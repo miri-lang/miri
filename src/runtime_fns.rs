@@ -23,7 +23,7 @@
 
 /// Constants for all `miri_rt_*` runtime symbols.
 pub mod rt {
-    // ── Closure ──────────────────────────────────────────────────────────────
+    // Closure
     /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure malloc, not in stdlib.
     pub const CLOSURE_ALLOC_TRACK: &str = "miri_rt_closure_alloc_track";
     /// Compiler-internal: decrements CLOSURE_ALLOC_BALANCE on closure free, not in stdlib.
@@ -56,7 +56,7 @@ pub mod rt {
     /// rather than a call it cannot inline.
     pub const TRACKING_STATE: &str = "miri_rt_tracking_state";
 
-    // ── Array ────────────────────────────────────────────────────────────────
+    // Array
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
     pub const ARRAY_FREE: &str = "miri_rt_array_free";
     pub const ARRAY_LEN: &str = "miri_rt_array_len";
@@ -83,10 +83,10 @@ pub mod rt {
     /// sorting, not in stdlib.
     pub const ARRAY_SET_ELEM_ORDER_KIND: &str = "miri_rt_array_set_elem_order_kind";
 
-    // ── Tuple ─────────────────────────────────────────────────────────────────
+    // Tuple
     pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
 
-    // ── List ─────────────────────────────────────────────────────────────────
+    // List
     pub const LIST_NEW: &str = "miri_rt_list_new";
     pub const LIST_FREE: &str = "miri_rt_list_free";
     pub const LIST_LEN: &str = "miri_rt_list_len";
@@ -119,7 +119,7 @@ pub mod rt {
     /// sorting, not in stdlib.
     pub const LIST_SET_ELEM_ORDER_KIND: &str = "miri_rt_list_set_elem_order_kind";
 
-    // ── Map ──────────────────────────────────────────────────────────────────
+    // Map
     pub const MAP_NEW: &str = "miri_rt_map_new";
     pub const MAP_FREE: &str = "miri_rt_map_free";
     pub const MAP_LEN: &str = "miri_rt_map_len";
@@ -151,12 +151,12 @@ pub mod rt {
     /// Compiler-internal: decrements the RC of a map element, not in stdlib.
     pub const MAP_DECREF_ELEMENT: &str = "miri_rt_map_decref_element";
 
-    // ── Hash ─────────────────────────────────────────────────────────────────
+    // Hash
     pub const HASH_COMBINE: &str = "miri_rt_hash_combine";
     /// Compiler-internal: the hash a derived `hash` takes of a float, not in stdlib.
     pub const FLOAT_HASH: &str = "miri_rt_float_hash";
 
-    // ── Set ──────────────────────────────────────────────────────────────────
+    // Set
     pub const SET_NEW: &str = "miri_rt_set_new";
     pub const SET_FREE: &str = "miri_rt_set_free";
     pub const SET_LEN: &str = "miri_rt_set_len";
@@ -182,7 +182,7 @@ pub mod rt {
     /// Compiler-internal: decrements the RC of a set element, not in stdlib.
     pub const SET_DECREF_ELEMENT: &str = "miri_rt_set_decref_element";
 
-    // ── IO ───────────────────────────────────────────────────────────────────
+    // IO
     pub const PRINT: &str = "miri_rt_print";
     pub const PRINTLN: &str = "miri_rt_println";
     pub const EPRINT: &str = "miri_rt_eprint";
@@ -213,7 +213,7 @@ pub mod rt {
     /// withheld at an instance its obligations were not checked at.
     pub const METHOD_NOT_CHECKED_PANIC: &str = "miri_rt_method_not_checked_panic";
 
-    // ── String ────────────────────────────────────────────────────────────────
+    // String
     pub const STRING_NEW: &str = "miri_rt_string_new";
     pub const STRING_FREE: &str = "miri_rt_string_free";
     /// Compiler-internal: RC-decrementing drop callback for string map keys.
@@ -249,7 +249,7 @@ pub mod rt {
     pub const STRING_CODE_AT: &str = "miri_rt_string_code_at";
     pub const STRING_FROM_CODE_POINT: &str = "miri_rt_string_from_code_point";
 
-    // ── String conversion ────────────────────────────────────────────────────
+    // String conversion
     /// Compiler-internal: used by the codegen for int → String coercions.
     pub const BOOL_TO_STRING: &str = "miri_rt_bool_to_string";
     /// Compiler-internal: used by the codegen for f64 → String coercions.
@@ -274,7 +274,7 @@ pub mod rt {
     /// [`I128_TO_STRING`].
     pub const U128_TO_STRING: &str = "miri_rt_u128_to_string";
 
-    // ── 128-bit integer arithmetic ───────────────────────────────────────────
+    // 128-bit integer arithmetic
     /// Compiler-internal: 128-bit division and remainder, which the backend has
     /// no instruction for at that width. Operands travel as their two 64-bit
     /// halves and the result is written through a pointer, because a 128-bit
@@ -295,7 +295,7 @@ pub mod rt {
     pub const I128_TO_F32: &str = "miri_rt_i128_to_f32";
     pub const U128_TO_F32: &str = "miri_rt_u128_to_f32";
 
-    // ── Filesystem ────────────────────────────────────────────────────────────
+    // Filesystem
     pub const FS_STATUS: &str = "miri_rt_fs_status";
     pub const FS_ERROR_MESSAGE: &str = "miri_rt_fs_error_message";
     pub const FS_EXISTS: &str = "miri_rt_fs_exists";
@@ -307,7 +307,7 @@ pub mod rt {
     pub const FS_DELETE: &str = "miri_rt_fs_delete";
     pub const FS_CWD: &str = "miri_rt_fs_cwd";
 
-    // ── OS / Environment ──────────────────────────────────────────────────────
+    // OS / Environment
     pub const ENV_HAS: &str = "miri_rt_env_has";
     pub const ENV_GET: &str = "miri_rt_env_get";
     pub const ENV_SET: &str = "miri_rt_env_set";
@@ -317,14 +317,14 @@ pub mod rt {
     pub const ARGS_AT: &str = "miri_rt_args_at";
     pub const PLATFORM: &str = "miri_rt_platform";
 
-    // ── Process ────────────────────────────────────────────────────────────────
+    // Process
     pub const EXIT: &str = "miri_rt_exit";
 
-    // ── Time ─────────────────────────────────────────────────────────────────
+    // Time
     pub const NANOTIME: &str = "miri_rt_nanotime";
     pub const SLEEP_NANOS: &str = "miri_rt_sleep_nanos";
 
-    // ── Regex ─────────────────────────────────────────────────────────────────
+    // Regex
     pub const REGEX_COMPILE: &str = "miri_rt_regex_compile";
     pub const REGEX_COMPILE_STATUS: &str = "miri_rt_regex_compile_status";
     pub const REGEX_COMPILE_MESSAGE: &str = "miri_rt_regex_compile_message";
@@ -336,7 +336,7 @@ pub mod rt {
     pub const REGEX_MATCH_END: &str = "miri_rt_regex_match_end";
     pub const REGEX_REPLACE: &str = "miri_rt_regex_replace";
 
-    // ── Complete symbol table ────────────────────────────────────────────────
+    // Complete symbol table
     //
     // Every constant above must appear here.  The drift-check tests in
     // `tests/stdlib/runtime_fns_sync.rs` use this slice to verify:
