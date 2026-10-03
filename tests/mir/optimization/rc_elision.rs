@@ -230,7 +230,7 @@ fn benchmark(items [int]) int:
 fn test_resource_type_keeps_rc_ops() {
     // Conn has a destructor (fn drop), so its IncRef/DecRef pairs must be kept.
     let source = r#"
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return

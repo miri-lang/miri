@@ -286,7 +286,7 @@ fn test_module_named_main_keeps_its_private_helper() {
 /// A struct an imported module declares with a drop hook links, and its hook
 /// runs once, when the value goes out of scope.
 #[test]
-fn an_imported_structs_drop_hook_runs_once() {
+fn an_imported_class_drop_hook_runs_once() {
     assert_project_runs_with_output(
         &[
             (
@@ -304,8 +304,8 @@ fn an_imported_structs_drop_hook_runs_once() {
             (
                 "q/m.mi",
                 concat!(
-                    "public struct Res\n",
-                    "    id int\n",
+                    "public class Res\n",
+                    "    public id int\n",
                     "    fn drop(self)\n",
                     "        println(\"res gone\")\n",
                 ),

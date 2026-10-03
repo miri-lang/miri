@@ -98,7 +98,7 @@ fn test_resource_type_destructor_fires() {
     assert_runs_with_output(
         r#"
 
-struct Counter
+class Counter
     value int
     fn drop(self)
         println("dropped")

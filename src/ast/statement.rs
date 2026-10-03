@@ -83,8 +83,7 @@ impl FunctionDeclarationData {
     /// Whether this method of a class or trait is the drop hook: an instance
     /// method named `drop` that a caller passes nothing. The receiver is
     /// implicit on those methods, so `fn drop(self)` and `fn drop()` are the
-    /// same hook. A struct spells its receiver, so its hook is
-    /// [`Self::is_struct_drop_hook`].
+    /// same hook.
     ///
     /// The hook is also callable as `value.drop()`. That call consumes the value
     /// and releases it on the spot rather than invoking the hook as a method, so
@@ -93,12 +92,6 @@ impl FunctionDeclarationData {
         self.name == DROP_HOOK_NAME
             && self.explicit_params().is_empty()
             && !self.properties.is_static
-    }
-
-    /// Whether this struct function is the drop hook `fn drop(self)`: the
-    /// receiver, spelled, and nothing else.
-    pub fn is_struct_drop_hook(&self) -> bool {
-        self.is_drop_hook() && self.declares_receiver()
     }
 }
 

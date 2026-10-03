@@ -516,6 +516,6 @@ struct Named
     fn equals(other Named) bool
         return self.id == other.id
 "#,
-        "cannot define methods other than 'drop'",
+        "Struct 'Named' cannot define method 'equals': a struct holds data only",
     );
 }

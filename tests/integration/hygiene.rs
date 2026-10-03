@@ -448,7 +448,7 @@ fn test_an_import_used_only_by_an_implements_clause_is_not_reported() {
     let code = r#"
 use system.accelerator
 
-struct Point implements Accelerable
+class Point implements Accelerable
     x int
 
 fn main()

@@ -363,7 +363,7 @@ fn test_resource_consumed_twice_in_function_body() {
     assert_compiler_error(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -406,7 +406,7 @@ fn test_resource_consumed_at_top_level_error() {
     assert_compiler_error(
         r#"
 
-struct Res
+class Res
     x int
     fn drop(self)
         return
@@ -427,7 +427,7 @@ fn test_resource_consumed_once_in_function_body_ok() {
     assert_runs_with_output(
         r#"
 
-struct Res
+class Res
     x int
     fn drop(self)
         return
@@ -450,7 +450,7 @@ fn test_resource_alias_then_use_error() {
     assert_compiler_error(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -475,7 +475,7 @@ fn test_resource_alias_then_use_in_function_body_error() {
     assert_compiler_error(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -513,7 +513,7 @@ fn test_resource_alias_reassignment_revives() {
     assert_runs_with_output(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -536,7 +536,7 @@ fn test_resource_passed_to_fn_consumed_error() {
     assert_compiler_error(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -557,7 +557,7 @@ fn test_resource_consumed_in_body_second_use_error() {
     assert_compiler_error(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -600,7 +600,7 @@ fn test_resource_conditional_consume_no_else_compiles() {
     assert_runs_with_output(
         r#"
 
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return

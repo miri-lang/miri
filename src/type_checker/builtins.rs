@@ -62,8 +62,6 @@ fn register_warp_context_type(types: &mut HashMap<String, TypeDefinition>) {
             ("lane_id".to_string(), int_type(), MemberVisibility::Public),
         ],
         generics: None,
-        traits: vec![],
-        has_drop: false,
         module: "std".to_string(),
     });
     types.insert(WARP_CONTEXT_TYPE_NAME.to_string(), warp_context_def);
@@ -79,8 +77,6 @@ fn register_dim3_type(types: &mut HashMap<String, TypeDefinition>) {
             ("z".to_string(), int_type(), MemberVisibility::Public),
         ],
         generics: None,
-        traits: vec![],
-        has_drop: false,
         module: "std".to_string(),
     });
     types.insert(DIM3_TYPE_NAME.to_string(), dim3_def);
@@ -125,8 +121,6 @@ fn register_gpu_context_type(types: &mut HashMap<String, TypeDefinition>) {
                 ("warp".to_string(), warp_type(), MemberVisibility::Public),
             ],
             generics: None,
-            traits: vec![],
-            has_drop: false,
             module: "std".to_string(),
         }),
     );
@@ -139,8 +133,6 @@ fn register_kernel_type(types: &mut HashMap<String, TypeDefinition>) {
         TypeDefinition::Struct(StructDefinition {
             fields: vec![],
             generics: None,
-            traits: vec![],
-            has_drop: false,
             module: "std".to_string(),
         }),
     );
@@ -169,8 +161,6 @@ fn register_frame_input_type(types: &mut HashMap<String, TypeDefinition>) {
         TypeDefinition::Struct(StructDefinition {
             fields,
             generics: None,
-            traits: vec![],
-            has_drop: false,
             module: "std".to_string(),
         }),
     );
@@ -188,8 +178,6 @@ fn register_async_types(types: &mut HashMap<String, TypeDefinition>) {
                 constraint: None,
                 kind: TypeDeclarationKind::None,
             }]),
-            traits: vec![],
-            has_drop: false,
             module: "std".to_string(),
         }),
     );

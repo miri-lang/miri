@@ -904,7 +904,7 @@ fn revive() String:
 #[test]
 fn test_lowered_resource_type_gets_balanced_rc_ops() {
     let source = r#"
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return
@@ -992,7 +992,7 @@ fn revive() String:
         (
             "use_conn",
             r#"
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return

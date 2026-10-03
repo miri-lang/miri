@@ -263,7 +263,7 @@ fn test_resource_param_inside_fn_body_still_errors() {
     assert_compiler_error(
         r#"
 
-struct Conn
+class Conn
     host String
     fn drop(self)
         println("closed")

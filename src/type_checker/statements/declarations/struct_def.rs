@@ -47,10 +47,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::context::{
     Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
-use crate::type_checker::statements::declarations::drop_hook::is_struct_drop_method;
-use crate::type_checker::statements::declarations::func::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
-use std::collections::HashMap;
 
 impl TypeChecker {
     #[allow(clippy::too_many_arguments)]
@@ -74,30 +71,17 @@ impl TypeChecker {
         context.enter_scope();
         let generic_defs = self.collect_struct_generics(generics, context);
         let fields_vec = self.collect_struct_fields(fields, context);
-        let (trait_names, trait_args) = self.check_class_traits(traits, context);
         context.exit_scope();
 
         if !self.validate_struct_field_types(&name, &fields_vec, name_expr) {
             return;
         }
 
-        self.check_accelerable_fields(
-            &name,
-            &trait_names,
-            fields_vec.iter().map(|(n, t, _)| (n.as_str(), t)),
-            name_expr,
-        );
+        // A struct holds data and nothing else: behavior, traits and drop
+        // hooks belong on a class.
+        self.reject_struct_traits(&name, traits);
+        self.reject_struct_methods(&name, methods);
 
-        // Structs are data types: the only method they may define is `drop`.
-        // Any other method has no type-checked body or call dispatch (that is a
-        // class feature), so reject it here with a clear error instead of
-        // letting it reach codegen as an internal compiler error.
-        self.reject_non_drop_struct_methods(&name, methods);
-
-        // Only a hook the struct declares itself runs; a trait default `drop`
-        // is refused in `check_struct_trait_methods`.
-        let has_drop = methods.iter().any(is_struct_drop_method);
-        self.check_struct_trait_methods(&name, &trait_names, &trait_args, has_drop, name_expr);
         let struct_def = StructDefinition {
             fields: fields_vec,
             generics: if generic_defs.is_empty() {
@@ -105,134 +89,62 @@ impl TypeChecker {
             } else {
                 Some(generic_defs)
             },
-            traits: trait_names,
-            has_drop,
             module: self.modules.current_module.clone(),
         };
 
         self.register_struct_definition(&name, struct_def, visibility, context);
-        self.check_struct_drop_body(&name, generics, methods, context);
     }
 
-    /// Refuse a struct that implements a trait requiring a method it does not
-    /// provide, as a class missing one is refused. A struct declares no method
-    /// but `drop`, so every other method a trait leaves abstract is missing:
-    /// accepted, a call through the trait would jump to a method no body
-    /// answers.
-    pub(crate) fn check_struct_trait_methods(
-        &mut self,
-        name: &str,
-        trait_names: &[String],
-        trait_args: &HashMap<String, Vec<Type>>,
-        has_drop: bool,
-        name_expr: &Expression,
-    ) {
-        for trait_name in trait_names {
-            let mut substitutions = HashMap::new();
-            let methods =
-                self.collect_trait_methods_resolved(trait_name, trait_args, &mut substitutions);
-            if !has_drop {
-                if let Some((_, origin)) = methods
-                    .get(DROP_HOOK_NAME)
-                    .filter(|(info, _)| !info.is_abstract)
-                {
-                    self.report_error(
-                        DiagnosticCode::TypTraitDefinition,
-                        format!(
-                            "Struct '{name}' takes `drop` from the default in trait '{origin}', \
-                             which a struct never runs: a struct runs only a hook it declares, so \
-                             declare `fn drop(self)` on '{name}' or implement the trait on a class"
-                        ),
-                        name_expr.span,
-                    );
-                }
-            }
-            let mut missing: Vec<(String, String)> = methods
-                .into_iter()
-                .filter(|(method, (info, _))| {
-                    info.is_abstract && !(has_drop && method == DROP_HOOK_NAME)
-                })
-                .map(|(method, (_, origin))| (method, origin))
-                .collect();
-            missing.sort();
-            for (method, origin) in missing {
-                self.report_error(
-                    DiagnosticCode::TypTraitDefinition,
-                    format!(
-                        "Struct '{name}' must implement method '{method}' from trait '{origin}'; \
-                         a struct declares no methods but `drop`, so implement the trait on a class"
-                    ),
-                    name_expr.span,
-                );
-            }
-        }
-    }
-
-    /// Checks the body of the struct `name`'s drop hook with `self` bound to
-    /// the struct, as a class method's body is checked, so everything the
-    /// hook calls and reads is resolved where it is written.
-    fn check_struct_drop_body(
-        &mut self,
-        name: &str,
-        generics: &Option<Vec<Expression>>,
-        methods: &[Statement],
-        context: &mut Context,
-    ) {
-        let Some((hook, decl)) = methods.iter().find_map(|method| {
-            let StatementKind::FunctionDeclaration(decl) = &method.node else {
-                return None;
+    /// Reports an error for every trait a struct lists after `implements`. A
+    /// struct is data: it declares no methods for a trait to require or
+    /// dispatch to, so a trait it named would only promise what it cannot do.
+    fn reject_struct_traits(&mut self, struct_name: &str, traits: &[Expression]) {
+        for trait_expr in traits {
+            let trait_name = match &trait_expr.node {
+                ExpressionKind::Identifier(name, _) => name.clone(),
+                ExpressionKind::Type(ty, _) => ty.to_string(),
+                _ => trait_expr.node.to_string(),
             };
-            decl.is_struct_drop_hook().then_some((method, decl))
-        }) else {
-            return;
-        };
-        context.enter_scope();
-        if let Some(gens) = generics {
-            self.define_generics(gens, context);
-        }
-        let struct_type = self.type_at_own_parameters(name, generics.as_deref(), context);
-        context.enter_class(name.to_string(), None, struct_type);
-        self.check_function_declaration(
-            FunctionDeclarationInfo {
-                name: &decl.name,
-                generics: &decl.generics,
-                params: decl.explicit_params(),
-                return_type: &decl.return_type,
-                body: decl.body.as_deref(),
-                properties: &decl.properties,
-                span: hook.span,
-                is_member: true,
-            },
-            context,
-        );
-        context.exit_class();
-        context.exit_scope();
-    }
-
-    /// Reports an error for every struct method other than `drop`. Structs are
-    /// data types; behavior belongs on a class, a trait, or a free function.
-    fn reject_non_drop_struct_methods(&mut self, struct_name: &str, methods: &[Statement]) {
-        for method in methods {
-            if is_struct_drop_method(method) {
-                continue;
-            }
-            let StatementKind::FunctionDeclaration(decl) = &method.node else {
-                continue;
-            };
-            let message = if decl.name == DROP_HOOK_NAME {
+            self.report_error_with_help(
+                DiagnosticCode::TypStructDefinition,
                 format!(
-                    "Struct '{}' declares its drop hook as 'fn drop(self)': the receiver \
-                     is spelled, and the hook takes nothing else.",
-                    struct_name
+                    "Struct '{struct_name}' cannot implement trait '{trait_name}': a struct \
+                     holds data only"
+                ),
+                trait_expr.span,
+                format!("make '{struct_name}' a class to implement '{trait_name}'"),
+            );
+        }
+    }
+
+    /// Reports an error for every method a struct declares, `drop` included.
+    /// A struct is data: methods and a drop hook belong on a class, and a
+    /// function over a struct can take it as a parameter.
+    fn reject_struct_methods(&mut self, struct_name: &str, methods: &[Statement]) {
+        for method in methods {
+            let StatementKind::FunctionDeclaration(decl) = &method.node else {
+                continue;
+            };
+            let help = if decl.name == DROP_HOOK_NAME {
+                format!(
+                    "a type that runs code when it is released is a resource: make \
+                     '{struct_name}' a class to give it a drop hook"
                 )
             } else {
                 format!(
-                    "Struct '{}' cannot define methods other than 'drop' (found '{}'). \
-                     Use a class for methods, or a free function that takes the struct.",
-                    struct_name, decl.name
+                    "make '{struct_name}' a class to give it methods, or write a function \
+                     that takes the struct"
                 )
             };
-            self.report_error(DiagnosticCode::TypStructDefinition, message, method.span);
+            self.report_error_with_help(
+                DiagnosticCode::TypStructDefinition,
+                format!(
+                    "Struct '{struct_name}' cannot define method '{}': a struct holds data only",
+                    decl.name
+                ),
+                method.span,
+                help,
+            );
         }
     }
 

@@ -141,7 +141,7 @@ let result = msg
 fn test_out_param_resource_type_not_consumed_after_call() {
     assert_type_checks(
         r#"
-struct Conn
+class Conn
     handle int
     fn drop(self)
         return

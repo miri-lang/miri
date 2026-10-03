@@ -365,14 +365,20 @@ impl TypeChecker {
             self.check_gpu_i32_range_literal(decl, inferred_type, context);
             return;
         }
-        self.report_error(
-            DiagnosticCode::TarGpuTypeNotAccelerable,
-            format!(
+        let message = match crate::type_checker::utils::unaccelerable_struct_field(
+            &inferred_type.kind,
+            &self.type_table.global_type_definitions,
+        ) {
+            Some((field, field_ty)) => format!(
+                "'{inferred_type}' is a struct whose field '{field}' has type '{field_ty}', which is \
+                 not accelerable; a struct is gpu-resident when every field is accelerable."
+            ),
+            None => format!(
                 "'{}' does not implement 'Accelerable' and cannot be gpu-resident.",
                 inferred_type
             ),
-            span,
-        );
+        };
+        self.report_error(DiagnosticCode::TarGpuTypeNotAccelerable, message, span);
     }
 
     /// Rejects an `f16` value on the host path. `f16` is a GPU-only scalar with

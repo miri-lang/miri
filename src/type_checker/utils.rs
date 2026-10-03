@@ -69,7 +69,8 @@ fn generic_substitution(
 
 /// Whether releasing the last reference to a `type_name` value runs a drop hook.
 ///
-/// A struct or an enum runs the hook it declares. A class runs the `drop`
+/// A struct holds data only and runs none. An enum runs the hook it declares.
+/// A class runs the `drop`
 /// [`resolve_method_source`] resolves for it, the order every inherited method
 /// follows: the nearest class in its chain declaring `drop` with a body, else
 /// a default a trait in its chain supplies. So a subclass inherits its base's
@@ -83,7 +84,6 @@ pub fn has_drop_hook(
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
 ) -> bool {
     match type_definitions.get(type_name) {
-        Some(TypeDefinition::Struct(def)) => def.has_drop,
         Some(TypeDefinition::Class(_)) => {
             resolve_method_source(type_definitions, type_name, DROP_HOOK_NAME)
                 .is_some_and(|source| is_drop_hook_signature(source.info()))
@@ -93,6 +93,7 @@ pub fn has_drop_hook(
             .get(DROP_HOOK_NAME)
             .is_some_and(is_drop_hook_signature),
         None
+        | Some(TypeDefinition::Struct(_))
         | Some(TypeDefinition::Generic(_))
         | Some(TypeDefinition::Alias(_))
         | Some(TypeDefinition::Trait(_)) => false,
@@ -190,15 +191,11 @@ fn is_resource_inner<'a>(
                 return false;
             }
             match type_definitions.get(name) {
-                Some(TypeDefinition::Struct(def)) => {
-                    if def.has_drop {
-                        return true;
-                    }
-                    // Transitively check fields
-                    def.fields
-                        .iter()
-                        .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited))
-                }
+                // A struct is a resource when a field it holds is one.
+                Some(TypeDefinition::Struct(def)) => def
+                    .fields
+                    .iter()
+                    .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited)),
                 Some(TypeDefinition::Class(def)) => {
                     if has_drop_hook(name, type_definitions) {
                         return true;
@@ -586,10 +583,11 @@ fn gpu_array_element_kind(kind: &TypeKind) -> Option<&TypeKind> {
 ///   (see [`gpu_scalar_class`]). `bool` and the 128-bit widths are *not*
 ///   storable and are rejected, so the binding gate agrees with
 ///   [`is_gpu_buffer_element`] on the element set;
-/// - a nominal type whose definition implements the stdlib `Accelerable` trait,
+/// - a class whose definition implements the stdlib `Accelerable` trait,
 ///   provided every type argument is itself accelerable (this enforces the
 ///   `T : AccelerableScalar` element bound on the stdlib `Array` / `List` impls
 ///   without naming those types);
+/// - a struct whose every field is accelerable at the struct's arguments;
 /// - a tuple whose every element type is accelerable.
 ///
 /// Dispatch is by the `Accelerable` trait, never by stdlib type name. This
@@ -669,6 +667,18 @@ fn accelerable_inner(
                         }
                     });
             }
+            // A struct is data, so whether its bytes can be marshalled is a
+            // question about its fields alone, asked at the type it is used at.
+            if let Some(TypeDefinition::Struct(def)) = type_definitions.get(name) {
+                return def.fields.iter().all(|(_, field_ty, _)| {
+                    let field = crate::type_checker::generics::substitute_generic_field_kind(
+                        &field_ty.kind,
+                        args.as_deref(),
+                        def.generics.as_ref(),
+                    );
+                    accelerable_inner(&field, type_definitions, allow_generic)
+                });
+            }
             type_implements_accelerable(name, type_definitions)
                 && type_args_are_accelerable(args.as_deref(), type_definitions, allow_generic)
         }
@@ -682,19 +692,39 @@ fn accelerable_inner(
     }
 }
 
-/// Trait-dispatch core of [`is_accelerable`]: does the named type's definition
-/// list the `Accelerable` trait? Both class and struct definitions carry a trait
-/// list; a user `class` or `struct` opts in via `implements ... Accelerable`.
+/// The first field keeping the struct `kind` from being accelerable, with its
+/// type at the struct's arguments; `None` when `kind` is not such a struct.
+pub fn unaccelerable_struct_field(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> Option<(String, Type)> {
+    let TypeKind::Custom(name, args) = kind else {
+        return None;
+    };
+    let Some(TypeDefinition::Struct(def)) = type_definitions.get(name) else {
+        return None;
+    };
+    def.fields.iter().find_map(|(field, field_ty, _)| {
+        let at_args = crate::type_checker::generics::substitute_generic_field_kind(
+            &field_ty.kind,
+            args.as_deref(),
+            def.generics.as_ref(),
+        );
+        (!is_accelerable(&at_args, type_definitions))
+            .then(|| (field.clone(), Type::new(at_args, field_ty.span)))
+    })
+}
+
+/// Trait-dispatch core of [`is_accelerable`]: does the named class list the
+/// `Accelerable` trait? A user `class` opts in via `implements ... Accelerable`.
 fn type_implements_accelerable(
     name: &str,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
 ) -> bool {
-    let traits = match type_definitions.get(name) {
-        Some(TypeDefinition::Class(def)) => &def.traits,
-        Some(TypeDefinition::Struct(def)) => &def.traits,
-        _ => return false,
+    let Some(TypeDefinition::Class(def)) = type_definitions.get(name) else {
+        return false;
     };
-    traits
+    def.traits
         .iter()
         .any(|trait_name| trait_name == ACCELERABLE_TRAIT_NAME)
 }
@@ -1363,9 +1393,6 @@ fn is_auto_copy_struct<'a>(
     type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
     visited: &mut std::collections::HashSet<&'a str>,
 ) -> bool {
-    if struct_def.has_drop {
-        return false;
-    }
     let all_fields_copy = struct_def
         .fields
         .iter()
@@ -3016,6 +3043,10 @@ impl TypeChecker {
                         Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
                     )
             );
+        if let Some(help) = self.struct_held_at_a_trait_help(value, expected) {
+            self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, value.span, help);
+            return;
+        }
         if let Some(signature) = self.lambda_rewritten_at_widths(value, expected) {
             self.report_error_with_help(
                 DiagnosticCode::TypTypeMismatch,
@@ -3042,6 +3073,33 @@ impl TypeChecker {
             value.span,
             format!("`[...]` is an array literal; build the {collection} from it with `{collection}([...])`"),
         );
+    }
+
+    /// Why `value` cannot be stored where the trait `expected` is declared,
+    /// when it is a struct: a struct holds data only and implements no trait,
+    /// so only a class can be held at one.
+    fn struct_held_at_a_trait_help(&self, value: &Expression, expected: &Type) -> Option<String> {
+        let TypeKind::Custom(trait_name, _) = &expected.kind else {
+            return None;
+        };
+        let definitions = &self.type_table.global_type_definitions;
+        if !matches!(definitions.get(trait_name), Some(TypeDefinition::Trait(_))) {
+            return None;
+        }
+        let Some(TypeKind::Custom(struct_name, _)) = self.get_type(value.id).map(|ty| &ty.kind)
+        else {
+            return None;
+        };
+        if !matches!(
+            definitions.get(struct_name),
+            Some(TypeDefinition::Struct(_))
+        ) {
+            return None;
+        }
+        Some(format!(
+            "a struct holds data only and implements no trait; make '{struct_name}' a class \
+             implementing '{trait_name}' to hold it as one"
+        ))
     }
 
     /// The signature `value`, an anonymous function refused for the function

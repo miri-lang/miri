@@ -703,8 +703,6 @@ impl TypeChecker {
             TypeDefinition::Struct(context::StructDefinition {
                 fields: vec![],
                 generics,
-                traits: vec![],
-                has_drop: false,
                 module: self.modules.current_module.clone(),
             }),
         );
@@ -1076,8 +1074,6 @@ impl TypeChecker {
             TypeDefinition::Struct(context::StructDefinition {
                 fields: vec![],
                 generics,
-                traits: vec![],
-                has_drop: false,
                 module: self.modules.current_module.clone(),
             }),
         );

@@ -222,6 +222,8 @@ fn offset(p Point, dx int, dy int) Point
 
 Small structs (all primitive fields, <= 128 bytes) are auto-copy — assignment produces a bitwise copy with no reference counting overhead.
 
+A struct holds data and nothing else: it declares no methods, implements no traits and has no drop hook (MER_TYP_058). Behaviour belongs on a class, or in a function that takes the struct; a type that must run code when it is released is a class. What a struct supports is derived from its fields — `==` and `hash()` compare and hash them, and a struct whose every field is accelerable may be `gpu let`/`gpu var` with no marker.
+
 ---
 
 ## Enums
@@ -739,7 +741,7 @@ class AppLogger implements Logger
 
 ### The `drop` Hook
 
-A class or struct may declare `fn drop(self)` (on a class, `fn drop()` means the same). Releasing the last reference to an instance is meant to run it exactly once. Releasing an instance through a trait-typed or base-class binding runs the hook of the instance's own class and releases its managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own. A struct runs only a hook it declares itself, so a struct implementing a trait that supplies a default `drop` without declaring its own is refused.
+A class or enum may declare `fn drop(self)` (on a class, `fn drop()` means the same); a struct holds data only and may not. Releasing the last reference to an instance is meant to run it exactly once. Releasing an instance through a trait-typed or base-class binding runs the hook of the instance's own class and releases its managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own.
 
 ### `Self` Type
 

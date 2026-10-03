@@ -76,8 +76,6 @@ fn test_set_type_facts() {
             ("y".to_string(), ty(TypeKind::I64), MemberVisibility::Public),
         ],
         generics: None,
-        traits: vec![],
-        has_drop: false,
         module: String::new(),
     };
     let definitions = HashMap::from([("Point".to_string(), TypeDefinition::Struct(struct_def))]);

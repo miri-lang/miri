@@ -2537,8 +2537,7 @@ impl<'a> FunctionTranslator<'a> {
     /// The owner is found by the same resolution an inherited method call uses,
     /// so a subclass reaches its base's hook (or its own copy, when the base is
     /// abstract) and the hook this thunk declares is the method body lowered for
-    /// it. A struct is not a class chain and names its own hook. The pipeline
-    /// reads the same answer to compile the body this names. A value released
+    /// it. An enum names its own hook. The pipeline reads the same answer to compile the body this names. A value released
     /// through a trait-typed or base-class reference reaches its own class's
     /// hook through the vtable's drop slot instead.
     pub fn resolve_drop_hook_name(type_name: &str, facts: &TypeFacts) -> Option<String> {

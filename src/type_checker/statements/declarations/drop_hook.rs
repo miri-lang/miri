@@ -4,20 +4,15 @@
 //! Which method declarations name a drop hook, and the shapes `drop` may take.
 //!
 //! On a class or trait every method receives its instance implicitly, so
-//! `fn drop(self)` and `fn drop()` declare the same hook. A struct spells its
-//! receiver, so only `fn drop(self)` does. The name belongs to the hook: a
+//! `fn drop(self)` and `fn drop()` declare the same hook. The name belongs to
+//! the hook: a
 //! `drop` that takes arguments or is static would compile as an ordinary method
 //! that nothing calls when the last reference goes, so it is refused.
 
 use crate::ast::statement::FunctionDeclarationData;
-use crate::ast::{Statement, StatementKind};
+use crate::ast::Statement;
 use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::TypeChecker;
-
-/// Returns true if a struct function statement is the drop hook `fn drop(self)`.
-pub(crate) fn is_struct_drop_method(stmt: &Statement) -> bool {
-    matches!(&stmt.node, StatementKind::FunctionDeclaration(decl) if decl.is_struct_drop_hook())
-}
 
 impl TypeChecker {
     /// Reports a class or trait method named `drop` that is not the hook, under
