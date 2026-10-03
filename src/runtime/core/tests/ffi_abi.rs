@@ -11,14 +11,10 @@
 //! The purpose is to confirm: (1) every symbol is accessible, (2) signatures
 //! match what the compiler expects, and (3) basic runtime behaviour is correct.
 
-// -----------------------------------------------------------------------
-// alloc
-// -----------------------------------------------------------------------
+// Alloc
 use miri_runtime_core::{miri_alloc, miri_alloc_zeroed, miri_free, miri_realloc};
 
-// -----------------------------------------------------------------------
-// array
-// -----------------------------------------------------------------------
+// Array
 use miri_runtime_core::{
     miri_rt_array_clone, miri_rt_array_data, miri_rt_array_decref_element, miri_rt_array_fill,
     miri_rt_array_free, miri_rt_array_get, miri_rt_array_get_mut, miri_rt_array_len,
@@ -26,9 +22,7 @@ use miri_runtime_core::{
     miri_rt_array_sort, miri_rt_array_to_list,
 };
 
-// -----------------------------------------------------------------------
-// list
-// -----------------------------------------------------------------------
+// List
 use miri_runtime_core::{
     miri_rt_list_capacity, miri_rt_list_clear, miri_rt_list_clone, miri_rt_list_decref_element,
     miri_rt_list_first, miri_rt_list_free, miri_rt_list_get, miri_rt_list_get_mut,
@@ -38,18 +32,14 @@ use miri_runtime_core::{
     miri_rt_list_set, miri_rt_list_set_elem_drop_fn, miri_rt_list_sort, miri_rt_list_with_capacity,
 };
 
-// -----------------------------------------------------------------------
-// set
-// -----------------------------------------------------------------------
+// Set
 use miri_runtime_core::{
     miri_rt_set_add, miri_rt_set_clear, miri_rt_set_contains, miri_rt_set_decref_element,
     miri_rt_set_element_at, miri_rt_set_free, miri_rt_set_is_empty, miri_rt_set_len,
     miri_rt_set_new, miri_rt_set_remove, miri_rt_set_set_elem_drop_fn,
 };
 
-// -----------------------------------------------------------------------
-// map
-// -----------------------------------------------------------------------
+// Map
 use miri_runtime_core::{
     miri_rt_map_clear, miri_rt_map_contains_key, miri_rt_map_decref_element, miri_rt_map_free,
     miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_is_empty, miri_rt_map_key_at,
@@ -57,9 +47,7 @@ use miri_runtime_core::{
     miri_rt_map_set_key_drop_fn, miri_rt_map_set_val_drop_fn, miri_rt_map_value_at,
 };
 
-// -----------------------------------------------------------------------
-// string
-// -----------------------------------------------------------------------
+// String
 use miri_runtime_core::{
     miri_rt_bool_to_string, miri_rt_float_to_string, miri_rt_int_to_string, miri_rt_string_char_at,
     miri_rt_string_char_count, miri_rt_string_clone, miri_rt_string_concat,
@@ -71,26 +59,18 @@ use miri_runtime_core::{
     miri_rt_string_trim_start,
 };
 
-// -----------------------------------------------------------------------
-// io
-// -----------------------------------------------------------------------
+// IO
 use miri_runtime_core::{
     miri_rt_eprint, miri_rt_eprintln, miri_rt_get_line_end, miri_rt_print, miri_rt_println,
 };
 
-// -----------------------------------------------------------------------
-// time
-// -----------------------------------------------------------------------
+// Time
 use miri_runtime_core::{miri_rt_nanotime, miri_rt_sleep_nanos};
 
-// -----------------------------------------------------------------------
-// tuple
-// -----------------------------------------------------------------------
+// Tuple
 use miri_runtime_core::miri_rt_tuple_len;
 
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_alloc_ffi_abi() {
