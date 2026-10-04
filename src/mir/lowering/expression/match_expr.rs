@@ -501,60 +501,31 @@ fn emit_predicate_test_chain(
     Ok(())
 }
 
-pub(crate) fn lower_match_expr(
+/// Contains the layout and targets computed when setting up match dispatch.
+struct MatchDispatchTable<'a> {
+    switch_targets: Vec<(Discriminant, crate::mir::block::BasicBlock)>,
+    otherwise_bb: Option<crate::mir::BasicBlock>,
+    branch_blocks: Vec<(
+        crate::mir::block::BasicBlock,
+        &'a crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )>,
+    predicate_arm_indices: Vec<usize>,
+    predicate_test_blocks: Vec<crate::mir::BasicBlock>,
+    otherwise_target: crate::mir::BasicBlock,
+}
+
+/// Analyze branches to build branch blocks, switch targets, and predicate test chains.
+fn setup_match_dispatch_table<'a>(
     ctx: &mut LoweringContext,
-    expr: &Expression,
-    dest: Option<Place>,
-) -> Result<Operand, LoweringError> {
-    let ExpressionKind::Match(subject, branches) = &expr.node else {
-        unreachable!()
-    };
-    let subject_info = lower_match_subject(ctx, subject)?;
-    let MatchSubject {
-        local: subject_local,
-        ty: ref subject_ty,
-        ..
-    } = subject_info;
-    // The subject outlives every arm, so a scope wrapping the whole match owns
-    // it. An arm that leaves through `return`, `break`, or `continue` never
-    // reaches the join block, and the scope walk those exits run is then the
-    // only thing that still releases what the match was dispatching on.
-    ctx.push_scope();
-    register_subject_temps(ctx, &subject_info);
-
-    // Use dest if provided (DPS), otherwise create a temp
-    let result_ty = resolve_type(ctx.type_checker, expr);
-    let result_local = if let Some(ref dest_place) = dest {
-        dest_place.local
-    } else {
-        ctx.push_temp(result_ty.clone(), expr.span)
-    };
-
-    // Create join block where all branches converge
-    let join_bb = ctx.new_basic_block();
-
-    // Collect literal patterns for SwitchInt.
-    // branch_blocks stores (block, branch, discriminants) where discriminants is
-    // non-empty for arms with specific literal/enum patterns and empty for catch-all
-    // arms (identifier, default, tuple). Predicate arms (string/float/regex literals)
-    // are tested separately. The discriminants are used when computing guard-failure
-    // targets (see second pass below).
-    //
-    // IMPORTANT: only the *first* arm that covers a given discriminant value is
-    // registered in switch_targets.  Subsequent arms with the same discriminant
-    // (e.g. a guarded arm followed by an unguarded fallback for the same literal)
-    // are reachable only via the guard-failure chain, NOT via a second SwitchInt
-    // dispatch.  Adding duplicate discriminants to switch_targets causes the
-    // Cranelift translator (which uses `.pop()` to build a brif chain in reverse)
-    // to dispatch to the *last* duplicate first, bypassing any earlier guarded arm.
+    branches: &'a [crate::ast::pattern::MatchBranch],
+    subject_ty: &Type,
+    join_bb: crate::mir::BasicBlock,
+) -> MatchDispatchTable<'a> {
     let mut switch_targets: Vec<(Discriminant, crate::mir::block::BasicBlock)> = Vec::new();
     let mut seen_discrs: std::collections::HashSet<u128> = std::collections::HashSet::new();
     let mut otherwise_bb = None;
-    let mut branch_blocks: Vec<(
-        crate::mir::block::BasicBlock,
-        &crate::ast::pattern::MatchBranch,
-        Vec<u128>, // discriminants covered; empty ⇒ catch-all
-    )> = Vec::new();
+    let mut branch_blocks = Vec::new();
 
     let is_option_subject = matches!(subject_ty.kind, TypeKind::Option(_));
 
@@ -578,7 +549,6 @@ pub(crate) fn lower_match_expr(
         branch_blocks.push((branch_bb, branch, arm_discrs));
     }
 
-    // Find arms with only predicate patterns, to set up predicate test chain
     let mut predicate_arm_indices: Vec<usize> = Vec::new();
     let mut predicate_test_blocks: Vec<crate::mir::BasicBlock> = Vec::new();
     for (idx, (_bb, branch, _discrs)) in branch_blocks.iter().enumerate() {
@@ -588,18 +558,30 @@ pub(crate) fn lower_match_expr(
         }
     }
 
-    // Determine the target for the switch's otherwise:
-    // - First predicate test block if one exists
-    // - Otherwise default pattern if one exists
-    // - Otherwise join_bb
     let otherwise_target = if !predicate_test_blocks.is_empty() {
         predicate_test_blocks[0]
     } else {
         otherwise_bb.unwrap_or(join_bb)
     };
 
-    // For enum types, we need to extract the discriminant (Field 0) to switch on
-    let switch_discr = if let TypeKind::Custom(type_name, _) = &subject_ty.kind {
+    MatchDispatchTable {
+        switch_targets,
+        otherwise_bb,
+        branch_blocks,
+        predicate_arm_indices,
+        predicate_test_blocks,
+        otherwise_target,
+    }
+}
+
+/// Compute or extract the switch discriminant operand for enums or scalar values.
+fn extract_switch_discriminant(
+    ctx: &mut LoweringContext,
+    subject_ty: &Type,
+    subject_local: crate::mir::Local,
+    subject_span: crate::error::syntax::Span,
+) -> Operand {
+    if let TypeKind::Custom(type_name, _) = &subject_ty.kind {
         if ctx
             .type_checker
             .type_table
@@ -607,9 +589,8 @@ pub(crate) fn lower_match_expr(
             .get(type_name)
             .is_some_and(|td| matches!(td, crate::type_checker::context::TypeDefinition::Enum(_)))
         {
-            // Extract discriminant from enum value at Field(0)
-            let discr_ty = Type::new(TypeKind::Int, subject.span);
-            let discr_local = ctx.push_temp(discr_ty, subject.span);
+            let discr_ty = Type::new(TypeKind::Int, subject_span);
+            let discr_local = ctx.push_temp(discr_ty, subject_span);
 
             let mut discr_place = Place::new(subject_local);
             discr_place.projection.push(PlaceElem::Field(0));
@@ -619,7 +600,7 @@ pub(crate) fn lower_match_expr(
                     Place::new(discr_local),
                     Rvalue::Use(Operand::Copy(discr_place)),
                 ),
-                span: subject.span,
+                span: subject_span,
             });
 
             Operand::Copy(Place::new(discr_local))
@@ -628,9 +609,90 @@ pub(crate) fn lower_match_expr(
         }
     } else {
         Operand::Copy(Place::new(subject_local))
+    }
+}
+
+/// Lower each match branch body, binding patterns, evaluating guards, and jumping to join block.
+#[allow(clippy::too_many_arguments)]
+fn lower_match_branch_bodies(
+    ctx: &mut LoweringContext,
+    branch_blocks: &[(
+        crate::mir::BasicBlock,
+        &crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )],
+    subject_local: crate::mir::Local,
+    subject_span: crate::error::syntax::Span,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    join_bb: crate::mir::BasicBlock,
+    expr_span: crate::error::syntax::Span,
+) -> Result<(), LoweringError> {
+    for (arm_idx, (branch_bb, branch, this_discrs)) in branch_blocks.iter().enumerate() {
+        ctx.set_current_block(*branch_bb);
+        ctx.push_scope();
+
+        let fallthrough = arm_fallthrough_target(arm_idx, branch_blocks, this_discrs, join_bb);
+        bind_arm_patterns(ctx, branch, subject_local, subject_span, fallthrough)?;
+
+        if let Some(guard) = &branch.guard {
+            emit_guard_and_branch(ctx, guard, arm_idx, branch_blocks, this_discrs, join_bb)?;
+        }
+
+        lower_to_local(ctx, &branch.body, result_local, result_ty)?;
+
+        let arm_terminated = ctx.body.basic_blocks[ctx.current_block.0]
+            .terminator
+            .is_some();
+        ctx.pop_scope(expr_span);
+        if !arm_terminated {
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Goto { target: join_bb },
+                expr_span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn lower_match_expr(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ExpressionKind::Match(subject, branches) = &expr.node else {
+        unreachable!()
+    };
+    let subject_info = lower_match_subject(ctx, subject)?;
+    let MatchSubject {
+        local: subject_local,
+        ty: ref subject_ty,
+        ..
+    } = subject_info;
+
+    ctx.push_scope();
+    register_subject_temps(ctx, &subject_info);
+
+    let result_ty = resolve_type(ctx.type_checker, expr);
+    let result_local = if let Some(ref dest_place) = dest {
+        dest_place.local
+    } else {
+        ctx.push_temp(result_ty.clone(), expr.span)
     };
 
-    // Set SwitchInt terminator
+    let join_bb = ctx.new_basic_block();
+
+    let MatchDispatchTable {
+        switch_targets,
+        otherwise_bb,
+        branch_blocks,
+        predicate_arm_indices,
+        predicate_test_blocks,
+        otherwise_target,
+    } = setup_match_dispatch_table(ctx, branches, subject_ty, join_bb);
+
+    let switch_discr = extract_switch_discriminant(ctx, subject_ty, subject_local, subject.span);
+
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
             discr: switch_discr,
@@ -640,7 +702,6 @@ pub(crate) fn lower_match_expr(
         expr.span,
     ));
 
-    // Emit predicate test blocks for all predicate arms
     emit_predicate_test_chain(
         ctx,
         subject_local,
@@ -652,38 +713,16 @@ pub(crate) fn lower_match_expr(
         join_bb,
     )?;
 
-    // Lower each branch body
-    for (arm_idx, (branch_bb, branch, this_discrs)) in branch_blocks.iter().enumerate() {
-        ctx.set_current_block(*branch_bb);
-        ctx.push_scope();
-
-        let fallthrough = arm_fallthrough_target(arm_idx, &branch_blocks, this_discrs, join_bb);
-        bind_arm_patterns(ctx, branch, subject_local, subject.span, fallthrough)?;
-
-        if let Some(guard) = &branch.guard {
-            emit_guard_and_branch(ctx, guard, arm_idx, &branch_blocks, this_discrs, join_bb)?;
-        }
-
-        // Lower branch body and assign result to result_local
-        lower_to_local(ctx, &branch.body, result_local, &result_ty)?;
-
-        // The arm's scope closes on every exit. An arm that already terminated
-        // — with `return`, `break`, or `continue` — released its bindings on
-        // the way out, so `pop_scope` emits nothing for it, but the scope still
-        // has to leave the stack: leaving it there makes every later
-        // `pop_scope` close one level too shallow, and the outermost scope's
-        // bindings are then never released at all.
-        let arm_terminated = ctx.body.basic_blocks[ctx.current_block.0]
-            .terminator
-            .is_some();
-        ctx.pop_scope(expr.span);
-        if !arm_terminated {
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::Goto { target: join_bb },
-                expr.span,
-            ));
-        }
-    }
+    lower_match_branch_bodies(
+        ctx,
+        &branch_blocks,
+        subject_local,
+        subject.span,
+        result_local,
+        &result_ty,
+        join_bb,
+        expr.span,
+    )?;
 
     ctx.set_current_block(join_bb);
     ctx.pop_scope(subject.span);
