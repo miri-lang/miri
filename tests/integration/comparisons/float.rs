@@ -184,3 +184,33 @@ fn main()
         "1",
     );
 }
+
+#[test]
+fn a_float_literal_beside_an_f32_compares_at_f32() {
+    assert_runs_with_output(
+        r#"
+const TENTH = 0.1
+
+fn main()
+    let third f32 = 0.1
+    let neg f32 = -0.7
+    println(f"{third == 0.1} {0.1 == third} {third == TENTH} {neg == -0.7} {neg < -0.7} {third + 0.2 == 0.3}")
+"#,
+        "true true true true false true",
+    );
+}
+
+#[test]
+fn an_f32_and_an_f64_compare_by_value() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let third f32 = 0.1
+    let wide f64 = 0.1
+    let half f32 = 0.5
+    let exact f64 = 0.5
+    println(f"{third == wide} {half == exact}")
+"#,
+        "false true",
+    );
+}
