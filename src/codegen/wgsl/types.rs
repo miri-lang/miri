@@ -616,4 +616,70 @@ mod tests {
         let strings = list_of(TypeKind::Custom(STRING_TYPE_NAME.to_string(), None));
         assert!(buffer_element_typename(&strings).is_err());
     }
+
+    #[test]
+    fn test_vector_type_supports_various_scalar_components() {
+        assert_eq!(
+            vector_type(&vec_of(VEC2_TYPE_NAME, TypeKind::I16)).as_deref(),
+            Some("vec2<i32>")
+        );
+        assert_eq!(
+            vector_type(&vec_of(VEC3_TYPE_NAME, TypeKind::U8)).as_deref(),
+            Some("vec3<u32>")
+        );
+        assert_eq!(
+            vector_type(&vec_of(VEC4_TYPE_NAME, TypeKind::Boolean)).as_deref(),
+            Some("vec4<bool>")
+        );
+        assert_eq!(
+            vector_type(&vec_of(VEC2_TYPE_NAME, TypeKind::F16)).as_deref(),
+            Some("vec2<f16>")
+        );
+        assert_eq!(
+            vector_type(&vec_of(VEC3_TYPE_NAME, TypeKind::F64)).as_deref(),
+            Some("vec3<f64>")
+        );
+        let atomic_i32 = vec_of(ATOMIC_TYPE_NAME, TypeKind::I32);
+        assert_eq!(
+            vector_type(&vec_of(VEC4_TYPE_NAME, atomic_i32)).as_deref(),
+            Some("vec4<i32>")
+        );
+    }
+
+    #[test]
+    fn test_vector_type_returns_none_for_non_custom_type_kinds() {
+        let non_custom_kinds = [
+            TypeKind::Boolean,
+            TypeKind::I32,
+            TypeKind::F32,
+            TypeKind::String,
+            TypeKind::Void,
+            TypeKind::RawPtr,
+            list_of(TypeKind::F32),
+            array_of(TypeKind::F32),
+            TypeKind::Tuple(vec![]),
+        ];
+
+        for kind in &non_custom_kinds {
+            assert_eq!(
+                vector_type(kind),
+                None,
+                "Expected None for non-custom TypeKind {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_atomic_element_buffer() {
+        let atomic_i32 = vec_of(ATOMIC_TYPE_NAME, TypeKind::I32);
+        let atomic_u32 = vec_of(ATOMIC_TYPE_NAME, TypeKind::U32);
+
+        assert!(is_atomic_element_buffer(&list_of(atomic_i32.clone())));
+        assert!(is_atomic_element_buffer(&array_of(atomic_u32)));
+
+        assert!(!is_atomic_element_buffer(&list_of(TypeKind::I32)));
+        assert!(!is_atomic_element_buffer(&array_of(TypeKind::F32)));
+        assert!(!is_atomic_element_buffer(&TypeKind::I32));
+    }
 }
