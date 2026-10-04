@@ -82,7 +82,9 @@ fn is_dir(path: &str) -> bool {
 /// (either parent directory '..' components or absolute paths).
 fn is_path_traversal(path_str: &str) -> bool {
     let p = Path::new(path_str);
-    p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir))
+    p.is_absolute()
+        || p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
 pub mod ffi {
