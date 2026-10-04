@@ -840,6 +840,24 @@ fn main()
 
 Captures are copies: assigning to a captured variable inside the body changes the closure's copy, not the enclosing variable.
 
+### Methods Are Not Values
+
+A method is called, never read as a value: `k.a` without a call is refused (`MER_TYP_078`), on a class instance, a trait-typed receiver and an enum alike. To hand a method on, wrap the call in a lambda, which names the parameters and shows that the receiver is captured:
+
+```miri
+class Scaler
+    factor int
+    fn apply(x int) int
+        return x * self.factor
+
+fn main()
+    let s = Scaler(factor: 3)
+    let triple = fn(x int) int: s.apply(x)   // not `s.apply`
+    println(f"{triple(5)}")   // 15
+```
+
+A field whose type is a function is a value like any other field, and reading it does not call it.
+
 ---
 
 ## Generics
