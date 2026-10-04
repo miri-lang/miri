@@ -38,10 +38,8 @@ public intrinsic fn assert_ne<T>(a T, b T, message String = "")
 /// aborts unless the panic message contains `expected` as a substring.
 public intrinsic fn assert_panics(f fn(), expected String = "")
 
-// =============================================================================
 // Memory-safety test helpers (used by integration tests to exercise the
 // leak detector — not for production code).
-// =============================================================================
 
 runtime "core" fn miri_rt_test_simulate_closure_leak()
 
