@@ -20,7 +20,7 @@ use system.collections.array
 
 gpu fn warp_size_kernel(dst out Array<i32, 1>)
     let size = kernel.warp.size
-    dst[0] = size
+    dst[0] = size as i32
 
 fn main()
     gpu var dst = Array<i32,1>()
@@ -38,7 +38,7 @@ use system.collections.array
 
 gpu fn lane_id_kernel(dst out Array<i32, 32>)
     let lane = kernel.warp.lane_id
-    dst[lane] = lane
+    dst[lane] = lane as i32
 
 fn main()
     gpu var dst = Array<i32,32>()
@@ -122,7 +122,7 @@ use system.collections.array
 
 gpu fn probe_warp_size(dst out Array<int, 1>)
     let size = kernel.warp.size
-    dst[0] = size
+    dst[0] = size as i32
 
 fn main()
     gpu var dst = Array<int,1>()
@@ -149,7 +149,7 @@ use system.collections.array
 
 gpu fn probe_lane_ids(dst out Array<int, 32>)
     let lane = kernel.warp.lane_id
-    dst[lane] = lane
+    dst[lane] = lane as i32
 
 fn main()
     gpu var dst = Array<int,32>()

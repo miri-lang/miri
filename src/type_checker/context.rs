@@ -81,6 +81,10 @@ pub struct SymbolInfo {
     /// its type was inferred from. A later store that binds an argument the
     /// initializer left open refines the binding through it.
     pub inferred_from: Option<usize>,
+    /// Whether this is a `const` declared without a written type. Its value
+    /// is a number written in the source, so beside another number it takes
+    /// that number's type, as the literal it was written as would.
+    pub untyped_constant: bool,
 }
 
 impl SymbolInfo {
@@ -109,6 +113,7 @@ impl SymbolInfo {
             declaration_keyword_start: None,
             module_scope: false,
             inferred_from: None,
+            untyped_constant: false,
         }
     }
 

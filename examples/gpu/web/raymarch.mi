@@ -80,7 +80,7 @@ fn map_scene(px f32, py f32, pz f32, tm f32) f32
 // Soft shadow factor along a ray from (ro) toward (rd) at time tm.
 fn soft_shadow(rox f32, roy f32, roz f32, rdx f32, rdy f32, rdz f32, tm f32) f32
     var res = 1.0
-    var t = 0.04
+    var t f32 = 0.04
     var i = 0
     while i < 40
         let h = map_scene(rox + rdx * t, roy + rdy * t, roz + rdz * t, tm)

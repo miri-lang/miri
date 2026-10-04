@@ -51,6 +51,16 @@ impl TypeChecker {
         expected: &Type,
         inferred: &Type,
     ) -> Option<Type> {
+        // A literal stored where an optional is declared becomes its payload,
+        // and takes the payload's width.
+        if let TypeKind::Option(payload) = &expected.kind {
+            if matches!(
+                expr.node,
+                ExpressionKind::Literal(_) | ExpressionKind::Unary(..)
+            ) {
+                return self.widen_int_literals(expr, payload, inferred);
+            }
+        }
         match &expr.node {
             ExpressionKind::Literal(Literal::Integer(_))
                 if is_integer_width(&expected.kind) && is_integer_width(&inferred.kind) =>
@@ -99,6 +109,34 @@ impl TypeChecker {
                 let widened = self.with_int_element_type(inferred, &widened_element?)?;
                 self.record_int_literal_width(expr, &widened);
                 Some(widened)
+            }
+            // `a if c else b` with a literal on both sides is a literal either
+            // way, and widens as one.
+            ExpressionKind::Conditional(then_expr, _, Some(else_expr), _) => {
+                let then_ty = self.type_table.types.get(&then_expr.id)?.clone();
+                let else_ty = self.type_table.types.get(&else_expr.id)?.clone();
+                let widened = self.widen_int_literals(then_expr, expected, &then_ty)?;
+                self.widen_int_literals(else_expr, expected, &else_ty)?;
+                self.record_int_literal_width(expr, &widened);
+                Some(widened)
+            }
+            // A `const` declared without a type was written as a literal, and
+            // takes a width the way that literal would, when its value fits.
+            ExpressionKind::Identifier(name, _) if is_integer_width(&expected.kind) => {
+                let info = self.type_table.global_scope.get(name)?;
+                let Some(Literal::Integer(value)) = &info.value else {
+                    return None;
+                };
+                let fits = info.untyped_constant
+                    && self
+                        .get_integer_size(expected)
+                        .is_some_and(|size| self.integer_fits(value, size, expected));
+                if !fits {
+                    return None;
+                }
+                let width = Type::new(expected.kind.clone(), expected.span);
+                self.record_int_literal_width(expr, &width);
+                Some(width)
             }
             _ => None,
         }

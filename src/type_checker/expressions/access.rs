@@ -396,7 +396,9 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
-        if !matches!(index_type.kind, TypeKind::Int) {
+        // An index is an `int`, or an integer whose every value an `int` holds
+        // on every target, converted to one.
+        if !crate::ast::types::holds_every_value_of(&TypeKind::Int, &index_type.kind) {
             self.report_error(
                 DiagnosticCode::TypIndexOperation,
                 format!("{} index must be an integer", name),
@@ -545,6 +547,11 @@ impl TypeChecker {
         if let Some(args) = args {
             if args.len() >= 2 {
                 let key_type = self.resolve_type_expression(&args[0], context);
+                // A number written as the key takes the key type, as it would
+                // stored anywhere else.
+                let index_type = &self
+                    .number_at_width(index, &key_type, index_type, context)
+                    .unwrap_or_else(|| index_type.clone());
                 if !self.are_compatible(&key_type, index_type, context) {
                     self.report_error(
                         DiagnosticCode::TypCollectionElementType,

@@ -210,7 +210,7 @@ use system.collections.set
 
 fn main()
     var s = Set<i32?>()
-    var i = 0
+    var i i32 = 0
     while i < 40
         s.add(Some(7))
         s.add(Some(i))

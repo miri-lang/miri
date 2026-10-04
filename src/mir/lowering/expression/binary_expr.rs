@@ -579,7 +579,73 @@ pub(crate) fn lower_binary_expr(
         return Ok(emit_unchecked_operator_trap(ctx, op, expr, dest));
     }
 
+    let (lhs_op, rhs_op) = at_one_number_type(ctx, (lhs, lhs_op), (rhs, rhs_op), expr.span);
     emit_binary_op(ctx, op, lhs_op, rhs_op, expr, dest, arg_watermark)
+}
+
+/// The two operands of a number operator, each converted to the type that
+/// holds every value of both when they are numbers of different types, so the
+/// instruction computes at that type: `u32 + i32` adds at `i64`, and `i8 < u8`
+/// compares at `i16`. Operands of one type, or of no common type, are left as
+/// they are.
+fn at_one_number_type(
+    ctx: &mut LoweringContext,
+    (lhs, lhs_op): (&Expression, Operand),
+    (rhs, rhs_op): (&Expression, Operand),
+    span: crate::error::syntax::Span,
+) -> (Operand, Operand) {
+    let (Some(lhs_ty), Some(rhs_ty)) = (ctx.recorded_type(lhs.id), ctx.recorded_type(rhs.id))
+    else {
+        return (lhs_op, rhs_op);
+    };
+    if lhs_ty.kind == rhs_ty.kind {
+        return (lhs_op, rhs_op);
+    }
+    // A literal beside a type parameter takes the type the instantiation binds
+    // it to, as the site judged it; the checker settled every other literal
+    // already. Any other pair computes at the type that holds both.
+    let written_at_parameter = |expr: &Expression| {
+        ctx.type_checker
+            .get_type(expr.id)
+            .is_some_and(|ty| matches!(ty.kind, TypeKind::Generic(..)))
+    };
+    let common = if is_number_literal(lhs) && written_at_parameter(rhs) {
+        Some(rhs_ty.kind.clone())
+    } else if is_number_literal(rhs) && written_at_parameter(lhs) {
+        Some(lhs_ty.kind.clone())
+    } else {
+        crate::ast::types::common_numeric_type(&lhs_ty.kind, &rhs_ty.kind)
+    };
+    let same_family = crate::ast::types::common_numeric_type(&lhs_ty.kind, &rhs_ty.kind).is_some();
+    let Some(common) = common.filter(|_| same_family) else {
+        return (lhs_op, rhs_op);
+    };
+    // An operand of the same signedness as a common type it is narrower than
+    // is widened by the instruction itself; only a sign change, or a common
+    // type wider than both, needs the conversion spelled out.
+    let signed = crate::ast::types::is_signed_number;
+    let one_signedness = signed(&lhs_ty.kind) == signed(&rhs_ty.kind);
+    if one_signedness && (lhs_ty.kind == common || rhs_ty.kind == common) {
+        return (lhs_op, rhs_op);
+    }
+    let mut convert = |operand: Operand, ty: &Type| {
+        if ty.kind == common {
+            return operand;
+        }
+        let target = Type::new(common.clone(), span);
+        let converted = ctx.push_temp(target.clone(), span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(converted),
+                Rvalue::Cast(Box::new(operand), target),
+            ),
+            span,
+        });
+        Operand::Copy(Place::new(converted))
+    };
+    let lhs_op = convert(lhs_op, &lhs_ty);
+    let rhs_op = convert(rhs_op, &rhs_ty);
+    (lhs_op, rhs_op)
 }
 
 /// Whether `lhs op rhs` would reach a machine instruction on a value that is
@@ -938,4 +1004,18 @@ fn emit_binary_op(
         ctx.emit_temp_drop(local, operand_watermark, expr.span);
     }
     Ok(ret_op)
+}
+
+/// Whether `expr` is a number written in the source: a literal, or one under
+/// a sign.
+fn is_number_literal(expr: &Expression) -> bool {
+    match &expr.node {
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+        | ExpressionKind::Literal(crate::ast::literal::Literal::Float(_)) => true,
+        ExpressionKind::Unary(
+            crate::ast::operator::UnaryOp::Negate | crate::ast::operator::UnaryOp::Plus,
+            operand,
+        ) => is_number_literal(operand),
+        _ => false,
+    }
 }

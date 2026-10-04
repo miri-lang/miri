@@ -923,3 +923,33 @@ pub(super) fn resolve_arg_type(
         .map(|ty| ctx.resolve_self_in(&ty))
         .unwrap_or_else(|| arg_op.ty(&ctx.body).clone())
 }
+
+/// The index `operand` of `index_expr`, converted to `int` when the program
+/// wrote it at a narrower integer type, which the checker admits only where an
+/// `int` holds every value of it. A collection is indexed at `int`.
+pub(crate) fn index_at_int(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    index_expr: &crate::ast::expression::Expression,
+) -> Operand {
+    let Some(written) = ctx.recorded_type(index_expr.id) else {
+        return operand;
+    };
+    let narrower_integer = !matches!(written.kind, TypeKind::Int)
+        && crate::ast::types::holds_every_value_of(&TypeKind::Int, &written.kind);
+    // A GPU holds an `int` as an `i32`, so an `i32` index there needs nothing.
+    let already_int_on_device = ctx.body.is_gpu() && matches!(written.kind, TypeKind::I32);
+    if !narrower_integer || already_int_on_device {
+        return operand;
+    }
+    let target = Type::new(TypeKind::Int, index_expr.span);
+    let converted = ctx.push_temp(target.clone(), index_expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: crate::mir::StatementKind::Assign(
+            crate::mir::Place::new(converted),
+            crate::mir::Rvalue::Cast(Box::new(operand), target),
+        ),
+        span: index_expr.span,
+    });
+    Operand::Copy(crate::mir::Place::new(converted))
+}

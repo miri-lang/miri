@@ -362,7 +362,7 @@ fn web_gpu_refuses_a_gpu_fn_launch_with_a_scalar_argument() {
 const FORALL_CAPTURING_A_SCALAR: &str = r#"use system.collections.array
 
 fn main()
-    let scale = 2.0
+    let scale f32 = 2.0
     gpu var buf = Array<f32, 4>()
     gpu forall i in 0..4
         buf[i] = scale

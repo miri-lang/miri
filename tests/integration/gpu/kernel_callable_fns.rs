@@ -130,7 +130,7 @@ fn main()
     gpu let src = [1.0, 2.0, 3.0]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = double_then_add_one(src[i])
+        dst[i] = double_then_add_one(src[i]) as f32
 ",
     );
 }

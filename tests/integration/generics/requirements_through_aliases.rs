@@ -108,7 +108,7 @@ fn a_call_through_a_module_alias_answers_the_bodys_arithmetic() {
             ),
             CALC,
         ],
-        "i8 and i64 are not compatible for arithmetic operation",
+        "'+' applied to i8 and i64 gives i64, but the generic body reads the result as i8",
     );
 }
 

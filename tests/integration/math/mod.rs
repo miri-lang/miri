@@ -97,7 +97,7 @@ use system.math.{mix}
 use system.io
 
 fn blend(t f32) f32
-    return mix(mix(1.0, 3.0, t), mix(5.0, 9.0, t), t)
+    return mix(mix(1.0, 3.0, t), mix(5.0, 9.0, t), t) as f32
 
 println(f"{blend(0.5)}")
 "#;

@@ -889,6 +889,7 @@ fn assign_to_index_array(
     let receiver_local = obj_place.local;
 
     let index_operand = lower_expression(ctx, idx, None)?;
+    let index_operand = crate::mir::lowering::helpers::index_at_int(ctx, index_operand, idx);
     let index_local = normalize_index(ctx, index_operand, idx)?;
 
     let mut target_place = obj_place;
