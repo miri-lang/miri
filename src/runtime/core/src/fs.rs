@@ -78,6 +78,15 @@ fn is_dir(path: &str) -> bool {
     }
 }
 
+/// Returns whether a path contains path traversal attempts (parent directory '..' components).
+/// Normalizes path separators so backslash-separated parent directory components are properly detected cross-platform.
+fn is_path_traversal(path_str: &str) -> bool {
+    let normalized = path_str.replace('\\', "/");
+    Path::new(&normalized)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 pub mod ffi {
     use super::*;
 
@@ -118,10 +127,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(0, String::new());
             return 0;
         }
@@ -161,10 +167,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
             return into_raw_ptr(MiriString::from_str(""));
         }
@@ -217,10 +220,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
             return -1;
         }
@@ -276,10 +276,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
             return -1;
         }
@@ -349,10 +346,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
             let list = crate::miri_rt_list_new(std::mem::size_of::<*mut u8>());
             return list;
@@ -439,10 +433,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
             return -1;
         }
@@ -503,10 +494,7 @@ pub mod ffi {
         let path_str = (*path).as_str();
 
         // Reject path traversal attempts containing '..'
-        if Path::new(path_str)
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
+        if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
             return -1;
         }
@@ -571,3 +559,83 @@ pub mod ffi {
 
 // Re-export FFI functions at module level for backward-compatible access
 pub use ffi::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::string::miri_rt_string_free;
+
+    #[test]
+    fn test_is_path_traversal() {
+        assert!(is_path_traversal("../foo"));
+        assert!(is_path_traversal("foo/../bar"));
+        assert!(is_path_traversal("..\\foo"));
+        assert!(is_path_traversal("foo\\..\\bar"));
+
+        assert!(!is_path_traversal("foo/bar"));
+        assert!(!is_path_traversal("file.txt"));
+        assert!(!is_path_traversal("subdir/file.txt"));
+        assert!(!is_path_traversal("/tmp/test.txt"));
+    }
+
+    #[test]
+    fn test_fs_path_traversal_rejection() {
+        unsafe {
+            let relative_parent = into_raw_ptr(MiriString::from_str("../secret.txt"));
+            let win_relative_parent = into_raw_ptr(MiriString::from_str("..\\secret.txt"));
+            let content = into_raw_ptr(MiriString::from_str("data"));
+
+            // miri_rt_fs_exists
+            assert_eq!(miri_rt_fs_exists(relative_parent), 0);
+            assert_eq!(miri_rt_fs_status(), 0);
+            assert_eq!(miri_rt_fs_exists(win_relative_parent), 0);
+            assert_eq!(miri_rt_fs_status(), 0);
+
+            // miri_rt_fs_read_file
+            let res1 = miri_rt_fs_read_file(relative_parent);
+            assert_eq!(miri_rt_fs_status(), 2);
+            miri_rt_string_free(res1);
+
+            let res2 = miri_rt_fs_read_file(win_relative_parent);
+            assert_eq!(miri_rt_fs_status(), 2);
+            miri_rt_string_free(res2);
+
+            // miri_rt_fs_write_file
+            assert_eq!(miri_rt_fs_write_file(relative_parent, content), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+            assert_eq!(miri_rt_fs_write_file(win_relative_parent, content), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+
+            // miri_rt_fs_append_file
+            assert_eq!(miri_rt_fs_append_file(relative_parent, content), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+            assert_eq!(miri_rt_fs_append_file(win_relative_parent, content), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+
+            // miri_rt_fs_list_dir
+            let list1 = miri_rt_fs_list_dir(relative_parent);
+            assert_eq!(miri_rt_fs_status(), 2);
+            crate::miri_rt_list_free(list1);
+
+            let list2 = miri_rt_fs_list_dir(win_relative_parent);
+            assert_eq!(miri_rt_fs_status(), 2);
+            crate::miri_rt_list_free(list2);
+
+            // miri_rt_fs_create_dir
+            assert_eq!(miri_rt_fs_create_dir(relative_parent), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+            assert_eq!(miri_rt_fs_create_dir(win_relative_parent), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+
+            // miri_rt_fs_delete
+            assert_eq!(miri_rt_fs_delete(relative_parent), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+            assert_eq!(miri_rt_fs_delete(win_relative_parent), -1);
+            assert_eq!(miri_rt_fs_status(), 2);
+
+            miri_rt_string_free(relative_parent);
+            miri_rt_string_free(win_relative_parent);
+            miri_rt_string_free(content);
+        }
+    }
+}
