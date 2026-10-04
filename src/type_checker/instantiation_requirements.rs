@@ -147,6 +147,17 @@ pub(crate) struct WrittenBinary {
     op: BinaryOp,
     right: Type,
     result: Type,
+    /// Which operands the body wrote as a number literal. A literal has no
+    /// width of its own and takes the other operand's type, so the site judges
+    /// it at whatever that operand is pinned to, as concrete code would.
+    literals: WrittenLiterals,
+}
+
+/// Whether each operand of a written operator is a number literal.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct WrittenLiterals {
+    pub(crate) left: bool,
+    pub(crate) right: bool,
 }
 
 impl WrittenBinary {
@@ -171,6 +182,7 @@ impl WrittenBinary {
             op: self.op,
             right: delegated_operand(&self.right, pins)?,
             result: delegated_operand(&self.result, pins)?,
+            literals: self.literals,
         })
     }
 }
@@ -681,10 +693,9 @@ impl TypeChecker {
     /// operation the body already refused is not restated at every site.
     pub(crate) fn record_binary_requirement(
         &mut self,
-        left: &Type,
-        op: &BinaryOp,
-        right: &Type,
+        (left, op, right): (&Type, &BinaryOp, &Type),
         result: &Type,
+        literals: WrittenLiterals,
         context: &Context,
     ) {
         let spells_a_parameter = |ty: &Type| {
@@ -705,6 +716,7 @@ impl TypeChecker {
                 op: *op,
                 right: right.clone(),
                 result: result.clone(),
+                literals,
             }),
         );
     }
@@ -1223,6 +1235,13 @@ impl TypeChecker {
         pinned: &HashMap<String, Type>,
         context: &Context,
     ) -> Option<String> {
+        let same_family = Self::is_float_kind(&left.kind) == Self::is_float_kind(&right.kind);
+        let numbers = self.is_numeric(left) && self.is_numeric(right) && same_family;
+        let (left, right) = match (written.literals.left, written.literals.right) {
+            (true, false) if numbers => (right, right),
+            (false, true) if numbers => (left, left),
+            _ => (left, right),
+        };
         let given = match self.check_binary_op_types(left, &written.op, right, context) {
             Ok(given) => given,
             Err(message) => return Some(message),

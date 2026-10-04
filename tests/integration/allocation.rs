@@ -84,7 +84,7 @@ use system.collections.list
 
 fn main()
     var l = List<i32>()
-    var i = 0
+    var i i32 = 0
     while i < 64
         l.push(i)
         i += 1

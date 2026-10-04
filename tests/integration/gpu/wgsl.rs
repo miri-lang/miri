@@ -156,7 +156,7 @@ fn main()
     gpu let src = Array<f16, 4>()
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
     gpu forall i in 0..4
-        dst[i] = src[i] as float
+        dst[i] = src[i] as f32
 ",
         );
     }
@@ -315,7 +315,7 @@ fn main()
     gpu forall i in 0..4
         dst[i] = a[i] * b[i]
 ",
-            "not compatible",
+            "cannot assign f32 to f16",
         );
     }
 
@@ -2210,14 +2210,14 @@ fn scratch_sum(base float) float
     var h = Array<f32, 4>()
     var k = 0
     while k < 4
-        h[k] = base * (k as f32)
+        h[k] = (base * (k as f32)) as f32
         k = k + 1
     return h[0] + h[1] + h[2] + h[3]
 
 fn main()
     gpu var dst = Array<f32, 1>()
     gpu forall i in 0..1
-        dst[i] = scratch_sum(2.0)
+        dst[i] = scratch_sum(2.0) as f32
 ";
     let wgsl = super::helpers::compile_to_wgsl(source);
     assert!(

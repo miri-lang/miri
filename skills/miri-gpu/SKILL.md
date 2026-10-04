@@ -40,7 +40,7 @@ use system.collections.array
 const W = 16
 const H = 16
 
-gpu var canvas = Array<i32, 256>()
+gpu var canvas = Array<int, 256>()
 
 forall x, y in 0..W, 0..H
     canvas[y * W + x] = x + y * 100
@@ -70,7 +70,7 @@ use system.gpu
 use system.collections.array
 
 const N = 256
-gpu var data = Array<i32, N>()
+gpu var data = Array<int, N>()
 
 forall i in 0..N
     data[i] = i * 2

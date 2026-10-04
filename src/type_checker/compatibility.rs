@@ -117,7 +117,18 @@ impl TypeChecker {
     }
 
     /// Checks numeric type compatibility including literal widening.
+    ///
+    /// A number is stored where its value always fits: the destination holds
+    /// every value of the source on every target. A literal took the
+    /// destination's type where it was written, so it is judged at that type.
     fn check_numeric_compatibility(&self, t1: &Type, t2: &Type) -> Option<bool> {
+        let numbers = |ty: &Type| {
+            crate::ast::types::scalar_width(&ty.kind).is_some()
+                && !matches!(ty.kind, TypeKind::Boolean)
+        };
+        if numbers(t1) && numbers(t2) {
+            return Some(crate::ast::types::holds_every_value_of(&t1.kind, &t2.kind));
+        }
         // Int literal compatible with any integer type
         if matches!(t2.kind, TypeKind::Int) && self.is_integer(t1) {
             return Some(true);

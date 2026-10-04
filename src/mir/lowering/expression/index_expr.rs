@@ -39,6 +39,7 @@ pub(crate) fn lower_index_expr(
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
     let index_operand = lower_expression(ctx, index_expr, None)?;
+    let index_operand = crate::mir::lowering::helpers::index_at_int(ctx, index_operand, index_expr);
     let index_local = ensure_index_local(ctx, index_expr, index_operand);
 
     let mut indexed_place = obj_place.clone();

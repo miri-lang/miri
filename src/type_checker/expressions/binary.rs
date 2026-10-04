@@ -52,6 +52,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
+use crate::type_checker::instantiation_requirements::WrittenLiterals;
 use crate::type_checker::TypeChecker;
 
 /// True for the numeric arithmetic operators (`+`, `-`, `*`, `/`, `%`) — the
@@ -130,6 +131,120 @@ impl TypeChecker {
         inferred.clone()
     }
 
+    /// The operand types of a numeric operator, once a number written in the
+    /// source on one side has taken the other side's type.
+    ///
+    /// A literal, or a `const` declared without a type, has no width of its
+    /// own, so `small + 1` stays an `i8` and `i < LIMIT` compares at `i`'s type.
+    /// Two values of different numeric types are left as they are: the
+    /// operator's check computes them at a type that holds both, or refuses
+    /// them when none does.
+    fn operands_at_one_width(
+        &mut self,
+        (left, left_ty): (&Expression, Type),
+        op: &BinaryOp,
+        (right, right_ty): (&Expression, Type),
+        context: &Context,
+    ) -> (Type, Type) {
+        let numeric_op = is_arithmetic_op(op)
+            || crate::type_checker::operators::is_ordering_op(op)
+            || matches!(
+                op,
+                BinaryOp::Equal
+                    | BinaryOp::NotEqual
+                    | BinaryOp::BitwiseAnd
+                    | BinaryOp::BitwiseOr
+                    | BinaryOp::BitwiseXor
+            );
+        let both_numbers = crate::ast::types::scalar_width(&left_ty.kind).is_some()
+            && crate::ast::types::scalar_width(&right_ty.kind).is_some()
+            && !matches!(left_ty.kind, TypeKind::Boolean)
+            && !matches!(right_ty.kind, TypeKind::Boolean);
+        let same_family = Self::is_float_kind(&left_ty.kind) == Self::is_float_kind(&right_ty.kind);
+        if !numeric_op || !both_numbers || !same_family || left_ty.kind == right_ty.kind {
+            return (left_ty, right_ty);
+        }
+        if let Some(adapted) = self.number_at_width(right, &left_ty, &right_ty, context) {
+            return (left_ty, adapted);
+        }
+        if let Some(adapted) = self.number_at_width(left, &right_ty, &left_ty, context) {
+            return (adapted, right_ty);
+        }
+        (left_ty, right_ty)
+    }
+
+    /// Whether the number literal `operand` is a value of `width`: a negative
+    /// literal is no value of an unsigned type, and a whole number no value of
+    /// an integer type too narrow for it. A literal that is not keeps its own
+    /// type, and the operator compares or computes the two by value.
+    pub(crate) fn number_literal_fits(&self, operand: &Expression, width: &Type) -> bool {
+        match &operand.node {
+            ExpressionKind::Literal(crate::ast::literal::Literal::Integer(value)) => self
+                .get_integer_size(width)
+                .is_some_and(|size| self.integer_fits(value, size, width)),
+            ExpressionKind::Unary(UnaryOp::Negate, inner) => {
+                let unsigned = matches!(
+                    width.kind,
+                    TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+                );
+                !unsigned && self.number_literal_fits(inner, width)
+            }
+            ExpressionKind::Unary(UnaryOp::Plus, inner) => self.number_literal_fits(inner, width),
+            _ => true,
+        }
+    }
+
+    /// The type `operand` takes at `width` when it is a number written in the
+    /// source — a literal, or a `const` declared without a type whose value
+    /// fits `width` — recorded at that width; `None` for any other operand.
+    pub(crate) fn number_at_width(
+        &mut self,
+        operand: &Expression,
+        width: &Type,
+        inferred: &Type,
+        context: &Context,
+    ) -> Option<Type> {
+        if let Some(adapted) = self.literal_at_width(operand, width, inferred, context) {
+            return Some(adapted);
+        }
+        let ExpressionKind::Identifier(name, _) = &operand.node else {
+            return None;
+        };
+        let info = context.resolve_info(name)?;
+        if !info.untyped_constant {
+            return None;
+        }
+        let fits = match &info.value {
+            Some(crate::ast::literal::Literal::Integer(value)) => self
+                .get_integer_size(width)
+                .is_some_and(|size| self.integer_fits(value, size, width)),
+            Some(crate::ast::literal::Literal::Float(_)) => Self::is_float_kind(&width.kind),
+            _ => false,
+        };
+        if !fits {
+            return None;
+        }
+        let adapted = Type::new(width.kind.clone(), operand.span);
+        self.type_table.types.insert(operand.id, adapted.clone());
+        Some(adapted)
+    }
+
+    /// The type `operand` takes at `width` when it is a bare number literal,
+    /// recorded at that width; `None` for any other operand.
+    fn literal_at_width(
+        &mut self,
+        operand: &Expression,
+        width: &Type,
+        inferred: &Type,
+        context: &Context,
+    ) -> Option<Type> {
+        if !is_number_literal(operand) || !self.number_literal_fits(operand, width) {
+            return None;
+        }
+        self.widen_int_literals(operand, width, inferred)
+            .or_else(|| self.narrow_float_literals(operand, width, inferred, context))
+    }
+
     /// The type of `operand`, typed `ty`, once an equality has bound the
     /// generic call it is from `other`, the type of the operand it is compared
     /// with: `x == none_of()` with `x` an `int?` builds `none_of` at `int`,
@@ -200,6 +315,16 @@ impl TypeChecker {
 
         let left_ty = self.literal_operand_at_width(left, &left_ty, &right_ty);
         let right_ty = self.literal_operand_at_width(right, &right_ty, &left_ty);
+        let (left_ty, right_ty) =
+            self.operands_at_one_width((left, left_ty), op, (right, right_ty), context);
+        // `opt ?? 0` — the default is stored where the optional's value is, so
+        // a number written there takes the payload's type.
+        let right_ty = match (&left_ty.kind, op) {
+            (TypeKind::Option(payload), BinaryOp::NullCoalesce) => self
+                .number_at_width(right, payload, &right_ty, context)
+                .unwrap_or(right_ty),
+            _ => right_ty,
+        };
 
         // A bare float literal defaults to `f32`/`f64`, so `f16_elem * 2.0` would
         // otherwise fail as a scalar-width mismatch. Narrow the literal operand to
@@ -232,7 +357,16 @@ impl TypeChecker {
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(result) => {
                 if is_deferred_to_instantiation(op) {
-                    self.record_binary_requirement(&left_ty, op, &right_ty, &result, context);
+                    let literals = WrittenLiterals {
+                        left: is_number_literal(left),
+                        right: is_number_literal(right),
+                    };
+                    self.record_binary_requirement(
+                        (&left_ty, op, &right_ty),
+                        &result,
+                        literals,
+                        context,
+                    );
                 }
                 self.record_operator_method_sites(&left_ty, op, span, context);
                 self.record_membership_sites(op, &right_ty, span, context);
@@ -455,18 +589,24 @@ impl TypeChecker {
         let lhs_type = self.infer_assignment_target(lhs, span, context);
         // A plain assignment writes the right-hand side into the target's
         // slot, so a literal there takes the target's width, as it does in a
-        // declaration. A compound one combines through its operator first.
+        // declaration.
+        // A compound one combines through its operator first, where a number
+        // written in the source takes the other operand's type as it does in
+        // `x = x + 2.25`.
         let rhs_type = if matches!(op, AssignmentOp::Assign) {
             self.narrow_float_literals(rhs, &lhs_type, &rhs_type, context)
                 .or_else(|| self.widen_int_literals(rhs, &lhs_type, &rhs_type))
                 .unwrap_or(rhs_type)
         } else {
-            rhs_type
+            self.number_at_width(rhs, &lhs_type, &rhs_type, context)
+                .unwrap_or(rhs_type)
         };
 
         self.check_division_by_zero_assignment(op, rhs);
 
-        let Some(stored_type) = self.compound_result_type(&lhs_type, op, &rhs_type, span, context)
+        let rhs_is_literal = is_number_literal(rhs);
+        let Some(stored_type) =
+            self.compound_result_type(&lhs_type, op, (&rhs_type, rhs_is_literal), span, context)
         else {
             return ast_factory::make_type(TypeKind::Error);
         };
@@ -513,7 +653,7 @@ impl TypeChecker {
         &mut self,
         lhs_type: &Type,
         op: &AssignmentOp,
-        rhs_type: &Type,
+        (rhs_type, rhs_is_literal): (&Type, bool),
         span: Span,
         context: &mut Context,
     ) -> Option<Type> {
@@ -530,8 +670,15 @@ impl TypeChecker {
                 // `x op= y` applies `op` as `x = x op y` does, so a generic
                 // body states the same requirement on its parameters.
                 if is_deferred_to_instantiation(&binary_op) {
+                    let literals = WrittenLiterals {
+                        left: false,
+                        right: rhs_is_literal,
+                    };
                     self.record_binary_requirement(
-                        lhs_type, &binary_op, rhs_type, &result, context,
+                        (lhs_type, &binary_op, rhs_type),
+                        &result,
+                        literals,
+                        context,
                     );
                 }
                 Some(result)
@@ -871,5 +1018,18 @@ impl BinaryOpRemedy {
                  e.g. f\"n={n}\"."
             }
         }
+    }
+}
+
+/// Whether `expr` is a number written in the source: a literal, or one under
+/// a sign.
+pub(crate) fn is_number_literal(expr: &Expression) -> bool {
+    match &expr.node {
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+        | ExpressionKind::Literal(crate::ast::literal::Literal::Float(_)) => true,
+        ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
+            is_number_literal(operand)
+        }
+        _ => false,
     }
 }

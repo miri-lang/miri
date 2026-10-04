@@ -543,9 +543,38 @@ fn try_lower_math_intrinsic(
         return Ok(None);
     };
 
+    // `min` and `max` combine their arguments as an operator does: each is
+    // converted to the type the checker settled on, which holds all of them.
+    let combined = resolve_type(ctx.type_checker, expr);
+    let combines = matches!(
+        intrinsic,
+        crate::mir::MathIntrinsic::Min | crate::mir::MathIntrinsic::Max
+    );
     let mut arg_ops = Vec::with_capacity(args.len());
     for arg in args {
-        arg_ops.push(lower_expression(ctx, arg, None)?);
+        let lowered = lower_expression(ctx, arg, None)?;
+        let arg_ty = ctx.recorded_type(arg.id);
+        let converted = match arg_ty {
+            Some(arg_ty)
+                if combines
+                    && arg_ty.kind != combined.kind
+                    && crate::ast::types::common_numeric_type(&arg_ty.kind, &combined.kind)
+                        .is_some() =>
+            {
+                let target = Type::new(combined.kind.clone(), expr.span);
+                let temp = ctx.push_temp(target.clone(), expr.span);
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Cast(Box::new(lowered), target),
+                    ),
+                    span: expr.span,
+                });
+                Operand::Copy(Place::new(temp))
+            }
+            _ => lowered,
+        };
+        arg_ops.push(converted);
     }
 
     let return_ty = resolve_type(ctx.type_checker, expr);

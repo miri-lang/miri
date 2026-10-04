@@ -652,22 +652,42 @@ impl TypeChecker {
             return Some(make_type(TypeKind::Error));
         }
 
-        // Validate that all arguments are the same numeric type (or numeric-compatible).
+        // The arguments are combined as an operator combines its operands: a
+        // number literal takes the other arguments' type, and numbers of
+        // different types meet at the type that holds every value of each.
+        let anchor = positional_args
+            .iter()
+            .find(|(arg, _)| !super::binary::is_number_literal(arg))
+            .map_or_else(|| first_arg_type.clone(), |(_, ty)| ty.clone());
+        let mut combined: Option<Type> = None;
         for (arg_expr, arg_type) in positional_args {
-            if !self.are_compatible(first_arg_type, arg_type, context) {
+            let arg_type = self
+                .number_at_width(arg_expr, &anchor, arg_type, context)
+                .unwrap_or_else(|| arg_type.clone());
+            let next = match &combined {
+                None => Some(arg_type.clone()),
+                Some(so_far) => {
+                    crate::ast::types::common_numeric_type(&so_far.kind, &arg_type.kind)
+                        .map(|kind| Type::new(kind, so_far.span))
+                }
+            };
+            let Some(next) = next else {
                 self.report_error(
                     DiagnosticCode::TypTypeMismatch,
                     format!(
-                        "Type mismatch in {}: expected {}, got {}",
-                        func_name, first_arg_type, arg_type
+                        "Type mismatch in {}: no number type holds every value of both '{}' \
+                         and '{}'; convert one argument with `as`",
+                        func_name,
+                        combined.as_ref().unwrap_or(first_arg_type),
+                        arg_type
                     ),
                     arg_expr.span,
                 );
-            }
+                return Some(make_type(TypeKind::Error));
+            };
+            combined = Some(next);
         }
-
-        // Return type matches the first argument type (numeric polymorphism).
-        Some(first_arg_type.clone())
+        Some(combined.unwrap_or_else(|| first_arg_type.clone()))
     }
 
     /// Detects vector builtin functions (dot, length, normalize, cross, reflect, mix)

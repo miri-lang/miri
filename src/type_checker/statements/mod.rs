@@ -455,6 +455,12 @@ impl TypeChecker {
         if matches!(return_type.kind, TypeKind::Void) {
             return;
         }
+        // A number written as the tail value takes the return type, as it
+        // does after an explicit `return`.
+        let expr_type = &self
+            .narrow_float_literals(expr, &return_type, expr_type, context)
+            .or_else(|| self.widen_int_literals(expr, &return_type, expr_type))
+            .unwrap_or_else(|| expr_type.clone());
         if !self.accepts_value_at(&return_type, expr_type, Some(expr), context) {
             self.report_error(
                 DiagnosticCode::TypTypeMismatch,

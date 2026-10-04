@@ -168,10 +168,19 @@ pub(crate) fn build_global_identifier_operand(
         )?));
     }
     let has_fixed_value = info.is_constant || !info.mutable;
+    // A `const` written without a type takes the width of the number beside
+    // it or the place it is stored, which the checker recorded on this use.
+    let ty = if info.untyped_constant {
+        ctx.recorded_type(expr.id)
+            .filter(|ty| crate::ast::types::scalar_width(&ty.kind).is_some())
+            .unwrap_or_else(|| info.ty.clone())
+    } else {
+        info.ty.clone()
+    };
     match &info.value {
         Some(literal) if has_fixed_value => Ok(Operand::Constant(Box::new(Constant {
             span: expr.span,
-            ty: info.ty.clone(),
+            ty,
             literal: literal.clone(),
         }))),
         _ if info.module_scope => Err(module_binding_without_value(name, expr)),

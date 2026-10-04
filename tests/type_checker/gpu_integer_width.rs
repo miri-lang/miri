@@ -161,7 +161,7 @@ fn main()
     let k i64 = 5
     gpu var dst = Array<int, 2>()
     gpu forall i in 0..2
-        dst[i] = i + k
+        dst[i] = (i + k) as int
 ",
     );
 }

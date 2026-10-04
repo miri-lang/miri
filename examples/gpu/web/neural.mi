@@ -99,13 +99,13 @@ gpu var stats = Array<f32, 3>()
 // Decision-field paint output (960×540 RGBA).
 gpu var paint = Array<f32, PAINT>()
 
-fn rand_unit(key i32) f32
+fn rand_unit(key int) f32
     let h = hash_u32(key as u32)
     return (h as f32) / (4294967295.0 as f32)
 
 // Initial spread of parameter `i`, small and per-layer in the Xavier-ish manner
 // the reference net uses. Biases start at exactly zero, so they scale by 0.
-fn init_scale(i i32) f32
+fn init_scale(i int) f32
     if i < B1: return 0.65
     if i >= W2 and i < B2: return 0.5
     if i >= W3 and i < B3: return 0.68

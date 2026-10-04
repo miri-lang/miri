@@ -46,7 +46,7 @@ fn main()
     gpu var buf = [0, 0, 0, 0]
     let k {ty} = {value}
     gpu forall i in 0..4
-        buf[i] = i + k
+        buf[i] = (i + k) as int
     let host = buf
     println(f\"{{host[3]}}\")
 "

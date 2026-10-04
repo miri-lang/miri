@@ -9,8 +9,8 @@
 use super::context::{class_implements_trait, class_method_declaration, Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{
-    vec_dim, BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
-    ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
+    common_numeric_type, scalar_width, vec_dim, BuiltinCollectionKind, Type, TypeKind,
+    EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
 };
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
@@ -35,6 +35,35 @@ pub(crate) fn is_ordering_op(op: &BinaryOp) -> bool {
 /// Whether either operand of a binary operator is one of the body's type
 /// parameters, whose pairing with the other operand each instantiation of the
 /// body judges rather than the body itself.
+/// The type an operator between two numbers of different types computes at,
+/// or the refusal when no type holds every value of both; `None` when the two
+/// are not both numbers of one family, which the caller judges.
+fn common_number_type(left: &Type, right: &Type) -> Option<Result<Type, String>> {
+    let both_numbers = scalar_width(&left.kind).is_some()
+        && scalar_width(&right.kind).is_some()
+        && !matches!(left.kind, TypeKind::Boolean)
+        && !matches!(right.kind, TypeKind::Boolean);
+    if !both_numbers || left.kind == right.kind {
+        return None;
+    }
+    let float = |ty: &Type| {
+        matches!(
+            ty.kind,
+            TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64
+        )
+    };
+    if float(left) != float(right) {
+        return None;
+    }
+    Some(match common_numeric_type(&left.kind, &right.kind) {
+        Some(common) => Ok(Type::new(common, left.span)),
+        None => Err(format!(
+            "Type mismatch: no number type holds every value of both '{left}' and '{right}'; \
+             convert one operand with `as` so both are the same type"
+        )),
+    })
+}
+
 fn has_parameter_operand(left: &Type, right: &Type) -> bool {
     [left, right]
         .iter()
@@ -137,6 +166,12 @@ impl TypeChecker {
             ));
         }
 
+        // Two numbers compute at a type that holds every value of both, so
+        // neither is truncated nor wrapped, and `a + b` is `b + a`.
+        if let Some(result) = common_number_type(left, right) {
+            return result;
+        }
+
         // Numeric operations
         if self.is_numeric(left) && self.is_numeric(right) {
             if self.are_compatible(left, right, context) {
@@ -154,11 +189,17 @@ impl TypeChecker {
         // both operands, so the one beside the parameter — a literal, a
         // concrete value, a second parameter — is judged with it there.
         //
-        // The result is the left operand's type, as it is for two numbers: `k *
-        // a` with `k int` is an `int` whatever the call binds `a` to. Each site
-        // also checks that the operator it judges gives the type the body read.
+        // The result is the parameter operand's type: `k * a` with `k int` is
+        // an `a`, whichever side it is written on. Each site checks that the
+        // operator it judges gives the type the body read, so a binding whose
+        // values `int` would widen (`a` an `i8`) is refused there.
         if has_parameter_operand(left, right) {
-            return Ok(left.clone());
+            let parameter = if matches!(left.kind, TypeKind::Generic(..)) {
+                left
+            } else {
+                right
+            };
+            return Ok(parameter.clone());
         }
 
         // Trait-based Add: if left implements Addable and types are compatible
@@ -379,6 +420,9 @@ impl TypeChecker {
                 "Invalid types for bitwise operation: {} and {}",
                 left, right
             ));
+        }
+        if let Some(result) = common_number_type(left, right) {
+            return result;
         }
 
         if left == right || matches!(right.kind, TypeKind::Int) {

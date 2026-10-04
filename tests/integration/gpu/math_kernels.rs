@@ -204,7 +204,7 @@ use system.collections.array
 fn main()
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = value_noise(0.5, 0.5)
+        dst[i] = value_noise(0.5, 0.5) as f32
 ",
     );
 }
@@ -226,7 +226,7 @@ fn main()
     gpu let src = [0.1, 0.2, 0.3]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = value_noise(src[i], 0.5) + lattice_unit(0.0, 0.0)
+        dst[i] = (value_noise(src[i], 0.5) + lattice_unit(0.0, 0.0)) as f32
 ",
     );
 }
@@ -274,7 +274,7 @@ use system.collections.array
 fn main()
     gpu var dst = [0.0, 0.0]
     gpu forall i in 0..2
-        dst[i] = fbm(1.0, 2.0) + curl_noise_x(1.0, 2.0) + curl_noise_y(1.0, 2.0)
+        dst[i] = (fbm(1.0, 2.0) + curl_noise_x(1.0, 2.0) + curl_noise_y(1.0, 2.0)) as f32
 ",
     );
 }

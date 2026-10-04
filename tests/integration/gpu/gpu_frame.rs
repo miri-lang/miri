@@ -454,7 +454,7 @@ fn test_gpu_frame_wgsl_validity_frame_plus_scalar_capture() {
 use system.gpu
 
 fn main()
-    let s = 1.0
+    let s f32 = 1.0
     gpu let a = [1.0, 2.0, 3.0, 4.0]
     gpu var b = [0.0, 0.0, 0.0, 0.0]
     gpu frame i in 0..4:

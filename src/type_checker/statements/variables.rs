@@ -267,6 +267,7 @@ impl TypeChecker {
         if decl.typ.is_none() && !is_at_module_scope {
             info.inferred_from = decl.initializer.as_ref().map(|init| init.id);
         }
+        info.untyped_constant = is_constant && decl.typ.is_none();
 
         if is_at_module_scope {
             self.type_table

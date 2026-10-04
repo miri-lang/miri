@@ -1070,6 +1070,86 @@ pub fn scalar_width(kind: &TypeKind) -> Option<i64> {
     Some(bytes)
 }
 
+/// The range of values a number type holds on every target: whether it is a
+/// float, whether it is signed, and the fewest and most bits it may have.
+/// `int` and `float` are 64 bits on the host and 32 on a GPU, so a type holds
+/// all of theirs only when it holds 64 bits' worth.
+fn numeric_range(kind: &TypeKind) -> Option<(bool, bool, u32, u32)> {
+    let range = match kind {
+        TypeKind::Int => (false, true, 32, 64),
+        TypeKind::Float => (true, true, 32, 64),
+        TypeKind::I8 => (false, true, 8, 8),
+        TypeKind::I16 => (false, true, 16, 16),
+        TypeKind::I32 => (false, true, 32, 32),
+        TypeKind::I64 => (false, true, 64, 64),
+        TypeKind::I128 => (false, true, 128, 128),
+        TypeKind::U8 => (false, false, 8, 8),
+        TypeKind::U16 => (false, false, 16, 16),
+        TypeKind::U32 => (false, false, 32, 32),
+        TypeKind::U64 => (false, false, 64, 64),
+        TypeKind::U128 => (false, false, 128, 128),
+        TypeKind::F16 => (true, true, 16, 16),
+        TypeKind::F32 => (true, true, 32, 32),
+        TypeKind::F64 => (true, true, 64, 64),
+        _ => return None,
+    };
+    Some(range)
+}
+
+/// Whether every value of `narrower` is a value of `wider` on every target.
+pub fn holds_every_value_of(wider: &TypeKind, narrower: &TypeKind) -> bool {
+    if wider == narrower {
+        return numeric_range(wider).is_some();
+    }
+    let (Some((w_float, w_signed, w_min, _)), Some((n_float, n_signed, _, n_max))) =
+        (numeric_range(wider), numeric_range(narrower))
+    else {
+        return false;
+    };
+    if w_float != n_float {
+        return false;
+    }
+    match (w_signed, n_signed) {
+        (true, true) | (false, false) => w_min >= n_max,
+        // A signed type holds an unsigned one only with a bit to spare for
+        // the sign.
+        (true, false) => w_min > n_max,
+        (false, true) => false,
+    }
+}
+
+/// Whether a number of `kind` is signed; `None` for anything else.
+pub fn is_signed_number(kind: &TypeKind) -> Option<bool> {
+    numeric_range(kind).map(|(_, signed, _, _)| signed)
+}
+
+/// The type arithmetic between a `left` and a `right` number computes at: the
+/// narrower of the two types that holds every value of both, on every target,
+/// or the narrowest signed type wider than both when neither does (`u32` and
+/// `i32` compute at `i64`). `None` when the two are an integer and a float, or
+/// when no type holds both (`u128` and `i128`).
+pub fn common_numeric_type(left: &TypeKind, right: &TypeKind) -> Option<TypeKind> {
+    if left == right {
+        return numeric_range(left).map(|_| left.clone());
+    }
+    let (left_float, ..) = numeric_range(left)?;
+    let (right_float, ..) = numeric_range(right)?;
+    if left_float != right_float {
+        return None;
+    }
+    let ladder: &[TypeKind] = if left_float {
+        &[TypeKind::F32, TypeKind::F64]
+    } else {
+        &[TypeKind::I16, TypeKind::I32, TypeKind::I64, TypeKind::I128]
+    };
+    [left.clone(), right.clone()]
+        .into_iter()
+        .chain(ladder.iter().cloned())
+        .find(|candidate| {
+            holds_every_value_of(candidate, left) && holds_every_value_of(candidate, right)
+        })
+}
+
 /// std430 inline byte stride between consecutive vector elements stored inline
 /// in a collection (the spacing used for addressing `arr[i]`), or `None` when
 /// `name` is not a vector type or `scalar` is not a vector component.

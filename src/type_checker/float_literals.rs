@@ -115,6 +115,16 @@ impl TypeChecker {
         inferred: &Type,
         context: &Context,
     ) -> Option<Type> {
+        // A literal stored where an optional is declared becomes its payload,
+        // and takes the payload's width.
+        if let TypeKind::Option(payload) = &expected.kind {
+            if matches!(
+                expr.node,
+                ExpressionKind::Literal(_) | ExpressionKind::Unary(..)
+            ) {
+                return self.narrow_float_literals(expr, payload, inferred, context);
+            }
+        }
         match &expr.node {
             ExpressionKind::Literal(Literal::Float(_))
                 if is_float_width(&expected.kind) && is_float_width(&inferred.kind) =>
@@ -164,6 +174,30 @@ impl TypeChecker {
                 let narrowed = self.with_element_type(inferred, &narrowed_element?)?;
                 self.record_narrowed_type(expr, &narrowed);
                 Some(narrowed)
+            }
+            // `a if c else b` with a literal on both sides is a literal either
+            // way, and narrows as one.
+            ExpressionKind::Conditional(then_expr, _, Some(else_expr), _) => {
+                let then_ty = self.type_table.types.get(&then_expr.id)?.clone();
+                let else_ty = self.type_table.types.get(&else_expr.id)?.clone();
+                let narrowed =
+                    self.narrow_float_literals(then_expr, expected, &then_ty, context)?;
+                self.narrow_float_literals(else_expr, expected, &else_ty, context)?;
+                self.record_narrowed_type(expr, &narrowed);
+                Some(narrowed)
+            }
+            // A `const` declared without a type was written as a literal, and
+            // takes a width the way that literal would.
+            ExpressionKind::Identifier(name, _) if is_float_width(&expected.kind) => {
+                let info = context.resolve_info(name)?;
+                let is_float_constant =
+                    info.untyped_constant && matches!(info.value, Some(Literal::Float(_)));
+                if !is_float_constant {
+                    return None;
+                }
+                let width = Type::new(width_for_target(&expected.kind, context), expected.span);
+                self.record_narrowed_type(expr, &width);
+                Some(width)
             }
             _ => None,
         }

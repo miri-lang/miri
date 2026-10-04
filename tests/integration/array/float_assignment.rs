@@ -51,7 +51,7 @@ fn test_array_f32_variable_rhs() {
         r#"
 use system.collections.array
 
-var x = 5.0
+var x f32 = 5.0
 var g = Array<f32, 3>()
 g[0] = x
 println(f'{g[0]}')

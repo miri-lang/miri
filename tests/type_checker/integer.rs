@@ -212,27 +212,37 @@ let c = a & b
 }
 
 #[test]
-fn test_mixed_integer_arithmetic_fail() {
-    // Strict typing: i8 + i16 should fail without cast
-    type_checker_error_test(
+fn test_mixed_integer_arithmetic_computes_at_the_wider_type() {
+    // Two integer widths compute at the type holding every value of both.
+    type_checker_test(
         "
 let x i8 = 1
 let y i16 = 2
-x + y
+let z i16 = x + y
 ",
-        "Type mismatch: i8 and i16 are not compatible for arithmetic operation",
     );
 }
 
 #[test]
-fn test_mixed_integer_bitwise_fail() {
+fn test_mixed_signedness_with_no_common_type_is_refused() {
     type_checker_error_test(
+        "
+let x u128 = 1
+let y i128 = 2
+x + y
+",
+        "no number type holds every value of both 'u128' and 'i128'",
+    );
+}
+
+#[test]
+fn test_mixed_integer_bitwise_computes_at_the_wider_type() {
+    type_checker_test(
         "
 let x u8 = 1
 let y u16 = 2
-x & y
+let z u16 = x & y
 ",
-        "Type mismatch: u8 and u16 are not compatible for bitwise operation",
     );
 }
 

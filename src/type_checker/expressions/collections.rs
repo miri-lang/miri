@@ -246,6 +246,20 @@ impl TypeChecker {
             let [payload] = arguments.as_slice() else {
                 return None;
             };
+            // `Some(7)` where an `i32?` is declared: the number is written at
+            // the payload's type, as it would be stored bare.
+            let same_family = Self::is_float_kind(&actual_payload.kind)
+                == Self::is_float_kind(&expected_payload.kind);
+            if super::binary::is_number_literal(payload)
+                && same_family
+                && crate::ast::types::scalar_width(&expected_payload.kind).is_some()
+                && self.number_literal_fits(payload, expected_payload)
+            {
+                return Some(Type::new(
+                    TypeKind::Option(Box::new(expected_payload.as_ref().clone())),
+                    actual.span,
+                ));
+            }
             let widened =
                 self.literal_payloads_widen_to(expected_payload, actual_payload, payload, context)?;
             return Some(Type::new(TypeKind::Option(Box::new(widened)), actual.span));

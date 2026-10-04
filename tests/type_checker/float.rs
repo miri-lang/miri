@@ -174,12 +174,19 @@ let quot = a / b
 
 /// Two float *values* of different widths do not mix — only literals adapt.
 #[test]
-fn test_f32_f64_mismatch() {
+fn test_f32_f64_computes_at_f64_and_narrowing_back_is_refused() {
+    type_checker_test(
+        "
+let a f32 = 1.0
+let b f64 = 2.0
+let c f64 = a + b
+",
+    );
     type_checker_error_test(
         "
 let a f32 = 1.0
 let b f64 = 2.0
-let c = a + b
+let c f32 = a + b
 ",
         "Type mismatch",
     );

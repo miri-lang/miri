@@ -461,33 +461,31 @@ fn main()
 /// written out: `k * a` with `k int` is an `int` at every binding of `a`, and
 /// `a * k` is whatever `a` is. Both orders give what the concrete code gives.
 #[test]
-fn arithmetic_with_a_parameter_gives_the_left_operands_type_in_either_order() {
+fn arithmetic_with_a_parameter_has_the_parameters_type_in_either_order() {
+    // `k * a` and `a * k` are both typed as the parameter, and an `i64`
+    // binding holds every `int`; concrete operands compute at the wider type,
+    // so `k * s` with `s` an `i8` is an `int` and does not wrap.
     assert_runs_with_output(
         r#"
-fn left_concrete<T>(a T, k int) int
+fn left_concrete<T>(a T, k int) T
     return k * a
 
 fn left_parameter<T>(a T, k int) T
     return a * k
 
-fn equals_500<T>(a T, k int) bool
-    return k * a == 500
-
 fn main()
-    let a i8 = 100
+    let a i64 = 100
     let k = 5
-    let concrete_left = k * a
-    let concrete_right = a * k
-    println(f"{left_concrete(a, k)} {concrete_left}")
-    println(f"{left_parameter(a, k)} {concrete_right}")
-    println(f"{equals_500(a, k)} {k * a == 500}")
+    let s i8 = 100
+    println(f"{left_concrete(a, k)} {left_parameter(a, k)}")
+    println(f"{k * s} {s * k} {k * s == 500}")
 "#,
-        "500 500\n-12 -12\ntrue true",
+        "500 500\n500 500 true",
     );
 }
 
 #[test]
-fn a_concrete_left_operand_is_not_read_as_the_parameter() {
+fn a_parameter_bound_to_a_type_the_concrete_operand_widens_is_refused() {
     assert_compiler_error(
         r#"
 fn mul<T>(a T, k int) T
@@ -497,28 +495,25 @@ fn main()
     let a i8 = 100
     println(f"{mul(a, 5)}")
 "#,
-        "expected T, got int",
+        "'*' applied to int and i8 gives int, but the generic body reads the result as i8",
     );
 }
 
-/// A number times a vector is a vector, so a body that read `2.0 * v` as the
-/// number's type is refused where `v` is bound to one rather than handing on
-/// a vector as an `f32`.
+/// A number times a vector is a vector, so a body typing `s * v` as the
+/// vector parameter's type is accepted where `v` is bound to one.
 #[test]
-fn a_site_whose_operator_gives_another_type_than_the_body_read_is_refused() {
-    assert_compiler_error(
+fn a_number_times_a_vector_parameter_is_the_vector() {
+    assert_type_checks(
         r#"
 use system.gpu.vector
 
-fn scaled<T>(v T) f32
+fn scaled<T>(v T) T
     let s f32 = 2.0
     return s * v
 
 fn main()
     let r = scaled(Vec3<f32>(1.0, 2.0, 3.0))
-    println(f"{r}")
 "#,
-        "but the generic body reads the result as f32",
     );
 }
 
