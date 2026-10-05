@@ -574,6 +574,8 @@ pub mod ffi {
         start: usize,
         end: usize,
     ) -> *mut MiriList {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return crate::miri_rt_list_new(0);
         }
@@ -594,7 +596,11 @@ pub mod ffi {
             crate::miri_rt_list_set_elem_clone_fn(list, arr.elem_clone_fn);
         }
         for i in lo..hi {
-            let src = arr.data.add(i * arr.elem_size);
+            // Security invariant: use checked_mul to guard against integer wrapping on element byte offsets.
+            let Some(offset) = i.checked_mul(arr.elem_size) else {
+                break;
+            };
+            let src = arr.data.add(offset);
             (*list).push(src);
             if arr.elem_drop_fn != 0 {
                 let ptr_val = *(src as *const usize);

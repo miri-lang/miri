@@ -942,3 +942,40 @@ fn test_list_element_must_fit_the_slot_size() {
         miri_rt_list_free(byte_slots);
     }
 }
+
+#[test]
+fn test_list_new_from_raw_and_managed_array_null_and_bounds_safety() {
+    unsafe {
+        // Null array inputs should return a valid empty MiriList
+        let raw_null = miri_rt_list_new_from_raw(std::ptr::null_mut(), 0, 8);
+        assert!(!raw_null.is_null());
+        assert_eq!(miri_rt_list_len(raw_null), 0);
+        miri_rt_list_free(raw_null);
+
+        let managed_null = miri_rt_list_new_from_managed_array(std::ptr::null_mut(), 0, 8);
+        assert!(!managed_null.is_null());
+        assert_eq!(miri_rt_list_len(managed_null), 0);
+        miri_rt_list_free(managed_null);
+
+        // Valid array input test
+        use miri_runtime_core::array::ffi::{
+            miri_rt_array_free, miri_rt_array_new, miri_rt_array_set,
+        };
+        let arr = miri_rt_array_new(3, std::mem::size_of::<usize>());
+        let val1: usize = 10;
+        let val2: usize = 20;
+        let val3: usize = 30;
+        miri_rt_array_set(arr, 0, &val1 as *const usize as *const u8);
+        miri_rt_array_set(arr, 1, &val2 as *const usize as *const u8);
+        miri_rt_array_set(arr, 2, &val3 as *const usize as *const u8);
+
+        let list_raw = miri_rt_list_new_from_raw(arr, 3, std::mem::size_of::<usize>());
+        assert_eq!(miri_rt_list_len(list_raw), 3);
+        assert_eq!(*(miri_rt_list_get(list_raw, 0) as *const usize), 10);
+        assert_eq!(*(miri_rt_list_get(list_raw, 1) as *const usize), 20);
+        assert_eq!(*(miri_rt_list_get(list_raw, 2) as *const usize), 30);
+        miri_rt_list_free(list_raw);
+
+        miri_rt_array_free(arr);
+    }
+}
