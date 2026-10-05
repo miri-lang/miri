@@ -397,6 +397,8 @@ pub mod ffi {
         _len: usize,
         elem_size: usize,
     ) -> *mut MiriList {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(array as *mut u8);
         let arr_elem_size = if !array.is_null() {
             (*array).elem_size()
         } else {
@@ -419,7 +421,11 @@ pub mod ffi {
             return list;
         }
         for i in 0..len {
-            (*list).push(data.add(i * arr_elem_size));
+            // Security invariant: use checked_mul to guard against integer wrapping on element byte offsets.
+            let Some(offset) = i.checked_mul(arr_elem_size) else {
+                break;
+            };
+            (*list).push(data.add(offset));
         }
         list
     }
@@ -438,6 +444,8 @@ pub mod ffi {
         _len: usize,
         _elem_size: usize,
     ) -> *mut MiriList {
+        // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
+        guard::guard_check(array as *mut u8);
         let list = miri_rt_list_new_from_raw(array, _len, _elem_size);
         if list.is_null() || array.is_null() {
             return list;
@@ -452,7 +460,11 @@ pub mod ffi {
             return list;
         }
         for i in 0..len {
-            let slot = data.add(i * elem_size) as *const usize;
+            // Security invariant: use checked_mul to guard against integer wrapping on element byte offsets.
+            let Some(offset) = i.checked_mul(elem_size) else {
+                break;
+            };
+            let slot = data.add(offset) as *const usize;
             let ptr_val = *slot;
             if ptr_val != 0 {
                 // RC is stored at ptr - RC_HEADER_SIZE (one word before the payload)
