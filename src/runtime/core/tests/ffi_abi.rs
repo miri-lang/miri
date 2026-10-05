@@ -19,7 +19,7 @@ use miri_runtime_core::{
     miri_rt_array_clone, miri_rt_array_data, miri_rt_array_decref_element, miri_rt_array_fill,
     miri_rt_array_free, miri_rt_array_get, miri_rt_array_get_mut, miri_rt_array_len,
     miri_rt_array_new, miri_rt_array_set, miri_rt_array_set_elem_drop_fn, miri_rt_array_set_val,
-    miri_rt_array_sort, miri_rt_array_to_list,
+    miri_rt_array_slice, miri_rt_array_sort, miri_rt_array_to_list,
 };
 
 // List
@@ -130,6 +130,16 @@ fn test_array_ffi_abi() {
         assert!(!list.is_null());
         assert_eq!(miri_rt_list_len(list), 4);
         miri_rt_list_free(list);
+
+        let sliced_list = miri_rt_array_slice(arr, 0, 2);
+        assert!(!sliced_list.is_null());
+        assert_eq!(miri_rt_list_len(sliced_list), 2);
+        miri_rt_list_free(sliced_list);
+
+        let null_slice = miri_rt_array_slice(std::ptr::null(), 0, 2);
+        assert!(!null_slice.is_null());
+        assert_eq!(miri_rt_list_len(null_slice), 0);
+        miri_rt_list_free(null_slice);
 
         miri_rt_array_sort(arr);
         miri_rt_array_fill(arr, &val as *const usize as *const u8);
