@@ -1942,7 +1942,7 @@ impl TypeChecker {
     ) -> (Type, Vec<ParameterBound>) {
         if let Some(gens) = &func_data.generics {
             context.enter_scope();
-            self.define_generics(gens, context);
+            self.reading_declared_signature(|checker| checker.define_generics(gens, context));
         }
         let mut named_args = site.named_args;
         self.validate_function_parameters(
@@ -2021,7 +2021,9 @@ impl TypeChecker {
         let mut seen_out_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for param in &func_data.params {
-            let param_type = self.resolve_type_expression(&param.typ, context);
+            let param_type = self.reading_declared_signature(|checker| {
+                checker.resolve_type_expression(&param.typ, context)
+            });
 
             let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
                 (Some(*expr), Some(ty.clone()))
@@ -2182,21 +2184,30 @@ impl TypeChecker {
         }
     }
 
+    /// Runs `read` with the visibility gate lifted, for reading a part of a
+    /// callee's declaration: its type parameters' bounds, its parameter types
+    /// or its return type.
+    ///
+    /// The callee declared these types, not the caller. Resolving them under
+    /// the caller's import list would reject a type the caller never names —
+    /// `use m.{f}` imports `f`, and `f`'s signature is read on behalf of the
+    /// module that wrote it. What the caller writes itself stays gated.
+    fn reading_declared_signature<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> T {
+        let previous = std::mem::replace(&mut self.resolving_declared_signature, true);
+        let result = read(self);
+        self.resolving_declared_signature = previous;
+        result
+    }
+
     fn declared_return_type(
         &mut self,
         func_data: &crate::ast::types::FunctionTypeData,
         context: &mut Context,
     ) -> Type {
         if let Some(rt_expr) = &func_data.return_type {
-            // The callee declared this type, not the caller. Resolving it under
-            // the caller's import list would reject a type the caller never
-            // names, so the visibility gate is lifted for the read and restored
-            // immediately after.
-            let previous = self.resolving_declared_signature;
-            self.resolving_declared_signature = true;
-            let rt = self.resolve_type_expression(rt_expr, context);
-            self.resolving_declared_signature = previous;
-            rt
+            self.reading_declared_signature(|checker| {
+                checker.resolve_type_expression(rt_expr, context)
+            })
         } else {
             ast_factory::make_type(TypeKind::Void)
         }

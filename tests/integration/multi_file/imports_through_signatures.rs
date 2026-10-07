@@ -214,3 +214,114 @@ fn test_a_type_reached_through_a_methods_return_is_not_unused() {
         "MER_IMP_005",
     );
 }
+
+/// A module whose functions' signatures name its own alias, trait and type set.
+const SIGNATURES: &str = concat!(
+    "public type Id is int\n",
+    "public type Real is f32 or float\n",
+    "\n",
+    "public trait Named\n",
+    "    fn name() String\n",
+    "\n",
+    "public class Q implements Named\n",
+    "    fn name() String\n",
+    "        return \"q\"\n",
+    "\n",
+    "public fn ident(i Id) Id\n",
+    "    return i\n",
+    "\n",
+    "public fn named<T implements Named>(x T) String\n",
+    "    return x.name()\n",
+    "\n",
+    "public fn mkq() Q\n",
+    "    return Q()\n",
+    "\n",
+    "public fn twice(x Real) Real\n",
+    "    return x * 2.0\n",
+);
+
+/// A parameter type is declared by the callee, as its return type is: a call
+/// reads it whether or not the caller imported the alias it names.
+#[test]
+fn test_a_callees_parameter_type_resolves_without_being_imported() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.sig.{ident}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(f\"{ident(4)}\")\n",
+                ),
+            ),
+            ("sig.mi", SIGNATURES),
+        ],
+        "4",
+    );
+}
+
+/// A bound is part of the callee's declaration too: a call checks it against
+/// the callee's own trait, which the caller never names.
+#[test]
+fn test_a_callees_trait_bound_resolves_without_being_imported() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.sig.{named, mkq}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    println(named(mkq()))\n",
+                ),
+            ),
+            ("sig.mi", SIGNATURES),
+        ],
+        "q",
+    );
+}
+
+/// A type-set bound, written as the shorthand, is read the same way: the call
+/// binds the callee's parameter to f32 without the caller importing `Real`.
+#[test]
+fn test_a_callees_type_set_resolves_without_being_imported() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.sig.{twice}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let a f32 = 1.5\n",
+                    "    let r f32 = twice(a)\n",
+                    "    println(f\"{r}\")\n",
+                ),
+            ),
+            ("sig.mi", SIGNATURES),
+        ],
+        "3.0",
+    );
+}
+
+/// Lifting the gate for the callee's declaration leaves the caller's own
+/// writing gated: naming the unimported alias is still refused.
+#[test]
+fn test_a_caller_still_cannot_write_a_type_it_did_not_import() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.sig.{ident}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let i Id = ident(4)\n",
+                ),
+            ),
+            ("sig.mi", SIGNATURES),
+        ],
+        "Unknown type: Id",
+    );
+}
