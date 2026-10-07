@@ -719,3 +719,68 @@ fn resolve_vtable_method_names_a_base_body_over_a_subclass_default() {
         "miri.Base.name".to_string()
     );
 }
+
+/// `class Base` with `m` and `keep`, `class Derived extends Base` overriding
+/// `m` alone.
+fn concrete_chain() -> HashMap<String, TypeDefinition> {
+    let base = class(
+        "Base",
+        None,
+        &[],
+        &[("m", method(false, false)), ("keep", method(false, false))],
+        false,
+    );
+    let derived = class(
+        "Derived",
+        Some("Base"),
+        &[],
+        &[("m", method(false, false))],
+        false,
+    );
+    make_defs([
+        ("Base".to_string(), TypeDefinition::Class(base)),
+        ("Derived".to_string(), TypeDefinition::Class(derived)),
+    ])
+}
+
+/// A concrete method a subclass overrides takes a slot; one no subclass
+/// overrides stays static.
+#[test]
+fn vtable_layout_gives_an_overridden_concrete_method_a_slot() {
+    let defs = concrete_chain();
+    let layout = VtableLayout::of(&defs);
+    assert_eq!(layout.slot("m"), Some(1));
+    assert_eq!(layout.slot("keep"), None);
+    assert_eq!(layout.slot_count(), 2);
+}
+
+/// A call on a concrete base receiver reads the slot of a method a subclass
+/// overrides; a call on the leaf, which nothing extends, stays static.
+#[test]
+fn vtable_slot_index_dispatches_a_concrete_receiver_only_where_a_subclass_overrides() {
+    let defs = concrete_chain();
+    assert_eq!(slot_of("Base", "m", &defs), Some(1));
+    assert_eq!(slot_of("Base", "keep", &defs), None);
+    assert_eq!(slot_of("Derived", "m", &defs), None);
+}
+
+/// Each class of the chain fills the overridden slot with its own body.
+#[test]
+fn collect_vtable_methods_lists_an_overridden_concrete_method() {
+    let defs = concrete_chain();
+    assert_eq!(collect_vtable_methods("Base", &defs), vec!["m"]);
+    assert_eq!(collect_vtable_methods("Derived", &defs), vec!["m"]);
+    assert_eq!(
+        resolve_vtable_method("Base", "m", &defs),
+        Some("miri.Base.m".to_string()),
+    );
+}
+
+/// A class another class extends carries a vtable, so a receiver typed as it
+/// can read one from an instance of the base itself.
+#[test]
+fn vtable_instance_is_some_for_a_class_another_class_extends() {
+    let defs = concrete_chain();
+    let ty = Type::new(TypeKind::Custom("Base".to_string(), None), span());
+    assert!(VtableInstance::of(&ty, &defs).is_some());
+}

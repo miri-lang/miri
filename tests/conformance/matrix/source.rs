@@ -458,6 +458,61 @@ fn trait_through(id: usize, concrete: &str, returns: &str, params: &str) -> (Str
     (declared, implemented)
 }
 
+/// A class chain whose subclass's `run` — written at `params`, the concrete
+/// signature — holds the body, reached through `via{id}`, whose parameter is
+/// typed as a class above the subclass.
+///
+/// A base `run` that would answer in place of the subclass's calls itself
+/// again, so a call that reads the base's body where the instance's class
+/// gives its own recurses until the stack runs out: the cell crashes rather
+/// than passing on whatever the base returns.
+fn class_through(cell: &Cell, id: usize, returns: &str, params: &str) -> (String, String, String) {
+    let t = cell.ty.spelling;
+    let recursing = format!("    fn run{params}\n        return self.run(a, b, ea, eb)\n\n");
+    let (declared, receiver, holder) = match cell.context {
+        Context::BaseTypedOverride => (
+            format!("class Base{id}\n{recursing}"),
+            format!("Base{id}"),
+            format!("class Sub{id} extends Base{id}\n    fn run{params}\n"),
+        ),
+        Context::AbstractTypedOverride => (
+            format!(
+                "class Base{id}\n{recursing}abstract class Mid{id} extends Base{id}\n    \
+                 abstract fn tag() int\n\n"
+            ),
+            format!("Mid{id}"),
+            format!(
+                "class Sub{id} extends Mid{id}\n    fn tag() int\n        return 0\n    \
+                 fn run{params}\n"
+            ),
+        ),
+        Context::BaseTypedInherited => (
+            format!(
+                "class Other{id} extends Base{id}\n{recursing}class Sub{id} extends Base{id}\n\n"
+            ),
+            format!("Base{id}"),
+            format!("class Base{id}\n    fn run{params}\n"),
+        ),
+        Context::Monomorphic
+        | Context::GenericFunction
+        | Context::GenericClassMethod
+        | Context::InheritedMethod
+        | Context::TraitDefault
+        | Context::GenericEnumMethod
+        | Context::TraitTypedParameter
+        | Context::TraitBoundedParameter => unreachable!("not a class-chain context"),
+    };
+    let via = format!(
+        "fn via{id}(o {receiver}, a {t}, b {t}, ea {t}, eb {t}) {returns}\n    \
+         return o.run(a, b, ea, eb)\n"
+    );
+    (
+        format!("{declared}{holder}"),
+        format!("via{id}(Sub{id}(), a, b, ea, eb)"),
+        via,
+    )
+}
+
 /// Emits the function, class or trait holding `body` for the cell's context
 /// into `items`, and returns the call that runs it.
 fn wrap_in_context(
@@ -474,6 +529,7 @@ fn wrap_in_context(
         concrete
     };
     let params = format!("(a {t}, b {t}, ea {t}, eb {t}) {returns}");
+    let method_params = format!("(self, a {t}, b {t}, ea {t}, eb {t}) {returns}");
     let (header, depth, call, trailer) = match cell.context {
         Context::Monomorphic => (
             format!("fn cell{id}{params}\n"),
@@ -535,6 +591,12 @@ fn wrap_in_context(
                      return x.run(a, b, ea, eb)\n"
                 ),
             )
+        }
+        Context::BaseTypedOverride
+        | Context::AbstractTypedOverride
+        | Context::BaseTypedInherited => {
+            let (header, call, via) = class_through(cell, id, returns, &method_params);
+            (header, 2, call, via)
         }
     };
     items.push_str(&header);

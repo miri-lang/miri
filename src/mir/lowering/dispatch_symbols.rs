@@ -23,7 +23,7 @@ use super::method_dispatch::{instantiated_callee, resolve_inherited_method};
 use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{Type, CLONE_METHOD_NAME};
-use crate::mir::dispatch::{dispatched_method_names, takes_vtable_slot};
+use crate::mir::dispatch::{dispatched_method_names, overridden_method_names, takes_vtable_slot};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{
     class_ancestry, resolve_method_source, trait_lineage, ClassDefinition, MethodInfo,
@@ -188,8 +188,9 @@ impl VtableInstance {
 }
 
 /// The method names of `class_name`'s filled vtable slots: every method its
-/// abstract ancestors declare and every method a trait in its chain requires,
-/// constructors and statics aside, sorted by name.
+/// abstract ancestors declare, every method a trait in its chain requires and
+/// every method its chain declares that some class overrides, constructors and
+/// statics aside, sorted by name.
 ///
 /// Where each lands in the vtable is [`VtableLayout::slot`]'s to say.
 pub fn collect_vtable_methods<'td>(
@@ -208,13 +209,22 @@ pub fn collect_vtable_methods<'td>(
         .flat_map(|class| class.traits.iter().map(String::as_str));
     let trait_methods = trait_hierarchy(type_defs, traits)
         .flat_map(|trait_def| dispatched_method_names(&trait_def.methods));
-    let methods: BTreeSet<&str> = abstract_methods.chain(trait_methods).collect();
+    let overridden: BTreeSet<&str> = overridden_method_names(type_defs).collect();
+    let overridden_in_chain = chain
+        .iter()
+        .flat_map(|class| dispatched_method_names(&class.methods))
+        .filter(|method| overridden.contains(method));
+    let methods: BTreeSet<&str> = abstract_methods
+        .chain(trait_methods)
+        .chain(overridden_in_chain)
+        .collect();
     methods.into_iter().collect()
 }
 
 /// The slot of `layout` a call to `method_name` through a `receiver` — a
-/// trait or an abstract class — reads, or `None` when the receiver dispatches
-/// no such method and the call is static.
+/// trait, an abstract class, or a class a subclass overrides the method
+/// below — reads, or `None` when the receiver dispatches no such method and
+/// the call is static.
 pub fn vtable_slot_index(
     layout: &VtableLayout,
     receiver: &str,
@@ -227,8 +237,8 @@ pub fn vtable_slot_index(
 }
 
 /// Whether `receiver` reaches `method_name` through its vtable: a trait whose
-/// hierarchy declares it, or an abstract class whose abstract ancestors or
-/// whose chain's traits do.
+/// hierarchy declares it, an abstract class whose abstract ancestors or whose
+/// chain's traits do, or a class some subclass of which overrides it.
 fn dispatches_through_vtable(
     receiver: &str,
     method_name: &str,
@@ -246,17 +256,36 @@ fn dispatches_through_vtable(
                         class.traits.iter().map(String::as_str),
                         method_name,
                     )
-            })
+            }) || overridden_below(receiver, method_name, type_defs)
         }
+        Some(TypeDefinition::Class(_)) => overridden_below(receiver, method_name, type_defs),
         Some(
-            TypeDefinition::Class(_)
-            | TypeDefinition::Struct(_)
+            TypeDefinition::Struct(_)
             | TypeDefinition::Enum(_)
             | TypeDefinition::Generic(_)
             | TypeDefinition::Alias(_),
         )
         | None => false,
     }
+}
+
+/// Whether a class that extends `receiver`, directly or further down, declares
+/// `method_name` as one a vtable slot stands for: a call on a `receiver` may
+/// then reach that class's body, so it reads the vtable. A method nothing
+/// below the receiver overrides is called statically.
+fn overridden_below(
+    receiver: &str,
+    method_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    type_defs.iter().any(|(name, definition)| {
+        let TypeDefinition::Class(class) = definition else {
+            return false;
+        };
+        name != receiver
+            && declares_dispatched(&class.methods, method_name)
+            && class_ancestry(name, type_defs).any(|(ancestor, _)| ancestor == receiver)
+    })
 }
 
 /// Whether a trait `roots` names, or a parent trait of one, declares

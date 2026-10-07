@@ -93,6 +93,16 @@ pub enum Context {
     /// A class's own method, reached through a generic function's parameter
     /// bounded by the trait the class implements at the type.
     TraitBoundedParameter,
+    /// A subclass's override, reached through a parameter typed as the
+    /// concrete class it extends.
+    BaseTypedOverride,
+    /// A subclass's override of a concrete base's method, reached through a
+    /// parameter typed as the abstract class between them.
+    AbstractTypedOverride,
+    /// A base's own method, reached through a parameter typed as the base
+    /// while holding a subclass that does not override it, beside a sibling
+    /// subclass that does.
+    BaseTypedInherited,
 }
 
 pub const SLOTS: &[Slot] = &[
@@ -144,6 +154,9 @@ pub const CONTEXTS: &[Context] = &[
     Context::GenericEnumMethod,
     Context::TraitTypedParameter,
     Context::TraitBoundedParameter,
+    Context::BaseTypedOverride,
+    Context::AbstractTypedOverride,
+    Context::BaseTypedInherited,
 ];
 
 impl Slot {
@@ -240,32 +253,43 @@ impl Context {
             Context::GenericEnumMethod => "generic_enum",
             Context::TraitTypedParameter => "trait_param",
             Context::TraitBoundedParameter => "trait_bound",
+            Context::BaseTypedOverride => "base_override",
+            Context::AbstractTypedOverride => "abstract_override",
+            Context::BaseTypedInherited => "base_inherited",
         }
     }
 
     /// Whether the cell's body is written against the type parameter `T`
-    /// rather than the concrete type. A body reached through a trait is the
-    /// implementing class's own method, written at the concrete type.
+    /// rather than the concrete type. A body reached through a trait or a
+    /// base class is a class's own method, written at the concrete type.
     pub fn is_generic(self) -> bool {
         !matches!(
             self,
-            Context::Monomorphic | Context::TraitTypedParameter | Context::TraitBoundedParameter
+            Context::Monomorphic
+                | Context::TraitTypedParameter
+                | Context::TraitBoundedParameter
+                | Context::BaseTypedOverride
+                | Context::AbstractTypedOverride
+                | Context::BaseTypedInherited
         )
     }
 
     /// Whether the context is judged in `slot`. A trait default body is
     /// compiled per implementor whatever the slot, so the local slot alone
     /// covers it; running it everywhere would only repeat the local verdict
-    /// at the cost of a program per crashing cell. The enum and trait
-    /// contexts differ from the others in how the body is reached, not in
-    /// where the value is kept, so a scalar-held slot and a collection
-    /// element cover them.
+    /// at the cost of a program per crashing cell. The enum, trait and
+    /// base-class dispatch contexts differ from the others in how the body is
+    /// reached, not in where the value is kept, so a scalar-held slot and a
+    /// collection element cover them.
     fn covers(self, slot: Slot) -> bool {
         match self {
             Context::TraitDefault => slot == Slot::Local,
             Context::GenericEnumMethod
             | Context::TraitTypedParameter
-            | Context::TraitBoundedParameter => matches!(slot, Slot::Local | Slot::ListElement),
+            | Context::TraitBoundedParameter
+            | Context::BaseTypedOverride
+            | Context::AbstractTypedOverride
+            | Context::BaseTypedInherited => matches!(slot, Slot::Local | Slot::ListElement),
             Context::Monomorphic
             | Context::GenericFunction
             | Context::GenericClassMethod

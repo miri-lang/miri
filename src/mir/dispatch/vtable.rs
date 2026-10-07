@@ -8,7 +8,10 @@ use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::monomorphized_arguments;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
-use crate::type_checker::context::{class_needs_vtable, MethodInfo, TypeDefinition};
+use crate::type_checker::context::{
+    class_ancestry, class_is_extended, class_needs_vtable, ClassDefinition, MethodInfo,
+    TypeDefinition,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The vtable one constructed class instance points at: the class, and the
@@ -125,10 +128,12 @@ pub(crate) fn constructed_class(rvalue: &Rvalue) -> Option<&Type> {
 /// Slot [`DROP_SLOT`] holds the routine that releases an instance of the
 /// vtable's own class, which a value held at a base class or a trait is
 /// released through. Every other slot stands for one method name: the sorted
-/// set of every instance method a trait or an abstract class declares,
-/// constructors and statics aside. Every vtable has one slot per name, filled
+/// set of every instance method a trait or an abstract class declares, and of
+/// every one a class overrides from a class it extends, constructors and
+/// statics aside. A concrete method no subclass overrides takes no slot, and
+/// a call to it stays static. Every vtable has one slot per name, filled
 /// where the class gives that method a body and null elsewhere; a class has
-/// one method per name, so a call through any trait or abstract base it is
+/// one method per name, so a call through any trait or base class it is
 /// reached by finds its own body at the one index the method's name takes.
 ///
 /// The numbering depends on method names alone, which registering a generic
@@ -139,13 +144,15 @@ pub struct VtableLayout {
 }
 
 impl VtableLayout {
-    /// The numbering the traits and abstract classes of `type_defs` give.
+    /// The numbering the traits, abstract classes and overrides of
+    /// `type_defs` give.
     pub fn of(type_defs: &HashMap<String, TypeDefinition>) -> Self {
-        let selectors: BTreeSet<&str> = type_defs
+        let declared = type_defs
             .values()
             .filter_map(dispatching_methods)
-            .flat_map(dispatched_method_names)
-            .collect();
+            .flat_map(dispatched_method_names);
+        let selectors: BTreeSet<&str> =
+            declared.chain(overridden_method_names(type_defs)).collect();
         Self {
             selectors: selectors.into_iter().map(Box::from).collect(),
         }
@@ -157,7 +164,7 @@ impl VtableLayout {
     }
 
     /// The slot `method_name` takes, or `None` when no trait or abstract class
-    /// declares it.
+    /// declares it and no class overrides it.
     pub fn slot(&self, method_name: &str) -> Option<usize> {
         self.selectors
             .binary_search_by(|selector| (**selector).cmp(method_name))
@@ -173,14 +180,11 @@ pub const DROP_SLOT: usize = 0;
 /// Whether a value whose static type is `name` may be an instance of another
 /// class, and so has to be released as its runtime class through the drop
 /// slot of the vtable it points at: a trait, or a class another class
-/// extends. Every class that extends another carries a vtable
-/// ([`class_needs_vtable`]), so an instance with none is of the static class.
+/// extends. Every class in a chain carries a vtable ([`class_needs_vtable`]).
 pub fn released_by_runtime_class(name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
     match type_defs.get(name) {
         Some(TypeDefinition::Trait(_)) => true,
-        Some(TypeDefinition::Class(_)) => type_defs.values().any(|definition| {
-            matches!(definition, TypeDefinition::Class(class) if class.base_class.as_deref() == Some(name))
-        }),
+        Some(TypeDefinition::Class(_)) => class_is_extended(name, type_defs),
         Some(
             TypeDefinition::Struct(_)
             | TypeDefinition::Enum(_)
@@ -202,6 +206,45 @@ fn dispatching_methods(definition: &TypeDefinition) -> Option<&BTreeMap<String, 
         | TypeDefinition::Generic(_)
         | TypeDefinition::Alias(_) => None,
     }
+}
+
+/// The name of every method some class overrides: one it declares that a
+/// class it extends, directly or further up, declares too.
+pub(crate) fn overridden_method_names(
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> impl Iterator<Item = &str> {
+    type_defs
+        .values()
+        .filter_map(|definition| match definition {
+            TypeDefinition::Class(class) => Some(class),
+            TypeDefinition::Trait(_)
+            | TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_) => None,
+        })
+        .flat_map(move |class| overrides_of(class, type_defs))
+}
+
+/// The methods `class` declares that a class it extends declares too.
+fn overrides_of<'td>(
+    class: &'td ClassDefinition,
+    type_defs: &'td HashMap<String, TypeDefinition>,
+) -> impl Iterator<Item = &'td str> {
+    let ancestors: Vec<&ClassDefinition> = class
+        .base_class
+        .as_deref()
+        .map(|base| {
+            class_ancestry(base, type_defs)
+                .map(|(_, def)| def)
+                .collect()
+        })
+        .unwrap_or_default();
+    dispatched_method_names(&class.methods).filter(move |method| {
+        ancestors
+            .iter()
+            .any(|ancestor| ancestor.methods.get(*method).is_some_and(takes_vtable_slot))
+    })
 }
 
 /// The names among `methods` a vtable slot can stand for.
