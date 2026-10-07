@@ -81,15 +81,19 @@ enum Path {
     /// It is handed to a consuming function on every pass of a loop, which
     /// uses it again after the first pass moved it.
     ConsumeInLoop,
+    /// It is the value of one branch of a conditional expression whose other
+    /// branch builds a second resource; the branch shares it with the result.
+    PickedByOneBranch,
 }
 
 impl Path {
-    const ALL: [Path; 5] = [
+    const ALL: [Path; 6] = [
         Path::ScopeExit,
         Path::MoveIntoSlot,
         Path::DropCall,
         Path::ReleaseThroughTrait,
         Path::ConsumeInLoop,
+        Path::PickedByOneBranch,
     ];
 
     fn token(self) -> &'static str {
@@ -99,13 +103,15 @@ impl Path {
             Path::DropCall => "drop_call",
             Path::ReleaseThroughTrait => "release_through_trait",
             Path::ConsumeInLoop => "consume_in_loop",
+            Path::PickedByOneBranch => "picked_by_one_branch",
         }
     }
 
     /// The statements exercising the path on `made`, one per line, and what
     /// the program must do: print exactly the lines given, or be refused with
-    /// the code given.
-    fn body(self, made: &str) -> (Vec<String>, Expected) {
+    /// the code given. `other` builds a second resource for a path that needs
+    /// one.
+    fn body(self, made: &str, other: &str) -> (Vec<String>, Expected) {
         let printed =
             |lines: &[&str]| Expected::Prints(lines.iter().map(|l| l.to_string()).collect());
         match self {
@@ -152,6 +158,16 @@ impl Path {
                     "    i = i + 1".into(),
                 ],
                 Expected::Refused("MER_OWN_003"),
+            ),
+            Path::PickedByOneBranch => (
+                vec![
+                    "if true".into(),
+                    format!("    let r = {made}"),
+                    "    var flag = true".into(),
+                    format!("    let s = if flag: r else: {other}"),
+                    "    println(\"picked\")".into(),
+                ],
+                printed(&["picked", "drop 1"]),
             ),
         }
     }
@@ -202,7 +218,7 @@ pub fn resource_cells() -> Vec<ResourceCell> {
                 continue;
             }
             for place in Place::ALL {
-                let (statements, expected) = path.body(&resource.make(1));
+                let (statements, expected) = path.body(&resource.make(1), &resource.make(2));
                 cells.push(ResourceCell {
                     name: format!(
                         "resource/{}/{}/{}",
