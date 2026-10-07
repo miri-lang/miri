@@ -26,6 +26,15 @@ impl<'source> Parser<'source> {
 
     pub(crate) fn generic_type(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
+        if self.match_lookahead_type(|t| t == &Token::Is) {
+            self.eat_token(&Token::Is)?;
+            let set = self.type_set_expression()?.map(Box::new);
+            return Ok(ast::generic_type_expression(
+                identifier,
+                set,
+                TypeDeclarationKind::Is,
+            ));
+        }
         if self.lookahead.is_none() || !self.lookahead_is_inheritance_modifier() {
             return Ok(ast::generic_type_expression(
                 identifier,

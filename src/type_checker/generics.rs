@@ -1046,7 +1046,7 @@ impl TypeChecker {
 
                 let constraint_type = constraint_expr
                     .as_ref()
-                    .map(|c| self.resolve_type_expression(c, context));
+                    .map(|c| self.resolve_bound_type(c, context));
 
                 context.define_type(
                     name.clone(),
@@ -1207,7 +1207,9 @@ impl TypeChecker {
                 argument(first);
                 argument(second);
             }
-            TypeKind::Tuple(elements) => elements.iter().for_each(argument),
+            TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => {
+                elements.iter().for_each(argument)
+            }
             TypeKind::Custom(_, Some(args)) => args.iter().for_each(argument),
             // A type already reported as wrong holds no slot to report again.
             TypeKind::Error => {}

@@ -742,10 +742,10 @@ helper()
 ";
     let mut lexer = miri::lexer::Lexer::new(source);
     let mut parser = miri::parser::Parser::new(&mut lexer, source);
-    let program = parser.parse().expect("the source parses");
+    let mut program = parser.parse().expect("the source parses");
     let mut type_checker = miri::type_checker::TypeChecker::new();
     type_checker
-        .check(&program)
+        .check(&mut program)
         .expect("the source type-checks");
     let helper = program
         .body

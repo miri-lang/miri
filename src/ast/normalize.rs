@@ -337,7 +337,7 @@ fn normalize_type_children(kind: &mut TypeKind) {
             normalize_expr(err);
         }
         TypeKind::Future(inner) => normalize_expr(inner),
-        TypeKind::Tuple(elems) => normalize_expr_list(elems),
+        TypeKind::Tuple(elems) | TypeKind::OneOf(elems) => normalize_expr_list(elems),
         TypeKind::Generic(_, Some(c), _) => normalize_type(c),
         TypeKind::Generic(_, None, _) => {}
         TypeKind::Function(func_data) => {
@@ -406,6 +406,7 @@ fn canonicalize_collection(kind: TypeKind) -> TypeKind {
         | TypeKind::Identifier
         | TypeKind::RawPtr
         | TypeKind::Tuple(_)
+        | TypeKind::OneOf(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Function(_)

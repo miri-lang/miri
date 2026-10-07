@@ -910,8 +910,33 @@ impl TypeChecker {
             TypeDeclarationKind::Extends => self.are_compatible(constraint, ty, context),
             TypeDeclarationKind::Implements => self.check_implements(ty, constraint, context),
             TypeDeclarationKind::Includes => self.check_includes(ty, constraint, context),
-            TypeDeclarationKind::Is => ty == constraint,
+            TypeDeclarationKind::Is => {
+                if let TypeKind::OneOf(members) = &constraint.kind {
+                    self.is_within_type_set(ty, members)
+                } else {
+                    ty == constraint
+                }
+            }
             TypeDeclarationKind::None => true,
+        }
+    }
+
+    /// Whether `ty` is a member of the set `members`. A set — the bound of a
+    /// caller's own type parameter — is within it when each of its members is,
+    /// since a call can bind that parameter to any one of them.
+    fn is_within_type_set(&self, ty: &Type, members: &[crate::ast::Expression]) -> bool {
+        let is_member = |kind: &TypeKind| {
+            members.iter().any(|member| {
+                self.extract_type_from_expression(member)
+                    .is_ok_and(|member| member.kind == *kind)
+            })
+        };
+        match &ty.kind {
+            TypeKind::OneOf(subset) => subset.iter().all(|part| {
+                self.extract_type_from_expression(part)
+                    .is_ok_and(|part| is_member(&part.kind))
+            }),
+            kind => is_member(kind),
         }
     }
 

@@ -997,3 +997,31 @@ fn test_128_bit_extremes_keep_their_spelling() {
         );
     }
 }
+
+#[test]
+fn test_type_sets_render_as_written() {
+    let source = "public type Real is f32 or float\n\nfn sq<T is f32 or float>(x T) T\n    return x * x\n\nfn twice(x Real) Real\n    return x + x\n";
+    let rendered = assert_render_is_a_fixed_point(source);
+    assert!(
+        rendered.contains("public type Real is f32 or float"),
+        "got: {rendered}"
+    );
+    assert!(
+        rendered.contains("fn sq<T is f32 or float>(x T) T"),
+        "got: {rendered}"
+    );
+    assert!(
+        rendered.contains("fn twice(x Real) Real"),
+        "got: {rendered}"
+    );
+    assert_ast_survives(source);
+}
+
+#[test]
+fn test_a_bounded_type_parameter_renders_its_bound() {
+    let rendered = assert_render_is_a_fixed_point("fn sq<T extends int>(x T) T\n    return x\n");
+    assert!(
+        rendered.contains("fn sq<T extends int>(x T) T"),
+        "got: {rendered}"
+    );
+}

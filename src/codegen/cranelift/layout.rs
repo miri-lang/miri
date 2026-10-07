@@ -138,6 +138,7 @@ pub fn field_layout(
         | TypeKind::Future(_)
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
         | TypeKind::Void
@@ -438,6 +439,7 @@ pub fn aggregate_size(
         | TypeKind::Future(_)
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
         | TypeKind::Void

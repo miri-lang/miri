@@ -367,6 +367,7 @@ fn push_type(out: &mut String, kind: &TypeKind, levels: usize) {
         | TypeKind::Identifier
         | TypeKind::RawPtr
         | TypeKind::Void
+        | TypeKind::OneOf(_)
         | TypeKind::Error => out.push_str(&kind.to_string()),
     }
 }

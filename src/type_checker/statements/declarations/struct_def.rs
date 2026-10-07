@@ -193,7 +193,7 @@ impl TypeChecker {
                     if let ExpressionKind::Identifier(n, _) = &name_expr.node {
                         let constraint_type = constraint_expr
                             .as_ref()
-                            .map(|c| self.resolve_type_expression(c, context));
+                            .map(|c| self.resolve_bound_type(c, context));
                         generic_defs.push(GenericDefinition {
                             name: n.clone(),
                             constraint: constraint_type,

@@ -551,6 +551,14 @@ pub enum TypeKind {
     Error,
     /// Linear type wrapper (explicit ownership).
     Linear(Box<Type>),
+    /// A type set (e.g., `f32 or float`): any one of its member types.
+    ///
+    /// A set is a bound, never the type of a value. It is written as the
+    /// target of a `type` declaration (`type Real is f32 or float`) or after
+    /// `is` in a type parameter (`<T is f32 or float>`), and a type parameter
+    /// bounded by it is bound to exactly one member at each call. The type
+    /// checker refuses it in every value position, so no later phase sees it.
+    OneOf(Vec<Expression>),
 }
 
 /// Represents a type declaration kind
@@ -602,6 +610,7 @@ impl TypeKind {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Custom(_, _)
             | TypeKind::Meta(_) => false,
             // Option: inherits from inner type
@@ -648,6 +657,7 @@ impl TypeKind {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Linear(_)
@@ -693,6 +703,7 @@ impl TypeKind {
             | TypeKind::Identifier
             | TypeKind::RawPtr
             | TypeKind::Tuple(_)
+            | TypeKind::OneOf(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
@@ -743,6 +754,7 @@ impl TypeKind {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Linear(_)
@@ -793,6 +805,7 @@ impl fmt::Display for TypeKind {
             TypeKind::Linear(inner) => write!(f, "linear({})", inner),
             TypeKind::Generic(name, _, _) => f.write_str(name),
             TypeKind::Tuple(elements) => fmt_tuple(f, elements),
+            TypeKind::OneOf(members) => fmt_one_of(f, members),
             TypeKind::Function(func) => fmt_function(f, func),
             TypeKind::Custom(name, args) => fmt_custom(f, name, args.as_deref()),
         }
@@ -808,6 +821,17 @@ fn fmt_tuple(f: &mut fmt::Formatter<'_>, elements: &[Expression]) -> fmt::Result
         }
     }
     f.write_str(")")
+}
+
+/// `A or B or C`: a type set spelled as it is written.
+fn fmt_one_of(f: &mut fmt::Formatter<'_>, members: &[Expression]) -> fmt::Result {
+    if let Some((first, rest)) = members.split_first() {
+        write!(f, "{}", first.node)?;
+        for member in rest {
+            write!(f, " or {}", member.node)?;
+        }
+    }
+    Ok(())
 }
 
 fn fmt_function(f: &mut fmt::Formatter<'_>, func: &FunctionTypeData) -> fmt::Result {

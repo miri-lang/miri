@@ -966,6 +966,7 @@ fn type_head(kind: &TypeKind) -> TypeHead<'_> {
         | TypeKind::Map(_, _)
         | TypeKind::Result(_, _)
         | TypeKind::Tuple(_)
+        | TypeKind::OneOf(_)
         | TypeKind::Option(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
@@ -1023,6 +1024,7 @@ fn type_parts(kind: &TypeKind) -> Vec<&TypeKind> {
             .collect(),
         TypeKind::Custom(_, None)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16

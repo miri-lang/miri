@@ -103,7 +103,7 @@ impl TypeChecker {
                 if let Ok(gen_name) = self.extract_type_name(name_expr) {
                     let constraint = constraint_expr
                         .as_ref()
-                        .map(|c| self.resolve_type_expression(c, context));
+                        .map(|c| self.resolve_bound_type(c, context));
                     result.push(GenericDefinition {
                         name: gen_name.to_string(),
                         constraint,

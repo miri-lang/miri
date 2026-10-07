@@ -1,4 +1,4 @@
-# version: 2
+# version: 3
 
 # The Miri language grammar, over the token stream the lexer produces.
 #
@@ -62,7 +62,7 @@ enum_block <- STMT_END INDENT enum_member+ DEDENT
 enum_member <- declaration / enum_variant
 enum_variant <- IDENT (L_PAREN type_expression (COMMA type_expression)* R_PAREN)? STMT_END
 
-type_declaration <- TYPE IDENT generic_parameters? ASSIGN type_expression STMT_END
+type_declaration <- TYPE IDENT generic_parameters? (IS type_set / (EXTENDS / IMPLEMENTS / INCLUDES) type_expression) STMT_END
 
 compound_statement <- if_statement / unless_statement / while_statement / until_statement / do_statement / for_statement / forall_statement / match_statement / gpu_statement / forever_statement
 
@@ -148,7 +148,8 @@ type_name <- IDENT / SYSTEM / GPU / FRAME / LOCAL / DEFAULT
 generic_arguments <- LESS_THAN generic_argument (COMMA generic_argument)* COMMA? GREATER_THAN
 generic_argument <- expression / type_expression
 generic_parameters <- LESS_THAN generic_parameter (COMMA generic_parameter)* COMMA? GREATER_THAN
-generic_parameter <- IDENT (COLON type_expression)? (EXTENDS type_expression)?
+generic_parameter <- IDENT (IS type_set / (EXTENDS / IMPLEMENTS / INCLUDES) type_expression)?
+type_set <- type_expression (OR type_expression)*
 fn_type_parameter <- IDENT type_expression / type_expression
 
 # ---------------------------------------------------------------------------

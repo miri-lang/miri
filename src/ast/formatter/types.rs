@@ -102,6 +102,7 @@ fn class_spelling(kind: &TypeKind) -> Option<(&'static str, Vec<&Expression>)> {
         | TypeKind::Future(_)
         | TypeKind::Function(_)
         | TypeKind::Generic(..)
+        | TypeKind::OneOf(_)
         | TypeKind::Custom(..)
         | TypeKind::Option(_)
         | TypeKind::Meta(_)
@@ -140,6 +141,7 @@ pub fn type_kind(sink: &mut Sink, kind: &TypeKind) {
         TypeKind::Map(key, value) => map(sink, key, value),
         TypeKind::Set(inner) => braced(sink, inner),
         TypeKind::Tuple(members) => tuple(sink, members),
+        TypeKind::OneOf(members) => one_of(sink, members),
         TypeKind::Result(ok, err) => angled(sink, "Result", &[ok.as_ref(), err.as_ref()]),
         TypeKind::Future(inner) => angled(sink, "Future", &[inner.as_ref()]),
         TypeKind::Function(data) => function_type(sink, data),
@@ -196,6 +198,16 @@ fn tuple(sink: &mut Sink, members: &[Expression]) {
         format_expression(sink, member, 0);
     }
     sink.emit(")");
+}
+
+/// `A or B or C`
+fn one_of(sink: &mut Sink, members: &[Expression]) {
+    for (index, member) in members.iter().enumerate() {
+        if index > 0 {
+            sink.emit(" or ");
+        }
+        format_expression(sink, member, 0);
+    }
 }
 
 /// `Name<A, B>`

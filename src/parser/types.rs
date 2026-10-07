@@ -38,6 +38,38 @@ impl<'source> Parser<'source> {
         Ok(Some(self.apply_nullable_suffix(base)?))
     }
 
+    /// A type, or a type set of two or more types joined by `or`
+    /// (`f32 or float`).
+    ///
+    /// Only the two places a set may be written call this: the target of a
+    /// `type ... is` declaration and the bound after `is` in a type parameter.
+    /// Everywhere else `or` after a type is not part of it.
+    pub(crate) fn type_set_expression(&mut self) -> Result<Option<Expression>, SyntaxError> {
+        let Some(first) = self.type_expression()? else {
+            return Ok(None);
+        };
+        if !self.match_lookahead_type(|t| t == &Token::Or) {
+            return Ok(Some(first));
+        }
+        let start = first.span.start;
+        let mut members = vec![first];
+        while self.match_lookahead_type(|t| t == &Token::Or) {
+            self.eat_token(&Token::Or)?;
+            match self.type_expression()? {
+                Some(member) => members.push(member),
+                None => {
+                    return Err(self.error_unexpected_token("a type", &self.lookahead_as_string()))
+                }
+            }
+        }
+        let span = Span::new(start, self.last_consumed_end);
+        Ok(Some(ast::type_expression_with_span(
+            Type::new(TypeKind::OneOf(members), span),
+            false,
+            span,
+        )))
+    }
+
     fn identifier_type(&mut self) -> Result<Expression, SyntaxError> {
         let (type_name, span) = self.identifier_to_type_name()?;
         let typ = self.type_name_to_type(type_name)?;

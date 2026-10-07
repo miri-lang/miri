@@ -97,6 +97,7 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         | TypeKind::Future(_)
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
@@ -264,6 +265,7 @@ fn buffer_element_inner_kind(kind: &TypeKind) -> Result<&TypeKind, CodegenError>
         | TypeKind::RawPtr
         | TypeKind::Map(_, _)
         | TypeKind::Tuple(_)
+        | TypeKind::OneOf(_)
         | TypeKind::Set(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)

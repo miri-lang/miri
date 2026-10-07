@@ -514,7 +514,7 @@ pub(crate) fn spells_a_type(kind: &TypeKind, applies: &dyn Fn(&TypeKind) -> bool
         TypeKind::Map(key, value) | TypeKind::Result(key, value) => {
             spelled_by(key) || spelled_by(value)
         }
-        TypeKind::Tuple(elements) => elements.iter().any(spelled_by),
+        TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => elements.iter().any(spelled_by),
         TypeKind::Custom(_, Some(arguments)) => arguments.iter().any(spelled_by),
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             spells_a_type(&inner.kind, applies)
@@ -1571,10 +1571,10 @@ mod tests {
     fn checked(source: &str) -> TypeChecker {
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
-        let program = parser.parse().expect("the test source parses");
+        let mut program = parser.parse().expect("the test source parses");
         let mut checker = TypeChecker::new();
         checker
-            .check(&program)
+            .check(&mut program)
             .expect("the test source type-checks");
         checker
     }

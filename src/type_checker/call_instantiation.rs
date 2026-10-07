@@ -311,6 +311,10 @@ impl TypeChecker {
                 continue;
             }
             hold = false;
+            if let TypeKind::OneOf(_) = &constraint.kind {
+                self.report_outside_type_set(&bound.parameter, argument, &constraint, call.span);
+                continue;
+            }
             self.report_error(
                 DiagnosticCode::TypGenericTypeStructure,
                 format!(
@@ -323,6 +327,34 @@ impl TypeChecker {
             );
         }
         hold
+    }
+
+    /// Reports a call binding `parameter` to a type outside the set bounding
+    /// it. A parameter the signature shorthand introduced is named after its
+    /// set, which is how the reader wrote it.
+    fn report_outside_type_set(
+        &mut self,
+        parameter: &str,
+        argument: &Type,
+        set: &Type,
+        span: Span,
+    ) {
+        let written = parameter
+            .strip_prefix(crate::type_checker::type_set_shorthand::PARAMETER_MARK)
+            .unwrap_or(parameter);
+        self.report_error_with_help(
+            DiagnosticCode::TypGenericTypeStructure,
+            format!(
+                "{} is not one of the types {written} accepts: {}",
+                spelled(argument),
+                spelled(set)
+            ),
+            span,
+            format!(
+                "pass a value of one of {}, converting it with `as` if needed",
+                spelled(set)
+            ),
+        );
     }
 
     /// Record, in the callee's declaration order, what `call_id` binds of

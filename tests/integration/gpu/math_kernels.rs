@@ -300,3 +300,51 @@ fn main()
 ";
     assert_gpu_runs_with_output(source, "0.0 0.0");
 }
+
+/// A function taking a type set is instantiated at `f32` for a kernel, so the
+/// helper the shader calls takes and returns `f32` with no conversion.
+#[test]
+fn a_type_set_helper_is_instantiated_at_f32_in_a_kernel() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+use system.collections.array
+
+type Real is f32 or float
+
+fn half(x Real) Real
+    return x * 0.5
+
+fn main()
+    gpu var dst = Array<f32, 4>()
+    gpu forall i in 0..4
+        dst[i] = half(i as f32)
+",
+    );
+}
+
+/// The same helper value-verifies on the device and on the host.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn a_type_set_helper_runs_in_a_kernel_and_on_the_host() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+type Real is f32 or float
+
+fn half(x Real) Real
+    return x * 0.5
+
+fn main()
+    gpu var dst = Array<f32, 3>()
+    gpu forall i in 0..3
+        dst[i] = half(i as f32)
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {half(5.0)}')
+";
+    assert_gpu_runs_with_output(source, "0.0 0.5 1.0 2.5");
+}

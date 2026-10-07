@@ -324,7 +324,7 @@ impl SettlementAudit<'_> {
             TypeKind::List(e) | TypeKind::Set(e) | TypeKind::Future(e) => in_expr(e),
             TypeKind::Array(e, _) => in_expr(e),
             TypeKind::Map(k, v) | TypeKind::Result(k, v) => in_expr(k) || in_expr(v),
-            TypeKind::Tuple(elems) => elems.iter().any(in_expr),
+            TypeKind::Tuple(elems) | TypeKind::OneOf(elems) => elems.iter().any(in_expr),
             TypeKind::Custom(_, Some(args)) => args.iter().any(in_expr),
             TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
                 self.mentions_parameter(inner)

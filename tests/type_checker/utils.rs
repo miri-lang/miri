@@ -128,9 +128,9 @@ pub fn type_checker_multi_module_test(modules: Vec<(&str, &str)>) {
 
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
-        let program = parser.parse().expect("Failed to parse module");
+        let mut program = parser.parse().expect("Failed to parse module");
 
-        if let Err(errors) = type_checker.check(&program) {
+        if let Err(errors) = type_checker.check(&mut program) {
             panic!("Type check failed for module {}: {:?}", module_name, errors);
         }
     }
@@ -145,9 +145,9 @@ pub fn type_checker_multi_module_error_test(modules: Vec<(&str, &str)>, expected
 
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
-        let program = parser.parse().expect("Failed to parse module");
+        let mut program = parser.parse().expect("Failed to parse module");
 
-        last_result = type_checker.check(&program);
+        last_result = type_checker.check(&mut program);
     }
 
     match last_result {
@@ -545,6 +545,7 @@ fn expected_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::Identifier
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _) => GpuScalarClass::Forbidden,
     }
 }

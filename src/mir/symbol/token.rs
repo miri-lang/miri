@@ -142,9 +142,11 @@ fn type_kind_token(kind: &TypeKind, depth: usize) -> Cow<'static, str> {
         TypeKind::U128 => "u128",
         TypeKind::RawPtr => "RawPtr",
         TypeKind::Generic(_, _, _) => OPEN_PARAMETER_TOKEN,
-        TypeKind::Meta(_) | TypeKind::Linear(_) | TypeKind::Identifier | TypeKind::Error => {
-            UNSPELLABLE_TYPE_TOKEN
-        }
+        TypeKind::Meta(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Identifier
+        | TypeKind::OneOf(_)
+        | TypeKind::Error => UNSPELLABLE_TYPE_TOKEN,
     };
     Cow::Borrowed(token)
 }

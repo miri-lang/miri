@@ -443,6 +443,7 @@ pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::Identifier
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _) => GpuScalarClass::Forbidden,
     }
 }
@@ -829,7 +830,8 @@ pub fn accelerable_binding_kind(kind: &TypeKind) -> Option<AcceleratorBindingKin
         | TypeKind::Identifier
         | TypeKind::Void
         | TypeKind::Error
-        | TypeKind::Generic(..) => None,
+        | TypeKind::Generic(..)
+        | TypeKind::OneOf(_) => None,
     }
 }
 
@@ -1149,6 +1151,7 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
         | TypeKind::Map(_, _)
         | TypeKind::Set(_)
         | TypeKind::Tuple(_)
+        | TypeKind::OneOf(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Option(_)
@@ -1209,7 +1212,8 @@ pub fn is_residency_gated_buffer(kind: &TypeKind) -> bool {
         | TypeKind::RawPtr
         | TypeKind::Identifier
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _) => false,
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_) => false,
     }
 }
 
@@ -1237,7 +1241,7 @@ pub fn type_mentions_f16(kind: &TypeKind) -> bool {
         TypeKind::Map(k, v) | TypeKind::Result(k, v) => {
             expr_mentions_f16(k) || expr_mentions_f16(v)
         }
-        TypeKind::Tuple(elems) => elems.iter().any(expr_mentions_f16),
+        TypeKind::Tuple(elems) | TypeKind::OneOf(elems) => elems.iter().any(expr_mentions_f16),
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             type_mentions_f16(&inner.kind)
         }
@@ -1333,6 +1337,7 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::List(_)
         | TypeKind::Array(_, _)
         | TypeKind::Map(_, _)
@@ -2034,13 +2039,71 @@ impl TypeChecker {
     /// - Type aliases
     /// - Generic type parameters
     pub(crate) fn resolve_type_expression(&mut self, expr: &Expression, context: &Context) -> Type {
-        match self.extract_type_from_expression(expr) {
+        let set_allowed = std::mem::take(&mut self.type_set_allowed);
+        let resolved = match self.extract_type_from_expression(expr) {
             Ok(t) => self.resolve_type_kind(t, expr, context),
             Err(msg) => {
                 self.report_error(DiagnosticCode::TypTypeNotFound, msg, expr.span);
                 Self::error_type()
             }
+        };
+        if !set_allowed && matches!(resolved.kind, TypeKind::OneOf(_)) {
+            self.report_type_set_as_value(expr, &resolved);
+            return Self::error_type();
         }
+        resolved
+    }
+
+    /// Resolves a type expression written where a type set is allowed: a type
+    /// parameter's bound or a `type` declaration's target.
+    pub(crate) fn resolve_bound_type(&mut self, expr: &Expression, context: &Context) -> Type {
+        self.type_set_allowed = true;
+        self.resolve_type_expression(expr, context)
+    }
+
+    /// Refuses a type set written as the type of a value.
+    fn report_type_set_as_value(&mut self, expr: &Expression, set: &Type) {
+        let written = match &expr.node {
+            ExpressionKind::Type(written, _) => written.to_string(),
+            _ => set.to_string(),
+        };
+        let message = if written == set.to_string() {
+            format!("'{set}' is a type set, which bounds a type parameter and cannot be the type of a value")
+        } else {
+            format!("'{written}' is a type set ({set}), which bounds a type parameter and cannot be the type of a value")
+        };
+        self.report_error_with_help(
+            DiagnosticCode::TypTypeSetAsValue,
+            message,
+            expr.span,
+            format!("use one of its members, or take the value as a type parameter: `fn f<T is {written}>(x T)`"),
+        );
+    }
+
+    /// Resolves a type set's members, folding a member that is itself a set
+    /// into this one, so `type Number is Real or int` holds every `Real`.
+    fn resolve_type_set(&mut self, members: Vec<Expression>, context: &Context) -> Type {
+        let mut resolved: Vec<Type> = Vec::with_capacity(members.len());
+        for member in &members {
+            let member_type = self.resolve_bound_type(member, context);
+            let parts = match member_type.kind {
+                TypeKind::OneOf(nested) => nested
+                    .iter()
+                    .filter_map(|part| self.extract_type_from_expression(part).ok())
+                    .collect(),
+                _ => vec![member_type],
+            };
+            for part in parts {
+                if !resolved.iter().any(|seen| seen.kind == part.kind) {
+                    resolved.push(part);
+                }
+            }
+        }
+        let members = resolved
+            .into_iter()
+            .map(|member| self.create_type_expression(member))
+            .collect();
+        make_type(TypeKind::OneOf(members))
     }
 
     /// Resolves a type expression the compiler built from another module's
@@ -2073,6 +2136,7 @@ impl TypeChecker {
             TypeKind::Result(ok, err) => self.resolve_result_type(ok, err, context),
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
             TypeKind::Tuple(elements) => self.resolve_tuple_type(elements, context),
+            TypeKind::OneOf(members) => self.resolve_type_set(members, context),
             _ => make_type(t.kind),
         }
     }

@@ -22,6 +22,7 @@ pub mod return_type_parameters;
 pub mod shared_body_releases;
 pub mod structs;
 pub mod trait_bounded_parameters;
+pub mod type_sets;
 pub mod unary_and_cast;
 pub mod unregistered_drop_instantiations;
 pub mod used_methods;

@@ -69,6 +69,7 @@ pub fn structural_thunk_symbol(kind: &TypeKind) -> Option<String> {
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
         | TypeKind::Void
         | TypeKind::Error
@@ -86,6 +87,12 @@ fn encode(kind: &TypeKind, out: &mut String) {
             encode_arity('t', elements.len(), out);
             for element in elements {
                 encode_expr(element, out);
+            }
+        }
+        TypeKind::OneOf(members) => {
+            encode_arity('o', members.len(), out);
+            for member in members {
+                encode_expr(member, out);
             }
         }
         TypeKind::Option(inner) => {
@@ -271,6 +278,7 @@ fn collect(kind: &TypeKind, found: &mut Vec<(String, TypeKind)>) {
         }
         TypeKind::Custom(_, None)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Function(_)
         | TypeKind::Int
         | TypeKind::I8

@@ -119,6 +119,10 @@ pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
             let elements: Vec<&Expression> = elements.iter().collect();
             (Cow::Borrowed("0tuple"), arguments(&elements))
         }
+        TypeKind::OneOf(members) => {
+            let members: Vec<&Expression> = members.iter().collect();
+            (Cow::Borrowed("0oneof"), arguments(&members))
+        }
         TypeKind::List(element) => (Cow::Borrowed("0list"), arguments(&[element])),
         TypeKind::Set(element) => (Cow::Borrowed("0set"), arguments(&[element])),
         TypeKind::Future(element) => (Cow::Borrowed("0future"), arguments(&[element])),

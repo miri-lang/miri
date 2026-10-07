@@ -87,7 +87,12 @@ impl<'source> Parser<'source> {
                 ));
             }
         };
-        let type_expr = self.type_expression()?.map(Box::new);
+        let type_expr = if kind == TypeDeclarationKind::Is {
+            self.type_set_expression()?
+        } else {
+            self.type_expression()?
+        }
+        .map(Box::new);
         Ok(ast::type_declaration_expression(
             name,
             generic_types,

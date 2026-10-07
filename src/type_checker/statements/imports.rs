@@ -121,7 +121,7 @@ impl TypeChecker {
         self.modules.loading_stack.push(abs_path_str.clone());
 
         // Load and parse module
-        let (source, module_ast) =
+        let (source, mut module_ast) =
             match self.load_and_parse_module(&file_path, &path_str, path.span) {
                 Some(result) => result,
                 None => {
@@ -130,6 +130,7 @@ impl TypeChecker {
                 }
             };
 
+        self.desugar_type_set_parameters(&mut module_ast);
         if self.report_shadowed_module_conflicts(&module_ast, &path_str, path.span) {
             self.modules.loading_stack.retain(|m| m != &abs_path_str);
             return;
@@ -240,7 +241,7 @@ impl TypeChecker {
     }
 
     /// The type name a top-level declaration introduces, if the statement is one.
-    fn declared_type_name(&self, statement: &Statement) -> Option<String> {
+    pub(crate) fn declared_type_name(&self, statement: &Statement) -> Option<String> {
         let name_expr = match &statement.node {
             StatementKind::Class(class_data) => &class_data.name,
             StatementKind::Struct(name_expr, ..)
@@ -909,7 +910,20 @@ impl TypeChecker {
                         .visible_type_names
                         .contains(sel_name.as_str());
 
-                if !in_scope && !in_types {
+                // An alias records no declaring module, so it is found among
+                // the names the module itself declares.
+                let in_aliases = matches!(
+                    self.type_table
+                        .global_type_definitions
+                        .get(sel_name.as_str()),
+                    Some(TypeDefinition::Alias(_))
+                ) && self
+                    .modules
+                    .module_declared_names
+                    .get(module_name)
+                    .is_some_and(|names| names.contains(sel_name.as_str()));
+
+                if !in_scope && !in_types && !in_aliases {
                     self.report_error(
                         DiagnosticCode::ImpNameNotFoundInModule,
                         format!("Name '{}' not found in module '{}'", sel_name, module_name),
