@@ -1014,18 +1014,18 @@ fn lower_method_receiver(
     lower_expression(ctx, obj, None)
 }
 
-/// True when the receiver's static type requires vtable (virtual) dispatch:
-/// an abstract class with a vtable, or a trait-typed receiver. `super` calls
-/// always dispatch statically.
+/// True when a call on a receiver of this static type may go through the
+/// vtable: a trait-typed receiver, or a class whose instances carry one.
+/// Whether the method itself is dispatched — declared by a trait or abstract
+/// class, or overridden below the receiver — is the slot lookup's to say.
+/// `super` calls always dispatch statically.
 fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_name: &str) -> bool {
     if matches!(&obj.node, ExpressionKind::Super) {
         return false;
     }
     let defs = &ctx.type_checker.type_definitions();
-    let abstract_with_vtable = class_needs_vtable(class_name, defs)
-        && matches!(defs.get(class_name), Some(TypeDefinition::Class(cd)) if cd.is_abstract);
     let is_trait = matches!(defs.get(class_name), Some(TypeDefinition::Trait(_)));
-    abstract_with_vtable || is_trait
+    is_trait || class_needs_vtable(class_name, defs)
 }
 
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.

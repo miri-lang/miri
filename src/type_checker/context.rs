@@ -570,15 +570,35 @@ fn trait_default_among<'a>(
 /// A class that is abstract or implements a trait uses it for virtual
 /// dispatch. A class that extends another uses it to be released as what it
 /// is: held at its base class, it is released through its own vtable's drop
-/// slot, which knows the fields the base does not. So a class with a null
-/// vtable word is never held at a type other than its own, bar a trait's.
+/// slot, which knows the fields the base does not. A class another class
+/// extends uses it to reach a subclass's override from a receiver typed as
+/// the base, so an instance of the base itself carries the vtable that call
+/// reads. So a class with a null vtable word is never held at a type other
+/// than its own, bar a trait's, and is never called through a slot.
 pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
     match type_defs.get(class_name) {
         Some(TypeDefinition::Class(cd)) => {
-            cd.is_abstract || !cd.traits.is_empty() || cd.base_class.is_some()
+            cd.is_abstract
+                || !cd.traits.is_empty()
+                || cd.base_class.is_some()
+                || class_is_extended(class_name, type_defs)
         }
-        _ => false,
+        Some(
+            TypeDefinition::Trait(_)
+            | TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => false,
     }
+}
+
+/// Whether some class names `class_name` as the class it extends.
+pub fn class_is_extended(class_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
+    type_defs.values().any(|definition| {
+        matches!(definition, TypeDefinition::Class(class) if class.base_class.as_deref() == Some(class_name))
+    })
 }
 
 /// `trait_name` and every trait it extends, each once, breadth-first with each
