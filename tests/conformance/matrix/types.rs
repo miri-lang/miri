@@ -138,6 +138,13 @@ const BOX: Decl = Decl {
     text: "class Bx\n    public x int\n    public s String\n\n    fn init(x int, s String)\n        self.x = x\n        self.s = s\n",
 };
 
+/// A class that writes no `equals` or `hash` of its own: both are defaults of
+/// a trait it implements, answering by a key the class supplies.
+const KEYED_BOX: Decl = Decl {
+    name: "Kb",
+    text: "trait Keyed extends Equatable, Hashable\n    fn key() String\n\n    fn equals(other Self) bool\n        return self.key() == other.key()\n\n    fn hash() int\n        return self.key().hash()\n\nclass Kb implements Keyed\n    public x int\n    public s String\n\n    fn init(x int, s String)\n        self.x = x\n        self.s = s\n\n    fn key() String\n        return f\"{self.x}:{self.s}\"\n",
+};
+
 const SHAPE: Decl = Decl {
     name: "Sh",
     text: "enum Sh\n    Num(int)\n    Label(String)\n\n    fn equals(other Sh) bool\n        return show_sh(self) == show_sh(other)\n\n    fn hash() int\n        return show_sh(self).hash()\n",
@@ -246,6 +253,19 @@ pub const ELEMENT_TYPES: &[ElementType] = &[
         // A class without `equals` is equal only to itself.
         equal_pair: ("Bx(x: 1, s: \"a\")", "a"),
         decls: &[BOX],
+        ..NUMBER
+    },
+    ElementType {
+        token: "class_default_eq",
+        spelling: "Kb",
+        a: named("Kb(x: 1, s: \"a\")", "1:a", ""),
+        b: named("Kb(x: 2, s: \"b\")", "2:b", ""),
+        sum: None,
+        orderable: false,
+        renderable: false,
+        observe: "f\"{$r.x}:{$r.s}\"",
+        equal_pair: ("Kb(x: 1, s: \"a\")", "Kb(x: 1, s: \"a\" + \"\")"),
+        decls: &[KEYED_BOX],
         ..NUMBER
     },
     ElementType {

@@ -87,13 +87,8 @@ impl ElementMethod {
                         .inherited_method(type_name, self.method_name())
                         .is_some_and(|method| !method.is_abstract)
             }
-            // TODO: `equals` is looked up along the class chain only, so a set or
-            // map holding a class whose `equals` is a trait default it inherits
-            // matches those elements by their bytes, not by the default.
-            // Resolving it needs the order `resolve_method_source` states,
-            // and the per-class copy of the default the pipeline lowers.
             ElementMethod::Equals => facts
-                .class_method(type_name, self.method_name())
+                .method_body(type_name, self.method_name())
                 .is_some_and(|(declaring, method)| is_element_equality(declaring, method)),
         }
     }
@@ -101,11 +96,12 @@ impl ElementMethod {
     /// The symbol of the method body this question calls for `type_name` at
     /// `inst_args`.
     ///
-    /// Both are resolved through the class chain, the same rule the clone thunk
-    /// applies and the one `==` and the ordering operators dispatch by. An
-    /// inherited method's body belongs to the class that declares it and is
-    /// compiled at *that* class's type arguments, which the `extends` chain maps
-    /// from the element's — so a `Child<U> extends Base<List<U>>` element asks
+    /// Both are resolved as a written call resolves them — the class chain
+    /// first, then a default a trait it implements supplies — the same rule the
+    /// clone thunk applies and the one `==` and the ordering operators dispatch
+    /// by. An inherited method's body belongs to the class that declares it and
+    /// is compiled at *that* class's type arguments, which the `extends` chain
+    /// maps from the element's — so a `Child<U> extends Base<List<U>>` element asks
     /// `Base_equals__List_String`, the body the pipeline lowered for it.
     fn method_symbol(
         self,

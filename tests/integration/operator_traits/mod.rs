@@ -7,3 +7,4 @@ pub mod custom;
 pub mod hashing;
 pub mod iteration;
 pub mod strings;
+pub mod trait_defaults;

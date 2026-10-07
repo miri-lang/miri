@@ -17,7 +17,7 @@ use crate::mir::lowering::dispatch::conform_lookup_operand;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
 use crate::mir::lowering::method_dispatch::{operator_method_callee, resolve_inherited_method};
-use crate::type_checker::context::{class_method_declaration, MethodInfo, TypeDefinition};
+use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
 #[allow(clippy::too_many_arguments)]
 fn try_lower_binary_trait_method(
@@ -147,10 +147,10 @@ fn binary_op_trait_method(
 /// The symbol owner and declaration of the body answering `method_name` for
 /// values of `class_name`, or None when the type has no such method.
 ///
-/// An enum answers with its own method. A class answers with its own or with
-/// the one a class it extends declares, named the way every other call to an
-/// inherited method is. A trait's default body does not make an operator call
-/// it: the operator traits declare none, so only a class states the answer.
+/// An enum answers with its own method. A class answers with the body a
+/// written call to the method reaches, in the order `resolve_method_source`
+/// states: its own, the one a class it extends declares, or a default a trait
+/// it implements supplies — named the way every other call to that body is.
 pub(crate) fn operator_method_body(
     ctx: &LoweringContext,
     class_name: &str,
@@ -159,7 +159,6 @@ pub(crate) fn operator_method_body(
     let definitions = ctx.type_checker.type_definitions();
     match definitions.get(class_name) {
         Some(TypeDefinition::Class(_)) => {
-            class_method_declaration(class_name, method_name, definitions)?;
             resolve_inherited_method(definitions, class_name, method_name)
         }
         Some(TypeDefinition::Enum(ed)) => ed
