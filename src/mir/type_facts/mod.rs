@@ -179,10 +179,21 @@ impl TypeFacts {
         .map(|(_, method)| method)
     }
 
-    /// The class in `name`'s chain that declares `method_name`, with the
-    /// declaration, nearest first.
-    pub fn class_method(&self, name: &str, method_name: &str) -> Option<(&str, &MethodInfo)> {
-        crate::type_checker::context::class_method_declaration(name, method_name, &self.definitions)
+    /// The body a `name` receiver runs for `method_name`, in the order
+    /// `resolve_method_source` states, paired with the type that writes it:
+    /// the class in `name`'s chain declaring it, or the trait supplying it as
+    /// a default. None when the method has no body to run.
+    pub fn method_body(&self, name: &str, method_name: &str) -> Option<(&str, &MethodInfo)> {
+        use crate::type_checker::context::MethodSource;
+        match crate::type_checker::context::resolve_method_source(
+            &self.definitions,
+            name,
+            method_name,
+        )? {
+            MethodSource::Declared { class, info } => Some((class, info)),
+            MethodSource::Default(default) => Some((default.trait_name, default.info)),
+            MethodSource::AbstractOnly { .. } => None,
+        }
     }
 
     /// The symbol of the body a call to `method_name` on a `name` element

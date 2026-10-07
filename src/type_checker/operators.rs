@@ -6,7 +6,7 @@
 //! This module handles type validation for binary and unary operators,
 //! ensuring operands have compatible types for the requested operations.
 
-use super::context::{class_implements_trait, class_method_declaration, Context, TypeDefinition};
+use super::context::{class_implements_trait, resolve_method_source, Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{
     common_numeric_type, scalar_width, vec_dim, BuiltinCollectionKind, Type, TypeKind,
@@ -831,23 +831,17 @@ impl TypeChecker {
         let definitions = &self.type_table.global_type_definitions;
         match definitions.get(name) {
             Some(TypeDefinition::Class(_)) => {
-                class_method_declaration(name, method, definitions).is_some()
+                resolve_method_source(definitions, name, method).is_some()
             }
             Some(TypeDefinition::Enum(enum_def)) => enum_def.methods.contains_key(method),
             _ => false,
         }
     }
 
+    /// Whether `==` on a `name` value calls an `equals` its type supplies,
+    /// declared or inherited from a trait default, rather than comparing
+    /// members.
     fn type_supplies_equality(&self, name: &str) -> bool {
-        let definitions = &self.type_table.global_type_definitions;
-        match definitions.get(name) {
-            Some(TypeDefinition::Class(_)) => {
-                class_method_declaration(name, EQUALS_METHOD_NAME, definitions).is_some()
-            }
-            Some(TypeDefinition::Enum(enum_def)) => {
-                enum_def.methods.contains_key(EQUALS_METHOD_NAME)
-            }
-            _ => false,
-        }
+        self.type_declares_method(name, EQUALS_METHOD_NAME)
     }
 }
