@@ -598,6 +598,11 @@ impl TypeChecker {
         }
     }
 
+    // TODO: aliases register here, in the body pass, but a class's method
+    // signatures are resolved earlier while declarations are collected, so an
+    // alias written in a method signature is reported as an unknown type. They
+    // need registering before declarations are collected, without breaking an
+    // alias whose target is a class declared later or an imported type.
     pub(crate) fn check_type_statement(
         &mut self,
         exprs: &[Expression],
