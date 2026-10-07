@@ -29,8 +29,18 @@ fn test_divide_assign_by_zero() {
 }
 
 #[test]
+fn test_divide_assign_by_negative_zero() {
+    type_checker_error_test("var x = 10\nx /= -0", "Division by zero");
+}
+
+#[test]
 fn test_modulo_assign_by_zero() {
     type_checker_error_test("var x = 10\nx %= 0", "Division by zero");
+}
+
+#[test]
+fn test_modulo_assign_by_negative_zero() {
+    type_checker_error_test("var x = 10\nx %= -0", "Division by zero");
 }
 
 #[test]
