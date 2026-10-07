@@ -418,6 +418,35 @@ type ScoreMap is {String: int}
 
 Aliases are transparent to the type checker and codegen — they are fully interchangeable with their underlying type.
 
+### Type Sets
+
+A type set names several types joined by `or`. It bounds a type parameter: each call binds the parameter to exactly one member.
+
+```miri
+type Real is f32 or float
+
+fn sq<T is Real>(x T) T              // a named set as the bound
+    return x * x
+
+fn cube<T is f32 or float>(x T) T    // a set written in the bound itself
+    return x * x * x
+
+fn half(x Real) Real                 // the shorthand: fn half<T is Real>(x T) T
+    return x * 0.5
+
+fn main()
+    let a f32 = 1.1
+    println(f"{sq(a)} {sq(1.1)}")    // 1.21 1.2100000000000002 — the result keeps the argument's type
+```
+
+A set name written as a parameter or return type is the shorthand for a type parameter that set bounds, and every use of the same name in one signature is the same parameter: `fn clamp(x Real, lo Real, hi Real) Real` takes and returns one type, so `clamp(a, 0.0, 1.0)` with `a f32` is an `f32`, and two arguments at different members (`add(an_f32, a_float)`) are refused as they would be for `<T is Real>(x T, y T)`. Different set names are different parameters, appended after those the function declares, in the order they first appear; written type arguments bind them in that order (`half<f32>(0.5)`). The shorthand is for functions: a method or a lambda cannot take a set. The body cannot name the parameter the shorthand introduces — there `Real` is still the set — so a body that needs to write the type uses the explicit form.
+
+A set may hold another set, which contributes its members: `type Number is Real or int`. A parameter bounded by a set satisfies a bound that holds every one of its members, so a `Real` value passes on to a `Number` parameter, while a `Number` one is refused by a `Real` bound.
+
+A set is never the type of a value: a binding, field, collection element, parameter of a lambda or method, or any other place a value's type is written is refused (`MER_TYP_080`), because no single representation holds every member. A call binding a type outside the set is refused at the call, naming the set's members (`MER_TYP_037`).
+
+A set is imported like any other declared name: with its module, or by name (`use local.shapes.{twice, Real}`).
+
 ---
 
 ## Imports & Modules
@@ -897,7 +926,7 @@ let b Box<String> = make()      // T = String
 take(make())                    // T = the parameter type of `take`
 ```
 
-A call whose type parameters are still unbound once its statement has been checked is refused (`MER_TYP_048`): no body can be compiled for it. That includes `let b = make()`, where nothing names the type, and a type parameter that appears nowhere in the signature (`fn noop<T>(x int) int`), which must always be written out: `noop<int>(5)`. Each bound a function declares on a type parameter (`T implements Named`) is checked against the type the call binds it to, however it was bound.
+A call whose type parameters are still unbound once its statement has been checked is refused (`MER_TYP_048`): no body can be compiled for it. That includes `let b = make()`, where nothing names the type, and a type parameter that appears nowhere in the signature (`fn noop<T>(x int) int`), which must always be written out: `noop<int>(5)`. Each bound a function declares on a type parameter (`T implements Named`, or `T is Real` for a [type set](#type-sets)) is checked against the type the call binds it to, however it was bound.
 
 #### Distinct type parameters are distinct types
 

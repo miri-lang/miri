@@ -253,6 +253,9 @@ pub(crate) fn substitute_self_type(ty: &Type, self_type: &Type) -> Type {
         TypeKind::Tuple(elements) => {
             TypeKind::Tuple(substitute_self_in_type_args(elements, self_type))
         }
+        TypeKind::OneOf(members) => {
+            TypeKind::OneOf(substitute_self_in_type_args(members, self_type))
+        }
         TypeKind::Result(ok, err) => {
             let mut both = substitute_self_in_type_args(&[*ok.clone(), *err.clone()], self_type);
             let substituted_err = both.pop().unwrap_or_else(|| *err.clone());
@@ -1124,7 +1127,9 @@ fn collect_generic_names_from_type(
             collect_argument(first);
             collect_argument(second);
         }
-        TypeKind::Tuple(elements) => elements.iter().for_each(collect_argument),
+        TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => {
+            elements.iter().for_each(collect_argument)
+        }
         TypeKind::Custom(_, Some(args)) => args.iter().for_each(collect_argument),
         TypeKind::Function(function) => {
             function

@@ -346,6 +346,13 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
                 .collect();
             Type::new(TypeKind::Tuple(new_exprs), ty.span)
         }
+        TypeKind::OneOf(members) => {
+            let new_members = members
+                .iter()
+                .map(|expr| substitute_in_type_expr(expr, subs))
+                .collect();
+            Type::new(TypeKind::OneOf(new_members), ty.span)
+        }
         TypeKind::Result(ok_expr, err_expr) => {
             let new_ok = substitute_in_type_expr(ok_expr, subs);
             let new_err = substitute_in_type_expr(err_expr, subs);

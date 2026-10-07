@@ -571,7 +571,7 @@ impl TypeChecker {
                     if let ExpressionKind::Identifier(gen_name, _) = &name_expr.node {
                         let constraint_ty = constraint
                             .as_ref()
-                            .map(|c| self.resolve_type_expression(c, context));
+                            .map(|c| self.resolve_bound_type(c, context));
                         context.define_type(
                             gen_name.clone(),
                             TypeDefinition::Generic(GenericDefinition {
@@ -647,7 +647,7 @@ impl TypeChecker {
             self.define_generics(gens, context);
         }
 
-        let target_type = self.resolve_type_expression(target, context);
+        let target_type = self.resolve_bound_type(target, context);
 
         if generics.is_some() {
             context.exit_scope();
@@ -679,7 +679,7 @@ impl TypeChecker {
                     };
                     let constraint_type = constraint_expr
                         .as_ref()
-                        .map(|c| self.resolve_type_expression(c, context));
+                        .map(|c| self.resolve_bound_type(c, context));
                     defs.push(GenericDefinition {
                         name: gen_name,
                         constraint: constraint_type,

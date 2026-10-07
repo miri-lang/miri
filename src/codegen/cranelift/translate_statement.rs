@@ -1408,6 +1408,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void

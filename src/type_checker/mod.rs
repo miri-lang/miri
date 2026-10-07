@@ -58,6 +58,7 @@ pub(crate) mod module_loader;
 mod operators;
 pub(crate) mod runtime_settled;
 pub mod statements;
+pub(crate) mod type_set_shorthand;
 mod type_table;
 pub mod use_after_move;
 mod used_methods;
@@ -235,6 +236,16 @@ pub struct TypeChecker {
     /// expression that needed the type. Set for the length of one such
     /// resolution by `resolve_type_expression_at`.
     pub(crate) synthesized_type_use_site: Option<Span>,
+    /// Whether the type expression about to be resolved may be a type set.
+    ///
+    /// A set (`f32 or float`) bounds a type parameter and is never the type of
+    /// a value, so only the two places that write one — a type parameter's
+    /// `is` bound and a `type` declaration's target — set this, for the one
+    /// resolution that follows. Every other resolution refuses a set.
+    pub(crate) type_set_allowed: bool,
+    /// The public type-set names each module file declares, read once per
+    /// file by the signature shorthand (see [`type_set_shorthand`]).
+    pub(crate) type_set_exports: HashMap<std::path::PathBuf, Vec<String>>,
 }
 
 impl Default for TypeChecker {
@@ -282,6 +293,8 @@ impl TypeChecker {
             member_receiver_expr_id: None,
             member_receiver_is_parameter: false,
             synthesized_type_use_site: None,
+            type_set_allowed: false,
+            type_set_exports: HashMap::new(),
         }
     }
 
@@ -498,7 +511,9 @@ impl TypeChecker {
     }
 
     /// Main entry point for type checking a program.
-    pub fn check(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
+    pub fn check(&mut self, program: &mut Program) -> Result<(), Vec<TypeError>> {
+        self.desugar_type_set_parameters(program);
+        let program = &*program;
         let mut context = Context::new();
         self.load_prelude(&mut context);
 

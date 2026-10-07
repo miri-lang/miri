@@ -466,6 +466,7 @@ impl References {
                 self.record(TUPLE_TYPE_NAME);
                 self.expressions(elements);
             }
+            TypeKind::OneOf(members) => self.expressions(members),
             TypeKind::Function(function) => {
                 self.expression_list(function.generics.as_deref());
                 self.parameters(&function.params);

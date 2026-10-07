@@ -2144,6 +2144,7 @@ fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
         | TypeKind::Future(_)
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)

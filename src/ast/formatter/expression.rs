@@ -153,8 +153,8 @@ fn kind(sink: &mut Sink, node: &ExpressionKind, span: Span, indent: usize) {
         ExpressionKind::Type(declared, is_nullable) => {
             type_expression(sink, declared, *is_nullable, span)
         }
-        ExpressionKind::GenericType(name, arguments, _) => {
-            generic_type(sink, name, arguments.as_deref(), indent)
+        ExpressionKind::GenericType(name, arguments, declaration) => {
+            generic_type(sink, name, arguments.as_deref(), declaration, indent)
         }
         ExpressionKind::TypeDeclaration(name, generics, declaration, bound) => type_declaration(
             sink,
@@ -232,14 +232,36 @@ fn call(sink: &mut Sink, callee: &Expression, arguments: &[Expression], indent: 
 }
 
 /// `Name<Argument>`
-fn generic_type(sink: &mut Sink, name: &Expression, arguments: Option<&Expression>, indent: usize) {
+/// `name<A>` where a call writes type arguments, or `T is Bound` where a type
+/// parameter is declared with one: the same node carries both, told apart by
+/// whether it declares a bound.
+fn generic_type(
+    sink: &mut Sink,
+    name: &Expression,
+    arguments: Option<&Expression>,
+    declaration: &crate::ast::types::TypeDeclarationKind,
+    indent: usize,
+) {
     render(sink, name, indent, precedence::PRIMARY);
     let Some(arguments) = arguments else {
         return;
     };
-    sink.emit("<");
-    expression(sink, arguments, indent);
-    sink.emit(">");
+    match declaration {
+        crate::ast::types::TypeDeclarationKind::None => {
+            sink.emit("<");
+            expression(sink, arguments, indent);
+            sink.emit(">");
+        }
+        crate::ast::types::TypeDeclarationKind::Is
+        | crate::ast::types::TypeDeclarationKind::Extends
+        | crate::ast::types::TypeDeclarationKind::Implements
+        | crate::ast::types::TypeDeclarationKind::Includes => {
+            sink.emit(" ");
+            sink.emit(&declaration.to_string());
+            sink.emit(" ");
+            expression(sink, arguments, indent);
+        }
+    }
 }
 
 /// `Enum.Variant(payload)`

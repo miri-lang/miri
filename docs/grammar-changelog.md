@@ -15,6 +15,28 @@ Records every change to `docs/grammar.peg`.
   downstream consumer. That is a human judgement; the hash only guarantees no
   grammar edit passes unnoticed.
 
+## Version 3
+
+**Content Hash**: `2aef17d2153f1e603ba5eeebc8df6dc8`
+
+Adds type sets and corrects the two rules that described how a type is declared
+and how a type parameter is bounded. A consumer holding version 2 rejects
+programs the compiler accepts, so this is a breaking change for anything caching
+the rules.
+
+**Type sets.** `type_set` reads one type or several joined by `or`
+(`f32 or float`). It is written in two places only: as the target of
+`type Name is ...`, and after `is` in a type parameter (`<T is f32 or float>`).
+Elsewhere `or` after a type is not part of it.
+
+**`type_declaration`** now reads `is` before its target, or one of `extends`,
+`implements` and `includes` — version 2 wrote `=`, which the parser has never
+accepted.
+
+**`generic_parameter`** now reads its bound after `is`, `extends`,
+`implements` or `includes` — version 2 admitted a `:` bound the parser has never
+accepted, and only `extends` of the four keywords.
+
 ## Version 2
 
 **Content Hash**: `9d929602eadc40bc37a6f8e60072b0c2`

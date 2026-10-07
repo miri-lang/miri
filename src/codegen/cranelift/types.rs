@@ -99,6 +99,6 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
 
         // TODO: give `resolve_projected_type_kind` an `Option` result so an
         // unresolved projection is decided at the call site, not a silent word.
-        TypeKind::Error => ptr_ty,
+        TypeKind::Error | TypeKind::OneOf(_) => ptr_ty,
     }
 }

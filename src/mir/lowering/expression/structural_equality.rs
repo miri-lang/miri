@@ -90,6 +90,7 @@ pub fn emit_structural_equality(
         | TypeKind::Function(_)
         | TypeKind::Future(_)
         | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
         | TypeKind::Error => Err(LoweringError::unsupported_expression(

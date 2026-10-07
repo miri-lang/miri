@@ -421,8 +421,8 @@ impl TypeChecker {
                 self.check_enum_can_interpolate(name, type_args.as_deref())
             }
 
-            // Unresolved generics cannot be formatted
-            TypeKind::Generic(_, _, _) => false,
+            // Unresolved generics and type sets cannot be formatted
+            TypeKind::Generic(_, _, _) | TypeKind::OneOf(_) => false,
 
             // Collections are not formattable
             TypeKind::List(_)

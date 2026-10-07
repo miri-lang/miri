@@ -63,6 +63,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -108,6 +109,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -219,6 +221,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -262,6 +265,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Set(_)
             | TypeKind::Map(_, _)
             | TypeKind::Tuple(_)
+            | TypeKind::OneOf(_)
             | TypeKind::Custom(_, _)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
@@ -316,6 +320,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -380,6 +385,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -461,6 +467,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -553,6 +560,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Map(_, _)
             | TypeKind::Set(_)
             | TypeKind::Tuple(_)
+            | TypeKind::OneOf(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
@@ -605,6 +613,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
+            | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void

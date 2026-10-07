@@ -120,7 +120,7 @@ impl MirType {
             TypeKind::Void => MirType::Void,
             TypeKind::Identifier => MirType::Identifier,
             TypeKind::RawPtr => MirType::RawPtr,
-            TypeKind::Error => MirType::Error,
+            TypeKind::Error | TypeKind::OneOf(_) => MirType::Error,
             // Canonical collection variants are normalized to Custom before MIR lowering.
             // They are handled below in the Custom arm.
             TypeKind::List(elem) => MirType::List(Box::new(Self::from_expr(elem))),

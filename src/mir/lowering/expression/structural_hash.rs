@@ -114,6 +114,7 @@ pub fn emit_structural_hash(
         TypeKind::Map(_, _)
         | TypeKind::Set(_)
         | TypeKind::Tuple(_)
+        | TypeKind::OneOf(_)
         | TypeKind::Function(_)
         | TypeKind::Future(_) => Ok(address_hash(ctx, span, value)),
         TypeKind::Meta(_) | TypeKind::Linear(_) | TypeKind::Error => {

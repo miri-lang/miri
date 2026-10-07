@@ -1,0 +1,9 @@
+// expect: MER_TYP_080
+// summary: Triggers MER_TYP_080: a type set is written as the type of a binding.
+use system.io
+
+type Real is f32 or float
+
+fn main()
+    let y Real = 1.5
+    println(f"{y}")

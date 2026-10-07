@@ -1643,6 +1643,7 @@ impl TypeChecker {
             | TypeKind::Map(_, _)
             | TypeKind::Set(_)
             | TypeKind::Tuple(_)
+            | TypeKind::OneOf(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Option(_)

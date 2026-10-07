@@ -1323,7 +1323,7 @@ impl Pipeline {
 
         let mut type_checker = self.make_type_checker();
         type_checker
-            .check(&ast)
+            .check(&mut ast)
             .map_err(|errors| CompilerError::TypeErrors {
                 errors,
                 warnings: type_checker.warnings().to_vec(),
@@ -1355,7 +1355,7 @@ impl Pipeline {
 
         let mut type_checker = self.make_type_checker();
         type_checker
-            .check(&ast)
+            .check(&mut ast)
             .map_err(|errors| CompilerError::TypeErrors {
                 errors,
                 warnings: type_checker.warnings().to_vec(),

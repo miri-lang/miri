@@ -362,6 +362,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Array(_, _)
             | TypeKind::Map(_, _)
             | TypeKind::Tuple(_)
+            | TypeKind::OneOf(_)
             | TypeKind::Set(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)

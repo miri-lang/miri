@@ -1,0 +1,12 @@
+// summary: Accepted counterpart of MER_TYP_080: the set bounds a type parameter, and the binding takes one member.
+// expect-stdout: 3.0
+use system.io
+
+type Real is f32 or float
+
+fn twice(x Real) Real
+    return x * 2.0
+
+fn main()
+    let y f32 = 1.5
+    println(f"{twice(y)}")
