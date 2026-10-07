@@ -214,18 +214,13 @@ fn try_lower_static_method_call(
     }
 
     // Try to find the static method on an enum
-    if let Some(enum_def) = ctx
+    // Borrow `enum_def` directly from `global_type_definitions` instead of cloning
+    // the entire `EnumDefinition` node (which includes maps of variants and methods).
+    if let Some(TypeDefinition::Enum(enum_def)) = ctx
         .type_checker
         .type_table
         .global_type_definitions
         .get(type_name)
-        .and_then(|def| {
-            if let crate::type_checker::context::TypeDefinition::Enum(enum_def) = def {
-                Some(enum_def.clone())
-            } else {
-                None
-            }
-        })
     {
         if let Some(method_info) = enum_def.methods.get(method_name) {
             if method_info.is_static {
