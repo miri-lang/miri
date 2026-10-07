@@ -290,22 +290,13 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         }
 
-        if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
-            let is_zero = match &right.node {
-                ExpressionKind::Literal(lit) => lit.is_zero(),
-                ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
-                    matches!(&operand.node, ExpressionKind::Literal(lit) if lit.is_zero())
-                }
-                _ => false,
-            };
-            if is_zero {
-                self.report_error(
-                    DiagnosticCode::TypConstEvalArithmetic,
-                    "Division by zero".to_string(),
-                    right.span,
-                );
-                return ast_factory::make_type(TypeKind::Error);
-            }
+        if matches!(op, BinaryOp::Div | BinaryOp::Mod) && is_zero_expression(right) {
+            self.report_error(
+                DiagnosticCode::TypConstEvalArithmetic,
+                "Division by zero".to_string(),
+                right.span,
+            );
+            return ast_factory::make_type(TypeKind::Error);
         }
 
         // Suppress cascade: if either operand already has an error type, propagate silently
@@ -803,14 +794,12 @@ impl TypeChecker {
         if !matches!(op, AssignmentOp::AssignDiv | AssignmentOp::AssignMod) {
             return;
         }
-        if let ExpressionKind::Literal(lit) = &rhs.node {
-            if lit.is_zero() {
-                self.report_error(
-                    DiagnosticCode::TypConstEvalArithmetic,
-                    "Division by zero".to_string(),
-                    rhs.span,
-                );
-            }
+        if is_zero_expression(rhs) {
+            self.report_error(
+                DiagnosticCode::TypConstEvalArithmetic,
+                "Division by zero".to_string(),
+                rhs.span,
+            );
         }
     }
 
@@ -1018,6 +1007,17 @@ impl BinaryOpRemedy {
                  e.g. f\"n={n}\"."
             }
         }
+    }
+}
+
+/// Returns true if `expr` is a zero literal, or a zero literal wrapped in a unary `+` or `-`.
+fn is_zero_expression(expr: &Expression) -> bool {
+    match &expr.node {
+        ExpressionKind::Literal(lit) => lit.is_zero(),
+        ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
+            matches!(&operand.node, ExpressionKind::Literal(lit) if lit.is_zero())
+        }
+        _ => false,
     }
 }
 
