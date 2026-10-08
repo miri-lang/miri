@@ -578,6 +578,7 @@ fn test_class_field_layout_uses_pointer_slots() {
                         ty: t(TypeKind::I64),
                         mutable: false,
                         visibility: MemberVisibility::Public,
+                        initializer: None,
                     },
                 ),
                 (
@@ -586,6 +587,7 @@ fn test_class_field_layout_uses_pointer_slots() {
                         ty: t(TypeKind::I64),
                         mutable: false,
                         visibility: MemberVisibility::Public,
+                        initializer: None,
                     },
                 ),
                 (
@@ -594,6 +596,7 @@ fn test_class_field_layout_uses_pointer_slots() {
                         ty: t(TypeKind::I64),
                         mutable: false,
                         visibility: MemberVisibility::Public,
+                        initializer: None,
                     },
                 ),
             ],
@@ -868,6 +871,7 @@ fn make_class(name: &str, base: Option<&str>, fields: Vec<(&str, TypeKind)>) -> 
                         ty: t(kind),
                         mutable: false,
                         visibility: MemberVisibility::Public,
+                        initializer: None,
                     },
                 )
             })

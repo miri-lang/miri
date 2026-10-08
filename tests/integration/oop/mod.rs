@@ -12,6 +12,7 @@ pub mod constructor;
 pub mod custom_iterable;
 pub mod derived_traits;
 pub mod drop;
+pub mod field_initializers;
 pub mod generic_class_monomorphization;
 pub mod generic_virtual_dispatch;
 pub mod hierarchy_layout;

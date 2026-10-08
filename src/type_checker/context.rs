@@ -29,7 +29,7 @@
 //! - [`GenericDefinition`]: Generic type parameters with constraints
 
 use crate::ast::statement::BindingResidency;
-use crate::ast::{literal::Literal, types::*, MemberVisibility};
+use crate::ast::{literal::Literal, types::*, Expression, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -188,6 +188,10 @@ pub struct FieldInfo {
     pub ty: Type,
     pub mutable: bool,
     pub visibility: MemberVisibility,
+    /// The value the field starts at when a constructor call does not set it
+    /// (`var v = 7`), evaluated afresh at every construction. `None` starts the
+    /// field at its type's zero value.
+    pub initializer: Option<Box<Expression>>,
 }
 
 /// Information about a method.

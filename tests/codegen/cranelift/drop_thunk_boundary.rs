@@ -53,6 +53,7 @@ fn definitions() -> HashMap<String, TypeDefinition> {
                     ty: parameter,
                     mutable: true,
                     visibility: MemberVisibility::Public,
+                    initializer: None,
                 },
             )],
             methods: BTreeMap::new(),

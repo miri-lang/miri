@@ -10,7 +10,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    AggregateKind, Constant, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+    AggregateKind, Constant, Local, Operand, Place, Rvalue, StatementKind, Terminator,
+    TerminatorKind,
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, StructDefinition};
@@ -110,14 +111,7 @@ pub fn lower_struct_constructor(
     });
 
     let result_op = Operand::Copy(destination);
-
-    for op in &operands {
-        if let Operand::Copy(place) | Operand::Move(place) = op {
-            if place.local != dest_local {
-                ctx.emit_temp_drop(place.local, arg_watermark, *span);
-            }
-        }
-    }
+    release_field_temps(ctx, &operands, dest_local, arg_watermark, *span);
 
     Ok(result_op)
 }
@@ -411,20 +405,20 @@ fn lower_class_with_init(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let field_defaults: Vec<Operand> = all_fields
-        .iter()
-        .map(|(_, fi)| create_default_value(&fi.ty, span))
-        .collect();
+    let field_watermark = ctx.body.local_decls.len();
+    let field_values = initial_field_values(ctx, all_fields, field_watermark, span)?;
 
     let (destination, result_op) = constructed_instance_place(ctx, &instance_ty, dest, span);
 
+    let dest_local = destination.local;
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             destination.clone(),
-            Rvalue::Aggregate(AggregateKind::Class(instance_ty), field_defaults),
+            Rvalue::Aggregate(AggregateKind::Class(instance_ty), field_values.clone()),
         ),
         span: *span,
     });
+    release_field_temps(ctx, &field_values, dest_local, field_watermark, *span);
 
     let init_arg_watermark = ctx.body.local_decls.len();
     let names: Vec<&str> = init_params.iter().map(|(name, _)| name.as_str()).collect();
@@ -486,22 +480,7 @@ fn lower_class_without_init(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let arg_watermark = ctx.body.local_decls.len();
-    let mut positional_args = Vec::with_capacity(args.len());
-    let mut named_args: std::collections::HashMap<&str, Operand> =
-        std::collections::HashMap::with_capacity(args.len());
-
-    for arg in args {
-        match &arg.node {
-            ExpressionKind::NamedArgument(name, value) => {
-                let op = lower_expression(ctx, value, None)?;
-                named_args.insert(name, op);
-            }
-            _ => {
-                let op = lower_expression(ctx, arg, None)?;
-                positional_args.push(op);
-            }
-        }
-    }
+    let (positional_args, mut named_args) = partition_constructor_args(ctx, args)?;
 
     let mut operands = Vec::with_capacity(all_fields.len());
     let mut pos_iter = positional_args.into_iter();
@@ -512,11 +491,7 @@ fn lower_class_without_init(
         } else if let Some(op) = named_args.remove(field_name.as_str()) {
             op
         } else {
-            // TODO: an omitted field takes its type's zero even when the
-            // class gives it an initializer (`var v = 7`), so `Crate()`
-            // reads 0. `FieldInfo` carries no initializer to lower here;
-            // either honour initializers or refuse them in the checker.
-            create_default_value(&field_info.ty, span)
+            field_initial_value(ctx, field_info, span)?
         };
 
         operands.push(coerce_to_field(
@@ -538,16 +513,57 @@ fn lower_class_without_init(
         ),
         span: *span,
     });
+    release_field_temps(ctx, &operands, dest_local, arg_watermark, *span);
 
-    for op in &operands {
+    Ok(result_op)
+}
+
+/// The value a field starts at when the constructor call does not set it: the
+/// initializer the class declares for it, evaluated at this construction so
+/// every instance gets its own value, or else the zero of the field's type.
+fn field_initial_value(
+    ctx: &mut LoweringContext,
+    field: &crate::type_checker::context::FieldInfo,
+    span: &Span,
+) -> Result<Operand, LoweringError> {
+    match &field.initializer {
+        Some(initializer) => lower_expression(ctx, initializer, None),
+        None => Ok(create_default_value(&field.ty, span)),
+    }
+}
+
+/// The value every field starts at before `init` runs, each brought to the
+/// field's type. Temps built for them are numbered from `watermark` on.
+fn initial_field_values(
+    ctx: &mut LoweringContext,
+    all_fields: &[(String, crate::type_checker::context::FieldInfo)],
+    watermark: usize,
+    span: &Span,
+) -> Result<Vec<Operand>, LoweringError> {
+    let mut values = Vec::with_capacity(all_fields.len());
+    for (_, field_info) in all_fields {
+        let op = field_initial_value(ctx, field_info, span)?;
+        values.push(coerce_to_field(ctx, op, &field_info.ty, watermark, *span));
+    }
+    Ok(values)
+}
+
+/// Release each temp built since `watermark` to hold a field value, once the
+/// aggregate stored into `dest_local` has taken its own reference to it.
+fn release_field_temps(
+    ctx: &mut LoweringContext,
+    operands: &[Operand],
+    dest_local: Local,
+    watermark: usize,
+    span: Span,
+) {
+    for op in operands {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             if place.local != dest_local {
-                ctx.emit_temp_drop(place.local, arg_watermark, *span);
+                ctx.emit_temp_drop(place.local, watermark, span);
             }
         }
     }
-
-    Ok(result_op)
 }
 
 /// Creates a default value operand for a given type.

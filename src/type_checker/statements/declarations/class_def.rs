@@ -203,11 +203,38 @@ impl TypeChecker {
             class_type,
         );
 
+        self.check_typed_field_initializers(bodies, context);
         self.check_class_method_bodies(&bodies.method_statements, context);
         self.record_runtime_settled_methods(&bodies.name, &bodies.method_statements);
 
         context.exit_class();
         context.exit_scope();
+    }
+
+    /// Check the initializer of each field that also declares its type against
+    /// that type. An untyped field took its type from its initializer when the
+    /// class was defined; a typed one is checked here, once every class of the
+    /// module is defined, so its initializer can construct a class declared
+    /// below it. A field whose type did not resolve was already reported.
+    fn check_typed_field_initializers(&mut self, bodies: &ClassBodies, context: &mut Context) {
+        for stmt in &bodies.class_data.body {
+            let StatementKind::Variable(decls, _) = &stmt.node else {
+                continue;
+            };
+            for decl in decls {
+                if decl.typ.is_none() || decl.initializer.is_none() {
+                    continue;
+                }
+                let resolved = bodies
+                    .fields
+                    .iter()
+                    .find(|(name, _)| *name == decl.name)
+                    .is_some_and(|(_, field)| !matches!(field.ty.kind, TypeKind::Error));
+                if resolved {
+                    self.determine_variable_type(decl, context, stmt.span);
+                }
+            }
+        }
     }
 
     /// Refuse an `extends` or `implements` clause naming a generic type
@@ -790,6 +817,7 @@ impl TypeChecker {
                     ty: field_type,
                     mutable: is_mutable,
                     visibility: vis.clone(),
+                    initializer: decl.initializer.clone(),
                 },
             ));
         }

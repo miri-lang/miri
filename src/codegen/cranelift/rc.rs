@@ -2606,6 +2606,7 @@ mod drop_thunk_tests {
                     },
                     mutable: true,
                     visibility: MemberVisibility::Public,
+                    initializer: None,
                 },
             )],
             methods: BTreeMap::new(),

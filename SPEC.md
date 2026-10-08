@@ -579,6 +579,19 @@ The `init` method is the constructor. Fields are initialized inside `init` via `
 let a = Animal(n: "Buddy")
 ```
 
+### Field Initializers
+
+A field may declare the value it starts at. A field without a type takes the type of its initializer; a field with both must have an initializer of that type. The initializer runs again for every instance, so each instance gets its own value, and it runs before `init`, so `init` can read or replace it. In a class without `init`, a constructor argument that sets the field replaces the initializer, which then does not run. A field without an initializer starts at its type's zero value. The initializer cannot read `self`.
+
+```miri
+class Crate
+    var count = 7
+    var label String = "crate"
+
+let c = Crate()               // c.count == 7, c.label == "crate"
+let d = Crate(label: "box")   // d.count == 7, d.label == "box"
+```
+
 ### Inheritance
 
 Use `extends` for single inheritance. Subclasses inherit all fields and methods from the parent.
