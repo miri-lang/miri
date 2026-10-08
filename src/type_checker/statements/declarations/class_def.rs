@@ -796,6 +796,11 @@ impl TypeChecker {
             let field_type = if let Some(type_expr) = &decl.typ {
                 self.resolve_type_expression(type_expr, context)
             } else if let Some(init) = &decl.initializer {
+                // TODO: an initializer reading `self` (`var b = self.a`) is
+                // refused as "Type 'C' has no field or method 'a'", because
+                // the class's fields are registered only after this loop. The
+                // refusal is right, since no instance exists yet, but the
+                // message should say an initializer cannot read `self`.
                 self.infer_expression(init, context)
             } else {
                 self.report_error(
