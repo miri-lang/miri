@@ -22,6 +22,7 @@ pub mod inherited_through_extends_arguments;
 pub mod inherited_traits;
 pub mod instance_allocation;
 pub mod invalid_targets;
+pub mod later_declared_class;
 pub mod method_resolution_order;
 pub mod method_values;
 pub mod static_members;

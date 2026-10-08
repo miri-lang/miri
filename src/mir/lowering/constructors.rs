@@ -512,6 +512,10 @@ fn lower_class_without_init(
         } else if let Some(op) = named_args.remove(field_name.as_str()) {
             op
         } else {
+            // TODO: an omitted field takes its type's zero even when the
+            // class gives it an initializer (`var v = 7`), so `Crate()`
+            // reads 0. `FieldInfo` carries no initializer to lower here;
+            // either honour initializers or refuse them in the checker.
             create_default_value(&field_info.ty, span)
         };
 

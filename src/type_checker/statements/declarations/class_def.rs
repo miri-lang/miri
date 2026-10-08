@@ -62,23 +62,57 @@ pub(crate) fn method_body(decl: &FunctionDeclarationData) -> Option<&Statement> 
     })
 }
 
+/// A class whose definition — fields, method signatures, hierarchy — is
+/// registered, with its validations and method bodies still to check.
+/// Defining every class of a module before checking any body lets a body
+/// written above a class read its fields and construct it, while the
+/// validations keep their place in source order: they compare the class
+/// against its traits, which are defined only when the body pass reaches them.
+pub(crate) struct ClassBodies<'a> {
+    name: String,
+    class_data: &'a ClassData,
+    base_class_name: Option<String>,
+    base_direct_args: Option<Vec<Type>>,
+    trait_names: Vec<String>,
+    trait_direct_args: HashMap<String, Vec<Type>>,
+    fields: Vec<(String, FieldInfo)>,
+    methods: BTreeMap<String, MethodInfo>,
+    method_statements: Vec<&'a Statement>,
+}
+
 impl TypeChecker {
-    #[allow(clippy::too_many_arguments)]
+    /// Defines a class and checks its method bodies in one go.
     pub(crate) fn check_class(
         &mut self,
-        name_expr: &Expression,
-        generics: &Option<Vec<Expression>>,
-        base_class: &Option<Box<Expression>>,
-        traits: &[Expression],
-        body: &[Statement],
-        visibility: &MemberVisibility,
+        class_data: &ClassData,
         context: &mut Context,
         span: Span,
-        is_abstract: bool,
     ) {
-        let Some(name) = self.check_class_extract_and_validate_name(name_expr, span) else {
-            return;
-        };
+        if let Some(bodies) = self.define_class(class_data, context, span) {
+            self.check_class_bodies(&bodies, context);
+        }
+    }
+
+    /// Registers a class's definition, leaving its validations and method
+    /// bodies to [`check_class_bodies`](Self::check_class_bodies). `None`
+    /// when the class has no valid name to register under.
+    pub(crate) fn define_class<'a>(
+        &mut self,
+        class_data: &'a ClassData,
+        context: &mut Context,
+        span: Span,
+    ) -> Option<ClassBodies<'a>> {
+        let ClassData {
+            name: name_expr,
+            generics,
+            base_class,
+            traits,
+            body,
+            visibility,
+            is_abstract,
+            ..
+        } = class_data;
+        let name = self.check_class_extract_and_validate_name(name_expr, span)?;
         self.modules.pre_registered_types.remove(&name);
 
         let generic_defs = generics
@@ -106,36 +140,71 @@ impl TypeChecker {
         let (fields, methods, method_statements) =
             self.check_class_collect_members(body, context, generic_defs.as_ref());
 
-        self.check_accelerable_impl(&name, &trait_names, &fields, name_expr);
-
-        self.run_class_validations(
-            &name,
-            &base_class_name,
-            &base_direct_args,
-            &trait_names,
-            &trait_direct_args,
-            &methods,
-            &method_statements,
-            name_expr,
-            is_abstract,
-        );
-
         self.finalize_class_definition(
             &name,
             generic_defs,
+            base_class_name.clone(),
+            base_direct_args.clone(),
+            trait_names.clone(),
+            trait_direct_args.clone(),
+            fields.clone(),
+            methods.clone(),
+            *is_abstract,
+            visibility,
+            context,
+        );
+
+        context.exit_class();
+        context.exit_scope();
+        Some(ClassBodies {
+            name,
+            class_data,
             base_class_name,
             base_direct_args,
             trait_names,
             trait_direct_args,
             fields,
             methods,
-            is_abstract,
-            visibility,
-            context,
+            method_statements,
+        })
+    }
+
+    /// Validates a class [`define_class`](Self::define_class) registered
+    /// against its traits and base class, then checks its method bodies in
+    /// the class's own scope.
+    pub(crate) fn check_class_bodies(&mut self, bodies: &ClassBodies, context: &mut Context) {
+        let name_expr = &bodies.class_data.name;
+        self.check_accelerable_impl(&bodies.name, &bodies.trait_names, &bodies.fields, name_expr);
+        self.run_class_validations(
+            &bodies.name,
+            &bodies.base_class_name,
+            &bodies.base_direct_args,
+            &bodies.trait_names,
+            &bodies.trait_direct_args,
+            &bodies.methods,
+            &bodies.method_statements,
+            name_expr,
+            bodies.class_data.is_abstract,
         );
 
-        self.check_class_method_bodies(&method_statements, context);
-        self.record_runtime_settled_methods(&name, &method_statements);
+        let generics = bodies.class_data.generics.as_deref();
+        context.enter_scope();
+        if let Some(gens) = generics {
+            // The definition already reported anything wrong with the bounds.
+            let prev = self.suppress_diagnostics;
+            self.suppress_diagnostics = true;
+            self.define_generics(gens, context);
+            self.suppress_diagnostics = prev;
+        }
+        let class_type = self.type_at_own_parameters(&bodies.name, generics, context);
+        context.enter_class(
+            bodies.name.clone(),
+            bodies.base_class_name.clone(),
+            class_type,
+        );
+
+        self.check_class_method_bodies(&bodies.method_statements, context);
+        self.record_runtime_settled_methods(&bodies.name, &bodies.method_statements);
 
         context.exit_class();
         context.exit_scope();
