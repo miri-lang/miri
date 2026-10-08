@@ -6,6 +6,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
+use crate::error::syntax::Span;
 use crate::mir::{
     BinOp, Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind, UnOp,
@@ -38,7 +39,7 @@ fn try_lower_binary_trait_method(
         &receiver_ty,
         op,
         OperatorOperands { lhs_op, rhs_op },
-        expr,
+        expr.span,
         dest,
         arg_watermark,
     )
@@ -64,7 +65,7 @@ pub(crate) fn try_lower_operator_trait_call(
     receiver_ty: &Type,
     op: &crate::ast::operator::BinaryOp,
     operands: OperatorOperands,
-    expr: &Expression,
+    span: Span,
     dest: Option<Place>,
     arg_watermark: usize,
 ) -> Result<Option<Operand>, LoweringError> {
@@ -86,7 +87,7 @@ pub(crate) fn try_lower_operator_trait_call(
         arg_watermark,
     };
     let body = OperatorBody { symbol, return_ty };
-    emit_binary_trait_call(ctx, body, result, call, expr).map(Some)
+    emit_binary_trait_call(ctx, body, result, call, span).map(Some)
 }
 
 /// The type of the lhs when it can implement a binary operator trait (`String`
@@ -195,13 +196,13 @@ fn emit_binary_trait_call(
     body: OperatorBody,
     result: TraitResult,
     call: BinTraitCall,
-    expr: &Expression,
+    span: Span,
 ) -> Result<Operand, LoweringError> {
     let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
     let return_ty = body.return_ty;
     let func_op = Operand::Constant(Box::new(Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
         literal: crate::ast::literal::Literal::Identifier(body.symbol),
     }));
 
@@ -213,7 +214,7 @@ fn emit_binary_trait_call(
                 call_args,
                 arg_locals,
                 return_ty,
-                expr,
+                span,
                 call.dest,
                 call.arg_watermark,
             )
@@ -233,7 +234,7 @@ fn emit_binary_trait_call(
             dest: call.dest,
             arg_watermark: call.arg_watermark,
         },
-        expr,
+        span,
     )
 }
 
@@ -285,9 +286,9 @@ fn return_adapted_method_call(
     call_args: Vec<Operand>,
     arg_locals: Vec<crate::mir::place::Local>,
     call: AdaptedCall,
-    expr: &Expression,
+    span: Span,
 ) -> Result<Operand, LoweringError> {
-    let method_temp = ctx.push_temp(call.return_ty.clone(), expr.span);
+    let method_temp = ctx.push_temp(call.return_ty.clone(), span);
     let after_call_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -298,13 +299,13 @@ fn return_adapted_method_call(
             destination: Place::new(method_temp),
             target: Some(after_call_bb),
         },
-        expr.span,
+        span,
     ));
     ctx.set_current_block(after_call_bb);
 
     for &local in &arg_locals {
         if local != method_temp {
-            ctx.emit_temp_drop(local, call.arg_watermark, expr.span);
+            ctx.emit_temp_drop(local, call.arg_watermark, span);
         }
     }
 
@@ -312,12 +313,12 @@ fn return_adapted_method_call(
     // holding temp is typed from the operator rather than from the method.
     let result_ty = match call.adapt {
         ResultAdaptation::Negate => call.return_ty,
-        ResultAdaptation::CompareToZero(_) => Type::new(TypeKind::Boolean, expr.span),
+        ResultAdaptation::CompareToZero(_) => Type::new(TypeKind::Boolean, span),
     };
     let (target, ret_op) = if let Some(d) = call.dest {
         (d.clone(), Operand::Copy(d))
     } else {
-        let temp = ctx.push_temp(result_ty, expr.span);
+        let temp = ctx.push_temp(result_ty, span);
         (Place::new(temp), Operand::Copy(Place::new(temp)))
     };
     let method_result = Operand::Copy(Place::new(method_temp));
@@ -326,21 +327,21 @@ fn return_adapted_method_call(
         ResultAdaptation::CompareToZero(bin_op) => Rvalue::BinaryOp(
             bin_op,
             Box::new(method_result),
-            Box::new(zero_operand(expr)),
+            Box::new(zero_operand(span)),
         ),
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(target, rvalue),
-        span: expr.span,
+        span,
     });
     Ok(ret_op)
 }
 
 /// The integer zero an ordering result is compared against.
-fn zero_operand(expr: &Expression) -> Operand {
+fn zero_operand(span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Int, expr.span),
+        span,
+        ty: Type::new(TypeKind::Int, span),
         literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(0)),
     }))
 }
@@ -352,14 +353,14 @@ fn return_method_call(
     call_args: Vec<Operand>,
     arg_locals: Vec<crate::mir::place::Local>,
     return_ty: Type,
-    expr: &Expression,
+    span: Span,
     dest: Option<Place>,
     arg_watermark: usize,
 ) -> Result<Operand, LoweringError> {
     let (destination, ret_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
     } else {
-        let temp = ctx.push_temp(return_ty, expr.span);
+        let temp = ctx.push_temp(return_ty, span);
         let p = Place::new(temp);
         (p.clone(), Operand::Copy(p))
     };
@@ -374,13 +375,13 @@ fn return_method_call(
             destination,
             target: Some(target_bb),
         },
-        expr.span,
+        span,
     ));
     ctx.set_current_block(target_bb);
 
     for &local in &arg_locals {
         if local != dest_local {
-            ctx.emit_temp_drop(local, arg_watermark, expr.span);
+            ctx.emit_temp_drop(local, arg_watermark, span);
         }
     }
 

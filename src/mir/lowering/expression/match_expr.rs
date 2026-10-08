@@ -13,6 +13,9 @@ use crate::mir::{
 };
 
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::expression::binary_expr::{
+    try_lower_operator_trait_call, OperatorOperands,
+};
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{bind_pattern, literal_to_u128, lower_to_local, resolve_type};
 
@@ -51,7 +54,7 @@ fn arm_has_only_predicate_patterns(branch: &crate::ast::pattern::MatchBranch) ->
 }
 
 /// Test a simple predicate pattern (String or Float) and assign the boolean result.
-fn emit_simple_predicate_test(
+pub(super) fn emit_simple_predicate_test(
     ctx: &mut LoweringContext,
     pattern: &Pattern,
     subject_local: crate::mir::Local,
@@ -60,24 +63,7 @@ fn emit_simple_predicate_test(
 ) -> Result<(), LoweringError> {
     match pattern {
         Pattern::Literal(crate::ast::literal::Literal::String(s)) => {
-            let subject_op = Operand::Copy(Place::new(subject_local));
-            let string_const = Operand::Constant(Box::new(crate::mir::Constant {
-                span: *pattern_span,
-                ty: Type::new(TypeKind::String, *pattern_span),
-                literal: crate::ast::literal::Literal::String(s.clone()),
-            }));
-
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(result_local),
-                    Rvalue::BinaryOp(
-                        crate::mir::BinOp::Eq,
-                        Box::new(subject_op),
-                        Box::new(string_const),
-                    ),
-                ),
-                span: *pattern_span,
-            });
+            emit_string_equality_test(ctx, s, subject_local, *pattern_span, result_local)?;
         }
         Pattern::Literal(crate::ast::literal::Literal::Float(float_lit)) => {
             use crate::ast::literal::FloatLiteral;
@@ -112,9 +98,48 @@ fn emit_simple_predicate_test(
     Ok(())
 }
 
+/// Assign to `result_local` whether the string in `subject_local` equals the
+/// literal `text`, compared by the `String` type's own equality the way `==`
+/// in a body compares them. Comparing the two operands directly compares their
+/// addresses, which only agree when both happen to be the same pooled literal.
+fn emit_string_equality_test(
+    ctx: &mut LoweringContext,
+    text: &str,
+    subject_local: crate::mir::Local,
+    span: crate::error::syntax::Span,
+    result_local: crate::mir::Local,
+) -> Result<(), LoweringError> {
+    let string_ty = Type::new(TypeKind::String, span);
+    let operands = OperatorOperands {
+        lhs_op: Operand::Copy(Place::new(subject_local)),
+        rhs_op: Operand::Constant(Box::new(crate::mir::Constant {
+            span,
+            ty: string_ty.clone(),
+            literal: crate::ast::literal::Literal::String(text.to_string()),
+        })),
+    };
+    let arg_watermark = ctx.body.local_decls.len();
+    let lowered = try_lower_operator_trait_call(
+        ctx,
+        &string_ty,
+        &crate::ast::operator::BinaryOp::Equal,
+        operands,
+        span,
+        Some(Place::new(result_local)),
+        arg_watermark,
+    )?;
+    match lowered {
+        Some(_) => Ok(()),
+        None => Err(LoweringError::unsupported_expression(
+            "a string pattern needs the String type's equality, which is not in scope",
+            span,
+        )),
+    }
+}
+
 /// Test a regex predicate pattern and branch to appropriate targets.
 /// Uses method dispatch to call .matches(), avoiding hardcoded stdlib assumptions.
-fn emit_regex_predicate_test(
+pub(super) fn emit_regex_predicate_test(
     ctx: &mut LoweringContext,
     pattern: &Pattern,
     subject_local: crate::mir::Local,
@@ -216,7 +241,7 @@ fn emit_guard_and_branch(
 ) -> Result<(), LoweringError> {
     let guard_op = lower_expression(ctx, guard, None)?;
     let guard_true_bb = ctx.new_basic_block();
-    let guard_fail_bb = arm_fallthrough_target(arm_idx, branch_blocks, this_discrs, join_bb);
+    let guard_fail_bb = ctx.new_basic_block();
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
@@ -227,6 +252,14 @@ fn emit_guard_and_branch(
         guard.span,
     ));
 
+    // A failing guard leaves an arm whose patterns are already bound, so the
+    // arm's bindings are released on the way out, as a failing nested pattern
+    // releases them.
+    let exit = super::match_nested::ArmExit {
+        block: arm_fallthrough_target(arm_idx, branch_blocks, this_discrs, join_bb),
+        scope: ctx.scope_depth(),
+    };
+    super::match_nested::leave_arm(ctx, guard_fail_bb, exit, guard.span);
     ctx.set_current_block(guard_true_bb);
     Ok(())
 }
@@ -258,9 +291,9 @@ fn arm_fallthrough_target(
 }
 
 /// Bind an arm's patterns. A pattern nested in a payload is a further test,
-/// which leaves for the arm's fallthrough when it does not match; such an arm
-/// must be a single pattern, since a failing alternative would leave the arm
-/// instead of trying the next alternative.
+/// which leaves for the arm's fallthrough when it does not match. An arm of
+/// several alternatives that tests a nested pattern or binds a name finds out
+/// which alternative matched before binding anything.
 fn bind_arm_patterns(
     ctx: &mut LoweringContext,
     branch: &crate::ast::pattern::MatchBranch,
@@ -268,24 +301,21 @@ fn bind_arm_patterns(
     span: crate::error::syntax::Span,
     fallthrough: crate::mir::BasicBlock,
 ) -> Result<(), LoweringError> {
-    let nested = branch
-        .patterns
-        .iter()
-        .any(super::match_nested::has_refutable_payload);
-    if !nested {
-        for pattern in &branch.patterns {
-            bind_pattern(ctx, pattern, subject_local, &span)?;
+    let [pattern] = branch.patterns.as_slice() else {
+        if super::match_nested::alternatives_need_tests(&branch.patterns) {
+            return super::match_nested::bind_matching_alternative(
+                ctx,
+                &branch.patterns,
+                subject_local,
+                span,
+                fallthrough,
+            );
         }
         return Ok(());
-    }
-    let [pattern] = branch.patterns.as_slice() else {
-        // TODO: alternatives with nested payload patterns need each
-        // alternative's failure to try the next one before leaving the arm.
-        return Err(LoweringError::unsupported_expression(
-            "a pattern nested inside another cannot yet be one of several alternatives in an arm",
-            span,
-        ));
     };
+    if !super::match_nested::has_refutable_payload(pattern) {
+        return bind_pattern(ctx, pattern, subject_local, &span);
+    }
     let exit = super::match_nested::ArmExit {
         block: fallthrough,
         scope: ctx.scope_depth(),

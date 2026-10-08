@@ -190,6 +190,24 @@ let sum = match t
     (a, b): a + b
 ```
 
+### Nested Patterns and Alternatives
+
+A variant or a literal written inside another pattern is a further test the arm must pass, at any depth. String and float literals compare by value and a regex literal must match the string.
+
+```miri
+match o
+    Some(Shape.Circle(s)): print(f"circle {s}")
+    Some("a"): print("the string a")
+    Some(_) | None: print("anything else")
+```
+
+The alternatives of an arm, `A | B`, are tried in order, and the arm is taken by the first one that matches. Every alternative must bind the same names, each at the same type, so the body reads the same names whichever one matched (MER_TYP_062). `_` binds nothing.
+
+```miri
+match p
+    Pair.Left(n, s) | Pair.Right(s, n): print(f"{n} {s}")
+```
+
 ---
 
 ## Strings
