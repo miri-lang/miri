@@ -485,6 +485,14 @@ impl TypeChecker {
             .replace((file_path.to_string_lossy().to_string(), source.to_string()));
 
         self.module_collect_shells(module_ast);
+        // TODO: this module's own `use` statements run after its declarations
+        // are collected, so a class method signature here cannot name a type
+        // the module imports (nor an alias of one); it is reported as
+        // unknown. Running the uses earlier has to keep circular imports,
+        // which need this module's shells and declarations first, working.
+        for stmt in &module_ast.body {
+            self.collect_type_aliases_in(stmt, context);
+        }
         self.module_collect_decls(module_ast, context);
         self.module_process_uses(module_ast, context);
         for stmt in &module_ast.body {

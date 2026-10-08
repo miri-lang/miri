@@ -598,11 +598,8 @@ impl TypeChecker {
         }
     }
 
-    // TODO: aliases register here, in the body pass, but a class's method
-    // signatures are resolved earlier while declarations are collected, so an
-    // alias written in a method signature is reported as an unknown type. They
-    // need registering before declarations are collected, without breaking an
-    // alias whose target is a class declared later or an imported type.
+    /// Checks a `type` statement and registers what it declares. This is the
+    /// authoritative registration: it reports every error the declaration has.
     pub(crate) fn check_type_statement(
         &mut self,
         exprs: &[Expression],
@@ -638,6 +635,46 @@ impl TypeChecker {
         }
     }
 
+    /// Registers, ahead of the body pass, each alias in a `type` statement
+    /// whose target already resolves.
+    ///
+    /// A class's method signatures are resolved while declarations are
+    /// collected, so an alias written in one must be known by then. This runs
+    /// once after type shells exist, which covers a target that is a builtin
+    /// or a type declared anywhere in the module, and again as the statement
+    /// is reached among the declarations, by which point the program's
+    /// earlier `use` statements have brought in their types. A target that
+    /// does not resolve yet is left alone, silently: registering it would fix
+    /// an error type into every signature that spells the alias, and
+    /// [`check_type_statement`] reports the error when the body pass reaches
+    /// the statement.
+    ///
+    /// [`check_type_statement`]: Self::check_type_statement
+    pub(crate) fn collect_type_aliases(&mut self, exprs: &[Expression], context: &mut Context) {
+        for expr in exprs {
+            let ExpressionKind::TypeDeclaration(name_expr, generics, kind, Some(target)) =
+                &expr.node
+            else {
+                continue;
+            };
+            if *kind != TypeDeclarationKind::Is {
+                continue;
+            }
+            let Ok(name) = self.extract_name(name_expr) else {
+                continue;
+            };
+            let name = name.to_string();
+            let kept = std::mem::take(&mut self.diagnostics);
+            let suppressed = std::mem::replace(&mut self.suppress_diagnostics, false);
+            let alias = self.alias_definition(generics, target, context);
+            self.suppress_diagnostics = suppressed;
+            let resolved = std::mem::replace(&mut self.diagnostics, kept).is_empty();
+            if resolved {
+                self.register_type_definition(name, TypeDefinition::Alias(alias));
+            }
+        }
+    }
+
     fn check_type_alias(
         &mut self,
         name: &str,
@@ -645,6 +682,17 @@ impl TypeChecker {
         target: &Expression,
         context: &mut Context,
     ) {
+        let alias = self.alias_definition(generics, target, context);
+        self.register_type_definition(name.to_string(), TypeDefinition::Alias(alias));
+    }
+
+    /// Resolves an alias's target, with its own type parameters in scope.
+    fn alias_definition(
+        &mut self,
+        generics: &Option<Vec<Expression>>,
+        target: &Expression,
+        context: &mut Context,
+    ) -> AliasDefinition {
         let generic_defs = self.extract_generic_defs(generics, context);
 
         if let Some(ref gens) = generics {
@@ -658,13 +706,10 @@ impl TypeChecker {
             context.exit_scope();
         }
 
-        self.register_type_definition(
-            name.to_string(),
-            TypeDefinition::Alias(AliasDefinition {
-                template: target_type,
-                generics: generic_defs,
-            }),
-        );
+        AliasDefinition {
+            template: target_type,
+            generics: generic_defs,
+        }
     }
 
     fn extract_generic_defs(
