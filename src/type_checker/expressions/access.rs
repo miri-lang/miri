@@ -885,6 +885,11 @@ impl TypeChecker {
                 make_type(TypeKind::Error)
             }
             _ => {
+                // TODO: a class value whose type the file reached only through
+                // a callee's declared return (`let f = make(); f.v`, `Foo`
+                // never imported here) lands in this arm: the definition is
+                // hidden from this file, so a field it does have is reported
+                // as no members at all.
                 self.report_error(
                     DiagnosticCode::TypFieldNotFound,
                     format!("Type '{}' does not have members", obj_type),
