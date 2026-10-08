@@ -213,6 +213,30 @@ fn test_null_byte_in_string() {
 fn test_multibyte_utf8_after_number_does_not_panic() {
     // Non-ASCII UTF-8 character immediately following a dot or range operator
     // must not slice across UTF-8 char boundaries and panic the lexer.
-    let _ = miri::lexer::Lexer::new("42.é").collect::<Vec<_>>();
-    let _ = miri::lexer::Lexer::new("0..=ä").collect::<Vec<_>>();
+    let tokens1: Vec<_> = miri::lexer::Lexer::new("42.é").collect();
+    assert_eq!(
+        tokens1.len(),
+        2,
+        "Expected 2 tokens for '42.é', got {:?}",
+        tokens1
+    );
+    assert_eq!(tokens1[0].as_ref().unwrap().0, Token::Float);
+    assert_eq!(
+        tokens1[1].as_ref().unwrap_err().kind,
+        SyntaxErrorKind::InvalidToken
+    );
+
+    let tokens2: Vec<_> = miri::lexer::Lexer::new("0..=ä").collect();
+    assert_eq!(
+        tokens2.len(),
+        3,
+        "Expected 3 tokens for '0..=ä', got {:?}",
+        tokens2
+    );
+    assert_eq!(tokens2[0].as_ref().unwrap().0, Token::Int);
+    assert_eq!(tokens2[1].as_ref().unwrap().0, Token::RangeInclusive);
+    assert_eq!(
+        tokens2[2].as_ref().unwrap_err().kind,
+        SyntaxErrorKind::InvalidToken
+    );
 }
