@@ -10,6 +10,7 @@ pub mod functions;
 pub mod generic_enum_leaks;
 pub mod generic_own_type_signature;
 pub mod int128_payload;
+pub mod later_declared_enum;
 pub mod managed;
 pub mod matching;
 pub mod methods;

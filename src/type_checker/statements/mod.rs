@@ -49,6 +49,7 @@ use crate::type_checker::attributes::{DeprecatedKind, Deprecation};
 use crate::type_checker::context::{
     AliasDefinition, Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::statements::declarations::EnumDeclaration;
 use crate::type_checker::TypeChecker;
 
 pub mod control_flow;
@@ -356,7 +357,15 @@ impl TypeChecker {
             }
             StatementKind::Enum(name, generics, variants, methods, vis, attributes) => {
                 self.collect_deprecated_type(name, DeprecatedKind::Enum, attributes);
-                self.check_enum(name, generics, variants, methods, attributes, vis, context)
+                let declaration = EnumDeclaration {
+                    name,
+                    generics,
+                    variants,
+                    methods,
+                    attributes,
+                    visibility: vis,
+                };
+                self.check_enum(declaration, context)
             }
             StatementKind::Class(class_data) => {
                 self.check_class_statement(class_data, statement.span, context)
