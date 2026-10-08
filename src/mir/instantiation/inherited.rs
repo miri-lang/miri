@@ -491,6 +491,7 @@ mod tests {
                 ty: field_ty,
                 mutable: false,
                 visibility: MemberVisibility::Public,
+                initializer: None,
             },
         ));
         class_def

@@ -55,6 +55,7 @@ fn generic_class(name: &str, field: Type) -> TypeDefinition {
                 ty: field,
                 mutable: true,
                 visibility: MemberVisibility::Public,
+                initializer: None,
             },
         )],
         methods: BTreeMap::new(),
