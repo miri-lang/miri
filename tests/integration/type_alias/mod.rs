@@ -5,5 +5,6 @@ pub use crate::integration::utils;
 
 pub mod advanced;
 pub mod basic;
+pub mod class_members;
 pub mod collections;
 pub mod functions;

@@ -520,6 +520,7 @@ impl TypeChecker {
         self.record_declaring_modules(ModuleId::Program, program);
         self.run_pass_collect_type_shells(program);
         self.load_shadowable_prelude(&mut context);
+        self.run_pass_collect_type_aliases(program, &mut context);
         self.run_pass_collect_declarations(program, &mut context);
         self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
@@ -547,6 +548,27 @@ impl TypeChecker {
                 }
             } else {
                 self.collect_type_shells(statement);
+            }
+        }
+    }
+
+    fn run_pass_collect_type_aliases(&mut self, program: &Program, context: &mut Context) {
+        for statement in &program.body {
+            self.collect_type_aliases_in(statement, context);
+        }
+    }
+
+    /// Registers the aliases a top-level statement, or a block of them,
+    /// declares whose targets already resolve.
+    pub(crate) fn collect_type_aliases_in(&mut self, statement: &Statement, context: &mut Context) {
+        let statements = if let StatementKind::Block(stmts) = &statement.node {
+            stmts.as_slice()
+        } else {
+            std::slice::from_ref(statement)
+        };
+        for stmt in statements {
+            if let StatementKind::Type(exprs, _) = &stmt.node {
+                self.collect_type_aliases(exprs, context);
             }
         }
     }
@@ -787,6 +809,7 @@ impl TypeChecker {
             StatementKind::Variable(decls, visibility) => {
                 self.collect_variable_decl(decls, visibility, context, statement.span);
             }
+            StatementKind::Type(exprs, _) => self.collect_type_aliases(exprs, context),
             _ => {}
         }
     }
@@ -939,6 +962,11 @@ impl TypeChecker {
 
         let (methods, base_direct_args) =
             self.scan_class_body(&name, base_class_name.as_deref(), class_data, context);
+
+        // TODO: fields are only registered when the body pass reaches the
+        // class, so a method body of a class declared earlier in the file
+        // sees this class with no fields: reading one, or constructing it
+        // with named arguments, is refused.
 
         self.register_type_definition(
             name.clone(),
