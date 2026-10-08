@@ -193,9 +193,9 @@ pub struct TypeChecker {
     pub(crate) hoisted_top_level: HashSet<String>,
     /// When true, [`report_error`](Self::report_error) and its siblings drop the
     /// diagnostic instead of recording it. Set only while the declaration-collection
-    /// pass hoists a top-level binding, whose initializer is fully re-checked (and
-    /// its diagnostics emitted) later in the body pass; suppressing here avoids
-    /// duplicate or premature errors from that speculative first inference.
+    /// pass hoists a top-level binding or provisionally declares a class, both of
+    /// which are fully re-checked (and their diagnostics emitted) later; suppressing
+    /// here avoids duplicate or premature errors from that speculative first pass.
     pub(crate) suppress_diagnostics: bool,
     /// Set while a value returned at a written `Self` is judged: it reaches
     /// the caller at the receiver's own class, so it hands no trait value on.
@@ -950,7 +950,22 @@ impl TypeChecker {
         if self.type_table.global_type_definitions.contains_key(name) && !is_pre_shell {
             return;
         }
-        let name = name.to_string();
+        // This is a provisional declaration, made so a module importing this
+        // one back sees the methods before the class is defined. A signature
+        // may name a type the declaring module has yet to import, so nothing
+        // is reported here: `define_class` resolves every member again, with
+        // the module's imports in scope, and reports what still fails.
+        let prev = std::mem::replace(&mut self.suppress_diagnostics, true);
+        self.collect_provisional_class(name.to_string(), class_data, context);
+        self.suppress_diagnostics = prev;
+    }
+
+    fn collect_provisional_class(
+        &mut self,
+        name: String,
+        class_data: &crate::ast::statement::ClassData,
+        context: &mut Context,
+    ) {
         let generics = class_data
             .generics
             .as_ref()

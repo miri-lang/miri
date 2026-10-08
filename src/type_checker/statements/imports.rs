@@ -484,17 +484,16 @@ impl TypeChecker {
             .current_source_override
             .replace((file_path.to_string_lossy().to_string(), source.to_string()));
 
+        // Declarations are collected before the module's own `use` lines run,
+        // because a module that imports this one back needs them. Its classes
+        // are only defined after the uses, so their signatures can name what
+        // the module imports, and an alias of an imported type is registered
+        // in between.
         self.module_collect_shells(module_ast);
-        // TODO: this module's own `use` statements run after its declarations
-        // are collected, so a class method signature here cannot name a type
-        // the module imports (nor an alias of one); it is reported as
-        // unknown. Running the uses earlier has to keep circular imports,
-        // which need this module's shells and declarations first, working.
-        for stmt in &module_ast.body {
-            self.collect_type_aliases_in(stmt, context);
-        }
+        self.module_collect_type_aliases(module_ast, context);
         self.module_collect_decls(module_ast, context);
         self.module_process_uses(module_ast, context);
+        self.module_collect_type_aliases(module_ast, context);
         let defined = self.define_classes(module_ast.body.iter(), context);
         for stmt in &module_ast.body {
             self.check_statement_after_definitions(stmt, &defined, context);
@@ -629,6 +628,12 @@ impl TypeChecker {
                 }
                 _ => self.collect_type_shells(stmt),
             }
+        }
+    }
+
+    fn module_collect_type_aliases(&mut self, module_ast: &Program, context: &mut Context) {
+        for stmt in &module_ast.body {
+            self.collect_type_aliases_in(stmt, context);
         }
     }
 
