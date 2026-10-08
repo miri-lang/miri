@@ -15,83 +15,80 @@ use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
 use std::collections::BTreeMap;
 
-impl TypeChecker {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_enum(
-        &mut self,
-        name_expr: &Expression,
-        generics: &Option<Vec<Expression>>,
-        variants: &[Expression],
-        methods: &[Statement],
-        attributes: &[Attribute],
-        visibility: &MemberVisibility,
-        context: &mut Context,
-    ) {
-        let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-            n.clone()
-        } else {
-            self.report_error(
-                DiagnosticCode::TypEnumDefinition,
-                "Invalid enum name".to_string(),
-                name_expr.span,
-            );
-            return;
-        };
+/// What the body pass still checks of an enum
+/// [`define_enum`](TypeChecker::define_enum) defined: its method bodies,
+/// which may read anything the module defines, including types declared
+/// below the enum.
+pub(crate) struct EnumBodies<'a> {
+    name: String,
+    generics: Option<&'a [Expression]>,
+    method_statements: Vec<&'a Statement>,
+}
 
-        // TODO: an enum's variants are registered only when the body pass
-        // reaches it, so a body above the enum cannot name its variants
-        // ("has no variant"). Structs and classes are defined ahead of the
-        // bodies by `define_types`; enums need the same, which first needs a
-        // placeholder test other than "has no variants" here.
-        if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
-            let is_placeholder = match existing {
-                TypeDefinition::Enum(def) => def.variants.is_empty(),
-                _ => false,
-            };
-            if !is_placeholder {
-                self.report_error(
-                    DiagnosticCode::TypTypeAlreadyDefined,
-                    format!("Type '{}' is already defined", name),
-                    name_expr.span,
-                );
-                return;
-            }
+/// The syntax of one enum declaration.
+pub(crate) struct EnumDeclaration<'a> {
+    pub name: &'a Expression,
+    pub generics: &'a Option<Vec<Expression>>,
+    pub variants: &'a [Expression],
+    pub methods: &'a [Statement],
+    pub attributes: &'a [Attribute],
+    pub visibility: &'a MemberVisibility,
+}
+
+impl TypeChecker {
+    /// Defines an enum and checks its method bodies in one go.
+    pub(crate) fn check_enum(&mut self, declaration: EnumDeclaration, context: &mut Context) {
+        if let Some(bodies) = self.define_enum(declaration, context) {
+            self.check_enum_bodies(&bodies, context);
+        }
+    }
+
+    /// Registers an enum's variants and method signatures, leaving its
+    /// method bodies to the body pass. `None` when the enum was refused —
+    /// an invalid name or a duplicate declaration.
+    pub(crate) fn define_enum<'a>(
+        &mut self,
+        declaration: EnumDeclaration<'a>,
+        context: &mut Context,
+    ) -> Option<EnumBodies<'a>> {
+        let name = self.enum_name(declaration.name)?;
+        if !self.check_enum_not_duplicate(&name, declaration.name) {
+            return None;
         }
 
         // Enter a scope for generic type parameters
         context.enter_scope();
 
-        let generic_defs = self.resolve_enum_generics(generics, context);
+        let generic_defs = self.resolve_enum_generics(declaration.generics, context);
 
-        // Set up class context so `self` resolves correctly in method bodies.
         // The enum names itself at its own parameters, so a method signature
         // written `Self`, `Holder<T>` or the bare `Holder` all mean the same
         // type and substitute to the receiver's instantiation at a call site.
-        let self_type = self.type_at_own_parameters(&name, generics.as_deref(), context);
+        let generics = declaration.generics.as_deref();
+        let self_type = self.type_at_own_parameters(&name, generics, context);
         context.enter_class(name.clone(), None, self_type);
 
-        // Resolve variants
-        let variant_map = self.collect_enum_variants(variants, context);
-
-        // Collect method signatures
+        let variant_map = self.collect_enum_variants(declaration.variants, context);
         let (method_map, method_statements) =
-            self.collect_enum_methods(methods, &variant_map, context);
-
-        let generic_defs_opt = if generic_defs.is_empty() {
-            None
-        } else {
-            Some(generic_defs)
-        };
+            self.collect_enum_methods(declaration.methods, &variant_map, context);
 
         let enum_def = EnumDefinition {
             variants: variant_map,
-            generics: generic_defs_opt,
+            generics: (!generic_defs.is_empty()).then_some(generic_defs),
             methods: method_map,
             module: self.modules.current_module.clone(),
-            must_use: attributes::has_attribute(attributes, MUST_USE_ATTRIBUTE),
-            non_exhaustive: attributes::has_attribute(attributes, NON_EXHAUSTIVE_ATTRIBUTE),
+            must_use: attributes::has_attribute(declaration.attributes, MUST_USE_ATTRIBUTE),
+            non_exhaustive: attributes::has_attribute(
+                declaration.attributes,
+                NON_EXHAUSTIVE_ATTRIBUTE,
+            ),
         };
 
+        // TODO: an enum declared inside a function body is defined only in
+        // its own scope, which closes below, so the next statement finds no
+        // such type. Either define it in the enclosing scope (and give it a
+        // link name that cannot collide with another function's local enum)
+        // or refuse local type declarations at the declaration.
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
         if context.scopes.len() == 2 {
             // scopes.len() == 2: base_scope + enum_scope
@@ -99,13 +96,65 @@ impl TypeChecker {
         }
 
         // Define enum type symbol (constructor/type)
-        self.register_enum_symbol(&name, visibility, context);
-
-        // PASS 2: Type-check method bodies
-        self.check_enum_method_bodies(method_statements, context);
+        self.register_enum_symbol(&name, declaration.visibility, context);
 
         context.exit_class();
         context.exit_scope();
+        Some(EnumBodies {
+            name,
+            generics,
+            method_statements,
+        })
+    }
+
+    /// Checks the method bodies of an enum defined earlier, with `self` and
+    /// the enum's own type parameters in scope.
+    pub(crate) fn check_enum_bodies(&mut self, bodies: &EnumBodies, context: &mut Context) {
+        context.enter_scope();
+        if let Some(gens) = bodies.generics {
+            // The definition already reported anything wrong with the bounds.
+            let prev = self.suppress_diagnostics;
+            self.suppress_diagnostics = true;
+            self.define_generics(gens, context);
+            self.suppress_diagnostics = prev;
+        }
+        let self_type = self.type_at_own_parameters(&bodies.name, bodies.generics, context);
+        context.enter_class(bodies.name.clone(), None, self_type);
+        self.check_enum_method_bodies(&bodies.method_statements, context);
+        context.exit_class();
+        context.exit_scope();
+    }
+
+    fn enum_name(&mut self, name_expr: &Expression) -> Option<String> {
+        if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+            return Some(n.clone());
+        }
+        self.report_error(
+            DiagnosticCode::TypEnumDefinition,
+            "Invalid enum name".to_string(),
+            name_expr.span,
+        );
+        None
+    }
+
+    /// Accepts `name` when no type holds it yet or only the enum's own
+    /// shell does, and claims the shell so a second declaration of the name
+    /// is reported as a duplicate.
+    fn check_enum_not_duplicate(&mut self, name: &str, name_expr: &Expression) -> bool {
+        if let Some(existing) = self.type_table.global_type_definitions.get(name) {
+            let is_placeholder = matches!(existing, TypeDefinition::Enum(_))
+                && self.modules.pre_registered_types.contains(name);
+            if !is_placeholder {
+                self.report_error(
+                    DiagnosticCode::TypTypeAlreadyDefined,
+                    format!("Type '{}' is already defined", name),
+                    name_expr.span,
+                );
+                return false;
+            }
+        }
+        self.modules.pre_registered_types.remove(name);
+        true
     }
 
     fn resolve_enum_generics(
@@ -293,7 +342,7 @@ impl TypeChecker {
 
     fn check_enum_method_bodies(
         &mut self,
-        method_statements: Vec<&Statement>,
+        method_statements: &[&Statement],
         context: &mut Context,
     ) {
         for stmt in method_statements {

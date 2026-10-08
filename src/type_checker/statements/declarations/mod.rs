@@ -11,4 +11,5 @@ pub mod struct_def;
 pub mod trait_def;
 
 pub(crate) use class_def::ClassBodies;
+pub(crate) use enum_def::{EnumBodies, EnumDeclaration};
 pub(crate) use func::FunctionDeclarationInfo;

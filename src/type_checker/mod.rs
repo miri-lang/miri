@@ -777,6 +777,7 @@ impl TypeChecker {
                 non_exhaustive: false,
             }),
         );
+        self.modules.pre_registered_types.insert(name.to_string());
     }
 
     /// Preliminary pass to register declarations without checking their bodies.
@@ -1165,6 +1166,7 @@ impl TypeChecker {
                 non_exhaustive: false,
             }),
         );
+        self.modules.pre_registered_types.insert(name.to_string());
     }
 
     fn collect_trait_decl(
