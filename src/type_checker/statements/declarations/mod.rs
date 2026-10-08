@@ -10,4 +10,5 @@ pub mod inherited_traits;
 pub mod struct_def;
 pub mod trait_def;
 
+pub(crate) use class_def::ClassBodies;
 pub(crate) use func::FunctionDeclarationInfo;

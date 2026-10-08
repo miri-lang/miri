@@ -86,6 +86,18 @@ pub fn resolve_type_name(expr: &Expression) -> Option<Type> {
     }
 }
 
+/// The program's top-level statements, a top-level block's own statements
+/// standing in for the block.
+fn top_level_statements(program: &Program) -> impl Iterator<Item = &Statement> {
+    program.body.iter().flat_map(|statement| {
+        if let StatementKind::Block(stmts) = &statement.node {
+            stmts.as_slice()
+        } else {
+            std::slice::from_ref(statement)
+        }
+    })
+}
+
 /// Residency verdict for a function: whether it can safely accept gpu-resident args.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FnResidency {
@@ -586,14 +598,9 @@ impl TypeChecker {
     }
 
     fn run_pass_check_bodies(&mut self, program: &Program, context: &mut Context) {
-        for statement in &program.body {
-            if let StatementKind::Block(stmts) = &statement.node {
-                for stmt in stmts {
-                    self.check_statement(stmt, context);
-                }
-            } else {
-                self.check_statement(statement, context);
-            }
+        let defined = self.define_classes(top_level_statements(program), context);
+        for statement in top_level_statements(program) {
+            self.check_statement_after_definitions(statement, &defined, context);
         }
         // A call opened outside any statement — an initializer the hoisting
         // pass checked and the body pass never reached again — is refused
@@ -962,11 +969,6 @@ impl TypeChecker {
 
         let (methods, base_direct_args) =
             self.scan_class_body(&name, base_class_name.as_deref(), class_data, context);
-
-        // TODO: fields are only registered when the body pass reaches the
-        // class, so a method body of a class declared earlier in the file
-        // sees this class with no fields: reading one, or constructing it
-        // with named arguments, is refused.
 
         self.register_type_definition(
             name.clone(),

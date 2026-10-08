@@ -51,6 +51,7 @@ use crate::type_checker::context::{
 };
 use crate::type_checker::TypeChecker;
 
+pub mod class_definitions;
 pub mod control_flow;
 pub mod declarations;
 pub mod entry_point;
@@ -315,17 +316,7 @@ impl TypeChecker {
             DeprecatedKind::Class,
             &class_data.attributes,
         );
-        self.check_class(
-            &class_data.name,
-            &class_data.generics,
-            &class_data.base_class,
-            &class_data.traits,
-            &class_data.body,
-            &class_data.visibility,
-            context,
-            span,
-            class_data.is_abstract,
-        )
+        self.check_class(class_data, context, span)
     }
 
     fn check_statement_kind(&mut self, statement: &Statement, context: &mut Context) {

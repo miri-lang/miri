@@ -495,8 +495,9 @@ impl TypeChecker {
         }
         self.module_collect_decls(module_ast, context);
         self.module_process_uses(module_ast, context);
+        let defined = self.define_classes(module_ast.body.iter(), context);
         for stmt in &module_ast.body {
-            self.check_statement(stmt, context);
+            self.check_statement_after_definitions(stmt, &defined, context);
         }
 
         self.modules.current_source_override = old_source_override;
