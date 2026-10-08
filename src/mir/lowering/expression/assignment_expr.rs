@@ -805,7 +805,7 @@ fn combine_compound_operands(
             slot_ty,
             &binary_op,
             operands,
-            expr,
+            expr.span,
             None,
             arg_watermark,
         )?

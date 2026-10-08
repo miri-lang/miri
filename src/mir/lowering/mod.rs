@@ -1307,7 +1307,7 @@ fn emit_guard_trait_comparison(
         &param_ty,
         &binary_op,
         operands,
-        guard,
+        guard.span,
         Some(Place::new(comparison.check_result)),
         comparison.arg_watermark,
     )?;

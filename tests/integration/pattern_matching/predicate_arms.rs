@@ -237,3 +237,23 @@ println(result)
         "correct",
     );
 }
+
+/// A string arm compares contents: a string built at run time matches the
+/// literal it spells, as `==` would say.
+#[test]
+fn test_a_string_arm_matches_a_string_built_at_run_time() {
+    assert_heap_guard_output(
+        r#"
+fn show(s String) String
+    match s
+        "a": "is a"
+        _: "other"
+
+fn main()
+    let built = "a" + ""
+    let other = "b" + ""
+    println(f"{show(built)}|{show(other)}")
+"#,
+        "is a|other",
+    );
+}

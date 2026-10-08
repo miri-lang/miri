@@ -370,6 +370,11 @@ impl TypeChecker {
     }
 
     /// Extracts coverage information for Option variants from match branches.
+    // TODO: an arm whose payload holds a pattern that can fail (`Some(0)`,
+    // `Some("a")`) is counted as covering `Some` here, and the same holds for
+    // enum variants in `extract_covered_enum_variants`. A match of only such
+    // arms beside `None` is accepted, and a value no arm takes leaves the
+    // match's result unwritten.
     fn extract_option_coverage(&self, branches: &[MatchBranch]) -> (bool, bool, bool) {
         let mut has_some = false;
         let mut has_none = false;
@@ -438,19 +443,7 @@ impl TypeChecker {
 
         for branch in branches {
             context.enter_scope();
-            // A pattern diagnostic points at the pattern the author wrote, not
-            // at the `match` that holds it; the whole-match span stands in only
-            // for a branch built programmatically, which has no source text.
-            for (index, pattern) in branch.patterns.iter().enumerate() {
-                let pattern_span = branch.pattern_span(index).unwrap_or(span);
-                self.check_pattern(
-                    pattern,
-                    subject_type,
-                    context,
-                    pattern_span,
-                    branch.is_mutable,
-                );
-            }
+            self.check_arm_patterns(branch, subject_type, span, context);
 
             let body_type = self.infer_statement_type(&branch.body, context);
             let arm_span = self.get_body_expression_span(&branch.body);

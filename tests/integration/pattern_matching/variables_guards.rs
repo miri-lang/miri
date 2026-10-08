@@ -96,3 +96,28 @@ print(f"{result}")
         "3",
     );
 }
+
+/// A guard that fails leaves an arm whose names are already bound; the names
+/// it bound are released on the way to the next arm.
+#[test]
+fn test_a_failing_guard_releases_the_names_its_arm_bound() {
+    assert_heap_guard_output(
+        r#"
+enum Pair
+    Left(int, String)
+    Right(String, int)
+
+fn show(p Pair) String
+    match p
+        Pair.Left(n, s) if n > 3: f"big {n} {s}"
+        Pair.Left(n, s): f"small {n} {s}"
+        Pair.Right(s, n): f"right {s} {n}"
+
+fn main()
+    let a = show(Pair.Left(1, "x" + ""))
+    let b = show(Pair.Left(5, "y" + ""))
+    println(f"{a}|{b}")
+"#,
+        "small 1 x|big 5 y",
+    );
+}

@@ -57,6 +57,7 @@ pub mod control_flow;
 pub mod functions;
 pub mod identifiers;
 pub mod literals;
+pub mod match_alternatives;
 pub mod range;
 pub mod types;
 pub mod unary;
