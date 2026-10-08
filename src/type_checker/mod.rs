@@ -88,7 +88,7 @@ pub fn resolve_type_name(expr: &Expression) -> Option<Type> {
 
 /// The program's top-level statements, a top-level block's own statements
 /// standing in for the block.
-fn top_level_statements(program: &Program) -> impl Iterator<Item = &Statement> {
+fn top_level_statements(program: &Program) -> impl Iterator<Item = &Statement> + Clone {
     program.body.iter().flat_map(|statement| {
         if let StatementKind::Block(stmts) = &statement.node {
             stmts.as_slice()
@@ -598,7 +598,7 @@ impl TypeChecker {
     }
 
     fn run_pass_check_bodies(&mut self, program: &Program, context: &mut Context) {
-        let defined = self.define_classes(top_level_statements(program), context);
+        let defined = self.define_types(top_level_statements(program), context);
         for statement in top_level_statements(program) {
             self.check_statement_after_definitions(statement, &defined, context);
         }
@@ -750,6 +750,7 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
             }),
         );
+        self.modules.pre_registered_types.insert(name.to_string());
     }
 
     fn shell_enum(
@@ -1137,6 +1138,7 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
             }),
         );
+        self.modules.pre_registered_types.insert(name.to_string());
     }
 
     fn collect_enum_decl(

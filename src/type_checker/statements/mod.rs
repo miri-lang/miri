@@ -51,7 +51,6 @@ use crate::type_checker::context::{
 };
 use crate::type_checker::TypeChecker;
 
-pub mod class_definitions;
 pub mod control_flow;
 pub mod declarations;
 pub mod entry_point;
@@ -62,6 +61,7 @@ pub mod gpu_for_captures;
 pub mod helpers;
 pub mod imports;
 pub mod returns;
+pub mod type_definitions;
 pub mod variables;
 
 pub(crate) use declarations::FunctionDeclarationInfo;

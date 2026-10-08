@@ -494,7 +494,7 @@ impl TypeChecker {
         self.module_collect_decls(module_ast, context);
         self.module_process_uses(module_ast, context);
         self.module_collect_type_aliases(module_ast, context);
-        let defined = self.define_classes(module_ast.body.iter(), context);
+        let defined = self.define_types(module_ast.body.iter(), context);
         for stmt in &module_ast.body {
             self.check_statement_after_definitions(stmt, &defined, context);
         }

@@ -38,7 +38,11 @@ impl TypeChecker {
             return;
         };
 
-        // Check for duplicate type definitions
+        // TODO: an enum's variants are registered only when the body pass
+        // reaches it, so a body above the enum cannot name its variants
+        // ("has no variant"). Structs and classes are defined ahead of the
+        // bodies by `define_types`; enums need the same, which first needs a
+        // placeholder test other than "has no variants" here.
         if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
             let is_placeholder = match existing {
                 TypeDefinition::Enum(def) => def.variants.is_empty(),

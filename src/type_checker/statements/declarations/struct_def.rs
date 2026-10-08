@@ -161,17 +161,13 @@ impl TypeChecker {
         }
     }
 
-    // TODO: a struct's fields are registered only when the body pass reaches
-    // it, so a body above the struct cannot read its fields or build it by
-    // field name. Classes are defined ahead of the bodies by `define_classes`;
-    // structs need the same, which first needs a placeholder test other than
-    // "has no fields" here.
+    /// Accepts `name` when no type holds it yet or only the struct's own
+    /// shell does, and claims the shell so a second declaration of the name
+    /// is reported as a duplicate.
     fn check_struct_not_duplicate(&mut self, name: &str, name_expr: &Expression) -> bool {
         if let Some(existing) = self.type_table.global_type_definitions.get(name) {
-            let is_placeholder = match existing {
-                TypeDefinition::Struct(def) => def.fields.is_empty(),
-                _ => false,
-            };
+            let is_placeholder = matches!(existing, TypeDefinition::Struct(_))
+                && self.modules.pre_registered_types.contains(name);
             if !is_placeholder {
                 self.report_error(
                     DiagnosticCode::TypTypeAlreadyDefined,
@@ -181,6 +177,7 @@ impl TypeChecker {
                 return false;
             }
         }
+        self.modules.pre_registered_types.remove(name);
         true
     }
 
