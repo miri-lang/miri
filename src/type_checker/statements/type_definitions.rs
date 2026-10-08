@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Every class of a module is defined — fields, method signatures, hierarchy
-//! — before any body of that module is checked. A body written above a class,
-//! a free function's or another class's method's, can then read the class's
-//! fields and construct it by field name, which it could not if the class
-//! were defined only when the body pass reached it.
+//! Every struct and class of a module is defined — fields, and for a class
+//! its method signatures and hierarchy — before any body of that module is
+//! checked. A body written above the type, a free function's or a class
+//! method's, can then read the type's fields and construct it by field name,
+//! which it could not if the type were defined only when the body pass
+//! reached it.
 
 use std::collections::HashMap;
 
@@ -15,20 +16,30 @@ use crate::type_checker::context::Context;
 use crate::type_checker::statements::declarations::ClassBodies;
 use crate::type_checker::TypeChecker;
 
-/// The classes of one module defined ahead of its bodies, keyed by the id of
-/// the statement declaring each. `None` marks a class whose definition was
-/// refused — an invalid attribute or name — so the body pass skips it rather
-/// than reporting it again.
-pub(crate) type DefinedClasses<'a> = HashMap<usize, Option<ClassBodies<'a>>>;
+/// The types of one module defined ahead of its bodies, keyed by the id of
+/// the statement declaring each. `Some` carries the method bodies of a class
+/// the body pass still checks; `None` marks a statement the body pass skips:
+/// a struct, which has no bodies and was checked in full, or a class whose
+/// definition was refused — an invalid attribute or name — and so must not
+/// be reported again.
+pub(crate) type DefinedTypes<'a> = HashMap<usize, Option<ClassBodies<'a>>>;
 
 impl TypeChecker {
-    /// Defines each class among `statements`, in source order.
-    pub(crate) fn define_classes<'a>(
+    /// Defines each struct, then each class, among `statements`, each kind in
+    /// source order. Structs go first because they depend on nothing but type
+    /// names, while a class field initializer may construct a struct.
+    pub(crate) fn define_types<'a>(
         &mut self,
-        statements: impl Iterator<Item = &'a Statement>,
+        statements: impl Iterator<Item = &'a Statement> + Clone,
         context: &mut Context,
-    ) -> DefinedClasses<'a> {
-        let mut defined = DefinedClasses::new();
+    ) -> DefinedTypes<'a> {
+        let mut defined = DefinedTypes::new();
+        for statement in statements.clone() {
+            if let StatementKind::Struct(..) = &statement.node {
+                self.check_statement(statement, context);
+                defined.insert(statement.id, None);
+            }
+        }
         for statement in statements {
             if let StatementKind::Class(class_data) = &statement.node {
                 let bodies = self.define_class_statement(statement, class_data, context);
@@ -39,12 +50,12 @@ impl TypeChecker {
     }
 
     /// Checks `statement` in the body pass: the method bodies of a class
-    /// [`define_classes`](Self::define_classes) defined, or the whole of any
-    /// other statement.
+    /// [`define_types`](Self::define_types) defined, nothing for a struct it
+    /// checked, or the whole of any other statement.
     pub(crate) fn check_statement_after_definitions(
         &mut self,
         statement: &Statement,
-        defined: &DefinedClasses,
+        defined: &DefinedTypes,
         context: &mut Context,
     ) {
         match defined.get(&statement.id) {
