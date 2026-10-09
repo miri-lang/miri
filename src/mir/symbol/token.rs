@@ -8,6 +8,7 @@ use std::borrow::Cow;
 
 use crate::ast::expression::Expression;
 use crate::ast::statement::BindingResidency;
+use crate::ast::type_identity;
 use crate::ast::types::{FunctionTypeData, STRING_TYPE_NAME};
 use crate::ast::BuiltinCollectionKind as Collection;
 use crate::ast::{ExpressionKind, TypeKind};
@@ -74,7 +75,10 @@ pub(crate) const MAX_TOKEN_DEPTH: usize = 64;
 ///   what follows. `<n>tuple`, `<n>fn`, `1option`, `2result`, `1future` and
 ///   `1out` are built-in heads taking `n` component tokens (a closure's `n`
 ///   counts its parameters; its return follows them); `<n>x` is the declared
-///   name of the next `n` characters, spelled that way when it is not plain.
+///   name of the next `n` characters, spelled that way when it is not plain;
+///   `<n>q` heads the identity of a type a module keeps private, followed by
+///   its `n` identifiers — the module path, then the declared name — each
+///   spelled as a declared name is.
 ///
 /// Two different types never share a token, except the types it has none for:
 /// a component that has no token of its own makes the whole type nameless —
@@ -175,10 +179,37 @@ fn is_plain_type_name(name: &str) -> bool {
 /// name — `My_Box` is `6xMy_Box` — so an underscore inside it can never be read
 /// as the boundary between two components.
 fn declared_name_token(name: &str) -> Cow<'static, str> {
+    if type_identity::is_qualified(name) {
+        return qualified_name_token(name);
+    }
     if is_plain_type_name(name) {
         return Cow::Owned(name.to_string());
     }
     Cow::Owned(format!("{}{ESCAPED_NAME_TAG}{name}", name.len()))
+}
+
+/// A declared type's identity spelled with identifier characters only: the
+/// identity itself, unless it is qualified, which is spelled as its token.
+pub(super) fn identifier_spelling(identity: &str) -> Cow<'_, str> {
+    if type_identity::is_qualified(identity) {
+        qualified_name_token(identity)
+    } else {
+        Cow::Borrowed(identity)
+    }
+}
+
+/// The token of a qualified type identity: a head counting its identifiers,
+/// then each one as a declared name — `local.k.Helper` is
+/// `3q_local_k_Helper` — so neither the `.` between them nor an `_` inside one
+/// reaches the token.
+fn qualified_name_token(identity: &str) -> Cow<'static, str> {
+    let segments: Vec<&str> = type_identity::module_path(identity)
+        .chain(std::iter::once(type_identity::source_name(identity)))
+        .collect();
+    join_tokens(
+        built_in_head(QUALIFIED_NAME_HEAD, segments.len()),
+        segments.into_iter().map(declared_name_token),
+    )
 }
 
 /// The token for a built-in collection: its class's name followed by its
@@ -280,6 +311,9 @@ const FUTURE_HEAD: &str = "future";
 const OUT_PARAMETER_HEAD: &str = "out";
 /// The tag spelling a declared name that is not plain, after its length.
 const ESCAPED_NAME_TAG: &str = "x";
+/// The tag of the head spelling a type identity qualified by the module that
+/// keeps the type private, after the number of its identifiers.
+const QUALIFIED_NAME_HEAD: &str = "q";
 /// The spelling of the empty type, the one built-in leaf spelling a declared
 /// type can take for its own name — every other one is a primitive's name,
 /// which resolves to the primitive before any declaration is consulted.

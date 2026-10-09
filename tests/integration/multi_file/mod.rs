@@ -12,5 +12,6 @@ pub mod import_validation;
 pub mod imports_through_signatures;
 pub mod intrinsic_declarations;
 pub mod module_functions;
+pub mod private_type_identity;
 pub mod project_root;
 pub mod types_a_module_imports;

@@ -67,7 +67,8 @@ fn render_aggregate(
     let watermark = ctx.body.local_decls.len();
     let base = crate::mir::lowering::helpers::ensure_place(ctx, operand, *span);
 
-    let mut acc = emit_string_literal(ctx, &format!("{}(", type_name), *span);
+    let written_name = crate::ast::type_identity::source_name(type_name);
+    let mut acc = emit_string_literal(ctx, &format!("{written_name}("), *span);
 
     for (field_idx, (field_name, field_ty)) in fields.iter().enumerate() {
         if field_idx > 0 {

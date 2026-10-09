@@ -23,6 +23,7 @@ pub mod pattern;
 pub mod program;
 pub mod script;
 pub mod statement;
+pub mod type_identity;
 pub mod types;
 
 pub use attributes::*;

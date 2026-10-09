@@ -23,8 +23,14 @@
 //! imported_name = name              (name holds no `__`)
 //!               | length name       (name holds `__`)
 //! method    = "m__t" length owner length name
+//! owner     = type name | qualified token
 //! length    = decimal length of what follows, no leading zero
 //! ```
+//!
+//! A type a module keeps private is identified as `local.k.Helper`, which no
+//! identifier can hold, so wherever its identity is spelled here — a method's
+//! owner, a vtable, a thunk — it is spelled as the token a type argument of it
+//! takes, `3q_local_k_Helper`.
 //!
 //! The program's own `helper` is spelled `helper`, its `m__x` is `m__0_m__x`,
 //! its `__h` is `m__0___h`, and the `helper` of `system.math` is
@@ -47,6 +53,7 @@
 
 use std::fmt;
 
+use super::token::identifier_spelling;
 use super::{
     ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, SymbolKind, ThunkKind,
     ThunkSubject, Token, ENTRY_NAME,
@@ -95,6 +102,7 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             method,
             method_args,
         } => {
+            let owner = identifier_spelling(owner);
             write!(
                 f,
                 "{MODULE_PREFIX}{METHOD_MARK}{}{owner}{}{method}",
@@ -105,7 +113,7 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             write_arguments(f, method_args)
         }
         SymbolKind::Vtable { class, args } => {
-            write!(f, "__vtable_{class}")?;
+            write!(f, "__vtable_{}", identifier_spelling(class))?;
             write_arguments(f, args)
         }
         SymbolKind::Closure {
@@ -174,7 +182,7 @@ fn thunk_prefix(kind: ThunkKind) -> &'static str {
 fn write_thunk_subject(f: &mut fmt::Formatter<'_>, subject: &ThunkSubject) -> fmt::Result {
     match subject {
         ThunkSubject::Named { name, args } => {
-            f.write_str(name)?;
+            f.write_str(&identifier_spelling(name))?;
             write_arguments(f, args)
         }
         ThunkSubject::Structural(encoding) => f.write_str(encoding),
