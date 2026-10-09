@@ -363,3 +363,154 @@ let res = match x
 ";
     type_checker_vars_type_test(source, vec![("res", type_int())]);
 }
+
+/// A pattern nested in `Some` can fail, so an arm holding one does not cover
+/// `Some` on its own.
+#[test]
+fn test_match_option_nested_literal_does_not_cover_some() {
+    let source = "
+fn show(o String?) String
+    match o
+        Some(\"a\"): \"is a\"
+        None: \"none\"
+";
+    type_checker_error_test(
+        source,
+        "Non-exhaustive match on Option. Missing variants: Some",
+    );
+}
+
+#[test]
+fn test_match_option_nested_integer_does_not_cover_some() {
+    let source = "
+fn show(o int?) String
+    match o
+        Some(0): \"zero\"
+        None: \"none\"
+";
+    type_checker_error_test(
+        source,
+        "Non-exhaustive match on Option. Missing variants: Some",
+    );
+}
+
+#[test]
+fn test_match_enum_nested_variant_does_not_cover_its_variant() {
+    let source = "
+enum Shape
+    Circle(int)
+    Square(int)
+
+enum Box
+    Wrap(Shape)
+    Empty
+
+fn show(b Box) int
+    match b
+        Box.Wrap(Shape.Circle(r)): r
+        Box.Empty: 0
+";
+    type_checker_error_test(
+        source,
+        "Non-exhaustive match on Enum 'Box'. Missing variants: Wrap",
+    );
+}
+
+/// Nested variants that between them name every variant of the payload's
+/// enum cover the outer variant.
+#[test]
+fn test_match_nested_variants_covering_every_payload_variant_are_exhaustive() {
+    let source = "
+enum Shape
+    Circle(int)
+    Square(int)
+
+fn show(o Shape?) int
+    match o
+        Some(Shape.Circle(r)): r
+        Some(Shape.Square(n)): n
+        None: 0
+";
+    type_checker_test(source);
+}
+
+#[test]
+fn test_match_nested_literal_beside_a_catch_all_payload_is_exhaustive() {
+    let source = "
+fn show(o int?) String
+    match o
+        Some(0): \"zero\"
+        Some(n): \"other\"
+        None: \"none\"
+";
+    type_checker_test(source);
+}
+
+#[test]
+fn test_match_nested_booleans_covering_both_values_are_exhaustive() {
+    let source = "
+fn show(o bool?) String
+    match o
+        Some(true): \"yes\"
+        Some(false): \"no\"
+        None: \"none\"
+";
+    type_checker_test(source);
+}
+
+/// Each payload position must be covered for every combination of the
+/// others: `(Circle, Circle)` is missing here.
+#[test]
+fn test_match_nested_payload_pairs_must_cover_every_combination() {
+    let source = "
+enum Shape
+    Circle(int)
+    Square(int)
+
+enum Pair
+    Both(Shape, Shape)
+
+fn show(p Pair) int
+    match p
+        Pair.Both(Shape.Square(a), _): a
+        Pair.Both(_, Shape.Square(b)): b
+";
+    type_checker_error_test(
+        source,
+        "Non-exhaustive match on Enum 'Pair'. Missing variants: Both",
+    );
+}
+
+#[test]
+fn test_match_nested_alternatives_count_toward_coverage() {
+    let source = "
+enum Shape
+    Circle(int)
+    Square(int)
+
+fn show(o Shape?) int
+    match o
+        Some(Shape.Circle(n)) | Some(Shape.Square(n)): n
+        None: 0
+";
+    type_checker_test(source);
+}
+
+#[test]
+fn test_match_guarded_nested_arm_does_not_cover() {
+    let source = "
+enum Shape
+    Circle(int)
+    Square(int)
+
+fn show(o Shape?) int
+    match o
+        Some(Shape.Circle(r)): r
+        Some(Shape.Square(n)) if n > 0: n
+        None: 0
+";
+    type_checker_error_test(
+        source,
+        "Non-exhaustive match on Option. Missing variants: Some",
+    );
+}

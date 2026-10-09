@@ -56,6 +56,7 @@ pub(crate) mod int_literals;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
+pub(crate) mod pattern_coverage;
 pub(crate) mod runtime_settled;
 pub mod statements;
 pub(crate) mod type_set_shorthand;
