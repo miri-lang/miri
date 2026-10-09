@@ -1518,7 +1518,7 @@ impl TypeChecker {
         if let Some(def @ TypeDefinition::Generic(_)) = context.resolve_type_definition(name) {
             return Some(def);
         }
-        let identity = self.written_type_identity(name);
+        let identity = self.written_type_identity_in(name, context);
         if self.type_table.visible_type_names.contains(identity) {
             self.type_table.global_type_definitions.get(identity)
         } else {
@@ -1703,6 +1703,10 @@ impl TypeChecker {
         if args.iter().any(|ty| ty.kind == TypeKind::Error) {
             return;
         }
+        let args: Vec<Type> = args
+            .iter()
+            .map(|ty| self.qualified_components(ty))
+            .collect();
         let tuples = self
             .generic_class_instantiations
             .entry(name.to_string())
@@ -2020,13 +2024,17 @@ impl TypeChecker {
     }
 
     /// Extracts a Type from a type expression.
+    ///
+    /// A written type naming a type its module keeps private reads as that
+    /// type's identity, wherever it is read from.
     pub(crate) fn extract_type_from_expression(&self, expr: &Expression) -> Result<Type, String> {
         match &expr.node {
             ExpressionKind::Type(t, is_nullable) => {
+                let written = self.qualified_written_type(expr).unwrap_or(t);
                 if *is_nullable {
-                    Ok(make_type(TypeKind::Option(t.clone())))
+                    Ok(make_type(TypeKind::Option(Box::new(written.clone()))))
                 } else {
-                    Ok(*t.clone())
+                    Ok(written.clone())
                 }
             }
             _ => Err("Expected type expression".to_string()),
@@ -2043,13 +2051,15 @@ impl TypeChecker {
     /// - Generic type parameters
     pub(crate) fn resolve_type_expression(&mut self, expr: &Expression, context: &Context) -> Type {
         let set_allowed = std::mem::take(&mut self.type_set_allowed);
-        let resolved = match self.extract_type_from_expression(expr) {
-            Ok(t) => self.resolve_type_kind(t, expr, context),
-            Err(msg) => {
-                self.report_error(DiagnosticCode::TypTypeNotFound, msg, expr.span);
-                Self::error_type()
+        let resolved = self.resolving_written_type(expr, |checker| {
+            match checker.extract_type_from_expression(expr) {
+                Ok(t) => checker.resolve_type_kind(t, expr, context),
+                Err(msg) => {
+                    checker.report_error(DiagnosticCode::TypTypeNotFound, msg, expr.span);
+                    Self::error_type()
+                }
             }
-        };
+        });
         if !set_allowed && matches!(resolved.kind, TypeKind::OneOf(_)) {
             self.report_type_set_as_value(expr, &resolved);
             return Self::error_type();
@@ -2134,12 +2144,15 @@ impl TypeChecker {
             TypeKind::List(inner) => self.resolve_list_type(inner, context),
             TypeKind::Set(inner) => self.resolve_set_type(inner, context),
             TypeKind::Map(k, v) => self.resolve_map_type(k, v, context),
-            TypeKind::Option(inner) => self.resolve_option_type(*inner, context),
+            TypeKind::Option(inner) => self.resolve_option_type(*inner, expr, context),
             TypeKind::Array(inner, size) => self.resolve_array_type(inner, size, context),
             TypeKind::Result(ok, err) => self.resolve_result_type(ok, err, context),
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
             TypeKind::Tuple(elements) => self.resolve_tuple_type(elements, context),
             TypeKind::OneOf(members) => self.resolve_type_set(members, context),
+            TypeKind::Function(function) if function.generics.is_none() => {
+                self.resolve_function_type(&function, context)
+            }
             _ => make_type(t.kind),
         }
     }
@@ -2191,8 +2204,36 @@ impl TypeChecker {
         ))
     }
 
-    fn resolve_option_type(&mut self, inner: Type, context: &Context) -> Type {
-        let inner_expr = self.create_type_expression(inner);
+    /// Resolves a closure type: each parameter type and the return are
+    /// resolved where they are written, so what their names resolve to is
+    /// recorded against them, and the type keeps its written form with those
+    /// names spelled as identities. A closure type declaring type parameters
+    /// of its own is kept as written.
+    fn resolve_function_type(&mut self, function: &FunctionTypeData, context: &Context) -> Type {
+        for param in &function.params {
+            self.resolve_type_expression(&param.typ, context);
+        }
+        if let Some(ret) = &function.return_type {
+            self.resolve_type_expression(ret, context);
+        }
+        make_type(TypeKind::Function(Box::new(
+            self.qualified_function(function),
+        )))
+    }
+
+    /// Resolves the optional `T?` or `Option<T>` written as `written`.
+    ///
+    /// The payload is resolved as the expression the optional is written in,
+    /// so what its name resolved to is recorded against that expression, as it
+    /// is for the payload of any other written type.
+    fn resolve_option_type(
+        &mut self,
+        inner: Type,
+        written: &Expression,
+        context: &Context,
+    ) -> Type {
+        let mut inner_expr = self.create_type_expression(inner);
+        inner_expr.id = written.id;
         let resolved_inner = self.resolve_type_expression(&inner_expr, context);
         make_type(TypeKind::Option(Box::new(resolved_inner)))
     }
@@ -2308,18 +2349,13 @@ impl TypeChecker {
         expr: &Expression,
         context: &Context,
     ) -> Type {
-        let identity = self.written_type_identity(name).to_string();
-        self.record_qualified_name(expr, &identity);
-        let definition = match self.resolve_visible_type(name, context).cloned() {
-            Some(def) => Some(def),
-            None if self.resolving_declared_signature => self
-                .type_table
-                .global_type_definitions
-                .get(&identity)
-                .cloned(),
-            None => None,
+        let Some(identity) = self.written_name_identity(name, expr, context) else {
+            let span = self.declared_signature_site.unwrap_or(expr.span);
+            self.report_type_not_visible(name, span);
+            return Self::error_type();
         };
-        let Some(def) = definition else {
+        self.record_qualified_name(expr, &identity);
+        let Some(def) = self.definition_named(name, &identity, context) else {
             if self.is_hidden_type_name(name) {
                 self.report_type_not_visible(name, expr.span);
             } else {
@@ -2330,42 +2366,95 @@ impl TypeChecker {
         // Types used purely as annotations (e.g. `private trait Foo` in a
         // parameter position) never go through the identifier-lookup path
         // that enforces `check_visibility`. We close that gap here: if the
-        // type name also has a symbol-table entry (all user-defined types do)
-        // we check its top-level visibility now.
-        if !self.is_type_symbol_visible(name) {
+        // type also has a symbol-table entry (all user-defined types do) we
+        // check its top-level visibility now.
+        if !self.is_type_symbol_visible(&identity) {
             self.report_type_not_visible(name, expr.span);
             return Self::error_type();
         }
         self.validate_and_resolve_type_definition(&identity, def, resolved_args, expr, context)
     }
 
-    /// Whether the symbol-table entry under the type name `name`, if there is
-    /// one, is visible from the module being checked. A name the module
-    /// resolves to a type it keeps private itself is visible whoever's entry
-    /// the name holds.
-    fn is_type_symbol_visible(&self, name: &str) -> bool {
-        self.written_type_identity(name) != name
-            || self
-                .type_table
-                .global_scope
-                .get(name)
-                .is_none_or(|sym| self.check_visibility(&sym.visibility, &sym.module))
+    /// The identity the name `name`, written as `expr`, resolves to; `None`
+    /// when it names a type the module being checked may not see.
+    ///
+    /// A callee's declared signature is resolved in the module that declares
+    /// it, so a name that module resolved to a type it keeps private stays
+    /// that type, and is refused anywhere else.
+    fn written_name_identity<'n>(
+        &self,
+        name: &'n str,
+        expr: &Expression,
+        context: &Context,
+    ) -> Option<std::borrow::Cow<'n, str>> {
+        use std::borrow::Cow;
+        if crate::ast::type_identity::is_qualified(name) {
+            return self.may_name_type(name).then_some(Cow::Borrowed(name));
+        }
+        let declared = self
+            .resolving_declared_signature
+            .then(|| self.declared_signature_identity(expr))
+            .flatten();
+        match declared {
+            Some(identity) if self.may_name_type(identity) => Some(Cow::Owned(identity.to_owned())),
+            Some(_) => None,
+            None => Some(match self.private_identity_in(name, context) {
+                Some(identity) => Cow::Owned(identity.to_owned()),
+                None => Cow::Borrowed(name),
+            }),
+        }
     }
 
-    /// Whether `name` names a type, through its symbol-table entry, that the
-    /// module being checked may not see: one another module keeps private is
-    /// registered under that module's identity, which `name` never resolves to.
+    /// The definition of the type `identity`, written as `name`: a type
+    /// parameter in scope, a type visible here, or — for a callee's declared
+    /// signature, read on behalf of the module that wrote it — any registered
+    /// type.
+    fn definition_named(
+        &self,
+        name: &str,
+        identity: &str,
+        context: &Context,
+    ) -> Option<TypeDefinition> {
+        if identity == name {
+            if let Some(def @ TypeDefinition::Generic(_)) = context.resolve_type_definition(name) {
+                return Some(def.clone());
+            }
+        }
+        let reachable = self.resolving_declared_signature
+            || self.type_table.visible_type_names.contains(identity);
+        reachable
+            .then(|| self.type_table.global_type_definitions.get(identity))
+            .flatten()
+            .cloned()
+    }
+
+    /// Whether the symbol-table entry of the type `identity`, if there is
+    /// one, is visible from the module being checked.
+    fn is_type_symbol_visible(&self, identity: &str) -> bool {
+        self.type_table
+            .global_scope
+            .get(identity)
+            .is_none_or(|sym| self.check_visibility(&sym.visibility, &sym.module))
+    }
+
+    /// Whether `name` names a type the module being checked may not see: one
+    /// another module keeps private, or one whose symbol-table entry is
+    /// private to another module.
     fn is_hidden_type_name(&self, name: &str) -> bool {
-        self.type_table.global_scope.get(name).is_some_and(|sym| {
-            matches!(sym.ty.kind, TypeKind::Meta(_))
-                && !self.check_visibility(&sym.visibility, &sym.module)
-        })
+        self.modules.is_kept_private_elsewhere(name)
+            || self.type_table.global_scope.get(name).is_some_and(|sym| {
+                matches!(sym.ty.kind, TypeKind::Meta(_))
+                    && !self.check_visibility(&sym.visibility, &sym.module)
+            })
     }
 
     fn report_type_not_visible(&mut self, name: &str, span: Span) {
         self.report_error(
             DiagnosticCode::TypNameNotVisible,
-            format!("Type '{}' is not visible", name),
+            format!(
+                "Type '{}' is not visible",
+                crate::type_checker::diagnostics::shown_type_name(name)
+            ),
             span,
         );
     }

@@ -415,14 +415,14 @@ fn payload_test(
             PayloadTest::Discriminant(own_value(), Expected::Is(value))
         }
         Pattern::Member(type_pattern, variant) => {
-            let index = enum_variant_index(ctx, type_pattern, variant, span)?;
+            let index = enum_variant_index(ctx, type_pattern, variant, &payload_ty, span)?;
             PayloadTest::Discriminant(read_discriminant(ctx, payload, span), Expected::Is(index))
         }
         Pattern::EnumVariant(parent, _) => {
             let Pattern::Member(type_pattern, variant) = parent.as_ref() else {
                 return Err(unsupported_nesting(span));
             };
-            let index = enum_variant_index(ctx, type_pattern, variant, span)?;
+            let index = enum_variant_index(ctx, type_pattern, variant, &payload_ty, span)?;
             PayloadTest::Discriminant(read_discriminant(ctx, payload, span), Expected::Is(index))
         }
         Pattern::Regex(_) => PayloadTest::Regex,
@@ -490,12 +490,15 @@ fn enum_variant_index(
     ctx: &LoweringContext,
     type_pattern: &Pattern,
     variant: &str,
+    payload_ty: &Type,
     span: Span,
 ) -> Result<u128, LoweringError> {
-    let Pattern::Identifier(type_name) = type_pattern else {
+    let Pattern::Identifier(_) = type_pattern else {
         return Err(unsupported_nesting(span));
     };
-    variant_discriminant(ctx, type_name, variant).ok_or_else(|| unsupported_nesting(span))
+    crate::mir::lowering::helpers::pattern_enum_identity(&payload_ty.kind)
+        .and_then(|enum_name| variant_discriminant(ctx, enum_name, variant))
+        .ok_or_else(|| unsupported_nesting(span))
 }
 
 /// Read the discriminant an enum value carries in its first field.

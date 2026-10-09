@@ -1942,7 +1942,9 @@ impl TypeChecker {
     ) -> (Type, Vec<ParameterBound>) {
         if let Some(gens) = &func_data.generics {
             context.enter_scope();
-            self.reading_declared_signature(|checker| checker.define_generics(gens, context));
+            self.reading_declared_signature(site.span, |checker| {
+                checker.define_generics(gens, context)
+            });
         }
         let mut named_args = site.named_args;
         self.validate_function_parameters(
@@ -1953,7 +1955,7 @@ impl TypeChecker {
             site.span,
             context,
         );
-        let return_type = self.declared_return_type(func_data, context);
+        let return_type = self.declared_return_type(func_data, site.span, context);
         let bounds = declared_bounds(func_data, context);
         if func_data.generics.is_some() {
             context.exit_scope();
@@ -2021,7 +2023,7 @@ impl TypeChecker {
         let mut seen_out_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for param in &func_data.params {
-            let param_type = self.reading_declared_signature(|checker| {
+            let param_type = self.reading_declared_signature(span, |checker| {
                 checker.resolve_type_expression(&param.typ, context)
             });
 
@@ -2192,20 +2194,30 @@ impl TypeChecker {
     /// the caller's import list would reject a type the caller never names —
     /// `use m.{f}` imports `f`, and `f`'s signature is read on behalf of the
     /// module that wrote it. What the caller writes itself stays gated.
-    fn reading_declared_signature<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> T {
+    ///
+    /// A type the callee's module keeps private is refused at `call_site`,
+    /// where the caller receives it, not where the callee's module wrote it.
+    fn reading_declared_signature<T>(
+        &mut self,
+        call_site: Span,
+        read: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         let previous = std::mem::replace(&mut self.resolving_declared_signature, true);
+        let previous_site = self.declared_signature_site.replace(call_site);
         let result = read(self);
         self.resolving_declared_signature = previous;
+        self.declared_signature_site = previous_site;
         result
     }
 
     fn declared_return_type(
         &mut self,
         func_data: &crate::ast::types::FunctionTypeData,
+        call_site: Span,
         context: &mut Context,
     ) -> Type {
         if let Some(rt_expr) = &func_data.return_type {
-            self.reading_declared_signature(|checker| {
+            self.reading_declared_signature(call_site, |checker| {
                 checker.resolve_type_expression(rt_expr, context)
             })
         } else {
@@ -2388,7 +2400,7 @@ impl TypeChecker {
                     self.report_error(DiagnosticCode::TypClassDefinition,
                         format!(
                             "Cannot instantiate abstract class '{}'. Abstract classes cannot be instantiated directly.",
-                            name
+                            crate::type_checker::diagnostics::shown_type_name(name)
                         ),
                         span,
                     );

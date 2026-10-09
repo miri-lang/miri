@@ -540,7 +540,9 @@ pub(crate) fn lower_member_expr(
         }
     }
 
-    if let ExpressionKind::Identifier(type_name, _) = &obj.node {
+    if let (ExpressionKind::Identifier(..), Some(type_name)) =
+        (&obj.node, ctx.type_checker.type_identity_named_by(obj))
+    {
         if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
             .type_checker
             .type_table

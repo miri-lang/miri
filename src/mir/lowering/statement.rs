@@ -265,7 +265,7 @@ fn lower_struct_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
 }
 
 fn lower_enum_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
-    let Some(name) = extract_identifier(name_expr) else {
+    let Some(name) = ctx.type_checker.type_identity_named_by(name_expr) else {
         return;
     };
     let Some(TypeDefinition::Enum(def)) = ctx
@@ -291,7 +291,7 @@ fn lower_enum_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
         name: name.to_string(),
         variants,
         generics,
-        module: ctx.type_checker.current_module().to_string(),
+        module: def.module.clone(),
     }));
 }
 
@@ -351,7 +351,7 @@ fn build_method_decls(def: &crate::type_checker::context::ClassDefinition) -> Ve
 }
 
 fn lower_trait_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
-    let Some(name) = extract_identifier(name_expr) else {
+    let Some(name) = ctx.type_checker.type_identity_named_by(name_expr) else {
         return;
     };
     let Some(TypeDefinition::Trait(def)) = ctx

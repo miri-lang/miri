@@ -152,7 +152,10 @@ impl TypeChecker {
             } else {
                 self.report_error(
                     DiagnosticCode::TypEnumDefinition,
-                    format!("'{}' is not an Enum", enum_name),
+                    format!(
+                        "'{}' is not an Enum",
+                        crate::type_checker::diagnostics::shown_type_name(enum_name)
+                    ),
                     span,
                 );
                 return Some(ast_factory::make_type(TypeKind::Error));
@@ -173,7 +176,11 @@ impl TypeChecker {
         let Some(variant_types) = enum_def.variants.get(variant_name) else {
             self.report_error(
                 DiagnosticCode::TypEnumVariant,
-                format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
+                format!(
+                    "Enum '{}' has no variant '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(enum_name),
+                    variant_name
+                ),
                 span,
             );
             return Some(ast_factory::make_type(TypeKind::Error));

@@ -280,7 +280,7 @@ impl TypeChecker {
                 DiagnosticCode::TypEnumVariant,
                 format!(
                     "Non-exhaustive match on Enum '{}'. Missing variants: {}",
-                    name,
+                    crate::type_checker::diagnostics::shown_type_name(name),
                     missing.join(", ")
                 ),
                 span,
@@ -294,6 +294,7 @@ impl TypeChecker {
         name: &str,
         context: &'d Context,
     ) -> Option<&'d EnumDefinition> {
+        let name = self.written_type_identity(name);
         context
             .type_definitions
             .iter()
@@ -344,8 +345,9 @@ impl TypeChecker {
         let lookup = |name: &str| self.listed_enum_variants(name, context);
         let coverage = Coverage { variants: &lookup };
         remaining_variants.retain(|variant| {
+            // A pattern names the enum as its module writes it.
             let constructor = Constructor::Variant {
-                enum_name: enum_name.to_string(),
+                enum_name: crate::ast::type_identity::source_name(enum_name).to_string(),
                 variant: variant.clone(),
             };
             let arity = arities.get(variant).copied().unwrap_or(0);
@@ -565,6 +567,12 @@ impl TypeChecker {
             Pattern::Literal(lit) => {
                 self.check_pattern_literal(lit, subject_type, span, context);
             }
+            // A binding takes the type of what it binds, which a type another
+            // module keeps private never becomes outside that module.
+            Pattern::Identifier(name) if self.refuses_hidden_private_type(subject_type, span) => {
+                let refused = make_type(TypeKind::Error);
+                self.check_pattern_identifier(name, &refused, is_mutable, context);
+            }
             Pattern::Identifier(name) => {
                 self.check_pattern_identifier(name, subject_type, is_mutable, context);
             }
@@ -700,7 +708,11 @@ impl TypeChecker {
                 if !enum_def.variants.contains_key(member) {
                     self.report_error(
                         DiagnosticCode::TypEnumVariant,
-                        format!("Enum '{}' has no variant '{}'", parent_name, member),
+                        format!(
+                            "Enum '{}' has no variant '{}'",
+                            crate::type_checker::diagnostics::shown_type_name(parent_name),
+                            member
+                        ),
                         span,
                     );
                 }
@@ -718,7 +730,10 @@ impl TypeChecker {
             } else {
                 self.report_error(
                     DiagnosticCode::TypEnumDefinition,
-                    format!("'{}' is not an Enum", parent_name),
+                    format!(
+                        "'{}' is not an Enum",
+                        crate::type_checker::diagnostics::shown_type_name(parent_name)
+                    ),
                     span,
                 );
             }
@@ -733,6 +748,7 @@ impl TypeChecker {
 
     /// Builds the expected enum type for a member pattern.
     fn build_enum_member_type(&self, enum_name: &str, subject_type: &Type) -> Type {
+        let enum_name = self.written_type_identity(enum_name);
         if let TypeKind::Custom(sub_name, sub_args) = &subject_type.kind {
             if sub_name == enum_name {
                 return make_type(TypeKind::Custom(enum_name.to_string(), sub_args.clone()));
@@ -967,14 +983,21 @@ impl TypeChecker {
             } else {
                 self.report_error(
                     DiagnosticCode::TypEnumVariant,
-                    format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
+                    format!(
+                        "Enum '{}' has no variant '{}'",
+                        crate::type_checker::diagnostics::shown_type_name(enum_name),
+                        variant_name
+                    ),
                     span,
                 );
             }
         } else {
             self.report_error(
                 DiagnosticCode::TypEnumDefinition,
-                format!("'{}' is not an Enum", enum_name),
+                format!(
+                    "'{}' is not an Enum",
+                    crate::type_checker::diagnostics::shown_type_name(enum_name)
+                ),
                 span,
             );
         }
@@ -1005,6 +1028,7 @@ impl TypeChecker {
 
     /// Builds the expected enum type for a variant pattern.
     fn build_enum_variant_type(&self, enum_name: &str, subject_type: &Type) -> Type {
+        let enum_name = self.written_type_identity(enum_name);
         let generic_args = if let TypeKind::Custom(sub_name, ref sub_args) = &subject_type.kind {
             if sub_name == enum_name {
                 sub_args.clone()

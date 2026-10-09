@@ -11,6 +11,13 @@ use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use std::collections::HashSet;
 
+/// The name a diagnostic shows for the type `identity`: the name its
+/// declaration writes. A type a module keeps private is registered under an
+/// identity carrying the module's path, which no reader wrote.
+pub(crate) fn shown_type_name(identity: &str) -> &str {
+    crate::ast::type_identity::source_name(identity)
+}
+
 /// Collects type checking diagnostics: errors, warnings, and reported error deduplication.
 #[derive(Debug, Clone)]
 pub struct DiagnosticCollector {

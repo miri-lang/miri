@@ -52,7 +52,7 @@ use crate::diagnostics::RepairRequest;
 use crate::error::foreign_syntax::ForeignForm;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
-use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -100,6 +100,15 @@ impl TypeChecker {
 
         if let Some(ty) = self.try_class_member_suggestion(name, span, context) {
             return ty;
+        }
+
+        if self.modules.is_kept_private_elsewhere(name) {
+            self.report_error(
+                DiagnosticCode::TypNameNotVisible,
+                format!("Type '{name}' is not visible"),
+                span,
+            );
+            return ast_factory::make_type(TypeKind::Error);
         }
 
         self.report_undefined_identifier_error(name, span, context);
@@ -241,10 +250,7 @@ impl TypeChecker {
         expr_id: usize,
         context: &mut Context,
     ) -> Option<Type> {
-        let info_opt = context
-            .resolve_info(name)
-            .cloned()
-            .or_else(|| self.type_table.global_scope.get(name).cloned());
+        let info_opt = self.resolve_value_name(name, context).cloned();
         if info_opt.as_ref().is_some_and(declares_type_parameters)
             && self.callee_expr_id != Some(expr_id)
         {
@@ -287,6 +293,22 @@ impl TypeChecker {
         }
 
         None
+    }
+
+    /// The binding `name` names: a local or any other scoped binding first, as
+    /// for every name, then the module's own private type of that name, then a
+    /// global one. A type the module keeps private is registered under its
+    /// identity, so a binding written over its name shadows it.
+    fn resolve_value_name<'a>(
+        &'a self,
+        name: &'a str,
+        context: &'a Context,
+    ) -> Option<&'a SymbolInfo> {
+        let key = self.written_type_identity_in(name, context);
+        context
+            .resolve_info(name)
+            .or_else(|| context.resolve_info(key))
+            .or_else(|| self.type_table.global_scope.get(key))
     }
 
     fn try_type_constructor(&self, name: &str) -> Option<Type> {

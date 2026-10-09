@@ -34,10 +34,13 @@ pub(crate) fn lower_enumvalue_expr(
     let ExpressionKind::Member(type_expr, variant_expr) = &enum_expr.node else {
         return Err(invalid());
     };
-    let ExpressionKind::Identifier(type_name, _) = &type_expr.node else {
+    let ExpressionKind::Identifier(..) = &type_expr.node else {
         return Err(invalid());
     };
     let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node else {
+        return Err(invalid());
+    };
+    let Some(type_name) = ctx.type_checker.type_identity_named_by(type_expr) else {
         return Err(invalid());
     };
     let Some(discriminant) = enum_variant_discriminant(ctx, type_name, variant_name) else {

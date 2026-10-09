@@ -58,9 +58,7 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     // type-checker cache by id collides with any other id=0 expression that
     // happens to have been stored last, so we trust the inner type instead.
     if let ExpressionKind::Type(t, is_nullable) = &expr.node {
-        let written = tc
-            .qualified_written_type(expr)
-            .unwrap_or_else(|| (**t).clone());
+        let written = tc.qualified_written_type(expr).unwrap_or(t).clone();
         if *is_nullable {
             return Type::new(TypeKind::Option(Box::new(written)), expr.span);
         }
@@ -303,6 +301,17 @@ pub(crate) fn is_option_some_pattern(subject_ty: &Type, parent: &Pattern) -> boo
     }
 }
 
+/// The identity of the enum a variant pattern matched against a value of
+/// type `matched` names: the value's own enum, which checking has already
+/// proven the pattern names. `None` when the value's type names no declared
+/// type.
+pub(crate) fn pattern_enum_identity(matched: &TypeKind) -> Option<&str> {
+    if let TypeKind::Custom(identity, _) = matched {
+        return Some(identity);
+    }
+    None
+}
+
 /// The payload types a variant pattern binds, so the bound locals are typed
 /// from the enum definition (e.g. `int` rather than `void`) instead of
 /// defaulting to a pointer slot.
@@ -320,19 +329,20 @@ pub(crate) fn variant_payload_types(
     let Pattern::Member(type_pattern, variant_name) = parent else {
         return None;
     };
-    let Pattern::Identifier(type_name) = type_pattern.as_ref() else {
+    let Pattern::Identifier(_) = type_pattern.as_ref() else {
         return None;
     };
+    let subject_kind = &ctx.body.local_decls[subject_local.0].ty.kind;
     let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
         .type_checker
         .type_table
         .global_type_definitions
-        .get(type_name)
+        .get(pattern_enum_identity(subject_kind)?)
     else {
         return None;
     };
     let declared = enum_def.variants.get(variant_name.as_str())?;
-    let type_args = enum_instantiation_args(&ctx.body.local_decls[subject_local.0].ty.kind);
+    let type_args = enum_instantiation_args(subject_kind);
     Some(substitute_variant_field_types(
         declared,
         type_args.as_deref(),

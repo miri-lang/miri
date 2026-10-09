@@ -899,11 +899,14 @@ impl TypeChecker {
     ) {
         if let Some(ref selected) = selected_names {
             for (sel_name, sel_span) in selected {
+                // A type the module keeps private is found, and refused as
+                // not visible where the importer names it.
                 let in_scope = self
                     .type_table
                     .global_scope
                     .get(sel_name.as_str())
-                    .is_some_and(|info| info.module == module_name);
+                    .is_some_and(|info| info.module == module_name)
+                    || self.modules.keeps_private(module_name, sel_name);
 
                 let in_types = self
                     .type_table

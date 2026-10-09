@@ -367,7 +367,11 @@ impl TypeChecker {
     ) {
         let ordered: Vec<(String, Type)> = parameters
             .iter()
-            .filter_map(|name| bound.get(name).map(|ty| (name.clone(), ty.clone())))
+            .filter_map(|name| {
+                bound
+                    .get(name)
+                    .map(|ty| (name.clone(), self.qualified_components(ty)))
+            })
             .collect();
         if !ordered.is_empty() {
             self.call_generic_mappings.insert(call_id, ordered);

@@ -64,16 +64,13 @@ impl TypeChecker {
         span: Span,
     ) {
         // Extract and validate trait name
-        let name = match self.extract_type_name(name_expr) {
-            Ok(n) => n.to_string(),
-            Err(_) => {
-                self.report_error(
-                    DiagnosticCode::TypTraitDefinition,
-                    "Invalid trait name".to_string(),
-                    name_expr.span,
-                );
-                return;
-            }
+        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
+            self.report_error(
+                DiagnosticCode::TypTraitDefinition,
+                "Invalid trait name".to_string(),
+                name_expr.span,
+            );
+            return;
         };
 
         // Check for duplicate type definitions
@@ -87,7 +84,10 @@ impl TypeChecker {
             if !is_placeholder {
                 self.report_error(
                     DiagnosticCode::TypTypeAlreadyDefined,
-                    format!("Type '{}' is already defined", name),
+                    format!(
+                        "Type '{}' is already defined",
+                        crate::type_checker::diagnostics::shown_type_name(&name)
+                    ),
                     span,
                 );
                 return;
@@ -158,7 +158,11 @@ impl TypeChecker {
                         format!("Parent trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
-                } else if let Some(def) = self.type_table.global_type_definitions.get(trait_name) {
+                } else if let Some(def) = self
+                    .type_table
+                    .global_type_definitions
+                    .get(self.written_type_identity(trait_name))
+                {
                     if !matches!(def, TypeDefinition::Trait(_)) {
                         let kind = match def {
                             TypeDefinition::Class(_) => "a class",
@@ -178,7 +182,7 @@ impl TypeChecker {
                         );
                     }
                 }
-                parent_trait_names.push(trait_name.to_string());
+                parent_trait_names.push(self.written_type_identity(trait_name).to_string());
             }
         }
         parent_trait_names
@@ -191,13 +195,13 @@ impl TypeChecker {
     ) -> BTreeMap<String, Vec<Type>> {
         let mut parent_trait_args: BTreeMap<String, Vec<Type>> = BTreeMap::new();
         for trait_expr in parent_traits {
-            if let Ok(parent_name) = self.extract_type_name(trait_expr) {
+            if let Ok(parent_name) = self.extract_type_identity(trait_expr).map(String::from) {
                 if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &trait_expr.node {
                     let resolved_args: Vec<Type> = args
                         .iter()
                         .map(|arg| self.resolve_type_expression(arg, context))
                         .collect();
-                    parent_trait_args.insert(parent_name.to_string(), resolved_args);
+                    parent_trait_args.insert(parent_name, resolved_args);
                 }
             }
         }
