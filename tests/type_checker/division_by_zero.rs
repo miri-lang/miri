@@ -44,8 +44,66 @@ fn test_modulo_assign_by_negative_zero() {
 }
 
 #[test]
+fn test_divide_by_positive_zero() {
+    type_checker_error_test("let x = 10 / +0", "Division by zero");
+    type_checker_error_test("let x = 10.0 / +0.0", "Division by zero");
+}
+
+#[test]
+fn test_modulo_by_positive_zero() {
+    type_checker_error_test("let x = 10 % +0", "Division by zero");
+    type_checker_error_test("let x = 10.0 % +0.0", "Division by zero");
+}
+
+#[test]
+fn test_divide_assign_by_positive_zero() {
+    type_checker_error_test("var x = 10\nx /= +0", "Division by zero");
+    type_checker_error_test("var x = 10.0\nx /= +0.0", "Division by zero");
+}
+
+#[test]
+fn test_modulo_assign_by_positive_zero() {
+    type_checker_error_test("var x = 10\nx %= +0", "Division by zero");
+    type_checker_error_test("var x = 10.0\nx %= +0.0", "Division by zero");
+}
+
+#[test]
+fn test_divide_assign_float_by_zero() {
+    type_checker_error_test("var x = 10.0\nx /= 0.0", "Division by zero");
+    type_checker_error_test("var x = 10.0\nx /= -0.0", "Division by zero");
+}
+
+#[test]
+fn test_modulo_assign_float_by_zero() {
+    type_checker_error_test("var x = 10.0\nx %= 0.0", "Division by zero");
+    type_checker_error_test("var x = 10.0\nx %= -0.0", "Division by zero");
+}
+
+#[test]
+fn test_divide_by_zero_explicit_types() {
+    type_checker_error_test("let x i8 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x u64 = 10 % 0", "Division by zero");
+    type_checker_error_test("let x f32 = 10.0 / 0.0", "Division by zero");
+    type_checker_error_test("let x f64 = 10.0 % 0.0", "Division by zero");
+}
+
+#[test]
+fn test_divide_by_zero_parenthesized() {
+    type_checker_error_test("let x = 10 / (0)", "Division by zero");
+    type_checker_error_test("let x = 10 / (+0)", "Division by zero");
+    type_checker_error_test("let x = 10.0 / (-0.0)", "Division by zero");
+}
+
+#[test]
 fn test_divide_by_non_zero_literal() {
     type_checker_test("let x = 10 / 2");
+}
+
+#[test]
+fn test_divide_by_negative_non_zero_literal() {
+    type_checker_test("let x = 10 / -2");
+    type_checker_test("let x = 10.0 / -2.5");
+    type_checker_test("var x = 10\nx /= -2");
 }
 
 #[test]
