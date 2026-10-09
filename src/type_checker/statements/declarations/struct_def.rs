@@ -61,7 +61,7 @@ impl TypeChecker {
         traits: &[Expression],
         context: &mut Context,
     ) {
-        let Some(name) = self.extract_struct_name(name_expr) else {
+        let Some(name) = self.extract_struct_name(name_expr, visibility) else {
             return;
         };
         if !self.check_struct_not_duplicate(&name, name_expr) {
@@ -148,9 +148,13 @@ impl TypeChecker {
         }
     }
 
-    fn extract_struct_name(&mut self, name_expr: &Expression) -> Option<String> {
-        if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-            Some(n.clone())
+    fn extract_struct_name(
+        &mut self,
+        name_expr: &Expression,
+        visibility: &MemberVisibility,
+    ) -> Option<String> {
+        if let ExpressionKind::Identifier(..) = &name_expr.node {
+            self.register_declared_identity(name_expr, visibility)
         } else {
             self.report_error(
                 DiagnosticCode::TypStructDefinition,
@@ -171,7 +175,10 @@ impl TypeChecker {
             if !is_placeholder {
                 self.report_error(
                     DiagnosticCode::TypTypeAlreadyDefined,
-                    format!("Type '{}' is already defined", name),
+                    format!(
+                        "Type '{}' is already defined",
+                        crate::ast::type_identity::source_name(name)
+                    ),
                     name_expr.span,
                 );
                 return false;
@@ -271,9 +278,10 @@ impl TypeChecker {
         }
 
         let struct_type = make_type(TypeKind::Custom(name.to_string(), None));
+        let written_name = crate::ast::type_identity::source_name(name);
         if context.scopes.len() == 1 {
             self.type_table.global_scope.insert(
-                name.to_string(),
+                written_name.to_string(),
                 SymbolInfo::new(
                     make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     false,
@@ -286,7 +294,7 @@ impl TypeChecker {
         }
 
         context.define(
-            name.to_string(),
+            written_name.to_string(),
             SymbolInfo::new(
                 make_type(TypeKind::Meta(Box::new(struct_type))),
                 false,

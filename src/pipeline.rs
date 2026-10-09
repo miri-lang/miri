@@ -1965,7 +1965,9 @@ impl Pipeline {
     ) -> Option<(&'r str, Vec<(&'r Statement, &'r str)>)> {
         match &stmt.node {
             StatementKind::Class(class_data) => {
-                let class_name = Self::identifier_name(&class_data.name)?;
+                let class_name = result
+                    .type_checker
+                    .type_identity_named_by(&class_data.name)?;
                 let methods = Self::methods_compiled_under_class_name(
                     result,
                     &reach.trait_defaults,
@@ -2673,7 +2675,9 @@ impl Pipeline {
                     )?;
                 }
                 StatementKind::Class(class_data) => {
-                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                    let Some(class_name) =
+                        result.type_checker.type_identity_named_by(&class_data.name)
+                    else {
                         continue;
                     };
 
@@ -2810,7 +2814,9 @@ impl Pipeline {
                 }
                 StatementKind::Class(class_data) => {
                     // Extract the class name string
-                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                    let Some(class_name) =
+                        result.type_checker.type_identity_named_by(&class_data.name)
+                    else {
                         continue;
                     };
 
@@ -2944,7 +2950,8 @@ impl Pipeline {
             let StatementKind::Class(class_data) = &stmt.node else {
                 continue;
             };
-            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+            let Some(class_name) = result.type_checker.type_identity_named_by(&class_data.name)
+            else {
                 continue;
             };
             let is_concrete = matches!(
@@ -2986,7 +2993,8 @@ impl Pipeline {
             let StatementKind::Class(class_data) = &stmt.node else {
                 continue;
             };
-            let Some(class_name) = Self::identifier_name(&class_data.name) else {
+            let Some(class_name) = result.type_checker.type_identity_named_by(&class_data.name)
+            else {
                 continue;
             };
             let is_abstract = matches!(
@@ -3127,7 +3135,9 @@ impl Pipeline {
                 let StatementKind::Class(class_data) = &stmt.node else {
                     return None;
                 };
-                let class_name = Self::identifier_name(&class_data.name)?;
+                let class_name = result
+                    .type_checker
+                    .type_identity_named_by(&class_data.name)?;
                 let Some(TypeDefinition::Class(class_def)) = definitions.get(class_name) else {
                     return None;
                 };
@@ -3238,7 +3248,8 @@ impl Pipeline {
                 let StatementKind::Class(class_data) = &stmt.node else {
                     return None;
                 };
-                (Self::identifier_name(&class_data.name) == Some(class_name)).then_some(stmt.span)
+                (result.type_checker.type_identity_named_by(&class_data.name) == Some(class_name))
+                    .then_some(stmt.span)
             })
             .unwrap_or_default()
     }

@@ -1518,8 +1518,9 @@ impl TypeChecker {
         if let Some(def @ TypeDefinition::Generic(_)) = context.resolve_type_definition(name) {
             return Some(def);
         }
-        if self.type_table.visible_type_names.contains(name) {
-            self.type_table.global_type_definitions.get(name)
+        let identity = self.written_type_identity(name);
+        if self.type_table.visible_type_names.contains(identity) {
+            self.type_table.global_type_definitions.get(identity)
         } else {
             None
         }
@@ -1527,7 +1528,9 @@ impl TypeChecker {
 
     /// Returns true if the named type is visible from user code.
     pub(crate) fn is_type_visible(&self, name: &str) -> bool {
-        self.type_table.visible_type_names.contains(name)
+        self.type_table
+            .visible_type_names
+            .contains(self.written_type_identity(name))
     }
 
     /// Creates an error type. Use this when type checking fails.
@@ -2288,38 +2291,83 @@ impl TypeChecker {
                 .collect()
         });
 
-        // Look up type definition. User-written type expressions must name a
-        // type visible in scope; a callee's declared signature is read on behalf
-        // of the module that wrote it, so it resolves from the definitions the
-        // import kept rather than from what this scope may name.
+        self.resolve_written_type_name(name, resolved_args, expr, context)
+    }
+
+    /// Resolves the type written as `name`, at `resolved_args`, to its
+    /// definition.
+    ///
+    /// User-written type expressions must name a type visible in scope; a
+    /// callee's declared signature is read on behalf of the module that wrote
+    /// it, so it resolves from the definitions the import kept rather than from
+    /// what this scope may name.
+    fn resolve_written_type_name(
+        &mut self,
+        name: &str,
+        resolved_args: Option<Vec<Expression>>,
+        expr: &Expression,
+        context: &Context,
+    ) -> Type {
+        let identity = self.written_type_identity(name).to_string();
+        self.record_qualified_name(expr, &identity);
         let definition = match self.resolve_visible_type(name, context).cloned() {
             Some(def) => Some(def),
-            None if self.resolving_declared_signature => {
-                self.type_table.global_type_definitions.get(name).cloned()
-            }
+            None if self.resolving_declared_signature => self
+                .type_table
+                .global_type_definitions
+                .get(&identity)
+                .cloned(),
             None => None,
         };
-        if let Some(def) = definition {
-            // Types used purely as annotations (e.g. `private trait Foo` in a
-            // parameter position) never go through the identifier-lookup path
-            // that enforces `check_visibility`.  We close that gap here: if the
-            // type name also has a symbol-table entry (all user-defined types do)
-            // we check its top-level visibility now.
-            if let Some(sym) = self.type_table.global_scope.get(name) {
-                if !self.check_visibility(&sym.visibility, &sym.module) {
-                    self.report_error(
-                        DiagnosticCode::TypNameNotVisible,
-                        format!("Type '{}' is not visible", name),
-                        expr.span,
-                    );
-                    return Self::error_type();
-                }
+        let Some(def) = definition else {
+            if self.is_hidden_type_name(name) {
+                self.report_type_not_visible(name, expr.span);
+            } else {
+                self.report_unknown_type(name, expr, context);
             }
-            self.validate_and_resolve_type_definition(name, def, resolved_args, expr, context)
-        } else {
-            self.report_unknown_type(name, expr, context);
-            Self::error_type()
+            return Self::error_type();
+        };
+        // Types used purely as annotations (e.g. `private trait Foo` in a
+        // parameter position) never go through the identifier-lookup path
+        // that enforces `check_visibility`. We close that gap here: if the
+        // type name also has a symbol-table entry (all user-defined types do)
+        // we check its top-level visibility now.
+        if !self.is_type_symbol_visible(name) {
+            self.report_type_not_visible(name, expr.span);
+            return Self::error_type();
         }
+        self.validate_and_resolve_type_definition(&identity, def, resolved_args, expr, context)
+    }
+
+    /// Whether the symbol-table entry under the type name `name`, if there is
+    /// one, is visible from the module being checked. A name the module
+    /// resolves to a type it keeps private itself is visible whoever's entry
+    /// the name holds.
+    fn is_type_symbol_visible(&self, name: &str) -> bool {
+        self.written_type_identity(name) != name
+            || self
+                .type_table
+                .global_scope
+                .get(name)
+                .is_none_or(|sym| self.check_visibility(&sym.visibility, &sym.module))
+    }
+
+    /// Whether `name` names a type, through its symbol-table entry, that the
+    /// module being checked may not see: one another module keeps private is
+    /// registered under that module's identity, which `name` never resolves to.
+    fn is_hidden_type_name(&self, name: &str) -> bool {
+        self.type_table.global_scope.get(name).is_some_and(|sym| {
+            matches!(sym.ty.kind, TypeKind::Meta(_))
+                && !self.check_visibility(&sym.visibility, &sym.module)
+        })
+    }
+
+    fn report_type_not_visible(&mut self, name: &str, span: Span) {
+        self.report_error(
+            DiagnosticCode::TypNameNotVisible,
+            format!("Type '{}' is not visible", name),
+            span,
+        );
     }
 
     /// Resolves built-in type aliases like Map<K,V>, List<T>, Set<T>, Range<T>.

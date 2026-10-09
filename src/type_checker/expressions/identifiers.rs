@@ -89,10 +89,12 @@ impl TypeChecker {
         }
 
         if let Some(ty) = self.try_variable_lookup(name, span, expr_id, context) {
+            self.record_type_named_by(expr_id, &ty);
             return ty;
         }
 
         if let Some(ty) = self.try_type_constructor(name) {
+            self.record_type_named_by(expr_id, &ty);
             return ty;
         }
 
@@ -253,7 +255,9 @@ impl TypeChecker {
         if let Some(info) = info_opt {
             self.record_callee(expr_id, name, &info);
             if !self.check_visibility(&info.visibility, &info.module) {
-                let kind = if self.type_table.global_type_definitions.contains_key(name) {
+                let names_a_type = matches!(info.ty.kind, TypeKind::Meta(_))
+                    || self.type_table.global_type_definitions.contains_key(name);
+                let kind = if names_a_type {
                     "Type"
                 } else if matches!(info.ty.kind, TypeKind::Function(_)) {
                     "Function"
@@ -287,8 +291,9 @@ impl TypeChecker {
 
     fn try_type_constructor(&self, name: &str) -> Option<Type> {
         if self.is_type_visible(name) {
+            let identity = self.written_type_identity(name).to_string();
             Some(ast_factory::make_type(TypeKind::Meta(Box::new(
-                ast_factory::make_type(TypeKind::Custom(name.to_string(), None)),
+                ast_factory::make_type(TypeKind::Custom(identity, None)),
             ))))
         } else {
             None

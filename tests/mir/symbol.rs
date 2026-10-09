@@ -895,3 +895,61 @@ fn a_definition_claimed_over_a_claim_without_one_is_refused() {
         DiagnosticCode::MirSymbolCollision
     );
 }
+
+/// The identity of a type the module `local.k.a` keeps private.
+const PRIVATE_HELPER: &str = "local.k.a.Helper";
+
+#[test]
+fn a_method_of_a_module_private_type_carries_the_module_in_its_root() {
+    assert_eq!(
+        Symbol::method(PRIVATE_HELPER, &[], "v", &[]).link_name(),
+        "miri$local$k$a.Helper.v"
+    );
+    assert_eq!(
+        Symbol::vtable(PRIVATE_HELPER, &[]).link_name(),
+        "miri$local$k$a.Helper.$vtable"
+    );
+    assert_eq!(
+        Symbol::type_thunk(ThunkKind::Drop, PRIVATE_HELPER, &[]).link_name(),
+        "miri$local$k$a.Helper.$drop"
+    );
+}
+
+#[test]
+fn private_types_of_one_name_in_two_modules_link_apart() {
+    let names = [PRIVATE_HELPER, "local.k.b.Helper", "Helper"]
+        .map(|owner| Symbol::method(owner, &[], "v", &[]).link_name());
+    assert_ne!(names[0], names[1]);
+    assert_ne!(names[0], names[2]);
+    assert_ne!(names[1], names[2]);
+}
+
+#[test]
+fn a_method_of_a_module_private_type_is_no_function_of_the_module() {
+    let function = Symbol::function(&module("local.k.a"), "Helper", &[]).link_name();
+    let method = Symbol::method(PRIVATE_HELPER, &[], "v", &[]).link_name();
+    assert_eq!(function, "miri$local$k$a.Helper");
+    assert_ne!(function, method);
+}
+
+#[test]
+fn a_module_private_type_argument_spells_no_separator_inside_its_token() {
+    let helper = ty(TypeKind::Custom(PRIVATE_HELPER.to_string(), None));
+    let symbol = Symbol::method("List", &[helper], "push", &[]);
+    assert_eq!(symbol.link_name(), "miri.List$4q_local_k_a_Helper.push");
+}
+
+#[test]
+fn a_wgsl_name_of_a_module_private_owner_is_identifier_only() {
+    let names = [
+        Symbol::method(PRIVATE_HELPER, &[], "v", &[]).wgsl_name(),
+        Symbol::vtable(PRIVATE_HELPER, &[]).wgsl_name(),
+        Symbol::type_thunk(ThunkKind::Drop, PRIVATE_HELPER, &[]).wgsl_name(),
+    ];
+    for name in names {
+        assert!(
+            name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "{name} is not an identifier"
+        );
+    }
+}

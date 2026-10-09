@@ -58,10 +58,13 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     // type-checker cache by id collides with any other id=0 expression that
     // happens to have been stored last, so we trust the inner type instead.
     if let ExpressionKind::Type(t, is_nullable) = &expr.node {
+        let written = tc
+            .qualified_written_type(expr)
+            .unwrap_or_else(|| (**t).clone());
         if *is_nullable {
-            return Type::new(TypeKind::Option(t.clone()), expr.span);
+            return Type::new(TypeKind::Option(Box::new(written)), expr.span);
         }
-        return *t.clone();
+        return written;
     }
 
     // Tripwire: any non-Type synthesized expression that reaches the cache

@@ -15,7 +15,8 @@
 //! ```text
 //! link name   := "main" | c-name | compiler-datum | miri-symbol
 //! miri-symbol := root [ "." residency ] "." definition
-//! root        := "miri" ( "$" identifier )*             the module declaring a function
+//! root        := "miri" ( "$" identifier )*             the module declaring a function,
+//!                                                       or keeping an owner private
 //! residency   := "$gpu" ( "$p" position "h" handle )+
 //! definition  := item                                  a function
 //!              | item "." item                         a method of an owner
@@ -41,10 +42,15 @@
 //! `helper` of `local.shapes.circle` is `miri$local$shapes$circle.helper` and
 //! the `lattice_unit` of `system.math` is `miri$system$math.lattice_unit`. Two
 //! modules may each declare a function of one name, and a call runs the one
-//! its name resolved to where the call is written. Every other definition —
-//! a type, its methods and thunks, a closure — is linked under the bare
-//! `miri` root: type names are one namespace across modules, and a closure is
-//! named by the AST node it is written at, which no other node shares.
+//! its name resolved to where the call is written. A type a module keeps
+//! private is identified by that module's path and its name
+//! (`local.shapes.Helper`, see [`crate::ast::type_identity`]), and its
+//! methods, vtable and thunks put the module in the root the same way: the
+//! `v` of that `Helper` is `miri$local$shapes.Helper.v`, so two modules may
+//! each keep a private type of one name. Every other definition — any other
+//! type, its methods and thunks, a closure — is linked under the bare `miri`
+//! root: the other type names are one namespace across modules, and a closure
+//! is named by the AST node it is written at, which no other node shares.
 //!
 //! The program's entry point is `main` and a `runtime` function is its C name,
 //! verbatim, because code outside this compilation calls them by those names.
@@ -71,11 +77,16 @@
 //! function, a method, a vtable or a declared type's thunk, told apart by what
 //! follows its first `.`; a `$` marker for the rest, each of which either ends
 //! there or takes the whole remainder as the one name it carries. Only a
-//! function's root carries module segments, so a function of module `a`
-//! (`miri$a.b`) is never the method `b` of a type `a` (`miri.a.b`), a function
-//! of the program is never one of a module (`miri.b`), and a module path is
-//! never read as a function named after one of its segments (`miri$a$b.c`
-//! against `miri$a.b`). Every Miri symbol contains a `.`, and neither `main`
+//! function's root and the root of a module-private type's method, vtable or
+//! thunk carry module segments. Those name the type in a segment of their own
+//! after the root and something after it, where a function's name is the one
+//! segment there, so a function of module `a` (`miri$a.b`) is never the
+//! method `b` of a type `a` (`miri.a.b`) or anything of a type `b` module `a`
+//! keeps private (`miri$a.b.c`), a function of the program is never one of a
+//! module (`miri.b`), and a module path is never read as a function named
+//! after one of its segments (`miri$a$b.c` against `miri$a.b`). The identity
+//! a private type takes as an argument is spelled by a token of its own (see
+//! [`type_kind_to_mangle_str`]), which holds no `.`. Every Miri symbol contains a `.`, and neither `main`
 //! nor a C name does, so no definition can be linked under the name of the
 //! entry point or of a function the runtime library or the C library exports.
 //!
@@ -105,6 +116,7 @@ pub use table::{Claim, ClaimRefusal, Namespace, SymbolCollision, SymbolTable};
 use std::borrow::Cow;
 use std::fmt::{self, Write};
 
+use crate::ast::type_identity;
 use crate::ast::types::Type;
 use crate::mir::body::DeviceHandleId;
 use crate::type_checker::ModuleId;
@@ -490,22 +502,34 @@ impl Symbol {
         wgsl::Wgsl(self).to_string()
     }
 
-    /// The module a top-level function is declared in; empty for every
-    /// other symbol.
-    fn module(&self) -> &[String] {
-        match &self.kind {
-            SymbolKind::Function { module, .. } => module.path(),
-            SymbolKind::Method { .. }
-            | SymbolKind::Vtable { .. }
-            | SymbolKind::Closure { .. }
+    /// The identifiers of the module a top-level function is declared in, or
+    /// that keeps the type a method, vtable or thunk belongs to private; none
+    /// for every other symbol.
+    fn module(&self) -> impl Iterator<Item = &str> {
+        let (function_module, type_owner): (&[String], Option<&str>) = match &self.kind {
+            SymbolKind::Function { module, .. } => (module.path(), None),
+            SymbolKind::Method { owner: name, .. }
+            | SymbolKind::Vtable { class: name, .. }
+            | SymbolKind::TypeThunk {
+                subject: ThunkSubject::Named { name, .. },
+                ..
+            } => (&[], Some(name)),
+            SymbolKind::Closure { .. }
             | SymbolKind::GpuKernel { .. }
             | SymbolKind::Runtime(_)
             | SymbolKind::Entry
-            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::TypeThunk {
+                subject: ThunkSubject::Structural(_),
+                ..
+            }
             | SymbolKind::ClosureDestructor(_)
             | SymbolKind::KernelDatum { .. }
-            | SymbolKind::StringLiteral { .. } => &[],
-        }
+            | SymbolKind::StringLiteral { .. } => (&[], None),
+        };
+        function_module
+            .iter()
+            .map(String::as_str)
+            .chain(type_owner.into_iter().flat_map(type_identity::module_path))
     }
 
     fn of(kind: SymbolKind) -> Self {
@@ -540,8 +564,12 @@ impl fmt::Display for Symbol {
 }
 
 /// The first segment of a Miri symbol: `miri`, then each identifier of the
-/// module a function is declared in: `miri$local$shapes`.
-fn write_root(f: &mut fmt::Formatter<'_>, module: &[String]) -> fmt::Result {
+/// module a function is declared in, or that keeps the type a definition
+/// belongs to private: `miri$local$shapes`.
+fn write_root<'m>(
+    f: &mut fmt::Formatter<'_>,
+    module: impl Iterator<Item = &'m str>,
+) -> fmt::Result {
     f.write_str(ROOT)?;
     write_arguments(f, module)
 }
@@ -557,12 +585,12 @@ fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Resul
             method,
             method_args,
         } => {
-            write_item(f, owner, owner_args)?;
+            write_type_item(f, owner, owner_args)?;
             f.write_char(SEGMENT_SEPARATOR)?;
             write_item(f, method, method_args)
         }
         SymbolKind::Vtable { class, args } => {
-            write_item(f, class, args)?;
+            write_type_item(f, class, args)?;
             write_marker_segment(f, VTABLE_MARKER)
         }
         SymbolKind::Closure {
@@ -580,6 +608,12 @@ fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Resul
         | SymbolKind::KernelDatum { .. }
         | SymbolKind::StringLiteral { .. } => wgsl::write_kind(f, kind),
     }
+}
+
+/// A declared type's name, without the module path the root already carries,
+/// followed by each of its argument tokens.
+fn write_type_item(f: &mut fmt::Formatter<'_>, identity: &str, args: &[Token]) -> fmt::Result {
+    write_item(f, type_identity::source_name(identity), args)
 }
 
 /// An identifier followed by each of its argument tokens: `pick$int$String`.
@@ -617,7 +651,7 @@ fn write_closure(
 fn write_thunk(f: &mut fmt::Formatter<'_>, kind: ThunkKind, subject: &ThunkSubject) -> fmt::Result {
     match subject {
         ThunkSubject::Named { name, args } => {
-            write_item(f, name, args)?;
+            write_type_item(f, name, args)?;
             write_marker_segment(f, thunk_marker(kind))
         }
         ThunkSubject::Structural(encoding) => write!(
@@ -640,9 +674,12 @@ fn thunk_marker(kind: ThunkKind) -> &'static str {
 }
 
 /// Each of `segments` after a `$`: a definition's argument tokens, or the
-/// identifiers of the module a function is declared in.
-fn write_arguments(f: &mut fmt::Formatter<'_>, segments: &[impl AsRef<str>]) -> fmt::Result {
-    segments.iter().try_for_each(|segment| {
+/// identifiers of the module a root names.
+fn write_arguments<S: AsRef<str>>(
+    f: &mut fmt::Formatter<'_>,
+    segments: impl IntoIterator<Item = S>,
+) -> fmt::Result {
+    segments.into_iter().try_for_each(|segment| {
         f.write_char(MARKER)?;
         f.write_str(segment.as_ref())
     })

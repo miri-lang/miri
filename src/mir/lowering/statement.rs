@@ -232,7 +232,7 @@ fn collect_generics(generics: Option<&Vec<GenericDefinition>>) -> Vec<String> {
 }
 
 fn lower_struct_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
-    let Some(name) = extract_identifier(name_expr) else {
+    let Some(name) = ctx.type_checker.type_identity_named_by(name_expr) else {
         return;
     };
     let Some(TypeDefinition::Struct(def)) = ctx
@@ -296,7 +296,7 @@ fn lower_enum_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
 }
 
 fn lower_class_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
-    let Some(name) = extract_identifier(name_expr) else {
+    let Some(name) = ctx.type_checker.type_identity_named_by(name_expr) else {
         return;
     };
     let Some(TypeDefinition::Class(def)) = ctx

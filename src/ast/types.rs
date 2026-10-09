@@ -858,7 +858,9 @@ fn fmt_custom(f: &mut fmt::Formatter<'_>, name: &str, args: Option<&[Expression]
             return write!(f, "{}", value.node);
         }
     }
-    f.write_str(name)?;
+    // A type another module keeps private is shown by the name its
+    // declaration writes, which is the name the reader knows it by.
+    f.write_str(crate::ast::type_identity::source_name(name))?;
     let Some(args) = args else { return Ok(()) };
     let (open, close) = if BuiltinCollectionKind::from_name(name).is_some() {
         ('(', ')')

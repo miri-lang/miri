@@ -75,6 +75,16 @@ pub struct ModuleLoader {
     /// A span is an offset into the file that holds it, so a diagnostic raised
     /// on an imported body after checking is rendered against this file.
     pub declaration_sources: HashMap<usize, Arc<(String, String)>>,
+    /// For each imported module, the identity each type it keeps private is
+    /// registered under, by the name the module writes it as. A name written
+    /// in that module resolves here before anywhere else.
+    pub private_type_identities: HashMap<String, HashMap<String, String>>,
+    /// The qualified identity each expression naming a type a module keeps
+    /// private resolved to — the name its declaration writes, or a written
+    /// type — keyed by the expression's id, for the stages that read the
+    /// syntax again after checking. An expression naming any other type names
+    /// it by its identity already.
+    pub qualified_type_names: HashMap<usize, String>,
 }
 
 impl Default for ModuleLoader {
@@ -100,7 +110,19 @@ impl ModuleLoader {
             module_symbols: HashMap::new(),
             pre_registered_types: HashSet::new(),
             declaration_sources: HashMap::new(),
+            private_type_identities: HashMap::new(),
+            qualified_type_names: HashMap::new(),
         }
+    }
+
+    /// The identity the type written as `name` in the module being checked
+    /// resolves to: the module's own private type of that name when it keeps
+    /// one, otherwise the name itself.
+    pub fn type_identity<'a>(&'a self, name: &'a str) -> &'a str {
+        self.private_type_identities
+            .get(&self.current_module)
+            .and_then(|identities| identities.get(name))
+            .map_or(name, String::as_str)
     }
 
     /// Names the module at `module_path` exposes that the program declared

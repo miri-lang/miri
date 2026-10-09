@@ -112,7 +112,7 @@ impl TypeChecker {
             is_abstract,
             ..
         } = class_data;
-        let name = self.check_class_extract_and_validate_name(name_expr, span)?;
+        let name = self.check_class_extract_and_validate_name(name_expr, visibility, span)?;
         self.modules.pre_registered_types.remove(&name);
 
         let generic_defs = generics
@@ -249,11 +249,12 @@ impl TypeChecker {
         ) {
             return;
         }
-        let Ok(supertype) = self.extract_type_name(clause) else {
+        let Ok(identity) = self.extract_type_identity(clause) else {
             return;
         };
+        let supertype = crate::ast::type_identity::source_name(identity);
         let parameters: Vec<&str> = self
-            .generics_of(supertype)
+            .generics_of(identity)
             .iter()
             .map(|parameter| parameter.name.as_str())
             .collect();
@@ -278,18 +279,16 @@ impl TypeChecker {
     fn check_class_extract_and_validate_name(
         &mut self,
         name_expr: &Expression,
+        visibility: &MemberVisibility,
         span: Span,
     ) -> Option<String> {
-        let name = match self.extract_type_name(name_expr) {
-            Ok(n) => n.to_string(),
-            Err(_) => {
-                self.report_error(
-                    DiagnosticCode::TypClassDefinition,
-                    "Invalid class name".to_string(),
-                    name_expr.span,
-                );
-                return None;
-            }
+        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
+            self.report_error(
+                DiagnosticCode::TypClassDefinition,
+                "Invalid class name".to_string(),
+                name_expr.span,
+            );
+            return None;
         };
         if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
             let is_placeholder = matches!(existing, TypeDefinition::Class(_))
@@ -297,7 +296,10 @@ impl TypeChecker {
             if !is_placeholder {
                 self.report_error(
                     DiagnosticCode::TypTypeAlreadyDefined,
-                    format!("Type '{}' is already defined", name),
+                    format!(
+                        "Type '{}' is already defined",
+                        crate::ast::type_identity::source_name(&name)
+                    ),
                     span,
                 );
                 return None;
@@ -339,7 +341,9 @@ impl TypeChecker {
         let Ok(name) = self.extract_name(base_name) else {
             return;
         };
-        let Some(TypeDefinition::Class(base)) = self.type_table.global_type_definitions.get(name)
+        let identity = self.written_type_identity(name);
+        let Some(TypeDefinition::Class(base)) =
+            self.type_table.global_type_definitions.get(identity)
         else {
             return;
         };
@@ -454,9 +458,10 @@ impl TypeChecker {
             None,
         )))));
 
+        let written_name = crate::ast::type_identity::source_name(name);
         if context.scopes.len() == 2 {
             self.type_table.global_scope.insert(
-                name.to_string(),
+                written_name.to_string(),
                 SymbolInfo::new(
                     class_type_meta.clone(),
                     false,
@@ -469,7 +474,7 @@ impl TypeChecker {
         }
 
         context.define(
-            name.to_string(),
+            written_name.to_string(),
             SymbolInfo::new(
                 class_type_meta,
                 false,
@@ -490,13 +495,14 @@ impl TypeChecker {
         if let Some(base_expr) = base_class {
             match self.extract_type_name(base_expr) {
                 Ok(base_name) => {
+                    let identity = self.written_type_identity(base_name).to_string();
                     if !self.is_type_visible(base_name) {
                         self.report_error(
                             DiagnosticCode::TypClassInheritance,
                             format!("Base class '{}' is not defined", base_name),
                             base_expr.span,
                         );
-                    } else if let Some(def) = self.type_table.global_type_definitions.get(base_name)
+                    } else if let Some(def) = self.type_table.global_type_definitions.get(&identity)
                     {
                         if !matches!(def, TypeDefinition::Class(_)) {
                             let kind = match def {
@@ -518,7 +524,7 @@ impl TypeChecker {
                             );
                         }
                     }
-                    Some(base_name.to_string())
+                    Some(identity)
                 }
                 Err(_) => {
                     self.report_error(

@@ -59,6 +59,7 @@ mod operators;
 pub(crate) mod pattern_coverage;
 pub(crate) mod runtime_settled;
 pub mod statements;
+mod type_identities;
 pub(crate) mod type_set_shorthand;
 mod type_table;
 pub mod use_after_move;
@@ -648,8 +649,8 @@ impl TypeChecker {
             StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
                 self.shell_trait(name_expr, generics_expr.as_ref(), context);
             }
-            StatementKind::Struct(name_expr, generics_expr, _, _, _, _) => {
-                self.shell_struct(name_expr, generics_expr.as_ref(), context);
+            StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => {
+                self.shell_struct(name_expr, generics_expr.as_ref(), visibility, context);
             }
             StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
                 self.shell_enum(name_expr, generics_expr.as_ref(), context);
@@ -663,13 +664,13 @@ impl TypeChecker {
         class_data: &crate::ast::statement::ClassData,
         context: &mut Context,
     ) {
-        let Ok(name) = self.extract_type_name(&class_data.name) else {
+        let Some(name) = self.register_declared_identity(&class_data.name, &class_data.visibility)
+        else {
             return;
         };
-        if self.type_table.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(&name) {
             return;
         }
-        let name = name.to_string();
         let generics = class_data
             .generics
             .as_ref()
@@ -677,11 +678,11 @@ impl TypeChecker {
         let base_class_name: Option<String> = class_data
             .base_class
             .as_ref()
-            .and_then(|b| self.extract_type_name(b).ok().map(String::from));
+            .and_then(|b| self.extract_type_identity(b).ok().map(String::from));
         let trait_names: Vec<String> = class_data
             .traits
             .iter()
-            .filter_map(|t| self.extract_type_name(t).ok().map(String::from))
+            .filter_map(|t| self.extract_type_identity(t).ok().map(String::from))
             .collect();
         self.register_type_definition(
             name.clone(),
@@ -734,24 +735,25 @@ impl TypeChecker {
         &mut self,
         name_expr: &Expression,
         generics_expr: Option<&Vec<Expression>>,
+        visibility: &MemberVisibility,
         context: &mut Context,
     ) {
-        let Ok(name) = self.extract_type_name(name_expr) else {
+        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
             return;
         };
-        if self.type_table.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(&name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
         self.register_type_definition(
-            name.to_string(),
+            name.clone(),
             TypeDefinition::Struct(context::StructDefinition {
                 fields: vec![],
                 generics,
                 module: self.modules.current_module.clone(),
             }),
         );
-        self.modules.pre_registered_types.insert(name.to_string());
+        self.modules.pre_registered_types.insert(name);
     }
 
     fn shell_enum(
@@ -804,8 +806,8 @@ impl TypeChecker {
                 );
             }
             StatementKind::Class(class_data) => self.collect_class_decl(class_data, context),
-            StatementKind::Struct(name_expr, generics_expr, _, _, _, _) => {
-                self.collect_struct_decl(name_expr, generics_expr.as_ref(), context);
+            StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => {
+                self.shell_struct(name_expr, generics_expr.as_ref(), visibility, context);
             }
             StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
                 self.collect_enum_decl(name_expr, generics_expr.as_ref(), context);
@@ -942,15 +944,16 @@ impl TypeChecker {
         class_data: &crate::ast::statement::ClassData,
         context: &mut Context,
     ) {
-        let Ok(name) = self.extract_type_name(&class_data.name) else {
+        let Some(name) = self.register_declared_identity(&class_data.name, &class_data.visibility)
+        else {
             return;
         };
-        let is_pre_shell = self.modules.pre_registered_types.contains(name)
+        let is_pre_shell = self.modules.pre_registered_types.contains(&name)
             && matches!(
-                self.type_table.global_type_definitions.get(name),
+                self.type_table.global_type_definitions.get(&name),
                 Some(TypeDefinition::Class(c)) if c.methods.is_empty()
             );
-        if self.type_table.global_type_definitions.contains_key(name) && !is_pre_shell {
+        if self.type_table.global_type_definitions.contains_key(&name) && !is_pre_shell {
             return;
         }
         // This is a provisional declaration, made so a module importing this
@@ -959,7 +962,7 @@ impl TypeChecker {
         // is reported here: `define_class` resolves every member again, with
         // the module's imports in scope, and reports what still fails.
         let prev = std::mem::replace(&mut self.suppress_diagnostics, true);
-        self.collect_provisional_class(name.to_string(), class_data, context);
+        self.collect_provisional_class(name, class_data, context);
         self.suppress_diagnostics = prev;
     }
 
@@ -976,11 +979,11 @@ impl TypeChecker {
         let base_class_name: Option<String> = class_data
             .base_class
             .as_ref()
-            .and_then(|b| self.extract_type_name(b).ok().map(String::from));
+            .and_then(|b| self.extract_type_identity(b).ok().map(String::from));
         let trait_names: Vec<String> = class_data
             .traits
             .iter()
-            .filter_map(|t| self.extract_type_name(t).ok().map(String::from))
+            .filter_map(|t| self.extract_type_identity(t).ok().map(String::from))
             .collect();
 
         self.register_class_shell(&name, &generics, &base_class_name, &trait_names, class_data);
@@ -1117,30 +1120,6 @@ impl TypeChecker {
             );
         }
         methods
-    }
-
-    fn collect_struct_decl(
-        &mut self,
-        name_expr: &Expression,
-        generics_expr: Option<&Vec<Expression>>,
-        context: &mut Context,
-    ) {
-        let Ok(name) = self.extract_type_name(name_expr) else {
-            return;
-        };
-        if self.type_table.global_type_definitions.contains_key(name) {
-            return;
-        }
-        let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
-        self.register_type_definition(
-            name.to_string(),
-            TypeDefinition::Struct(context::StructDefinition {
-                fields: vec![],
-                generics,
-                module: self.modules.current_module.clone(),
-            }),
-        );
-        self.modules.pre_registered_types.insert(name.to_string());
     }
 
     fn collect_enum_decl(
