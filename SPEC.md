@@ -540,6 +540,8 @@ fn main()
     // internal_detail()       // Error — private to its module
 ```
 
+A private type (class, struct, enum or trait) belongs to the module that declares it. Two modules may each declare a private type of the same name, and a program may declare a type of a name an imported module keeps private; each name refers to its own module's type. A private type's values never leave its module: a caller that would receive one — as a function's return or parameter, a field, a type argument, a closure type, `T?`, or a value bound by a pattern — is refused with "Type 'Helper' is not visible", just as if it had named the type itself.
+
 ### Namespace Collision Detection
 
 Importing two modules that export the same name produces a compile error with suggestions for resolution (e.g., using aliased imports).
