@@ -685,7 +685,21 @@ impl TypeChecker {
     ///
     /// Handles tuple indexing, struct/class field access, enum variant access,
     /// option/result built-in methods, and inheritance chain lookup.
+    /// The type of the member `prop` of `obj`, refused where it names a type
+    /// another module keeps private: such a type never leaves its module,
+    /// whether a field holds it or a method hands it back.
     pub(crate) fn infer_member(
+        &mut self,
+        obj: &Expression,
+        prop: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let member = self.infer_member_type(obj, prop, span, context);
+        self.refuse_hidden_private_type(member, span)
+    }
+
+    fn infer_member_type(
         &mut self,
         obj: &Expression,
         prop: &Expression,
@@ -1324,7 +1338,11 @@ impl TypeChecker {
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
             self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Type '{}' has no field '{}'", type_name, prop_name),
+                format!(
+                    "Type '{}' has no field '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(type_name),
+                    prop_name
+                ),
                 span,
                 format!("Did you mean '{}'?", suggestion),
                 RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
@@ -1332,7 +1350,11 @@ impl TypeChecker {
         } else {
             self.report_error(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Type '{}' has no field '{}'", type_name, prop_name),
+                format!(
+                    "Type '{}' has no field '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(type_name),
+                    prop_name
+                ),
                 span,
             );
         }
@@ -1488,7 +1510,11 @@ impl TypeChecker {
                         DiagnosticCode::TypNameNotVisible,
                         format!(
                             "Field '{}' of class '{}' is {:?} and cannot be accessed from here",
-                            prop_name, search_class_def.name, field_info.visibility
+                            prop_name,
+                            crate::type_checker::diagnostics::shown_type_name(
+                                &search_class_def.name
+                            ),
+                            field_info.visibility
                         ),
                         span,
                     );
@@ -1625,7 +1651,11 @@ impl TypeChecker {
         {
             self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Type '{}' has no field or method '{}'", name, prop_name),
+                format!(
+                    "Type '{}' has no field or method '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    prop_name
+                ),
                 span,
                 format!("Did you mean '{}'?", suggestion),
                 RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
@@ -1636,7 +1666,11 @@ impl TypeChecker {
             name,
             self.type_is_iterable(name, context),
         ) {
-            let message = format!("Type '{}' has no field or method '{}'", name, prop_name);
+            let message = format!(
+                "Type '{}' has no field or method '{}'",
+                crate::type_checker::diagnostics::shown_type_name(name),
+                prop_name
+            );
             match self.key_accessor_repair(name, prop_name, type_args, span) {
                 Some(repair) => self.report_error_with_help_and_repair(
                     DiagnosticCode::TypFieldNotFound,
@@ -1655,7 +1689,11 @@ impl TypeChecker {
         } else {
             self.report_error(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Type '{}' has no field or method '{}'", name, prop_name),
+                format!(
+                    "Type '{}' has no field or method '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    prop_name
+                ),
                 span,
             );
         }
@@ -1897,7 +1935,11 @@ impl TypeChecker {
         if let Some(suggestion) = find_best_match(prop_name, &all_methods) {
             self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Trait '{}' has no method '{}'", name, prop_name),
+                format!(
+                    "Trait '{}' has no method '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    prop_name
+                ),
                 span,
                 format!("Did you mean '{}'?", suggestion),
                 RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
@@ -1905,7 +1947,11 @@ impl TypeChecker {
         } else {
             self.report_error(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Trait '{}' has no method '{}'", name, prop_name),
+                format!(
+                    "Trait '{}' has no method '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    prop_name
+                ),
                 span,
             );
         }
@@ -1962,7 +2008,11 @@ impl TypeChecker {
         let Some(method_info) = enum_def.methods.get(prop_name) else {
             self.report_error(
                 DiagnosticCode::TypFieldNotFound,
-                format!("Enum '{}' has no method '{}'", name, prop_name),
+                format!(
+                    "Enum '{}' has no method '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    prop_name
+                ),
                 span,
             );
             return make_type(TypeKind::Error);
@@ -2256,7 +2306,11 @@ impl TypeChecker {
         if let Some(suggestion) = find_best_match(prop_name, &candidates) {
             self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypEnumVariant,
-                format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
+                format!(
+                    "Enum '{}' has no variant '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(enum_name),
+                    prop_name
+                ),
                 span,
                 format!("Did you mean '{}'?", suggestion),
                 RepairRequest::rename(span.start, span.end, prop_name, &suggestion),
@@ -2264,7 +2318,11 @@ impl TypeChecker {
         } else {
             self.report_error(
                 DiagnosticCode::TypEnumVariant,
-                format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
+                format!(
+                    "Enum '{}' has no variant '{}'",
+                    crate::type_checker::diagnostics::shown_type_name(enum_name),
+                    prop_name
+                ),
                 span,
             );
         }

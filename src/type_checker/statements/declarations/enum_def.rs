@@ -51,7 +51,7 @@ impl TypeChecker {
         declaration: EnumDeclaration<'a>,
         context: &mut Context,
     ) -> Option<EnumBodies<'a>> {
-        let name = self.enum_name(declaration.name)?;
+        let name = self.enum_name(declaration.name, declaration.visibility)?;
         if !self.check_enum_not_duplicate(&name, declaration.name) {
             return None;
         }
@@ -125,9 +125,13 @@ impl TypeChecker {
         context.exit_scope();
     }
 
-    fn enum_name(&mut self, name_expr: &Expression) -> Option<String> {
-        if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-            return Some(n.clone());
+    fn enum_name(
+        &mut self,
+        name_expr: &Expression,
+        visibility: &MemberVisibility,
+    ) -> Option<String> {
+        if let ExpressionKind::Identifier(..) = &name_expr.node {
+            return self.register_declared_identity(name_expr, visibility);
         }
         self.report_error(
             DiagnosticCode::TypEnumDefinition,
@@ -147,7 +151,10 @@ impl TypeChecker {
             if !is_placeholder {
                 self.report_error(
                     DiagnosticCode::TypTypeAlreadyDefined,
-                    format!("Type '{}' is already defined", name),
+                    format!(
+                        "Type '{}' is already defined",
+                        crate::type_checker::diagnostics::shown_type_name(name)
+                    ),
                     name_expr.span,
                 );
                 return false;
@@ -313,7 +320,6 @@ impl TypeChecker {
             name.to_string(),
             None,
         )))));
-
         if context.scopes.len() == 2 {
             self.type_table.global_scope.insert(
                 name.to_string(),

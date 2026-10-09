@@ -603,10 +603,13 @@ fn try_lower_enum_variant(
     let ExpressionKind::Member(enum_expr, variant_expr) = &func.node else {
         return Ok(None);
     };
-    let ExpressionKind::Identifier(type_name, _) = &enum_expr.node else {
+    let ExpressionKind::Identifier(..) = &enum_expr.node else {
         return Ok(None);
     };
     let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node else {
+        return Ok(None);
+    };
+    let Some(type_name) = ctx.type_checker.type_identity_named_by(enum_expr) else {
         return Ok(None);
     };
     let Some(discriminant) = enum_call_discriminant(ctx, type_name, variant_name) else {

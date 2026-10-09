@@ -177,7 +177,7 @@ impl TypeChecker {
                     DiagnosticCode::TypTypeAlreadyDefined,
                     format!(
                         "Type '{}' is already defined",
-                        crate::ast::type_identity::source_name(name)
+                        crate::type_checker::diagnostics::shown_type_name(name)
                     ),
                     name_expr.span,
                 );
@@ -278,10 +278,9 @@ impl TypeChecker {
         }
 
         let struct_type = make_type(TypeKind::Custom(name.to_string(), None));
-        let written_name = crate::ast::type_identity::source_name(name);
         if context.scopes.len() == 1 {
             self.type_table.global_scope.insert(
-                written_name.to_string(),
+                name.to_string(),
                 SymbolInfo::new(
                     make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     false,
@@ -294,7 +293,7 @@ impl TypeChecker {
         }
 
         context.define(
-            written_name.to_string(),
+            name.to_string(),
             SymbolInfo::new(
                 make_type(TypeKind::Meta(Box::new(struct_type))),
                 false,

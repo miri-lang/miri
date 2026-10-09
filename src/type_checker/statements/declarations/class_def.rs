@@ -252,7 +252,7 @@ impl TypeChecker {
         let Ok(identity) = self.extract_type_identity(clause) else {
             return;
         };
-        let supertype = crate::ast::type_identity::source_name(identity);
+        let supertype = crate::type_checker::diagnostics::shown_type_name(identity);
         let parameters: Vec<&str> = self
             .generics_of(identity)
             .iter()
@@ -298,7 +298,7 @@ impl TypeChecker {
                     DiagnosticCode::TypTypeAlreadyDefined,
                     format!(
                         "Type '{}' is already defined",
-                        crate::ast::type_identity::source_name(&name)
+                        crate::type_checker::diagnostics::shown_type_name(&name)
                     ),
                     span,
                 );
@@ -458,10 +458,9 @@ impl TypeChecker {
             None,
         )))));
 
-        let written_name = crate::ast::type_identity::source_name(name);
         if context.scopes.len() == 2 {
             self.type_table.global_scope.insert(
-                written_name.to_string(),
+                name.to_string(),
                 SymbolInfo::new(
                     class_type_meta.clone(),
                     false,
@@ -474,7 +473,7 @@ impl TypeChecker {
         }
 
         context.define(
-            written_name.to_string(),
+            name.to_string(),
             SymbolInfo::new(
                 class_type_meta,
                 false,
@@ -636,13 +635,14 @@ impl TypeChecker {
         let mut trait_direct_args: HashMap<String, Vec<Type>> = HashMap::new();
         for trait_expr in traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
+                let identity = self.written_type_identity(trait_name).to_string();
                 if !self.is_type_visible(trait_name) {
                     self.report_error(
                         DiagnosticCode::TypTraitDefinition,
                         format!("Trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
-                } else if let Some(def) = self.type_table.global_type_definitions.get(trait_name) {
+                } else if let Some(def) = self.type_table.global_type_definitions.get(&identity) {
                     if !matches!(def, TypeDefinition::Trait(_)) {
                         let kind = match def {
                             TypeDefinition::Class(_) => "a class",
@@ -668,9 +668,9 @@ impl TypeChecker {
                         .iter()
                         .map(|arg| self.resolve_type_expression(arg, context))
                         .collect();
-                    trait_direct_args.insert(trait_name.to_string(), resolved_args);
+                    trait_direct_args.insert(identity.clone(), resolved_args);
                 }
-                trait_names.push(trait_name.to_string());
+                trait_names.push(identity);
             }
         }
         (trait_names, trait_direct_args)
@@ -1307,7 +1307,9 @@ impl TypeChecker {
                 ) {
                     refusals.push(format!(
                         "Class '{}' must implement abstract method '{}' from class '{}'",
-                        lineage.name, method_name, declaring
+                        crate::type_checker::diagnostics::shown_type_name(lineage.name),
+                        method_name,
+                        crate::type_checker::diagnostics::shown_type_name(declaring)
                     ));
                 }
             }
@@ -1372,7 +1374,9 @@ impl TypeChecker {
                 DiagnosticCode::TypTraitDefinition,
                 format!(
                     "Class '{}' must implement method '{}' from trait '{}'",
-                    name, method_name, origin_trait
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    method_name,
+                    crate::type_checker::diagnostics::shown_type_name(&origin_trait)
                 ),
                 name_expr.span,
             );
@@ -1383,7 +1387,10 @@ impl TypeChecker {
                 DiagnosticCode::TypTraitDefinition,
                 format!(
                     "Method '{}' in class '{}' does not match trait '{}' signature: expected {}",
-                    method_name, name, origin_trait, expected_sig
+                    method_name,
+                    crate::type_checker::diagnostics::shown_type_name(name),
+                    crate::type_checker::diagnostics::shown_type_name(&origin_trait),
+                    expected_sig
                 ),
                 name_expr.span,
             );
@@ -1533,15 +1540,15 @@ impl TypeChecker {
 
         if !params_match || !out_flags_match || !return_match {
             let expected = format!(
-                "fn {}({}) -> {:?}",
+                "fn {}({}) -> {}",
                 method_name,
                 method_info
                     .params
                     .iter()
-                    .map(|(n, t)| format!("{}: {:?}", n, substitute(t).kind))
+                    .map(|(n, t)| format!("{}: {}", n, substitute(t)))
                     .collect::<Vec<_>>()
                     .join(", "),
-                substitute(&method_info.return_type).kind
+                substitute(&method_info.return_type)
             );
             mismatched_methods.push((method_name.to_string(), origin_trait.to_string(), expected));
         }

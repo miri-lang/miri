@@ -2,7 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::RuntimeKind;
-use crate::ast::expression::ExpressionKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
 };
@@ -820,7 +819,7 @@ impl TraitDefaultBodies {
             let StatementKind::Trait(name_expr, _, _, methods, _) = &stmt.node else {
                 continue;
             };
-            let Some(trait_name) = Pipeline::identifier_name(name_expr) else {
+            let Some(trait_name) = result.type_checker.type_identity_named_by(name_expr) else {
                 continue;
             };
             for (member, method_stmt) in methods.iter().enumerate() {
@@ -1113,7 +1112,9 @@ fn settled_type_facts(
             .filter(|body| !body.is_gpu()),
     )
     .map(|facts| facts.withholding(pipeline_result.withheld_methods.clone()))
-    .map_err(|refusal| drop_instantiation_refusal(refusal, &pipeline_result.ast))
+    .map_err(|refusal| {
+        drop_instantiation_refusal(refusal, &pipeline_result.ast, &pipeline_result.type_checker)
+    })
 }
 
 /// The error a refused drop-instantiation closure is reported as: a field
@@ -1122,6 +1123,7 @@ fn settled_type_facts(
 fn drop_instantiation_refusal(
     refusal: mir::type_facts::DropInstantiationRefusal,
     ast: &Program,
+    type_checker: &TypeChecker,
 ) -> CompilerError {
     use mir::lowering::instantiation_limits as limits;
     match refusal {
@@ -1131,7 +1133,7 @@ fn drop_instantiation_refusal(
                 &args,
                 &limits::ExceededLimit::TypeDepth(depth),
                 &limits::Growth::default(),
-                class_declaration_span(ast, &name),
+                class_declaration_site(ast, type_checker, &name),
             ))
         }
         mir::type_facts::DropInstantiationRefusal::Unnameable { name, symbol } => {
@@ -1151,14 +1153,16 @@ struct InheritedCopy<'r> {
     compilation_ids: &'r mir::lowering::SharedCompilationIds,
 }
 
-/// Where the program declares `class`; the start of the file for a class it
-/// imports or does not declare.
-fn class_declaration_span(ast: &Program, class: &str) -> Span {
+/// Where the class `class_name` is declared, among the program's own
+/// statements and the imported ones; the start of the file when none declares
+/// it.
+fn class_declaration_site(ast: &Program, type_checker: &TypeChecker, class_name: &str) -> Span {
     ast.body
         .iter()
+        .chain(&type_checker.imported_statements)
         .find(|stmt| {
             matches!(&stmt.node, StatementKind::Class(class_data)
-                if Pipeline::identifier_name(&class_data.name) == Some(class))
+                if type_checker.type_identity_named_by(&class_data.name) == Some(class_name))
         })
         .map_or_else(Span::default, |stmt| stmt.span)
 }
@@ -1258,7 +1262,7 @@ fn expand_nested_generic_instantiations(
                         resolved.push(concrete_arg);
                     }
                     if resolved.len() == nested_args.len() && !resolved.is_empty() {
-                        let declared = class_declaration_span(ast, class_name);
+                        let declared = class_declaration_site(ast, type_checker, class_name);
                         discovered.push((nested_name.clone(), resolved, declared));
                     }
                 }
@@ -1662,15 +1666,6 @@ impl Pipeline {
         Ok((object_bytes, required_runtimes))
     }
 
-    /// Extract an identifier name from an expression, if it is a simple identifier.
-    fn identifier_name(expr: &crate::ast::Expression) -> Option<&str> {
-        if let ExpressionKind::Identifier(name, _) = &expr.node {
-            Some(name.as_str())
-        } else {
-            None
-        }
-    }
-
     fn mangle_method_name(class_name: &str, method_name: &str) -> String {
         mir::symbol::Symbol::method(class_name, &[], method_name, &[]).link_name()
     }
@@ -1977,7 +1972,7 @@ impl Pipeline {
                 Some((class_name, methods))
             }
             StatementKind::Enum(name_expr, Some(_), _, methods, _, _) => {
-                let enum_name = Self::identifier_name(name_expr)?;
+                let enum_name = result.type_checker.type_identity_named_by(name_expr)?;
                 let methods = methods
                     .iter()
                     .filter_map(|method_stmt| {
@@ -2745,7 +2740,8 @@ impl Pipeline {
                 ) => {
                     // Compile enum methods as `EnumName_methodName` using lower_class_method.
                     // Enum methods have no explicit `self` in their param list (like class methods).
-                    let Some(enum_name) = Self::identifier_name(name_expr) else {
+                    let Some(enum_name) = result.type_checker.type_identity_named_by(name_expr)
+                    else {
                         continue;
                     };
 
@@ -2884,7 +2880,8 @@ impl Pipeline {
                     _vis,
                     _attributes,
                 ) => {
-                    let Some(enum_name) = Self::identifier_name(name_expr) else {
+                    let Some(enum_name) = result.type_checker.type_identity_named_by(name_expr)
+                    else {
                         continue;
                     };
 
@@ -3205,7 +3202,7 @@ impl Pipeline {
         let definitions = result.type_checker.type_definitions();
         let self_type = Type::new(
             TypeKind::Custom(class_name.to_string(), None),
-            Self::class_declaration_site(result, class_name),
+            class_declaration_site(&result.ast, &result.type_checker, class_name),
         );
         let supertypes = result.type_checker.declaring_types_above(
             class_name,
@@ -3239,19 +3236,6 @@ impl Pipeline {
             Self::push_lowered_body(bodies, symbols, symbol, mir_body, lambdas)?;
         }
         Ok(())
-    }
-
-    /// Where the class `class_name` is declared.
-    fn class_declaration_site(result: &PipelineResult, class_name: &str) -> Span {
-        statements_with_sites(result)
-            .find_map(|(_, stmt)| {
-                let StatementKind::Class(class_data) = &stmt.node else {
-                    return None;
-                };
-                (result.type_checker.type_identity_named_by(&class_data.name) == Some(class_name))
-                    .then_some(stmt.span)
-            })
-            .unwrap_or_default()
     }
 
     /// Monomorphize generic functions: collect every generic function call the

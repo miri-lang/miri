@@ -85,6 +85,12 @@ pub struct ModuleLoader {
     /// syntax again after checking. An expression naming any other type names
     /// it by its identity already.
     pub qualified_type_names: HashMap<usize, String>,
+    /// Whether a qualified identity was recorded since the resolution of the
+    /// written type enclosing the current one began.
+    pub qualified_name_recorded: bool,
+    /// Each written type naming a type a module keeps private, with those
+    /// names spelled as identities, keyed by the type expression's id.
+    pub qualified_written_types: HashMap<usize, crate::ast::types::Type>,
 }
 
 impl Default for ModuleLoader {
@@ -112,6 +118,8 @@ impl ModuleLoader {
             declaration_sources: HashMap::new(),
             private_type_identities: HashMap::new(),
             qualified_type_names: HashMap::new(),
+            qualified_name_recorded: false,
+            qualified_written_types: HashMap::new(),
         }
     }
 
@@ -119,10 +127,33 @@ impl ModuleLoader {
     /// resolves to: the module's own private type of that name when it keeps
     /// one, otherwise the name itself.
     pub fn type_identity<'a>(&'a self, name: &'a str) -> &'a str {
+        self.private_identity(name).unwrap_or(name)
+    }
+
+    /// The identity of the type the module being checked keeps private
+    /// under `name`, if it keeps one.
+    pub fn private_identity(&self, name: &str) -> Option<&str> {
         self.private_type_identities
-            .get(&self.current_module)
-            .and_then(|identities| identities.get(name))
-            .map_or(name, String::as_str)
+            .get(&self.current_module)?
+            .get(name)
+            .map(String::as_str)
+    }
+
+    /// Whether some module other than the one being checked keeps a type
+    /// private under `name`, which this module therefore cannot see.
+    pub fn is_kept_private_elsewhere(&self, name: &str) -> bool {
+        self.private_type_identities
+            .iter()
+            .any(|(module, identities)| {
+                *module != self.current_module && identities.contains_key(name)
+            })
+    }
+
+    /// Whether the module at `module_path` keeps a type private under `name`.
+    pub fn keeps_private(&self, module_path: &str, name: &str) -> bool {
+        self.private_type_identities
+            .get(module_path)
+            .is_some_and(|identities| identities.contains_key(name))
     }
 
     /// Names the module at `module_path` exposes that the program declared

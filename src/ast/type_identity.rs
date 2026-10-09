@@ -19,12 +19,21 @@
 const SEPARATOR: &str = ".";
 
 /// The identity of the type declared as `name` in the module whose `use` path
-/// is `module`.
-pub fn qualified(module: &[String], name: &str) -> String {
-    let mut identity = module.join(SEPARATOR);
+/// is `module`, written as that path is: `local.k.a`.
+pub fn qualified(module: &str, name: &str) -> String {
+    let mut identity = String::with_capacity(module.len() + SEPARATOR.len() + name.len());
+    identity.push_str(module);
     identity.push_str(SEPARATOR);
     identity.push_str(name);
     identity
+}
+
+/// Whether the qualified `identity` names a type the module whose `use` path
+/// is `module` declares.
+pub fn is_declared_in(identity: &str, module: &str) -> bool {
+    identity
+        .rsplit_once(SEPARATOR)
+        .is_some_and(|(declaring, _)| declaring == module)
 }
 
 /// The name the declaration of the type `identity` writes.
@@ -53,13 +62,9 @@ pub fn is_qualified(identity: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn path(segments: &[&str]) -> Vec<String> {
-        segments.iter().map(|s| s.to_string()).collect()
-    }
-
     #[test]
     fn a_qualified_identity_reads_back_as_its_module_and_name() {
-        let identity = qualified(&path(&["local", "k", "a"]), "Helper");
+        let identity = qualified("local.k.a", "Helper");
         assert_eq!(identity, "local.k.a.Helper");
         assert!(is_qualified(&identity));
         assert_eq!(source_name(&identity), "Helper");
@@ -67,6 +72,9 @@ mod tests {
             module_path(&identity).collect::<Vec<_>>(),
             ["local", "k", "a"]
         );
+        assert!(is_declared_in(&identity, "local.k.a"));
+        assert!(!is_declared_in(&identity, "local.k"));
+        assert!(!is_declared_in("Helper", "local.k.a"));
     }
 
     #[test]

@@ -12,7 +12,12 @@
 use crate::ast::type_identity;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::{Expression, ExpressionKind, MemberVisibility};
-use crate::type_checker::{ModuleId, TypeChecker};
+use crate::diagnostics::DiagnosticCode;
+use crate::error::syntax::Span;
+use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::diagnostics::shown_type_name;
+use crate::type_checker::module_loader::PROGRAM_MODULE;
+use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
     /// The identity the type declared by `name_expr` with `visibility` in the
@@ -41,13 +46,13 @@ impl TypeChecker {
     /// qualified by the module's path when an imported module keeps it
     /// private, which no other module can name, and `name` itself otherwise.
     fn identity_for(&self, name: &str, visibility: &MemberVisibility) -> String {
-        let module = ModuleId::checked_as(&self.modules.current_module);
-        match (visibility, &module) {
-            (MemberVisibility::Private, ModuleId::Imported(path)) => {
-                type_identity::qualified(path, name)
+        let module = self.modules.current_module.as_str();
+        let is_imported = module != PROGRAM_MODULE;
+        match visibility {
+            MemberVisibility::Private if is_imported => type_identity::qualified(module, name),
+            MemberVisibility::Private | MemberVisibility::Public | MemberVisibility::Protected => {
+                name.to_string()
             }
-            (MemberVisibility::Private, ModuleId::Program)
-            | (MemberVisibility::Public | MemberVisibility::Protected, _) => name.to_string(),
         }
     }
 
@@ -74,6 +79,7 @@ impl TypeChecker {
             self.modules
                 .qualified_type_names
                 .insert(expr_id, identity.to_string());
+            self.modules.qualified_name_recorded = true;
         }
     }
 
@@ -103,21 +109,141 @@ impl TypeChecker {
         self.modules.type_identity(name)
     }
 
+    /// The identity the type written as `name` resolves to where `context`
+    /// is in scope: a type parameter of that name shadows a type the module
+    /// keeps private.
+    pub(crate) fn written_type_identity_in<'a>(
+        &'a self,
+        name: &'a str,
+        context: &Context,
+    ) -> &'a str {
+        self.private_identity_in(name, context).unwrap_or(name)
+    }
+
+    /// The identity of the type the module being checked keeps private under
+    /// `name`, unless a type parameter of that name is in scope in `context`.
+    pub(crate) fn private_identity_in<'a>(
+        &'a self,
+        name: &str,
+        context: &Context,
+    ) -> Option<&'a str> {
+        let identity = self.modules.private_identity(name)?;
+        match context.resolve_type_definition(name) {
+            Some(TypeDefinition::Generic(_)) => None,
+            Some(
+                TypeDefinition::Class(_)
+                | TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Trait(_)
+                | TypeDefinition::Alias(_),
+            )
+            | None => Some(identity),
+        }
+    }
+
     /// The type the type expression `expr` writes, with each name in it that
     /// checking resolved to a type a module keeps private spelled as that
-    /// type's identity; `None` when `expr` is not a type expression or no
-    /// module keeps a type private.
+    /// type's identity; `None` when it names no such type.
     ///
     /// A written type is its module's own spelling, and the stages after
     /// checking read it with no module to resolve its names in.
-    pub fn qualified_written_type(&self, expr: &Expression) -> Option<Type> {
+    pub fn qualified_written_type(&self, expr: &Expression) -> Option<&Type> {
+        self.modules.qualified_written_types.get(&expr.id)
+    }
+
+    /// The identity a callee's declared signature resolved `expr` to in the
+    /// module that declares it, when that is a type the module keeps private.
+    pub(crate) fn declared_signature_identity(&self, expr: &Expression) -> Option<&str> {
+        self.modules
+            .qualified_type_names
+            .get(&expr.id)
+            .map(String::as_str)
+    }
+
+    /// Whether the module being checked may name the type `identity`: a type
+    /// a module keeps private is reachable from that module alone.
+    pub(crate) fn may_name_type(&self, identity: &str) -> bool {
+        !type_identity::is_qualified(identity)
+            || type_identity::is_declared_in(identity, &self.modules.current_module)
+    }
+
+    /// Remembers, for the type expression `expr` whose resolution `resolve`
+    /// performs, the type it writes with each name that resolved to a type a
+    /// module keeps private spelled as that type's identity. Only a type that
+    /// names one is remembered, so the stages after checking pay one lookup for
+    /// every other.
+    pub(crate) fn resolving_written_type<T>(
+        &mut self,
+        expr: &Expression,
+        resolve: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let outer = std::mem::replace(&mut self.modules.qualified_name_recorded, false);
+        let resolved = resolve(self);
+        let recorded = self.modules.qualified_name_recorded;
+        if recorded && expr.id != 0 {
+            if let ExpressionKind::Type(written, _) = &expr.node {
+                let qualified = self.qualified_type(written, expr.id);
+                self.modules
+                    .qualified_written_types
+                    .insert(expr.id, qualified);
+            }
+        }
+        self.modules.qualified_name_recorded = outer || recorded;
+        resolved
+    }
+
+    /// `ty`, unless it names a type another module keeps private, which is
+    /// refused at `span` as not visible.
+    pub(crate) fn refuse_hidden_private_type(&mut self, ty: Type, span: Span) -> Type {
+        if self.refuses_hidden_private_type(&ty, span) {
+            return Type::new(TypeKind::Error, ty.span);
+        }
+        ty
+    }
+
+    /// Whether `ty` names a type another module keeps private, refusing it at
+    /// `span` as not visible when it does.
+    pub(crate) fn refuses_hidden_private_type(&mut self, ty: &Type, span: Span) -> bool {
+        let Some(hidden) = self.hidden_private_type_in(&ty.kind) else {
+            return false;
+        };
+        let message = format!("Type '{}' is not visible", shown_type_name(hidden));
+        self.report_error(DiagnosticCode::TypNameNotVisible, message, span);
+        true
+    }
+
+    /// The first type `kind` names, itself or in a component, that another
+    /// module keeps private.
+    fn hidden_private_type_in<'t>(&self, kind: &'t TypeKind) -> Option<&'t str> {
         if self.modules.qualified_type_names.is_empty() {
             return None;
         }
-        let ExpressionKind::Type(written, _) = &expr.node else {
-            return None;
-        };
-        Some(self.qualified_type(written, expr.id))
+        if let TypeKind::Custom(name, _) = kind {
+            if !self.may_name_type(name) {
+                return Some(name);
+            }
+        }
+        let (written, wrapped) = type_components(kind);
+        written
+            .into_iter()
+            .find_map(|expr| {
+                let ExpressionKind::Type(ty, _) = &expr.node else {
+                    return None;
+                };
+                self.hidden_private_type_in(&ty.kind)
+            })
+            .or_else(|| wrapped.and_then(|ty| self.hidden_private_type_in(&ty.kind)))
+    }
+
+    /// `ty` with each name written in a component of it — a type argument, a
+    /// closure's parameter or return — that checking resolved to a type a
+    /// module keeps private spelled as that type's identity. A closure type
+    /// read off a declaration carries the parameter types its module wrote.
+    pub(crate) fn qualified_components(&self, ty: &Type) -> Type {
+        if self.modules.qualified_type_names.is_empty() {
+            return ty.clone();
+        }
+        self.qualified_type(ty, 0)
     }
 
     /// `ty`, written in the expression `id`, with its names qualified.
@@ -175,7 +301,7 @@ impl TypeChecker {
 
     /// A closure type with the names its parameters and return write
     /// qualified.
-    fn qualified_function(&self, function: &FunctionTypeData) -> FunctionTypeData {
+    pub(crate) fn qualified_function(&self, function: &FunctionTypeData) -> FunctionTypeData {
         let mut qualified = function.clone();
         for param in &mut qualified.params {
             *param.typ = self.qualified_expression(&param.typ);
@@ -205,5 +331,54 @@ impl TypeChecker {
             }
         }
         qualified
+    }
+}
+
+/// The parts of a type that are types themselves: the expressions its
+/// arguments, elements and a closure's signature are written in, and the type
+/// an optional, a metatype or a linear type wraps.
+fn type_components(kind: &TypeKind) -> (Vec<&Expression>, Option<&Type>) {
+    match kind {
+        TypeKind::Custom(_, args) => (args.iter().flatten().collect(), None),
+        TypeKind::List(element)
+        | TypeKind::Set(element)
+        | TypeKind::Future(element)
+        | TypeKind::Array(element, _) => (vec![element], None),
+        TypeKind::Map(first, second) | TypeKind::Result(first, second) => {
+            (vec![first, second], None)
+        }
+        TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => (elements.iter().collect(), None),
+        TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
+            (Vec::new(), Some(inner))
+        }
+        TypeKind::Function(function) => {
+            let params = function.params.iter().map(|param| &*param.typ);
+            (
+                params.chain(function.return_type.as_deref()).collect(),
+                None,
+            )
+        }
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Generic(..)
+        | TypeKind::Void
+        | TypeKind::Error => (Vec::new(), None),
     }
 }

@@ -217,6 +217,9 @@ pub struct TypeChecker {
     /// visibility gate, so an unimported name is still rejected where the author
     /// actually wrote it.
     pub(crate) resolving_declared_signature: bool,
+    /// Where the call whose callee's declared signature is being read is
+    /// written, while one is.
+    pub(crate) declared_signature_site: Option<Span>,
     /// Maps the name of each `@deprecated` declaration to what it is and why it
     /// was deprecated. Populated during declaration collection so that use
     /// sites — a call, an instantiation, an enum-variant reference — can emit
@@ -301,6 +304,7 @@ impl TypeChecker {
             returning_at_written_self: false,
             binding_refinements: binding_refinement::BindingRefinements::default(),
             resolving_declared_signature: false,
+            declared_signature_site: None,
             deprecated_declarations: HashMap::new(),
             call_site_arity: None,
             callee_expr_id: None,
@@ -646,14 +650,14 @@ impl TypeChecker {
         let context = &mut context;
         match &statement.node {
             StatementKind::Class(class_data) => self.shell_class(class_data, context),
-            StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
-                self.shell_trait(name_expr, generics_expr.as_ref(), context);
+            StatementKind::Trait(name_expr, generics_expr, _, _, visibility) => {
+                self.shell_trait(name_expr, generics_expr.as_ref(), visibility, context);
             }
             StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => {
                 self.shell_struct(name_expr, generics_expr.as_ref(), visibility, context);
             }
-            StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
-                self.shell_enum(name_expr, generics_expr.as_ref(), context);
+            StatementKind::Enum(name_expr, generics_expr, _, _, visibility, _) => {
+                self.shell_enum(name_expr, generics_expr.as_ref(), visibility, context);
             }
             _ => {}
         }
@@ -707,16 +711,20 @@ impl TypeChecker {
         &mut self,
         name_expr: &Expression,
         generics_expr: Option<&Vec<Expression>>,
+        visibility: &MemberVisibility,
         context: &mut Context,
     ) {
-        let Ok(name) = self.extract_type_name(name_expr) else {
+        let Some(name_str) = self.register_declared_identity(name_expr, visibility) else {
             return;
         };
-        if self.type_table.global_type_definitions.contains_key(name) {
+        if self
+            .type_table
+            .global_type_definitions
+            .contains_key(&name_str)
+        {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
-        let name_str = name.to_string();
         self.register_type_definition(
             name_str.clone(),
             TypeDefinition::Trait(context::TraitDefinition {
@@ -760,17 +768,18 @@ impl TypeChecker {
         &mut self,
         name_expr: &Expression,
         generics_expr: Option<&Vec<Expression>>,
+        visibility: &MemberVisibility,
         context: &mut Context,
     ) {
-        let Ok(name) = self.extract_type_name(name_expr) else {
+        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
             return;
         };
-        if self.type_table.global_type_definitions.contains_key(name) {
+        if self.type_table.global_type_definitions.contains_key(&name) {
             return;
         }
         let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
         self.register_type_definition(
-            name.to_string(),
+            name.clone(),
             TypeDefinition::Enum(context::EnumDefinition {
                 variants: BTreeMap::new(),
                 generics,
@@ -780,7 +789,7 @@ impl TypeChecker {
                 non_exhaustive: false,
             }),
         );
-        self.modules.pre_registered_types.insert(name.to_string());
+        self.modules.pre_registered_types.insert(name);
     }
 
     /// Preliminary pass to register declarations without checking their bodies.
@@ -809,11 +818,11 @@ impl TypeChecker {
             StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => {
                 self.shell_struct(name_expr, generics_expr.as_ref(), visibility, context);
             }
-            StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
-                self.collect_enum_decl(name_expr, generics_expr.as_ref(), context);
+            StatementKind::Enum(name_expr, generics_expr, _, _, visibility, _) => {
+                self.shell_enum(name_expr, generics_expr.as_ref(), visibility, context);
             }
-            StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
-                self.collect_trait_decl(name_expr, generics_expr.as_ref(), context);
+            StatementKind::Trait(name_expr, generics_expr, _, _, visibility) => {
+                self.shell_trait(name_expr, generics_expr.as_ref(), visibility, context);
             }
             StatementKind::Use(path_expr, alias) => {
                 self.check_use(path_expr, alias, context);
@@ -1120,60 +1129,5 @@ impl TypeChecker {
             );
         }
         methods
-    }
-
-    fn collect_enum_decl(
-        &mut self,
-        name_expr: &Expression,
-        generics_expr: Option<&Vec<Expression>>,
-        context: &mut Context,
-    ) {
-        let Ok(name) = self.extract_type_name(name_expr) else {
-            return;
-        };
-        if self.type_table.global_type_definitions.contains_key(name) {
-            return;
-        }
-        let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
-        self.register_type_definition(
-            name.to_string(),
-            TypeDefinition::Enum(context::EnumDefinition {
-                variants: BTreeMap::new(),
-                generics,
-                methods: BTreeMap::new(),
-                module: self.modules.current_module.clone(),
-                must_use: false,
-                non_exhaustive: false,
-            }),
-        );
-        self.modules.pre_registered_types.insert(name.to_string());
-    }
-
-    fn collect_trait_decl(
-        &mut self,
-        name_expr: &Expression,
-        generics_expr: Option<&Vec<Expression>>,
-        context: &mut Context,
-    ) {
-        let Ok(name) = self.extract_type_name(name_expr) else {
-            return;
-        };
-        if self.type_table.global_type_definitions.contains_key(name) {
-            return;
-        }
-        let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
-        let name_str = name.to_string();
-        self.register_type_definition(
-            name_str.clone(),
-            TypeDefinition::Trait(context::TraitDefinition {
-                name: name_str.clone(),
-                generics,
-                parent_traits: vec![],
-                parent_trait_args: BTreeMap::new(),
-                methods: BTreeMap::new(),
-                module: self.modules.current_module.clone(),
-            }),
-        );
-        self.modules.pre_registered_types.insert(name_str);
     }
 }

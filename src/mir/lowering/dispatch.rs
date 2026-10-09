@@ -187,21 +187,20 @@ fn try_lower_static_method_call(
 ) -> Result<Option<Operand>, LoweringError> {
     // Static method calls have the form TypeName.method_name(args)
     // where TypeName is an identifier (type name), not an instance
-    let ExpressionKind::Identifier(type_name, _) = &obj_expr.node else {
+    let ExpressionKind::Identifier(..) = &obj_expr.node else {
         return Ok(None);
     };
     let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
         return Ok(None);
     };
-    let class_name = ctx
-        .type_checker
-        .type_identity_named_by(obj_expr)
-        .unwrap_or(type_name);
+    let Some(type_name) = ctx.type_checker.type_identity_named_by(obj_expr) else {
+        return Ok(None);
+    };
 
     // Try to find the static method in a class inheritance chain first
     if let Some((defining_class_name, method_info)) = ctx
         .type_checker
-        .find_static_method_in_chain(class_name, method_name.as_str())
+        .find_static_method_in_chain(type_name, method_name.as_str())
     {
         if method_info.is_static {
             return lower_static_method_impl(

@@ -953,3 +953,15 @@ fn a_wgsl_name_of_a_module_private_owner_is_identifier_only() {
         );
     }
 }
+
+#[test]
+fn a_wgsl_name_of_a_module_private_owner_method_has_its_own_mark() {
+    assert_eq!(
+        Symbol::method(PRIVATE_HELPER, &[], "v", &[]).wgsl_name(),
+        "m__q19_4q_local_k_a_Helper1v"
+    );
+    assert_ne!(
+        Symbol::method(PRIVATE_HELPER, &[], "v", &[]).wgsl_name(),
+        Symbol::method("Helper", &[], "v", &[]).wgsl_name()
+    );
+}

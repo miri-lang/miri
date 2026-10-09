@@ -17,7 +17,9 @@ use crate::mir::lowering::expression::binary_expr::{
     try_lower_operator_trait_call, OperatorOperands,
 };
 use crate::mir::lowering::expression::lower_expression;
-use crate::mir::lowering::helpers::{bind_pattern, literal_to_u128, lower_to_local, resolve_type};
+use crate::mir::lowering::helpers::{
+    bind_pattern, literal_to_u128, lower_to_local, pattern_enum_identity, resolve_type,
+};
 
 /// Classify a pattern into switch-able, predicate-based, or catch-all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,11 +325,31 @@ fn bind_arm_patterns(
     super::match_nested::bind_testing_payloads(ctx, pattern, subject_local, span, exit)
 }
 
+/// The discriminant of `variant_name` in the enum the match subject, of type
+/// `subject_ty`, is: the enum a variant pattern on it names.
+fn subject_variant_index(
+    ctx: &LoweringContext,
+    subject_ty: &Type,
+    variant_name: &str,
+) -> Option<u128> {
+    let enum_name = pattern_enum_identity(&subject_ty.kind)?;
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+        ctx.type_checker.type_definitions().get(enum_name)
+    else {
+        return None;
+    };
+    let index = enum_def
+        .variants
+        .keys()
+        .position(|name| name == variant_name)?;
+    u128::try_from(index).ok()
+}
+
 /// Compute discriminant values and switch targets for a pattern in match arms.
 fn compute_pattern_discriminants(
     ctx: &LoweringContext,
     pattern: &Pattern,
-    is_option_subject: bool,
+    subject_ty: &Type,
     branch_bb: crate::mir::BasicBlock,
     seen_discrs: &mut std::collections::HashSet<u128>,
     switch_targets: &mut Vec<(Discriminant, crate::mir::BasicBlock)>,
@@ -335,7 +357,7 @@ fn compute_pattern_discriminants(
 ) -> Vec<u128> {
     let mut arm_discrs: Vec<u128> = Vec::new();
 
-    if is_option_subject {
+    if matches!(subject_ty.kind, TypeKind::Option(_)) {
         match pattern {
             Pattern::Literal(crate::ast::literal::Literal::None) => {
                 arm_discrs.push(0);
@@ -396,46 +418,22 @@ fn compute_pattern_discriminants(
             }
         }
         Pattern::Member(type_pattern, variant_name) => {
-            if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
-                    .type_checker
-                    .type_table
-                    .global_type_definitions
-                    .get(type_name)
-                {
-                    if let Some((idx, _)) = enum_def
-                        .variants
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (name, _))| *name == variant_name)
-                    {
-                        arm_discrs.push(idx as u128);
-                        if seen_discrs.insert(idx as u128) {
-                            switch_targets.push((Discriminant::from(idx as u128), branch_bb));
-                        }
+            if let Pattern::Identifier(_) = type_pattern.as_ref() {
+                if let Some(idx) = subject_variant_index(ctx, subject_ty, variant_name) {
+                    arm_discrs.push(idx);
+                    if seen_discrs.insert(idx) {
+                        switch_targets.push((Discriminant::from(idx), branch_bb));
                     }
                 }
             }
         }
         Pattern::EnumVariant(parent_pattern, _bindings) => {
             if let Pattern::Member(type_pattern, variant_name) = parent_pattern.as_ref() {
-                if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                    if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
-                        .type_checker
-                        .type_table
-                        .global_type_definitions
-                        .get(type_name)
-                    {
-                        if let Some((idx, _)) = enum_def
-                            .variants
-                            .iter()
-                            .enumerate()
-                            .find(|(_, (name, _))| *name == variant_name)
-                        {
-                            arm_discrs.push(idx as u128);
-                            if seen_discrs.insert(idx as u128) {
-                                switch_targets.push((Discriminant::from(idx as u128), branch_bb));
-                            }
+                if let Pattern::Identifier(_) = type_pattern.as_ref() {
+                    if let Some(idx) = subject_variant_index(ctx, subject_ty, variant_name) {
+                        arm_discrs.push(idx);
+                        if seen_discrs.insert(idx) {
+                            switch_targets.push((Discriminant::from(idx), branch_bb));
                         }
                     }
                 }
@@ -557,8 +555,6 @@ fn setup_match_dispatch_table<'a>(
     let mut otherwise_bb = None;
     let mut branch_blocks = Vec::new();
 
-    let is_option_subject = matches!(subject_ty.kind, TypeKind::Option(_));
-
     for branch in branches {
         let branch_bb = ctx.new_basic_block();
         let mut arm_discrs: Vec<u128> = Vec::new();
@@ -567,7 +563,7 @@ fn setup_match_dispatch_table<'a>(
             let discrs = compute_pattern_discriminants(
                 ctx,
                 pattern,
-                is_option_subject,
+                subject_ty,
                 branch_bb,
                 &mut seen_discrs,
                 &mut switch_targets,

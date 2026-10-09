@@ -23,14 +23,17 @@
 //! imported_name = name              (name holds no `__`)
 //!               | length name       (name holds `__`)
 //! method    = "m__t" length owner length name
-//! owner     = type name | qualified token
+//!           | "m__q" length "_" token length name
 //! length    = decimal length of what follows, no leading zero
 //! ```
 //!
 //! A type a module keeps private is identified as `local.k.Helper`, which no
 //! identifier can hold, so wherever its identity is spelled here — a method's
 //! owner, a vtable, a thunk — it is spelled as the token a type argument of it
-//! takes, `3q_local_k_Helper`.
+//! takes, `3q_local_k_Helper`. That token begins with a digit, so a method of
+//! such an owner takes a mark of its own, and its owner's length is ended by
+//! `_` rather than by the owner's first character: the `v` of that `Helper`
+//! is `m__q17_3q_local_k_Helper1v`.
 //!
 //! The program's own `helper` is spelled `helper`, its `m__x` is `m__0_m__x`,
 //! its `__h` is `m__0___h`, and the `helper` of `system.math` is
@@ -41,9 +44,11 @@
 //! This is injective up to argument tokens. Only `program` spellings lack the
 //! `m__` prefix, and a `program` name holds no `__`, so its first `__` begins
 //! its argument tokens. After the prefix, `escaped` continues with `0`,
-//! `method` with `t`, and `imported` with the first digit of a non-empty
-//! identifier's length, never `0`. An identifier never begins with a digit,
-//! so each length ends where what it counts begins: an `imported` path ends at
+//! `method` with `t`, or with `q` for an owner a module keeps private, and
+//! `imported` with the first digit of a non-empty identifier's length, never
+//! `0`. An identifier never begins with a digit, so each length ends where
+//! what it counts begins, and the one length counting a token, which does
+//! begin with a digit, ends at the `_` after it: an `imported` path ends at
 //! the first `_` found where a length would begin, the name after it is
 //! length-prefixed exactly when it holds `__`, and a method's owner and name
 //! are each exactly as long as their lengths say. Argument tokens are joined
@@ -58,6 +63,7 @@ use super::{
     ClosureKind, GpuKernelKind, KernelDatum, StringLiteralPart, Symbol, SymbolKind, ThunkKind,
     ThunkSubject, Token, ENTRY_NAME,
 };
+use crate::ast::type_identity;
 use crate::type_checker::ModuleId;
 
 /// The separator between a name and each of its argument tokens.
@@ -70,6 +76,10 @@ const MODULE_PREFIX: &str = "m__";
 /// Follows [`MODULE_PREFIX`] in the spelling of a method; a module path
 /// identifier's length never begins with a letter.
 const METHOD_MARK: &str = "t";
+
+/// Follows [`MODULE_PREFIX`] in the spelling of a method of a type a module
+/// keeps private.
+const QUALIFIED_METHOD_MARK: &str = "q";
 
 /// Follows [`MODULE_PREFIX`] in the spelling of a program function whose name
 /// begins with that prefix or with [`RESERVED_PREFIX`]; a module path
@@ -102,13 +112,8 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             method,
             method_args,
         } => {
-            let owner = identifier_spelling(owner);
-            write!(
-                f,
-                "{MODULE_PREFIX}{METHOD_MARK}{}{owner}{}{method}",
-                owner.len(),
-                method.len()
-            )?;
+            write_method_owner(f, owner)?;
+            write!(f, "{}{method}", method.len())?;
             write_arguments(f, owner_args)?;
             write_arguments(f, method_args)
         }
@@ -134,6 +139,21 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
         SymbolKind::ClosureDestructor(closure) => write!(f, "__dtor_{closure}"),
         SymbolKind::KernelDatum { kernel, datum } => write_kernel_datum(f, kernel, *datum),
         SymbolKind::StringLiteral { index, part } => write_string_literal(f, *index, *part),
+    }
+}
+
+/// The start of a method's spelling: its mark, then its owner, after the
+/// owner's length.
+fn write_method_owner(f: &mut fmt::Formatter<'_>, owner: &str) -> fmt::Result {
+    if type_identity::is_qualified(owner) {
+        let token = identifier_spelling(owner);
+        write!(
+            f,
+            "{MODULE_PREFIX}{QUALIFIED_METHOD_MARK}{}_{token}",
+            token.len()
+        )
+    } else {
+        write!(f, "{MODULE_PREFIX}{METHOD_MARK}{}{owner}", owner.len())
     }
 }
 
