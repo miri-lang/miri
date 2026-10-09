@@ -50,9 +50,27 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
-use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
+use crate::type_checker::context::{Context, EnumDefinition, SymbolInfo, TypeDefinition};
+use crate::type_checker::pattern_coverage::{row_of, Constructor, Coverage, CoverageRow};
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
+
+/// The rows the unguarded arms of a match contribute to its coverage: one per
+/// pattern, alternatives included. A guard can fail, so a guarded arm covers
+/// nothing.
+fn coverage_rows(branches: &[MatchBranch]) -> Vec<CoverageRow<'_>> {
+    branches
+        .iter()
+        .filter(|branch| branch.guard.is_none())
+        .flat_map(|branch| branch.patterns.iter().map(row_of))
+        .collect()
+}
+
+/// Whether one of `rows` matches any value.
+fn has_catch_all(rows: &[CoverageRow]) -> bool {
+    rows.iter()
+        .any(|row| row.first().is_some_and(Option::is_none))
+}
 
 /// The enum facts an exhaustiveness check consults, detached from the definition.
 struct EnumMatchFacts {
@@ -232,7 +250,7 @@ impl TypeChecker {
         };
 
         let has_catch_all =
-            self.extract_covered_enum_variants(name, branches, &mut remaining_variants);
+            self.extract_covered_enum_variants(name, branches, &mut remaining_variants, context);
 
         // An open variant set makes listing today's variants insufficient: only a
         // catch-all keeps the match compiling when a variant is added later. Inside
@@ -270,11 +288,13 @@ impl TypeChecker {
         }
     }
 
-    /// Everything exhaustiveness checking needs from an enum definition, owned so
-    /// the borrow of the definition ends before diagnostics are reported. Only the
-    /// variant names are copied; the generics and method tables are left untouched.
-    fn find_enum_match_facts(&self, name: &str, context: &Context) -> Option<EnumMatchFacts> {
-        let definition = context
+    /// The enum `name` resolves to here, innermost scope first.
+    fn find_enum_definition<'d>(
+        &'d self,
+        name: &str,
+        context: &'d Context,
+    ) -> Option<&'d EnumDefinition> {
+        context
             .type_definitions
             .iter()
             .rev()
@@ -285,8 +305,14 @@ impl TypeChecker {
             .or_else(|| match self.type_table.global_type_definitions.get(name) {
                 Some(TypeDefinition::Enum(def)) => Some(def),
                 _ => None,
-            })?;
+            })
+    }
 
+    /// Everything exhaustiveness checking needs from an enum definition, owned so
+    /// the borrow of the definition ends before diagnostics are reported. Only the
+    /// variant names are copied; the generics and method tables are left untouched.
+    fn find_enum_match_facts(&self, name: &str, context: &Context) -> Option<EnumMatchFacts> {
+        let definition = self.find_enum_definition(name, context)?;
         Some(EnumMatchFacts {
             remaining_variants: definition.variants.keys().cloned().collect(),
             module: definition.module.clone(),
@@ -294,46 +320,54 @@ impl TypeChecker {
         })
     }
 
-    /// Extracts covered enum variants from match branches and checks exhaustiveness.
+    /// Remove from `remaining_variants` every variant of `enum_name` the
+    /// unguarded arms cover, payloads included, and report whether one of
+    /// them matches any value.
     fn extract_covered_enum_variants(
         &self,
         enum_name: &str,
         branches: &[MatchBranch],
         remaining_variants: &mut HashSet<String>,
+        context: &Context,
     ) -> bool {
-        let mut is_exhaustive = false;
-        for branch in branches {
-            if branch.guard.is_none() {
-                for pattern in &branch.patterns {
-                    match pattern {
-                        Pattern::Default | Pattern::Identifier(_) => {
-                            is_exhaustive = true;
-                        }
-                        Pattern::Member(parent, member) => {
-                            if let Pattern::Identifier(parent_name) = &**parent {
-                                if parent_name == enum_name {
-                                    remaining_variants.remove(member);
-                                }
-                            }
-                        }
-                        Pattern::EnumVariant(parent, _) => {
-                            if let Pattern::Member(enum_name_pat, variant_name) = &**parent {
-                                if let Pattern::Identifier(enum_name_str) = &**enum_name_pat {
-                                    if enum_name_str == enum_name {
-                                        remaining_variants.remove(variant_name);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            if is_exhaustive {
-                break;
-            }
+        let rows = coverage_rows(branches);
+        let arities: HashMap<String, usize> = self
+            .find_enum_definition(enum_name, context)
+            .map(|definition| {
+                definition
+                    .variants
+                    .iter()
+                    .map(|(variant, payloads)| (variant.clone(), payloads.len()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let lookup = |name: &str| self.listed_enum_variants(name, context);
+        let coverage = Coverage { variants: &lookup };
+        remaining_variants.retain(|variant| {
+            let constructor = Constructor::Variant {
+                enum_name: enum_name.to_string(),
+                variant: variant.clone(),
+            };
+            let arity = arities.get(variant).copied().unwrap_or(0);
+            !coverage.covers(&rows, &constructor, arity)
+        });
+        has_catch_all(&rows)
+    }
+
+    /// Each variant the enum `name` declares, with its payload count, when
+    /// every variant is known here: an enum another module marks as open to
+    /// new variants is not.
+    fn listed_enum_variants(&self, name: &str, context: &Context) -> Option<Vec<(String, usize)>> {
+        let definition = self.find_enum_definition(name, context)?;
+        if definition.non_exhaustive && definition.module != self.modules.current_module {
+            return None;
         }
-        is_exhaustive
+        let variants = definition
+            .variants
+            .iter()
+            .map(|(variant, payloads)| (variant.clone(), payloads.len()))
+            .collect();
+        Some(variants)
     }
 
     /// Checks exhaustiveness for Option types in match expressions.
@@ -342,13 +376,13 @@ impl TypeChecker {
         subject_type: &Type,
         branches: &[MatchBranch],
         span: Span,
-        _context: &Context,
+        context: &Context,
     ) {
         if !matches!(subject_type.kind, TypeKind::Option(_)) {
             return;
         }
 
-        let (has_some, has_none, is_exhaustive) = self.extract_option_coverage(branches);
+        let (has_some, has_none, is_exhaustive) = self.extract_option_coverage(branches, context);
 
         if !(is_exhaustive || has_some && has_none) {
             let mut missing = Vec::new();
@@ -369,60 +403,21 @@ impl TypeChecker {
         }
     }
 
-    /// Extracts coverage information for Option variants from match branches.
-    // TODO: an arm whose payload holds a pattern that can fail (`Some(0)`,
-    // `Some("a")`) is counted as covering `Some` here, and the same holds for
-    // enum variants in `extract_covered_enum_variants`. A match of only such
-    // arms beside `None` is accepted, and a value no arm takes leaves the
-    // match's result unwritten.
-    fn extract_option_coverage(&self, branches: &[MatchBranch]) -> (bool, bool, bool) {
-        let mut has_some = false;
-        let mut has_none = false;
-        let mut is_exhaustive = false;
-
-        for branch in branches {
-            if branch.guard.is_none() {
-                for pattern in &branch.patterns {
-                    match pattern {
-                        Pattern::Default | Pattern::Identifier(_) => {
-                            is_exhaustive = true;
-                        }
-                        Pattern::Literal(crate::ast::literal::Literal::None) => {
-                            has_none = true;
-                        }
-                        Pattern::Member(parent, member) => {
-                            if let Pattern::Identifier(parent_name) = &**parent {
-                                if parent_name == OPTION_TYPE_NAME {
-                                    match member.as_str() {
-                                        "Some" => has_some = true,
-                                        "None" => has_none = true,
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        }
-                        Pattern::EnumVariant(parent, _) => match &**parent {
-                            Pattern::Identifier(name) if name == "Some" => {
-                                has_some = true;
-                            }
-                            Pattern::Member(enum_pat, variant) => {
-                                if let Pattern::Identifier(name) = &**enum_pat {
-                                    if name == OPTION_TYPE_NAME && variant == "Some" {
-                                        has_some = true;
-                                    }
-                                }
-                            }
-                            _ => {}
-                        },
-                        _ => {}
-                    }
-                }
-            }
-            if is_exhaustive {
-                break;
-            }
-        }
-        (has_some, has_none, is_exhaustive)
+    /// Whether the unguarded arms cover `Some` (payloads included) and
+    /// `None`, and whether one of them matches any value.
+    fn extract_option_coverage(
+        &self,
+        branches: &[MatchBranch],
+        context: &Context,
+    ) -> (bool, bool, bool) {
+        let rows = coverage_rows(branches);
+        let lookup = |name: &str| self.listed_enum_variants(name, context);
+        let coverage = Coverage { variants: &lookup };
+        (
+            coverage.covers(&rows, &Constructor::Some, 1),
+            coverage.covers(&rows, &Constructor::None, 0),
+            has_catch_all(&rows),
+        )
     }
 
     /// Infers the result type from match branches, checking type compatibility.

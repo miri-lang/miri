@@ -365,3 +365,22 @@ fn main()
     assert!(result.success, "{}", result.output());
     assert!(result.stdout.contains("wrap none"), "{}", result.output());
 }
+
+/// The compile-time refusal is what keeps a value no arm takes from leaving
+/// the match's result unwritten.
+#[test]
+fn test_a_match_whose_some_arms_all_test_a_nested_literal_is_refused() {
+    assert_compiler_error(
+        r#"
+fn show(o String?) String
+    match o
+        Some("a"): "is a"
+        None: "none"
+
+fn main()
+    let b = "b" + ""
+    println(f"[{show(Some(b))}]")
+"#,
+        "Non-exhaustive match on Option. Missing variants: Some",
+    );
+}
