@@ -17,6 +17,7 @@
 
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
+use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
 /// Whether a type is one of the integer widths a literal can be recorded at.
@@ -50,6 +51,7 @@ impl TypeChecker {
         expr: &Expression,
         expected: &Type,
         inferred: &Type,
+        context: &Context,
     ) -> Option<Type> {
         // A literal stored where an optional is declared becomes its payload,
         // and takes the payload's width.
@@ -58,7 +60,7 @@ impl TypeChecker {
                 expr.node,
                 ExpressionKind::Literal(_) | ExpressionKind::Unary(..)
             ) {
-                return self.widen_int_literals(expr, payload, inferred);
+                return self.widen_int_literals(expr, payload, inferred, context);
             }
         }
         match &expr.node {
@@ -73,7 +75,7 @@ impl TypeChecker {
             // width, and the negation is then performed at that width instead of
             // at the default `int`'s.
             ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
-                let widened = self.widen_int_literals(operand, expected, inferred)?;
+                let widened = self.widen_int_literals(operand, expected, inferred, context)?;
                 self.record_int_literal_width(expr, &widened);
                 Some(widened)
             }
@@ -91,7 +93,7 @@ impl TypeChecker {
             {
                 let literal_inferred = self.type_table.types.get(&args[0].id)?.clone();
                 let widened_literal =
-                    self.widen_int_literals(&args[0], expected, &literal_inferred)?;
+                    self.widen_int_literals(&args[0], expected, &literal_inferred, context)?;
                 let element = self.int_sequence_element_type(&widened_literal)?;
                 let widened = self.with_int_element_type(inferred, &element)?;
                 self.record_int_literal_width(expr, &widened);
@@ -102,8 +104,12 @@ impl TypeChecker {
                 let inferred_element = self.int_sequence_element_type(inferred)?;
                 let mut widened_element = None;
                 for element in elements {
-                    widened_element =
-                        self.widen_int_literals(element, &expected_element, &inferred_element);
+                    widened_element = self.widen_int_literals(
+                        element,
+                        &expected_element,
+                        &inferred_element,
+                        context,
+                    );
                     widened_element.as_ref()?;
                 }
                 let widened = self.with_int_element_type(inferred, &widened_element?)?;
@@ -115,15 +121,16 @@ impl TypeChecker {
             ExpressionKind::Conditional(then_expr, _, Some(else_expr), _) => {
                 let then_ty = self.type_table.types.get(&then_expr.id)?.clone();
                 let else_ty = self.type_table.types.get(&else_expr.id)?.clone();
-                let widened = self.widen_int_literals(then_expr, expected, &then_ty)?;
-                self.widen_int_literals(else_expr, expected, &else_ty)?;
+                let widened = self.widen_int_literals(then_expr, expected, &then_ty, context)?;
+                self.widen_int_literals(else_expr, expected, &else_ty, context)?;
                 self.record_int_literal_width(expr, &widened);
                 Some(widened)
             }
-            // A `const` declared without a type was written as a literal, and
-            // takes a width the way that literal would, when its value fits.
+            // A `const` or `let` declared without a type, bound to a literal,
+            // names that literal, and takes a width the way that literal
+            // would, when its value fits.
             ExpressionKind::Identifier(name, _) if is_integer_width(&expected.kind) => {
-                let info = self.type_table.global_scope.get(name)?;
+                let info = context.resolve_info(name)?;
                 let Some(Literal::Integer(value)) = &info.value else {
                     return None;
                 };
@@ -137,6 +144,11 @@ impl TypeChecker {
                 let width = Type::new(expected.kind.clone(), expected.span);
                 self.record_int_literal_width(expr, &width);
                 Some(width)
+            }
+            // Arithmetic built only from numbers written in the source takes
+            // the width as one number, when every value it computes fits.
+            ExpressionKind::Binary(..) if is_integer_width(&expected.kind) => {
+                self.source_arithmetic_at_width(expr, expected, context)
             }
             _ => None,
         }
@@ -154,6 +166,7 @@ impl TypeChecker {
         arg_expr: &Expression,
         arg_type: &Type,
         element: &Type,
+        context: &Context,
     ) {
         if !is_integer_width(&element.kind) {
             return;
@@ -161,7 +174,7 @@ impl TypeChecker {
         let Some(expected) = self.with_int_element_type(arg_type, element) else {
             return;
         };
-        self.widen_int_literals(arg_expr, &expected, arg_type);
+        self.widen_int_literals(arg_expr, &expected, arg_type, context);
     }
 
     /// Records `ty` as the type of `expr`, replacing what inference recorded.

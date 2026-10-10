@@ -459,7 +459,7 @@ impl TypeChecker {
         // does after an explicit `return`.
         let expr_type = &self
             .narrow_float_literals(expr, &return_type, expr_type, context)
-            .or_else(|| self.widen_int_literals(expr, &return_type, expr_type))
+            .or_else(|| self.widen_int_literals(expr, &return_type, expr_type, context))
             .unwrap_or_else(|| expr_type.clone());
         if !self.accepts_value_at(&return_type, expr_type, Some(expr), context) {
             self.report_error(

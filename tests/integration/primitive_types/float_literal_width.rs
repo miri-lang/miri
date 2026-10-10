@@ -170,3 +170,168 @@ fn main()
         "f32",
     );
 }
+
+#[test]
+fn test_let_bound_to_a_literal_takes_the_width_of_the_operand_beside_it() {
+    // `let e = 0.04` names a number written in the source, so it adapts the way
+    // the literal would: `y + e` computes at f32 and is accepted by the f32
+    // parameter instead of being refused as an f64 store.
+    assert_runs_with_output(
+        r#"
+fn twice(x f32) f32
+    return x * 2.0
+
+fn shifted(y f32) f32
+    let e = 0.04
+    return twice(y + e)
+
+fn main()
+    println(f"[{shifted(1.0)}]")
+"#,
+        "[2.08]",
+    );
+}
+
+#[test]
+fn test_let_bound_to_a_literal_narrows_where_an_f32_is_declared() {
+    // Passed on its own, the binding rounds to f32 at the call, as the literal
+    // would: 3.1415927, not the f64 value.
+    assert_runs_with_output(
+        r#"
+fn ident(x f32) f32
+    return x
+
+fn main()
+    let pi = 3.14159265358979
+    let narrow f32 = pi
+    println(f"[{ident(pi)}] [{narrow}]")
+"#,
+        "[3.1415927] [3.1415927]",
+    );
+}
+
+#[test]
+fn test_let_bound_to_a_literal_keeps_full_precision_where_nothing_narrows_it() {
+    // One use at f32 does not fix the binding's width: every other use still
+    // reads the value at f64, so 0.1 + 0.2 is not rounded back to 0.3.
+    assert_runs_with_output(
+        r#"
+fn ident(x f32) f32
+    return x
+
+fn main()
+    let a = 0.1
+    println(f"[{ident(a)}]")
+    println(f"[{a + 0.2}]")
+"#,
+        "[0.1]\n[0.30000000000000004]",
+    );
+}
+
+#[test]
+fn test_var_bound_to_a_literal_keeps_the_float_default() {
+    // A `var` can be reassigned, so its value is not the literal any more by
+    // the time it is read: it takes `float` at declaration, and an f32
+    // parameter refuses it.
+    assert_compiler_error(
+        r#"
+fn twice(x f32) f32
+    return x * 2.0
+
+fn main()
+    var t = 0.04
+    t = t + 0.01
+    println(f"{twice(t)}")
+"#,
+        "expected f32, got float",
+    );
+}
+
+#[test]
+fn test_let_bound_to_a_computed_value_does_not_adapt() {
+    // Only a number written in the source adapts. A binding holding a value
+    // the program computed keeps the width it was computed at.
+    assert_compiler_error(
+        r#"
+fn twice(x f32) f32
+    return x * 2.0
+
+fn scale() float
+    return 0.5
+
+fn main()
+    let s = scale()
+    println(f"{twice(s)}")
+"#,
+        "expected f32, got float",
+    );
+}
+
+#[test]
+fn test_arithmetic_of_literals_takes_the_width_of_the_operand_beside_it() {
+    // `2.0 * 0.04` and `2.0 * e` are numbers written in the source and
+    // nothing else, so each takes f32 as one number beside an f32, and the
+    // f32 return accepts the quotient.
+    assert_runs_with_output(
+        r#"
+fn by_literals(x f32) f32
+    return x / (2.0 * 0.04)
+
+fn by_binding(x f32) f32
+    let e = 0.04
+    return x / (2.0 * e)
+
+fn main()
+    println(f"[{by_literals(1.0)}] [{by_binding(1.0)}]")
+"#,
+        "[12.5] [12.5]",
+    );
+}
+
+#[test]
+fn test_arithmetic_of_literals_narrows_where_an_f32_is_returned() {
+    assert_runs_with_output(
+        r#"
+fn eighth() f32
+    let e = 0.5
+    return e * 0.25
+
+fn main()
+    println(f"[{eighth()}]")
+"#,
+        "[0.125]",
+    );
+}
+
+#[test]
+fn test_arithmetic_with_a_computed_value_does_not_adapt() {
+    // `s` holds a value the program computed at float, so `2.0 * s` is no
+    // number written in the source, and stays a float the f32 return refuses.
+    assert_compiler_error(
+        r#"
+fn half() float
+    return 0.5
+
+fn scaled() f32
+    let s = half()
+    return 2.0 * s
+"#,
+        "f32",
+    );
+}
+
+#[test]
+fn test_signed_arithmetic_of_literals_takes_the_width_beside_it() {
+    assert_runs_with_output(
+        r#"
+fn twice(x f32) f32
+    return x * 2.0
+
+fn main()
+    let e = 0.25
+    let y f32 = 1.0
+    println(f"[{twice(-(2.0 * e) + y)}]")
+"#,
+        "[1.0]",
+    );
+}

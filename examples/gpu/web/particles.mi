@@ -88,13 +88,13 @@ fn pf_value_noise(x f32, y f32) f32
 // Returned as the loose components (out_x, out_y) packed into the caller's vars
 // via the standard finite-difference curl (∂n/∂y, -∂n/∂x).
 fn curl_x(x f32, y f32) f32
-    let e f32 = 0.04
+    let e = 0.04
     let n1 = pf_value_noise(x, y + e)
     let n2 = pf_value_noise(x, y - e)
     return (n1 - n2) / (2.0 * e)
 
 fn curl_y(x f32, y f32) f32
-    let e f32 = 0.04
+    let e = 0.04
     let n3 = pf_value_noise(x + e, y)
     let n4 = pf_value_noise(x - e, y)
     return (n4 - n3) / (2.0 * e)

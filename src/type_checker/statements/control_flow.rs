@@ -1320,7 +1320,12 @@ impl TypeChecker {
                     context,
                 )
                 .or_else(|| {
-                    self.widen_int_literals(expr, &expected_return_type, &actual_return_type)
+                    self.widen_int_literals(
+                        expr,
+                        &expected_return_type,
+                        &actual_return_type,
+                        context,
+                    )
                 })
             })
             .unwrap_or(actual_return_type);

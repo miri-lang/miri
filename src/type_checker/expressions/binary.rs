@@ -57,7 +57,7 @@ use crate::type_checker::TypeChecker;
 
 /// True for the numeric arithmetic operators (`+`, `-`, `*`, `/`, `%`) — the
 /// operators over which an `f16` operand narrows a bare float literal.
-fn is_arithmetic_op(op: &BinaryOp) -> bool {
+pub(crate) fn is_arithmetic_op(op: &BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -113,6 +113,7 @@ impl TypeChecker {
         operand: &Expression,
         inferred: &Type,
         other: &Type,
+        context: &Context,
     ) -> Type {
         let takes_integer_width = matches!(
             other.kind,
@@ -124,7 +125,7 @@ impl TypeChecker {
         let negated = matches!(operand.node, ExpressionKind::Unary(UnaryOp::Negate, _));
         let unsigned_other = matches!(other.kind, TypeKind::U64 | TypeKind::U128);
         if takes_integer_width && !(negated && unsigned_other) {
-            if let Some(widened) = self.widen_int_literals(operand, other, inferred) {
+            if let Some(widened) = self.widen_int_literals(operand, other, inferred, context) {
                 return widened;
             }
         }
@@ -134,7 +135,7 @@ impl TypeChecker {
     /// The operand types of a numeric operator, once a number written in the
     /// source on one side has taken the other side's type.
     ///
-    /// A literal, or a `const` declared without a type, has no width of its
+    /// A literal, or a `const` or `let` bound to one without a type, has no width of its
     /// own, so `small + 1` stays an `i8` and `i < LIMIT` compares at `i`'s type.
     /// Two values of different numeric types are left as they are: the
     /// operator's check computes them at a type that holds both, or refuses
@@ -195,7 +196,7 @@ impl TypeChecker {
     }
 
     /// The type `operand` takes at `width` when it is a number written in the
-    /// source — a literal, or a `const` declared without a type whose value
+    /// source — a literal, or a `const` or `let` bound to one without a type whose value
     /// fits `width` — recorded at that width; `None` for any other operand.
     pub(crate) fn number_at_width(
         &mut self,
@@ -205,6 +206,9 @@ impl TypeChecker {
         context: &Context,
     ) -> Option<Type> {
         if let Some(adapted) = self.literal_at_width(operand, width, inferred, context) {
+            return Some(adapted);
+        }
+        if let Some(adapted) = self.source_arithmetic_at_width(operand, width, context) {
             return Some(adapted);
         }
         let ExpressionKind::Identifier(name, _) = &operand.node else {
@@ -241,7 +245,7 @@ impl TypeChecker {
         if !is_number_literal(operand) || !self.number_literal_fits(operand, width) {
             return None;
         }
-        self.widen_int_literals(operand, width, inferred)
+        self.widen_int_literals(operand, width, inferred, context)
             .or_else(|| self.narrow_float_literals(operand, width, inferred, context))
     }
 
@@ -304,8 +308,8 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         }
 
-        let left_ty = self.literal_operand_at_width(left, &left_ty, &right_ty);
-        let right_ty = self.literal_operand_at_width(right, &right_ty, &left_ty);
+        let left_ty = self.literal_operand_at_width(left, &left_ty, &right_ty, context);
+        let right_ty = self.literal_operand_at_width(right, &right_ty, &left_ty, context);
         let (left_ty, right_ty) =
             self.operands_at_one_width((left, left_ty), op, (right, right_ty), context);
         // `opt ?? 0` — the default is stored where the optional's value is, so
@@ -586,7 +590,7 @@ impl TypeChecker {
         // `x = x + 2.25`.
         let rhs_type = if matches!(op, AssignmentOp::Assign) {
             self.narrow_float_literals(rhs, &lhs_type, &rhs_type, context)
-                .or_else(|| self.widen_int_literals(rhs, &lhs_type, &rhs_type))
+                .or_else(|| self.widen_int_literals(rhs, &lhs_type, &rhs_type, context))
                 .unwrap_or(rhs_type)
         } else {
             self.number_at_width(rhs, &lhs_type, &rhs_type, context)

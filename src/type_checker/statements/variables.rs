@@ -267,7 +267,7 @@ impl TypeChecker {
         if decl.typ.is_none() && !is_at_module_scope {
             info.inferred_from = decl.initializer.as_ref().map(|init| init.id);
         }
-        info.untyped_constant = is_constant && decl.typ.is_none();
+        info.untyped_constant = is_untyped_constant(decl, is_constant, info.value.as_ref());
 
         if is_at_module_scope {
             self.type_table
@@ -625,7 +625,7 @@ impl TypeChecker {
                 .narrow_float_literals(init, &declared_type, &inferred_type, context)
                 .unwrap_or(inferred_type);
             let inferred_type = self
-                .widen_int_literals(init, &declared_type, &inferred_type)
+                .widen_int_literals(init, &declared_type, &inferred_type, context)
                 .unwrap_or(inferred_type);
             let accepted =
                 self.accepts_value_at(&declared_type, &inferred_type, Some(init), context);
@@ -716,4 +716,27 @@ fn negated_float(float: crate::ast::literal::FloatLiteral) -> crate::ast::litera
         FloatLiteral::F32(bits) => FloatLiteral::F32((-f32::from_bits(bits)).to_bits()),
         FloatLiteral::F64(bits) => FloatLiteral::F64((-f64::from_bits(bits)).to_bits()),
     }
+}
+
+/// Whether a binding names a number the way the literal it was written as
+/// would, taking the width of each place it is used rather than one width at
+/// declaration.
+///
+/// A `const` declared without a type always does. So does a `let` declared
+/// without a type whose value is a number known at compile time: it can never
+/// be reassigned, so every read of it is a read of that number. A `var` can be,
+/// so it takes its width once, at declaration. A device-resident binding is
+/// uploaded at the width it was declared with, so it does not adapt either.
+fn is_untyped_constant(
+    decl: &VariableDeclaration,
+    is_constant: bool,
+    value: Option<&Literal>,
+) -> bool {
+    if decl.typ.is_some() {
+        return false;
+    }
+    let is_host_let = matches!(decl.declaration_type, VariableDeclarationType::Immutable)
+        && decl.residency == BindingResidency::Host;
+    let is_number = matches!(value, Some(Literal::Integer(_) | Literal::Float(_)));
+    is_constant || (is_host_let && is_number)
 }

@@ -2310,3 +2310,25 @@ fn main()
     );
     assert_gpu_wgsl_valid(source);
 }
+
+#[test]
+fn test_literal_lets_stored_into_narrower_buffers_convert_in_the_kernel() {
+    // WGSL converts no number implicitly: `n` is an `i32` local and `dst` a
+    // `u32` buffer, so the store must spell the conversion out or the shader
+    // does not validate.
+    let source = r#"
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<u32, 2>()
+    gpu var f = Array<f32, 2>()
+    gpu forall i in 0..2
+        let n = 7
+        let e = 0.25
+        dst[i] = n
+        f[i] = f[i] + e
+"#;
+    assert!(compile_to_wgsl(source).contains("u32(_"));
+    assert_gpu_wgsl_valid(source);
+}
