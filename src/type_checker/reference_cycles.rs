@@ -10,8 +10,8 @@
 //! closure, as does `self.next = Some(self)`.
 //!
 //! The check sees the direct form only: a store into a place rooted at a
-//! class, trait or `Array` binding (`x.f`, `x.f.g`, `x.items[i]`, `a[i]`) —
-//! a binding whose copies share one object — whose stored value is
+//! class or trait binding (`x.f`, `x.f.g`, `x.items[i]`) — a binding whose
+//! copies share one object — whose stored value is
 //! that same binding, a closure capturing it, or a variant, constructor call
 //! or literal holding one of those. A cycle closed through another name or
 //! another object (`let u = x` then `x.f = fn(): u.n`, or `a.b = b` then
@@ -97,14 +97,8 @@ impl TypeChecker {
     /// held through a trait. A built-in collection that copies on write is a
     /// value even though its type is a class: a store into one a closure also
     /// holds copies it first, so the closure keeps the collection as it was.
-    /// An `Array` has no copy on write, so a store into it is seen by every
-    /// holder, as with a class.
-    ///
-    /// TODO: a struct is a value type, so it is not counted here, but a struct
-    /// holding a managed field is shared rather than copied on rebinding and
-    /// on capture (`var c = b; c.count = 9` changes `b`). Until it is copied,
-    /// a closure capturing such a struct and stored in one of its fields
-    /// leaks the struct; once it is, that store closes no cycle.
+    /// A struct is a value the same way (`unshare` in MIR lowering), so it is
+    /// not counted either.
     fn holds_by_reference(&self, expr: &Expression, context: &Context) -> bool {
         let Some(TypeKind::Custom(name, _)) = self.get_type(expr.id).map(|t| &t.kind) else {
             return false;

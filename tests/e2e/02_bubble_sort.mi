@@ -7,7 +7,7 @@ use system.io
 use system.time
 use system.collections.array
 
-fn bubble_sort(arr Array<int, 10>)
+fn bubble_sort(arr Array<int, 10>) Array<int, 10>
     var a = arr
     var n = a.length()
     var i = 0
@@ -20,6 +20,7 @@ fn bubble_sort(arr Array<int, 10>)
                 a[j + 1] = temp
             j += 1
         i += 1
+    return a
 
 fn main()
     var data = [64, 34, 25, 12, 22, 11, 90, 5, 45, 1]
@@ -29,11 +30,11 @@ fn main()
     println()
     
     let start = nanotime()
-    bubble_sort(data)
+    let sorted = bubble_sort(data)
     let end = nanotime()
     
     print("Sorted array:   ")
-    for x in data: print(f"{x} ")
+    for x in sorted: print(f"{x} ")
     println()
     
     println(f"Time taken: {end - start} ns")

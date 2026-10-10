@@ -252,6 +252,19 @@ fn offset(p Point, dx int, dy int) Point
 
 Small structs (all primitive fields, <= 128 bytes) are auto-copy — assignment produces a bitwise copy with no reference counting overhead.
 
+Every struct is a value, whatever its fields hold. Binding one to a second name, passing it to a function or capturing it in a closure gives the receiver a value of its own, so a write through one name is never seen through another:
+
+```miri
+var b = User(name: "Alice", age: 30)
+let f = fn() int: b.age
+var c = b
+c.age = 31
+b.age = 40
+println(f"{f()} {b.age} {c.age}")   // 30 40 31
+```
+
+A struct with a managed field is reference counted, and the second name shares its block until one of them writes: the write copies a struct that anything else still holds before changing it (copy on write). The same holds for every value a write reaches through — `a.inner.count = 1` copies a shared `a`, then a shared `a.inner`, and `a.items.push(4)` copies a shared `a`, then a shared `a.items`. A class instance on such a path is a reference and is never copied; a struct or collection held in one of its fields is.
+
 A struct holds data and nothing else: it declares no methods, implements no traits and has no drop hook (MER_TYP_058). Behaviour belongs on a class, or in a function that takes the struct; a type that must run code when it is released is a class. What a struct supports is derived from its fields — `==` and `hash()` compare and hash them, and a struct whose every field is accelerable may be `gpu let`/`gpu var` with no marker.
 
 ---
@@ -562,17 +575,19 @@ Miri uses a hybrid memory model with no annotations required from the programmer
 
 - **Auto-copy types**: Small, all-primitive structs and all primitive types are copied on assignment. No overhead.
 - **Managed types**: Collections (`Array`, `List`, `Map`, `Set`), strings, and structs containing managed fields use reference counting.
+- **Values**: Collections and structs are values. A second binding shares the first one's block until either writes, and the write copies a block that is still shared before changing it (copy on write), so a write through one name is never seen through another. Class instances are references: every binding to one is the same object.
 - **Drop specialization**: When a managed type's reference count reaches zero, a type-specific drop function recursively releases all managed fields.
 
 ```miri
 var a = [1, 2, 3]
 var b = a            // RC incremented, both point to same data
+b[0] = 9             // b was shared, so it is copied first: a is still [1, 2, 3]
 a = [4, 5, 6]       // old array's RC decremented, freed if zero
 ```
 
 ### Reference Cycles
 
-Reference counting never frees a cycle: an object that holds a reference to itself keeps its own count above zero and is never released. A store that puts an object back into one of its own fields is therefore refused (`MER_TYP_081`). The refused store writes into a place rooted at a binding that holds its object by reference — a class instance, a value held through a trait, or an `Array`, which has no copy on write — whether a field (`x.f`), a field of a field (`x.f.g`) or an element of either (`x.items[i]`). The value it refuses is that binding itself, a closure that captures it, or a variant (`Some(x)`), constructor call or literal holding one of those, including through either branch of a conditional.
+Reference counting never frees a cycle: an object that holds a reference to itself keeps its own count above zero and is never released. A store that puts an object back into one of its own fields is therefore refused (`MER_TYP_081`). The refused store writes into a place rooted at a binding that holds its object by reference — a class instance or a value held through a trait — whether a field (`x.f`), a field of a field (`x.f.g`) or an element of either (`x.items[i]`). The value it refuses is that binding itself, a closure that captures it, or a variant (`Some(x)`), constructor call or literal holding one of those, including through either branch of a conditional.
 
 ```miri
 class Ticker
@@ -584,7 +599,7 @@ class Ticker
 
 To give an object a callback that works on it, make the object a parameter of the function type and pass it at the call: `on_tick fn(Ticker) int`, stored as `fn(t Ticker) int: t.count + 1` and called as `t.on_tick(t)`.
 
-`List`, `Map` and `Set` copy on write, so a store into one a closure also holds copies the collection first and closes no cycle: `fns[0] = fn() int: fns.length()` is accepted.
+Collections and structs copy on write, so a store into one a closure also holds copies it first and closes no cycle: `fns[0] = fn() int: fns.length()` is accepted, and so is `b.on_tick = fn() int: b.count` on a struct `b`.
 
 The check sees the direct form only, where the stored value names the same binding as the target. A cycle closed through another name (`let u = t` then `t.on_tick = fn() int: u.count`) or through another object (`a.other = Some(b)` then `b.other = Some(a)`) is not refused, and leaks.
 

@@ -983,15 +983,14 @@ fn prepare_method_self(
     method_name: &str,
     span: Span,
 ) -> Result<(Operand, Option<Local>), LoweringError> {
-    let self_op = lower_method_receiver(ctx, obj)?;
-    let self_op = match obj_ty
+    let mutated_cow = obj_ty
         .kind
         .as_builtin_collection()
         .filter(|k| k.mutates_method(method_name))
-        .and_then(cow_fn)
-    {
-        Some(cow) => emit_cow_check(ctx, self_op, obj_ty, cow, span),
-        None => self_op,
+        .and_then(cow_fn);
+    let self_op = match mutated_cow {
+        Some(cow) => lower_mutated_receiver(ctx, obj, obj_ty, Some(cow), span)?,
+        None => lower_method_receiver(ctx, obj)?,
     };
     let obj_temp_local = if let Operand::Copy(ref p) = self_op {
         Some(p.local)
@@ -1028,6 +1027,33 @@ fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_na
     is_trait || class_needs_vtable(class_name, defs)
 }
 
+/// Lowers the receiver of a call that mutates the collection `obj` names, so
+/// the call changes a collection only that receiver holds.
+///
+/// A bare binding is lowered as it is and, when the kind has a copy-on-write
+/// entry point `cow`, checked through it. A receiver reached through a field
+/// or an element is made the program's own along its whole path first: the
+/// struct holding it may be shared with another name, and so may the
+/// collection itself.
+pub(super) fn lower_mutated_receiver(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    cow: Option<&str>,
+    span: Span,
+) -> Result<Operand, LoweringError> {
+    if !matches!(obj.node, ExpressionKind::Identifier(..)) {
+        if let Some(place) = super::expression::unshare::lower_written_place(ctx, obj)? {
+            return Ok(Operand::Copy(place));
+        }
+    }
+    let obj_op = lower_expression(ctx, obj, None)?;
+    Ok(match cow {
+        Some(cow) => emit_cow_check(ctx, obj_op, obj_ty, cow, span),
+        None => obj_op,
+    })
+}
+
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.
 ///
 /// If the receiver is a simple local variable (`Move` with no projection), emits a call to
@@ -1049,6 +1075,11 @@ pub(super) fn emit_cow_check(
         Operand::Move(p) if p.projection.is_empty() => p.local,
         _ => return obj_op,
     };
+    // Reference counts exist on the host only: a GPU body has no count to
+    // check, and a GPU-resident binding's host copy is detached by residency.
+    if ctx.body.is_gpu() || ctx.body.local_decls[self_local.0].device_handle.is_some() {
+        return obj_op;
+    }
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
     let cow_fn = Operand::Constant(Box::new(crate::mir::Constant {
         span,

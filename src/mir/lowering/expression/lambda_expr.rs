@@ -155,7 +155,7 @@ pub(crate) fn lower_closure(
         body,
         captures: captures.clone(),
     });
-    Ok(emit_closure_aggregate(ctx, closure, &captures, dest))
+    emit_closure_aggregate(ctx, closure, &captures, dest)
 }
 
 /// The return type the function type `ty` states, read at the enclosing
@@ -367,21 +367,20 @@ fn emit_closure_aggregate(
     closure: &ClosureSource,
     captures: &[CapturedVar],
     dest: Option<Place>,
-) -> Operand {
+) -> Result<Operand, LoweringError> {
     // Build capture operands from the outer scope's locals. A self-reference
     // becomes a counted closure value first, released once the aggregate has
     // taken its own reference.
     let watermark = ctx.body.local_decls.len();
-    let capture_operands: Vec<Operand> = captures
-        .iter()
-        .map(|cap| {
-            if ctx.self_references.contains_key(&cap.outer_local) {
-                lower_self_reference_value(ctx, cap.outer_local, closure.span, None)
-            } else {
-                Operand::Copy(Place::new(cap.outer_local))
-            }
-        })
-        .collect();
+    let mut capture_operands: Vec<Operand> = Vec::with_capacity(captures.len());
+    for cap in captures {
+        let operand = if ctx.self_references.contains_key(&cap.outer_local) {
+            lower_self_reference_value(ctx, cap.outer_local, closure.span, None)
+        } else {
+            captured_value(ctx, cap.outer_local, closure.span)?
+        };
+        capture_operands.push(operand);
+    }
 
     // Record capture types in the outer body for Perceus / codegen.
     // Stored as AST Type so both Perceus (via MirType::from_type_kind) and
@@ -430,5 +429,23 @@ fn emit_closure_aggregate(
         ctx.emit_temp_drop(local, watermark, closure.span);
     }
 
-    Operand::Copy(target)
+    Ok(Operand::Copy(target))
+}
+
+/// The value a closure captures from `outer_local`.
+///
+/// A closure captures by value. A struct of plain scalars is a pointer to a
+/// block no one else retains, so handing the closure that pointer would let a
+/// later write to the binding change what the closure sees; it is copied
+/// instead. Every other value is retained by the closure, and a write to one
+/// made after the capture copies it first (`unshare`).
+fn captured_value(
+    ctx: &mut LoweringContext,
+    outer_local: Local,
+    span: Span,
+) -> Result<Operand, LoweringError> {
+    let place = Place::new(outer_local);
+    let ty = ctx.body.local_decls[outer_local.0].ty.clone();
+    let copy = super::value_copy::copy_value_aggregate(ctx, &place, &ty, None, span)?;
+    Ok(copy.unwrap_or(Operand::Copy(place)))
 }

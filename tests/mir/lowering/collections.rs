@@ -205,6 +205,10 @@ fn main()
     var a = [0, 0]
     a.set(0, o.amount)
 "#,
-        &["let _5: int;", "_5 = _1.0;"],
+        &[
+            "miri_rt_array_cow\")(move _2)",
+            "let _6: int;",
+            "_6 = _1.0;",
+        ],
     );
 }
