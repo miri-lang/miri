@@ -9,7 +9,6 @@
 use crate::mir::body::Body;
 use crate::mir::place::Local;
 use crate::mir::symbol::Symbol;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Represents a lowered lambda function.
@@ -30,27 +29,4 @@ pub struct CapturedVar {
     pub name: Rc<str>,
     pub lambda_local: Local,
     pub outer_local: Local,
-}
-
-/// Registry for lambda bodies collected during lowering.
-#[derive(Debug, Default)]
-pub struct LambdaRegistry {
-    /// Map from lambda name to its info
-    pub lambdas: HashMap<String, LambdaInfo>,
-}
-
-impl LambdaRegistry {
-    pub fn new() -> Self {
-        Self {
-            lambdas: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, info: LambdaInfo) {
-        self.lambdas.insert(info.symbol.link_name(), info);
-    }
-
-    pub fn get(&self, name: &str) -> Option<&LambdaInfo> {
-        self.lambdas.get(name)
-    }
 }

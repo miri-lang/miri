@@ -105,7 +105,7 @@ fn resolve_vtable_method_picks_concrete_override() {
         ("Derived".to_string(), TypeDefinition::Class(derived)),
     ]);
     assert_eq!(
-        resolve_vtable_method("Derived", "greet", &defs),
+        resolve_vtable_method("Derived", "greet", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Derived.greet".to_string()),
     );
 }
@@ -126,7 +126,10 @@ fn resolve_vtable_method_leaves_a_method_re_declared_abstract_unfilled() {
     ]);
     // Mid re-declares greet abstract, which shadows Base's body: a class
     // extending Mid supplies its own.
-    assert_eq!(resolve_vtable_method("Mid", "greet", &defs), None);
+    assert_eq!(
+        resolve_vtable_method("Mid", "greet", &defs).map(|symbol| symbol.link_name()),
+        None
+    );
 }
 
 /// A default a non-generic class inherits resolves to the class's own copy,
@@ -143,7 +146,7 @@ fn resolve_vtable_method_names_the_class_copy_of_a_trait_default() {
         ("Impl".to_string(), TypeDefinition::Class(impl_class)),
     ]);
     assert_eq!(
-        resolve_vtable_method("Impl", "greet", &defs),
+        resolve_vtable_method("Impl", "greet", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Impl.greet".to_string()),
     );
 }
@@ -165,7 +168,7 @@ fn resolve_vtable_method_names_the_shared_default_for_a_generic_class() {
         ("Impl".to_string(), TypeDefinition::Class(impl_class)),
     ]);
     assert_eq!(
-        resolve_vtable_method("Impl", "greet", &defs),
+        resolve_vtable_method("Impl", "greet", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Greeter.greet".to_string()),
     );
 }
@@ -192,7 +195,7 @@ fn resolve_vtable_method_names_the_class_copy_of_a_default_under_an_abstract_dec
         ("Impl".to_string(), TypeDefinition::Class(impl_class)),
     ]);
     assert_eq!(
-        resolve_vtable_method("Impl", "greet", &defs),
+        resolve_vtable_method("Impl", "greet", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Impl.greet".to_string()),
     );
 }
@@ -201,7 +204,9 @@ fn resolve_vtable_method_names_the_class_copy_of_a_default_under_an_abstract_dec
 fn resolve_vtable_method_returns_none_when_method_absent() {
     let standalone = class("Standalone", None, &[], &[], false);
     let defs = make_defs([("Standalone".to_string(), TypeDefinition::Class(standalone))]);
-    assert!(resolve_vtable_method("Standalone", "missing", &defs).is_none());
+    assert!(resolve_vtable_method("Standalone", "missing", &defs)
+        .map(|symbol| symbol.link_name())
+        .is_none());
 }
 
 #[test]
@@ -213,7 +218,9 @@ fn resolve_vtable_method_returns_none_for_non_class_types() {
             generics: None,
         }),
     )]);
-    assert!(resolve_vtable_method("AliasName", "any", &defs).is_none());
+    assert!(resolve_vtable_method("AliasName", "any", &defs)
+        .map(|symbol| symbol.link_name())
+        .is_none());
 }
 
 #[test]
@@ -468,7 +475,7 @@ fn vtable_instance_at_spelled_arguments_names_its_instantiation_bodies() {
     };
     assert_eq!(instance.symbol(), "miri.Impl$String.$vtable");
     assert_eq!(
-        instance.slot_targets(&defs),
+        slot_target_names(instance.slot_targets(&defs)),
         vec![
             ("describe", Some("miri.Impl$String.describe".to_string())),
             ("name", Some("miri.Impl$String.name".to_string())),
@@ -492,7 +499,7 @@ fn vtable_instance_without_spelled_arguments_names_the_shared_bodies() {
     };
     assert_eq!(instance.symbol(), "miri.Impl.$vtable");
     assert_eq!(
-        instance.slot_targets(&defs),
+        slot_target_names(instance.slot_targets(&defs)),
         vec![
             ("describe", Some("miri.Op.describe".to_string())),
             ("name", Some("miri.Impl.name".to_string())),
@@ -528,11 +535,11 @@ fn resolve_vtable_method_finds_a_default_through_a_parent_trait() {
         ),
     ]);
     assert_eq!(
-        resolve_vtable_method("Impl", "who", &defs),
+        resolve_vtable_method("Impl", "who", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Impl.who".to_string()),
     );
     assert_eq!(
-        resolve_vtable_method("GenericImpl", "who", &defs),
+        resolve_vtable_method("GenericImpl", "who", &defs).map(|symbol| symbol.link_name()),
         Some("miri.A.who".to_string()),
     );
 }
@@ -557,7 +564,7 @@ fn inherited_trait_default_prefers_the_first_listed_trait() {
         })
     ));
     assert_eq!(
-        resolve_vtable_method("Box", "who", &defs),
+        resolve_vtable_method("Box", "who", &defs).map(|symbol| symbol.link_name()),
         Some("miri.First.who".to_string()),
     );
 }
@@ -572,7 +579,9 @@ fn synthesized_references_names_the_drop_hook_an_abstract_class_inherits() {
         ("Closer".to_string(), TypeDefinition::Trait(closer)),
         ("A".to_string(), TypeDefinition::Class(base)),
     ]);
-    assert!(synthesized_references(&defs).contains("miri.Closer.drop"));
+    assert!(synthesized_references(&defs)
+        .iter()
+        .any(|symbol| symbol.link_name() == "miri.Closer.drop"));
 }
 
 /// A method the chain declares names its declaring class; one it does not
@@ -585,8 +594,14 @@ fn method_symbol_names_the_declaring_class_else_the_type_itself() {
         ("Base".to_string(), TypeDefinition::Class(base)),
         ("Sub".to_string(), TypeDefinition::Class(sub)),
     ]);
-    assert_eq!(method_symbol(&defs, "Sub", "area"), "miri.Base.area");
-    assert_eq!(method_symbol(&defs, "Sub", "clone"), "miri.Sub.clone");
+    assert_eq!(
+        method_symbol(&defs, "Sub", "area").link_name(),
+        "miri.Base.area"
+    );
+    assert_eq!(
+        method_symbol(&defs, "Sub", "clone").link_name(),
+        "miri.Sub.clone"
+    );
 }
 
 /// Every method a container's thunk asks of an element, and its `clone`, is
@@ -603,7 +618,9 @@ fn synthesized_references_names_each_element_method_and_clone_a_class_declares()
     let symbols = synthesized_references(&defs);
     for name in ELEMENT_METHOD_NAMES.into_iter().chain(["clone"]) {
         assert!(
-            symbols.contains(&format!("miri.Item.{name}")),
+            symbols
+                .iter()
+                .any(|symbol| symbol.link_name() == format!("miri.Item.{name}")),
             "{name}: {symbols:?}"
         );
     }
@@ -711,11 +728,11 @@ fn a_default_a_base_body_shadows_is_compiled_under_no_class() {
 fn resolve_vtable_method_names_a_base_body_over_a_subclass_default() {
     let defs = base_body_under_subclass_default();
     assert_eq!(
-        resolve_vtable_method("Child", "name", &defs),
+        resolve_vtable_method("Child", "name", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Base.name".to_string()),
     );
     assert_eq!(
-        method_symbol(&defs, "Child", "name"),
+        method_symbol(&defs, "Child", "name").link_name(),
         "miri.Base.name".to_string()
     );
 }
@@ -771,7 +788,7 @@ fn collect_vtable_methods_lists_an_overridden_concrete_method() {
     assert_eq!(collect_vtable_methods("Base", &defs), vec!["m"]);
     assert_eq!(collect_vtable_methods("Derived", &defs), vec!["m"]);
     assert_eq!(
-        resolve_vtable_method("Base", "m", &defs),
+        resolve_vtable_method("Base", "m", &defs).map(|symbol| symbol.link_name()),
         Some("miri.Base.m".to_string()),
     );
 }
@@ -783,4 +800,14 @@ fn vtable_instance_is_some_for_a_class_another_class_extends() {
     let defs = concrete_chain();
     let ty = Type::new(TypeKind::Custom("Base".to_string(), None), span());
     assert!(VtableInstance::of(&ty, &defs).is_some());
+}
+
+/// Each slot's method with the link name of the body it names.
+fn slot_target_names(
+    targets: Vec<(&str, Option<miri::mir::symbol::Symbol>)>,
+) -> Vec<(&str, Option<String>)> {
+    targets
+        .into_iter()
+        .map(|(method, target)| (method, target.map(|symbol| symbol.link_name())))
+        .collect()
 }

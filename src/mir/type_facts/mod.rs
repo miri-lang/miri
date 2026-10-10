@@ -50,7 +50,7 @@ pub struct TypeFacts {
     generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
     drop_instantiations: HashMap<String, Vec<Vec<Type>>>,
     vtable_fills: VtableFills,
-    withheld_methods: HashSet<String>,
+    withheld_methods: HashSet<Symbol>,
 }
 
 impl TypeFacts {
@@ -83,9 +83,9 @@ impl TypeFacts {
         })
     }
 
-    /// The same facts, with `withheld_methods` the link names of the methods
-    /// lowering withheld at an instance nothing that runs reaches them at.
-    pub fn withholding(mut self, withheld_methods: HashSet<String>) -> Self {
+    /// The same facts, with `withheld_methods` the methods lowering withheld
+    /// at an instance nothing that runs reaches them at.
+    pub fn withholding(mut self, withheld_methods: HashSet<Symbol>) -> Self {
         self.withheld_methods = withheld_methods;
         self
     }
@@ -131,10 +131,10 @@ impl TypeFacts {
         &self.vtable_fills
     }
 
-    /// Whether lowering withheld the method body `link_name` names: it
-    /// compiled no body for it, so nothing may call or register it.
-    pub fn is_withheld(&self, link_name: &str) -> bool {
-        self.withheld_methods.contains(link_name)
+    /// Whether lowering withheld the method body `symbol` names: it compiled
+    /// no body for it, so nothing may call or register it.
+    pub fn is_withheld(&self, symbol: &Symbol) -> bool {
+        self.withheld_methods.contains(symbol)
     }
 
     /// The type each field of the struct or class `name` is stored at in an
@@ -153,12 +153,12 @@ impl TypeFacts {
 
     /// The symbol of the drop hook releasing a `name` value runs, or `None`
     /// when the type has none.
-    pub fn drop_hook_symbol(&self, name: &str) -> Option<String> {
+    pub fn drop_hook_symbol(&self, name: &str) -> Option<Symbol> {
         crate::mir::lowering::dispatch_symbols::drop_hook_symbol(name, &self.definitions)
     }
 
     /// The symbol of the `clone` a copy of a `name` element calls.
-    pub fn clone_symbol(&self, name: &str) -> String {
+    pub fn clone_symbol(&self, name: &str) -> Symbol {
         crate::mir::lowering::dispatch_symbols::clone_method_symbol(name, &self.definitions)
     }
 
@@ -204,7 +204,7 @@ impl TypeFacts {
         name: &str,
         method_name: &str,
         args: Option<&[Type]>,
-    ) -> String {
+    ) -> Symbol {
         args.and_then(|args| {
             crate::mir::lowering::method_dispatch::instantiated_callee(
                 &self.definitions,

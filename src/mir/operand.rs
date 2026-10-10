@@ -2,10 +2,11 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::literal::Literal;
-use crate::ast::types::Type;
+use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::Body;
 use crate::mir::place::{Place, PlaceElem};
+use crate::mir::symbol::Symbol;
 use crate::mir::types::MirType;
 use std::fmt;
 
@@ -25,24 +26,39 @@ pub enum Operand {
     Copy(Place),
     /// A constant value.
     Constant(Box<Constant>),
+    /// A function named by its symbol: a call's callee, or a function's
+    /// address taken as a value.
+    Function(Box<FunctionConstant>),
 }
 
 impl Operand {
-    /// The symbol this operand names when it is a call's callee spelled as a
-    /// function name; `None` for any other constant and for a place, whose
-    /// callee is only known at run time.
-    pub fn called_symbol(&self) -> Option<&str> {
-        let Operand::Constant(constant) = self else {
-            return None;
-        };
-        match &constant.literal {
-            Literal::Identifier(name) => Some(name.as_str()),
-            Literal::Integer(_)
-            | Literal::Float(_)
-            | Literal::String(_)
-            | Literal::Boolean(_)
-            | Literal::Regex(_)
-            | Literal::None => None,
+    /// The operand naming the function `symbol`, typed as a function name is.
+    pub fn function(symbol: Symbol, span: Span) -> Self {
+        Operand::Function(Box::new(FunctionConstant {
+            span,
+            ty: Type::new(TypeKind::Identifier, span),
+            symbol,
+        }))
+    }
+
+    /// The operand naming the function the runtime library exports as
+    /// `c_name`.
+    pub fn runtime(c_name: &str, span: Span) -> Self {
+        Self::function(Symbol::runtime(c_name), span)
+    }
+
+    /// The C name of the runtime function this operand names; `None` for any
+    /// other operand.
+    pub fn called_runtime_name(&self) -> Option<&str> {
+        self.called_symbol()?.runtime_name()
+    }
+
+    /// The function this operand names; `None` for a constant and for a
+    /// place, whose callee is only known at run time.
+    pub fn called_symbol(&self) -> Option<&Symbol> {
+        match self {
+            Operand::Function(function) => Some(&function.symbol),
+            Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) => None,
         }
     }
 
@@ -58,6 +74,7 @@ impl Operand {
         match self {
             Operand::Move(place) | Operand::Copy(place) => &body.local_decls[place.local.0].ty,
             Operand::Constant(c) => &c.ty,
+            Operand::Function(function) => &function.ty,
         }
     }
 
@@ -85,6 +102,7 @@ impl Operand {
     pub fn ty_projected(&self, body: &Body) -> Option<MirType> {
         match self {
             Operand::Constant(c) => Some(MirType::from_type_kind(&c.ty.kind)),
+            Operand::Function(function) => Some(MirType::from_type_kind(&function.ty.kind)),
             Operand::Move(place) | Operand::Copy(place) => resolve_place_mir_type(place, body),
         }
     }
@@ -150,6 +168,7 @@ impl fmt::Display for Operand {
             Operand::Move(place) => write!(f, "move {}", place),
             Operand::Copy(place) => write!(f, "{}", place), // Implicit copy usually
             Operand::Constant(c) => write!(f, "const {}", c),
+            Operand::Function(function) => write!(f, "fn {}", function.symbol),
         }
     }
 }
@@ -166,4 +185,12 @@ impl fmt::Display for Constant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.literal)
     }
+}
+
+/// A function named as an operand, by the symbol it is compiled under.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionConstant {
+    pub span: Span,
+    pub ty: Type,
+    pub symbol: Symbol,
 }

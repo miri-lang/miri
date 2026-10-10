@@ -11,6 +11,7 @@ use crate::ast::types::{Type, TypeKind, EQUALS_METHOD_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     BinOp, Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind,
     Terminator, TerminatorKind,
@@ -113,7 +114,7 @@ fn emit_string_equality(
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: identifier_constant(rt::STRING_EQUALS, span),
+            func: Operand::runtime(rt::STRING_EQUALS, span),
             args: vec![lhs, rhs],
             out_args: Vec::new(),
             arg_handles: Vec::new(),
@@ -417,7 +418,7 @@ fn emit_named_type_equality(
             &method,
         );
         return Ok(emit_equals_method_call(
-            ctx, span, &symbol, lhs_op, rhs_op, is_eq,
+            ctx, span, symbol, lhs_op, rhs_op, is_eq,
         ));
     }
     if matches!(
@@ -439,7 +440,7 @@ pub(super) fn type_supplies_equality(ctx: &LoweringContext, name: &str) -> bool 
 fn emit_equals_method_call(
     ctx: &mut LoweringContext,
     span: Span,
-    symbol: &str,
+    symbol: Symbol,
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
@@ -452,7 +453,7 @@ fn emit_equals_method_call(
     let next_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: identifier_constant(symbol, span),
+            func: Operand::function(symbol, span),
             args,
             out_args: Vec::new(),
             arg_handles: Vec::new(),
@@ -892,7 +893,7 @@ pub(super) fn emit_corrupt_discriminant_panic(
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: identifier_constant(rt::PANIC, span),
+            func: Operand::runtime(rt::PANIC, span),
             args: vec![Operand::Copy(Place::new(message_temp))],
             out_args: Vec::new(),
             arg_handles: Vec::new(),
@@ -1029,13 +1030,4 @@ fn emit_scalar_equality(
     });
 
     result
-}
-
-/// Helper to construct an identifier Constant operand.
-pub(super) fn identifier_constant(name: &str, span: Span) -> Operand {
-    Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
-    }))
 }

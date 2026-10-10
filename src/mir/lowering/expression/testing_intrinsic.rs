@@ -390,7 +390,7 @@ fn lower_assert_panics(
 
     let next_bb = ctx.new_basic_block();
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
-    let func_op = identifier_constant(rt::ASSERT_PANICS, span);
+    let func_op = Operand::runtime(rt::ASSERT_PANICS, span);
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -515,7 +515,7 @@ fn emit_call_no_return(
     after_bb: crate::mir::BasicBlock,
 ) {
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
-    let func_op = identifier_constant(runtime_fn, span);
+    let func_op = Operand::runtime(runtime_fn, span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
@@ -527,15 +527,6 @@ fn emit_call_no_return(
         },
         span,
     ));
-}
-
-/// Create a `Constant` operand that names the runtime function symbol.
-fn identifier_constant(name: &str, span: Span) -> Operand {
-    Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier(name.to_string()),
-    }))
 }
 
 /// Create a `Constant` operand carrying a String literal value.
@@ -625,7 +616,7 @@ fn pick_concrete_kind(
             Operand::Constant(c) if !matches!(c.ty.kind, TypeKind::Error) => {
                 Some(c.ty.kind.clone())
             }
-            Operand::Constant(_) => None,
+            Operand::Constant(_) | Operand::Function(_) => None,
         }
     }
 
@@ -743,7 +734,7 @@ fn emit_string_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b: Op
     let next = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: identifier_constant(rt::STRING_EQUALS, span),
+            func: Operand::runtime(rt::STRING_EQUALS, span),
             args: vec![a, b],
             out_args: Vec::new(),
             arg_handles: Vec::new(),

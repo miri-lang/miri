@@ -102,7 +102,7 @@ pub(crate) fn device_effect(kind: &TerminatorKind) -> DeviceEffect<'_> {
 /// The effect of a call to one of the residency runtime entries, or `None` for
 /// any other callee.
 fn runtime_entry_effect<'a>(func: &Operand, args: &[Operand]) -> Option<DeviceEffect<'a>> {
-    let symbol = func.called_symbol()?;
+    let symbol = func.called_runtime_name()?;
     let handle = || args.first().and_then(handle_argument);
     let effect = match symbol {
         READBACK_FN => {
@@ -148,7 +148,7 @@ pub(crate) fn whole_local(operand: &Operand) -> Option<Local> {
         Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
             Some(place.local)
         }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
     }
 }
 
@@ -185,7 +185,7 @@ pub(crate) fn readback_destinations(body: &Body) -> HashSet<Local> {
             else {
                 return None;
             };
-            if func.called_symbol() != Some(READBACK_FN) {
+            if func.called_runtime_name() != Some(READBACK_FN) {
                 return None;
             }
             args.get(1).and_then(whole_local)
@@ -254,7 +254,9 @@ pub(crate) fn statement_adoption(body: &Body, statement: &Statement) -> Option<(
 pub(crate) fn terminator_host_reads(body: &Body, kind: &TerminatorKind) -> Vec<Local> {
     let read = match kind {
         TerminatorKind::SwitchInt { discr, .. } => whole_local(discr),
-        TerminatorKind::Call { func, args, .. } if func.called_symbol() == Some(UPLOAD_FN) => {
+        TerminatorKind::Call { func, args, .. }
+            if func.called_runtime_name() == Some(UPLOAD_FN) =>
+        {
             upload_source(body, args)
         }
         TerminatorKind::Call { .. }

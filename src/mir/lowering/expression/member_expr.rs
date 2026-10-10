@@ -159,13 +159,7 @@ fn lower_zero_arg_method_as_property(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let mangled_name = Symbol::method(class_name, &[], method_name, &[]).link_name();
-
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier(mangled_name),
-    }));
+    let func_op = Operand::function(Symbol::method(class_name, &[], method_name, &[]), expr.span);
 
     let mut call_args = vec![obj_operand];
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
@@ -406,7 +400,7 @@ fn release_field_access_base(
     }
     let result_base = match result {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-        Operand::Constant(_) => None,
+        Operand::Constant(_) | Operand::Function(_) => None,
     };
     if result_base == Some(base) {
         ctx.register_scope_temp(base);

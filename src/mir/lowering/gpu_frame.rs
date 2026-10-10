@@ -198,18 +198,17 @@ fn emit_frame_pass(
         GpuKernelKind::FramePass { pass: pass_idx },
         ctx.kernel_index(frame_stmt_id),
     );
-    let kernel_name = kernel_symbol.link_name();
 
     if is_literal_end {
         let range = literal_frame_range(loop_var_name, start_lit, end, range_type.clone(), *span)?;
         let kernel_body =
             build_frame_kernel_literal(ctx, captures, &range, body, *span, uses_frame)?;
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
-            symbol: kernel_symbol,
+            symbol: kernel_symbol.clone(),
             body: kernel_body,
             captures: Vec::new(),
         });
-        emit_gpu_frame_launch_literal(ctx, &kernel_name, range.grid, captures, *span, uses_frame)?;
+        emit_gpu_frame_launch_literal(ctx, kernel_symbol, range.grid, captures, *span, uses_frame)?;
     } else {
         let bound = forall_gpu::AxisBound::Runtime(end.clone(), range_type.clone());
         let kernel_body = build_frame_kernel_runtime(
@@ -221,13 +220,13 @@ fn emit_frame_pass(
             uses_frame,
         )?;
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
-            symbol: kernel_symbol,
+            symbol: kernel_symbol.clone(),
             body: kernel_body,
             captures: Vec::new(),
         });
         emit_gpu_frame_launch_runtime(
             ctx,
-            &kernel_name,
+            kernel_symbol,
             start_lit,
             end,
             range_type.clone(),
@@ -346,7 +345,7 @@ fn compute_bounds_limit(
 
 fn emit_gpu_frame_launch_literal(
     ctx: &mut LoweringContext,
-    kernel_name: &str,
+    kernel: Symbol,
     grid: [u32; 3],
     captures: &[forall_gpu::CaptureInfo],
     span: Span,
@@ -357,11 +356,7 @@ fn emit_gpu_frame_launch_literal(
     let grid_ops = grid.map(|axis| forall_gpu::int_constant(i64::from(axis), span));
     let (grid_local, block_local) = make_grid_block_locals(ctx, grid_ops, block_size, span);
 
-    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(kernel_name.to_string()),
-    }));
+    let kernel_op = Operand::function(kernel, span);
 
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);
@@ -426,7 +421,7 @@ fn emit_gpu_frame_launch_literal(
 #[allow(clippy::too_many_arguments)]
 fn emit_gpu_frame_launch_runtime(
     ctx: &mut LoweringContext,
-    kernel_name: &str,
+    kernel: Symbol,
     start: i64,
     end: &Expression,
     range_type: crate::ast::RangeExpressionType,
@@ -441,11 +436,7 @@ fn emit_gpu_frame_launch_runtime(
     let grid_ops = runtime_frame_grid(ctx, start, &end_op, block_size, span);
     let (grid_local, block_local) = make_grid_block_locals(ctx, grid_ops, block_size, span);
 
-    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(kernel_name.to_string()),
-    }));
+    let kernel_op = Operand::function(kernel, span);
 
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);

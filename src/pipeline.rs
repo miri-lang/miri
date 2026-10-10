@@ -20,7 +20,7 @@ use crate::lexer::Lexer;
 use crate::mir;
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -496,10 +496,21 @@ pub struct PipelineResult {
     /// The slots each vtable fills, settled once lowering has reached every
     /// body; empty until then.
     pub vtable_fills: mir::lowering::vtable_demand::VtableFills,
-    /// The link names of the generic class methods lowering withheld because
-    /// nothing that runs reaches them at an instance their obligations fail
-    /// at; see `ImpliedMethodVerdicts`.
-    pub withheld_methods: std::collections::HashSet<String>,
+    /// The generic class methods lowering withheld because nothing that runs
+    /// reaches them at an instance their obligations fail at; see
+    /// `ImpliedMethodVerdicts`.
+    pub withheld_methods: HashSet<Symbol>,
+    /// The bodies GPU code reaches as device helpers, whose GPU clones a WGSL
+    /// module declares and calls under their WGSL names; empty until lowering.
+    pub device_helpers: HashSet<Symbol>,
+}
+
+/// Every lowered body under the name it is emitted as, and the bodies GPU
+/// code reaches as device helpers.
+#[derive(Debug)]
+pub struct GpuProgram {
+    pub bodies: Vec<(String, mir::Body)>,
+    pub device_helpers: HashSet<Symbol>,
 }
 
 /// Options controlling the build process.
@@ -564,42 +575,82 @@ fn monomorphized_lowering_failure(
     ))
 }
 
-fn called_function_names(bodies: &[(Symbol, mir::Body)]) -> std::collections::HashSet<String> {
-    let mut called = std::collections::HashSet::new();
-    for (_, body) in bodies {
-        for block in &body.basic_blocks {
-            let Some(term) = &block.terminator else {
-                continue;
-            };
-            if let mir::TerminatorKind::Call {
-                func: mir::Operand::Constant(constant),
-                ..
-            } = &term.kind
-            {
-                if let crate::ast::literal::Literal::Identifier(name) = &constant.literal {
-                    called.insert(name.clone());
+fn called_functions(bodies: &[(Symbol, mir::Body)]) -> HashSet<Symbol> {
+    bodies
+        .iter()
+        .flat_map(|(_, body)| direct_callees(body))
+        .cloned()
+        .collect()
+}
+
+/// The functions reached from some starting bodies by following their direct
+/// calls, each yielded once, the starting ones included.
+struct CalleeWalk<'m, 'b> {
+    body_of: &'m HashMap<&'b Symbol, &'b mir::Body>,
+    visited: HashSet<&'b Symbol>,
+    queue: VecDeque<&'b Symbol>,
+}
+
+impl<'m, 'b> CalleeWalk<'m, 'b> {
+    fn from(
+        body_of: &'m HashMap<&'b Symbol, &'b mir::Body>,
+        starts: impl IntoIterator<Item = &'b Symbol>,
+    ) -> Self {
+        let mut walk = Self {
+            body_of,
+            visited: HashSet::new(),
+            queue: VecDeque::new(),
+        };
+        for start in starts {
+            if walk.visited.insert(start) {
+                walk.queue.push_back(start);
+            }
+        }
+        walk
+    }
+}
+
+impl<'b> Iterator for CalleeWalk<'_, 'b> {
+    type Item = &'b Symbol;
+
+    fn next(&mut self) -> Option<&'b Symbol> {
+        let current = self.queue.pop_front()?;
+        if let Some(body) = self.body_of.get(current) {
+            for callee in direct_callees(body) {
+                if self.visited.insert(callee) {
+                    self.queue.push_back(callee);
                 }
             }
         }
+        Some(current)
     }
-    called
 }
 
-/// The names the lowered bodies call, gathered as they grow: each refresh
+/// The functions a body calls directly.
+fn direct_callees(body: &mir::Body) -> impl Iterator<Item = &Symbol> {
+    body.basic_blocks.iter().filter_map(|block| {
+        let mir::TerminatorKind::Call { func, .. } = &block.terminator.as_ref()?.kind else {
+            return None;
+        };
+        func.called_symbol()
+    })
+}
+
+/// The functions the lowered bodies call, gathered as they grow: each refresh
 /// scans only the bodies lowered since the one before.
 ///
 /// A body that constructs a class instance calls, through the instance's
 /// vtable, the body each slot of it a virtual call reads names, so those count
 /// as called too; the vtable demand says which, from the reached bodies alone.
-struct CalledNames {
-    names: std::collections::HashSet<String>,
-    /// The names a lowered body calls outright, not through a vtable slot.
-    direct: std::collections::HashSet<String>,
+struct CalledFunctions {
+    names: HashSet<Symbol>,
+    /// The functions a lowered body calls outright, not through a vtable slot.
+    direct: HashSet<Symbol>,
     vtables: mir::lowering::vtable_demand::VtableDemand,
     scanned: usize,
 }
 
-impl CalledNames {
+impl CalledFunctions {
     /// Nothing called yet, with the program's entry point and the bodies
     /// codegen names outside any call counted as reached.
     fn new(reach: &ReachTables) -> Self {
@@ -607,10 +658,10 @@ impl CalledNames {
             .synthesized
             .iter()
             .cloned()
-            .chain(std::iter::once("main".to_string()));
-        CalledNames {
-            names: std::collections::HashSet::new(),
-            direct: std::collections::HashSet::new(),
+            .chain(std::iter::once(Symbol::entry()));
+        CalledFunctions {
+            names: HashSet::new(),
+            direct: HashSet::new(),
             vtables: mir::lowering::vtable_demand::VtableDemand::rooted_at(roots),
             scanned: 0,
         }
@@ -625,19 +676,12 @@ impl CalledNames {
         reach: &ReachTables,
     ) -> Result<(), CompilerError> {
         let unscanned = bodies.get(self.scanned..).unwrap_or_default();
-        let direct = called_function_names(unscanned);
+        let direct = called_functions(unscanned);
         self.names.extend(direct.iter().cloned());
         self.direct.extend(direct);
-        let link_names: Vec<String> = unscanned
-            .iter()
-            .map(|(symbol, _)| symbol.link_name())
-            .collect();
         self.vtables
             .record(
-                link_names
-                    .iter()
-                    .zip(unscanned)
-                    .map(|(name, (_, body))| (name.as_str(), body)),
+                unscanned.iter().map(|(symbol, body)| (symbol, body)),
                 mir::lowering::vtable_demand::DemandTables {
                     type_checker: &result.type_checker,
                     layout: &reach.vtable_layout,
@@ -649,13 +693,13 @@ impl CalledNames {
         Ok(())
     }
 
-    fn contains(&self, name: &str) -> bool {
-        self.names.contains(name)
+    fn contains(&self, symbol: &Symbol) -> bool {
+        self.names.contains(symbol)
     }
 
-    /// Whether a lowered body calls `name` outright.
-    fn is_called(&self, name: &str) -> bool {
-        self.direct.contains(name)
+    /// Whether a lowered body calls `symbol` outright.
+    fn is_called(&self, symbol: &Symbol) -> bool {
+        self.direct.contains(symbol)
     }
 }
 
@@ -875,7 +919,7 @@ struct ReachTables {
     /// and its name.
     generic_functions: std::collections::HashMap<DeclaredFunction, StatementSite>,
     trait_defaults: TraitDefaultBodies,
-    synthesized: std::collections::HashSet<String>,
+    synthesized: HashSet<Symbol>,
     /// The slot numbering the lowered virtual calls index by.
     vtable_layout: mir::lowering::dispatch_symbols::VtableLayout,
 }
@@ -1339,6 +1383,7 @@ impl Pipeline {
             type_checker,
             vtable_fills: Default::default(),
             withheld_methods: Default::default(),
+            device_helpers: Default::default(),
         })
     }
 
@@ -1403,6 +1448,7 @@ impl Pipeline {
             type_checker,
             vtable_fills: Default::default(),
             withheld_methods: Default::default(),
+            device_helpers: Default::default(),
         })
     }
 
@@ -1518,7 +1564,10 @@ impl Pipeline {
             BuildTarget::WebGpu => {
                 let gpu_buffer_inits = &pipeline_result.type_checker.gpu_buffer_inits;
                 let bundle_dir = crate::codegen::web_gpu::emit_bundle(
-                    &mir_bodies,
+                    crate::codegen::web_gpu::LoweredProgram {
+                        bodies: &mir_bodies,
+                        device_helpers: &pipeline_result.device_helpers,
+                    },
                     opts.out_path.as_ref(),
                     Some(source),
                     if gpu_buffer_inits.is_empty() {
@@ -1611,6 +1660,7 @@ impl Pipeline {
                     let mut backend = CraneliftBackend::new()
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
                     backend.set_type_facts(settled_type_facts(pipeline_result, &mir_bodies)?);
+                    backend.set_device_helpers(pipeline_result.device_helpers.clone());
 
                     let ptr_ty = backend.pointer_type();
                     let runtime_info = collect_runtime_info(
@@ -1664,10 +1714,6 @@ impl Pipeline {
         };
 
         Ok((object_bytes, required_runtimes))
-    }
-
-    fn mangle_method_name(class_name: &str, method_name: &str) -> String {
-        mir::symbol::Symbol::method(class_name, &[], method_name, &[]).link_name()
     }
 
     /// Every recorded instantiation that gets a per-instantiation body, scalar
@@ -1794,7 +1840,7 @@ impl Pipeline {
     fn lower_called_generic_class_methods(
         result: &mut PipelineResult,
         reach: &ReachTables,
-        called: &mut CalledNames,
+        called: &mut CalledFunctions,
         verdicts: &mut ImpliedMethodVerdicts,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
@@ -1833,17 +1879,16 @@ impl Pipeline {
     fn wanted_instance_methods(
         result: &PipelineResult,
         reach: &ReachTables,
-        called: &CalledNames,
+        called: &CalledFunctions,
         symbols: &SymbolTable,
     ) -> Vec<WantedMethod> {
         Self::instance_methods(result, reach)
             .into_iter()
             .filter(|site| !symbols.is_claimed(&site.method.symbol))
             .filter_map(|site| {
-                let link_name = site.method.symbol.link_name();
-                let demand = if called.is_called(&link_name) {
+                let demand = if called.is_called(&site.method.symbol) {
                     MethodDemand::Called
-                } else if called.contains(&link_name)
+                } else if called.contains(&site.method.symbol)
                     || Self::is_element_method_body(
                         result,
                         &site.method.class_name,
@@ -2098,12 +2143,12 @@ impl Pipeline {
     /// the symbols [`mir::verify::verify_collection_element_ownership`] holds to its
     /// rule, spelled from the declarations rather than recognised by reading a
     /// call's name.
-    fn shared_collection_methods(result: &PipelineResult) -> std::collections::HashSet<String> {
+    fn shared_collection_methods(result: &PipelineResult) -> HashSet<Symbol> {
         let definitions = result.type_checker.type_definitions();
         Self::builtin_collection_classes(result)
             .flat_map(|(class_name, _)| {
                 mir::lowering::dispatch_symbols::methods_compiled_under(definitions, class_name)
-                    .map(move |method_name| Self::mangle_method_name(class_name, method_name))
+                    .map(move |method_name| Symbol::method(class_name, &[], method_name, &[]))
             })
             .collect()
     }
@@ -2118,9 +2163,7 @@ impl Pipeline {
     /// [`mir::lowering::method_dispatch::is_settled_by_the_runtime`] is the one
     /// definition dispatch and this exemption share, and
     /// [`crate::type_checker::runtime_settled`] states the rule.
-    fn collection_methods_backed_by_intrinsics(
-        result: &PipelineResult,
-    ) -> std::collections::HashSet<String> {
+    fn collection_methods_backed_by_intrinsics(result: &PipelineResult) -> HashSet<Symbol> {
         Self::builtin_collection_classes(result)
             .flat_map(|(class_name, class_def)| {
                 class_def
@@ -2132,7 +2175,7 @@ impl Pipeline {
                             method_name,
                         )
                     })
-                    .map(move |method_name| Self::mangle_method_name(class_name, method_name))
+                    .map(move |method_name| Symbol::method(class_name, &[], method_name, &[]))
             })
             .collect()
     }
@@ -2251,24 +2294,24 @@ impl Pipeline {
                 mir::dispatch::matched_element_types(&decl.ty, &mut elements);
             }
         }
-        let mut wanted = std::collections::BTreeMap::new();
+        let mut wanted = HashMap::new();
         for element in elements {
             if let Some(symbol) =
                 mir::dispatch::synthesized_equality_symbol(&element.kind, type_defs)
             {
-                wanted.entry(symbol.link_name()).or_insert((
-                    symbol,
-                    element.clone(),
-                    ElementBody::Equality,
-                ));
+                wanted
+                    .entry(symbol)
+                    .or_insert((element.clone(), ElementBody::Equality));
             }
             if let Some(symbol) = mir::dispatch::element_hash_symbol(&element.kind, type_defs) {
-                wanted
-                    .entry(symbol.link_name())
-                    .or_insert((symbol, element, ElementBody::Hash));
+                wanted.entry(symbol).or_insert((element, ElementBody::Hash));
             }
         }
-        for (_, (symbol, element, kind)) in wanted {
+        // Lowered in link-name order, so the bodies come out in one order
+        // whatever order the elements were found in.
+        let mut wanted: Vec<_> = wanted.into_iter().collect();
+        wanted.sort_by_cached_key(|(symbol, _)| symbol.link_name());
+        for (symbol, (element, kind)) in wanted {
             if !symbols
                 .claim_at(&symbol, element.span)
                 .map_err(CompilerError::Lowering)?
@@ -2296,23 +2339,25 @@ impl Pipeline {
         result: &mut PipelineResult,
         is_release: bool,
     ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
-        let lowered = self.lower_program(result, is_release)?;
+        let mut lowered = self.lower_program(result, is_release)?;
         let mut gpu_names =
             mir::gpu_names::GpuNames::collect(&lowered).map_err(CompilerError::Lowering)?;
-        let mut bodies: Vec<(String, mir::Body)> = lowered
-            .into_iter()
-            .map(|(symbol, body)| (mir::gpu_names::emitted_name(&symbol, &body), body))
-            .collect();
 
         // Clone user functions that are transitively called from GPU kernels into
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
-        Self::clone_gpu_device_helpers(&mut bodies, &mut gpu_names)?;
+        Self::clone_gpu_device_helpers(&mut lowered, &mut gpu_names)?;
 
         // Apply recorded workgroup sizes from kernel launches to GPU kernel bodies.
         // When kernel(args).launch(grid, block) is lowered, the block size is recorded
         // in the caller's body.kernel_workgroups. This pass collects them and applies
         // each to the corresponding GPU kernel body's backend metadata.
-        Self::stamp_kernel_workgroups(&mut bodies)?;
+        Self::stamp_kernel_workgroups(&mut lowered)?;
+
+        let mut bodies: Vec<(String, mir::Body)> = lowered
+            .into_iter()
+            .map(|(symbol, body)| (gpu_names.emitted_name(&symbol, &body), body))
+            .collect();
+        result.device_helpers = gpu_names.into_helpers();
 
         // Read back every gpu-resident binding a host read needs fresh, in every
         // build. Runs before RC insertion, which accounts for the host arrays the
@@ -2364,7 +2409,7 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let mut called = CalledNames::new(reach);
+        let mut called = CalledFunctions::new(reach);
         loop {
             register_base_class_instantiations(&mut result.type_checker)?;
             Self::lower_called_generic_class_methods(
@@ -2425,7 +2470,7 @@ impl Pipeline {
     fn settle_reached_instances(
         result: &mut PipelineResult,
         reach: &ReachTables,
-        called: &CalledNames,
+        called: &CalledFunctions,
         verdicts: &ImpliedMethodVerdicts,
         symbols: &SymbolTable,
     ) -> Result<(), CompilerError> {
@@ -2506,7 +2551,7 @@ impl Pipeline {
     fn lower_called_trait_defaults(
         result: &PipelineResult,
         reach: &ReachTables,
-        called: &CalledNames,
+        called: &CalledFunctions,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
@@ -2517,8 +2562,7 @@ impl Pipeline {
             if symbols.is_claimed(symbol) {
                 continue;
             }
-            let link_name = symbol.link_name();
-            let is_named = called.contains(&link_name) || reach.synthesized.contains(&link_name);
+            let is_named = called.contains(symbol) || reach.synthesized.contains(symbol);
             if !is_named {
                 continue;
             }
@@ -2566,24 +2610,24 @@ impl Pipeline {
     fn lower_called_shared_generic_functions(
         result: &PipelineResult,
         reach: &ReachTables,
-        called: &CalledNames,
+        called: &CalledFunctions,
         is_release: bool,
         bodies: &mut Vec<(Symbol, mir::Body)>,
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let mut named: Vec<(String, &DeclaredFunction, StatementSite)> = reach
+        let mut named: Vec<(Symbol, &DeclaredFunction, StatementSite)> = reach
             .generic_functions
             .iter()
             .filter_map(|(function, site)| {
                 let symbol = Symbol::declared_function(&function.module, &function.name);
-                let link_name = symbol.link_name();
-                let is_named =
-                    called.contains(&link_name) || reach.synthesized.contains(&link_name);
-                (is_named && !symbols.is_claimed(&symbol)).then_some((link_name, function, *site))
+                let is_named = called.contains(&symbol) || reach.synthesized.contains(&symbol);
+                (is_named && !symbols.is_claimed(&symbol)).then_some((symbol, function, *site))
             })
             .collect();
-        named.sort_by(|a, b| a.0.cmp(&b.0));
+        // Emitted in link-name order, so the bodies come out in one order
+        // whatever order the declarations were found in.
+        named.sort_by_cached_key(|(symbol, _, _)| symbol.link_name());
         for (_, function, site) in named {
             let Some(stmt) = site.statement(result) else {
                 continue;
@@ -3503,8 +3547,24 @@ impl Pipeline {
         source: &str,
         release: bool,
     ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
+        self.get_gpu_program_in(source, release)
+            .map(|program| program.bodies)
+    }
+
+    /// [`Self::get_gpu_mir_bodies_in`] together with the bodies GPU code
+    /// reaches as device helpers, which a WGSL module built from those bodies
+    /// declares and calls under their WGSL names.
+    pub fn get_gpu_program_in(
+        &self,
+        source: &str,
+        release: bool,
+    ) -> Result<GpuProgram, CompilerError> {
         let mut result = self.frontend(source)?;
-        self.lower_to_mir(&mut result, release)
+        let bodies = self.lower_to_mir(&mut result, release)?;
+        Ok(GpuProgram {
+            bodies,
+            device_helpers: result.device_helpers,
+        })
     }
 
     /// Get MIR bodies after Perceus RC insertion and RC elision, for test inspection.
@@ -3570,37 +3630,41 @@ impl Pipeline {
 
     /// Clone user functions that are transitively called from GPU kernels.
     /// Each clone is marked as GpuDevice and has f32-narrowed types.
+    ///
+    /// A clone keeps the symbol of the body it was cloned from, so afterwards a
+    /// helper's symbol names two bodies: the CPU original and its GpuDevice
+    /// clone. They are told apart by execution model, which is what every later
+    /// lookup by symbol selects on.
     fn clone_gpu_device_helpers(
-        bodies: &mut Vec<(String, mir::Body)>,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
         gpu_names: &mut mir::gpu_names::GpuNames,
     ) -> Result<(), CompilerError> {
-        let kernel_names: std::collections::HashSet<&str> = bodies
+        let body_of: HashMap<&Symbol, &mir::Body> =
+            bodies.iter().map(|(symbol, body)| (symbol, body)).collect();
+        let kernels: HashSet<&Symbol> = bodies
             .iter()
-            .filter(|(_, b)| b.execution_model == mir::ExecutionModel::GpuKernel)
-            .map(|(n, _)| n.as_str())
+            .filter(|(_, body)| body.execution_model == mir::ExecutionModel::GpuKernel)
+            .map(|(symbol, _)| symbol)
             .collect();
-
-        if kernel_names.is_empty() {
+        if kernels.is_empty() {
             return Ok(());
         }
 
-        let reachable = Self::compute_reachable_callees(bodies, &kernel_names)?;
+        let reachable: HashSet<&Symbol> =
+            CalleeWalk::from(&body_of, kernels.iter().copied()).collect();
         let mut helpers_to_add = Vec::new();
-        let mut helper_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        for (name, body) in bodies.iter() {
-            if reachable.contains(name.as_str())
+        for (symbol, body) in bodies.iter() {
+            if reachable.contains(symbol)
                 && body.execution_model == mir::ExecutionModel::Cpu
-                && !kernel_names.contains(name.as_str())
+                && !kernels.contains(symbol)
             {
                 let mut gpu_body = body.clone();
                 gpu_body.execution_model = mir::ExecutionModel::GpuDevice;
                 Self::narrow_float_types(&mut gpu_body);
-                helper_names.insert(name.clone());
-                let wgsl_name = gpu_names
-                    .claim_helper(name, body.span)
+                gpu_names
+                    .claim_helper(symbol, body.span)
                     .map_err(CompilerError::Lowering)?;
-                helpers_to_add.push((wgsl_name, gpu_body));
+                helpers_to_add.push((symbol.clone(), gpu_body));
             }
         }
 
@@ -3610,77 +3674,22 @@ impl Pipeline {
         // `narrow_type_kind` only touches scalar floats, so explicit `array<f64>`
         // buffers are left intact; f64-buffer kernels that call no helper are
         // unaffected because they never enter this set.
-        if !helper_names.is_empty() {
-            for idx in 0..bodies.len() {
-                if bodies[idx].1.execution_model != mir::ExecutionModel::GpuKernel {
-                    continue;
-                }
-                let one_kernel: std::collections::HashSet<&str> =
-                    std::iter::once(bodies[idx].0.as_str()).collect();
-                let kernel_reach = Self::compute_reachable_callees(bodies, &one_kernel)?;
-                if kernel_reach.iter().any(|n| helper_names.contains(n)) {
-                    Self::narrow_float_types(&mut bodies[idx].1);
-                }
-            }
+        let helpers = gpu_names.helpers();
+        let kernels_calling_helpers: Vec<usize> = bodies
+            .iter()
+            .enumerate()
+            .filter(|(_, (symbol, body))| {
+                body.execution_model == mir::ExecutionModel::GpuKernel
+                    && CalleeWalk::from(&body_of, [symbol]).any(|callee| helpers.contains(callee))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        for index in kernels_calling_helpers {
+            Self::narrow_float_types(&mut bodies[index].1);
         }
 
         bodies.extend(helpers_to_add);
-        gpu_names.retarget_calls(bodies);
         Ok(())
-    }
-
-    /// Compute the set of function names transitively called from the given kernel names.
-    fn compute_reachable_callees(
-        bodies: &[(String, mir::Body)],
-        kernel_names: &std::collections::HashSet<&str>,
-    ) -> Result<std::collections::HashSet<String>, CompilerError> {
-        use std::collections::VecDeque;
-
-        let name_to_body: std::collections::HashMap<&str, &mir::Body> =
-            bodies.iter().map(|(n, b)| (n.as_str(), b)).collect();
-
-        let mut reachable = std::collections::HashSet::new();
-        let mut queue = VecDeque::new();
-
-        for kernel_name in kernel_names {
-            reachable.insert(kernel_name.to_string());
-            queue.push_back(kernel_name.to_string());
-        }
-
-        while let Some(current_name) = queue.pop_front() {
-            if let Some(body) = name_to_body.get(current_name.as_str()) {
-                let callees = Self::extract_callees(body);
-                for callee in callees {
-                    if !reachable.contains(&callee) {
-                        reachable.insert(callee.clone());
-                        queue.push_back(callee);
-                    }
-                }
-            }
-        }
-
-        Ok(reachable)
-    }
-
-    /// Extract function names called by a body (by scanning all Call terminators).
-    fn extract_callees(body: &mir::Body) -> Vec<String> {
-        use crate::ast::literal::Literal;
-
-        let mut callees = Vec::new();
-        for block in &body.basic_blocks {
-            if let Some(term) = &block.terminator {
-                if let mir::TerminatorKind::Call {
-                    func: mir::Operand::Constant(c),
-                    ..
-                } = &term.kind
-                {
-                    if let Literal::Identifier(name) = &c.literal {
-                        callees.push(name.clone());
-                    }
-                }
-            }
-        }
-        callees
     }
 
     /// Narrow all f64 (float) types in the body to f32 for GPU compatibility.
@@ -3782,21 +3791,20 @@ impl Pipeline {
     ///
     /// If a kernel has multiple conflicting block sizes recorded (different launches
     /// with different blocks), returns an error — per-shape monomorphization is deferred.
-    fn stamp_kernel_workgroups(bodies: &mut [(String, mir::Body)]) -> Result<(), CompilerError> {
+    fn stamp_kernel_workgroups(bodies: &mut [(Symbol, mir::Body)]) -> Result<(), CompilerError> {
         use crate::mir::backend::BackendMetadata;
 
         // Collect all workgroup size recordings from all bodies.
-        let mut workgroup_map: std::collections::HashMap<String, [u32; 3]> =
-            std::collections::HashMap::new();
+        let mut workgroup_map: HashMap<Symbol, [u32; 3]> = HashMap::new();
 
         for (_name, body) in bodies.iter() {
-            for (kernel_name, block_size) in &body.kernel_workgroups {
-                if let Some(&existing) = workgroup_map.get(kernel_name) {
+            for (kernel, block_size) in &body.kernel_workgroups {
+                if let Some(&existing) = workgroup_map.get(kernel) {
                     if existing != *block_size {
                         return Err(CompilerError::Codegen(format!(
                             "conflicting launch workgroup shapes for kernel '{}': \
                             {} {} {} vs {} {} {} (per-shape monomorphization is deferred)",
-                            kernel_name,
+                            kernel.wgsl_name(),
                             existing[0],
                             existing[1],
                             existing[2],
@@ -3806,20 +3814,27 @@ impl Pipeline {
                         )));
                     }
                 } else {
-                    workgroup_map.insert(kernel_name.clone(), *block_size);
+                    workgroup_map.insert(kernel.clone(), *block_size);
                 }
             }
         }
 
-        // Apply each workgroup size to the corresponding kernel body.
-        for (kernel_name, block_size) in workgroup_map {
-            if let Some((_name, body)) = bodies.iter_mut().find(|(name, _)| name == &kernel_name) {
-                if let Some(BackendMetadata::Gpu(ref mut gpu_md)) = &mut body.backend_metadata {
-                    gpu_md.workgroup_size = Some(block_size);
-                } else if body.backend_metadata.is_none()
-                    && body.execution_model == mir::ExecutionModel::GpuKernel
-                {
-                    // If no backend metadata exists yet, create it.
+        // Apply each workgroup size to the corresponding kernel body. A helper's
+        // symbol also names its CPU original, so the kernel is selected by its
+        // execution model as well.
+        for (kernel, block_size) in workgroup_map {
+            let Some((_, body)) = bodies.iter_mut().find(|(symbol, body)| {
+                *symbol == kernel && body.execution_model == mir::ExecutionModel::GpuKernel
+            }) else {
+                return Err(CompilerError::Codegen(format!(
+                    "a launch records a workgroup size for the kernel '{}', which has no \
+                     compiled kernel body",
+                    kernel.wgsl_name()
+                )));
+            };
+            match &mut body.backend_metadata {
+                Some(BackendMetadata::Gpu(gpu_md)) => gpu_md.workgroup_size = Some(block_size),
+                None => {
                     body.backend_metadata =
                         Some(BackendMetadata::Gpu(crate::mir::backend::GpuBodyMetadata {
                             workgroup_size: Some(block_size),

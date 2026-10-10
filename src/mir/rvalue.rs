@@ -36,10 +36,10 @@ pub enum AggregateKind {
     Enum(Rc<str>, Rc<str>),
     /// An Option value, `Some(val)`. It is heap-allocated for correct representation.
     Option,
-    /// A closure allocation. The `Rc<str>` is the lambda function name.
+    /// A closure allocation. The `Symbol` names the body the closure calls.
     /// The `Type` is the lambda's function type (used to build fn_ptr signature in codegen).
     /// Operands are captured values in slot order.
-    Closure(std::rc::Rc<str>, crate::ast::types::Type),
+    Closure(crate::mir::symbol::Symbol, crate::ast::types::Type),
 }
 
 /// Right-hand value: the result of a computation.

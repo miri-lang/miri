@@ -458,11 +458,11 @@ fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<S
 
 /// The bodies a `for` loop over a class calls to walk it.
 struct IterableMethods {
-    length: String,
-    element_at: String,
+    length: Symbol,
+    element_at: Symbol,
     /// The body that reads a map's value at the same position, bound to a
     /// loop's second variable.
-    value_at: String,
+    value_at: Symbol,
 }
 
 /// The bodies a `for` loop over the value `iterable_id` calls, or `None` when
@@ -498,7 +498,7 @@ fn iterable_method_symbol(
     receiver_ty: &Type,
     class_name: &str,
     method_name: &str,
-) -> String {
+) -> Symbol {
     let declared = crate::type_checker::context::class_method_declaration(
         class_name,
         method_name,
@@ -516,7 +516,7 @@ fn iterable_method_symbol(
             )
             .0
         }
-        None => Symbol::method(class_name, &[], method_name, &[]).link_name(),
+        None => Symbol::method(class_name, &[], method_name, &[]),
     }
 }
 
@@ -537,12 +537,7 @@ fn emit_loop_length(
         });
         return;
     };
-    let length_symbol = methods.length.clone();
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
-    }));
+    let func_op = Operand::function(methods.length.clone(), *span);
     // A class method is a body this compilation lowers, never a runtime export,
     // so it always takes the implicit trailing allocator.
     let mut args = vec![Operand::Copy(Place::new(list_local))];
@@ -610,14 +605,10 @@ fn emit_element_at_call(
     loop_var: crate::mir::Local,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    element_at_symbol: &str,
+    element_at_symbol: &Symbol,
     span: &Span,
 ) {
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(element_at_symbol.to_string()),
-    }));
+    let func_op = Operand::function(element_at_symbol.clone(), *span);
     let after_elem_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -649,16 +640,11 @@ fn emit_secondary_loop_var(
     idx_local: crate::mir::Local,
     list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    value_at: Option<&str>,
+    value_at: Option<&Symbol>,
     span: &Span,
 ) {
     if let Some(value_at_symbol) = value_at {
-        let value_at_symbol = value_at_symbol.to_string();
-        let func_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(value_at_symbol),
-        }));
+        let func_op = Operand::function(value_at_symbol.clone(), *span);
         let after_val_bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
@@ -728,7 +714,7 @@ fn emit_loop_body_element_load(
     if let Some(secondary) = bindings.secondary {
         let value_at = iterable
             .filter(|_| bindings.is_map)
-            .map(|methods| methods.value_at.as_str());
+            .map(|methods| &methods.value_at);
         emit_secondary_loop_var(ctx, secondary, list_local, idx_var, value_at, span);
     }
 }

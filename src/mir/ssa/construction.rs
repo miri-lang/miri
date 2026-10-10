@@ -381,7 +381,7 @@ impl SSABuilder {
                     place.local = self.get_current_version(place.local);
                 }
             }
-            Operand::Constant(_) => {}
+            Operand::Constant(_) | Operand::Function(_) => {}
         }
     }
 

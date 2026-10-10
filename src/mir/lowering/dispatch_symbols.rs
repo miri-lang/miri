@@ -165,7 +165,7 @@ impl VtableInstance {
     pub fn slot_targets<'td>(
         &self,
         type_defs: &'td HashMap<String, TypeDefinition>,
-    ) -> Vec<(&'td str, Option<String>)> {
+    ) -> Vec<(&'td str, Option<Symbol>)> {
         collect_vtable_methods(self.class(), type_defs)
             .into_iter()
             .map(|method| (method, self.slot_target(method, type_defs)))
@@ -180,7 +180,7 @@ impl VtableInstance {
         &self,
         method_name: &str,
         type_defs: &HashMap<String, TypeDefinition>,
-    ) -> Option<String> {
+    ) -> Option<Symbol> {
         instantiated_callee(type_defs, self.class(), self.args(), method_name)
             .map(|callee| callee.symbol)
             .or_else(|| resolve_vtable_method(self.class(), method_name, type_defs))
@@ -336,7 +336,7 @@ pub fn resolve_vtable_method(
     class_name: &str,
     method_name: &str,
     type_defs: &HashMap<String, TypeDefinition>,
-) -> Option<String> {
+) -> Option<Symbol> {
     let owner = match resolve_method_source(type_defs, class_name, method_name)? {
         MethodSource::Declared { class, .. } => class,
         MethodSource::Default(default) if is_generic_class(type_defs, class_name) => {
@@ -345,7 +345,7 @@ pub fn resolve_vtable_method(
         MethodSource::Default(_) => class_name,
         MethodSource::AbstractOnly { .. } => return None,
     };
-    Some(Symbol::method(owner, &[], method_name, &[]).link_name())
+    Some(Symbol::method(owner, &[], method_name, &[]))
 }
 
 /// Whether `class_name` registers a class declaring type parameters.
@@ -363,9 +363,9 @@ pub fn inherited_method_symbol(
     type_defs: &HashMap<String, TypeDefinition>,
     type_name: &str,
     method_name: &str,
-) -> Option<String> {
+) -> Option<Symbol> {
     resolve_inherited_method(type_defs, type_name, method_name)
-        .map(|(owner, _)| Symbol::method(&owner, &[], method_name, &[]).link_name())
+        .map(|(owner, _)| Symbol::method(&owner, &[], method_name, &[]))
 }
 
 /// The symbol a call to `method_name` on a `type_name` receiver names:
@@ -375,9 +375,9 @@ pub fn method_symbol(
     type_defs: &HashMap<String, TypeDefinition>,
     type_name: &str,
     method_name: &str,
-) -> String {
+) -> Symbol {
     inherited_method_symbol(type_defs, type_name, method_name)
-        .unwrap_or_else(|| Symbol::method(type_name, &[], method_name, &[]).link_name())
+        .unwrap_or_else(|| Symbol::method(type_name, &[], method_name, &[]))
 }
 
 /// The symbol of the drop hook releasing a `type_name` value runs, or `None`
@@ -386,7 +386,7 @@ pub fn method_symbol(
 pub fn drop_hook_symbol(
     type_name: &str,
     type_defs: &HashMap<String, TypeDefinition>,
-) -> Option<String> {
+) -> Option<Symbol> {
     if !has_drop_hook(type_name, type_defs) {
         return None;
     }
@@ -394,7 +394,7 @@ pub fn drop_hook_symbol(
 }
 
 /// The symbol of the `clone` a copy of a `type_name` element calls.
-pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> String {
+pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> Symbol {
     method_symbol(type_defs, type_name, CLONE_METHOD_NAME)
 }
 
@@ -407,7 +407,7 @@ pub fn clone_method_symbol(type_name: &str, type_defs: &HashMap<String, TypeDefi
 /// A thunk's own predicate can still skip a class, so this may name a body no
 /// thunk ends up calling; that costs one body compiled needlessly, never one
 /// missing at link time.
-pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<String> {
+pub fn synthesized_references(type_defs: &HashMap<String, TypeDefinition>) -> HashSet<Symbol> {
     let mut symbols = HashSet::new();
     for (type_name, definition) in type_defs {
         let TypeDefinition::Class(_) = definition else {

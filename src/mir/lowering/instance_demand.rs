@@ -127,12 +127,12 @@ impl ImpliedMethodVerdicts {
         accepted
     }
 
-    /// The link names of every refused method nothing compiled after all.
-    pub(crate) fn withheld(&self, symbols: &SymbolTable) -> HashSet<String> {
+    /// Every refused method nothing compiled after all.
+    pub(crate) fn withheld(&self, symbols: &SymbolTable) -> HashSet<Symbol> {
         self.verdicts
             .iter()
             .filter(|(symbol, accepted)| !**accepted && !symbols.is_claimed(symbol))
-            .map(|(symbol, _)| symbol.link_name())
+            .map(|(symbol, _)| symbol.clone())
             .collect()
     }
 }

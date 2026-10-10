@@ -30,7 +30,7 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Compile-time info for one GPU kernel emitted by the WGSL backend.
 #[derive(Debug, Clone)]
@@ -47,9 +47,13 @@ pub struct KernelEmit {
 pub(crate) fn build_kernel_registry(
     module: &mut ObjectModule,
     bodies: &[(&str, &Body)],
+    device_helpers: &HashSet<Symbol>,
 ) -> Result<HashMap<String, KernelEmit>, CodegenError> {
     let backend = WgslBackend;
-    let options = WgslOptions::default();
+    let options = WgslOptions {
+        device_helpers: device_helpers.clone(),
+        ..WgslOptions::default()
+    };
     let mut registry = HashMap::new();
 
     // GpuDevice helper bodies (user functions called from kernels) are emitted
@@ -402,19 +406,9 @@ fn operand_type<'a>(op: &Operand, type_ctx: &'a TypeCtx) -> Result<&'a Type, Cod
 
 fn extract_kernel_name(kernel_op: &Operand) -> Result<String, CodegenError> {
     match kernel_op {
-        Operand::Constant(c) => match &c.literal {
-            Literal::Identifier(name) => Ok(name.clone()),
-            Literal::Integer(_)
-            | Literal::Float(_)
-            | Literal::String(_)
-            | Literal::Boolean(_)
-            | Literal::Regex(_)
-            | Literal::None => Err(CodegenError::Internal(
-                "GpuLaunch kernel operand must be an Identifier constant".to_string(),
-            )),
-        },
-        Operand::Copy(_) | Operand::Move(_) => Err(CodegenError::Internal(
-            "GpuLaunch kernel operand must be a Constant".to_string(),
+        Operand::Function(function) => Ok(function.symbol.wgsl_name()),
+        Operand::Constant(_) | Operand::Copy(_) | Operand::Move(_) => Err(CodegenError::Internal(
+            "GpuLaunch kernel operand must name the kernel's function".to_string(),
         )),
     }
 }
@@ -830,7 +824,7 @@ fn read_operand_value(
 ) -> Result<Value, CodegenError> {
     let place = match op {
         Operand::Copy(p) | Operand::Move(p) => p,
-        Operand::Constant(_) => {
+        Operand::Constant(_) | Operand::Function(_) => {
             return Err(CodegenError::Internal(
                 "GpuLaunch operand must be a Copy/Move of a projection-free Local".to_string(),
             ));

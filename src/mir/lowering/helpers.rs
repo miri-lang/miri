@@ -23,15 +23,15 @@ use super::statement::lower_statement;
 /// Ensure an operand is materialized as a `Place`.
 ///
 /// If the operand is already a `Copy` or `Move` of a place, returns it directly.
-/// If the operand is a `Constant`, stores it in a fresh temp local and returns
-/// that temp's place.
+/// A constant or a function name is stored in a fresh temp local typed as the
+/// operand is, and that temp's place returned.
 pub fn ensure_place(ctx: &mut LoweringContext, operand: Operand, span: Span) -> Place {
     match operand {
         Operand::Copy(p) | Operand::Move(p) => p,
-        Operand::Constant(c) => {
-            let temp = ctx.push_temp(c.ty.clone(), span);
+        value @ (Operand::Constant(_) | Operand::Function(_)) => {
+            let temp = ctx.push_temp(value.ty(&ctx.body).clone(), span);
             ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(Operand::Constant(c))),
+                kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(value)),
                 span,
             });
             Place::new(temp)

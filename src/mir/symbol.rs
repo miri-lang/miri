@@ -486,6 +486,24 @@ impl Symbol {
         matches!(self.kind, SymbolKind::Runtime(_))
     }
 
+    /// The C name of a function the runtime library exports; `None` for any
+    /// other symbol.
+    pub fn runtime_name(&self) -> Option<&str> {
+        match &self.kind {
+            SymbolKind::Runtime(c_name) => Some(c_name),
+            SymbolKind::Function { .. }
+            | SymbolKind::Method { .. }
+            | SymbolKind::Vtable { .. }
+            | SymbolKind::Closure { .. }
+            | SymbolKind::GpuKernel { .. }
+            | SymbolKind::Entry
+            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => None,
+        }
+    }
+
     /// The name the linker knows this symbol by.
     pub fn link_name(&self) -> String {
         // Pre-allocate a reasonable capacity (64 bytes) to prevent intermediate

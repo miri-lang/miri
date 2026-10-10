@@ -155,7 +155,7 @@ fn emit_logical_rhs(
     let rhs_op = lower_expression(ctx, rhs, None)?;
     let rhs_local = match &rhs_op {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-        Operand::Constant(_) => None,
+        Operand::Constant(_) | Operand::Function(_) => None,
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
@@ -218,7 +218,7 @@ fn lower_null_coalesce(
     let lhs_op = lower_expression(ctx, lhs, None)?;
     let lhs_local = match &lhs_op {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-        Operand::Constant(_) => None,
+        Operand::Constant(_) | Operand::Function(_) => None,
     };
     let is_none_local = emit_none_comparison(ctx, &lhs_op, &inner_ty, expr);
 

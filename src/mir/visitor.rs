@@ -13,7 +13,7 @@
 
 use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::body::{Body, LocalDecl};
-use crate::mir::operand::{Constant, Operand};
+use crate::mir::operand::{Constant, FunctionConstant, Operand};
 use crate::mir::place::{Local, Place, PlaceContext, PlaceElem};
 use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::{Statement, StatementKind};
@@ -223,6 +223,7 @@ pub trait Visitor {
             Operand::Copy(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
             Operand::Move(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location), // Move is also a use
             Operand::Constant(constant) => self.visit_constant(constant, location),
+            Operand::Function(function) => self.visit_function(function, location),
         }
     }
 
@@ -244,6 +245,8 @@ pub trait Visitor {
     fn visit_local_decl(&mut self, _local: Local, _decl: &LocalDecl) {}
 
     fn visit_constant(&mut self, _constant: &Constant, _location: BasicBlock) {}
+
+    fn visit_function(&mut self, _function: &FunctionConstant, _location: BasicBlock) {}
 }
 
 /// A visitor trait for **mutable** traversal and modification of MIR.
@@ -439,6 +442,7 @@ pub trait MutVisitor {
             Operand::Copy(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
             Operand::Move(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
             Operand::Constant(constant) => self.visit_constant(constant, location),
+            Operand::Function(function) => self.visit_function(function, location),
         }
     }
 
@@ -465,4 +469,6 @@ pub trait MutVisitor {
     fn visit_local_decl(&mut self, _local: Local, _decl: &mut LocalDecl) {}
 
     fn visit_constant(&mut self, _constant: &mut Constant, _location: BasicBlock) {}
+
+    fn visit_function(&mut self, _function: &mut FunctionConstant, _location: BasicBlock) {}
 }

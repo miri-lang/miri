@@ -64,9 +64,9 @@ fn test_set_literal() {
         &[
             "// s",
             "_1 = {};",
-            r#"_3 = const Identifier("miri_rt_set_add")(_1, _2)"#,
-            r#"_5 = const Identifier("miri_rt_set_add")(_1, _4)"#,
-            r#"_7 = const Identifier("miri_rt_set_add")(_1, _6)"#,
+            r#"_3 = fn miri_rt_set_add(_1, _2)"#,
+            r#"_5 = fn miri_rt_set_add(_1, _4)"#,
+            r#"_7 = fn miri_rt_set_add(_1, _6)"#,
         ],
     );
 }
@@ -78,8 +78,8 @@ fn test_map_literal() {
         &[
             "// m",
             "_1 = {};",
-            r#"_4 = const Identifier("miri_rt_map_set")(_1, _2, _3)"#,
-            r#"_7 = const Identifier("miri_rt_map_set")(_1, _5, _6)"#,
+            r#"_4 = fn miri_rt_map_set(_1, _2, _3)"#,
+            r#"_7 = fn miri_rt_map_set(_1, _5, _6)"#,
         ],
     );
 }
@@ -188,7 +188,7 @@ fn main()
             // pointer, and gives codegen a pointer slot for a scalar.
             "let _4: int;",
             "_4 = _1.0;",
-            "miri_rt_list_push\")(move _2, _4)",
+            "fn miri_rt_list_push(move _2, _4)",
         ],
     );
 }
@@ -206,7 +206,7 @@ fn main()
     a.set(0, o.amount)
 "#,
         &[
-            "miri_rt_array_cow\")(move _2)",
+            "fn miri_rt_array_cow(move _2)",
             "let _6: int;",
             "_6 = _1.0;",
         ],

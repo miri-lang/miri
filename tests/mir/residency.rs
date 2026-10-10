@@ -137,7 +137,7 @@ fn readback_calls(body: &miri::mir::Body) -> usize {
             matches!(
                 block.terminator.as_ref().map(|t| &t.kind),
                 Some(miri::mir::TerminatorKind::Call { func, .. })
-                    if func.called_symbol() == Some("miri_gpu_readback")
+                    if func.called_runtime_name() == Some("miri_gpu_readback")
             )
         })
         .count()
@@ -228,7 +228,7 @@ fn calls_to(body: &miri::mir::Body, symbol: &str) -> usize {
             matches!(
                 block.terminator.as_ref().map(|t| &t.kind),
                 Some(miri::mir::TerminatorKind::Call { func, .. })
-                    if func.called_symbol() == Some(symbol)
+                    if func.called_runtime_name() == Some(symbol)
             )
         })
         .count()

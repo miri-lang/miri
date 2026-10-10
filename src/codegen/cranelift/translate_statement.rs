@@ -2,7 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
@@ -10,6 +9,7 @@ use crate::codegen::cranelift::translator::{
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::error::CodegenError;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     AggregateKind, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
@@ -729,7 +729,8 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let func_name = Self::direct_call_name(func);
+        let callee = Self::direct_callee(func)?;
+        let func_name = callee.map(Symbol::link_name);
 
         let (arg_values, sig, out_arg_slots) = Self::prepare_call_args(
             builder,
@@ -748,11 +749,11 @@ impl<'a> FunctionTranslator<'a> {
                 .push(AbiParam::new(translate_type(dest_ty, ptr_type)));
         }
 
-        if let Some(func_name) = func_name {
+        if let Some(callee) = callee {
             Self::dispatch_named_call(
                 builder,
                 ctx,
-                &func_name,
+                callee,
                 args,
                 arg_values,
                 sig,
@@ -784,21 +785,16 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Returns the static function name when `func` is a `Constant(Identifier)`
-    /// operand (direct named call); `None` for indirect/closure calls or any
-    /// non-identifier constant.
-    fn direct_call_name(func: &Operand) -> Option<String> {
+    /// The function a direct call names; `None` for an indirect or closure
+    /// call through a place. A constant callee names no function and is an
+    /// internal error rather than an indirect call.
+    fn direct_callee(func: &Operand) -> Result<Option<&Symbol>, CodegenError> {
         match func {
-            Operand::Constant(c) => match &c.literal {
-                Literal::Identifier(name) => Some(name.clone()),
-                Literal::Integer(_)
-                | Literal::Float(_)
-                | Literal::String(_)
-                | Literal::Boolean(_)
-                | Literal::Regex(_)
-                | Literal::None => None,
-            },
-            Operand::Copy(_) | Operand::Move(_) => None,
+            Operand::Function(function) => Ok(Some(&function.symbol)),
+            Operand::Copy(_) | Operand::Move(_) => Ok(None),
+            Operand::Constant(constant) => Err(CodegenError::Internal(format!(
+                "a call's callee is the constant {constant}, not a function"
+            ))),
         }
     }
 
@@ -904,7 +900,9 @@ impl<'a> FunctionTranslator<'a> {
             {
                 Some(p.local)
             }
-            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+                None
+            }
         }
     }
 
@@ -987,7 +985,7 @@ impl<'a> FunctionTranslator<'a> {
     fn dispatch_named_call(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        func_name: &str,
+        callee: &Symbol,
         args: &[Operand],
         arg_values: Vec<cranelift_codegen::ir::Value>,
         sig: Signature,
@@ -997,10 +995,11 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), CodegenError> {
+        let func_name = callee.link_name();
         let func_id = ctx
             .module
-            .declare_function(func_name, Linkage::Import, &sig)
-            .map_err(|e| CodegenError::declare_function(func_name.to_string(), e.to_string()))?;
+            .declare_function(&func_name, Linkage::Import, &sig)
+            .map_err(|e| CodegenError::declare_function(func_name, e.to_string()))?;
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         let call = builder.ins().call(local_func, &arg_values);
 
@@ -1012,14 +1011,15 @@ impl<'a> FunctionTranslator<'a> {
             None
         };
 
-        if func_name == rt::LIST_NEW_FROM_MANAGED_ARRAY {
+        let runtime_name = callee.runtime_name();
+        if runtime_name == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY) {
             let elem_ty = Self::list_literal_element_type(dest_ty, args, type_ctx);
             if let (Some(list_ptr), Some(elem_ty)) = (maybe_result, elem_ty) {
                 let literal = ListLiteral { list_ptr, elem_ty };
                 Self::apply_list_from_managed_overrides(builder, ctx, &literal, type_ctx)?;
             }
         }
-        if func_name == rt::LIST_NEW {
+        if runtime_name == Some(rt::LIST_NEW) {
             Self::apply_list_new_init(builder, ctx, maybe_result, dest_ty, type_ctx, ptr_type)?;
         }
         Ok(())
@@ -1123,7 +1123,9 @@ impl<'a> FunctionTranslator<'a> {
             Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
                 element_of(&type_ctx.local_types[p.local.0].kind)
             }
-            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+                None
+            }
         })
     }
 

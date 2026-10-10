@@ -95,6 +95,7 @@ use crate::mir::place::Place;
 use crate::mir::residency::{self, HandleCarriers, Mirror};
 use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::StatementKind;
+use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Discriminant;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::{Body, ExecutionModel, Local, Statement};
@@ -234,11 +235,12 @@ fn join_states(into: &mut PathState, from: &PathState) {
 /// every RC operation. Reading such a body through the host's rules reports a
 /// leak for each value the kernel holds.
 pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
+    let mut violations = verify_callees(body);
     if matches!(
         body.execution_model,
         ExecutionModel::GpuKernel | ExecutionModel::GpuDevice
     ) {
-        return Vec::new();
+        return violations;
     }
 
     let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
@@ -246,7 +248,7 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     let managed_params = collect_managed_param_locals(body);
     let reachable = reachable_block_indices(body);
 
-    let mut violations = verify_collection_element_width(body);
+    violations.extend(verify_collection_element_width(body));
     flag_decref_on_params(body, &managed_params, &mut violations);
 
     let fixpoint = run_to_fixpoint(body, &tracked, &reachable);
@@ -259,6 +261,54 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     );
     report_join_divergences(body, &reachable, &tracked, &fixpoint.exits, &mut violations);
     violations
+}
+
+/// Every call and launch whose target names no function: a call's callee is
+/// the symbol of the function it calls or a place holding the closure it calls
+/// through, and a launch names its kernel's symbol. A constant in either place
+/// is a name no later pass can resolve.
+pub fn verify_callees(body: &Body) -> Vec<VerificationViolation> {
+    body.basic_blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .filter_map(|terminator| callee_violation(body, &terminator.kind))
+        .collect()
+}
+
+/// The violation a terminator's target raises, if it names no function.
+fn callee_violation(body: &Body, kind: &TerminatorKind) -> Option<VerificationViolation> {
+    let (message, destination) = match kind {
+        TerminatorKind::Call {
+            func, destination, ..
+        } => match func {
+            Operand::Constant(constant) => (
+                format!("a call's callee is the constant {constant}, not a function's symbol"),
+                destination,
+            ),
+            Operand::Function(_) | Operand::Copy(_) | Operand::Move(_) => return None,
+        },
+        TerminatorKind::GpuLaunch {
+            kernel,
+            destination,
+            ..
+        } => match kernel {
+            Operand::Function(_) => return None,
+            Operand::Constant(_) | Operand::Copy(_) | Operand::Move(_) => (
+                format!("a launch's kernel is {kernel}, not the kernel's symbol"),
+                destination,
+            ),
+        },
+        TerminatorKind::VirtualCall { .. }
+        | TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable => return None,
+    };
+    Some(VerificationViolation {
+        local: destination.local,
+        local_name: local_display_name(body, destination.local),
+        message,
+    })
 }
 
 /// Locals whose ownership this function is responsible for: managed, not the
@@ -450,7 +500,7 @@ fn successors_of(body: &Body, bb: usize) -> Vec<usize> {
 /// Whether a terminator hands control to a callee that never gives it back.
 fn terminator_diverges(kind: &TerminatorKind) -> bool {
     match kind {
-        TerminatorKind::Call { func, .. } => direct_call_name(func).is_some_and(diverges),
+        TerminatorKind::Call { func, .. } => func.called_runtime_name().is_some_and(diverges),
         TerminatorKind::VirtualCall { .. }
         | TerminatorKind::GpuLaunch { .. }
         | TerminatorKind::Goto { .. }
@@ -708,7 +758,7 @@ fn stores_place_in_a_value(dest: &Place, rvalue: &Rvalue, place: &Place) -> bool
 fn reads(operand: &Operand, place: &Place) -> bool {
     match operand {
         Operand::Copy(source) | Operand::Move(source) => source == place,
-        Operand::Constant(_) => false,
+        Operand::Constant(_) | Operand::Function(_) => false,
     }
 }
 
@@ -887,7 +937,7 @@ fn apply_terminator(
 
     let result = &body.local_decls[destination.local.0].ty.kind;
     let borrows = func
-        .and_then(direct_call_name)
+        .and_then(Operand::called_runtime_name)
         .is_some_and(|name| hands_back_a_borrow(name, result));
     if destination.projection.is_empty() && !borrows {
         adjust(state, tracked, destination.local, 1);
@@ -909,7 +959,7 @@ fn release_taken_args(
     state: &mut PathState,
     violations: &mut Vec<VerificationViolation>,
 ) {
-    let Some(name) = func.and_then(direct_call_name) else {
+    let Some(name) = func.and_then(Operand::called_runtime_name) else {
         return;
     };
     for position in taken_argument_positions(name) {
@@ -922,25 +972,6 @@ fn release_taken_args(
             continue;
         }
         release(body, &Place::new(local), tracked, state, violations);
-    }
-}
-
-/// The symbol a call names, for a direct call to a named function.
-///
-/// Indirect and closure calls resolve their callee at runtime, so nothing static
-/// is known about what they take ownership of.
-fn direct_call_name(func: &Operand) -> Option<&str> {
-    match func {
-        Operand::Constant(constant) => match &constant.literal {
-            Literal::Identifier(name) => Some(name.as_str()),
-            Literal::Integer(_)
-            | Literal::Float(_)
-            | Literal::String(_)
-            | Literal::Boolean(_)
-            | Literal::Regex(_)
-            | Literal::None => None,
-        },
-        Operand::Copy(_) | Operand::Move(_) => None,
     }
 }
 
@@ -968,7 +999,9 @@ fn rvalue_is_owning(rvalue: &Rvalue) -> bool {
     match rvalue {
         // A managed constant is materialized fresh and a move carries the source's
         // reference across.
-        Rvalue::Use(Operand::Constant(_)) | Rvalue::Use(Operand::Move(_)) => true,
+        Rvalue::Use(Operand::Constant(_))
+        | Rvalue::Use(Operand::Function(_))
+        | Rvalue::Use(Operand::Move(_)) => true,
         // A cast re-spells a type without touching the value, so it carries across
         // whatever the read it wraps produced.
         Rvalue::Cast(_, _) => true,
@@ -993,7 +1026,7 @@ fn rvalue_is_owning(rvalue: &Rvalue) -> bool {
 fn bare_local_moved(operand: &Operand) -> Option<Local> {
     match operand {
         Operand::Move(place) if place.projection.is_empty() => Some(place.local),
-        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) => None,
+        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => None,
     }
 }
 
@@ -1030,7 +1063,7 @@ fn bare_local_read(operand: &Operand) -> Option<Local> {
         Operand::Move(place) | Operand::Copy(place) if place.projection.is_empty() => {
             Some(place.local)
         }
-        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) => None,
+        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => None,
     }
 }
 
@@ -1098,8 +1131,8 @@ fn local_display_name(body: &Body, local: Local) -> String {
 /// reference over), and none of that is visible as an RC operation in MIR.
 pub fn verify_collection_element_ownership(
     body: &Body,
-    shared_collection_methods: &HashSet<String>,
-    intrinsic_backed: &HashSet<String>,
+    shared_collection_methods: &HashSet<Symbol>,
+    intrinsic_backed: &HashSet<Symbol>,
 ) -> Vec<VerificationViolation> {
     let mut violations = Vec::new();
     for block in &body.basic_blocks {
@@ -1109,7 +1142,7 @@ pub fn verify_collection_element_ownership(
         let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
             continue;
         };
-        let Some(symbol) = called_symbol(func) else {
+        let Some(symbol) = func.called_symbol() else {
             continue;
         };
         if !shared_collection_methods.contains(symbol) || intrinsic_backed.contains(symbol) {
@@ -1161,7 +1194,7 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
         let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
             continue;
         };
-        let Some(symbol) = called_symbol(func) else {
+        let Some(symbol) = func.called_runtime_name() else {
             continue;
         };
         let Some(receiver) = args.first().and_then(bare_local_read) else {
@@ -1255,6 +1288,7 @@ fn concrete_collection_slot(
 fn concrete_operand_type(operand: &Operand, body: &Body) -> Option<crate::ast::types::Type> {
     match operand {
         Operand::Constant(constant) => pinned_type(&constant.ty, body),
+        Operand::Function(function) => pinned_type(&function.ty, body),
         Operand::Copy(_) | Operand::Move(_) => {
             let local = bare_local_read(operand)?;
             pinned_type(&body.local_decls[local.0].ty, body)
@@ -1276,22 +1310,6 @@ fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::
         TypeKind::Generic(_, _, _) => None,
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => None,
         _ => Some(ty.clone()),
-    }
-}
-
-/// The identifier a `Call` names, or `None` for an indirect call.
-fn called_symbol(func: &Operand) -> Option<&str> {
-    let Operand::Constant(constant) = func else {
-        return None;
-    };
-    match &constant.literal {
-        Literal::Identifier(name) => Some(name.as_str()),
-        Literal::Integer(_)
-        | Literal::Float(_)
-        | Literal::String(_)
-        | Literal::Boolean(_)
-        | Literal::Regex(_)
-        | Literal::None => None,
     }
 }
 

@@ -190,6 +190,7 @@ fn lower_expression_stmt(
     // (e.g. `int?` for `x = 20` when x is `int?`).
     let ty = match &operand {
         Operand::Constant(c) => c.ty.clone(),
+        Operand::Function(function) => function.ty.clone(),
         Operand::Copy(place) | Operand::Move(place) => {
             if !place.projection.is_empty() {
                 ctx.type_checker

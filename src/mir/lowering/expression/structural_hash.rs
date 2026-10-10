@@ -19,13 +19,14 @@
 //!   hashes its address.
 
 use super::structural_equality::{
-    emit_corrupt_discriminant_panic, emit_variant_switch, identifier_constant, materialize_field,
-    read_discriminant, substituted_member_types,
+    emit_corrupt_discriminant_panic, emit_variant_switch, materialize_field, read_discriminant,
+    substituted_member_types,
 };
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     BinOp, Constant, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
     Terminator, TerminatorKind,
@@ -213,7 +214,7 @@ fn emit_named_type_hash(
             HASH_METHOD_NAME,
             &method,
         );
-        return Ok(call_hash_method(ctx, span, &symbol, value));
+        return Ok(call_hash_method(ctx, span, symbol, value));
     }
     match ctx.type_checker.type_definitions().get(name) {
         Some(TypeDefinition::Enum(_)) => emit_enum_hash(ctx, span, name, args, value),
@@ -334,12 +335,17 @@ fn emit_struct_hash(
 }
 
 /// Call the `hash` body named `symbol` on `value`.
-fn call_hash_method(ctx: &mut LoweringContext, span: Span, symbol: &str, value: Operand) -> Local {
+fn call_hash_method(
+    ctx: &mut LoweringContext,
+    span: Span,
+    symbol: Symbol,
+    value: Operand,
+) -> Local {
     let mut args = vec![value];
     if let Some(&allocator) = ctx.variable_map.get("allocator") {
         args.push(Operand::Copy(Place::new(allocator)));
     }
-    call_into_int(ctx, span, identifier_constant(symbol, span), args)
+    call_into_int(ctx, span, Operand::function(symbol, span), args)
 }
 
 /// The hash of a value `==` compares by identity: its address, mixed.
@@ -368,7 +374,7 @@ fn call_runtime_hash(
     name: &str,
     args: Vec<Operand>,
 ) -> Local {
-    call_into_int(ctx, span, identifier_constant(name, span), args)
+    call_into_int(ctx, span, Operand::runtime(name, span), args)
 }
 
 fn call_into_int(

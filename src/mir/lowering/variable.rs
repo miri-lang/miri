@@ -101,11 +101,7 @@ fn emit_void_runtime_call(
     args: Vec<Operand>,
     span: Span,
 ) {
-    let func = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier(fn_name.to_string()),
-    }));
+    let func = Operand::runtime(fn_name, span);
     let dest_local = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     let after_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(

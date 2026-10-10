@@ -16,98 +16,76 @@
 //! from its entry-point name with two fixed, distinct suffixes, so they are
 //! distinct whenever the entry points are.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 
-use crate::ast::literal::Literal;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::symbol::{Namespace, Symbol, SymbolTable};
-use crate::mir::{Body, ExecutionModel, Operand, TerminatorKind};
+use crate::mir::{Body, ExecutionModel};
 
-/// The WGSL names claimed so far, and the symbols of the bodies that may yet
-/// be reached from GPU code as helpers.
+/// The WGSL names claimed so far, and the bodies GPU code reaches as
+/// helpers.
 #[derive(Debug)]
 pub struct GpuNames {
-    by_link_name: HashMap<String, Symbol>,
     claimed: SymbolTable,
-    helper_names: HashMap<String, String>,
+    helpers: HashSet<Symbol>,
 }
 
 impl GpuNames {
-    /// Claim the WGSL name of every kernel among `lowered`, and remember the
-    /// symbol of every other body by its link name.
+    /// Claim the WGSL name of every kernel among `lowered`.
     pub fn collect(lowered: &[(Symbol, Body)]) -> Result<Self, LoweringError> {
         let mut names = Self {
-            by_link_name: HashMap::new(),
             claimed: SymbolTable::new(Namespace::Wgsl),
-            helper_names: HashMap::new(),
+            helpers: HashSet::new(),
         };
         for (symbol, body) in lowered {
             match body.execution_model {
                 ExecutionModel::GpuKernel => {
                     names.claimed.claim_at(symbol, body.span)?;
                 }
-                ExecutionModel::Cpu | ExecutionModel::GpuDevice | ExecutionModel::Async => {
-                    names
-                        .by_link_name
-                        .insert(symbol.link_name(), symbol.clone());
-                }
+                ExecutionModel::Cpu | ExecutionModel::GpuDevice | ExecutionModel::Async => {}
             }
         }
         Ok(names)
     }
 
-    /// Claim the WGSL name of the body linked as `link_name`, defined at
-    /// `span`, which GPU code reaches as a helper: the name its GPU clone is
-    /// declared under.
-    pub fn claim_helper(&mut self, link_name: &str, span: Span) -> Result<String, LoweringError> {
-        let Some(symbol) = self.by_link_name.get(link_name) else {
-            return Ok(link_name.to_string());
-        };
+    /// Claim the WGSL name of the body `symbol`, defined at `span`, which GPU
+    /// code reaches as a helper: the name its GPU clone is declared under.
+    pub fn claim_helper(&mut self, symbol: &Symbol, span: Span) -> Result<(), LoweringError> {
         self.claimed.claim_at(symbol, span)?;
-        let wgsl_name = symbol.wgsl_name();
-        self.helper_names
-            .insert(link_name.to_string(), wgsl_name.clone());
-        Ok(wgsl_name)
+        self.helpers.insert(symbol.clone());
+        Ok(())
     }
 
-    /// Point every direct call in a GPU body at the WGSL name of the helper
-    /// it calls.
-    pub fn retarget_calls(&self, bodies: &mut [(String, Body)]) {
-        let calls = bodies
-            .iter_mut()
-            .filter(|(_, body)| {
-                matches!(
-                    body.execution_model,
-                    ExecutionModel::GpuKernel | ExecutionModel::GpuDevice
-                )
-            })
-            .flat_map(|(_, body)| body.basic_blocks.iter_mut())
-            .filter_map(|block| block.terminator.as_mut());
-        for terminator in calls {
-            let TerminatorKind::Call {
-                func: Operand::Constant(constant),
-                ..
-            } = &mut terminator.kind
-            else {
-                continue;
-            };
-            let Literal::Identifier(name) = &mut constant.literal else {
-                continue;
-            };
-            if let Some(wgsl_name) = self.helper_names.get(name.as_str()) {
-                name.clone_from(wgsl_name);
-            }
-        }
+    /// The bodies claimed as helpers, which a WGSL module declares under
+    /// their WGSL names and its calls name by them.
+    pub fn helpers(&self) -> &HashSet<Symbol> {
+        &self.helpers
+    }
+
+    /// The claimed helpers, handed to the backends that spell calls to them.
+    pub fn into_helpers(self) -> HashSet<Symbol> {
+        self.helpers
+    }
+
+    /// The name a lowered body is emitted under; see [`spelled_name`].
+    pub fn emitted_name(&self, symbol: &Symbol, body: &Body) -> String {
+        spelled_name(&self.helpers, symbol, body.execution_model)
     }
 }
 
-/// The name a lowered body is emitted under: a GPU kernel's is the entry
-/// point its WGSL module declares, which the host launches it by, and every
-/// other body's is its link name.
-pub fn emitted_name(symbol: &Symbol, body: &Body) -> String {
-    match body.execution_model {
+/// The name the body `symbol` runs as under `model` is declared and called
+/// by, `helpers` being the bodies claimed as device helpers: a GPU kernel's is
+/// the entry point its WGSL module declares, which the host launches it by,
+/// and a helper's GPU clone is declared under its WGSL name; every other
+/// body's is its link name.
+///
+/// A call from GPU code names its callee as the device body it runs as, so a
+/// declaration and every call to it spell one name.
+pub fn spelled_name(helpers: &HashSet<Symbol>, symbol: &Symbol, model: ExecutionModel) -> String {
+    match model {
         ExecutionModel::GpuKernel => symbol.wgsl_name(),
+        ExecutionModel::GpuDevice if helpers.contains(symbol) => symbol.wgsl_name(),
         ExecutionModel::Cpu | ExecutionModel::GpuDevice | ExecutionModel::Async => {
             symbol.link_name()
         }

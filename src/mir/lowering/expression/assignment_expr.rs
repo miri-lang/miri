@@ -593,11 +593,7 @@ pub(crate) fn emit_map_set_call(
     val_op: Operand,
     expr: &Expression,
 ) -> crate::mir::Local {
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier(rt::MAP_SET.to_string()),
-    }));
+    let func_op = Operand::runtime(rt::MAP_SET, expr.span);
 
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, expr.span), expr.span);
@@ -848,11 +844,7 @@ pub(crate) fn emit_map_get_checked_call(
     value_ty: &Type,
     expr: &Expression,
 ) -> Operand {
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier(rt::MAP_GET_CHECKED.to_string()),
-    }));
+    let func_op = Operand::runtime(rt::MAP_GET_CHECKED, expr.span);
 
     // The lookup hands back what the map still owns without raising its count,
     // so the temp holding it is a borrow: releasing it would take a reference
@@ -1020,11 +1012,7 @@ fn emit_gpu_upload(
 
     let array_operand = Operand::Copy(host_place.clone());
 
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: Literal::Identifier(crate::mir::residency::UPLOAD_FN.to_string()),
-    }));
+    let func_op = Operand::runtime(crate::mir::residency::UPLOAD_FN, expr.span);
 
     let target_bb = ctx.new_basic_block();
     let _result_temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);

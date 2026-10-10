@@ -65,7 +65,7 @@ impl OptimizationPass for CopyPropagation {
                         replacements.retain(|_, op| !uses_local(op, dest));
 
                         if let Rvalue::Use(op) = rvalue {
-                            // All Operand variants (Copy, Move, Constant) are
+                            // All Operand variants (Copy, Move, Constant, Function) are
                             // safe to propagate — they are pure value references.
                             replacements.insert(dest, op.clone());
                         } else {
@@ -115,6 +115,6 @@ impl OptimizationPass for CopyPropagation {
 fn uses_local(op: &Operand, target: Local) -> bool {
     match op {
         Operand::Copy(place) | Operand::Move(place) => place.local == target,
-        Operand::Constant(_) => false,
+        Operand::Constant(_) | Operand::Function(_) => false,
     }
 }

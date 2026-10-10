@@ -965,3 +965,55 @@ fn a_wgsl_name_of_a_module_private_owner_method_has_its_own_mark() {
         Symbol::method("Helper", &[], "v", &[]).wgsl_name()
     );
 }
+
+/// The two spellings a callee is emitted and called under, pinned for one
+/// symbol of each kind a call names: a change to either breaks every object
+/// file and WGSL module already built against it.
+#[test]
+fn the_link_and_wgsl_names_of_each_callee_kind_are_pinned() {
+    let pinned = [
+        (
+            Symbol::function(&ModuleId::Program, "pick", &[ty(TypeKind::Int)]),
+            "miri.pick$int",
+            "pick__int",
+        ),
+        (
+            Symbol::function(&module("system.math"), "lattice_unit", &[]),
+            "miri$system$math.lattice_unit",
+            "m__6system4math_lattice_unit",
+        ),
+        (
+            Symbol::runtime("miri_rt_list_new"),
+            "miri_rt_list_new",
+            "miri_rt_list_new",
+        ),
+        (
+            Symbol::method("Point", &[], "norm", &[]),
+            "miri.Point.norm",
+            "m__t5Point4norm",
+        ),
+        (
+            Symbol::gpu_kernel(GpuKernelKind::Forall, 0),
+            "miri_gpu_forall_0",
+            "miri_gpu_forall_0",
+        ),
+    ];
+    for (symbol, link_name, wgsl_name) in pinned {
+        assert_eq!(symbol.link_name(), link_name);
+        assert_eq!(symbol.wgsl_name(), wgsl_name, "{link_name}");
+    }
+}
+
+/// Only a runtime function has a C name.
+#[test]
+fn only_a_runtime_function_has_a_runtime_name() {
+    assert_eq!(
+        Symbol::runtime("miri_rt_list_new").runtime_name(),
+        Some("miri_rt_list_new")
+    );
+    assert_eq!(
+        Symbol::function(&ModuleId::Program, "miri_rt_list_new", &[]).runtime_name(),
+        None
+    );
+    assert_eq!(Symbol::entry().runtime_name(), None);
+}

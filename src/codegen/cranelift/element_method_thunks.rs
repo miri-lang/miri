@@ -108,7 +108,7 @@ impl ElementMethod {
         type_name: &str,
         inst_args: Option<&[Type]>,
         facts: &TypeFacts,
-    ) -> String {
+    ) -> Symbol {
         // The per-instantiation body is the one a static call names, from the
         // one answer static dispatch reads. Where none applies — a non-generic
         // ancestor declares the method, or the element is not a generic
@@ -206,7 +206,7 @@ struct MethodCallee {
     /// Lowering withheld the method at this instance, so no body answers it:
     /// the thunk reports that at run time instead of calling it.
     withheld: bool,
-    symbol: String,
+    symbol: Symbol,
     ptr_type: cl_types::Type,
     call_conv: CallConv,
 }
@@ -303,9 +303,10 @@ fn emit_user_method_call(
     sig.returns
         .push(AbiParam::new(callee.method.answer_type(ptr_type)));
 
+    let callee_name = callee.symbol.link_name();
     let func_id = module
-        .declare_function(&callee.symbol, Linkage::Import, &sig)
-        .map_err(|e| CodegenError::declare_function(callee.symbol.clone(), e.to_string()))?;
+        .declare_function(&callee_name, Linkage::Import, &sig)
+        .map_err(|e| CodegenError::declare_function(callee_name, e.to_string()))?;
     let local_fn = module.declare_func_in_func(func_id, builder.func);
     let no_allocator = builder.ins().iconst(ptr_type, 0);
     let call = builder.ins().call(local_fn, &[left, right, no_allocator]);

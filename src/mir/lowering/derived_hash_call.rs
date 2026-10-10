@@ -50,7 +50,7 @@ pub(super) fn try_lower_derived_hash_call(
         Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
             Some(place.local)
         }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
     };
     let hash = Operand::Copy(Place::new(emit_structural_hash(
         ctx,
