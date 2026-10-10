@@ -264,8 +264,8 @@ impl TypeChecker {
     /// Equality asks whether two values are the same, which every type can
     /// answer: numerically, structurally, or through an `Equatable`
     /// implementation of its own.
-    fn check_equality_op(
-        &mut self,
+    pub(crate) fn check_equality_op(
+        &self,
         left: &Type,
         right: &Type,
         context: &Context,
@@ -314,8 +314,8 @@ impl TypeChecker {
     /// comparing two objects by address answers from allocation order, so the
     /// same two values would compare differently depending on which was built
     /// first. A type that defines no ordering is therefore refused.
-    fn check_ordering_op(
-        &mut self,
+    pub(crate) fn check_ordering_op(
+        &self,
         left: &Type,
         op: &BinaryOp,
         right: &Type,

@@ -942,10 +942,17 @@ impl TypeChecker {
 
     /// Checks if a type implements an interface (structural typing for structs).
     pub(crate) fn check_implements(&self, ty: &Type, constraint: &Type, context: &Context) -> bool {
-        let (constraint_name, ty_name) = match (&constraint.kind, &ty.kind) {
-            (TypeKind::Custom(cn, _), TypeKind::Custom(tn, _)) => (cn.as_str(), tn.as_str()),
-            _ => return false,
+        if let TypeKind::Custom(trait_name, None) = &constraint.kind {
+            if self.derives_trait(ty, trait_name, context) {
+                return true;
+            }
+        }
+        let (TypeKind::Custom(constraint_name, _), Some(ty_name)) =
+            (&constraint.kind, declaring_class_name(&ty.kind))
+        else {
+            return false;
         };
+        let constraint_name = constraint_name.as_str();
 
         // Check hierarchy first
         if self.is_subtype(ty_name, constraint_name) {
@@ -1134,5 +1141,48 @@ fn value_argument(arg: &crate::ast::Expression) -> Option<&crate::ast::Expressio
     match &arg.node {
         ExpressionKind::Type(ty, _) => super::generics::extract_value_generic(ty),
         _ => Some(arg),
+    }
+}
+
+/// The name of the type whose declaration says which traits a value of
+/// `kind` implements: the string and the collections are stdlib classes
+/// written under their own names. `None` for a type that declares none.
+fn declaring_class_name(kind: &TypeKind) -> Option<&str> {
+    match kind {
+        TypeKind::Custom(name, _) => Some(name.as_str()),
+        TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME),
+        TypeKind::List(_) => Some(crate::ast::types::BuiltinCollectionKind::List.name()),
+        TypeKind::Array(_, _) => Some(crate::ast::types::BuiltinCollectionKind::Array.name()),
+        TypeKind::Map(_, _) => Some(crate::ast::types::BuiltinCollectionKind::Map.name()),
+        TypeKind::Set(_) => Some(crate::ast::types::BuiltinCollectionKind::Set.name()),
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(..)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_)
+        | TypeKind::OneOf(_) => None,
     }
 }

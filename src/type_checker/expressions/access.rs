@@ -857,6 +857,9 @@ impl TypeChecker {
                 return member;
             }
         }
+        if let Some(member) = self.derived_operator_member(obj_type, prop_name, context) {
+            return member;
+        }
         let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);
         self.record_parameter_method_requirement(obj_type, prop_name, context);
 
@@ -876,7 +879,7 @@ impl TypeChecker {
             if let Some(result) = self.dispatch_type_definition_member(
                 name, prop_name, obj_type, &type_args, span, context, call_arity,
             ) {
-                return result;
+                return self.read_at_bounded_receiver(result, obj_type);
             }
         }
 
@@ -885,15 +888,17 @@ impl TypeChecker {
                 self.infer_member_meta(inner_type, prop_name, span, context)
             }
             _ if self.is_numeric(obj_type) || matches!(obj_type.kind, TypeKind::Boolean) => {
-                // A number or a boolean has no methods: text is built from one
-                // by interpolating it, the way `+` on text says too.
+                // A number or a boolean has no fields, and no methods besides
+                // the ones its operators answer: text is built from one by
+                // interpolating it, the way `+` on text says too.
                 self.report_error_with_help(
                     DiagnosticCode::TypFieldNotFound,
                     format!("Type '{}' does not have members", obj_type),
                     span,
                     format!(
-                        "a '{obj_type}' has no methods or fields; to turn it into text, \
-                         interpolate it in an f-string, e.g. f\"{{x}}\""
+                        "a '{obj_type}' has no fields, and no methods besides the ones its \
+                         operators answer; to turn it into text, interpolate it in an \
+                         f-string, e.g. f\"{{x}}\""
                     ),
                 );
                 make_type(TypeKind::Error)
@@ -912,6 +917,27 @@ impl TypeChecker {
                 make_type(TypeKind::Error)
             }
         }
+    }
+
+    /// A member of the trait bounding `receiver`, read at the receiver: the
+    /// trait wrote its own instances as `Self`, which for a value of a type
+    /// parameter is that parameter, so `a.compare(b)` with `a T` takes a `T`
+    /// and `a.concat(b)` gives one. Any other member is returned as it is.
+    fn read_at_bounded_receiver(&self, member: Type, receiver: &Type) -> Type {
+        let TypeKind::Generic(_, Some(bound), _) = &receiver.kind else {
+            return member;
+        };
+        let TypeKind::Custom(trait_name, None) = &bound.kind else {
+            return member;
+        };
+        if !matches!(
+            self.type_definitions().get(trait_name),
+            Some(TypeDefinition::Trait(_))
+        ) {
+            return member;
+        }
+        let as_self = HashMap::from([(trait_name.clone(), receiver.clone())]);
+        self.substitute_type(&member, &as_self)
     }
 
     /// The `hash()` a value of `obj_type` answers without declaring one: the

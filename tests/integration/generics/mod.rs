@@ -10,6 +10,7 @@ pub mod bounded_parameter_methods;
 pub mod classes_inside_generic_functions;
 pub mod declaration_order;
 pub mod delegation;
+pub mod derived_trait_conformance;
 pub mod distinct_parameters;
 pub mod explicit_type_arguments;
 pub mod extends;

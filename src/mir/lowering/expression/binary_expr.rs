@@ -962,6 +962,56 @@ fn lower_structural_equality(
     Ok(ret_op)
 }
 
+/// Lowers the three-way comparison of `lhs` and `rhs`, two values of a type
+/// the machine orders: `-1` when `lhs` sorts first, `1` when `rhs` does and
+/// `0` otherwise, computed as `(lhs > rhs) - (lhs < rhs)` over each operand
+/// evaluated once. An unordered pair — a NaN on either side — is `0`.
+pub(crate) fn lower_three_way_comparison(
+    ctx: &mut LoweringContext,
+    lhs: &Expression,
+    rhs: &Expression,
+    span: Span,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let lhs_op = lower_expression(ctx, lhs, None)?;
+    let rhs_op = lower_expression(ctx, rhs, None)?;
+    let (lhs_op, rhs_op) = at_one_number_type(ctx, (lhs, lhs_op), (rhs, rhs_op), span);
+    let int_ty = Type::new(TypeKind::Int, span);
+    let ordered_as_int = |ctx: &mut LoweringContext, op: BinOp| {
+        let ordered = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(ordered),
+                Rvalue::BinaryOp(op, Box::new(lhs_op.clone()), Box::new(rhs_op.clone())),
+            ),
+            span,
+        });
+        let as_int = ctx.push_temp(int_ty.clone(), span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(as_int),
+                Rvalue::Cast(Box::new(Operand::Copy(Place::new(ordered))), int_ty.clone()),
+            ),
+            span,
+        });
+        Operand::Copy(Place::new(as_int))
+    };
+    let above = ordered_as_int(ctx, BinOp::Gt);
+    let below = ordered_as_int(ctx, BinOp::Lt);
+    let target = match dest {
+        Some(place) => place,
+        None => Place::new(ctx.push_temp(int_ty.clone(), span)),
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::BinaryOp(BinOp::Sub, Box::new(above), Box::new(below)),
+        ),
+        span,
+    });
+    Ok(Operand::Copy(target))
+}
+
 /// Emit a plain `BinaryOp` rvalue into `dest` (or a fresh temp).
 fn emit_binary_op(
     ctx: &mut LoweringContext,
