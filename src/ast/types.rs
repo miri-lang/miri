@@ -370,7 +370,7 @@ impl BuiltinCollectionKind {
             ),
             Self::Set => matches!(method_name, "add" | "remove" | "clear"),
             Self::Map => matches!(method_name, "set" | "remove" | "clear"),
-            Self::Array => false,
+            Self::Array => matches!(method_name, "set" | "sort" | "reverse"),
         }
     }
 }

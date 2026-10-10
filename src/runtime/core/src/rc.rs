@@ -141,6 +141,28 @@ pub unsafe fn incref(ptr: *mut u8) {
     }
 }
 
+/// Whether a managed heap object is reachable through more than one reference.
+///
+/// Compiled code asks this before writing into a value that has value
+/// semantics — a struct, or a collection reached through a field — so a write
+/// through one name is never seen through another: a shared value is copied
+/// first. An immortal object (RC stored as a negative `isize`) answers `true`,
+/// because every reader shares it for the whole run and nothing may write
+/// through it. A null pointer is shared by no one.
+///
+/// # Safety
+/// `ptr` must be null or point to the payload of a block whose RC word sits
+/// immediately before it.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_rc_is_shared(ptr: *const u8) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    crate::guard::guard_check(ptr as *mut u8);
+    let rc = *((ptr as usize - RC_HEADER_SIZE) as *const usize) as isize;
+    rc != 1
+}
+
 /// Frees the `[RC][payload]` block given a pointer to the payload.
 ///
 /// `#[track_caller]` for the same reason as [`alloc_with_rc`]: the guard records

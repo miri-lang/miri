@@ -66,7 +66,7 @@ fn is_map_index(ctx: &LoweringContext, obj: &Expression) -> bool {
 
 /// Materialize the index operand into a bare local (`PlaceElem::Index` requires
 /// a `Local`), spilling to a temp when it is projected or a constant.
-fn ensure_index_local(
+pub(crate) fn ensure_index_local(
     ctx: &mut LoweringContext,
     index_expr: &Expression,
     index_operand: Operand,

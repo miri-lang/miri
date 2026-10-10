@@ -41,7 +41,7 @@ pub(crate) use super::method_dispatch::resolve_inherited_method;
 pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
-use super::method_dispatch::{emit_cow_check, residency_specialize_call};
+use super::method_dispatch::{lower_mutated_receiver, residency_specialize_call};
 
 pub fn lower_call(
     ctx: &mut LoweringContext,
@@ -704,8 +704,7 @@ fn lower_list_push(
     item_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
+    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::LIST_COW), *span)?;
     emit_list_push(ctx, obj_op, obj_ty, item_arg, span).map(Some)
 }
 
@@ -968,8 +967,7 @@ fn lower_map_set(
     value_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::MAP_COW, *span);
+    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::MAP_COW), *span)?;
     emit_map_set(ctx, obj_op, obj_ty, key_arg, value_arg, span).map(Some)
 }
 
@@ -1029,8 +1027,7 @@ fn lower_set_add(
     dest: Option<Place>,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::SET_COW, *span);
+    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::SET_COW), *span)?;
     emit_set_add(ctx, obj_op, obj_ty, elem_arg, dest, span).map(Some)
 }
 
@@ -1086,8 +1083,7 @@ fn lower_list_insert(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let item_watermark = ctx.body.local_decls.len();
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
+    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::LIST_COW), *span)?;
     let index_op = lower_expression(ctx, index_arg, None)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
@@ -1124,12 +1120,8 @@ fn lower_collection_set(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let obj_op = if builtin == Some(BuiltinCollectionKind::List) {
-        emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span)
-    } else {
-        obj_op
-    };
+    let cow = builtin.and_then(crate::runtime_fns::cow_fn);
+    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, cow, *span)?;
     let obj_op_src = operand_src_local(&obj_op);
     let index_op = lower_expression(ctx, index_arg, None)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;

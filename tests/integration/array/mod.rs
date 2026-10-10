@@ -16,3 +16,4 @@ pub mod methods;
 pub mod optional_elements;
 pub mod rc;
 pub mod transformable;
+pub mod value_semantics;

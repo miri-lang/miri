@@ -55,6 +55,11 @@ pub mod rt {
     /// codegen loads it and branches, so an unobserved allocation pays a load
     /// rather than a call it cannot inline.
     pub const TRACKING_STATE: &str = "miri_rt_tracking_state";
+    /// Compiler-internal: answers whether a managed object has more than one
+    /// reference, not in stdlib. Asked before a write into a struct, or into a
+    /// collection reached through a field, so the write copies a shared value
+    /// first instead of changing it under every other name that holds it.
+    pub const RC_IS_SHARED: &str = "miri_rt_rc_is_shared";
 
     // Array
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
@@ -354,6 +359,7 @@ pub mod rt {
         CLASS_FREE_TRACK,
         RELEASE_CHECK,
         TRACKING_STATE,
+        RC_IS_SHARED,
         // Array
         ARRAY_NEW,
         ARRAY_FREE,
@@ -719,8 +725,12 @@ pub fn diverges(name: &str) -> bool {
     )
 }
 
-/// Returns the Copy-on-Write runtime function for a built-in collection kind,
-/// or `None` for kinds that do not have a CoW intrinsic (`Array`).
+/// Returns the Copy-on-Write runtime function for a built-in collection kind.
+///
+/// Every built-in collection is a value: a write through one binding copies a
+/// buffer another binding also holds before changing it. Returned as an
+/// `Option` so a collection kind without an entry point can be added without
+/// touching the callers.
 ///
 /// Centralized so dispatch logic does not branch on string class names.
 pub fn cow_fn(kind: BuiltinCollectionKind) -> Option<&'static str> {
@@ -728,6 +738,6 @@ pub fn cow_fn(kind: BuiltinCollectionKind) -> Option<&'static str> {
         BuiltinCollectionKind::List => Some(rt::LIST_COW),
         BuiltinCollectionKind::Set => Some(rt::SET_COW),
         BuiltinCollectionKind::Map => Some(rt::MAP_COW),
-        BuiltinCollectionKind::Array => None,
+        BuiltinCollectionKind::Array => Some(rt::ARRAY_COW),
     }
 }

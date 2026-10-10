@@ -10,3 +10,4 @@ pub mod fields;
 pub mod functions;
 pub mod later_declared_struct;
 pub mod managed_field_assignment;
+pub mod value_semantics;

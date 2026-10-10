@@ -252,11 +252,11 @@ fn main()
     );
 }
 
-/// An array has no copy on write, so a closure capturing it, stored in its
-/// own element, is the array holding itself.
+/// An array copies on write: an element store copies it away from the
+/// closure's capture, so the closure sees the array as it was and no cycle forms.
 #[test]
-fn test_closure_capturing_an_array_stored_in_its_element_is_refused() {
-    assert_compiler_error(
+fn test_closure_capturing_an_array_stored_in_its_element_runs() {
+    assert_heap_guard_output(
         r#"
 use system.io
 
@@ -268,7 +268,32 @@ fn main()
     a[0] = fn() int: a.length()
     println(f"{a[0]()}")
 "#,
-        "the closure captures 'a' and is stored in an element of 'a'",
+        "2",
+    );
+}
+
+/// A struct copies on write: the field store copies it away from the closure's
+/// capture, so the closure holds the struct as it was and no cycle forms.
+#[test]
+fn test_closure_capturing_a_struct_stored_in_its_field_runs() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+struct Ticker
+    count int
+    on_tick fn() int
+
+fn zero() int
+    return 0
+
+fn main()
+    var t = Ticker(count: 1, on_tick: zero)
+    t.on_tick = fn() int: t.count + 1
+    t.count = 10
+    println(f"{t.on_tick()} {t.count}")
+"#,
+        "2 10",
     );
 }
 

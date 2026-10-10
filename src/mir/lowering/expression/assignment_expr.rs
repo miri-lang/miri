@@ -273,7 +273,10 @@ fn assign_to_member(
         let lowered = lower_expression(ctx, rhs, None)?;
         let rhs_ty = resolve_arg_type(ctx, rhs, &lowered);
         let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
-        let obj_operand = super::value_copy::lower_projection_base(ctx, obj)?;
+        let obj_operand = match super::unshare::lower_written_place(ctx, obj)? {
+            Some(place) => Operand::Copy(place),
+            None => super::value_copy::lower_projection_base(ctx, obj)?,
+        };
         let obj_ty = ctx
             .recorded_type(obj.id)
             .ok_or_else(|| LoweringError::type_not_found(obj.id, obj.span))?;
@@ -395,7 +398,7 @@ fn finalize_member_result(
     }
 }
 
-fn resolve_member_field_index(
+pub(crate) fn resolve_member_field_index(
     type_name: &str,
     prop: &Expression,
     type_defs: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
@@ -567,7 +570,12 @@ fn assign_to_member_compound(
 /// A value the map lays out inline — an inline vector — is copied as bytes and
 /// never referenced, so it is not retained: the rule `donate_operand_to_container`
 /// applies to every other store.
-fn inc_ref_if_managed(ctx: &mut LoweringContext, op: &Operand, ty: &Type, expr: &Expression) {
+pub(crate) fn inc_ref_if_managed(
+    ctx: &mut LoweringContext,
+    op: &Operand,
+    ty: &Type,
+    expr: &Expression,
+) {
     if ctx.is_perceus_managed(&ty.kind) && !crate::ast::types::element_layout(&ty.kind).is_address {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             ctx.push_statement(crate::mir::Statement {
@@ -578,7 +586,7 @@ fn inc_ref_if_managed(ctx: &mut LoweringContext, op: &Operand, ty: &Type, expr: 
     }
 }
 
-fn emit_map_set_call(
+pub(crate) fn emit_map_set_call(
     ctx: &mut LoweringContext,
     obj_op: Operand,
     key_op: Operand,
@@ -621,6 +629,11 @@ fn lower_index_assign_receiver(
     obj: &Expression,
     span: crate::error::syntax::Span,
 ) -> Result<Operand, LoweringError> {
+    if !matches!(obj.node, ExpressionKind::Identifier(..)) {
+        if let Some(place) = super::unshare::lower_written_place(ctx, obj)? {
+            return Ok(Operand::Copy(place));
+        }
+    }
     let obj_op = lower_expression(ctx, obj, None)?;
     let Some(obj_ty) = ctx.type_checker.get_type(obj.id).cloned() else {
         return Ok(obj_op);
@@ -828,7 +841,7 @@ fn combine_compound_operands(
 }
 
 /// Read `m[k]` the way an index read does, aborting when the key is absent.
-fn emit_map_get_checked_call(
+pub(crate) fn emit_map_get_checked_call(
     ctx: &mut LoweringContext,
     obj_op: Operand,
     key_op: Operand,
