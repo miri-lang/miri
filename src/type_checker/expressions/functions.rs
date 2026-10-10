@@ -289,7 +289,7 @@ impl TypeChecker {
             };
             widened = self
                 .narrow_float_literals(expr, expected, &inferred, context)
-                .or_else(|| self.widen_int_literals(expr, expected, &inferred))
+                .or_else(|| self.widen_int_literals(expr, expected, &inferred, context))
                 .or(widened);
         }
         widened.unwrap_or_else(|| implicit_return_type.clone())

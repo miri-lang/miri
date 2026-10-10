@@ -59,6 +59,7 @@ pub(crate) mod module_loader;
 mod operators;
 pub(crate) mod pattern_coverage;
 pub(crate) mod runtime_settled;
+mod source_arithmetic;
 pub mod statements;
 mod type_identities;
 pub(crate) mod type_set_shorthand;

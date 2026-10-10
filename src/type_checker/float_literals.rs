@@ -81,7 +81,7 @@ fn targets_gpu(context: &Context) -> bool {
 /// because that call is emitted as WGSL where no f64 exists. Clamping here is
 /// what keeps a declared width from pulling a literal past what its target can
 /// hold.
-fn width_for_target(declared: &TypeKind, context: &Context) -> TypeKind {
+pub(crate) fn width_for_target(declared: &TypeKind, context: &Context) -> TypeKind {
     if targets_gpu(context) && matches!(declared, TypeKind::Float | TypeKind::F64) {
         gpu_float_width()
     } else {
@@ -186,8 +186,9 @@ impl TypeChecker {
                 self.record_narrowed_type(expr, &narrowed);
                 Some(narrowed)
             }
-            // A `const` declared without a type was written as a literal, and
-            // takes a width the way that literal would.
+            // A `const` or `let` declared without a type, bound to a literal,
+            // names that literal, and takes a width the way that literal
+            // would.
             ExpressionKind::Identifier(name, _) if is_float_width(&expected.kind) => {
                 let info = context.resolve_info(name)?;
                 let is_float_constant =
@@ -198,6 +199,11 @@ impl TypeChecker {
                 let width = Type::new(width_for_target(&expected.kind, context), expected.span);
                 self.record_narrowed_type(expr, &width);
                 Some(width)
+            }
+            // Arithmetic built only from numbers written in the source takes
+            // the width as one number.
+            ExpressionKind::Binary(..) if is_float_width(&expected.kind) => {
+                self.source_arithmetic_at_width(expr, expected, context)
             }
             _ => None,
         }

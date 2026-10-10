@@ -2056,7 +2056,12 @@ impl TypeChecker {
                         .and_then(|e| {
                             self.narrow_float_literals(e, &concrete_param_type, &arg_type, context)
                                 .or_else(|| {
-                                    self.widen_int_literals(e, &concrete_param_type, &arg_type)
+                                    self.widen_int_literals(
+                                        e,
+                                        &concrete_param_type,
+                                        &arg_type,
+                                        context,
+                                    )
                                 })
                         })
                         .unwrap_or(arg_type)
@@ -2568,7 +2573,7 @@ impl TypeChecker {
                 // The type argument is the declared element width, so the
                 // literals written in the argument take it — otherwise each
                 // keeps the default `int` and fills only part of a wider slot.
-                self.widen_sequence_argument_elements(arg_expr, arg_type, &elem_type);
+                self.widen_sequence_argument_elements(arg_expr, arg_type, &elem_type, context);
                 self.narrow_sequence_argument_elements(arg_expr, arg_type, &elem_type, context);
                 let elements_fit = self.literal_elements_fit(arg_expr, &elem_type, context);
                 // A literal argument is recorded at the element type once its
@@ -3086,7 +3091,9 @@ impl TypeChecker {
                 let arg_type = arg_expr
                     .and_then(|e| {
                         self.narrow_float_literals(e, &concrete_field_type, &arg_type, context)
-                            .or_else(|| self.widen_int_literals(e, &concrete_field_type, &arg_type))
+                            .or_else(|| {
+                                self.widen_int_literals(e, &concrete_field_type, &arg_type, context)
+                            })
                     })
                     .unwrap_or(arg_type);
                 if !self.accepts_value_at(&concrete_field_type, &arg_type, arg_expr, context) {
@@ -3172,7 +3179,9 @@ impl TypeChecker {
                 let arg_type = arg_expr
                     .and_then(|e| {
                         self.narrow_float_literals(e, &concrete_param_type, &arg_type, context)
-                            .or_else(|| self.widen_int_literals(e, &concrete_param_type, &arg_type))
+                            .or_else(|| {
+                                self.widen_int_literals(e, &concrete_param_type, &arg_type, context)
+                            })
                     })
                     .unwrap_or(arg_type);
                 if !self.accepts_value_at(&concrete_param_type, &arg_type, arg_expr, context) {
@@ -3267,7 +3276,9 @@ impl TypeChecker {
                 let arg_type = arg_expr
                     .and_then(|e| {
                         self.narrow_float_literals(e, &concrete_field_type, &arg_type, context)
-                            .or_else(|| self.widen_int_literals(e, &concrete_field_type, &arg_type))
+                            .or_else(|| {
+                                self.widen_int_literals(e, &concrete_field_type, &arg_type, context)
+                            })
                     })
                     .unwrap_or(arg_type);
                 if !self.accepts_value_at(&concrete_field_type, &arg_type, arg_expr, context) {
@@ -3443,7 +3454,7 @@ impl TypeChecker {
             }
             let arg_type = self
                 .narrow_float_literals(arg, elem_type, arg_type, context)
-                .or_else(|| self.widen_int_literals(arg, elem_type, arg_type))
+                .or_else(|| self.widen_int_literals(arg, elem_type, arg_type, context))
                 .unwrap_or_else(|| arg_type.clone());
             if !self.accepts_value_at(elem_type, &arg_type, Some(arg), context) {
                 let arg_type = self.settled_value_type(arg, arg_type);

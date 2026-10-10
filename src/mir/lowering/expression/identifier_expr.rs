@@ -113,6 +113,9 @@ fn lower_local_identifier(
     let ty = ctx.body.local_decls[local.0].ty.clone();
     let source = Place::new(local);
 
+    if let Some(width) = adapted_width(ctx, &ty, expr) {
+        return Ok(read_at_width(ctx, source, width, expr.span, dest));
+    }
     if let Some(d) = dest {
         if let Some(operand) =
             super::value_copy::copy_value_aggregate(ctx, &source, &ty, Some(d.clone()), expr.span)?
@@ -135,6 +138,43 @@ fn lower_local_identifier(
     } else {
         Ok(Operand::Move(source))
     }
+}
+
+/// The width the checker read a number binding at, when it differs from the
+/// width the binding is stored at.
+///
+/// A binding that names a number written in the source — a `const`, or a
+/// `let` bound to a literal, declared without a type — takes the width of
+/// each place it is used, as the literal would; the checker records that
+/// width on the use. The binding itself is stored once, at its default width,
+/// so a use at another width has to convert it.
+fn adapted_width(ctx: &LoweringContext, stored: &Type, expr: &Expression) -> Option<Type> {
+    let is_number = |kind: &TypeKind| crate::ast::types::is_signed_number(kind).is_some();
+    if !is_number(&stored.kind) {
+        return None;
+    }
+    ctx.recorded_type(expr.id)
+        .filter(|read| is_number(&read.kind) && read.kind != stored.kind)
+}
+
+/// Reads the number in `source` converted to `width`, into `dest` when one is
+/// given.
+fn read_at_width(
+    ctx: &mut LoweringContext,
+    source: Place,
+    width: Type,
+    span: crate::error::syntax::Span,
+    dest: Option<Place>,
+) -> Operand {
+    let target = dest.unwrap_or_else(|| Place::new(ctx.push_temp(width.clone(), span)));
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::Cast(Box::new(Operand::Copy(source)), width),
+        ),
+        span,
+    });
+    Operand::Copy(target)
 }
 
 /// Build the constant operand for a global identifier. A binding with a known
@@ -168,7 +208,7 @@ pub(crate) fn build_global_identifier_operand(
         )?));
     }
     let has_fixed_value = info.is_constant || !info.mutable;
-    // A `const` written without a type takes the width of the number beside
+    // A `const` or `let` bound to a number without a type takes the width of the number beside
     // it or the place it is stored, which the checker recorded on this use.
     let ty = if info.untyped_constant {
         ctx.recorded_type(expr.id)

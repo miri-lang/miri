@@ -557,3 +557,69 @@ fn main()
         "out of range for u64",
     );
 }
+
+#[test]
+fn test_let_bound_to_an_integer_literal_takes_a_narrow_parameter_width() {
+    // `let n = 200` names a number written in the source, so it fits a u8
+    // parameter the way the literal `200` would.
+    assert_runs_with_output(
+        r#"
+fn widen(x u8) int
+    return x as int + 1
+
+fn main()
+    let n = 200
+    println(f"[{widen(n)}]")
+"#,
+        "[201]",
+    );
+}
+
+#[test]
+fn test_let_bound_to_an_integer_literal_too_large_for_the_width_is_refused() {
+    // Adapting never truncates: 300 does not fit a u8, so the binding keeps
+    // `int` and the narrow parameter refuses it.
+    assert_compiler_error(
+        r#"
+fn widen(x u8) int
+    return x as int + 1
+
+fn main()
+    let n = 300
+    println(f"{widen(n)}")
+"#,
+        "expected u8",
+    );
+}
+
+#[test]
+fn test_arithmetic_of_integer_literals_takes_a_narrow_parameter_width() {
+    assert_runs_with_output(
+        r#"
+fn widen(x u8) int
+    return x as int
+
+fn main()
+    let n = 100
+    println(f"[{widen(n * 2 + 5)}]")
+"#,
+        "[205]",
+    );
+}
+
+#[test]
+fn test_integer_arithmetic_whose_steps_overflow_the_width_does_not_adapt() {
+    // `200 * 2 / 4` folds to 100, which fits u8, but at u8 the product would
+    // already have wrapped. The expression keeps `int`, and the narrow
+    // parameter refuses it rather than computing a wrapped value.
+    assert_compiler_error(
+        r#"
+fn widen(x u8) int
+    return x as int
+
+fn main()
+    println(f"{widen(200 * 2 / 4)}")
+"#,
+        "expected u8",
+    );
+}

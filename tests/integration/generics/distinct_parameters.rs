@@ -464,7 +464,9 @@ fn main()
 fn arithmetic_with_a_parameter_has_the_parameters_type_in_either_order() {
     // `k * a` and `a * k` are both typed as the parameter, and an `i64`
     // binding holds every `int`; concrete operands compute at the wider type,
-    // so `k * s` with `s` an `i8` is an `int` and does not wrap.
+    // so `k * s` with `s` an `i8` is an `int` and does not wrap. `k` is
+    // declared `int`: bound to a bare `5` it would be a number written in the
+    // source, and take `s`'s width as the literal does.
     assert_runs_with_output(
         r#"
 fn left_concrete<T>(a T, k int) T
@@ -475,7 +477,7 @@ fn left_parameter<T>(a T, k int) T
 
 fn main()
     let a i64 = 100
-    let k = 5
+    let k int = 5
     let s i8 = 100
     println(f"{left_concrete(a, k)} {left_parameter(a, k)}")
     println(f"{k * s} {s * k} {k * s == 500}")

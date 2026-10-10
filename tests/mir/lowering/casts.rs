@@ -94,3 +94,31 @@ fn main()
         "#,
     );
 }
+
+#[test]
+fn test_literal_let_read_at_a_narrower_width_is_converted_at_the_read() {
+    // `n` is stored once at `int`; the store into `m` reads it at `u8`, the
+    // width the checker gave that use, so the read converts.
+    mir_snapshot_test(
+        r#"
+fn main()
+    let n = 200
+    let m u8 = n
+"#,
+        r#"
+            let _0: void;
+            let _1: int; // n
+            let _2: u8; // m
+
+            bb0: {
+                StorageLive(_1);
+                _1 = const Integer(I16(200));
+                StorageLive(_2);
+                _2 = _1 as u8;
+                StorageDead(_2);
+                StorageDead(_1);
+                return;
+            }
+        "#,
+    );
+}

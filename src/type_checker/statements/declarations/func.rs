@@ -654,7 +654,7 @@ impl TypeChecker {
             expr_type
         } else {
             self.narrow_float_literals(expr, return_type, &expr_type, context)
-                .or_else(|| self.widen_int_literals(expr, return_type, &expr_type))
+                .or_else(|| self.widen_int_literals(expr, return_type, &expr_type, context))
                 .unwrap_or(expr_type)
         };
 
