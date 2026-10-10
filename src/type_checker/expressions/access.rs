@@ -927,6 +927,10 @@ impl TypeChecker {
         let TypeKind::Generic(_, Some(bound), _) = &receiver.kind else {
             return member;
         };
+        // TODO: a bound naming a generic trait (`X implements Pick<int>`) is
+        // returned unread, so its `Self` stays the bare trait and `a.pick(b)`
+        // wants a `Pick`; `Self` inside a generic trait also resolves without
+        // the trait's parameters, which refuses the trait itself.
         let TypeKind::Custom(trait_name, None) = &bound.kind else {
             return member;
         };
