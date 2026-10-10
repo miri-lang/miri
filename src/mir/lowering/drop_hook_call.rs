@@ -57,7 +57,7 @@ fn release_call_result(
     let watermark = ctx.body.local_decls.len();
     let temp = match lower_expression(ctx, receiver, None)? {
         Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => place.local,
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => {
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
             return Err(borrowed_receiver_error(receiver.span));
         }
     };

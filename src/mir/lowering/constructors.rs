@@ -301,7 +301,7 @@ pub fn lower_class_constructor(
         let (init_symbol, param_subs) = match callee {
             Some(callee) => (callee.symbol, callee.owner_subs),
             None => (
-                Symbol::method(&init_class, &[], INIT_METHOD_NAME, &[]).link_name(),
+                Symbol::method(&init_class, &[], INIT_METHOD_NAME, &[]),
                 field_subs,
             ),
         };
@@ -399,7 +399,7 @@ fn lower_class_with_init(
     ctx: &mut LoweringContext,
     span: &Span,
     instance_ty: Type,
-    init_symbol: String,
+    init_symbol: Symbol,
     all_fields: &[(String, crate::type_checker::context::FieldInfo)],
     init_params: &[(String, Type)],
     args: &[Expression],
@@ -440,11 +440,7 @@ fn lower_class_with_init(
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
 
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(init_symbol),
-    }));
+    let func_op = Operand::function(init_symbol, *span);
 
     let void_ty = Type::new(TypeKind::Void, *span);
     let void_dest = ctx.push_temp(void_ty, *span);
@@ -793,7 +789,7 @@ fn lower_copy_from_source(
     let source_op = lower_expression(ctx, source, None)?;
     let source_local = match &source_op {
         Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        Operand::Constant(_) => None,
+        Operand::Constant(_) | Operand::Function(_) => None,
     };
 
     let mut args = vec![source_op];
@@ -816,11 +812,7 @@ fn emit_runtime_call(
     destination: Place,
 ) {
     let target_bb = ctx.new_basic_block();
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
-    }));
+    let func_op = Operand::runtime(name, *span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
@@ -1091,11 +1083,7 @@ pub(crate) fn lower_array_constructor(
         )),
     }));
 
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(rt::ARRAY_NEW.to_string()),
-    }));
+    let func_op = Operand::runtime(rt::ARRAY_NEW, *span);
 
     let target_bb = ctx.new_basic_block();
 

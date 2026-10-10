@@ -7,6 +7,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
     BinOp, Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind, UnOp,
@@ -178,7 +179,7 @@ pub(crate) fn operator_method_body(
 
 /// The body an operator calls: its symbol and what it returns.
 struct OperatorBody {
-    symbol: String,
+    symbol: Symbol,
     return_ty: Type,
 }
 
@@ -200,11 +201,7 @@ fn emit_binary_trait_call(
 ) -> Result<Operand, LoweringError> {
     let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
     let return_ty = body.return_ty;
-    let func_op = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(body.symbol),
-    }));
+    let func_op = Operand::function(body.symbol, span);
 
     let adapt = match result {
         TraitResult::AsReturned => {
@@ -433,11 +430,7 @@ fn lower_in_operator(
     };
 
     let fn_name = resolve_contains_fn(ctx, rhs);
-    let contains_fn = Operand::Constant(Box::new(Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier(fn_name.to_string()),
-    }));
+    let contains_fn = Operand::runtime(fn_name, expr.span);
 
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -732,10 +725,7 @@ fn emit_unchecked_operator_trap(
     let after = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: crate::mir::lowering::dispatch::runtime_fn_operand(
-                crate::runtime_fns::rt::METHOD_NOT_CHECKED_PANIC,
-                span,
-            ),
+            func: Operand::runtime(crate::runtime_fns::rt::METHOD_NOT_CHECKED_PANIC, span),
             args: Vec::new(),
             out_args: Vec::new(),
             arg_handles: Vec::new(),

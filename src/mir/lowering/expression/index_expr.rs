@@ -7,7 +7,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
-    Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
+    Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind,
 };
 use crate::runtime_fns::rt;
@@ -157,14 +157,10 @@ fn lower_map_index_read(
     let key_op = conform_lookup_operand(ctx, key_op, key_expr, obj);
     let key_place = match &key_op {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-        Operand::Constant(_) => None,
+        Operand::Constant(_) | Operand::Function(_) => None,
     };
 
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: expr.span,
-        ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier(rt::MAP_GET_CHECKED.to_string()),
-    }));
+    let func_op = Operand::runtime(rt::MAP_GET_CHECKED, expr.span);
 
     // Read through the active instantiation substitution, for the reason the
     // list read gives: a value type recorded against a generic parameter says

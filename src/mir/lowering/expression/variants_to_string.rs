@@ -409,11 +409,7 @@ pub(super) fn emit_enum_to_string(
         ),
         span: *span,
     });
-    let panic_func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: Literal::Identifier(crate::runtime_fns::rt::PANIC.to_string()),
-    }));
+    let panic_func_op = Operand::runtime(crate::runtime_fns::rt::PANIC, *span);
     let panic_msg_op = Operand::Copy(Place::new(panic_msg_temp));
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(

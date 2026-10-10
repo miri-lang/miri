@@ -16,7 +16,8 @@ use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::type_facts::{StructDefinition, TypeDefinition};
 use crate::mir::{
-    AggregateKind, BinOp, Constant, Local, MathIntrinsic, Operand, Place, Rvalue, UnOp,
+    AggregateKind, BinOp, Constant, FunctionConstant, Local, MathIntrinsic, Operand, Place, Rvalue,
+    UnOp,
 };
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
@@ -390,7 +391,7 @@ impl<'a> FunctionTranslator<'a> {
             return Self::translate_closure_aggregate(
                 builder,
                 ctx,
-                lambda_name,
+                &lambda_name.link_name(),
                 fn_type,
                 operands,
                 locals,
@@ -657,6 +658,7 @@ impl<'a> FunctionTranslator<'a> {
                 Some(&type_ctx.local_types[place.local.0].kind)
             }
             Operand::Constant(constant) => Some(&constant.ty.kind),
+            Operand::Function(function) => Some(&function.ty.kind),
             Operand::Copy(_) | Operand::Move(_) => None,
         }
     }
@@ -1694,6 +1696,9 @@ impl<'a> FunctionTranslator<'a> {
             Operand::Constant(constant) => {
                 Self::translate_constant(builder, ctx, constant, type_ctx)
             }
+            Operand::Function(function) => {
+                Self::translate_function_operand(builder, ctx, function, type_ctx.ptr_type)
+            }
         }
     }
     /// Translate a constant to a Cranelift value.
@@ -1720,7 +1725,7 @@ impl<'a> FunctionTranslator<'a> {
             Literal::None => Ok(builder.ins().iconst(ptr_type, 0)),
             Literal::String(s) => Self::translate_string_literal(builder, ctx, s, ptr_type),
             Literal::Identifier(name) => {
-                Self::translate_identifier_literal(builder, ctx, name, constant, ptr_type)
+                Self::translate_identifier_literal(builder, ctx, name, &constant.ty, ptr_type)
             }
             Literal::Regex(_) => Err(CodegenError::Internal(
                 "Regex literal reached codegen; MIR lowering must replace all regex literals with calls to Regex.from_validated_pattern()"
@@ -1832,12 +1837,44 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &str,
-        constant: &Constant,
+        ty: &crate::ast::types::Type,
         ptr_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
-        let TypeKind::Function(func_data) = &constant.ty.kind else {
+        let TypeKind::Function(func_data) = &ty.kind else {
             return Ok(builder.ins().iconst(ptr_type, 0));
         };
+        Self::function_address(builder, ctx, name, func_data, ptr_type)
+    }
+
+    /// A function named as a value: its address. A function operand whose type
+    /// carries no signature has no address to take; materializing it as a null
+    /// pointer would hand the program a function it crashes calling, so it is
+    /// an internal error.
+    fn translate_function_operand(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        function: &FunctionConstant,
+        ptr_type: cl_types::Type,
+    ) -> Result<Value, CodegenError> {
+        let TypeKind::Function(func_data) = &function.ty.kind else {
+            return Err(CodegenError::Internal(format!(
+                "the function {} is read as a value, but its operand carries no function type",
+                function.symbol
+            )));
+        };
+        let name = function.symbol.link_name();
+        Self::function_address(builder, ctx, &name, func_data, ptr_type)
+    }
+
+    /// Declare `name` as an import with the signature `func_data` spells and
+    /// take its address.
+    fn function_address(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &str,
+        func_data: &crate::ast::types::FunctionTypeData,
+        ptr_type: cl_types::Type,
+    ) -> Result<Value, CodegenError> {
         let call_conv = builder.func.signature.call_conv;
         let mut sig = Signature::new(call_conv);
         for param in &func_data.params {
@@ -2004,7 +2041,7 @@ impl<'a> FunctionTranslator<'a> {
                 let kind = &type_ctx.local_types[p.local.0].kind;
                 crate::mir::rc::is_word_slot_managed(kind)
             }
-            Operand::Constant(_) => false,
+            Operand::Constant(_) | Operand::Function(_) => false,
         });
         if !has_managed {
             return Ok(builder.ins().iconst(ptr_type, 0));
@@ -2636,6 +2673,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::resolve_projected_type_kind(place, type_ctx)
             }
             Operand::Constant(constant) => Ok(constant.ty.kind.clone()),
+            Operand::Function(function) => Ok(function.ty.kind.clone()),
         }
     }
 
@@ -2651,6 +2689,7 @@ impl<'a> FunctionTranslator<'a> {
                 &type_ctx.local_types[place.local.0].kind
             }
             Operand::Constant(c) => &c.ty.kind,
+            Operand::Function(function) => &function.ty.kind,
         }
     }
 
@@ -2660,7 +2699,7 @@ impl<'a> FunctionTranslator<'a> {
     pub fn operand_has_no_projection(operand: &Operand) -> bool {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => place.projection.is_empty(),
-            Operand::Constant(_) => true,
+            Operand::Constant(_) | Operand::Function(_) => true,
         }
     }
 

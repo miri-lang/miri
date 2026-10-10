@@ -3,16 +3,19 @@
 
 use cranelift_codegen::ir::types;
 use cranelift_object::object::{File, Object, ObjectSymbol};
+use miri::ast::literal::Literal;
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions, OptLevel, RuntimeImport};
 use miri::codegen::{ArtifactFormat, Backend};
 use miri::error::syntax::Span;
+use miri::mir::symbol::Symbol;
 use miri::mir::type_facts::{StructDefinition, TypeDefinition, TypeFacts};
 use miri::mir::{
-    BasicBlockData, Body, ExecutionModel, Local, LocalDecl, Place, Statement, StatementKind,
-    Terminator, TerminatorKind,
+    BasicBlockData, Body, Constant, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
+    Statement, StatementKind, Terminator, TerminatorKind,
 };
+use miri::type_checker::ModuleId;
 
 use std::collections::HashMap;
 
@@ -266,4 +269,84 @@ fn test_compile_with_pic_disabled() {
         !artifact.bytes.is_empty(),
         "Compilation with PIC disabled must produce non-empty artifact"
     );
+}
+
+// ── Callees ────────────────────────────────────────────────────────────
+
+/// A body of locals `_0: void` and `_1: int` whose one block runs
+/// `statements` and ends in `terminator`, then returns.
+fn body_ending_in(statements: Vec<Statement>, terminator: TerminatorKind) -> Body {
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::default()));
+    body.new_local(LocalDecl::new(ty(TypeKind::Int), Span::default()));
+    let mut first = BasicBlockData::new(None);
+    first.statements = statements;
+    first.terminator = Some(Terminator {
+        kind: terminator,
+        span: Span::default(),
+    });
+    let mut last = BasicBlockData::new(None);
+    last.terminator = Some(Terminator {
+        kind: TerminatorKind::Return,
+        span: Span::default(),
+    });
+    body.basic_blocks.push(first);
+    body.basic_blocks.push(last);
+    body
+}
+
+fn compile_error(body: &Body) -> String {
+    let backend = CraneliftBackend::new().expect("host backend");
+    match backend.compile(&[("caller", body)], &CraneliftOptions::default()) {
+        Ok(_) => panic!("the body must be refused"),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// A call whose callee is a constant names no function; it is an internal
+/// error, never an indirect call through whatever the constant reads as.
+#[test]
+fn a_call_through_a_constant_callee_is_an_internal_error() {
+    let body = body_ending_in(
+        Vec::new(),
+        TerminatorKind::Call {
+            func: Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: ty(TypeKind::Identifier),
+                literal: Literal::Identifier("miri.foo".to_string()),
+            })),
+            args: Vec::new(),
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(Local(1)),
+            target: Some(miri::mir::BasicBlock(1)),
+        },
+    );
+    let error = compile_error(&body);
+    assert!(error.contains("not a function"), "{error}");
+}
+
+/// A function read as a value whose operand carries no function type has no
+/// signature to take an address under; it is an internal error, never a null
+/// function pointer.
+#[test]
+fn a_function_value_without_a_function_type_is_an_internal_error() {
+    let read = Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::function(
+                Symbol::declared_function(&ModuleId::Program, "foo"),
+                Span::default(),
+            )),
+        ),
+        span: Span::default(),
+    };
+    let body = body_ending_in(
+        vec![read],
+        TerminatorKind::Goto {
+            target: miri::mir::BasicBlock(1),
+        },
+    );
+    let error = compile_error(&body);
+    assert!(error.contains("carries no function type"), "{error}");
 }

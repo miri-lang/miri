@@ -105,16 +105,16 @@ pub struct Body {
     /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
     pub has_drop_types: HashSet<String>,
     /// GPU kernel workgroup sizes recorded during a launch in another function.
-    /// Maps kernel name to [block_x, block_y, block_z].
+    /// Maps each kernel to [block_x, block_y, block_z].
     /// Collected when a `kernel(args).launch(grid, block)` call is lowered in a caller.
     /// Applied as metadata to the GPU kernel body's `BackendMetadata::Gpu.workgroup_size`
     /// during the post-lowering pipeline pass `stamp_kernel_workgroups`.
-    pub kernel_workgroups: Vec<(String, [u32; 3])>,
+    pub kernel_workgroups: Vec<(Symbol, [u32; 3])>,
     /// Launch grids written as a literal `Dim3` at a `kernel(args).launch(grid,
-    /// block)` in this body, keyed by kernel name, as [grid_x, grid_y, grid_z]
+    /// block)` in this body, keyed by kernel, as [grid_x, grid_y, grid_z]
     /// workgroup counts. A web bundle dispatches the grid it records, so it
     /// reads this; a grid computed at run time has no entry.
-    pub kernel_grids: Vec<(String, [u32; 3])>,
+    pub kernel_grids: Vec<(Symbol, [u32; 3])>,
     /// Every generic function instantiation this body calls, in call order.
     /// Recorded when the call is lowered, with the body's own instantiation
     /// substitution already applied, so the pipeline can lower each callee

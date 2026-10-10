@@ -13,7 +13,9 @@ pub(crate) mod types;
 
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::error::CodegenError;
+use crate::mir::symbol::Symbol;
 use crate::mir::{Body, ExecutionModel};
+use std::collections::HashSet;
 use std::fmt;
 
 /// Default workgroup size used when a kernel does not declare one.
@@ -24,6 +26,9 @@ const DEFAULT_WORKGROUP_SIZE: [u32; 3] = [64, 1, 1];
 pub struct WgslOptions {
     /// Fallback workgroup size when the kernel lacks GPU metadata.
     pub default_workgroup_size: Option<[u32; 3]>,
+    /// The bodies the module declares as device helpers, under their WGSL
+    /// names; a call to one is spelled the same way.
+    pub device_helpers: HashSet<Symbol>,
 }
 
 /// One source-map span: the Miri source that produced a given WGSL line.
@@ -63,11 +68,11 @@ pub fn compile_module(
 
 /// Shared module-emission core: run every body through the emitter and return
 /// it, ready for `finish` (WGSL only) or `finish_with_map` (WGSL + source map).
-fn emit_module(
+fn emit_module<'o>(
     bodies: &[(&str, &Body)],
-    options: &WgslOptions,
-) -> Result<emitter::Emitter, CodegenError> {
-    let mut emitter = emitter::Emitter::new();
+    options: &'o WgslOptions,
+) -> Result<emitter::Emitter<'o>, CodegenError> {
+    let mut emitter = emitter::Emitter::new(&options.device_helpers);
     let workgroup_default = options
         .default_workgroup_size
         .unwrap_or(DEFAULT_WORKGROUP_SIZE);

@@ -16,7 +16,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::ast::literal::Literal;
 use crate::codegen::wgsl::types::{buffer_element, buffer_element_typename, WgslScalar};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::compiler::CompilerError;
@@ -24,7 +23,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::backend::GpuBufferInit;
 use crate::mir::body::DeviceHandleId;
-use crate::mir::{Body, ExecutionModel, LocalDecl, Operand, StorageClass, TerminatorKind};
+use crate::mir::symbol::Symbol;
+use crate::mir::{Body, ExecutionModel, LocalDecl, StorageClass, TerminatorKind};
 
 /// Where the host launches one kernel: the device buffer passed for each of
 /// the kernel's storage bindings, in binding order.
@@ -38,13 +38,13 @@ pub(super) struct LaunchSite<'a> {
 /// site, the literal grids those launches were written with, and the local
 /// that declared each device buffer.
 pub(super) struct HostProgram<'a> {
-    launches: HashMap<&'a str, Vec<LaunchSite<'a>>>,
-    grids: HashMap<&'a str, Vec<[u32; 3]>>,
+    launches: HashMap<String, Vec<LaunchSite<'a>>>,
+    grids: HashMap<String, Vec<[u32; 3]>>,
     owners: HashMap<u64, Vec<&'a LocalDecl>>,
 }
 
 impl<'a> HostProgram<'a> {
-    pub(super) fn scan(mir_bodies: &'a [(String, Body)]) -> Self {
+    pub(super) fn scan(mir_bodies: &'a [(String, Body)]) -> Result<Self, CompilerError> {
         let mut program = Self {
             launches: HashMap::new(),
             grids: HashMap::new(),
@@ -53,17 +53,17 @@ impl<'a> HostProgram<'a> {
         for (_, body) in mir_bodies {
             if runs_on_host(body) {
                 program.record_owners(body);
-                program.record_launches(body);
+                program.record_launches(body)?;
                 for (kernel, grid) in &body.kernel_grids {
                     program
                         .grids
-                        .entry(kernel.as_str())
+                        .entry(kernel.wgsl_name())
                         .or_default()
                         .push(*grid);
                 }
             }
         }
-        program
+        Ok(program)
     }
 
     /// A local that owns a device buffer declared it; a residency-specialized
@@ -76,30 +76,34 @@ impl<'a> HostProgram<'a> {
         }
     }
 
-    fn record_launches(&mut self, body: &'a Body) {
+    /// Record every launch `body` makes. A launch whose kernel is not named
+    /// by the kernel's symbol names nothing a bundle can bind, and is an
+    /// internal error rather than a launch left out of the bundle.
+    fn record_launches(&mut self, body: &'a Body) -> Result<(), CompilerError> {
         let terminators = body
             .basic_blocks
             .iter()
             .filter_map(|block| block.terminator.as_ref());
         for terminator in terminators {
             let TerminatorKind::GpuLaunch {
-                kernel: Operand::Constant(kernel),
+                kernel,
                 launch_args,
                 ..
             } = &terminator.kind
             else {
                 continue;
             };
-            if let Literal::Identifier(name) = &kernel.literal {
-                self.launches
-                    .entry(name.as_str())
-                    .or_default()
-                    .push(LaunchSite {
-                        handles: launch_args.arg_handles(),
-                        span: terminator.span,
-                    });
-            }
+            let Some(name) = kernel.called_symbol().map(Symbol::wgsl_name) else {
+                return Err(CompilerError::Codegen(format!(
+                    "a launch names its kernel by {kernel}, not by the kernel's symbol"
+                )));
+            };
+            self.launches.entry(name).or_default().push(LaunchSite {
+                handles: launch_args.arg_handles(),
+                span: terminator.span,
+            });
         }
+        Ok(())
     }
 
     /// The one launch site of `kernel`. A bundle binds each kernel to a single
@@ -429,4 +433,91 @@ fn refusal(message: String, span: Span, help: &str) -> CompilerError {
         span,
         Some(help.to_string()),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::types::{Type, TypeKind};
+    use crate::mir::{
+        BasicBlock, BasicBlockData, Constant, GpuLaunchArgs, Operand, Place, Terminator,
+    };
+
+    fn constant(literal: Literal, kind: TypeKind) -> Operand {
+        Operand::Constant(Box::new(Constant {
+            span: Span::default(),
+            ty: Type::new(kind, Span::default()),
+            literal,
+        }))
+    }
+
+    /// A host body whose one launch names its kernel by `kernel`.
+    fn host_launching(kernel: Operand) -> Body {
+        let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+        body.new_local(LocalDecl::new(
+            Type::new(TypeKind::Void, Span::default()),
+            Span::default(),
+        ));
+        let one = || constant(Literal::Integer(IntegerLiteral::I64(1)), TypeKind::Int);
+        let Ok(launch_args) = GpuLaunchArgs::new(Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        else {
+            panic!("a launch without captures has consistent metadata");
+        };
+        let mut block = BasicBlockData::new(None);
+        block.terminator = Some(Terminator::new(
+            TerminatorKind::GpuLaunch {
+                kernel,
+                grid: one(),
+                block: one(),
+                launch_args,
+                scalar_args: Vec::new(),
+                uniform_bound_x: None,
+                uniform_bound_y: None,
+                uniform_bound_z: None,
+                uniform_start_x: None,
+                uniform_start_y: None,
+                uniform_start_z: None,
+                destination: Place::new(crate::mir::Local(0)),
+                target: Some(BasicBlock(0)),
+            },
+            Span::default(),
+        ));
+        body.basic_blocks.push(block);
+        body
+    }
+
+    /// A launch whose kernel is not named by the kernel's symbol binds nothing
+    /// a bundle can name, and is refused rather than left out of the bundle.
+    #[test]
+    fn a_launch_naming_its_kernel_by_a_constant_is_an_internal_error() {
+        let kernel = constant(
+            Literal::Identifier("kernel_0".to_string()),
+            TypeKind::Identifier,
+        );
+        let bodies = [("main".to_string(), host_launching(kernel))];
+        let Err(error) = HostProgram::scan(&bodies) else {
+            panic!("the launch must be refused");
+        };
+        assert!(
+            error.to_string().contains("not by the kernel's symbol"),
+            "{error}"
+        );
+    }
+
+    /// A launch naming its kernel by the kernel's symbol is recorded under the
+    /// kernel's entry point.
+    #[test]
+    fn a_launch_naming_its_kernel_by_its_symbol_is_recorded() {
+        let kernel = Symbol::gpu_kernel(crate::mir::symbol::GpuKernelKind::Forall, 0);
+        let entry_point = kernel.wgsl_name();
+        let bodies = [(
+            "main".to_string(),
+            host_launching(Operand::function(kernel, Span::default())),
+        )];
+        let Ok(program) = HostProgram::scan(&bodies) else {
+            panic!("the launch must be recorded");
+        };
+        assert_eq!(program.launches.get(&entry_point).map(Vec::len), Some(1));
+    }
 }

@@ -23,9 +23,10 @@ pub fn compile_to_wgsl(source: &str) -> String {
 /// names.
 pub fn compile_to_wgsl_in(source: &str, release: bool) -> String {
     let pipeline = Pipeline::new();
-    let bodies = pipeline
-        .get_gpu_mir_bodies_in(source, release)
+    let program = pipeline
+        .get_gpu_program_in(source, release)
         .expect("lowering failed");
+    let bodies = &program.bodies;
 
     // Mirror `build_kernel_registry`: every kernel module also carries the
     // GpuDevice helper bodies reachable from the kernel.
@@ -41,7 +42,13 @@ pub fn compile_to_wgsl_in(source: &str, release: bool) -> String {
     module_bodies.push((kernel.0.as_str(), &kernel.1));
 
     let artifact = WgslBackend
-        .compile(&module_bodies, &WgslOptions::default())
+        .compile(
+            &module_bodies,
+            &WgslOptions {
+                device_helpers: program.device_helpers.clone(),
+                ..WgslOptions::default()
+            },
+        )
         .expect("WGSL backend should succeed");
     String::from_utf8(artifact.bytes).expect("WGSL output is UTF-8")
 }

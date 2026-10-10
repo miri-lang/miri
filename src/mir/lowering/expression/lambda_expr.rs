@@ -393,7 +393,7 @@ fn emit_closure_aggregate(
         .iter()
         .filter_map(|op| match op {
             Operand::Copy(place) => Some(place.local),
-            Operand::Move(_) | Operand::Constant(_) => None,
+            Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
         })
         .collect();
 
@@ -404,7 +404,7 @@ fn emit_closure_aggregate(
         kind: MirStatementKind::Assign(
             target.clone(),
             Rvalue::Aggregate(
-                AggregateKind::Closure(closure.symbol.link_name().into(), closure.ty.clone()),
+                AggregateKind::Closure(closure.symbol.clone(), closure.ty.clone()),
                 capture_operands,
             ),
         ),

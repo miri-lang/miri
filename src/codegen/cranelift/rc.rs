@@ -287,7 +287,7 @@ impl<'a> FunctionTranslator<'a> {
         type_name: &str,
         inst_args: Option<&[Type]>,
         facts: &TypeFacts,
-    ) -> String {
+    ) -> Symbol {
         facts.element_method_symbol(type_name, crate::ast::types::CLONE_METHOD_NAME, inst_args)
     }
 
@@ -2462,7 +2462,7 @@ impl<'a> FunctionTranslator<'a> {
             module,
             ctx,
             &mut builder_ctx,
-            clone_method,
+            clone_method.link_name(),
             ptr_type,
             call_conv,
         )?;
@@ -2542,7 +2542,9 @@ impl<'a> FunctionTranslator<'a> {
     /// through a trait-typed or base-class reference reaches its own class's
     /// hook through the vtable's drop slot instead.
     pub fn resolve_drop_hook_name(type_name: &str, facts: &TypeFacts) -> Option<String> {
-        facts.drop_hook_symbol(type_name)
+        facts
+            .drop_hook_symbol(type_name)
+            .map(|symbol| symbol.link_name())
     }
 
     /// Resolves the mangled name of the shared `clone()` body for `type_name`.
@@ -2552,7 +2554,7 @@ impl<'a> FunctionTranslator<'a> {
     /// is abstract, the caller's name is used instead (matching how
     /// `resolve_inherited_method` in `mir::lowering::dispatch` mangles the call).
     pub fn resolve_clone_method_name(type_name: &str, facts: &TypeFacts) -> String {
-        Self::clone_method_symbol(type_name, None, facts)
+        Self::clone_method_symbol(type_name, None, facts).link_name()
     }
 
     /// Returns true if `type_name` (or any ancestor class) implements `Cloneable`,

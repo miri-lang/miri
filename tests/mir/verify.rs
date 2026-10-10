@@ -17,14 +17,16 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::body::{BindingResidency, DeviceHandleId};
+use miri::mir::symbol::{ClosureKind, GpuKernelKind, Symbol};
 use miri::mir::verify::{
-    verify_body, verify_collection_element_ownership, verify_cross_residency_readback,
-    VerificationViolation,
+    verify_body, verify_callees, verify_collection_element_ownership,
+    verify_cross_residency_readback, VerificationViolation,
 };
 use miri::mir::{
     AggregateKind, Body, Constant, Discriminant, ExecutionModel, GpuLaunchArgs, Local, LocalDecl,
     Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
+use miri::type_checker::ModuleId;
 use std::collections::HashSet;
 
 fn span() -> Span {
@@ -110,7 +112,14 @@ fn branch(then_block: usize, else_block: usize) -> Terminator {
 }
 
 fn callee(return_ty: Type) -> Operand {
-    constant(return_ty, Literal::String("callee".to_string()))
+    let mut callee = Operand::function(
+        Symbol::declared_function(&ModuleId::Program, "callee"),
+        span(),
+    );
+    if let Operand::Function(function) = &mut callee {
+        function.ty = return_ty;
+    }
+    callee
 }
 
 /// A call whose destination is unmanaged, so it moves no ownership of its own.
@@ -140,7 +149,7 @@ fn call_returning_string(destination: usize, target: usize) -> Terminator {
 /// A call to a named runtime intrinsic, spelling the callee the way lowering does.
 fn runtime_call(name: &str, args: Vec<Operand>, destination: usize, target: usize) -> Terminator {
     terminator(TerminatorKind::Call {
-        func: constant(void_ty(), Literal::Identifier(name.to_string())),
+        func: Operand::runtime(name, span()),
         args,
         out_args: Vec::new(),
         arg_handles: Vec::new(),
@@ -1349,7 +1358,7 @@ fn closure_capture(dest: usize, captured: usize) -> Statement {
     stmt(StatementKind::Assign(
         place(dest),
         Rvalue::Aggregate(
-            AggregateKind::Closure("main_lambda_0".into(), closure_ty),
+            AggregateKind::Closure(Symbol::closure(ClosureKind::Lambda, 0, &[]), closure_ty),
             vec![Operand::Copy(place(captured))],
         ),
     ))
@@ -1443,7 +1452,7 @@ fn launch_over_binding(handle: u64, target: usize) -> Terminator {
         )
     };
     terminator(TerminatorKind::GpuLaunch {
-        kernel: constant(void_ty(), Literal::Identifier("kernel_0".to_string())),
+        kernel: Operand::function(Symbol::gpu_kernel(GpuKernelKind::Forall, 0), span()),
         grid: int_operand(),
         block: int_operand(),
         launch_args,
@@ -1725,8 +1734,12 @@ fn collection_ty(class_name: &str, args: &[TypeKind]) -> Type {
 }
 
 /// The set of symbols `names` spells.
-fn symbols(names: &[&str]) -> HashSet<String> {
-    names.iter().map(|name| name.to_string()).collect()
+/// The functions the program declares as `names`.
+fn symbols(names: &[&str]) -> HashSet<Symbol> {
+    names
+        .iter()
+        .map(|name| Symbol::declared_function(&ModuleId::Program, name))
+        .collect()
 }
 
 /// Locals: 0 the return slot, 1 a receiver typed `receiver`, 2 the call's result.
@@ -1738,7 +1751,17 @@ fn collection_call_body(receiver: Type, symbol: &str) -> Body {
         vec![
             block(
                 Vec::new(),
-                runtime_call(symbol, vec![Operand::Copy(place(1))], 2, 1),
+                terminator(TerminatorKind::Call {
+                    func: Operand::function(
+                        Symbol::declared_function(&ModuleId::Program, symbol),
+                        span(),
+                    ),
+                    args: vec![Operand::Copy(place(1))],
+                    out_args: Vec::new(),
+                    arg_handles: Vec::new(),
+                    destination: place(2),
+                    target: Some(BasicBlock(1)),
+                }),
             ),
             block(Vec::new(), ret()),
         ],
@@ -2087,7 +2110,7 @@ fn readback_calls(body: &Body) -> usize {
             matches!(
                 block.terminator.as_ref().map(|t| &t.kind),
                 Some(TerminatorKind::Call { func, .. })
-                    if func.called_symbol() == Some("miri_gpu_readback")
+                    if func.called_runtime_name() == Some("miri_gpu_readback")
             )
         })
         .count()
@@ -2298,4 +2321,108 @@ fn the_readback_pass_reads_back_each_binding_sharing_a_handle() {
 
     assert_fenced(&shared, "the pass's output");
     assert_eq!(readback_calls(&shared), 2, "{shared}");
+}
+
+/// A body whose one call goes through `func`, into the unmanaged local 2.
+fn body_calling(func: Operand) -> Body {
+    temp_body(vec![
+        block(
+            Vec::new(),
+            terminator(TerminatorKind::Call {
+                func,
+                args: Vec::new(),
+                out_args: Vec::new(),
+                arg_handles: Vec::new(),
+                destination: place(2),
+                target: Some(BasicBlock(1)),
+            }),
+        ),
+        block(Vec::new(), ret()),
+    ])
+}
+
+/// A body whose one launch names its kernel by `kernel`.
+fn body_launching(kernel: Operand) -> Body {
+    let mut launch = launch_over_binding(1, 1);
+    if let TerminatorKind::GpuLaunch { kernel: slot, .. } = &mut launch.kind {
+        *slot = kernel;
+    }
+    body_of(
+        &[void_ty(), string_ty(), void_ty(), void_ty()],
+        0,
+        vec![block(Vec::new(), launch), block(Vec::new(), ret())],
+    )
+}
+
+/// A call whose callee is spelled as a name rather than the function's symbol
+/// names no function: lowering produced something no later pass can resolve.
+#[test]
+fn a_call_through_a_constant_callee_is_refused() {
+    let body = body_calling(constant(
+        void_ty(),
+        Literal::Identifier("miri.foo".to_string()),
+    ));
+    let violations = verify_callees(&body);
+    assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
+    assert_eq!(violations[0].local, Local(2));
+    assert!(
+        violations[0]
+            .message
+            .starts_with("a call's callee is the constant"),
+        "got: {}",
+        messages(&violations)
+    );
+    assert_eq!(
+        verify_body(&body).len(),
+        1,
+        "verify_body reports the refusal and nothing else"
+    );
+}
+
+/// A callee naming its function's symbol, or a place holding the closure the
+/// call goes through, is what lowering produces and is accepted.
+#[test]
+fn a_call_through_a_function_or_a_place_is_accepted() {
+    for func in [
+        callee(void_ty()),
+        Operand::Copy(place(1)),
+        Operand::Move(place(1)),
+    ] {
+        let violations = verify_callees(&body_calling(func.clone()));
+        assert!(
+            violations.is_empty(),
+            "{func} must be accepted, got: {}",
+            messages(&violations)
+        );
+    }
+}
+
+/// A launch whose kernel is not the kernel's symbol — a constant naming it, or
+/// a place — names no kernel to launch.
+#[test]
+fn a_launch_naming_its_kernel_by_anything_but_its_symbol_is_refused() {
+    for kernel in [
+        constant(void_ty(), Literal::Identifier("kernel_0".to_string())),
+        Operand::Copy(place(1)),
+    ] {
+        let violations = verify_callees(&body_launching(kernel.clone()));
+        assert_eq!(violations.len(), 1, "{kernel}: {}", messages(&violations));
+        assert_eq!(violations[0].local, Local(3));
+        assert!(
+            violations[0].message.starts_with("a launch's kernel is"),
+            "got: {}",
+            messages(&violations)
+        );
+    }
+}
+
+/// A launch naming its kernel by the kernel's symbol is accepted.
+#[test]
+fn a_launch_naming_its_kernel_by_its_symbol_is_accepted() {
+    let body = body_launching(Operand::function(
+        Symbol::gpu_kernel(GpuKernelKind::Forall, 0),
+        span(),
+    ));
+    let violations = verify_callees(&body);
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
 }

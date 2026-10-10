@@ -85,6 +85,7 @@ fn lower_formattedstring_part(
         .map(|t| t.kind.clone())
         .unwrap_or_else(|| match &part_op {
             Operand::Constant(c) => c.ty.kind.clone(),
+            Operand::Function(function) => function.ty.kind.clone(),
             Operand::Copy(p) | Operand::Move(p) => ctx.body.local_decls[p.local.0].ty.kind.clone(),
         });
 

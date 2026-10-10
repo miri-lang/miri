@@ -73,11 +73,10 @@ pub(crate) fn try_lower_gpu_reduce(
 
     // Build the reduction kernel.
     let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Reduce, ctx.kernel_index(call_expr_id));
-    let kernel_name = kernel_symbol.link_name();
     let kernel_body = build_gpu_reduce_kernel(ctx, obj_ty, array_length, fold_op, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {
-        symbol: kernel_symbol,
+        symbol: kernel_symbol.clone(),
         body: kernel_body,
         captures: Vec::new(),
     });
@@ -92,7 +91,7 @@ pub(crate) fn try_lower_gpu_reduce(
     };
     let (output_op, handle_id) = emit_gpu_reduce_launch(
         ctx,
-        &kernel_name,
+        kernel_symbol,
         receiver_local,
         init_op,
         *span,
@@ -335,11 +334,7 @@ fn emit_void_runtime_call(
     args: Vec<Operand>,
     span: Span,
 ) {
-    let func = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier(fn_name.to_string()),
-    }));
+    let func = Operand::runtime(fn_name, span);
     let dest_local = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     let after_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -1084,7 +1079,7 @@ fn assemble_reduce_launch_args(
 #[allow(clippy::too_many_arguments)]
 fn emit_reduce_gpu_launch(
     ctx: &mut LoweringContext,
-    kernel_name: &str,
+    kernel: Symbol,
     scalar_ops: Vec<Operand>,
     launch_args: GpuLaunchArgs,
     output_local: Local,
@@ -1120,11 +1115,7 @@ fn emit_reduce_gpu_launch(
         span,
     );
 
-    let kernel_op = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier(kernel_name.to_string()),
-    }));
+    let kernel_op = Operand::function(kernel, span);
 
     let dest_local = ctx.push_temp(void_ty, span);
     let after_bb = ctx.new_basic_block();
@@ -1190,7 +1181,7 @@ fn extract_reduce_result(ctx: &mut LoweringContext, output_local: Local, span: S
 /// will trigger the readback then.
 fn emit_gpu_reduce_launch(
     ctx: &mut LoweringContext,
-    kernel_name: &str,
+    kernel: Symbol,
     receiver_local: Local,
     init_op: Operand,
     span: Span,
@@ -1214,7 +1205,7 @@ fn emit_gpu_reduce_launch(
 
     emit_reduce_gpu_launch(
         ctx,
-        kernel_name,
+        kernel,
         scalar_ops,
         launch_args,
         output_local,

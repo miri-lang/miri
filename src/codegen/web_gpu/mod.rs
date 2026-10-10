@@ -22,13 +22,14 @@ use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::backend::GpuBufferInit;
 use crate::mir::body::DeviceHandleId;
+use crate::mir::symbol::Symbol;
 use crate::mir::{Body, ExecutionModel, LocalDecl};
 use buffers::{BufferTable, HostProgram};
 use manifest::{
     BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest, SourceMapEntry,
 };
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -79,16 +80,24 @@ struct KernelArtifact {
     source_map: Vec<SourceMapEntry>,
 }
 
+/// The lowered program a bundle is built from: every body under the name it is
+/// emitted as, and the bodies its WGSL modules declare as device helpers.
+#[derive(Debug, Clone, Copy)]
+pub struct LoweredProgram<'a> {
+    pub bodies: &'a [(String, Body)],
+    pub device_helpers: &'a HashSet<Symbol>,
+}
+
 /// Emit the web-gpu bundle to disk. Returns the path of the bundle directory.
 /// The caller chooses `out_path`: it is treated as a directory to fill;
 /// `None` falls back to a unique tempdir.
 pub fn emit_bundle(
-    mir_bodies: &[(String, Body)],
+    program: LoweredProgram<'_>,
     out_path: Option<&PathBuf>,
     source: Option<&str>,
     gpu_buffer_inits: Option<&HashMap<Span, GpuBufferInit>>,
 ) -> Result<PathBuf, CompilerError> {
-    let kernels = extract_kernels(mir_bodies);
+    let kernels = extract_kernels(program.bodies);
     if kernels.is_empty() {
         return Err(CompilerError::Codegen(
             "--target web-gpu requires the program to declare at least one GPU kernel \
@@ -97,7 +106,7 @@ pub fn emit_bundle(
         ));
     }
 
-    let host = HostProgram::scan(mir_bodies);
+    let host = HostProgram::scan(program.bodies)?;
     let plans = plan_kernels(&kernels, &host)?;
     let no_inits = HashMap::new();
     let buffers = BufferTable::build(
@@ -110,17 +119,7 @@ pub fn emit_bundle(
     let bundle_dir = resolve_bundle_dir(out_path)?;
     fs::create_dir_all(&bundle_dir)?;
 
-    // Device-side helper functions (`fn` called from a kernel) are cloned as
-    // GpuDevice bodies by the frontend. Each kernel module must carry them so
-    // its calls resolve in the browser validator, exactly as the native kernel
-    // registry does.
-    let helpers: Vec<(&str, &Body)> = mir_bodies
-        .iter()
-        .filter(|(_, body)| matches!(body.execution_model, ExecutionModel::GpuDevice))
-        .map(|(name, body)| (name.as_str(), body))
-        .collect();
-
-    let artifacts = compile_kernels(&plans, &helpers, &buffers, source)?;
+    let artifacts = compile_kernels(&plans, program, &buffers, source)?;
 
     // Derive program name from output directory or use default
     let program_name = out_path
@@ -250,18 +249,31 @@ fn plan_bindings<'p>(
 
 fn compile_kernels(
     plans: &[KernelPlan],
-    helpers: &[(&str, &Body)],
+    program: LoweredProgram<'_>,
     buffers: &BufferTable,
     source: Option<&str>,
 ) -> Result<Vec<KernelArtifact>, CompilerError> {
-    let options = WgslOptions::default();
+    // Device-side helper functions (`fn` called from a kernel) are cloned as
+    // GpuDevice bodies by the frontend. Each kernel module must carry them so
+    // its calls resolve in the browser validator, exactly as the native kernel
+    // registry does.
+    let helpers: Vec<(&str, &Body)> = program
+        .bodies
+        .iter()
+        .filter(|(_, body)| matches!(body.execution_model, ExecutionModel::GpuDevice))
+        .map(|(name, body)| (name.as_str(), body))
+        .collect();
+    let options = WgslOptions {
+        device_helpers: program.device_helpers.clone(),
+        ..WgslOptions::default()
+    };
     let mut artifacts = Vec::with_capacity(plans.len());
 
     for plan in plans {
         // Emit every reachable helper alongside the kernel; an unused helper is
         // a harmless dead function in WGSL.
         let mut module_bodies: Vec<(&str, &Body)> = Vec::with_capacity(1 + helpers.len());
-        module_bodies.extend_from_slice(helpers);
+        module_bodies.extend_from_slice(&helpers);
         module_bodies.push((plan.name, plan.body));
         let module = compile_module(&module_bodies, &options)
             .map_err(|err| CompilerError::Codegen(err.to_string()))?;

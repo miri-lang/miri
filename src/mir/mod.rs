@@ -50,9 +50,9 @@ pub use declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
     VariantDecl,
 };
-pub use lambda::{CapturedVar, LambdaInfo, LambdaRegistry};
+pub use lambda::{CapturedVar, LambdaInfo};
 pub use module::{Import, ImportItem, ImportKind, ImportSource};
-pub use operand::{Constant, Operand};
+pub use operand::{Constant, FunctionConstant, Operand};
 pub use place::{Local, Place, PlaceElem};
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};

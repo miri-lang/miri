@@ -31,14 +31,14 @@ use super::instantiation_limits::{
     constructor_parts, exceeded_limit, has_value_argument, polymorphic_recursion, Growth,
 };
 use super::is_monomorphizable_type_argument;
-use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::symbol::token::type_kind_to_mangle_str;
+use crate::mir::symbol::Symbol;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    AggregateKind, BasicBlock, BasicBlockData, Body, Constant, Operand, Place, Rvalue,
+    AggregateKind, BasicBlock, BasicBlockData, Body, FunctionConstant, Operand, Place, Rvalue,
     TerminatorKind,
 };
 use crate::type_checker::context::{GenericDefinition, TypeDefinition};
@@ -84,7 +84,7 @@ struct BodyDemand {
     owner: Option<VtableInstance>,
     constructed: Vec<(VtableInstance, Span)>,
     dispatched: Vec<Dispatch>,
-    references: Vec<String>,
+    references: Vec<Symbol>,
 }
 
 /// One vtable a reached body builds.
@@ -98,12 +98,12 @@ struct ReachedVtable {
     /// How the body that built the instance was reached.
     lineage: Lineage,
     /// Each slot the instance gives a body that no reached call reads yet.
-    unfilled: BTreeMap<usize, (String, String)>,
+    unfilled: BTreeMap<usize, (String, Symbol)>,
     filled: Vec<FilledSlot>,
 }
 
 /// A body waiting to be reached, with the lineage it is reached with.
-type Pending = (String, BodyDemand, Lineage);
+type Pending = (Symbol, BodyDemand, Lineage);
 
 /// The type table and slot numbering a demand reads.
 #[derive(Clone, Copy)]
@@ -119,10 +119,10 @@ pub struct DemandTables<'a> {
 pub struct VtableDemand {
     vtables: BTreeMap<String, ReachedVtable>,
     dispatches: BTreeSet<Dispatch>,
-    reached: HashSet<String>,
-    unreached: HashMap<String, BodyDemand>,
-    named: HashMap<String, Lineage>,
-    newly_named: Vec<String>,
+    reached: HashSet<Symbol>,
+    unreached: HashMap<Symbol, BodyDemand>,
+    named: HashMap<Symbol, Lineage>,
+    newly_named: Vec<Symbol>,
     /// How many reached vtables each class has at value arguments.
     value_instances: HashMap<String, usize>,
 }
@@ -130,7 +130,7 @@ pub struct VtableDemand {
 impl VtableDemand {
     /// A demand whose roots include `symbols`, the bodies codegen calls
     /// outside any MIR call.
-    pub fn rooted_at(symbols: impl IntoIterator<Item = String>) -> Self {
+    pub fn rooted_at(symbols: impl IntoIterator<Item = Symbol>) -> Self {
         Self {
             named: symbols.into_iter().map(|symbol| (symbol, None)).collect(),
             ..Self::default()
@@ -145,7 +145,7 @@ impl VtableDemand {
     /// [`super::instantiation_limits`].
     pub fn record<'b>(
         &mut self,
-        bodies: impl IntoIterator<Item = (&'b str, &'b Body)>,
+        bodies: impl IntoIterator<Item = (&'b Symbol, &'b Body)>,
         tables: DemandTables,
     ) -> Result<(), LoweringError> {
         let type_defs = tables.type_checker.type_definitions();
@@ -154,7 +154,7 @@ impl VtableDemand {
             let lineage = match self.named.remove(symbol) {
                 Some(lineage) => lineage,
                 None if leaves_a_parameter_open(body, type_defs) => {
-                    self.unreached.insert(symbol.to_string(), demand);
+                    self.unreached.insert(symbol.clone(), demand);
                     continue;
                 }
                 None => demand.owner.take().map(|instance| {
@@ -165,13 +165,13 @@ impl VtableDemand {
                     })
                 }),
             };
-            self.reach((symbol.to_string(), demand, lineage), tables)?;
+            self.reach((symbol.clone(), demand, lineage), tables)?;
         }
         Ok(())
     }
 
     /// The symbols filled slots have named since the last call.
-    pub fn take_named_slot_symbols(&mut self) -> Vec<String> {
+    pub fn take_named_slot_symbols(&mut self) -> Vec<Symbol> {
         std::mem::take(&mut self.newly_named)
     }
 
@@ -210,7 +210,7 @@ impl VtableDemand {
 
     /// Mark `symbol` as named by a body reached through `lineage`: reach it
     /// now if it is recorded, else when it is.
-    fn name(&mut self, symbol: String, lineage: &Lineage, pending: &mut Vec<Pending>) {
+    fn name(&mut self, symbol: Symbol, lineage: &Lineage, pending: &mut Vec<Pending>) {
         if self.reached.contains(&symbol) {
             return;
         }
@@ -499,16 +499,14 @@ impl Visitor for DemandCollector<'_> {
         {
             self.demand.constructed.push((instance, self.span));
         }
-        if let Rvalue::Aggregate(AggregateKind::Closure(name, _), _) = rvalue {
-            self.demand.references.push(name.to_string());
+        if let Rvalue::Aggregate(AggregateKind::Closure(symbol, _), _) = rvalue {
+            self.demand.references.push(symbol.clone());
         }
         self.visit_rvalue(rvalue, block);
     }
 
-    fn visit_constant(&mut self, constant: &Constant, _location: BasicBlock) {
-        if let Literal::Identifier(name) = &constant.literal {
-            self.demand.references.push(name.clone());
-        }
+    fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
+        self.demand.references.push(function.symbol.clone());
     }
 }
 
@@ -526,7 +524,7 @@ fn dispatch_through(
         Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
             Some(operand.ty(body))
         }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
     });
     let Some(TypeKind::Custom(name, args)) = receiver_ty.map(|ty| &ty.kind) else {
         return Dispatch {

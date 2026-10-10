@@ -183,11 +183,7 @@ pub(super) fn emit_regex_predicate_test(
         span: *pattern_span,
     });
 
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span: *pattern_span,
-        ty: Type::new(TypeKind::Identifier, *pattern_span),
-        literal: crate::ast::literal::Literal::Identifier(rt::REGEX_MATCHES.to_string()),
-    }));
+    let func_op = Operand::runtime(rt::REGEX_MATCHES, *pattern_span);
 
     let bool_ty = Type::new(TypeKind::Boolean, *pattern_span);
     let result_temp = ctx.push_temp(bool_ty, *pattern_span);
@@ -787,7 +783,7 @@ fn lower_match_subject(
     };
     let source_local = match &subject_op {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-        Operand::Constant(_) => None,
+        Operand::Constant(_) | Operand::Function(_) => None,
     };
     let ty = resolve_type(ctx.type_checker, subject);
     let local = ctx.push_temp(ty.clone(), subject.span);

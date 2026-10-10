@@ -8,7 +8,7 @@ use crate::ast::types::{Type, TypeKind, STRING_TYPE_NAME};
 use crate::error::lowering::LoweringError;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind,
+    Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
 
@@ -302,14 +302,8 @@ fn emit_runtime_to_string(
     args: Vec<Operand>,
     span: &crate::error::syntax::Span,
 ) -> Result<crate::mir::place::Local, LoweringError> {
-    use crate::ast::literal::Literal;
-
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: Literal::Identifier(runtime_fn.to_string()),
-    }));
+    let func_op = Operand::runtime(runtime_fn, *span);
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -338,8 +332,6 @@ pub(super) fn emit_string_concat(
     right: crate::mir::place::Local,
     span: &crate::error::syntax::Span,
 ) -> Result<crate::mir::place::Local, LoweringError> {
-    use crate::ast::literal::Literal;
-
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
     let mut call_args = vec![
         Operand::Copy(Place::new(left)),
@@ -348,19 +340,15 @@ pub(super) fn emit_string_concat(
     if let Some(&al) = ctx.variable_map.get("allocator") {
         call_args.push(Operand::Copy(Place::new(al)));
     }
-    let func_op = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: Literal::Identifier(
-            Symbol::method(
-                STRING_TYPE_NAME,
-                &[],
-                crate::ast::implicit_methods::CONCAT_METHOD_NAME,
-                &[],
-            )
-            .link_name(),
+    let func_op = Operand::function(
+        Symbol::method(
+            STRING_TYPE_NAME,
+            &[],
+            crate::ast::implicit_methods::CONCAT_METHOD_NAME,
+            &[],
         ),
-    }));
+        *span,
+    );
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {

@@ -18,29 +18,34 @@ use crate::codegen::wgsl::WgslSourceSpan;
 use crate::error::syntax::Span;
 use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
+use crate::mir::gpu_names::spelled_name;
+use crate::mir::symbol::Symbol;
 use crate::mir::{
-    BasicBlock, BinOp, Body, Constant, Dimension, GpuIndexNarrowing, GpuIntrinsic, Local,
-    LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind, StorageClass,
-    TerminatorKind, UnOp, I32_INDEX_MAX,
+    BasicBlock, BinOp, Body, Constant, Dimension, ExecutionModel, GpuIndexNarrowing, GpuIntrinsic,
+    Local, LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind,
+    StorageClass, TerminatorKind, UnOp, I32_INDEX_MAX,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write;
 
-pub(super) struct Emitter {
+pub(super) struct Emitter<'o> {
     output: String,
     /// WGSL-line → Miri-offset spans accumulated while emitting bodies.
     source_map: Vec<WgslSourceSpan>,
+    /// The bodies the module declares as device helpers.
+    device_helpers: &'o HashSet<Symbol>,
 }
 
 /// Lines the `enable f16;` preamble prepends to the module (`enable f16;` plus a
 /// blank separator line). Source-map WGSL lines shift down by this when present.
 const F16_PREAMBLE_LINES: u32 = 2;
 
-impl Emitter {
-    pub(super) fn new() -> Self {
+impl<'o> Emitter<'o> {
+    pub(super) fn new(device_helpers: &'o HashSet<Symbol>) -> Self {
         Self {
             output: String::new(),
             source_map: Vec::new(),
+            device_helpers,
         }
     }
 
@@ -260,6 +265,7 @@ impl Emitter {
             &mut self.output,
             &mut self.source_map,
         )?;
+        ctx.device_helpers = Some(self.device_helpers);
         ctx.emit_local_declarations()?;
         ctx.emit_blocks()?;
 
@@ -313,6 +319,7 @@ impl Emitter {
         let mut ctx =
             BodyEmitter::new(body, &[], [1, 1, 1], &mut self.output, &mut self.source_map)?;
         ctx.return_local = Some(Local(0));
+        ctx.device_helpers = Some(self.device_helpers);
         ctx.emit_local_declarations()?;
         ctx.emit_blocks()?;
 
@@ -599,6 +606,9 @@ struct BodyEmitter<'a> {
     /// value (`_0`). `None` for `@compute` kernel entry points, which return
     /// `void` and read/write storage buffers instead.
     return_local: Option<Local>,
+    /// The bodies the module declares as device helpers, which a call names
+    /// by their WGSL names; `None` where the module declares none.
+    device_helpers: Option<&'a HashSet<Symbol>>,
 }
 
 impl<'a> BodyEmitter<'a> {
@@ -653,6 +663,7 @@ impl<'a> BodyEmitter<'a> {
             loop_info,
             loop_stack: Vec::new(),
             return_local: None,
+            device_helpers: None,
         })
     }
 
@@ -1407,14 +1418,12 @@ impl<'a> BodyEmitter<'a> {
         }
 
         let func_name = match func {
-            Operand::Constant(c) => match &c.literal {
-                crate::ast::literal::Literal::Identifier(name) => name.clone(),
-                _ => {
-                    return Err(CodegenError::Internal(
-                        "WGSL backend: call with non-identifier func".to_string(),
-                    ));
-                }
-            },
+            Operand::Function(function) => self.callee_name(&function.symbol),
+            Operand::Constant(_) => {
+                return Err(CodegenError::Internal(
+                    "WGSL backend: a call's callee is a constant, not a function".to_string(),
+                ));
+            }
             Operand::Copy(_) | Operand::Move(_) => {
                 return Err(CodegenError::Internal(
                     "WGSL backend: call with non-constant func".to_string(),
@@ -1437,6 +1446,17 @@ impl<'a> BodyEmitter<'a> {
         writeln!(self.output, "{} = {}({});", dest_str, func_name, args_str).map_err(emit_err)?;
 
         Ok(())
+    }
+
+    /// The name a call to `symbol` is spelled with: the name the device body
+    /// it runs as is declared under.
+    fn callee_name(&self, symbol: &Symbol) -> String {
+        let no_helpers = HashSet::new();
+        spelled_name(
+            self.device_helpers.unwrap_or(&no_helpers),
+            symbol,
+            ExecutionModel::GpuDevice,
+        )
     }
 
     /// True when `dest` names a whole function-scope fixed-size array local —
@@ -1464,7 +1484,7 @@ impl<'a> BodyEmitter<'a> {
             Operand::Copy(place) | Operand::Move(place) => {
                 place.projection.is_empty() && self.body.allocator == Some(place.local)
             }
-            Operand::Constant(_) => false,
+            Operand::Constant(_) | Operand::Function(_) => false,
         }
     }
 
@@ -1660,6 +1680,10 @@ impl<'a> BodyEmitter<'a> {
                 }
             }
             Operand::Constant(c) => render_constant(c),
+            Operand::Function(function) => Err(CodegenError::Internal(format!(
+                "WGSL backend: the function {} cannot be used as a value",
+                function.symbol
+            ))),
         }
     }
 
@@ -2237,6 +2261,7 @@ mod tests {
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
+            device_helpers: None,
         };
 
         // Render the place.
@@ -2297,6 +2322,7 @@ mod tests {
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
+            device_helpers: None,
         };
 
         // Render the place.
@@ -2356,6 +2382,7 @@ mod tests {
             loop_info: HashMap::new(),
             loop_stack: Vec::new(),
             return_local: None,
+            device_helpers: None,
         };
 
         // Render the place.

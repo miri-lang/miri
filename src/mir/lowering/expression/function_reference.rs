@@ -72,7 +72,7 @@ pub(crate) fn try_lower_function_reference(
     let func_data = func_data.clone();
     let fn_ty = info.ty.clone();
     let declared = super::identifier_expr::declared_name(info, name);
-    let target = super::identifier_expr::global_function_link_name(ctx, expr, declared)?;
+    let target = super::identifier_expr::global_function_symbol(ctx, expr, declared)?;
     Ok(Some(lower_function_reference(
         ctx, expr, expr, &target, &fn_ty, &func_data, dest,
     )))
@@ -112,7 +112,7 @@ pub(crate) fn try_lower_module_member_reference(
         ));
     }
     let func_data = func_data.clone();
-    let target = Symbol::declared_function(&declared.module, &declared.name).link_name();
+    let target = Symbol::declared_function(&declared.module, &declared.name);
     Ok(Some(lower_function_reference(
         ctx, member, name, &target, &fn_ty, &func_data, dest,
     )))
@@ -126,7 +126,7 @@ fn lower_function_reference(
     ctx: &mut LoweringContext,
     expr: &Expression,
     callee: &Expression,
-    symbol: &str,
+    symbol: &Symbol,
     fn_ty: &Type,
     func_data: &FunctionTypeData,
     dest: Option<Place>,
@@ -134,14 +134,13 @@ fn lower_function_reference(
     // The reference site's expression id keeps two references to the same
     // function from claiming one symbol, the way a lambda's id does.
     let thunk_symbol =
-        ctx.closure_symbol(ClosureKind::FunctionReference(symbol.to_string()), expr.id);
-    let thunk_name: std::rc::Rc<str> = thunk_symbol.link_name().into();
+        ctx.closure_symbol(ClosureKind::FunctionReference(symbol.link_name()), expr.id);
     let forwarded_allocator = forwarded_allocator(ctx, callee);
     let thunk = build_forwarding_thunk(
         ctx,
         expr,
         symbol,
-        thunk_symbol,
+        thunk_symbol.clone(),
         func_data,
         forwarded_allocator.as_ref(),
     );
@@ -156,7 +155,7 @@ fn lower_function_reference(
         kind: MirStatementKind::Assign(
             target.clone(),
             Rvalue::Aggregate(
-                AggregateKind::Closure(thunk_name, fn_ty.clone()),
+                AggregateKind::Closure(thunk_symbol, fn_ty.clone()),
                 capture_operands,
             ),
         ),
@@ -199,7 +198,7 @@ struct AllocatorCapture {
 fn build_forwarding_thunk(
     ctx: &LoweringContext,
     expr: &Expression,
-    symbol: &str,
+    symbol: &Symbol,
     thunk_symbol: Symbol,
     func_data: &FunctionTypeData,
     allocator: Option<&AllocatorCapture>,
@@ -236,7 +235,7 @@ fn build_forwarding_thunk(
     let after_call = thunk_ctx.new_basic_block();
     thunk_ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: crate::mir::lowering::dispatch::runtime_fn_operand(symbol, span),
+            func: Operand::function(symbol.clone(), span),
             args,
             out_args: params.iter().map(|param| param.is_out).collect(),
             arg_handles: Vec::new(),

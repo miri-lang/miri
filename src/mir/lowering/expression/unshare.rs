@@ -27,8 +27,8 @@ use crate::mir::lowering::expression::lower_expression;
 use crate::mir::place::PlaceElem;
 use crate::mir::terminator::Discriminant;
 use crate::mir::{
-    AggregateKind, BasicBlock, Constant, Local, Operand, Place, Rvalue, Statement, StatementKind,
-    Terminator, TerminatorKind,
+    AggregateKind, BasicBlock, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
+    TerminatorKind,
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::TypeDefinition;
@@ -454,11 +454,7 @@ fn emit_runtime_call(
     target: BasicBlock,
     span: Span,
 ) {
-    let func = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
-    }));
+    let func = Operand::runtime(name, span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func,

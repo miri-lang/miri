@@ -75,7 +75,12 @@ impl<'a> FunctionTranslator<'a> {
             let func_id = if facts.is_withheld(&filled.symbol) {
                 Self::method_not_checked_trap(module)?
             } else {
-                Self::vtable_slot_func_id(module, symbol, &filled.method, &filled.symbol)?
+                Self::vtable_slot_func_id(
+                    module,
+                    symbol,
+                    &filled.method,
+                    &filled.symbol.link_name(),
+                )?
             };
             let func_ref = module.declare_func_in_data(func_id, &mut desc);
             desc.write_function_addr((filled.slot * ptr_size) as u32, func_ref);
@@ -140,6 +145,7 @@ impl<'a> FunctionTranslator<'a> {
 mod tests {
     use super::*;
     use crate::mir::dispatch::VtableFills;
+    use crate::mir::symbol::Symbol;
     use cranelift_module::FuncOrDataId;
     use std::collections::{HashMap, HashSet};
 
@@ -161,17 +167,12 @@ mod tests {
         ObjectModule::new(builder)
     }
 
-    fn facts_withholding(withheld: &[&str]) -> TypeFacts {
+    fn facts_withholding(withheld: &[Symbol]) -> TypeFacts {
         let Ok(facts) = TypeFacts::new(HashMap::new(), HashMap::new(), VtableFills::default(), [])
         else {
             panic!("empty facts settle");
         };
-        facts.withholding(
-            withheld
-                .iter()
-                .map(|name| name.to_string())
-                .collect::<HashSet<_>>(),
-        )
+        facts.withholding(withheld.iter().cloned().collect::<HashSet<_>>())
     }
 
     /// A slot whose method lowering withheld at the instance points to the
@@ -182,9 +183,9 @@ mod tests {
         let slots = [FilledSlot {
             slot: 1,
             method: "bad".to_string(),
-            symbol: "miri.A.bad".to_string(),
+            symbol: Symbol::method("A", &[], "bad", &[]),
         }];
-        let facts = facts_withholding(&["miri.A.bad"]);
+        let facts = facts_withholding(&[Symbol::method("A", &[], "bad", &[])]);
         let emitted = FunctionTranslator::emit_vtable(
             &mut module,
             cranelift_codegen::ir::types::I64,
@@ -211,7 +212,7 @@ mod tests {
         let slots = [FilledSlot {
             slot: 1,
             method: "keep".to_string(),
-            symbol: "miri.A.keep".to_string(),
+            symbol: Symbol::method("A", &[], "keep", &[]),
         }];
         let facts = facts_withholding(&[]);
         let emitted = FunctionTranslator::emit_vtable(

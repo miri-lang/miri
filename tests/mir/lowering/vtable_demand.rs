@@ -6,7 +6,6 @@
 
 use crate::type_checker::utils::type_checker_result;
 use miri::ast::expression::Expression;
-use miri::ast::literal::Literal;
 use miri::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
 use miri::ast::ExpressionKind;
 use miri::diagnostics::DiagnosticCode;
@@ -17,11 +16,13 @@ use miri::mir::lowering::instantiation_limits::{
     DEPTH_THROUGH_TRAIT_HELP, MAX_INSTANCE_TYPE_DEPTH, MAX_VALUE_INSTANCES_PER_CLASS, VALUE_HELP,
 };
 use miri::mir::lowering::vtable_demand::{DemandTables, FilledSlot, VtableDemand};
+use miri::mir::symbol::Symbol;
 use miri::mir::{
-    AggregateKind, BasicBlockData, Body, Constant, ExecutionModel, LocalDecl, Operand, Place,
-    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    AggregateKind, BasicBlockData, Body, ExecutionModel, LocalDecl, Operand, Place, Rvalue,
+    Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::pipeline::PipelineResult;
+use miri::type_checker::ModuleId;
 
 const SOURCE: &str = "
 trait Op<T>
@@ -48,6 +49,16 @@ class Buf<T, Size> implements Op<T>
 
 fn span() -> Span {
     Span::new(0, 0)
+}
+
+/// The function the program declares as `name`; `main` is the entry point.
+fn sym(name: &str) -> Symbol {
+    Symbol::declared_function(&ModuleId::Program, name)
+}
+
+/// The link name of each of `symbols`, in order.
+fn link_names(symbols: &[Symbol]) -> Vec<String> {
+    symbols.iter().map(Symbol::link_name).collect()
 }
 
 fn ty(kind: TypeKind) -> Type {
@@ -139,11 +150,7 @@ impl BodySketch {
         }
         for symbol in self.calls {
             let local = body.new_local(LocalDecl::new(ty(TypeKind::Int), span()));
-            let callee = Operand::Constant(Box::new(Constant {
-                span: span(),
-                ty: ty(TypeKind::Identifier),
-                literal: Literal::Identifier(symbol.to_string()),
-            }));
+            let callee = Operand::function(sym(symbol), span());
             block.statements.push(Statement {
                 kind: StatementKind::Assign(Place::new(local), Rvalue::Use(callee)),
                 span: span(),
@@ -193,7 +200,7 @@ impl Fixture {
             .expect("a trait method takes a slot")
     }
 
-    fn record(&self, demand: &mut VtableDemand, bodies: &[(&str, Body)]) {
+    fn record(&self, demand: &mut VtableDemand, bodies: &[(Symbol, Body)]) {
         self.try_record(demand, bodies)
             .expect("the demand accepts every body recorded");
     }
@@ -201,10 +208,10 @@ impl Fixture {
     fn try_record(
         &self,
         demand: &mut VtableDemand,
-        bodies: &[(&str, Body)],
+        bodies: &[(Symbol, Body)],
     ) -> Result<(), LoweringError> {
         demand.record(
-            bodies.iter().map(|(symbol, body)| (*symbol, body)),
+            bodies.iter().map(|(symbol, body)| (symbol, body)),
             self.tables(),
         )
     }
@@ -233,17 +240,17 @@ fn a_declared_slot_no_call_reads_stays_unfilled() {
         .dispatches(op_at(TypeKind::String), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("main", main)]);
+    fixture.record(&mut demand, &[(sym("main"), main)]);
     assert_eq!(
         filled(&demand, "miri.Impl$String.$vtable"),
         vec![FilledSlot {
             slot: keep,
             method: "keep".to_string(),
-            symbol: "miri.Impl$String.keep".to_string(),
+            symbol: Symbol::method("Impl", &[ty(TypeKind::String)], "keep", &[]),
         }],
     );
     assert_eq!(
-        demand.take_named_slot_symbols(),
+        link_names(&demand.take_named_slot_symbols()),
         vec!["miri.Impl$String.keep"]
     );
 }
@@ -257,17 +264,18 @@ fn a_slot_is_filled_once_its_instance_and_its_call_are_both_recorded() {
     let keep = fixture.slot("keep");
     let mut demand = VtableDemand::default();
     let builder = BodySketch::new().constructs(impl_at(TypeKind::Int)).body();
-    fixture.record(&mut demand, &[("build", builder)]);
+    fixture.record(&mut demand, &[(sym("build"), builder)]);
     assert!(demand.take_named_slot_symbols().is_empty());
 
     let caller = BodySketch::new()
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
-    fixture.record(&mut demand, &[("call", caller)]);
-    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl$int.keep"]);
+    fixture.record(&mut demand, &[(sym("call"), caller)]);
+    let named = demand.take_named_slot_symbols();
+    assert_eq!(link_names(&named), vec!["miri.Impl$int.keep"]);
 
     let callee = BodySketch::new().body();
-    fixture.record(&mut demand, &[("miri.Impl$int.keep", callee)]);
+    fixture.record(&mut demand, &[(named[0].clone(), callee)]);
     assert!(demand.take_named_slot_symbols().is_empty());
     assert_eq!(filled(&demand, "miri.Impl$int.$vtable").len(), 1);
 }
@@ -284,7 +292,7 @@ fn a_slot_is_filled_only_where_the_receiver_arguments_agree() {
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("main", main)]);
+    fixture.record(&mut demand, &[(sym("main"), main)]);
     assert_eq!(filled(&demand, "miri.Impl$int.$vtable").len(), 1);
     assert!(filled(&demand, "miri.Impl$String.$vtable").is_empty());
 }
@@ -300,7 +308,7 @@ fn a_receiver_at_an_open_argument_reads_every_instance() {
         .dispatches(TypeKind::Custom("Op".to_string(), None), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("main", main)]);
+    fixture.record(&mut demand, &[(sym("main"), main)]);
     assert_eq!(filled(&demand, "miri.Impl$int.$vtable").len(), 1);
     assert_eq!(filled(&demand, "miri.Impl$String.$vtable").len(), 1);
 }
@@ -320,16 +328,19 @@ fn a_shared_generic_body_counts_only_once_reached() {
         .dispatches(op_at(TypeKind::String), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("make", shared), ("main", main)]);
+    fixture.record(&mut demand, &[(sym("make"), shared), (sym("main"), main)]);
     assert_eq!(demand.vtable_symbols().count(), 0);
 
     let caller = BodySketch::new().calls("make").body();
-    fixture.record(&mut demand, &[("run", caller)]);
+    fixture.record(&mut demand, &[(sym("run"), caller)]);
     assert_eq!(
         demand.vtable_symbols().collect::<Vec<_>>(),
         vec!["miri.Impl.$vtable"]
     );
-    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl.keep"]);
+    assert_eq!(
+        link_names(&demand.take_named_slot_symbols()),
+        vec!["miri.Impl.keep"]
+    );
 }
 
 /// A body reached through `Impl<int>`'s slot that builds `Impl<Wrap<int>>`
@@ -345,21 +356,24 @@ fn an_instance_growing_past_the_one_it_was_reached_through_is_compiled_for_its_o
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("main", main)]);
-    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl$int.keep"]);
+    fixture.record(&mut demand, &[(sym("main"), main)]);
+    let named = demand.take_named_slot_symbols();
+    assert_eq!(link_names(&named), vec!["miri.Impl$int.keep"]);
 
     let wrapped = generic("Wrap", vec![TypeKind::Int]);
     let body = BodySketch::new()
         .constructs(impl_at(wrapped.clone()))
         .dispatches(op_at(wrapped), keep)
         .body();
-    fixture.record(&mut demand, &[("miri.Impl$int.keep", body)]);
+    fixture.record(&mut demand, &[(named[0].clone(), body)]);
     assert_eq!(
-        demand.take_named_slot_symbols(),
+        link_names(&demand.take_named_slot_symbols()),
         vec!["miri.Impl$Wrap_int.keep"]
     );
     assert_eq!(
-        filled(&demand, "miri.Impl$Wrap_int.$vtable")[0].symbol,
+        filled(&demand, "miri.Impl$Wrap_int.$vtable")[0]
+            .symbol
+            .link_name(),
         "miri.Impl$Wrap_int.keep"
     );
 }
@@ -382,7 +396,7 @@ fn grow_until_refused(fixture: &Fixture, demand: &mut VtableDemand) -> (usize, L
             .constructs(impl_at(wrapped_int(layers)))
             .dispatches(op_at(wrapped_int(layers)), keep)
             .body();
-        if let Err(error) = fixture.try_record(demand, &[(named[0].as_str(), body)]) {
+        if let Err(error) = fixture.try_record(demand, &[(named[0].clone(), body)]) {
             return (layers, error);
         }
     }
@@ -421,7 +435,7 @@ fn an_instance_growing_on_every_level_is_refused_past_the_depth_bound() {
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("main", main)]);
+    fixture.record(&mut demand, &[(sym("main"), main)]);
     let (layers, error) = grow_until_refused(&fixture, &mut demand);
     assert_eq!(layers, MAX_INSTANCE_TYPE_DEPTH);
     let (message, help, notes) = refusal_text(&error);
@@ -447,13 +461,16 @@ fn the_depth_bound_holds_of_an_instance_built_from_a_root() {
     let at_the_bound = BodySketch::new()
         .constructs(impl_at(wrapped_int(MAX_INSTANCE_TYPE_DEPTH - 1)))
         .body();
-    fixture.record(&mut VtableDemand::default(), &[("main", at_the_bound)]);
+    fixture.record(&mut VtableDemand::default(), &[(sym("main"), at_the_bound)]);
 
     let past_the_bound = BodySketch::new()
         .constructs(impl_at(wrapped_int(MAX_INSTANCE_TYPE_DEPTH)))
         .body();
     let error = fixture
-        .try_record(&mut VtableDemand::default(), &[("main", past_the_bound)])
+        .try_record(
+            &mut VtableDemand::default(),
+            &[(sym("main"), past_the_bound)],
+        )
         .expect_err("an instance past the depth bound is refused");
     let (message, _, notes) = refusal_text(&error);
     assert!(message.contains("33 levels deep"), "{message}");
@@ -491,11 +508,11 @@ fn a_class_built_at_more_values_than_the_bound_is_refused() {
     let fixture = Fixture::new();
     let bound = MAX_VALUE_INSTANCES_PER_CLASS as i128;
     let within = building_bufs(1..=bound);
-    fixture.record(&mut VtableDemand::default(), &[("main", within)]);
+    fixture.record(&mut VtableDemand::default(), &[(sym("main"), within)]);
 
     let past = building_bufs(1..=bound + 1);
     let error = fixture
-        .try_record(&mut VtableDemand::default(), &[("main", past)])
+        .try_record(&mut VtableDemand::default(), &[(sym("main"), past)])
         .expect_err("a class past the value bound is refused");
     let (message, help, _) = refusal_text(&error);
     assert_eq!(
@@ -514,11 +531,11 @@ fn the_value_bound_does_not_depend_on_the_order_values_are_reached() {
     let bound = MAX_VALUE_INSTANCES_PER_CLASS as i128;
     let mut demand = VtableDemand::default();
     let first = building_bufs((bound / 2 + 1..=bound + 1).rev());
-    fixture.record(&mut demand, &[("main", first)]);
+    fixture.record(&mut demand, &[(sym("main"), first)]);
     let again = building_bufs((bound / 2 + 1..=bound + 1).rev());
     let rest = building_bufs((1..=bound / 2).rev());
     let error = fixture
-        .try_record(&mut demand, &[("helper", again), ("other", rest)])
+        .try_record(&mut demand, &[(sym("helper"), again), (sym("other"), rest)])
         .expect_err("the same set of values is refused in any order");
     let (message, _, _) = refusal_text(&error);
     assert!(message.contains("needs more than 256"), "{message}");
@@ -538,8 +555,14 @@ fn a_body_spelling_self_is_not_left_open() {
         .dispatches(op_at(TypeKind::Int), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("miri.Pt.drop", hook)]);
-    assert_eq!(demand.take_named_slot_symbols(), vec!["miri.Impl$int.keep"]);
+    fixture.record(
+        &mut demand,
+        &[(Symbol::method("Pt", &[], "drop", &[]), hook)],
+    );
+    assert_eq!(
+        link_names(&demand.take_named_slot_symbols()),
+        vec!["miri.Impl$int.keep"]
+    );
 }
 
 /// The same instance built from a root, where nothing it grows past was
@@ -554,9 +577,9 @@ fn an_instance_built_from_a_root_is_compiled_for_its_own_arguments() {
         .dispatches(op_at(wrapped), keep)
         .body();
     let mut demand = VtableDemand::default();
-    fixture.record(&mut demand, &[("main", main)]);
+    fixture.record(&mut demand, &[(sym("main"), main)]);
     assert_eq!(
-        demand.take_named_slot_symbols(),
+        link_names(&demand.take_named_slot_symbols()),
         vec!["miri.Impl$Wrap_int.keep"]
     );
 }

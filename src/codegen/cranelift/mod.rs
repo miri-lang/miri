@@ -35,7 +35,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
@@ -69,6 +69,8 @@ pub struct CraneliftBackend {
     facts: TypeFacts,
     /// Runtime function imports to declare as external symbols.
     runtime_imports: Vec<RuntimeImport>,
+    /// The bodies the GPU kernels' WGSL modules declare as device helpers.
+    device_helpers: HashSet<Symbol>,
 }
 
 impl fmt::Debug for CraneliftBackend {
@@ -154,6 +156,7 @@ impl CraneliftBackend {
             isa,
             facts: TypeFacts::default(),
             runtime_imports: Vec::new(),
+            device_helpers: HashSet::new(),
         })
     }
 
@@ -173,6 +176,11 @@ impl CraneliftBackend {
     /// fill names is defined with every slot null.
     pub fn set_type_facts(&mut self, facts: TypeFacts) {
         self.facts = facts;
+    }
+
+    /// Set the bodies the GPU kernels' WGSL modules declare as device helpers.
+    pub fn set_device_helpers(&mut self, device_helpers: HashSet<Symbol>) {
+        self.device_helpers = device_helpers;
     }
 
     /// Set runtime function imports that should be declared as external symbols.
@@ -232,8 +240,11 @@ impl Backend for CraneliftBackend {
         self.generate_structural_element_decref_functions(&mut module, &mut ctx, &isa, bodies)?;
         self.generate_element_method_thunks(&mut module, &mut ctx, &isa)?;
         self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
-        let kernel_registry =
-            crate::codegen::cranelift::gpu_launch::build_kernel_registry(&mut module, bodies)?;
+        let kernel_registry = crate::codegen::cranelift::gpu_launch::build_kernel_registry(
+            &mut module,
+            bodies,
+            &self.device_helpers,
+        )?;
         let cpu_bodies: Vec<(&str, &Body)> = bodies
             .iter()
             .copied()

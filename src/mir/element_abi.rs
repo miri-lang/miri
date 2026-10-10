@@ -74,7 +74,7 @@ fn element_call(body: &Body, block: usize) -> Option<(&'static [usize], Vec<Oper
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return None;
     };
-    let positions = crate::runtime_fns::element_positions(func.called_symbol()?);
+    let positions = crate::runtime_fns::element_positions(func.called_runtime_name()?);
     if positions.is_empty() {
         return None;
     }
@@ -134,6 +134,12 @@ fn element_address(
             push_assign(body, block, Place::new(temp), value, span);
             Place::new(temp)
         }
+        Operand::Function(function) => {
+            return Err(format!(
+                "the function {} cannot be passed as a collection element",
+                function.symbol
+            ));
+        }
     };
     let address = body.new_local(LocalDecl::new(Type::new(TypeKind::RawPtr, span), span));
     push_assign(body, block, Place::new(address), Rvalue::Ref(place), span);
@@ -151,6 +157,7 @@ fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> 
             Ok(element_layout(&body.local_decls[place.local.0].ty.kind))
         }
         Operand::Constant(constant) => Ok(element_layout(&constant.ty.kind)),
+        Operand::Function(function) => Ok(element_layout(&function.ty.kind)),
         Operand::Copy(place) | Operand::Move(place) => {
             let reached = arg.ty_projected(body).ok_or_else(|| {
                 format!("the collection element {place} reaches a type this pass cannot size")
@@ -293,7 +300,7 @@ fn element_returning_call(body: &Body, block: usize) -> Option<(Place, Option<Ba
     else {
         return None;
     };
-    if !crate::runtime_fns::returns_element_value(func.called_symbol()?) {
+    if !crate::runtime_fns::returns_element_value(func.called_runtime_name()?) {
         return None;
     }
     Some((destination.clone(), *target, terminator.span))

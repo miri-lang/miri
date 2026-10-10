@@ -266,13 +266,10 @@ fn lower_static_method_impl(
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest.cloned(), *span);
 
-    let mangled = Symbol::method(defining_type_name, &[], method_name, &[]).link_name();
-
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(mangled),
-    }));
+    let func_op = Operand::function(
+        Symbol::method(defining_type_name, &[], method_name, &[]),
+        *span,
+    );
 
     // Build out_args from method_info with no receiver offset (static methods have no self).
     let out_args = build_method_out_args_with_offset(method_info, args.len(), arg_ops.len(), 0);
@@ -348,13 +345,11 @@ fn lower_aliased_function_call(
     let ExpressionKind::Identifier(func_name, _) = &callee.node else {
         return Ok(None);
     };
-    let mangled = match generic_function_symbol(ctx, callee, call_expr_id, *span)? {
-        Some(mangled) => mangled,
-        None => {
-            super::expression::identifier_expr::global_function_link_name(ctx, callee, func_name)?
-        }
+    let symbol = match generic_function_symbol(ctx, callee, call_expr_id, *span)? {
+        Some(symbol) => symbol,
+        None => super::expression::identifier_expr::global_function_symbol(ctx, callee, func_name)?,
     };
-    let func_op = runtime_fn_operand(&mangled, *span);
+    let func_op = Operand::function(symbol, *span);
 
     // The arguments are handled as a direct call's are: each brought to its
     // parameter's type, a named one placed at the parameter it names, an
@@ -629,21 +624,12 @@ pub(super) fn call_destination(
     }
 }
 
-/// Build a runtime-function callee constant for `name`.
-pub(super) fn runtime_fn_operand(name: &str, span: Span) -> Operand {
-    Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
-    }))
-}
-
-/// Resolve a kernel operand and name from a gpu fn callee expression.
-pub(super) fn resolve_kernel_operand(
+/// The kernel a gpu fn callee expression names.
+pub(super) fn resolve_kernel_symbol(
     ctx: &LoweringContext,
     callee: &Expression,
     span: Span,
-) -> Result<(Operand, String), LoweringError> {
+) -> Result<Symbol, LoweringError> {
     let ExpressionKind::Identifier(func_name, _) = &callee.node else {
         return Err(LoweringError::unsupported_expression(
             "gpu fn must be called by name".to_string(),
@@ -654,20 +640,11 @@ pub(super) fn resolve_kernel_operand(
     let type_args = ctx.instantiated_call_mapping(callee.id).unwrap_or_default();
     refuse_unnameable_call_mapping(ctx, func_name, &type_args, span)?;
     let kernel = ctx.declared_callee(callee, func_name)?;
-    let kernel_name = Symbol::function(
+    Ok(Symbol::function(
         &kernel.module,
         &kernel.name,
         type_args.iter().map(|(_, ty)| ty),
-    )
-    .wgsl_name();
-
-    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(kernel_name.clone()),
-    }));
-
-    Ok((kernel_op, kernel_name))
+    ))
 }
 
 /// The source local backing a place operand, if any.
@@ -724,7 +701,7 @@ pub(crate) fn emit_list_push(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
-    let func_op = runtime_fn_operand(rt::LIST_PUSH, *span);
+    let func_op = Operand::runtime(rt::LIST_PUSH, *span);
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -991,7 +968,7 @@ pub(crate) fn emit_map_set(
     let (value_op, value_src) =
         donate_operand_to_container(ctx, value_op, value_ty, value_arg.span);
 
-    let func_op = runtime_fn_operand(rt::MAP_SET, *span);
+    let func_op = Operand::runtime(rt::MAP_SET, *span);
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -1053,7 +1030,7 @@ pub(crate) fn emit_set_add(
     // result has to land in the caller's destination when it asked for one.
     let destination = dest
         .unwrap_or_else(|| Place::new(ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span)));
-    let func_op = runtime_fn_operand(rt::SET_ADD, *span);
+    let func_op = Operand::runtime(rt::SET_ADD, *span);
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -1088,7 +1065,7 @@ fn lower_list_insert(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
-    let func_op = runtime_fn_operand(rt::LIST_INSERT, *span);
+    let func_op = Operand::runtime(rt::LIST_INSERT, *span);
     let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -1308,7 +1285,7 @@ fn lower_gpu_slice(
         .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
     let (destination, op) = call_destination(ctx, result_ty, dest, *span);
 
-    let func_op = runtime_fn_operand(rt::ARRAY_SLICE, *span);
+    let func_op = Operand::runtime(rt::ARRAY_SLICE, *span);
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -1464,10 +1441,7 @@ fn lower_direct_call(
         .unwrap_or(Type::new(TypeKind::Void, *span));
     let (destination, op) = call_destination(ctx, return_ty, dest, *span);
 
-    let is_indirect_call = !matches!(
-        func_op,
-        Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
-    );
+    let is_indirect_call = !matches!(func_op, Operand::Function(_));
     let func_op_for_drop = func_op.clone();
     let out_args = build_out_args(&param_types, &arg_ops);
 
@@ -1567,12 +1541,8 @@ fn apply_generic_mangling(
     func_op: &mut Operand,
 ) -> Result<(), LoweringError> {
     let func_span = callee.span;
-    if let Some(mangled) = generic_function_symbol(ctx, callee, call_expr_id, func_span)? {
-        *func_op = Operand::Constant(Box::new(crate::mir::Constant {
-            span: func_span,
-            ty: crate::ast::types::Type::new(TypeKind::Identifier, func_span),
-            literal: crate::ast::literal::Literal::Identifier(mangled),
-        }));
+    if let Some(symbol) = generic_function_symbol(ctx, callee, call_expr_id, func_span)? {
+        *func_op = Operand::function(symbol, func_span);
     }
     Ok(())
 }
@@ -1591,7 +1561,7 @@ fn generic_function_symbol(
     callee: &Expression,
     call_expr_id: usize,
     span: Span,
-) -> Result<Option<String>, LoweringError> {
+) -> Result<Option<Symbol>, LoweringError> {
     let ExpressionKind::Identifier(func_name, _) = &callee.node else {
         return Ok(None);
     };
@@ -1605,15 +1575,14 @@ fn generic_function_symbol(
         &function.name,
         type_args.iter().map(|(_, ty)| ty),
     );
-    let link_name = symbol.link_name();
     ctx.body
         .generic_function_calls
         .push(crate::mir::body::GenericFunctionCall {
-            symbol,
+            symbol: symbol.clone(),
             function,
             type_args,
         });
-    Ok(Some(link_name))
+    Ok(Some(symbol))
 }
 
 /// Refuse a call through `callee` to a generic function whose instantiation
@@ -1623,7 +1592,7 @@ fn refuse_uninstantiated_generic_call(
     callee: &Expression,
     func_name: &str,
     span: Span,
-) -> Result<Option<String>, LoweringError> {
+) -> Result<Option<Symbol>, LoweringError> {
     if calls_a_generic_function(ctx, callee) {
         return Err(uninstantiated_generic_call(func_name, span));
     }
@@ -1734,7 +1703,9 @@ fn argument_type(ctx: &LoweringContext, op: &Operand, arg: &Expression) -> Type 
         Operand::Copy(place) | Operand::Move(place) if !place.projection.is_empty() => {
             ctx.resolved_type(arg)
         }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => op.ty(&ctx.body).clone(),
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+            op.ty(&ctx.body).clone()
+        }
     }
 }
 
@@ -1958,10 +1929,7 @@ fn inject_allocator_arg(
     func_op: &Operand,
     arg_ops: &mut Vec<Operand>,
 ) {
-    let is_indirect_call = !matches!(
-        func_op,
-        Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
-    );
+    let is_indirect_call = !matches!(func_op, Operand::Function(_));
     if is_indirect_call || !callee_takes_allocator(ctx, callee) {
         return;
     }

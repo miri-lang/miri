@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::literal::Literal;
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::mir::lambda::LambdaInfo;
 use miri::mir::lowering::lower_function;
@@ -35,16 +34,12 @@ fn local_named(body: &Body, name: &str) -> Local {
 }
 
 /// The operands passed by the first call to the global function `callee`.
-fn args_of_call_to<'a>(body: &'a Body, callee: &str) -> &'a [Operand] {
+fn args_of_call_to<'a>(body: &'a Body, callee: &Symbol) -> &'a [Operand] {
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.as_ref())
         .find_map(|term| match &term.kind {
-            TerminatorKind::Call {
-                func: Operand::Constant(c),
-                args,
-                ..
-            } if matches!(&c.literal, Literal::Identifier(n) if n == callee) => {
+            TerminatorKind::Call { func, args, .. } if func.called_symbol() == Some(callee) => {
                 Some(args.as_slice())
             }
             _ => None,
@@ -73,7 +68,7 @@ fn outer(a int) int
 
     let args = args_of_call_to(
         &helper.body,
-        &Symbol::function(&ModuleId::Program, "base", &[]).link_name(),
+        &Symbol::function(&ModuleId::Program, "base", &[]),
     );
     assert_eq!(args.len(), 2, "base takes its argument plus the allocator");
     let Operand::Copy(forwarded) = &args[1] else {

@@ -269,7 +269,7 @@ pub(crate) fn takes_vtable_slot(info: &MethodInfo) -> bool {
 pub struct FilledSlot {
     pub slot: usize,
     pub method: String,
-    pub symbol: String,
+    pub symbol: Symbol,
 }
 
 /// The filled slots of every vtable a program's reached bodies build, by

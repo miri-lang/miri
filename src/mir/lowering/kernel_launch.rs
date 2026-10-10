@@ -9,6 +9,7 @@ use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::symbol::Symbol;
 use crate::mir::{GpuLaunchArgs, Operand, Place, Rvalue, Statement, StatementKind, TerminatorKind};
 
 use super::forall_gpu::needs_wire_conversion;
@@ -16,8 +17,7 @@ use super::{lower_expression, LoweringContext};
 
 /// Aggregated result of analyzing GPU function arguments for a kernel launch.
 pub(super) struct ThreadedGpuFnArgs {
-    pub(super) kernel_op: Operand,
-    pub(super) kernel_name: String,
+    pub(super) kernel: Symbol,
     pub(super) args: GpuFnArgs,
 }
 
@@ -155,7 +155,7 @@ pub(super) fn thread_gpu_fn_args(
     call_args: &[Expression],
     span: Span,
 ) -> Result<ThreadedGpuFnArgs, LoweringError> {
-    let (kernel_op, kernel_name) = super::dispatch::resolve_kernel_operand(ctx, callee, span)?;
+    let kernel = super::dispatch::resolve_kernel_symbol(ctx, callee, span)?;
 
     if !matches!(callee.node, ExpressionKind::Identifier(..)) {
         return Err(LoweringError::unsupported_expression(
@@ -165,11 +165,7 @@ pub(super) fn thread_gpu_fn_args(
     }
 
     let args = process_gpu_fn_args(ctx, callee, call_args, span)?;
-    Ok(ThreadedGpuFnArgs {
-        kernel_op,
-        kernel_name,
-        args,
-    })
+    Ok(ThreadedGpuFnArgs { kernel, args })
 }
 
 fn is_gpu_buffer_type(kind: &TypeKind) -> bool {
@@ -251,7 +247,7 @@ pub(crate) fn try_lower_kernel_launch(
         .iter()
         .filter_map(|op| match op {
             Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-            Operand::Constant(_) => None,
+            Operand::Constant(_) | Operand::Function(_) => None,
         })
         .collect();
 
@@ -267,8 +263,8 @@ pub(crate) fn try_lower_kernel_launch(
         if let ExpressionKind::Call(callee, call_args) = &obj.node {
             let threaded = thread_gpu_fn_args(ctx, callee, call_args, *span)?;
             (
-                threaded.kernel_op,
-                Some(threaded.kernel_name),
+                Operand::function(threaded.kernel.clone(), *span),
+                Some(threaded.kernel),
                 threaded.args,
             )
         } else {

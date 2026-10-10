@@ -89,29 +89,28 @@ pub(crate) fn residency_specialize_call(
         }
     }
 
-    if let Operand::Constant(constant) = &*func_op {
-        if let crate::ast::literal::Literal::Identifier(_) = &constant.literal {
-            let function = ctx.declared_callee(func, func_name)?.clone();
-            let type_args = ctx
-                .instantiated_call_mapping(call_expr_id)
-                .unwrap_or_default();
-            let symbol = Symbol::function(
-                &function.module,
-                &function.name,
-                type_args.iter().map(|(_, ty)| ty),
-            )
-            .with_residency(&gpu_args);
-            *func_op = super::dispatch::runtime_fn_operand(&symbol.link_name(), func.span);
-            ctx.body
-                .residency_function_calls
-                .push(crate::mir::body::ResidencyFunctionCall {
-                    symbol,
-                    function,
-                    type_args,
-                    arg_handles: handles.clone(),
-                });
-        }
+    if !matches!(func_op, Operand::Function(_)) {
+        return Ok(handles);
     }
+    let function = ctx.declared_callee(func, func_name)?.clone();
+    let type_args = ctx
+        .instantiated_call_mapping(call_expr_id)
+        .unwrap_or_default();
+    let symbol = Symbol::function(
+        &function.module,
+        &function.name,
+        type_args.iter().map(|(_, ty)| ty),
+    )
+    .with_residency(&gpu_args);
+    *func_op = Operand::function(symbol.clone(), func.span);
+    ctx.body
+        .residency_function_calls
+        .push(crate::mir::body::ResidencyFunctionCall {
+            symbol,
+            function,
+            type_args,
+            arg_handles: handles.clone(),
+        });
     Ok(handles)
 }
 
@@ -258,7 +257,7 @@ pub(super) fn emit_virtual_method_call(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_static_method_call(
     ctx: &mut LoweringContext,
-    symbol: &str,
+    symbol: Symbol,
     self_op: Operand,
     user_args: &[Expression],
     method_info: &MethodInfo,
@@ -269,7 +268,6 @@ pub(super) fn emit_static_method_call(
     obj_watermark: usize,
     span: Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mangled_name = symbol.to_string();
     let mut call_args = vec![self_op];
     let arg_watermark = ctx.body.local_decls.len();
     call_args.extend(lower_method_args(ctx, user_args, method_info, arg_types)?);
@@ -277,11 +275,7 @@ pub(super) fn emit_static_method_call(
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
 
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(mangled_name),
-    }));
+    let func_op = Operand::function(symbol, span);
 
     let out_args =
         super::dispatch::build_method_out_args(method_info, user_args.len(), call_args.len());
@@ -529,11 +523,11 @@ fn emit_resolved_method_call(
     }
     let symbol = match mono {
         Some((mangled, _)) => mangled,
-        None => Symbol::method(m.defining_class, &[], m.method_name, &[]).link_name(),
+        None => Symbol::method(m.defining_class, &[], m.method_name, &[]),
     };
     emit_static_method_call(
         ctx,
-        &symbol,
+        symbol,
         self_op,
         m.args,
         m.method_info,
@@ -626,7 +620,7 @@ fn names_a_settled_type(ctx: &LoweringContext, ty: &Type) -> bool {
 fn call_result_type(
     ctx: &LoweringContext,
     m: &ResolvedMethod,
-    mono: &Option<(String, Type)>,
+    mono: &Option<(Symbol, Type)>,
 ) -> Type {
     if let Some(inferred) = ctx.type_checker.get_type(m.call_expr_id) {
         let resolved = ctx.resolve_self_in(inferred);
@@ -770,14 +764,14 @@ pub(crate) fn operator_method_callee(
     owner: &str,
     method_name: &str,
     method: &MethodInfo,
-) -> (String, Type) {
+) -> (Symbol, Type) {
     match resolve_generic_class_monomorph(ctx, receiver_ty, method_name, method) {
         Some(callee) => {
             ctx.record_class_instantiations(receiver_ty);
             callee
         }
         None => (
-            Symbol::method(owner, &[], method_name, &[]).link_name(),
+            Symbol::method(owner, &[], method_name, &[]),
             method.return_type.clone(),
         ),
     }
@@ -795,7 +789,7 @@ fn resolve_generic_class_monomorph(
     obj_ty: &Type,
     method_name: &str,
     method_info: &MethodInfo,
-) -> Option<(String, Type)> {
+) -> Option<(Symbol, Type)> {
     let (name, resolved) = receiver_instantiation(ctx, obj_ty)?;
     monomorph_for_instantiation(ctx, &name, &resolved, method_name, method_info)
 }
@@ -808,8 +802,8 @@ pub(crate) struct InstantiatedCallee {
     pub(crate) owner: String,
     /// The owner's parameters at the arguments the receiver reaches it at.
     pub(crate) owner_subs: HashMap<String, Type>,
-    /// The link name of the body, `miri.{owner}${args}.{method}`.
-    pub(crate) symbol: String,
+    /// The body's symbol, linked as `miri.{owner}${args}.{method}`.
+    pub(crate) symbol: Symbol,
 }
 
 /// The per-instantiation body `method_name` resolves to on `name` instantiated
@@ -847,7 +841,7 @@ pub(crate) fn instantiated_callee(
     if !super::is_monomorphized_instantiation(&owner_args, owner_gens.len(), defs) {
         return None;
     }
-    let symbol = Symbol::method(&owner, &owner_args, method_name, &[]).link_name();
+    let symbol = Symbol::method(&owner, &owner_args, method_name, &[]);
     let owner_subs = owner_gens
         .iter()
         .zip(owner_args)
@@ -885,7 +879,7 @@ fn instantiated_enum_callee(
             .zip(resolved)
             .map(|(g, t)| (g.name.clone(), t.clone()))
             .collect(),
-        symbol: Symbol::method(name, resolved, method_name, &[]).link_name(),
+        symbol: Symbol::method(name, resolved, method_name, &[]),
     })
 }
 
@@ -901,7 +895,7 @@ fn resolve_super_monomorph(
     ctx: &LoweringContext,
     method_name: &str,
     method_info: &MethodInfo,
-) -> Option<(String, Type)> {
+) -> Option<(Symbol, Type)> {
     let self_type = ctx.self_type.as_ref()?;
     let (class_name, class_args) = receiver_instantiation(ctx, self_type)?;
     let (base, base_args) =
@@ -947,7 +941,7 @@ fn monomorph_for_instantiation(
     resolved: &[Type],
     method_name: &str,
     method_info: &MethodInfo,
-) -> Option<(String, Type)> {
+) -> Option<(Symbol, Type)> {
     // An instantiated body reaches instantiations the registry was never told
     // about; the caller records the receiver's so the pipeline registers it.
     // A receiver that declares no parameters carries no instantiation to
@@ -1081,11 +1075,7 @@ pub(super) fn emit_cow_check(
         return obj_op;
     }
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
-    let cow_fn = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: crate::ast::literal::Literal::Identifier(cow_fn_name.to_string()),
-    }));
+    let cow_fn = Operand::runtime(cow_fn_name, span);
     let cow_target = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {

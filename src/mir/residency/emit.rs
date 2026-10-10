@@ -178,11 +178,7 @@ fn append_call(
     destination: Place,
     span: Span,
 ) -> BasicBlock {
-    let func = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier(name.to_string()),
-    }));
+    let func = Operand::runtime(name, span);
     let next = new_block(body);
     body.basic_blocks[from.0].terminator = Some(Terminator::new(
         TerminatorKind::Call {

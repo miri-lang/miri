@@ -56,7 +56,7 @@ type BoundsArray = [Option<Box<Operand>>; 3];
 
 /// Parameters for GPU launch terminator assembly.
 struct GpuLaunchTerminatorParams<'a> {
-    kernel_name: &'a str,
+    kernel: Symbol,
     captures: &'a [CaptureInfo],
     grid_local: Local,
     block_local: Local,
@@ -193,17 +193,15 @@ pub fn lower_forall_gpu(
     // symbol table keeps the first and the rest share it. Each instantiation
     // of a generic body gets a kernel of its own, compiled at its types.
     let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Forall, ctx.kernel_index(stmt_id));
-    let kernel_name = kernel_symbol.link_name();
-
     let kernel_body = build_kernel_body_nd(ctx, config, &axes, &captures, body, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {
-        symbol: kernel_symbol,
+        symbol: kernel_symbol.clone(),
         body: kernel_body,
         captures: Vec::new(),
     });
 
-    emit_gpu_launch_nd(ctx, config, &kernel_name, &axes, &captures, *span)?;
+    emit_gpu_launch_nd(ctx, config, kernel_symbol, &axes, &captures, *span)?;
 
     Ok(())
 }
@@ -1107,11 +1105,7 @@ fn assemble_gpu_launch_terminator(
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         params.captures.iter().partition(|c| !c.is_scalar);
 
-    let kernel_op = Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(TypeKind::Identifier, span),
-        literal: Literal::Identifier(params.kernel_name.to_string()),
-    }));
+    let kernel_op = Operand::function(params.kernel, span);
 
     let buffer_ops: Vec<Operand> = buffer_captures
         .iter()
@@ -1171,7 +1165,7 @@ fn assemble_gpu_launch_terminator(
 fn emit_gpu_launch_nd(
     ctx: &mut LoweringContext,
     config: &BackendConfig,
-    kernel_name: &str,
+    kernel: Symbol,
     axes: &[AxisSpec],
     captures: &[CaptureInfo],
     span: Span,
@@ -1194,7 +1188,7 @@ fn emit_gpu_launch_nd(
     assemble_gpu_launch_terminator(
         ctx,
         GpuLaunchTerminatorParams {
-            kernel_name,
+            kernel,
             captures,
             grid_local,
             block_local,
