@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod argument_width;
 pub mod imported_intrinsics;
 pub mod integer_math;
 

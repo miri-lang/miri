@@ -111,7 +111,7 @@ gpu frame
         ex = ex if ex >= 0.0 else 0.0 - ex
         var ey = (fy + 0.5) / (SCALE as f32) - 0.5
         ey = ey if ey >= 0.0 else 0.0 - ey
-        let inner = 1.0 - smoothstep(0.32, 0.46, max(ex, ey)) as f32
+        let inner = 1.0 - smoothstep(0.32, 0.46, max(ex, ey))
 
         let st = state_b[cell]
         let alive = 1.0 if st > 0.99 else 0.0

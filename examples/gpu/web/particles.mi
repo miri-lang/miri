@@ -17,8 +17,8 @@
 // 4. Present: read accum_b → write paint RGBA (tone-mapped white/blue).
 //
 // Particle state and the accumulator both ping-pong (a→b); the host swaps the
-// a/b bindings between frames. Every math-intrinsic result is anchored to f32
-// so the device path stays 32-bit (browser WGSL has no f64).
+// a/b bindings between frames. Math on f32 values stays f32, so the device
+// path is 32-bit throughout (browser WGSL has no f64).
 
 use system.collections.array
 use system.gpu.atomic
@@ -64,25 +64,25 @@ fn rand_unit(key int) f32
 
 // Hash a 2D point to a pseudo-random scalar in [0, 1).
 fn hash2(x f32, y f32) f32
-    let d = (x * 127.1 + y * 311.7) as f32
-    let s = (sin(d) as f32) * (43758.5453 as f32)
-    return (s - (floor(s) as f32)) as f32
+    let d = x * 127.1 + y * 311.7
+    let s = sin(d) * (43758.5453 as f32)
+    return s - floor(s)
 
 // Value noise: bilinear blend of hashed lattice corners with a smoothstep fade.
 fn pf_value_noise(x f32, y f32) f32
-    let ix = floor(x) as f32
-    let iy = floor(y) as f32
-    let fx = (x - ix) as f32
-    let fy = (y - iy) as f32
+    let ix = floor(x)
+    let iy = floor(y)
+    let fx = x - ix
+    let fy = y - iy
     let ux = fx * fx * (3.0 - 2.0 * fx)
     let uy = fy * fy * (3.0 - 2.0 * fy)
     let a = hash2(ix, iy)
     let b = hash2(ix + 1.0, iy)
     let c = hash2(ix, iy + 1.0)
     let d = hash2(ix + 1.0, iy + 1.0)
-    let top = (a + (b - a) * ux) as f32
-    let bot = (c + (d - c) * ux) as f32
-    return (top + (bot - top) * uy) as f32
+    let top = a + (b - a) * ux
+    let bot = c + (d - c) * ux
+    return top + (bot - top) * uy
 
 // Curl of the value-noise field at p, giving a divergence-free flow direction.
 // Returned as the loose components (out_x, out_y) packed into the caller's vars
@@ -91,13 +91,13 @@ fn curl_x(x f32, y f32) f32
     let e f32 = 0.04
     let n1 = pf_value_noise(x, y + e)
     let n2 = pf_value_noise(x, y - e)
-    return ((n1 - n2) / (2.0 * e)) as f32
+    return (n1 - n2) / (2.0 * e)
 
 fn curl_y(x f32, y f32) f32
     let e f32 = 0.04
     let n3 = pf_value_noise(x + e, y)
     let n4 = pf_value_noise(x - e, y)
-    return ((n4 - n3) / (2.0 * e)) as f32
+    return (n4 - n3) / (2.0 * e)
 
 // Seed: scatter particles uniformly across the aspect-scaled play field with
 // randomized age and seed. x spans [-1.7777778, 1.7777778], y spans [-1, 1].
@@ -138,41 +138,41 @@ gpu frame
         let py = pstate_a[base + 1]
         let age = pstate_a[base + 2]
         let seed = pstate_a[base + 3]
-        let life = (4.0 + seed * 6.0) as f32
+        let life = 4.0 + seed * 6.0
         let t = frame.time
 
         // Two-octave curl flow.
-        var vx = (curl_x(px * 1.7 + t * 0.12, py * 1.7 - t * 0.07) * 0.26) as f32
-        var vy = (curl_y(px * 1.7 + t * 0.12, py * 1.7 - t * 0.07) * 0.26) as f32
-        vx = (vx + curl_x(px * 0.5 - t * 0.05, py * 0.5 - t * 0.05) * 0.16) as f32
-        vy = (vy + curl_y(px * 0.5 - t * 0.05, py * 0.5 - t * 0.05) * 0.16) as f32
+        var vx = curl_x(px * 1.7 + t * 0.12, py * 1.7 - t * 0.07) * 0.26
+        var vy = curl_y(px * 1.7 + t * 0.12, py * 1.7 - t * 0.07) * 0.26
+        vx = vx + curl_x(px * 0.5 - t * 0.05, py * 0.5 - t * 0.05) * 0.16
+        vy = vy + curl_y(px * 0.5 - t * 0.05, py * 0.5 - t * 0.05) * 0.16
 
         // Pointer vortex: swirl plus inward pull with an exponential falloff.
         // Reacts to a bare hover (no click needed) via `frame.hovering`.
         if frame.hovering
             let mx = frame.mouse_x * 3.5555556 - 1.7777778
             let my = frame.mouse_y * 2.0 - 1.0
-            let dx = (mx - px) as f32
-            let dy = (my - py) as f32
-            let r = (sqrt(dx * dx + dy * dy) as f32) + 0.0001
+            let dx = mx - px
+            let dy = my - py
+            let r = sqrt(dx * dx + dy * dy) + 0.0001
             let dirx = dx / r
             let diry = dy / r
-            let g = exp(0.0 - r * 3.2) as f32
+            let g = exp(0.0 - r * 3.2)
             // Pull toward the pointer, plus a tangent for the swirl. The play
             // field's y runs down the screen (a particle at y = -1 lands on the
             // top row), so the tangent is the clockwise perpendicular
             // (dy, -dx) — the anticlockwise one would spin the vortex the wrong
             // way for a viewer.
-            vx = (vx + (dirx * 0.45 + diry * 0.85) * g) as f32
-            vy = (vy + (diry * 0.45 - dirx * 0.85) * g) as f32
+            vx = vx + (dirx * 0.45 + diry * 0.85) * g
+            vy = vy + (diry * 0.45 - dirx * 0.85) * g
 
         let dt = frame.dt
-        var nx = (px + vx * dt) as f32
-        var ny = (py + vy * dt) as f32
-        var nage = (age + dt) as f32
+        var nx = px + vx * dt
+        var ny = py + vy * dt
+        var nage = age + dt
 
-        let escaped = 1.0 if (abs(nx) as f32) > 1.83 else 0.0
-        let escaped_y = 1.0 if (abs(ny) as f32) > 1.05 else 0.0
+        let escaped = 1.0 if abs(nx) > 1.83 else 0.0
+        let escaped_y = 1.0 if abs(ny) > 1.05 else 0.0
         if nage > life or escaped > 0.5 or escaped_y > 0.5
             nx = hash2(seed * 53.0 + t, 1.0) * 3.5555556 - 1.7777778
             ny = hash2(seed * 53.0 - t, 7.31) * 2.0 - 1.0
@@ -223,26 +223,26 @@ gpu frame
     // The per-pixel color is scaled by brightness so untouched cells are pure
     // black, matching the sparse blue/white streaks of the reference field.
     forall p in 0..921600
-        let total = (accum_b[p] as f32) as f32
+        let total = accum_b[p] as f32
         // The divisor sets where the tone map's knee falls. Saturated blue is a
         // darker colour than the white the field used to ramp to, so the knee sits
         // lower to keep the overall brightness the reference has.
-        let v = (total / 92.0) as f32
-        let bright = (v / (1.0 + v)) as f32
+        let v = total / 92.0
+        let bright = v / (1.0 + v)
         // Hue comes from the cell's warm share, so blue and yellow particles stay
         // distinguishable however they pile up; a single accumulator could only
         // have ramped one colour toward white.
-        let warmth = (warm_b[p] as f32) / (max(1.0, total) as f32)
-        let hue_r = mix(0.22, 1.0, warmth) as f32
-        let hue_g = mix(0.42, 0.82, warmth) as f32
-        let hue_b = mix(1.0, 0.25, warmth) as f32
+        let warmth = (warm_b[p] as f32) / max(1.0, total)
+        let hue_r = mix(0.22, 1.0, warmth)
+        let hue_g = mix(0.42, 0.82, warmth)
+        let hue_b = mix(1.0, 0.25, warmth)
         // Dense cores wash toward white, the way additive blending saturates in
         // the reference; sparse cells keep their colour.
-        let wash = (bright * bright * 0.75) as f32
+        let wash = bright * bright * 0.75
         let base = p * 4
-        paint[base] = ((hue_r + (1.0 - hue_r) * wash) * bright) as f32
-        paint[base + 1] = ((hue_g + (1.0 - hue_g) * wash) * bright) as f32
-        paint[base + 2] = ((hue_b + (1.0 - hue_b) * wash) * bright) as f32
+        paint[base] = (hue_r + (1.0 - hue_r) * wash) * bright
+        paint[base + 1] = (hue_g + (1.0 - hue_g) * wash) * bright
+        paint[base + 2] = (hue_b + (1.0 - hue_b) * wash) * bright
         paint[base + 3] = 1.0
 
 // Native smoke: after the seed and one frame, sum the whole intensity surface.

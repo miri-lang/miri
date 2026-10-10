@@ -348,3 +348,49 @@ fn main()
 ";
     assert_gpu_runs_with_output(source, "0.0 0.5 1.0 2.5");
 }
+
+/// A math function of an `f32` is an `f32` in a kernel, so an `f32` helper
+/// returns its result with no conversion.
+#[test]
+fn an_f32_helper_returns_a_math_result_in_a_kernel() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+use system.math
+use system.collections.array
+
+fn wave(x f32) f32
+    return sin(x) * 0.5
+
+fn main()
+    gpu var dst = Array<f32, 2>()
+    gpu forall i in 0..2
+        dst[i] = wave(i as f32)
+",
+    );
+}
+
+/// The same helper value-verifies on the device and on the host.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn an_f32_helper_returns_a_math_result_in_a_kernel_and_on_the_host() {
+    let source = "
+use system.gpu
+use system.math
+use system.collections.array
+
+fn root(x f32) f32
+    return sqrt(x * 4.0)
+
+fn main()
+    gpu var dst = Array<f32, 3>()
+    gpu forall i in 0..3
+        dst[i] = root(i as f32)
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {root(2.25)}')
+";
+    assert_gpu_runs_with_output(source, "0.0 2.0 2.828427 3.0");
+}

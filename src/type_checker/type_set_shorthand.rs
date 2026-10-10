@@ -191,26 +191,52 @@ fn declared_aliases(program: &Program) -> impl Iterator<Item = String> + '_ {
     })
 }
 
+/// The parts of a top-level function declaration the shorthand reads and
+/// rewrites: an ordinary function and an intrinsic alike.
+struct Signature<'a> {
+    generics: &'a mut Option<Vec<Expression>>,
+    params: &'a mut Vec<Parameter>,
+    return_type: &'a mut Option<Box<Expression>>,
+}
+
+impl<'a> Signature<'a> {
+    fn of(statement: &'a mut StatementKind) -> Option<Self> {
+        match statement {
+            StatementKind::FunctionDeclaration(declaration) => Some(Signature {
+                generics: &mut declaration.generics,
+                params: &mut declaration.params,
+                return_type: &mut declaration.return_type,
+            }),
+            StatementKind::IntrinsicFunctionDeclaration(_, generics, params, return_type, _) => {
+                Some(Signature {
+                    generics,
+                    params,
+                    return_type,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Calls `visit` on every function declared at a module's top level.
-fn for_each_function(program: &mut Program, visit: &mut impl FnMut(&mut FunctionDeclarationData)) {
+fn for_each_function(program: &mut Program, visit: &mut impl FnMut(&mut Signature)) {
     for statement in &mut program.body {
-        match &mut statement.node {
-            StatementKind::Block(statements) => {
-                for inner in statements {
-                    if let StatementKind::FunctionDeclaration(declaration) = &mut inner.node {
-                        visit(declaration);
-                    }
+        if let StatementKind::Block(statements) = &mut statement.node {
+            for inner in statements {
+                if let Some(mut signature) = Signature::of(&mut inner.node) {
+                    visit(&mut signature);
                 }
             }
-            StatementKind::FunctionDeclaration(declaration) => visit(declaration),
-            _ => {}
+        } else if let Some(mut signature) = Signature::of(&mut statement.node) {
+            visit(&mut signature);
         }
     }
 }
 
 /// The bare type names a function's signature writes, other than its own
 /// type parameters.
-fn signature_type_names(declaration: &mut FunctionDeclarationData) -> HashSet<String> {
+fn signature_type_names(declaration: &mut Signature) -> HashSet<String> {
     let parameters = declared_parameters(declaration);
     let mut names = HashSet::new();
     for_each_signature_type(declaration, &mut |name| {
@@ -222,7 +248,7 @@ fn signature_type_names(declaration: &mut FunctionDeclarationData) -> HashSet<St
 }
 
 /// The names of the type parameters a function declares.
-fn declared_parameters(declaration: &FunctionDeclarationData) -> HashSet<String> {
+fn declared_parameters(declaration: &Signature) -> HashSet<String> {
     declaration
         .generics
         .iter()
@@ -249,7 +275,7 @@ fn is_type_set_expression(target: &Expression) -> bool {
 
 /// Gives a function whose signature names a set in `sets` one type parameter
 /// per set name, and points the signature at it.
-fn desugar_function(declaration: &mut FunctionDeclarationData, sets: &HashSet<String>) {
+fn desugar_function(declaration: &mut Signature, sets: &HashSet<String>) {
     let declared = declared_parameters(declaration);
     let mut used: Vec<String> = Vec::new();
     for_each_signature_type(declaration, &mut |name| {
@@ -300,14 +326,11 @@ fn generic_parameter_name(generic: &Expression) -> Option<String> {
 
 /// Calls `visit` on every bare type name in a function's parameter and return
 /// types, in the order they are written.
-fn for_each_signature_type(
-    declaration: &mut FunctionDeclarationData,
-    visit: &mut impl FnMut(&mut String),
-) {
-    for parameter in &mut declaration.params {
+fn for_each_signature_type(declaration: &mut Signature, visit: &mut impl FnMut(&mut String)) {
+    for parameter in declaration.params.iter_mut() {
         visit_type_names(&mut parameter.typ, visit);
     }
-    if let Some(return_type) = &mut declaration.return_type {
+    if let Some(return_type) = declaration.return_type.as_mut() {
         visit_type_names(return_type, visit);
     }
 }

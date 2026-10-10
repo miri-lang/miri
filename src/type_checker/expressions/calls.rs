@@ -2143,15 +2143,13 @@ impl TypeChecker {
                 (name, make_type(parameter))
             })
             .collect();
-        let mut positional = positional_args.iter();
-        for param in &func_data.params {
-            let argument = positional
-                .next()
-                .map(|(_, ty)| ty)
-                .or_else(|| named_args.get(&param.name).map(|(_, ty, _)| ty));
-            let Some(argument) = argument else {
-                continue;
-            };
+        // A number literal binds a parameter only when no other argument
+        // does, so `mix(0.0, 1.0, t)` takes `t`'s width as `0.0 + t` does.
+        let (literals, values): (Vec<_>, Vec<_>) =
+            arguments_by_parameter(func_data, positional_args, named_args)
+                .into_iter()
+                .partition(|(_, value, _)| super::binary::is_number_literal(value));
+        for (param, _, argument) in values.into_iter().chain(literals) {
             let Ok(written) = self.extract_type_from_expression(&param.typ) else {
                 continue;
             };
@@ -3619,4 +3617,29 @@ fn leftover_named_argument_message(name: &str, names_a_parameter: bool) -> Strin
     } else {
         format!("Unknown argument '{name}'")
     }
+}
+
+/// Each argument a call passes, positional or named, beside the parameter it
+/// is passed for, in the order the callee declares its parameters.
+fn arguments_by_parameter<'a>(
+    func_data: &'a crate::ast::types::FunctionTypeData,
+    positional_args: &'a [(&'a Expression, Type)],
+    named_args: &'a HashMap<String, (&'a Expression, Type, Span)>,
+) -> Vec<(&'a Parameter, &'a Expression, &'a Type)> {
+    let mut positional = positional_args.iter();
+    func_data
+        .params
+        .iter()
+        .filter_map(|param| {
+            let (value, ty) = positional
+                .next()
+                .map(|(value, ty)| (*value, ty))
+                .or_else(|| {
+                    named_args
+                        .get(&param.name)
+                        .map(|(value, ty, _)| (*value, ty))
+                })?;
+            Some((param, value, ty))
+        })
+        .collect()
 }
