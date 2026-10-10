@@ -28,6 +28,7 @@ pub mod option_coercion;
 pub mod out_parameter;
 pub mod rc_elision;
 pub mod reassignment;
+pub mod reference_cycles;
 pub mod release_by_runtime_class;
 pub mod stored_closures;
 pub mod temporaries;

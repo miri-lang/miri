@@ -1,0 +1,17 @@
+// summary: Accepted counterpart of MER_TYP_081: the closure takes the object as a parameter instead of capturing it.
+// expect-stdout: 2
+use system.io
+
+class Ticker
+    count int
+    on_tick fn(Ticker) int
+    fn wire()
+        self.on_tick = fn(t Ticker) int: t.count + 1
+
+fn zero(t Ticker) int
+    return 0
+
+fn main()
+    let t = Ticker(count: 1, on_tick: zero)
+    t.wire()
+    println(f"{t.on_tick(t)}")
