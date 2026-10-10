@@ -159,6 +159,38 @@ pub fn operator_method_name(op: &BinaryOp) -> Option<&'static str> {
     operator_method(op).map(|method| method.name)
 }
 
+/// One operator for each method an operator dispatches to: `+`, `*`, `==`
+/// and `<`, the operator that names its method's trait.
+const NAMING_OPERATORS: [BinaryOp; 4] = [
+    BinaryOp::Add,
+    BinaryOp::Mul,
+    BinaryOp::Equal,
+    BinaryOp::LessThan,
+];
+
+/// The operator dispatching to the method `trait_name` declares, and that
+/// method, when the trait is one an operator dispatches to.
+///
+/// A type the language defines the operator on answers the method through
+/// the operator, without declaring either, so `int` meets `Comparable`.
+pub fn operator_naming_trait(trait_name: &str) -> Option<(BinaryOp, OperatorMethod)> {
+    NAMING_OPERATORS.into_iter().find_map(|op| {
+        operator_method(&op)
+            .filter(|method| method.trait_name == trait_name)
+            .map(|method| (op, method))
+    })
+}
+
+/// The operator dispatching to the method called `method_name`, and that
+/// method, when an operator dispatches to one of that name.
+pub fn operator_naming_method(method_name: &str) -> Option<(BinaryOp, OperatorMethod)> {
+    NAMING_OPERATORS.into_iter().find_map(|op| {
+        operator_method(&op)
+            .filter(|method| method.name == method_name)
+            .map(|method| (op, method))
+    })
+}
+
 /// The type whose method `op` runs when applied to a left operand of type
 /// `left`.
 ///
@@ -182,14 +214,30 @@ mod tests {
 
     #[test]
     fn every_operator_method_is_named_by_some_operator() {
-        let all = [
-            BinaryOp::Add,
-            BinaryOp::Mul,
-            BinaryOp::Equal,
-            BinaryOp::LessThan,
-        ];
-        let named: Vec<&str> = all.iter().filter_map(operator_method_name).collect();
+        let named: Vec<&str> = NAMING_OPERATORS
+            .iter()
+            .filter_map(operator_method_name)
+            .collect();
         assert_eq!(named, OPERATOR_METHOD_NAMES);
+    }
+
+    #[test]
+    fn an_operator_trait_and_its_method_name_the_same_operator() {
+        for trait_name in [
+            ADDING_TRAIT_NAME,
+            REPEATING_TRAIT_NAME,
+            EQUALITY_TRAIT_NAME,
+            ORDERING_TRAIT_NAME,
+        ] {
+            let naming = operator_naming_trait(trait_name);
+            assert!(naming.is_some(), "{trait_name} names no operator");
+            assert_eq!(
+                naming.and_then(|(_, method)| operator_naming_method(method.name)),
+                naming
+            );
+        }
+        assert_eq!(operator_naming_trait("Hashable"), None);
+        assert_eq!(operator_naming_method("hash"), None);
     }
 
     #[test]
