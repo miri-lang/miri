@@ -221,7 +221,7 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    /// Recognises a macro invocation at `position`, which Miri has no syntax for.
+    /// Recognizes a macro invocation at `position`, which Miri has no syntax for.
     ///
     /// `!` is not a Miri token at all, so it reaches here as an invalid one. It
     /// is a macro call rather than a stray character when a name runs up to it
@@ -399,12 +399,9 @@ impl<'source> Lexer<'source> {
         let src = self.inner.source();
         let lookahead_cursor = self.inner.span().end;
 
-        // Security invariant: inspect single bytes instead of slicing `&src[x..x+1]`,
+        // Security invariant: inspect single bytes on src.as_bytes() instead of slicing `&src[x..x+1]`,
         // which panics when `lookahead_cursor` lands on a multi-byte UTF-8 character (Compiler DoS).
         if lookahead_cursor < src.len() {
-            // Security Invariant: Check lookahead bytes directly on src.as_bytes()
-            // rather than string slicing (&src[lookahead_cursor..lookahead_cursor + 1])
-            // to prevent UTF-8 boundary panics (compiler DoS) on non-ASCII lookahead input.
             let next_byte = src.as_bytes()[lookahead_cursor];
             if next_byte == b'.' {
                 self.split_range(lookahead_cursor);
