@@ -23,8 +23,8 @@
 //
 // The simulation runs on a 192×192 grid; the display pass samples it bilinearly
 // into a 16:9 canvas (the square field stretched across the frame, as in the
-// reference's linear-filtered surface). Every math-intrinsic result is anchored
-// to f32 so the device path stays 32-bit.
+// reference's linear-filtered surface). Math on f32 values stays f32, so the
+// device path is 32-bit throughout.
 
 use system.collections.array
 use system.math
@@ -108,41 +108,41 @@ gpu frame
         // The opening frame puffs too, so the field is never empty waiting for
         // the first period to elapse; `dt` is zero only on that frame.
         let period = 1.4
-        let cycle = (t / period) as f32
-        let phase = (cycle - (floor(cycle) as f32)) as f32
+        let cycle = t / period
+        let phase = cycle - floor(cycle)
         let puff = 1.0 if phase < (frame.dt / period) or frame.dt <= 0.0 else 0.0
-        let amb = ((1.0 - active) * puff) as f32
+        let amb = (1.0 - active) * puff
         // The emission point walks a wobbling circle, so successive puffs land
         // in different places and stir the whole field over time.
-        let a = (t * 0.8 + (sin(t * 0.37) as f32) * 3.0) as f32
-        let ax = (0.5 + 0.33 * (cos(a) as f32)) as f32
-        let ay = (0.5 + 0.33 * (sin(a * 1.3) as f32)) as f32
-        let adx = (0.0 - (sin(a) as f32)) * 220.0
-        let ady = (cos(a * 1.3) as f32) * 220.0
-        let dxa = (fx - ax) as f32
-        let dya = (fy - ay) as f32
-        let ga = (exp((0.0 - (dxa * dxa + dya * dya)) / 0.0018) as f32) * amb
+        let a = t * 0.8 + sin(t * 0.37) * 3.0
+        let ax = 0.5 + 0.33 * cos(a)
+        let ay = 0.5 + 0.33 * sin(a * 1.3)
+        let adx = (0.0 - sin(a)) * 220.0
+        let ady = cos(a * 1.3) * 220.0
+        let dxa = fx - ax
+        let dya = fy - ay
+        let ga = exp((0.0 - (dxa * dxa + dya * dya)) / 0.0018) * amb
 
         // Pointer impulse at the cursor; the motion delta becomes the flow
         // velocity (normalized delta → cell units via the 800 factor).
-        let dxp = (fx - frame.mouse_x) as f32
-        let dyp = (fy - frame.mouse_y) as f32
-        let gp = (exp((0.0 - (dxp * dxp + dyp * dyp)) / 0.0018) as f32) * active
+        let dxp = fx - frame.mouse_x
+        let dyp = fy - frame.mouse_y
+        let gp = exp((0.0 - (dxp * dxp + dyp * dyp)) / 0.0018) * active
 
         var nvx = vx_a[idx] + adx * ga + mvx * 800.0 * gp
         var nvy = vy_a[idx] + ady * ga + mvy * 800.0 * gp
-        vx_b[idx] = nvx as f32
-        vy_b[idx] = nvy as f32
+        vx_b[idx] = nvx
+        vy_b[idx] = nvy
 
         // Dye color: yellow vs blue, alternating slowly.
-        let warm = 1.0 if (sin(t * 0.7) as f32) > 0.0 else 0.0
-        let cr = mix(0.10, 0.55, warm) as f32
-        let cg = mix(0.20, 0.40, warm) as f32
-        let cb = mix(0.55, 0.08, warm) as f32
-        let inj = (ga + gp) as f32
-        dr_b[idx] = (dr_a[idx] + cr * inj) as f32
-        dg_b[idx] = (dg_a[idx] + cg * inj) as f32
-        db_b[idx] = (db_a[idx] + cb * inj) as f32
+        let warm = 1.0 if sin(t * 0.7) > 0.0 else 0.0
+        let cr = mix(0.10, 0.55, warm)
+        let cg = mix(0.20, 0.40, warm)
+        let cb = mix(0.55, 0.08, warm)
+        let inj = ga + gp
+        dr_b[idx] = dr_a[idx] + cr * inj
+        dg_b[idx] = dg_a[idx] + cg * inj
+        db_b[idx] = db_a[idx] + cb * inj
 
     // Pass 2: advect velocity (read _b, write _a). Backtrace in cell units.
     forall idx in 0..36864
@@ -153,8 +153,8 @@ gpu frame
         let sy = (y as f32) - vy_b[idx] * dt
         let x0 = floor(sx) as i32
         let y0 = floor(sy) as i32
-        let tx = (sx - (x0 as f32)) as f32
-        let ty = (sy - (y0 as f32)) as f32
+        let tx = sx - (x0 as f32)
+        let ty = sy - (y0 as f32)
         let xa = max(0, min(191, x0))
         let xb = max(0, min(191, x0 + 1))
         let ya = max(0, min(191, y0))
@@ -163,16 +163,16 @@ gpu frame
         let vx10 = vx_b[ya * 192 + xb]
         let vx01 = vx_b[yb * 192 + xa]
         let vx11 = vx_b[yb * 192 + xb]
-        let vxtop = (vx00 + (vx10 - vx00) * tx) as f32
-        let vxbot = (vx01 + (vx11 - vx01) * tx) as f32
-        vx_a[idx] = ((vxtop + (vxbot - vxtop) * ty) * 0.995) as f32
+        let vxtop = vx00 + (vx10 - vx00) * tx
+        let vxbot = vx01 + (vx11 - vx01) * tx
+        vx_a[idx] = (vxtop + (vxbot - vxtop) * ty) * 0.995
         let vy00 = vy_b[ya * 192 + xa]
         let vy10 = vy_b[ya * 192 + xb]
         let vy01 = vy_b[yb * 192 + xa]
         let vy11 = vy_b[yb * 192 + xb]
-        let vytop = (vy00 + (vy10 - vy00) * tx) as f32
-        let vybot = (vy01 + (vy11 - vy01) * tx) as f32
-        vy_a[idx] = ((vytop + (vybot - vytop) * ty) * 0.995) as f32
+        let vytop = vy00 + (vy10 - vy00) * tx
+        let vybot = vy01 + (vy11 - vy01) * tx
+        vy_a[idx] = (vytop + (vybot - vytop) * ty) * 0.995
 
     // Pass 3: advect dye (read _b, write _a) along the new velocity (in _a).
     forall idx in 0..36864
@@ -183,8 +183,8 @@ gpu frame
         let sy = (y as f32) - vy_a[idx] * dt
         let x0 = floor(sx) as i32
         let y0 = floor(sy) as i32
-        let tx = (sx - (x0 as f32)) as f32
-        let ty = (sy - (y0 as f32)) as f32
+        let tx = sx - (x0 as f32)
+        let ty = sy - (y0 as f32)
         let xa = max(0, min(191, x0))
         let xb = max(0, min(191, x0 + 1))
         let ya = max(0, min(191, y0))
@@ -193,15 +193,15 @@ gpu frame
         let i10 = ya * 192 + xb
         let i01 = yb * 192 + xa
         let i11 = yb * 192 + xb
-        let rtop = (dr_b[i00] + (dr_b[i10] - dr_b[i00]) * tx) as f32
-        let rbot = (dr_b[i01] + (dr_b[i11] - dr_b[i01]) * tx) as f32
-        dr_a[idx] = ((rtop + (rbot - rtop) * ty) * 0.985) as f32
-        let gtop = (dg_b[i00] + (dg_b[i10] - dg_b[i00]) * tx) as f32
-        let gbot = (dg_b[i01] + (dg_b[i11] - dg_b[i01]) * tx) as f32
-        dg_a[idx] = ((gtop + (gbot - gtop) * ty) * 0.985) as f32
-        let btop = (db_b[i00] + (db_b[i10] - db_b[i00]) * tx) as f32
-        let bbot = (db_b[i01] + (db_b[i11] - db_b[i01]) * tx) as f32
-        db_a[idx] = ((btop + (bbot - btop) * ty) * 0.985) as f32
+        let rtop = dr_b[i00] + (dr_b[i10] - dr_b[i00]) * tx
+        let rbot = dr_b[i01] + (dr_b[i11] - dr_b[i01]) * tx
+        dr_a[idx] = (rtop + (rbot - rtop) * ty) * 0.985
+        let gtop = dg_b[i00] + (dg_b[i10] - dg_b[i00]) * tx
+        let gbot = dg_b[i01] + (dg_b[i11] - dg_b[i01]) * tx
+        dg_a[idx] = (gtop + (gbot - gtop) * ty) * 0.985
+        let btop = db_b[i00] + (db_b[i10] - db_b[i00]) * tx
+        let bbot = db_b[i01] + (db_b[i11] - db_b[i01]) * tx
+        db_a[idx] = (btop + (bbot - btop) * ty) * 0.985
 
     // Pass 4: divergence of the velocity field (read _a).
     forall idx in 0..36864
@@ -215,7 +215,7 @@ gpu frame
         let r = vx_a[y * 192 + xp]
         let b = vy_a[ym * 192 + x]
         let tt = vy_a[yp * 192 + x]
-        divg[idx] = (0.5 * (r - l + tt - b)) as f32
+        divg[idx] = 0.5 * (r - l + tt - b)
         p_a[idx] = 0.0
 
     // Pass 5: Jacobi pressure solve. The repeat unrolls to 24 ordered passes;
@@ -228,7 +228,7 @@ gpu frame
             let r = p_a[y * 192 + min(191, x + 1)]
             let b = p_a[max(0, y - 1) * 192 + x]
             let tt = p_a[min(191, y + 1) * 192 + x]
-            p_b[idx] = ((l + r + b + tt - divg[idx]) * 0.25) as f32
+            p_b[idx] = (l + r + b + tt - divg[idx]) * 0.25
         forall idx in 0..36864
             let x = idx % 192
             let y = idx / 192
@@ -236,7 +236,7 @@ gpu frame
             let r = p_b[y * 192 + min(191, x + 1)]
             let b = p_b[max(0, y - 1) * 192 + x]
             let tt = p_b[min(191, y + 1) * 192 + x]
-            p_a[idx] = ((l + r + b + tt - divg[idx]) * 0.25) as f32
+            p_a[idx] = (l + r + b + tt - divg[idx]) * 0.25
 
     // Pass 6: subtract the pressure gradient (read _a vel + p_a, write _b vel).
     forall idx in 0..36864
@@ -246,8 +246,8 @@ gpu frame
         let r = p_a[y * 192 + min(191, x + 1)]
         let b = p_a[max(0, y - 1) * 192 + x]
         let tt = p_a[min(191, y + 1) * 192 + x]
-        vx_b[idx] = (vx_a[idx] - 0.5 * (r - l)) as f32
-        vy_b[idx] = (vy_a[idx] - 0.5 * (tt - b)) as f32
+        vx_b[idx] = vx_a[idx] - 0.5 * (r - l)
+        vy_b[idx] = vy_a[idx] - 0.5 * (tt - b)
 
     // Pass 7: display. Bilinearly sample the 192×192 dye into the 1280×720 (16:9)
     // canvas — the square field stretched across the frame, as the reference does
@@ -260,8 +260,8 @@ gpu frame
         let sy = (((py as f32) + 0.5) / (CH as f32)) * 192.0 - 0.5
         let x0 = floor(sx) as i32
         let y0 = floor(sy) as i32
-        let tx = (sx - (x0 as f32)) as f32
-        let ty = (sy - (y0 as f32)) as f32
+        let tx = sx - (x0 as f32)
+        let ty = sy - (y0 as f32)
         let xa = max(0, min(191, x0))
         let xb = max(0, min(191, x0 + 1))
         let ya = max(0, min(191, y0))
@@ -270,19 +270,19 @@ gpu frame
         let i10 = ya * 192 + xb
         let i01 = yb * 192 + xa
         let i11 = yb * 192 + xb
-        let rtop = (dr_a[i00] + (dr_a[i10] - dr_a[i00]) * tx) as f32
-        let rbot = (dr_a[i01] + (dr_a[i11] - dr_a[i01]) * tx) as f32
-        let cr = max((rtop + (rbot - rtop) * ty), 0.0) as f32
-        let gtop = (dg_a[i00] + (dg_a[i10] - dg_a[i00]) * tx) as f32
-        let gbot = (dg_a[i01] + (dg_a[i11] - dg_a[i01]) * tx) as f32
-        let cg = max((gtop + (gbot - gtop) * ty), 0.0) as f32
-        let btop = (db_a[i00] + (db_a[i10] - db_a[i00]) * tx) as f32
-        let bbot = (db_a[i01] + (db_a[i11] - db_a[i01]) * tx) as f32
-        let cb = max((btop + (bbot - btop) * ty), 0.0) as f32
+        let rtop = dr_a[i00] + (dr_a[i10] - dr_a[i00]) * tx
+        let rbot = dr_a[i01] + (dr_a[i11] - dr_a[i01]) * tx
+        let cr = max((rtop + (rbot - rtop) * ty), 0.0)
+        let gtop = dg_a[i00] + (dg_a[i10] - dg_a[i00]) * tx
+        let gbot = dg_a[i01] + (dg_a[i11] - dg_a[i01]) * tx
+        let cg = max((gtop + (gbot - gtop) * ty), 0.0)
+        let btop = db_a[i00] + (db_a[i10] - db_a[i00]) * tx
+        let bbot = db_a[i01] + (db_a[i11] - db_a[i01]) * tx
+        let cb = max((btop + (bbot - btop) * ty), 0.0)
         let base = pidx * 4
-        paint[base] = (0.012 + (pow(cr, 0.85) as f32)) as f32
-        paint[base + 1] = (0.02 + (pow(cg, 0.85) as f32)) as f32
-        paint[base + 2] = (0.046 + (pow(cb, 0.85) as f32)) as f32
+        paint[base] = 0.012 + pow(cr, 0.85)
+        paint[base + 1] = 0.02 + pow(cg, 0.85)
+        paint[base + 2] = 0.046 + pow(cb, 0.85)
         paint[base + 3] = 1.0
 
 // Native smoke: after the seed and one frame, the ambient swirl has injected

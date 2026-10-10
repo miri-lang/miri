@@ -1,33 +1,39 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-public intrinsic fn abs(x float) float
-public intrinsic fn min(a float, b float) float
-public intrinsic fn max(a float, b float) float
-public intrinsic fn pow(base float, exp float) float
-public intrinsic fn sqrt(x float) float
-public intrinsic fn floor(x float) float
-public intrinsic fn ceil(x float) float
-public intrinsic fn round(x float) float
-public intrinsic fn sin(x float) float
-public intrinsic fn cos(x float) float
-public intrinsic fn tan(x float) float
-public intrinsic fn log(x float) float
-public intrinsic fn exp(x float) float
-public intrinsic fn tanh(x float) float
-public intrinsic fn exp2(x float) float
-public intrinsic fn log2(x float) float
-public intrinsic fn atan2(y float, x float) float
-public intrinsic fn fract(x float) float
-public intrinsic fn clamp(x float, lo float, hi float) float
-public intrinsic fn mix(a float, b float, t float) float
-public intrinsic fn smoothstep(low float, high float, x float) float
-public intrinsic fn step(edge float, x float) float
-public intrinsic fn sign(x float) float
+// The floating-point types math is defined on. Each function below takes its
+// arguments at one member and returns that member: `sin` of an `f32` is an
+// `f32` on every target, as `f32::sin` in Rust and the WGSL overloads are.
+// `abs`, `min` and `max` also take integers, typed at their argument.
+public type Real is f16 or f32 or f64 or float
+
+public intrinsic fn abs(x Real) Real
+public intrinsic fn min(a Real, b Real) Real
+public intrinsic fn max(a Real, b Real) Real
+public intrinsic fn pow(base Real, exp Real) Real
+public intrinsic fn sqrt(x Real) Real
+public intrinsic fn floor(x Real) Real
+public intrinsic fn ceil(x Real) Real
+public intrinsic fn round(x Real) Real
+public intrinsic fn sin(x Real) Real
+public intrinsic fn cos(x Real) Real
+public intrinsic fn tan(x Real) Real
+public intrinsic fn log(x Real) Real
+public intrinsic fn exp(x Real) Real
+public intrinsic fn tanh(x Real) Real
+public intrinsic fn exp2(x Real) Real
+public intrinsic fn log2(x Real) Real
+public intrinsic fn atan2(y Real, x Real) Real
+public intrinsic fn fract(x Real) Real
+public intrinsic fn clamp(x Real, lo Real, hi Real) Real
+public intrinsic fn mix(a Real, b Real, t Real) Real
+public intrinsic fn smoothstep(low Real, high Real, x Real) Real
+public intrinsic fn step(edge Real, x Real) Real
+public intrinsic fn sign(x Real) Real
 
 // Logistic sigmoid, composed from `exp`. Usable on the CPU and inside GPU
 // kernels (it lowers to a GPU-callable helper function).
-public fn sigmoid(x float) float: 1.0 / (1.0 + exp(-x))
+public fn sigmoid(x Real) Real: 1.0 / (1.0 + exp(-x))
 
 public const PI = 3.14159265358979323846
 public const E = 2.71828182845904523536
@@ -54,6 +60,10 @@ fn lattice_unit(xi float, yi float) float
     let key = kx * 1973 as u32 + ky * 9277 as u32 + 101 as u32
     return hash_u32(key) as float / 4294967295.0
 
+// TODO: the noise functions below compute in `float` only. Taking `Real`
+// needs a cast from an integer to a set-bounded type parameter (`h as T`),
+// which the checker refuses ("cannot cast to non-numeric type 'T'").
+//
 // 2D value noise in [0, 1): smoothstep-weighted bilinear blend of the four
 // hashed integer-lattice corners around (x, y). Deterministic and continuous.
 public fn value_noise(x float, y float) float

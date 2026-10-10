@@ -12,8 +12,8 @@
 // View state ping-pongs (view_a → view_b) so the integrator never reads the
 // buffer it writes; the host swaps a/b between frames. The per-pixel iteration
 // budget grows as the view zooms in, capped at 880 so a deep zoom stays inside
-// the frame budget. Every math-intrinsic result is anchored to f32 (`as f32`)
-// so the device path stays 32-bit (browser WGSL has no f64).
+// the frame budget. Math on f32 values stays f32, so the device path is
+// 32-bit throughout (browser WGSL has no f64).
 
 use system.collections.array
 use system.math
@@ -37,22 +37,22 @@ gpu var paint = Array<f32, PAINT>()
 // Five-stop palette, evaluated per channel. Stops: navy, blue, cyan, yellow,
 // white — matching the reference shader's `palette(t)`.
 fn pal_r(t f32) f32
-    if t < 0.35: return mix(0.016, 0.13, t / 0.35) as f32
-    if t < 0.62: return mix(0.13, 0.35, (t - 0.35) / 0.27) as f32
-    if t < 0.85: return mix(0.35, 1.0, (t - 0.62) / 0.23) as f32
-    return mix(1.0, 1.0, (t - 0.85) / 0.15) as f32
+    if t < 0.35: return mix(0.016, 0.13, t / 0.35)
+    if t < 0.62: return mix(0.13, 0.35, (t - 0.35) / 0.27)
+    if t < 0.85: return mix(0.35, 1.0, (t - 0.62) / 0.23)
+    return mix(1.0, 1.0, (t - 0.85) / 0.15)
 
 fn pal_g(t f32) f32
-    if t < 0.35: return mix(0.027, 0.27, t / 0.35) as f32
-    if t < 0.62: return mix(0.27, 0.62, (t - 0.35) / 0.27) as f32
-    if t < 0.85: return mix(0.62, 0.85, (t - 0.62) / 0.23) as f32
-    return mix(0.85, 0.97, (t - 0.85) / 0.15) as f32
+    if t < 0.35: return mix(0.027, 0.27, t / 0.35)
+    if t < 0.62: return mix(0.27, 0.62, (t - 0.35) / 0.27)
+    if t < 0.85: return mix(0.62, 0.85, (t - 0.62) / 0.23)
+    return mix(0.85, 0.97, (t - 0.85) / 0.15)
 
 fn pal_b(t f32) f32
-    if t < 0.35: return mix(0.059, 0.75, t / 0.35) as f32
-    if t < 0.62: return mix(0.75, 1.0, (t - 0.35) / 0.27) as f32
-    if t < 0.85: return mix(1.0, 0.24, (t - 0.62) / 0.23) as f32
-    return mix(0.24, 0.85, (t - 0.85) / 0.15) as f32
+    if t < 0.35: return mix(0.059, 0.75, t / 0.35)
+    if t < 0.62: return mix(0.75, 1.0, (t - 0.35) / 0.27)
+    if t < 0.85: return mix(1.0, 0.24, (t - 0.62) / 0.23)
+    return mix(0.24, 0.85, (t - 0.85) / 0.15)
 
 // Seed: initial viewport centred near the main cardioid at full extent.
 forall i in 0..4
@@ -89,8 +89,8 @@ gpu frame
         // Wheel zooms about the pointer rather than the centre, so the point
         // under the cursor stays under it. The step is clamped per frame so one
         // flick of a high-resolution wheel cannot leap the whole depth range.
-        let zoom = clamp(exp(frame.wheel * 0.0014) as f32, 0.6, 1.6) as f32
-        let next_scale = clamp(scale * zoom, 0.00002, 4.0) as f32
+        let zoom = clamp(exp(frame.wheel * 0.0014), 0.6, 1.6)
+        let next_scale = clamp(scale * zoom, 0.00002, 4.0)
         // Fraction of the distance from the centre to the cursor that the view
         // must travel to keep the cursor's point fixed. Zero when the scale did
         // not change, so a frame with no wheel input never shifts the view.
@@ -121,7 +121,7 @@ gpu frame
         let cim = cy + vv * scale
 
         // Dynamic iteration budget grows as the view zooms in (smaller scale).
-        let budget = 120.0 + 60.0 * (log2(3.0 / scale + 1.0) as f32) * 2.2
+        let budget = 120.0 + 60.0 * log2(3.0 / scale + 1.0) * 2.2
         let max_iter = min(budget, 880.0) as int
 
         var zx = 0.0
@@ -150,11 +150,11 @@ gpu frame
             paint[base + 3] = 1.0
         else
             // Smooth iteration count removes the escape-time banding.
-            let sn = (n as f32) - (log2(log2(dotz) as f32) as f32) + 4.0
+            let sn = (n as f32) - log2(log2(dotz)) + 4.0
             let pt0 = sn * 0.022 + 0.62
-            let t = pt0 - (floor(pt0) as f32)
+            let t = pt0 - floor(pt0)
             // Darken low escape counts so filaments glow out of the void.
-            let bright = 0.55 + 0.45 * (smoothstep(0.0, 12.0, sn) as f32)
+            let bright = 0.55 + 0.45 * smoothstep(0.0, 12.0, sn)
             paint[base] = pal_r(t) * bright
             paint[base + 1] = pal_g(t) * bright
             paint[base + 2] = pal_b(t) * bright

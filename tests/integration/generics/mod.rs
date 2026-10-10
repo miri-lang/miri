@@ -17,6 +17,7 @@ pub mod extends;
 pub mod generic_type_drop_thunks;
 pub mod invariance;
 pub mod lambdas;
+pub mod literal_arguments;
 pub mod operator_dispatch;
 pub mod requirements_through_aliases;
 pub mod return_type_parameters;

@@ -465,6 +465,8 @@ A set is never the type of a value: a binding, field, collection element, parame
 
 A set is imported like any other declared name: with its module, or by name (`use local.shapes.{twice, Real}`).
 
+`system.math` declares `Real` as `f16 or f32 or f64 or float`, and its functions take it: `sin(a)` with `a f32` is an `f32` on the host and on the device, as `f32::sin` in Rust and the WGSL overloads are. `abs`, `min` and `max` also take integers. A number literal takes the width of the argument beside it, so `mix(0.0, 1.0, t)` is an `f32` when `t` is.
+
 ---
 
 ## Imports & Modules
@@ -950,7 +952,7 @@ let s = identity("hello")
 A call binds each of the callee's type parameters from, in order:
 
 1. **Type arguments written on the call.** `make<String>()` binds `T` to `String`. The call must write exactly as many type arguments as the function declares, or it is refused (`MER_TYP_036`). Inside a generic body, `make<T>()` binds the callee's parameter to the caller's own `T`.
-2. **The arguments it passes.** `identity(42)` binds `T` to `int`. A parameter declared as a trait or base class binds through the argument's own clauses: with `class Box implements Op<Foo>`, passing a `Box` where `Op<X>` is declared binds `X` to `Foo`.
+2. **The arguments it passes.** `identity(42)` binds `T` to `int`. A parameter declared as a trait or base class binds through the argument's own clauses: with `class Box implements Op<Foo>`, passing a `Box` where `Op<X>` is declared binds `X` to `Foo`. A number literal binds a parameter only when no other argument does, so it takes the width of the argument beside it as it would beside an operator: `first(0.5, a)` with `a f32` binds `T` to `f32`, while `first(0.5, 1.5)` binds it to `float`.
 3. **The type of the location the result goes into.** A parameter only the return type mentions is bound by the declared type of the binding, parameter or return type the result is stored in:
 
 ```miri

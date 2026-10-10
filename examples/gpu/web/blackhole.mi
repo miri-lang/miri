@@ -17,8 +17,8 @@
 //
 // Camera state ping-pongs (cam_a → cam_b) so the integrator never reads the
 // buffer it writes; the host swaps a/b between frames. Vectors are carried as
-// loose scalar components and every math-intrinsic result is anchored to f32
-// (`as f32`) so the device path stays 32-bit (browser WGSL has no f64).
+// loose scalar components, and math on f32 values stays f32, so the device
+// path is 32-bit throughout (browser WGSL has no f64).
 
 use system.collections.array
 use system.math
@@ -39,27 +39,27 @@ gpu var paint = Array<f32, PAINT>()
 
 // 2D value hash → [0,1); the base entropy source for the nebula.
 fn hash21(px f32, py f32) f32
-    var qx = fract(px * 123.34) as f32
-    var qy = fract(py * 345.45) as f32
+    var qx = fract(px * 123.34)
+    var qy = fract(py * 345.45)
     let d = qx * (qx + 34.345) + qy * (qy + 34.345)
     qx = qx + d
     qy = qy + d
-    return fract(qx * qy) as f32
+    return fract(qx * qy)
 
 // 3D value hash → [0,1); seeds the volumetric starfield cells.
 fn hash31(px f32, py f32, pz f32) f32
-    let ax = fract(px * 0.3183099 + 0.1) as f32
-    let ay = fract(py * 0.3183099 + 0.1) as f32
-    let az = fract(pz * 0.3183099 + 0.1) as f32
+    let ax = fract(px * 0.3183099 + 0.1)
+    let ay = fract(py * 0.3183099 + 0.1)
+    let az = fract(pz * 0.3183099 + 0.1)
     let bx = ax * 17.0
     let by = ay * 17.0
     let bz = az * 17.0
-    return fract(bx * by * bz * (bx + by + bz)) as f32
+    return fract(bx * by * bz * (bx + by + bz))
 
 // Smooth 2D value noise (bilinear interpolation over four hashed corners).
 fn vnoise(px f32, py f32) f32
-    let ix = floor(px) as f32
-    let iy = floor(py) as f32
+    let ix = floor(px)
+    let iy = floor(py)
     var fx = px - ix
     var fy = py - iy
     fx = fx * fx * (3.0 - 2.0 * fx)
@@ -68,7 +68,7 @@ fn vnoise(px f32, py f32) f32
     let b = hash21(ix + 1.0, iy)
     let c = hash21(ix, iy + 1.0)
     let d = hash21(ix + 1.0, iy + 1.0)
-    return mix(mix(a, b, fx) as f32, mix(c, d, fx) as f32, fy) as f32
+    return mix(mix(a, b, fx), mix(c, d, fx), fy)
 
 // Four-octave fractional Brownian motion over the value noise.
 fn nebula_fbm(px f32, py f32) f32
@@ -90,9 +90,9 @@ fn star_layer(dx f32, dy f32, dz f32, scale f32, thr f32) f32
     let px = dx * scale
     let py = dy * scale
     let pz = dz * scale
-    let idx = floor(px) as f32
-    let idy = floor(py) as f32
-    let idz = floor(pz) as f32
+    let idx = floor(px)
+    let idy = floor(py)
+    let idz = floor(pz)
     let fx = (px - idx) - 0.5
     let fy = (py - idy) - 0.5
     let fz = (pz - idz) - 0.5
@@ -103,15 +103,15 @@ fn star_layer(dx f32, dy f32, dz f32, scale f32, thr f32) f32
     let sx = fx - offx * 0.7
     let sy = fy - offy * 0.7
     let sz = fz - offz * 0.7
-    let len = sqrt(sx * sx + sy * sy + sz * sz) as f32
-    let star = smoothstep(0.5, 0.0, len) as f32
-    let on = step(1.0 - thr, h) as f32
-    return star * star * on * (0.4 + 0.6 * (fract(h * 91.7) as f32))
+    let len = sqrt(sx * sx + sy * sy + sz * sz)
+    let star = smoothstep(0.5, 0.0, len)
+    let on = step(1.0 - thr, h)
+    return star * star * on * (0.4 + 0.6 * fract(h * 91.7))
 
 // Accretion-disk opacity ramp: fades in past the inner edge, out toward the rim.
 fn disk_opacity(r f32) f32
-    let a = smoothstep(2.6, 3.1, r) as f32
-    let b = smoothstep(6.5, 9.0, r) as f32
+    let a = smoothstep(2.6, 3.1, r)
+    let b = smoothstep(6.5, 9.0, r)
     return 0.9 * a * (1.0 - b)
 
 // Seed: starting pose (near edge-on for the iconic warped-disk view), idle past
@@ -150,8 +150,8 @@ gpu frame
         // `drag_dy` points up the screen while the pointer's travel points down,
         // so raising the pointer must raise the camera: subtract, matching the
         // reference's `rot.y += (clientY - lastY) * 0.006`.
-        cam_b[1] = clamp(pitch - frame.drag_dy * 0.006, -1.45, 1.45) as f32
-        cam_b[2] = clamp(dist * (exp(frame.wheel * 0.0012) as f32), 4.5, 34.0) as f32
+        cam_b[1] = clamp(pitch - frame.drag_dy * 0.006, -1.45, 1.45)
+        cam_b[2] = clamp(dist * exp(frame.wheel * 0.0012), 4.5, 34.0)
         cam_b[3] = next_idle
 
     // Pass 2: trace one photon geodesic per pixel and composite the result.
@@ -166,18 +166,18 @@ gpu frame
 
         // Camera orbiting the hole on a sphere of radius `dist`.
         let ya = cam_b[0]
-        let pa = clamp(cam_b[1], -1.45, 1.45) as f32
+        let pa = clamp(cam_b[1], -1.45, 1.45)
         let dist = cam_b[2]
-        let cpa = cos(pa) as f32
-        let rox = (cos(ya) as f32) * cpa * dist
-        let roy = (sin(pa) as f32) * dist
-        let roz = (sin(ya) as f32) * cpa * dist
+        let cpa = cos(pa)
+        let rox = cos(ya) * cpa * dist
+        let roy = sin(pa) * dist
+        let roz = sin(ya) * cpa * dist
         // Forward / right / up basis (right = cross(fw, up0), up = cross(rt, fw)).
-        let flen = sqrt(rox * rox + roy * roy + roz * roz) as f32
+        let flen = sqrt(rox * rox + roy * roy + roz * roz)
         let fwx = (0.0 - rox) / flen
         let fwy = (0.0 - roy) / flen
         let fwz = (0.0 - roz) / flen
-        let rl = sqrt(fwz * fwz + fwx * fwx) as f32
+        let rl = sqrt(fwz * fwz + fwx * fwx)
         let rtx = (0.0 - fwz) / rl
         let rtz = fwx / rl
         let upx = 0.0 - rtz * fwy
@@ -186,7 +186,7 @@ gpu frame
         let rdx0 = fwx * 1.7 + rtx * uvx + upx * uvy
         let rdy0 = fwy * 1.7 + upy * uvy
         let rdz0 = fwz * 1.7 + rtz * uvx + upz * uvy
-        let rdl = sqrt(rdx0 * rdx0 + rdy0 * rdy0 + rdz0 * rdz0) as f32
+        let rdl = sqrt(rdx0 * rdx0 + rdy0 * rdy0 + rdz0 * rdz0)
         let rdx = rdx0 / rdl
         let rdy = rdy0 / rdl
         let rdz = rdz0 / rdl
@@ -199,7 +199,7 @@ gpu frame
         let nrmx0 = e1y * rdz - e1z * rdy
         let nrmy0 = e1z * rdx - e1x * rdz
         let nrmz0 = e1x * rdy - e1y * rdx
-        let nl = sqrt(nrmx0 * nrmx0 + nrmy0 * nrmy0 + nrmz0 * nrmz0) as f32
+        let nl = sqrt(nrmx0 * nrmx0 + nrmy0 * nrmy0 + nrmz0 * nrmz0)
         let usey = 1.0 if nl < 0.0001 else 0.0
         let nrmx = 0.0 if usey > 0.5 else nrmx0 / nl
         let nrmy = 1.0 if usey > 0.5 else nrmy0 / nl
@@ -207,7 +207,7 @@ gpu frame
         let e2x0 = nrmy * e1z - nrmz * e1y
         let e2y0 = nrmz * e1x - nrmx * e1z
         let e2z0 = nrmx * e1y - nrmy * e1x
-        let e2l = sqrt(e2x0 * e2x0 + e2y0 * e2y0 + e2z0 * e2z0) as f32
+        let e2l = sqrt(e2x0 * e2x0 + e2y0 * e2y0 + e2z0 * e2z0)
         var e2x = e2x0 / e2l
         var e2y = e2y0 / e2l
         var e2z = e2z0 / e2l
@@ -220,7 +220,7 @@ gpu frame
         var u = 1.0 / r0
         let vr = rdx * e1x + rdy * e1y + rdz * e1z
         let vt = rdx * e2x + rdy * e2y + rdz * e2z
-        var du = (0.0 - u) * vr / (max(vt, 0.001) as f32)
+        var du = (0.0 - u) * vr / max(vt, 0.001)
 
         var phi = 0.0
         var r = r0
@@ -240,14 +240,14 @@ gpu frame
 
         var i = 0
         while i < 260
-            let dphi = mix(0.028, 0.11, clamp((r - 3.0) / 14.0, 0.0, 1.0)) as f32
+            let dphi = mix(0.028, 0.11, clamp((r - 3.0) / 14.0, 0.0, 1.0))
             let acc = 0.0 - u + 1.5 * u * u
             du = du + acc * dphi
             u = u + du * dphi
             phi = phi + dphi
-            r = 1.0 / (max(u, 0.0001) as f32)
-            let cph = cos(phi) as f32
-            let sph = sin(phi) as f32
+            r = 1.0 / max(u, 0.0001)
+            let cph = cos(phi)
+            let sph = sin(phi)
             pos_x = r * (cph * e1x + sph * e2x)
             pos_y = r * (cph * e1y + sph * e2y)
             pos_z = r * (cph * e1z + sph * e2z)
@@ -259,45 +259,45 @@ gpu frame
                 // Equatorial-plane crossing → sample the disk (front-to-back).
                 if prev_y * pos_y < 0.0
                     let f = prev_y / (prev_y - pos_y)
-                    let cr = mix(prev_r, r, f) as f32
+                    let cr = mix(prev_r, r, f)
                     if cr > 2.6 and cr < 9.0
-                        let x = clamp((cr - 2.6) / 6.4, 0.0, 1.0) as f32
-                        let cpx = mix(prev_px, pos_x, f) as f32
-                        let cpz = mix(prev_pz, pos_z, f) as f32
-                        let ang = atan2(cpz, cpx) as f32
-                        let omega = pow(2.6 / cr, 1.5) as f32
+                        let x = clamp((cr - 2.6) / 6.4, 0.0, 1.0)
+                        let cpx = mix(prev_px, pos_x, f)
+                        let cpz = mix(prev_pz, pos_z, f)
+                        let ang = atan2(cpz, cpx)
+                        let omega = pow(2.6 / cr, 1.5)
                         let rot = tm * omega * 0.9
                         let bnd = nebula_fbm((ang - rot) * 2.5, cr * 1.3)
                         let bands = 0.35 + 1.25 * bnd * bnd
                         // Temperature: hot white-orange inner → cool red outer.
-                        let sm1 = smoothstep(0.0, 0.35, x) as f32
-                        let sm2 = smoothstep(0.35, 1.0, x) as f32
+                        let sm1 = smoothstep(0.0, 0.35, x)
+                        let sm2 = smoothstep(0.35, 1.0, x)
                         // Temperature blend: hot white-orange → mid orange → cool red.
-                        let cr0 = mix(mix(1.0, 1.0, sm1) as f32, 0.85, sm2) as f32
-                        let cg0 = mix(mix(0.92, 0.55, sm1) as f32, 0.2, sm2) as f32
-                        let cb0 = mix(mix(0.78, 0.18, sm1) as f32, 0.05, sm2) as f32
+                        let cr0 = mix(mix(1.0, 1.0, sm1), 0.85, sm2)
+                        let cg0 = mix(mix(0.92, 0.55, sm1), 0.2, sm2)
+                        let cb0 = mix(mix(0.78, 0.18, sm1), 0.05, sm2)
                         // Relativistic Doppler beaming along the orbit tangent.
                         let travx = pos_x - prev_px
                         let travy = pos_y - prev_py
                         let travz = pos_z - prev_pz
-                        let tl = sqrt(travx * travx + travy * travy + travz * travz) as f32
+                        let tl = sqrt(travx * travx + travy * travy + travz * travz)
                         let tvx = travx / tl
                         let tvz = travz / tl
-                        let odl = sqrt(cpz * cpz + cpx * cpx) as f32
+                        let odl = sqrt(cpz * cpz + cpx * cpx)
                         let odx = cpz / odl
                         let odz = (0.0 - cpx) / odl
-                        let beta = min(sqrt(0.5 / cr) as f32, 0.75) as f32
-                        let gg = 1.0 / (sqrt(1.0 - beta * beta) as f32)
+                        let beta = min(sqrt(0.5 / cr), 0.75)
+                        let gg = 1.0 / sqrt(1.0 - beta * beta)
                         let ddot = odx * beta * tvx + odz * beta * tvz
                         let delta = 1.0 / (gg * (1.0 - ddot))
-                        let boost = pow(clamp(delta, 0.2, 3.0) as f32, 3.0) as f32
-                        let tint = clamp((delta - 0.85) * 1.2, 0.0, 1.0) as f32
-                        let ccr = cr0 * (mix(1.0, 0.75, tint) as f32)
-                        let ccg = cg0 * (mix(0.55, 0.85, tint) as f32)
-                        let ccb = cb0 * (mix(0.35, 1.2, tint) as f32)
+                        let boost = pow(clamp(delta, 0.2, 3.0), 3.0)
+                        let tint = clamp((delta - 0.85) * 1.2, 0.0, 1.0)
+                        let ccr = cr0 * mix(1.0, 0.75, tint)
+                        let ccg = cg0 * mix(0.55, 0.85, tint)
+                        let ccb = cb0 * mix(0.35, 1.2, tint)
                         // Gravitational redshift dimming near the horizon.
-                        let grav = sqrt(clamp(1.0 - 1.0 / cr, 0.04, 1.0) as f32) as f32
-                        let bright = mix(1.7, 0.5, x) as f32
+                        let grav = sqrt(clamp(1.0 - 1.0 / cr, 0.04, 1.0))
+                        let bright = mix(1.7, 0.5, x)
                         let em = bands * bright * boost * grav
                         col_r = col_r + trans * ccr * em
                         col_g = col_g + trans * ccg * em
@@ -324,7 +324,7 @@ gpu frame
             // Photon-ring rays that neither escaped nor were captured within the
             // step budget end with `pos_* == prev_*`; floor the length so the
             // direction stays finite instead of dividing by zero.
-            let dl = max(sqrt(dnx * dnx + dny * dny + dnz * dnz) as f32, 0.0001) as f32
+            let dl = max(sqrt(dnx * dnx + dny * dny + dnz * dnz), 0.0001)
             let dirx = dnx / dl
             let diry = dny / dl
             let dirz = dnz / dl
@@ -347,9 +347,9 @@ gpu frame
         col_g = col_g / (col_g + 0.85)
         col_b = col_b / (col_b + 0.85)
         let base = idx * 4
-        paint[base] = pow(max(col_r, 0.0) as f32, 0.82) as f32
-        paint[base + 1] = pow(max(col_g, 0.0) as f32, 0.82) as f32
-        paint[base + 2] = pow(max(col_b, 0.0) as f32, 0.82) as f32
+        paint[base] = pow(max(col_r, 0.0), 0.82)
+        paint[base + 1] = pow(max(col_g, 0.0), 0.82)
+        paint[base + 2] = pow(max(col_b, 0.0), 0.82)
         paint[base + 3] = 1.0
 
 // Native smoke: the center ray falls straight into the hole (a pure-black

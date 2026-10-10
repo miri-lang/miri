@@ -29,7 +29,7 @@
 //             so it keeps ownership of the weight ping-pong).
 // 4. Render:  per-pixel decision field (class glow over navy, flowing confidence
 //             bands, a bright pulsing seam) with the data points overlaid.
-// Every math-intrinsic result is anchored to f32 so the device path stays 32-bit.
+// Math on f32 values stays f32, so the device path is 32-bit throughout.
 
 use system.collections.array
 use system.math
@@ -117,20 +117,20 @@ fn mode_at(t f32) i32
 
 // Seed weights from that spread; zero the velocities.
 forall i in 0..PARAMS
-    w_a[i] = ((rand_unit(i + 1) * 2.0 - 1.0) * init_scale(i)) as f32
+    w_a[i] = (rand_unit(i + 1) * 2.0 - 1.0) * init_scale(i)
     v_a[i] = 0.0
 
 // Seed a two-arm spiral: points 0..PER_ARM are class 0, the rest class 1.
 forall s in 0..SAMPLES
     let c = s / PER_ARM
     let i = s - c * PER_ARM
-    let t = ((i as f32) / (PER_ARM as f32)) as f32
-    let r = (0.13 + 0.74 * t) as f32
-    let th = (t * 4.4 + (c as f32) * (3.14159265 as f32)) as f32
-    let nx = ((rand_unit(s * 2 + 1) - 0.5) * 0.07) as f32
-    let ny = ((rand_unit(s * 2 + 2) - 0.5) * 0.07) as f32
-    data[s * 3] = (r * (cos(th) as f32) + nx) as f32
-    data[s * 3 + 1] = (r * (sin(th) as f32) + ny) as f32
+    let t = (i as f32) / (PER_ARM as f32)
+    let r = 0.13 + 0.74 * t
+    let th = t * 4.4 + (c as f32) * (3.14159265 as f32)
+    let nx = (rand_unit(s * 2 + 1) - 0.5) * 0.07
+    let ny = (rand_unit(s * 2 + 2) - 0.5) * 0.07
+    data[s * 3] = r * cos(th) + nx
+    data[s * 3 + 1] = r * sin(th) + ny
     data[s * 3 + 2] = c as f32
 
 // Clear the paint buffer. This top-level 2-D pass over the exact display extent
@@ -189,39 +189,39 @@ gpu frame
                 // Forward pass.
                 var j = 0
                 while j < H1
-                    let a1 = (w[W1 + j * IN] * x0 + w[W1 + j * IN + 1] * x1 + w[B1 + j]) as f32
-                    h1[j] = tanh(a1) as f32
+                    let a1 = w[W1 + j * IN] * x0 + w[W1 + j * IN + 1] * x1 + w[B1 + j]
+                    h1[j] = tanh(a1)
                     j = j + 1
                 j = 0
                 while j < H2
                     var a2 = w[B2 + j]
                     var k = 0
                     while k < H1
-                        a2 = (a2 + w[W2 + j * H1 + k] * h1[k]) as f32
+                        a2 = a2 + w[W2 + j * H1 + k] * h1[k]
                         k = k + 1
-                    h2[j] = tanh(a2) as f32
+                    h2[j] = tanh(a2)
                     j = j + 1
                 var y = w[B3]
                 j = 0
                 while j < H2
-                    y = (y + w[W3 + j] * h2[j]) as f32
+                    y = y + w[W3 + j] * h2[j]
                     j = j + 1
-                let p = (1.0 / (1.0 + (exp(0.0 - y) as f32))) as f32
+                let p = 1.0 / (1.0 + exp(0.0 - y))
 
                 // Backward pass: accumulate the exact gradient into `g`.
-                let ds = (p - lbl) as f32
-                g[B3] = (g[B3] + ds) as f32
+                let ds = p - lbl
+                g[B3] = g[B3] + ds
                 j = 0
                 while j < H2
-                    g[W3 + j] = (g[W3 + j] + ds * h2[j]) as f32
-                    d2[j] = (ds * w[W3 + j] * (1.0 - h2[j] * h2[j])) as f32
+                    g[W3 + j] = g[W3 + j] + ds * h2[j]
+                    d2[j] = ds * w[W3 + j] * (1.0 - h2[j] * h2[j])
                     j = j + 1
                 j = 0
                 while j < H2
-                    g[B2 + j] = (g[B2 + j] + d2[j]) as f32
+                    g[B2 + j] = g[B2 + j] + d2[j]
                     var k = 0
                     while k < H1
-                        g[W2 + j * H1 + k] = (g[W2 + j * H1 + k] + d2[j] * h1[k]) as f32
+                        g[W2 + j * H1 + k] = g[W2 + j * H1 + k] + d2[j] * h1[k]
                         k = k + 1
                     j = j + 1
                 var k = 0
@@ -229,27 +229,27 @@ gpu frame
                     var acc = 0.0
                     j = 0
                     while j < H2
-                        acc = (acc + d2[j] * w[W2 + j * H1 + k]) as f32
+                        acc = acc + d2[j] * w[W2 + j * H1 + k]
                         j = j + 1
-                    d1[k] = (acc * (1.0 - h1[k] * h1[k])) as f32
+                    d1[k] = acc * (1.0 - h1[k] * h1[k])
                     k = k + 1
                 k = 0
                 while k < H1
-                    g[B1 + k] = (g[B1 + k] + d1[k]) as f32
-                    g[W1 + k * IN] = (g[W1 + k * IN] + d1[k] * x0) as f32
-                    g[W1 + k * IN + 1] = (g[W1 + k * IN + 1] + d1[k] * x1) as f32
+                    g[B1 + k] = g[B1 + k] + d1[k]
+                    g[W1 + k * IN] = g[W1 + k * IN] + d1[k] * x0
+                    g[W1 + k * IN + 1] = g[W1 + k * IN + 1] + d1[k] * x1
                     k = k + 1
                 s = s + 1
 
             // Momentum SGD (lr 0.25, momentum 0.9), gradient averaged over the
             // batch. No weight decay: the spiral needs the sharp, high-curvature
             // boundary that L2 would smooth.
-            let sc = (0.25 / (SAMPLES as f32)) as f32
+            let sc = 0.25 / (SAMPLES as f32)
             var i = 0
             while i < PARAMS
-                let nv = (0.9 * vel[i] - sc * g[i]) as f32
+                let nv = 0.9 * vel[i] - sc * g[i]
                 vel[i] = nv
-                w[i] = (w[i] + nv) as f32
+                w[i] = w[i] + nv
                 i = i + 1
             epoch = epoch + 1
 
@@ -267,7 +267,7 @@ gpu frame
         var o = 0
         while o < PARAMS
             if restart
-                w_b[o] = ((rand_unit(key_base + o + 1) * 2.0 - 1.0) * init_scale(o)) as f32
+                w_b[o] = (rand_unit(key_base + o + 1) * 2.0 - 1.0) * init_scale(o)
                 v_b[o] = 0.0
             else
                 w_b[o] = w[o]
@@ -278,7 +278,7 @@ gpu frame
         // freshly seeded one, so it measures this shape's training, not the
         // session's.
         let epochs_before = 0.0 if restart else w_a[EPOCH]
-        w_b[EPOCH] = (epochs_before + (EPOCHS_PER_FRAME as f32)) as f32
+        w_b[EPOCH] = epochs_before + (EPOCHS_PER_FRAME as f32)
 
     // Pass 2: post-step loss + accuracy over the batch, plus the epoch count
     // the train pass just advanced, for the HUD readback.
@@ -294,30 +294,30 @@ gpu frame
             let lbl = data[s * 3 + 2]
             var j = 0
             while j < H1
-                let a1 = (w_b[W1 + j * IN] * x0 + w_b[W1 + j * IN + 1] * x1 + w_b[B1 + j]) as f32
-                h1[j] = tanh(a1) as f32
+                let a1 = w_b[W1 + j * IN] * x0 + w_b[W1 + j * IN + 1] * x1 + w_b[B1 + j]
+                h1[j] = tanh(a1)
                 j = j + 1
             j = 0
             while j < H2
                 var a2 = w_b[B2 + j]
                 var k = 0
                 while k < H1
-                    a2 = (a2 + w_b[W2 + j * H1 + k] * h1[k]) as f32
+                    a2 = a2 + w_b[W2 + j * H1 + k] * h1[k]
                     k = k + 1
-                h2[j] = tanh(a2) as f32
+                h2[j] = tanh(a2)
                 j = j + 1
             var y = w_b[B3]
             j = 0
             while j < H2
-                y = (y + w_b[W3 + j] * h2[j]) as f32
+                y = y + w_b[W3 + j] * h2[j]
                 j = j + 1
-            let p = clamp(1.0 / (1.0 + (exp(0.0 - y) as f32)), 0.000001, 0.999999) as f32
-            loss = (loss - (lbl * (log(p) as f32) + (1.0 - lbl) * (log(1.0 - p) as f32))) as f32
+            let p = clamp(1.0 / (1.0 + exp(0.0 - y)), 0.000001, 0.999999)
+            loss = loss - (lbl * log(p) + (1.0 - lbl) * log(1.0 - p))
             let hit = 1.0 if (p - 0.5) * (lbl - 0.5) > 0.0 else 0.0
-            correct = (correct + hit) as f32
+            correct = correct + hit
             s = s + 1
-        stats[0] = (loss / (SAMPLES as f32)) as f32
-        stats[1] = (correct / (SAMPLES as f32)) as f32
+        stats[0] = loss / (SAMPLES as f32)
+        stats[1] = correct / (SAMPLES as f32)
         stats[2] = w_b[EPOCH]
 
     // Pass 3: regenerate the dataset for the current mode. A timer cycles the
@@ -336,25 +336,25 @@ gpu frame
             // Two-arm spiral: points 0..PER_ARM are class 0, the rest class 1.
             let c = s / PER_ARM
             let i = s - c * PER_ARM
-            let tt = ((i as f32) / (PER_ARM as f32)) as f32
-            let r = (0.13 + 0.74 * tt) as f32
-            let th = (tt * 4.4 + (c as f32) * (3.14159265 as f32)) as f32
-            dx = (r * (cos(th) as f32) + (rand_unit(s * 2 + 1) - 0.5) * 0.07) as f32
-            dy = (r * (sin(th) as f32) + (rand_unit(s * 2 + 2) - 0.5) * 0.07) as f32
+            let tt = (i as f32) / (PER_ARM as f32)
+            let r = 0.13 + 0.74 * tt
+            let th = tt * 4.4 + (c as f32) * (3.14159265 as f32)
+            dx = r * cos(th) + (rand_unit(s * 2 + 1) - 0.5) * 0.07
+            dy = r * sin(th) + (rand_unit(s * 2 + 2) - 0.5) * 0.07
             lbl = c as f32
         if mode == 1
             // Concentric rings: an inner disk (class 1) in an outer annulus,
             // split evenly across the batch.
             let inner = s * 2 < SAMPLES
-            let rad = (sqrt(rand_unit(100003 + s * 3 + 1)) * 0.34) as f32 if inner else (0.58 + rand_unit(100003 + s * 3 + 1) * 0.27) as f32
-            let ang = (rand_unit(100003 + s * 3 + 2) * (6.2831853 as f32)) as f32
-            dx = (rad * (cos(ang) as f32)) as f32
-            dy = (rad * (sin(ang) as f32)) as f32
+            let rad = (sqrt(rand_unit(100003 + s * 3 + 1)) * 0.34) if inner else (0.58 + rand_unit(100003 + s * 3 + 1) * 0.27)
+            let ang = rand_unit(100003 + s * 3 + 2) * (6.2831853 as f32)
+            dx = rad * cos(ang)
+            dy = rad * sin(ang)
             lbl = 1.0 if inner else 0.0
         if mode == 2
             // XOR: class 1 where x and y share a sign, class 0 otherwise.
-            let px = ((rand_unit(200003 + s * 3 + 1) * 2.0 - 1.0) * 0.85) as f32
-            let py = ((rand_unit(200003 + s * 3 + 2) * 2.0 - 1.0) * 0.85) as f32
+            let px = (rand_unit(200003 + s * 3 + 1) * 2.0 - 1.0) * 0.85
+            let py = (rand_unit(200003 + s * 3 + 2) * 2.0 - 1.0) * 0.85
             dx = px
             dy = py
             lbl = 1.0 if px * py > 0.0 else 0.0
@@ -368,83 +368,83 @@ gpu frame
         let ix = px % CW
         let iy = px / CW
         // Aspect-corrected input square: y spans [-1, 1], x widens by 16:9.
-        let gx = ((((ix as f32) + 0.5) / (CW as f32)) - 0.5) * 2.0 * ((CW as f32) / (CH as f32)) as f32
+        let gx = ((((ix as f32) + 0.5) / (CW as f32)) - 0.5) * 2.0 * ((CW as f32) / (CH as f32))
         let gy = (0.5 - (((iy as f32) + 0.5) / (CH as f32))) * 2.0 as f32
 
         var h1 = Array<f32, H1>()
         var h2 = Array<f32, H2>()
         var j = 0
         while j < H1
-            let a1 = (w_b[W1 + j * IN] * gx + w_b[W1 + j * IN + 1] * gy + w_b[B1 + j]) as f32
-            h1[j] = tanh(a1) as f32
+            let a1 = w_b[W1 + j * IN] * gx + w_b[W1 + j * IN + 1] * gy + w_b[B1 + j]
+            h1[j] = tanh(a1)
             j = j + 1
         j = 0
         while j < H2
             var a2 = w_b[B2 + j]
             var k = 0
             while k < H1
-                a2 = (a2 + w_b[W2 + j * H1 + k] * h1[k]) as f32
+                a2 = a2 + w_b[W2 + j * H1 + k] * h1[k]
                 k = k + 1
-            h2[j] = tanh(a2) as f32
+            h2[j] = tanh(a2)
             j = j + 1
         var y = w_b[B3]
         j = 0
         while j < H2
-            y = (y + w_b[W3 + j] * h2[j]) as f32
+            y = y + w_b[W3 + j] * h2[j]
             j = j + 1
-        let p = (1.0 / (1.0 + (exp(0.0 - y) as f32))) as f32
+        let p = 1.0 / (1.0 + exp(0.0 - y))
 
         // Class side (blue below 0.5, gold above) lifted off a deep navy base by
         // the squared confidence, so the uncertain band around the boundary stays
         // dark and the settled regions glow.
-        let conf = (abs(p - 0.5) * 2.0) as f32
+        let conf = abs(p - 0.5) * 2.0
         let sr = 0.16 if p < 0.5 else 1.0
         let sg = 0.31 if p < 0.5 else 0.84
         let sb = 0.82 if p < 0.5 else 0.24
-        let fill = (0.10 + 0.60 * conf * conf) as f32
-        var cr = (0.012 + sr * fill) as f32
-        var cg = (0.02 + sg * fill) as f32
-        var cb = (0.046 + sb * fill) as f32
+        let fill = 0.10 + 0.60 * conf * conf
+        var cr = 0.012 + sr * fill
+        var cg = 0.02 + sg * fill
+        var cb = 0.046 + sb * fill
 
         // Confidence iso-contours flowing outward from the boundary: the field
         // keeps moving even once the weights have nearly settled.
-        let bands = (abs(fract(p * 9.0 - frame.time * 0.25) - 0.5)) as f32
-        let band = (smoothstep(0.44, 0.5, bands) * 0.10) as f32
-        cr = (cr + sr * band) as f32
-        cg = (cg + sg * band) as f32
-        cb = (cb + sb * band) as f32
+        let bands = abs(fract(p * 9.0 - frame.time * 0.25) - 0.5)
+        let band = smoothstep(0.44, 0.5, bands) * 0.10
+        cr = cr + sr * band
+        cg = cg + sg * band
+        cb = cb + sb * band
 
         // Decision boundary: a bright seam at p = 0.5, breathing on a slow pulse.
-        let e = (abs(p - 0.5) / 0.035) as f32
-        let edge = (exp(0.0 - e * e)) as f32
-        let pulse = (0.72 + 0.28 * (sin(frame.time * 2.4) as f32)) as f32
-        cr = (cr + 0.90 * edge * 0.55 * pulse) as f32
-        cg = (cg + 0.95 * edge * 0.55 * pulse) as f32
-        cb = (cb + 1.0 * edge * 0.55 * pulse) as f32
+        let e = abs(p - 0.5) / 0.035
+        let edge = exp(0.0 - e * e)
+        let pulse = 0.72 + 0.28 * sin(frame.time * 2.4)
+        cr = cr + 0.90 * edge * 0.55 * pulse
+        cg = cg + 0.95 * edge * 0.55 * pulse
+        cb = cb + 1.0 * edge * 0.55 * pulse
 
         // Data-point overlay: small filled dots colored by their true label, each
         // ringed by a dark rim so they read against the field. Samples outside the
         // pixel's x band are rejected on one load, before the distance math.
         var s = 0
         while s < SAMPLES
-            let dx = (gx - data[s * 3]) as f32
+            let dx = gx - data[s * 3]
             if dx * dx < 0.00032
-                let dy = (gy - data[s * 3 + 1]) as f32
-                let dd = (dx * dx + dy * dy) as f32
+                let dy = gy - data[s * 3 + 1]
+                let dd = dx * dx + dy * dy
                 if dd < 0.00032
-                    let rr = (sqrt(dd)) as f32
+                    let rr = sqrt(dd)
                     let lbl = data[s * 3 + 2]
                     let pr = 0.45 if lbl < 0.5 else 1.0
                     let pg = 0.62 if lbl < 0.5 else 0.88
                     let pb = 1.0 if lbl < 0.5 else 0.40
-                    let disc = (1.0 - smoothstep(0.0155, 0.0178, rr)) as f32
-                    cr = (cr + (0.01 - cr) * disc) as f32
-                    cg = (cg + (0.02 - cg) * disc) as f32
-                    cb = (cb + (0.05 - cb) * disc) as f32
-                    let core = (1.0 - smoothstep(0.0100, 0.0148, rr)) as f32
-                    cr = (cr + (pr - cr) * core) as f32
-                    cg = (cg + (pg - cg) * core) as f32
-                    cb = (cb + (pb - cb) * core) as f32
+                    let disc = 1.0 - smoothstep(0.0155, 0.0178, rr)
+                    cr = cr + (0.01 - cr) * disc
+                    cg = cg + (0.02 - cg) * disc
+                    cb = cb + (0.05 - cb) * disc
+                    let core = 1.0 - smoothstep(0.0100, 0.0148, rr)
+                    cr = cr + (pr - cr) * core
+                    cg = cg + (pg - cg) * core
+                    cb = cb + (pb - cb) * core
             s = s + 1
 
         let base = px * 4
