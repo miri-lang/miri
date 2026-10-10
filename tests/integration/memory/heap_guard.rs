@@ -139,6 +139,10 @@ fn main()
 /// neither yes nor no, and only the value meaning "no" skips the call. Were the
 /// initial value to mean "no", nothing would ever call in to settle it, every
 /// allocation would go unseen, and this program would exit silently.
+///
+/// The leak is a cycle through two objects, which reference counting cannot
+/// free and the compiler does not refuse (it refuses only an object stored in
+/// its own field).
 #[test]
 fn test_heap_guard_reports_a_leaked_inline_allocation() {
     assert_heap_guard_detects(
@@ -149,7 +153,9 @@ class Node
 
 fn main()
     var a = Node()
-    a.peer = Some(a)
+    var b = Node()
+    a.peer = Some(b)
+    b.peer = Some(a)
     println("built")
 "#,
         &["leaked", "(class)"],

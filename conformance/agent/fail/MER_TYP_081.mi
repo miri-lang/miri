@@ -1,0 +1,17 @@
+// expect: MER_TYP_081
+// summary: Triggers MER_TYP_081: a closure capturing self is stored in a field of self.
+use system.io
+
+class Ticker
+    count int
+    on_tick fn() int
+    fn wire()
+        self.on_tick = fn() int: self.count + 1
+
+fn zero() int
+    return 0
+
+fn main()
+    let t = Ticker(count: 1, on_tick: zero)
+    t.wire()
+    println(f"{t.on_tick()}")

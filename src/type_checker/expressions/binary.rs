@@ -630,6 +630,7 @@ impl TypeChecker {
 
         if matches!(op, AssignmentOp::Assign) {
             self.check_gpu_reassignment_i32_range(lhs, rhs, &lhs_type, context);
+            self.refuse_store_closing_a_cycle(lhs, rhs, span, context);
         }
 
         lhs_type

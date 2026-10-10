@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 94
+## Error fixtures (`fail/`) — 95
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -110,6 +110,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_078 | Triggers MER_TYP_078: a method is read as a value without a call. |
 | MER_TYP_079 | Triggers MER_TYP_079: a class with its own equals and no hash is a Set element. |
 | MER_TYP_080 | Triggers MER_TYP_080: a type set is written as the type of a binding. |
+| MER_TYP_081 | Triggers MER_TYP_081: a closure capturing self is stored in a field of self. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -131,7 +132,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 105
+## Accepted fixtures (`pass/`) — 106
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -239,6 +240,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_078 | Accepted counterpart of MER_TYP_078: the call is wrapped in a lambda. |
 | MER_TYP_079 | Accepted counterpart of MER_TYP_079: the class implements Hashable beside equals. |
 | MER_TYP_080 | Accepted counterpart of MER_TYP_080: the set bounds a type parameter, and the binding takes one member. |
+| MER_TYP_081 | Accepted counterpart of MER_TYP_081: the closure takes the object as a parameter instead of capturing it. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

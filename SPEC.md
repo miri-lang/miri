@@ -570,6 +570,24 @@ var b = a            // RC incremented, both point to same data
 a = [4, 5, 6]       // old array's RC decremented, freed if zero
 ```
 
+### Reference Cycles
+
+Reference counting never frees a cycle: an object that holds a reference to itself keeps its own count above zero and is never released. A store that puts an object back into one of its own fields is therefore refused (`MER_TYP_081`). The refused store writes into a place rooted at a binding that holds its object by reference — a class instance, a value held through a trait, or an `Array`, which has no copy on write — whether a field (`x.f`), a field of a field (`x.f.g`) or an element of either (`x.items[i]`). The value it refuses is that binding itself, a closure that captures it, or a variant (`Some(x)`), constructor call or literal holding one of those, including through either branch of a conditional.
+
+```miri
+class Ticker
+    count int
+    on_tick fn() int
+    fn wire()
+        self.on_tick = fn() int: self.count + 1   // MER_TYP_081: the closure captures self
+```
+
+To give an object a callback that works on it, make the object a parameter of the function type and pass it at the call: `on_tick fn(Ticker) int`, stored as `fn(t Ticker) int: t.count + 1` and called as `t.on_tick(t)`.
+
+`List`, `Map` and `Set` copy on write, so a store into one a closure also holds copies the collection first and closes no cycle: `fns[0] = fn() int: fns.length()` is accepted.
+
+The check sees the direct form only, where the stored value names the same binding as the target. A cycle closed through another name (`let u = t` then `t.on_tick = fn() int: u.count`) or through another object (`a.other = Some(b)` then `b.other = Some(a)`) is not refused, and leaks.
+
 *Note: Element-level RC (managed types inside collections) and full string ownership are deferred to a future release. See the project roadmap for details.*
 
 *Note: GPU codegen, closures with capture-by-reference (`out` closures), and full memory safety (Perceus+) are planned for upcoming milestones.*
@@ -905,6 +923,8 @@ fn main()
 ```
 
 Captures are copies: assigning to a captured variable inside the body changes the closure's copy, not the enclosing variable.
+
+A capture of a class instance is a copy of the reference, so a closure capturing an object and stored in one of that object's fields would hold the object alive forever. That store is refused; see [Reference Cycles](#reference-cycles).
 
 ### Methods Are Not Values
 

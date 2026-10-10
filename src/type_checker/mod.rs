@@ -58,6 +58,7 @@ pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
 pub(crate) mod pattern_coverage;
+mod reference_cycles;
 pub(crate) mod runtime_settled;
 mod source_arithmetic;
 pub mod statements;

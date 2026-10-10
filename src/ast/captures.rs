@@ -6,9 +6,10 @@
 //! Walks AST to collect all identifiers referenced in a statement that are not
 //! bound by local declarations within the statement. Used by type checking (GPU
 //! forall validation) and MIR lowering (GPU capture marshaling) to identify
-//! which outer-scope variables must be captured.
+//! which outer-scope variables must be captured, and by the reference-cycle
+//! check to learn what a closure captures.
 
-use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
+use crate::ast::expression::{Expression, ExpressionKind, LambdaData, LeftHandSideExpression};
 use crate::ast::statement::{Statement, StatementKind};
 use std::collections::HashSet;
 
@@ -45,6 +46,28 @@ pub fn collect_free_identifiers_expr(expr: &Expression) -> HashSet<String> {
     let mut captured = HashSet::new();
     collect_identifiers_in_expr(expr, &mut bound, &mut captured);
     captured
+}
+
+/// Collects the enclosing-scope identifiers a closure captures: those its body
+/// references that neither a parameter nor a local declaration binds.
+pub fn collect_lambda_captures(lambda: &LambdaData) -> HashSet<String> {
+    let mut bound = HashSet::new();
+    let mut captured = HashSet::new();
+    collect_identifiers_in_lambda(lambda, &mut bound, &mut captured);
+    captured
+}
+
+/// A closure's parameters are bound only inside its body; whatever else the
+/// body references is free in the closure, and so in the code around it.
+fn collect_identifiers_in_lambda(
+    lambda: &LambdaData,
+    bound: &mut HashSet<String>,
+    captured: &mut HashSet<String>,
+) {
+    let scope_snapshot = bound.clone();
+    bound.extend(lambda.params.iter().map(|p| p.name.clone()));
+    collect_identifiers_in_stmt(&lambda.body, bound, captured);
+    *bound = scope_snapshot;
 }
 
 fn collect_identifiers_in_stmt(
@@ -254,13 +277,15 @@ fn collect_identifiers_in_expr(
                 collect_identifiers_in_expr(p, bound, captured);
             }
         }
+        ExpressionKind::Lambda(lambda) => {
+            collect_identifiers_in_lambda(lambda, bound, captured);
+        }
         ExpressionKind::Literal(_)
         | ExpressionKind::Super
         | ExpressionKind::Type(_, _)
         | ExpressionKind::GenericType(_, _, _)
         | ExpressionKind::TypeDeclaration(_, _, _, _)
         | ExpressionKind::ImportPath(_, _)
-        | ExpressionKind::StructMember(_, _)
-        | ExpressionKind::Lambda(_) => {}
+        | ExpressionKind::StructMember(_, _) => {}
     }
 }

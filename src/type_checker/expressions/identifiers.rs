@@ -131,6 +131,12 @@ impl TypeChecker {
         );
     }
 
+    /// Whether `name` is one of the builtin variant constructors (`Some`, `Ok`,
+    /// `Err`), each a call whose result holds its argument.
+    pub(crate) fn is_builtin_variant_constructor(name: &str) -> bool {
+        matches!(name, "Some" | "Ok" | "Err")
+    }
+
     fn try_builtin_identifier(&self, name: &str) -> Option<Type> {
         match name {
             "None" => Some(ast_factory::make_type(TypeKind::Option(Box::new(

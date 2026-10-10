@@ -10,6 +10,7 @@ Miri uses reference counting (via the Perceus optimization) to manage object lif
 - Calling `drop()` on a value the scope does not own — a parameter, `self`, a field, a loop or match binding, or a captured variable (error)
 - A class or trait `drop` that takes arguments or is static (error): the name belongs to the drop hook
 - Discarding values that must be used (types marked `@must_use`)
+- A store that puts an object back into one of its own fields — the object itself, a closure capturing it, or a value holding it (error, `MER_TYP_081`): reference counting never frees a cycle
 
 ## Key Concepts
 

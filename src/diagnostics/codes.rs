@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (80 codes: 001-080)
+    // TYP — Type checker (81 codes: 001-081)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1051,6 +1051,13 @@ diagnostics!(
     "080",
     TypTypeSetAsValue,
     "Type Set Used As A Value Type",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "081",
+    TypReferenceCycle,
+    "Store Makes A Reference Cycle",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
