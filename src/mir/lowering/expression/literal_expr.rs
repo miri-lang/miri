@@ -12,49 +12,45 @@ use crate::type_checker::expressions::literals::build_regex_pattern;
 
 use crate::mir::lowering::context::LoweringContext;
 
+/// Map an integer literal to its width-specific `TypeKind`.
+fn integer_literal_type_kind(int_lit: &crate::ast::literal::IntegerLiteral) -> TypeKind {
+    use crate::ast::literal::IntegerLiteral;
+    match int_lit {
+        IntegerLiteral::I8(_) => TypeKind::I8,
+        IntegerLiteral::I16(_) => TypeKind::I16,
+        IntegerLiteral::I32(_) => TypeKind::I32,
+        IntegerLiteral::I64(_) => TypeKind::I64,
+        IntegerLiteral::I128(_) => TypeKind::I128,
+        IntegerLiteral::U8(_) => TypeKind::U8,
+        IntegerLiteral::U16(_) => TypeKind::U16,
+        IntegerLiteral::U32(_) => TypeKind::U32,
+        IntegerLiteral::U64(_) => TypeKind::U64,
+        IntegerLiteral::U128(_) => TypeKind::U128,
+    }
+}
+
+/// Map a literal to its `TypeKind`.
+fn literal_type_kind(lit: &crate::ast::literal::Literal) -> TypeKind {
+    use crate::ast::literal::{FloatLiteral, Literal};
+    match lit {
+        Literal::Integer(int_lit) => integer_literal_type_kind(int_lit),
+        Literal::Boolean(_) => TypeKind::Boolean,
+        Literal::String(_) => TypeKind::String,
+        Literal::Regex(_) => TypeKind::Custom(REGEX_TYPE_NAME.into(), None),
+        Literal::Float(FloatLiteral::F32(_)) => TypeKind::F32,
+        Literal::Float(FloatLiteral::F64(_)) => TypeKind::F64,
+        Literal::Identifier(_) => TypeKind::Identifier,
+        Literal::None => TypeKind::Void,
+    }
+}
+
 /// Infer a literal's MIR type when the type checker has none (preserving the
 /// specific integer/float width carried by the literal).
 fn infer_literal_type(
     lit: &crate::ast::literal::Literal,
     span: crate::error::syntax::Span,
 ) -> Type {
-    use crate::ast::literal::{FloatLiteral, Literal};
-    match lit {
-        Literal::Integer(int_lit) => infer_integer_literal_type(int_lit, span),
-        Literal::Boolean(_) => Type::new(TypeKind::Boolean, span),
-        Literal::String(_) => Type::new(TypeKind::String, span),
-        Literal::Regex(_) => {
-            // Regex literals are lowered to Regex values via a call to the
-            // from_validated_pattern method, so infer_literal_type should not
-            // be called for them. Return the Regex type as a fallback.
-            Type::new(TypeKind::Custom(REGEX_TYPE_NAME.into(), None), span)
-        }
-        Literal::Float(FloatLiteral::F32(_)) => Type::new(TypeKind::F32, span),
-        Literal::Float(FloatLiteral::F64(_)) => Type::new(TypeKind::F64, span),
-        Literal::Identifier(_) => Type::new(TypeKind::Identifier, span),
-        // `None` is the unit/absent value; use Void.
-        Literal::None => Type::new(TypeKind::Void, span),
-    }
-}
-
-/// Map an integer literal to its width-specific MIR type.
-fn infer_integer_literal_type(
-    int_lit: &crate::ast::literal::IntegerLiteral,
-    span: crate::error::syntax::Span,
-) -> Type {
-    use crate::ast::literal::IntegerLiteral;
-    match int_lit {
-        IntegerLiteral::I8(_) => Type::new(TypeKind::I8, span),
-        IntegerLiteral::I16(_) => Type::new(TypeKind::I16, span),
-        IntegerLiteral::I32(_) => Type::new(TypeKind::I32, span),
-        IntegerLiteral::I64(_) => Type::new(TypeKind::I64, span),
-        IntegerLiteral::I128(_) => Type::new(TypeKind::I128, span),
-        IntegerLiteral::U8(_) => Type::new(TypeKind::U8, span),
-        IntegerLiteral::U16(_) => Type::new(TypeKind::U16, span),
-        IntegerLiteral::U32(_) => Type::new(TypeKind::U32, span),
-        IntegerLiteral::U64(_) => Type::new(TypeKind::U64, span),
-        IntegerLiteral::U128(_) => Type::new(TypeKind::U128, span),
-    }
+    Type::new(literal_type_kind(lit), span)
 }
 
 pub(crate) fn lower_literal_expr(
