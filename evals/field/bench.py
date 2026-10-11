@@ -28,6 +28,7 @@ exit criterion.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -155,6 +156,7 @@ def install_pack(root, arm):
     flavor = "claude" if arm["id"] == "miri-pack" else "agents"
     subprocess.run(
         ["miri", "skill", "install", "--agent", flavor, "--target", str(root), "--force"],
+        env=subject_environment(),
         check=True,
         capture_output=True,
     )
@@ -247,15 +249,77 @@ def run_agent(model, workspace, time_cap, prompt):
         return transcript, None, time.monotonic() - started, True
 
 
+# The toolchain a subject is handed, staged outside the repository by
+# `stage_toolchain`. None until a run stages one.
+STAGED_TOOLCHAIN = None
+
+
 def subject_environment():
-    """The operator's environment without what routes the harness, plus the stdlib."""
+    """The operator's environment without what routes the harness or leads to the repository.
+
+    Nothing in it names this repository: no variable whose value does, and no
+    `PATH` entry inside it. A compiler on `PATH` inside the repository, a
+    standard-library variable or even `PWD` pointing into it, is a signpost:
+    a subject that looks at where its compiler lives walks into the docs, the
+    examples and the hidden tests. The staged toolchain comes first on `PATH`
+    instead, finds its own standard library beside the binary, and names its
+    runtime libraries through `MIRI_RUNTIME_DIR`.
+    """
+    entries = [
+        entry
+        for entry in os.environ.get("PATH", "").split(os.pathsep)
+        if entry and not inside_repository(entry)
+    ]
     environment = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith(HARNESS_ROUTING_PREFIXES) and name not in HARNESS_TUNING
+        if not name.startswith(HARNESS_ROUTING_PREFIXES)
+        and name not in HARNESS_TUNING
+        and not name.startswith("MIRI_")
+        and not names_repository(value)
     }
-    environment["MIRI_STDLIB_PATH"] = str(REPO / "src" / "stdlib")
+    if STAGED_TOOLCHAIN is not None:
+        entries.insert(0, str(STAGED_TOOLCHAIN / "bin"))
+        environment["MIRI_RUNTIME_DIR"] = str(STAGED_TOOLCHAIN / "runtime")
+    environment["PATH"] = os.pathsep.join(entries)
     return environment
+
+
+def inside_repository(path):
+    try:
+        Path(path).resolve().relative_to(REPO.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def stage_toolchain(scratch):
+    """Copy the operator's `miri`, its standard library and runtimes under `scratch`.
+
+    The copy is keyed by the binary's contents, so concurrent cells share one
+    staging and a rebuilt compiler gets a fresh one rather than replacing files
+    a running subject is using. Returns None when there is no `miri` to stage.
+    """
+    binary = shutil.which("miri")
+    if binary is None:
+        return None
+    key = hashlib.sha256(Path(binary).read_bytes()).hexdigest()[:16]
+    target = Path(scratch) / "toolchain" / key
+    if (target / "bin" / "miri").is_file():
+        return target
+    building = target.with_name(f"{key}.{os.getpid()}")
+    shutil.rmtree(building, ignore_errors=True)
+    (building / "bin").mkdir(parents=True)
+    shutil.copy2(binary, building / "bin" / "miri")
+    shutil.copytree(REPO / "src" / "stdlib", building / "lib" / "miri" / "stdlib")
+    (building / "runtime").mkdir()
+    for library in REPO.glob("src/runtime/*/target/release/libmiri_runtime_*.a"):
+        shutil.copy2(library, building / "runtime" / library.name)
+    try:
+        building.rename(target)
+    except OSError:
+        shutil.rmtree(building, ignore_errors=True)
+    return target
 
 
 def inherited_memory(scratch):
@@ -274,13 +338,18 @@ def isolation_of(transcript):
 
     The harness states its MCP servers, plugins and skills in its first event
     and streams an event for every hook it runs. A run is clean when that first
-    event was seen, no hook ran, no MCP server was loaded and every plugin is
-    one the harness itself ships.
+    event was seen, no hook ran, no MCP server was loaded, every plugin is
+    one the harness itself ships, and no tool call named this repository: a
+    subject that read the compiler's docs or the hidden tests was not measured
+    on the arm it was launched in.
     """
-    init, hook_events = None, 0
+    init, hook_events, repo_references = None, 0, 0
     for line in transcript.splitlines():
         event = decode_event(line)
-        if not isinstance(event, dict) or event.get("type") != "system":
+        if not isinstance(event, dict):
+            continue
+        repo_references += sum(1 for call in tool_inputs(event) if names_repository(call))
+        if event.get("type") != "system":
             continue
         if event.get("subtype") == "init" and init is None:
             init = event
@@ -291,9 +360,10 @@ def isolation_of(transcript):
     plugins = [plugin for plugin in init.get("plugins", []) if isinstance(plugin, dict)]
     foreign = [plugin.get("name") for plugin in plugins if plugin.get("path") != "builtin"]
     return {
-        "clean": bool(init) and hook_events == 0 and not servers and not foreign,
+        "clean": bool(init) and hook_events == 0 and not servers and not foreign and repo_references == 0,
         "initObserved": bool(init),
         "hookEvents": hook_events,
+        "repoReferences": repo_references,
         "mcpServers": servers,
         "plugins": foreign,
         "skills": init.get("skills", []),
@@ -368,6 +438,25 @@ def settled_usage(event):
     }
 
 
+def tool_inputs(event):
+    """The serialized input of every tool call a streamed event carries."""
+    content = event.get("message", {}).get("content")
+    if not isinstance(content, list):
+        return []
+    return [
+        json.dumps(block.get("input"))
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+
+
+def names_repository(call):
+    spellings = {str(REPO), str(REPO.resolve())}
+    home = str(Path.home())
+    spellings |= {"~" + spelling[len(home):] for spelling in list(spellings) if spelling.startswith(home)}
+    return any(spelling in call for spelling in spellings)
+
+
 def tool_commands(event):
     """The shell commands a streamed event carries, if any."""
     content = event.get("message", {}).get("content")
@@ -420,6 +509,7 @@ def run_case(workspace, arm, case, case_timeout):
         finished = subprocess.run(
             [*arm["run"], str(case)],
             cwd=workspace,
+            env=subject_environment(),
             capture_output=True,
             text=True,
             timeout=case_timeout,
@@ -751,6 +841,8 @@ def main(argv):
     arguments = parse_arguments(argv)
     arm = arm_named(arguments.arm)
     job = job_named(arguments.job)
+    global STAGED_TOOLCHAIN
+    STAGED_TOOLCHAIN = stage_toolchain(arguments.scratch)
 
     if arguments.score_only:
         if arguments.probe:

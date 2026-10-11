@@ -80,9 +80,13 @@ of them.
 
 - **Unattended.** One prompt, permissions auto-approved, no human turn, no
   follow-up. What the agent leaves behind when it stops is what is scored.
-- **Barred from this repository.** The workspace is outside it, and nothing in
-  the workspace points back at it. `MIRI_STDLIB_PATH` is set so the compiler
-  finds its own standard library without the subject reading this tree.
+- **Barred from this repository.** The workspace is outside it, and nothing the
+  subject is handed points back at it. `bench.py` stages a copy of the operator's
+  `miri`, its standard library and its runtime libraries under the scratch
+  directory and puts that copy first on `PATH`; the subject's environment keeps
+  no variable that names this repository and no `PATH` entry inside it. A run
+  whose tool calls name the repository anyway is recorded as not isolated, and
+  `report.py` refuses its round.
 - **Hidden tests stay hidden.** They are never in the workspace and are run
   only after the agent has stopped, so a green run passed the contract rather
   than the cases.

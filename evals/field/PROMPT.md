@@ -118,9 +118,10 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
 `bench.py` needs the `claude` harness on the path (or a wrapper around it,
 named with `--harness-command` and recorded in every record), each arm's
 toolchain, and a `miri` on the path built from the commit under test —
-`cargo build --release` and then that binary, not a stale one. `MIRI_STDLIB_PATH`
-must point at the compiler's standard library so a subject can compile without
-reading the repository it is barred from.
+`cargo build --release` and `make runtimes`, then that binary, not a stale one.
+`bench.py` stages a copy of it, the standard library and the runtime libraries
+outside the repository, so a subject can compile without being pointed at the
+repository it is barred from.
 
 A round is 5 jobs × 5 arms × 3 models × 3 runs. It costs money and hours, and
 nothing in continuous integration runs it.
