@@ -82,8 +82,17 @@ const JOBS: [Job; 9] = [
     },
 ];
 
-/// The four arms every job is run under.
-const ARMS: [&str; 4] = ["miri-pack", "miri-bare", "python", "rust"];
+/// The arms a job can be run under: two cold Miri arms, three taught Miri
+/// before the brief, and the two baselines.
+const ARMS: [&str; 7] = [
+    "miri-pack",
+    "miri-bare",
+    "miri-skill",
+    "miri-grammar",
+    "miri-both",
+    "python",
+    "rust",
+];
 
 /// The languages a seeded job commits a starting source for.
 const SEED_LANGUAGES: [&str; 3] = ["miri", "python", "rust"];
@@ -334,7 +343,7 @@ fn collect_sources(dir: &Path, text: &mut String) {
 }
 
 #[test]
-fn test_arms_are_the_four_the_benchmark_compares() {
+fn test_arms_are_the_ones_the_benchmark_compares() {
     let path = field_dir().join("arms.toml");
     let parsed: ArmsFile = toml::from_str(&read(&path))
         .unwrap_or_else(|e| panic!("cannot parse {}: {}", path.display(), e));
@@ -2401,4 +2410,201 @@ fn test_every_gpu_job_carries_solutions_that_build_and_show_a_kernel() {
             String::from_utf8_lossy(&built.stderr)
         );
     }
+}
+
+/// The onboarding text an onboarded arm is taught from before its brief.
+fn onboarding_text() -> String {
+    read(&field_dir().join("onboarding").join("ONBOARDING.md"))
+}
+
+#[test]
+fn test_the_onboarding_text_names_nothing_a_job_is_about() {
+    let text = onboarding_text().to_lowercase();
+    assert!(
+        text.contains("{{material}}"),
+        "ONBOARDING.md no longer substitutes the material it teaches from"
+    );
+    let job_words: BTreeSet<String> = JOBS
+        .iter()
+        .flat_map(|job| job.id.split('-').skip(1))
+        .filter(|word| *word != "gpu")
+        .map(str::to_string)
+        .collect();
+    for word in &job_words {
+        assert!(
+            !text.contains(word.as_str()),
+            "ONBOARDING.md names '{}', which belongs to a job: the onboarding \
+             must be the same lesson for every job",
+            word
+        );
+    }
+    for word in LANGUAGE_WORDS.iter().filter(|word| **word != "miri") {
+        assert!(
+            !text.contains(word),
+            "ONBOARDING.md names '{}', another arm's language or toolchain",
+            word
+        );
+    }
+}
+
+#[test]
+fn test_every_onboarded_arm_names_a_material_the_phase_knows() {
+    let materials: toml::Value = toml::from_str(&read(
+        &field_dir().join("onboarding").join("materials.toml"),
+    ))
+    .expect("onboarding/materials.toml does not parse");
+    let arms: toml::Value =
+        toml::from_str(&read(&field_dir().join("arms.toml"))).expect("arms.toml does not parse");
+    let mut onboarded = 0;
+    for arm in arms["arm"].as_array().expect("arms.toml lists no arms") {
+        let Some(names) = arm.get("onboarding").and_then(toml::Value::as_array) else {
+            continue;
+        };
+        onboarded += 1;
+        for name in names {
+            let name = name.as_str().expect("a material is named by a string");
+            let material = materials.get(name).unwrap_or_else(|| {
+                panic!(
+                    "arm {:?} is taught from unknown material {}",
+                    arm["id"], name
+                )
+            });
+            assert!(
+                material.get("describes").is_some(),
+                "material {} has no phrase for the onboarding text",
+                name
+            );
+            if let Some(source) = material.get("stage").and_then(|stage| stage.get("from")) {
+                let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(source.as_str().expect("a staged path is a string"));
+                assert!(
+                    source.is_file(),
+                    "material {} stages {}, which is missing",
+                    name,
+                    source.display()
+                );
+            }
+        }
+    }
+    assert_eq!(
+        onboarded, 3,
+        "the skill, grammar and both arms are the onboarded ones"
+    );
+}
+
+/// A stand-in harness for the two-phase launch: it records every invocation's
+/// arguments and what the workspace held, reports a session, and settles a
+/// different cost for the onboarding phase than for the measured one.
+#[cfg(unix)]
+fn install_two_phase_harness(bin: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    install_fake_harness(bin, None);
+    let init = r#"{"type":"system","subtype":"init","session_id":"sess-onboard","apiKeySource":"none","mcp_servers":[],"plugins":[],"skills":[]}"#;
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'fake harness 1'; exit 0; fi\n\
+         printf '%s' \"$*\" | tr '\\n' ' ' >> invocations.txt; echo >> invocations.txt\n\
+         case \"$*\" in\n\
+         *--resume*) echo '{init}'; echo '{{\"type\":\"result\",\"session_id\":\"sess-onboard\",\"usage\":{{\"input_tokens\":7,\"output_tokens\":3}}}}' ;;\n\
+         *) ls > onboarding-saw.txt; echo '{init}'; echo '{{\"type\":\"result\",\"session_id\":\"sess-onboard\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":10}}}}' ;;\n\
+         esac\n",
+        init = init
+    );
+    let path = bin.join("claude");
+    fs::write(&path, script).expect("cannot write the two-phase harness");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+        .expect("cannot make the two-phase harness executable");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_an_onboarded_arm_is_taught_first_and_measured_from_its_brief() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-onboarding");
+    let _ = fs::remove_dir_all(&root);
+    install_two_phase_harness(&root.join("bin"));
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let ran = Command::new("python3")
+        .arg(field_dir().join("bench.py"))
+        .args([
+            "--job",
+            PROBE_JOB,
+            "--arm",
+            "miri-grammar",
+            "--model",
+            "claude-sonnet",
+        ])
+        .args(["--round", "synthetic", "--records-root"])
+        .arg(root.join("runs"))
+        .arg("--scratch")
+        .arg(root.join("scratch"))
+        .env("PATH", path)
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let workspace = root
+        .join("scratch")
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("miri-grammar")
+        .join("claude-sonnet")
+        .join("1");
+    let invocations = read(&workspace.join("invocations.txt"));
+    let lines: Vec<&str> = invocations.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "an onboarded run is two launches:\n{}",
+        invocations
+    );
+    assert!(
+        !lines[0].contains("--resume") && lines[0].contains("GRAMMAR.peg"),
+        "the first launch is not the onboarding prompt naming its material:\n{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("--resume sess-onboard") && lines[1].contains("BRIEF.md"),
+        "the measured launch does not resume the onboarding session:\n{}",
+        lines[1]
+    );
+    let saw = read(&workspace.join("onboarding-saw.txt"));
+    assert!(
+        saw.contains("GRAMMAR.peg") && !saw.contains("BRIEF.md"),
+        "the job was in the directory while the subject was being taught:\n{}",
+        saw
+    );
+    let records = root
+        .join("runs")
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("miri-grammar")
+        .join("claude-sonnet");
+    let record: serde_json::Value =
+        serde_json::from_str(&read(&records.join("1.json"))).expect("the record is not JSON");
+    assert_eq!(
+        record["tokens"]["in"], 7,
+        "the measured cost took in the onboarding phase"
+    );
+    assert_eq!(record["tokens"]["out"], 3);
+    assert_eq!(
+        record["onboarding"]["tokens"]["in"], 100,
+        "the onboarding cost was not kept apart"
+    );
+    assert_eq!(record["onboarding"]["material"][0], "grammar");
+    assert!(
+        records.join("1.onboarding.jsonl").is_file(),
+        "the onboarding transcript was not kept beside the measured one"
+    );
+    let _ = fs::remove_dir_all(&root);
 }

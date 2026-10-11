@@ -84,6 +84,14 @@ STDERR_KEPT = 2000
 # joined on nothing would read as held by having asked no one.
 SURFACES = REPO / "skills" / "surfaces.toml"
 
+# The onboarding phase: the committed text an onboarded arm is taught from before
+# its job arrives, and the materials it may be taught with. The text is the same
+# for every job and names nothing job-specific; only the material sentence
+# differs between arms.
+ONBOARDING = FIELD / "onboarding"
+ONBOARDING_TEXT = ONBOARDING / "ONBOARDING.md"
+MATERIALS = ONBOARDING / "materials.toml"
+
 # The `kind` a probe record carries. `report.py` refuses a record of this kind
 # rather than skipping it, so a probe copied into a round fails loudly.
 PROBE_KIND = "probe"
@@ -118,7 +126,8 @@ def job_named(job_id):
 def render_brief(job_id, arm, job):
     """The brief the subject reads, with the three substitutions applied."""
     text = (FIELD / "jobs" / job_id / "BRIEF.md").read_text(encoding="utf-8")
-    toolchain = job.get("toolchain", {}).get(arm["id"], arm["toolchain"])
+    lines = job.get("toolchain", {})
+    toolchain = lines.get(arm["id"], lines.get(arm["language"].lower(), arm["toolchain"]))
     for placeholder, value in (
         ("{{LANGUAGE}}", arm["language"]),
         ("{{TOOLCHAIN}}", toolchain),
@@ -128,24 +137,55 @@ def render_brief(job_id, arm, job):
     return text
 
 
-def prepare_workspace(root, job_id, arm, job):
-    """Seed a scratch directory and leave the rendered brief in it.
+def stage_material(root, arm):
+    """Start a scratch directory holding only what the arm is taught from.
 
     The workspace lives outside this repository on purpose: a subject that can
     read the compiler's own sources is not learning the language the way the
-    agents this benchmark reports on will.
+    agents this benchmark reports on will. An onboarded arm's material is
+    copied in by the operator's side; the subject never reads it from here.
     """
     if root.exists():
         shutil.rmtree(root)
-    seed = FIELD / "jobs" / job_id / "seeds" / seed_language(arm)
-    if seed.is_dir():
-        shutil.copytree(seed, root)
-    else:
-        root.mkdir(parents=True)
-    (root / "BRIEF.md").write_text(render_brief(job_id, arm, job), encoding="utf-8")
+    root.mkdir(parents=True)
     if arm["install_pack"]:
         install_pack(root, arm)
+    for name in arm.get("onboarding", []):
+        staged = materials()[name].get("stage")
+        if staged:
+            shutil.copy2(REPO / staged["from"], root / staged["to"])
     return root
+
+
+def prepare_job(root, job_id, arm, job):
+    """Lay the job's seed and its rendered brief into a staged workspace.
+
+    For an onboarded arm this happens after the onboarding phase, so nothing
+    job-specific is in the directory while the subject is being taught.
+    """
+    seed = FIELD / "jobs" / job_id / "seeds" / seed_language(arm)
+    if seed.is_dir():
+        shutil.copytree(seed, root, dirs_exist_ok=True)
+    (root / "BRIEF.md").write_text(render_brief(job_id, arm, job), encoding="utf-8")
+    return root
+
+
+def prepare_workspace(root, job_id, arm, job):
+    """A workspace ready for a measured prompt, with no onboarding run."""
+    return prepare_job(stage_material(root, arm), job_id, arm, job)
+
+
+def materials():
+    return load_toml(MATERIALS)
+
+
+def onboarding_prompt(arm):
+    """The onboarding text with the arm's material named in it, or None for a cold arm."""
+    names = arm.get("onboarding", [])
+    if not names:
+        return None
+    described = " and ".join(materials()[name]["describes"] for name in names)
+    return ONBOARDING_TEXT.read_text(encoding="utf-8").replace("{{MATERIAL}}", described)
 
 
 def seed_language(arm):
@@ -154,9 +194,8 @@ def seed_language(arm):
 
 
 def install_pack(root, arm):
-    flavor = "claude" if arm["id"] == "miri-pack" else "agents"
     subprocess.run(
-        ["miri", "skill", "install", "--agent", flavor, "--target", str(root), "--force"],
+        ["miri", "skill", "install", "--agent", "claude", "--target", str(root), "--force"],
         env=subject_environment(),
         check=True,
         capture_output=True,
@@ -202,9 +241,16 @@ def round_directory(arguments):
     return f"{arguments.round}.{PROBE_KIND}" if arguments.probe else arguments.round
 
 
-def launch_command(model, workspace, prompt):
-    """The one non-interactive invocation a run is allowed."""
+def launch_command(model, workspace, prompt, resume=None):
+    """The non-interactive invocation of one phase of a run.
+
+    A cold arm's run is this one invocation. An onboarded arm's run is two: the
+    onboarding prompt, then the measured prompt resuming the same session, so
+    what the subject was taught stays in its context and is paid for again,
+    as cached input, on every measured turn.
+    """
     if model["harness"] == "claude":
+        resumed = ["--resume", resume] if resume else []
         return [
             model["command"],
             "-p",
@@ -225,16 +271,17 @@ def launch_command(model, workspace, prompt):
             "--include-hook-events",
             "--settings",
             str(HARNESS_SETTINGS),
+            *resumed,
         ]
     raise SystemExit(f"unknown harness {model['harness']}")
 
 
-def run_agent(model, workspace, time_cap, prompt):
+def run_agent(model, workspace, time_cap, prompt, resume=None):
     """Launch the harness once, capped on wall clock, and keep its transcript."""
     started = time.monotonic()
     try:
         finished = subprocess.run(
-            launch_command(model, workspace, prompt),
+            launch_command(model, workspace, prompt, resume),
             cwd=workspace,
             env=subject_environment(),
             stdin=subprocess.DEVNULL,
@@ -659,6 +706,7 @@ def record_for(arguments, arm, model, job, outcome):
         "silentWrongAnswer": outcome["silentWrongAnswer"],
         "isolation": outcome["isolation"],
         "workspace": outcome["workspace"],
+        "onboarding": outcome["onboarding"],
     }
 
 
@@ -692,6 +740,7 @@ def probe_record(arguments, arm, model, outcome):
         "ratingsProblem": outcome["ratingsProblem"],
         "isolation": outcome["isolation"],
         "workspace": outcome["workspace"],
+        "onboarding": outcome["onboarding"],
     }
 
 
@@ -751,12 +800,73 @@ def workspace_for(arguments, arm, model, index):
     return Path(arguments.scratch) / round_directory(arguments) / arguments.job / arm["id"] / model["key"] / str(index)
 
 
-def one_run(arguments, arm, model, job, index):
-    workspace = workspace_for(arguments, arm, model, index)
-    prepare_workspace(workspace, arguments.job, arm, job)
+def session_of(transcript):
+    """The session id the harness reported, which a later phase resumes."""
+    for line in transcript.splitlines():
+        event = decode_event(line)
+        if isinstance(event, dict) and isinstance(event.get("session_id"), str):
+            return event["session_id"]
+    return None
+
+
+def onboard(arm, model, workspace):
+    """Run the onboarding phase, unmeasured, and return what it cost apart.
+
+    Its metrics never enter the measured ones: they are kept beside them under
+    `onboarding`, so a reader can add them back, and the measured phase still
+    pays for the onboarding context as cached input on every turn.
+    """
+    prompt = onboarding_prompt(arm)
+    settings = load_toml(MATERIALS).get("phase", {})
+    transcript, exit_code, wall_clock, timed_out = run_agent(
+        model, workspace, settings.get("time_cap_seconds", 900), prompt
+    )
+    session = session_of(transcript)
+    if session is None:
+        raise SystemExit(f"the onboarding phase in {workspace} reported no session to resume")
+    usage, turns, tools, toolchain_calls = parse_transcript(transcript)
+    return transcript, session, {
+        "material": arm["onboarding"],
+        "tokens": usage,
+        "turns": turns,
+        "toolInvocations": tools,
+        "toolchainInvocations": toolchain_calls,
+        "wallClockSeconds": round(wall_clock, 1),
+        "outcome": outcome_of(exit_code, timed_out, turns, settings.get("turn_cap", 40)),
+        "isolation": isolation_of(transcript),
+        "sessionId": session,
+    }
+
+
+def launch(arguments, arm, model, job, index):
+    """Stage a run's workspace, onboard it when the arm is taught, and run the job.
+
+    Returns the measured phase's transcript and ending, and the onboarding
+    phase's transcript and summary (None and None for a cold arm).
+    """
+    workspace = stage_material(workspace_for(arguments, arm, model, index), arm)
+    onboarding_transcript, session, onboarding = None, None, None
+    if onboarding_prompt(arm):
+        onboarding_transcript, session, onboarding = onboard(arm, model, workspace)
+    prepare_job(workspace, arguments.job, arm, job)
     started = datetime.now(timezone.utc).isoformat()
     transcript, exit_code, wall_clock, timed_out = run_agent(
-        model, workspace, job["time_cap_seconds"], prompt_for(arguments)
+        model, workspace, job["time_cap_seconds"], prompt_for(arguments), session
+    )
+    return workspace, started, transcript, exit_code, wall_clock, timed_out, onboarding_transcript, onboarding
+
+
+def isolation_of_run(transcript, onboarding):
+    """The measured phase's isolation; a run is clean only if both phases were."""
+    isolation = isolation_of(transcript)
+    if onboarding is not None:
+        isolation["clean"] = isolation["clean"] and onboarding["isolation"]["clean"]
+    return isolation
+
+
+def one_run(arguments, arm, model, job, index):
+    workspace, started, transcript, exit_code, wall_clock, timed_out, onboarding_transcript, onboarding = launch(
+        arguments, arm, model, job, index
     )
     usage, turns, tools, toolchain_calls = parse_transcript(transcript)
     tests = score(workspace, arguments.job, arm)
@@ -772,18 +882,17 @@ def one_run(arguments, arm, model, job, index):
         "outcome": outcome,
         "hiddenTests": tests,
         "silentWrongAnswer": declared_wrongly(outcome, tests),
-        "isolation": isolation_of(transcript),
+        "isolation": isolation_of_run(transcript, onboarding),
         "workspace": str(workspace),
+        "onboarding": onboarding,
+        "onboardingTranscript": onboarding_transcript,
     }
 
 
 def one_probe(arguments, arm, model, job, index):
     """Run a cell once for its opinions. Nothing about the run is scored."""
-    workspace = workspace_for(arguments, arm, model, index)
-    prepare_workspace(workspace, arguments.job, arm, job)
-    started = datetime.now(timezone.utc).isoformat()
-    transcript, exit_code, _, timed_out = run_agent(
-        model, workspace, job["time_cap_seconds"], prompt_for(arguments)
+    workspace, started, transcript, exit_code, _, timed_out, onboarding_transcript, onboarding = launch(
+        arguments, arm, model, job, index
     )
     turns = parse_transcript(transcript)[1]
     ratings, problem = read_ratings(workspace)
@@ -793,16 +902,20 @@ def one_probe(arguments, arm, model, job, index):
         "outcome": outcome_of(exit_code, timed_out, turns, job["turn_cap"]),
         "ratings": ratings,
         "ratingsProblem": problem,
-        "isolation": isolation_of(transcript),
+        "isolation": isolation_of_run(transcript, onboarding),
         "workspace": str(workspace),
+        "onboarding": onboarding,
+        "onboardingTranscript": onboarding_transcript,
     }
 
 
-def write_record(arguments, arm, model, record, transcript, index):
+def write_record(arguments, arm, model, record, transcript, index, onboarding_transcript=None):
     directory = Path(arguments.records_root) / round_directory(arguments) / arguments.job / arm["id"] / model["key"]
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{index}.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     (directory / f"{index}.transcript.jsonl").write_text(transcript, encoding="utf-8")
+    if onboarding_transcript is not None:
+        (directory / f"{index}.onboarding.jsonl").write_text(onboarding_transcript, encoding="utf-8")
     return directory / f"{index}.json"
 
 
@@ -861,16 +974,22 @@ def dry_run(arguments, arm, job):
     print(f"workspace  {workspace}")
     print(f"cases      {len(hidden_tests(arguments.job))}")
     print(f"caps       {job['turn_cap']} turns, {job['time_cap_seconds']}s")
+    taught = onboarding_prompt(arm)
+    if taught:
+        print("onboarding " + taught.replace("\n", "\n           "))
     if arguments.model:
-        command = launch_command(resolved_model(arguments), workspace, prompt_for(arguments))
-        print("launch     " + " ".join(command))
+        model = resolved_model(arguments)
+        if taught:
+            print("onboard    " + " ".join(launch_command(model, workspace, taught)))
+        resume = "<onboarding session>" if taught else None
+        print("launch     " + " ".join(launch_command(model, workspace, prompt_for(arguments), resume)))
 
 
 def measured_cell(arguments, arm, model, job):
     for index in range(1, arguments.runs + 1):
         transcript, outcome = one_run(arguments, arm, model, job, index)
         record = record_for(arguments, arm, model, job, outcome)
-        path = write_record(arguments, arm, model, record, transcript, index)
+        path = write_record(arguments, arm, model, record, transcript, index, outcome["onboardingTranscript"])
         tests = outcome["hiddenTests"]
         print(f"{path}: {outcome['outcome']}, {tests['passed']}/{tests['total']} hidden tests")
     return 0
@@ -887,7 +1006,7 @@ def probe_cell(arguments, arm, model, job):
     for index in range(1, arguments.runs + 1):
         transcript, outcome = one_probe(arguments, arm, model, job, index)
         record = probe_record(arguments, arm, model, outcome)
-        path = write_record(arguments, arm, model, record, transcript, index)
+        path = write_record(arguments, arm, model, record, transcript, index, outcome["onboardingTranscript"])
         if outcome["ratingsProblem"]:
             unreadable += 1
             print(f"{path}: {outcome['ratingsProblem']}", file=sys.stderr)
