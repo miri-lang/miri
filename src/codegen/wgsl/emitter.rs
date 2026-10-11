@@ -837,6 +837,11 @@ impl<'a> BodyEmitter<'a> {
         }
 
         let body_entry = targets[0].1;
+        // TODO: for a short-circuit condition (`while a and b`) the header's
+        // `otherwise` is the block that records `a` was false, not the loop's
+        // exit; the real exit is then emitted inside the loop on `b`'s false
+        // branch, so a kernel whose loop ends on `a` skips every statement after
+        // the loop. The exit must be the join both condition paths reach.
         let exit = *otherwise;
         if latch_set.len() > 1 {
             return HeaderClass::MultiLatch;

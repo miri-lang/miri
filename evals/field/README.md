@@ -57,6 +57,17 @@ whether the pack is what is doing the standing.
 | `03-tracker-extension` | a committed working program | Extension: changing code the subject did not write. |
 | `04-data-edges` | nothing | The edges a hurried program skips — empty input, text outside the Latin alphabet, an absent key, an overflowing total. |
 | `05-gpu-heat` | nothing | A GPU kernel. |
+| `06-gpu-life` | nothing | Integer kernels with double buffering and an edge rule. |
+| `07-gpu-escape-time` | nothing | A float kernel, scored with a tolerance on a histogram of escape times. |
+| `08-gpu-histogram` | nothing | A reduction: values generated and counted on the device, atomics or several passes. |
+| `09-gpu-particles` | nothing | A simulation of two kernels per step, scored with a tolerance on summary statistics. |
+
+The GPU jobs from `06` on are compute-only versions of the demos the website
+runs (`examples/gpu/web/`), chosen by domain before any pilot ran. Each ships a
+Miri solution and a Python one on `wgpu` beside its reference, both run on a GPU
+against the hidden cases when the job was written, which is what shows the job
+can be won; a later round may tune a job's caps or tolerance, never drop it
+because one arm loses it.
 
 Every brief is language-neutral, and the three substitutions — the language
 name, the toolchain line and the entry point — are the only text that differs

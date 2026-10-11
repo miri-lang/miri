@@ -1,0 +1,22 @@
+id = "09-gpu-particles"
+title = "Particles under gravity, computed on the GPU"
+turn_cap = 60
+time_cap_seconds = 2700
+gpu = true
+
+# A GPU computes in single precision. Over these cases its summary lands within
+# about one part in a million of the double-precision reference; a value may
+# differ by one part in ten thousand of itself, or by 0.0001 near zero.
+[compare]
+kind = "numeric"
+relative = 0.0001
+absolute = 0.0001
+
+# The GPU library is part of the toolchain line, which is the one sentence that
+# differs between arms. Naming it in the brief itself would tell every arm which
+# language it is being measured in.
+[toolchain]
+"miri-pack" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. A `forall` over `gpu var` buffers runs as a GPU kernel"
+"miri-bare" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. A `forall` over `gpu var` buffers runs as a GPU kernel"
+python = "`uv` and `pytest`, and the `wgpu` package for the GPU"
+rust = "`cargo` and `clippy`, and the `wgpu` crate for the GPU"

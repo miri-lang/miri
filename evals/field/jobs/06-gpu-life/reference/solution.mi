@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// A Miri solution to the Game of Life job, written to prove the job can be won
+// in Miri today. Each generation is one `forall` over device buffers.
+
+use system.os
+use system.fs
+use system.collections.array
+use system.collections.list
+
+const MAX_CELLS = 262144
+
+fn read_numbers(path String) [int]
+    var numbers = List<int>()
+    match Fs().read_file(path)
+        Result.Ok(text)
+            for line in text.split("\n")
+                for field in line.trim().split(" ")
+                    match field.trim().to_int()
+                        Some(value): numbers.push(value)
+                        None: numbers.length()
+        Result.Err(_): numbers.length()
+    numbers
+
+fn main() int
+    let numbers = read_numbers(Args().element_at(0))
+    let w = numbers[0]
+    let h = numbers[1]
+    let generations = numbers[2]
+    let n = w * h
+    var host = Array<i32, MAX_CELLS>()
+    for i in 0..n
+        host[i] = numbers[3 + i] as i32
+    gpu var a = Array<i32, MAX_CELLS>()
+    gpu var b = Array<i32, MAX_CELLS>()
+    a = host
+    var g = 0
+    while g < generations
+        if g % 2 == 0
+            forall idx in 0..n
+                let x = idx % w
+                let y = idx / w
+                var live = 0
+                for dy in -1..2
+                    for dx in -1..2
+                        let nx = x + dx
+                        let ny = y + dy
+                        if (dx != 0 or dy != 0) and nx >= 0 and nx < w and ny >= 0 and ny < h
+                            live = live + a[ny * w + nx]
+                b[idx] = 1 if live == 3 or (live == 2 and a[idx] == 1) else 0
+        else
+            forall idx in 0..n
+                let x = idx % w
+                let y = idx / w
+                var live = 0
+                for dy in -1..2
+                    for dx in -1..2
+                        let nx = x + dx
+                        let ny = y + dy
+                        if (dx != 0 or dy != 0) and nx >= 0 and nx < w and ny >= 0 and ny < h
+                            live = live + b[ny * w + nx]
+                a[idx] = 1 if live == 3 or (live == 2 and b[idx] == 1) else 0
+        g = g + 1
+    if generations % 2 == 0
+        host = a
+    else
+        host = b
+    var alive = 0
+    for y in 0..h
+        var line = ""
+        for x in 0..w
+            let cell = host[y * w + x] as int
+            alive = alive + cell
+            line = line + (f"{cell}" if x == 0 else f" {cell}")
+        println(line)
+    println(f"ALIVE {alive}")
+    0

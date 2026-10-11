@@ -33,8 +33,8 @@ struct Job {
     min_cases: usize,
 }
 
-/// The five jobs of a round.
-const JOBS: [Job; 5] = [
+/// The jobs of a round: four on the processor, five on the GPU.
+const JOBS: [Job; 9] = [
     Job {
         id: "01-word-frequency",
         seeded: false,
@@ -59,6 +59,26 @@ const JOBS: [Job; 5] = [
         id: "05-gpu-heat",
         seeded: false,
         min_cases: 3,
+    },
+    Job {
+        id: "06-gpu-life",
+        seeded: false,
+        min_cases: 5,
+    },
+    Job {
+        id: "07-gpu-escape-time",
+        seeded: false,
+        min_cases: 5,
+    },
+    Job {
+        id: "08-gpu-histogram",
+        seeded: false,
+        min_cases: 5,
+    },
+    Job {
+        id: "09-gpu-particles",
+        seeded: false,
+        min_cases: 5,
     },
 ];
 
@@ -477,7 +497,7 @@ fn test_expected_outputs_come_from_the_reference_solution() {
 /// Run a reference solution over one case's input and return its stdout.
 ///
 /// A program under test names its input in its first argument rather than
-/// reading standard input, because one of the five languages cannot read
+/// reading standard input, because one of the four languages cannot read
 /// standard input at all. The reference is run the same way.
 fn run_reference(reference: &Path, input: &Path) -> String {
     let output = Command::new("python3")
@@ -2301,6 +2321,84 @@ fn test_every_arm_says_how_a_kernel_is_evidenced() {
             files > 0 && patterns > 0,
             "arm {} names no files or no patterns for its kernel evidence",
             id
+        );
+    }
+}
+
+/// The GPU jobs written after the first round, each carrying a Miri solution
+/// and a Python one on the GPU library beside its reference.
+const WON_GPU_JOBS: [&str; 4] = [
+    "06-gpu-life",
+    "07-gpu-escape-time",
+    "08-gpu-histogram",
+    "09-gpu-particles",
+];
+
+/// Whether `source` carries every kernel pattern `arm` declares.
+fn carries_kernel_evidence(arm: &str, source: &str) -> bool {
+    let code = format!(
+        "import re, tomllib\n\
+         arms = tomllib.load(open({:?}, 'rb'))['arm']\n\
+         patterns = next(a for a in arms if a['id'] == {:?})['kernel_evidence']['patterns']\n\
+         text = open({:?}).read()\n\
+         print(all(re.search(p, text) for p in patterns))",
+        field_dir().join("arms.toml").display().to_string(),
+        arm,
+        source
+    );
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(code)
+        .output()
+        .expect("cannot run python3");
+    String::from_utf8_lossy(&output.stdout).trim() == "True"
+}
+
+/// A GPU job is only worth measuring if it can be won. Each one ships a Miri
+/// solution and a Python one written against the job's contract; both were run
+/// on a GPU against the hidden cases when the job was written. Here, on any
+/// machine, the Miri solution must still build with today's compiler, and both
+/// must carry the kernel evidence their arm is scored on, so neither can drift
+/// into an answer the scorer would refuse.
+#[test]
+fn test_every_gpu_job_carries_solutions_that_build_and_show_a_kernel() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the evidence was not read");
+        return;
+    }
+    let stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+    for job in WON_GPU_JOBS {
+        let reference = field_dir().join("jobs").join(job).join("reference");
+        let miri_solution = reference.join("solution.mi");
+        let python_solution = reference.join("solution_wgpu.py");
+        assert!(
+            carries_kernel_evidence("miri-pack", &miri_solution.display().to_string()),
+            "{} would be scored as off the GPU",
+            miri_solution.display()
+        );
+        assert!(
+            carries_kernel_evidence("python", &python_solution.display().to_string()),
+            "{} would be scored as off the GPU",
+            python_solution.display()
+        );
+        let artifact = std::env::temp_dir().join(format!("miri-field-solution-{}", job));
+        let built = crate::utils::miri_cmd()
+            .env("MIRI_STDLIB_PATH", &stdlib)
+            .arg("build")
+            .arg(&miri_solution)
+            .arg("-o")
+            .arg(&artifact)
+            .output()
+            .expect("cannot run miri");
+        let _ = fs::remove_file(&artifact);
+        assert!(
+            built.status.success(),
+            "{} no longer builds:\n{}{}",
+            miri_solution.display(),
+            String::from_utf8_lossy(&built.stdout),
+            String::from_utf8_lossy(&built.stderr)
         );
     }
 }

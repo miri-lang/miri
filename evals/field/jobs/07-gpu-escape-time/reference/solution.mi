@@ -1,0 +1,89 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// A Miri solution to the escape-time job, written to prove the job can be won
+// in Miri today. One `forall` computes every point's escape time on the device;
+// the host folds the counts into the summary.
+
+use system.os
+use system.fs
+use system.collections.array
+use system.collections.list
+
+const MAX_POINTS = 1048576
+
+fn read_fields(path String) [String]
+    var fields = List<String>()
+    match Fs().read_file(path)
+        Result.Ok(text)
+            for line in text.split("\n")
+                for field in line.trim().split(" ")
+                    if field.trim().length() > 0
+                        fields.push(field.trim())
+        Result.Err(_): fields.length()
+    fields
+
+fn whole(field String) int
+    match field.to_int()
+        Some(value): value
+        None: 0
+
+fn decimal(field String) f32
+    match field.to_float()
+        Some(value): value as f32
+        None: 0.0 as f32
+
+fn main() int
+    let fields = read_fields(Args().element_at(0))
+    let w = whole(fields[0])
+    let h = whole(fields[1])
+    let limit = whole(fields[2])
+    let x_min = decimal(fields[3])
+    let x_max = decimal(fields[4])
+    let y_min = decimal(fields[5])
+    let y_max = decimal(fields[6])
+    let n = w * h
+    let step_x = (x_max - x_min) / (w as f32)
+    let step_y = (y_max - y_min) / (h as f32)
+    gpu var times = Array<i32, MAX_POINTS>()
+    forall idx in 0..n
+        let cx = x_min + ((idx % w) as f32 + 0.5) * step_x
+        let cy = y_min + ((idx / w) as f32 + 0.5) * step_y
+        var zx = 0.0 as f32
+        var zy = 0.0 as f32
+        var steps = 0
+        // One condition per test: a two-operand `while` condition loses the
+        // statements after the loop on the GPU when its first operand ends it.
+        while steps < limit
+            if zx * zx + zy * zy > 4.0
+                break
+            let next_x = zx * zx - zy * zy + cx
+            zy = 2.0 * zx * zy + cy
+            zx = next_x
+            steps = steps + 1
+        times[idx] = steps as i32
+    let host = times
+    var inside = 0
+    var bins = List([0, 0, 0, 0, 0, 0, 0, 0])
+    var escaped = 0
+    var total = 0
+    for idx in 0..n
+        let t = host[idx] as int
+        if t == limit
+            inside = inside + 1
+        else
+            let bin = 8 * t / limit
+            bins.set(bin, bins[bin] + 1)
+            escaped = escaped + 1
+            total = total + t
+    println(f"INSIDE {inside}")
+    for bin in 0..8
+        println(f"BIN {bin} {bins[bin]}")
+    if escaped == 0
+        println("MEAN 0.000")
+    else
+        let thousandths = (total * 1000 + escaped / 2) / escaped
+        let fraction = thousandths % 1000
+        let padding = "00" if fraction < 10 else ("0" if fraction < 100 else "")
+        println(f"MEAN {thousandths / 1000}.{padding}{fraction}")
+    0
