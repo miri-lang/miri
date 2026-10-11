@@ -6,7 +6,9 @@
 # byte-identical across the five.
 #
 # `run` is how the harness runs the finished program. The path of a hidden
-# test's input is appended to it as one more argument.
+# test's input is appended to it as one more argument. It is the way the arm's
+# own toolchain runs a project, so a package the subject installed with that
+# toolchain is there when the hidden tests run.
 
 [[arm]]
 id = "miri-pack"
@@ -31,7 +33,7 @@ id = "python"
 language = "Python"
 toolchain = "`uv` and `pytest`"
 entry_point = "main.py"
-run = ["python3", "main.py"]
+run = ["uv", "run", "--quiet", "python", "main.py"]
 install_pack = false
 notes = "A baseline language. Baselines get no skill file: their guidance is in the weights, and that asymmetry is the experiment."
 
