@@ -23,9 +23,7 @@ from pathlib import Path
 FIELD = Path(__file__).resolve().parent
 REPO = FIELD.parent.parent
 
-CPU_JOBS = ("01-word-frequency", "02-ledger-repair", "03-tracker-extension", "04-data-edges")
-GPU_JOB = "05-gpu-heat"
-BASELINES = ("python", "rust", "typescript")
+BASELINES = ("python", "rust")
 PACK = "miri-pack"
 BARE = "miri-bare"
 
@@ -129,9 +127,23 @@ def recommended_surfaces():
     return listed["commands"] + listed["documents"]
 
 
+def job_tracks():
+    """The CPU jobs and the GPU jobs, as each job's `job.toml` declares them."""
+    cpu, gpu = [], []
+    for path in sorted((FIELD / "jobs").glob("*/job.toml")):
+        with open(path, "rb") as handle:
+            (gpu if tomllib.load(handle).get("gpu", False) else cpu).append(path.parent.name)
+    return tuple(cpu), tuple(gpu)
+
+
+CPU_JOBS, GPU_JOBS = job_tracks()
+
+
 def is_green(record):
+    """Every hidden test passed, and a GPU job's kernel is in the source."""
     tests = record["hiddenTests"]
-    return record["outcome"] == "finished" and tests["total"] > 0 and tests["passed"] == tests["total"]
+    passed = record["outcome"] == "finished" and tests["total"] > 0 and tests["passed"] == tests["total"]
+    return passed and not tests.get("notOnGpu", False)
 
 
 def tokens(record):
@@ -252,24 +264,24 @@ def judge_wrong_answers(cells, models):
 
 
 def judge_gpu(cells, models):
-    """C3 — the GPU job is in reach where a baseline's is not, or is half the cost."""
-    detail = []
-    for model in models:
-        unrun = [name for name in BASELINES if (GPU_JOB, name, model) not in cells]
-        if unrun:
-            detail.append(note(GPU_JOB, model, False, f"{', '.join(unrun)} not run"))
-            continue
-        pack = median_green(cells, GPU_JOB, PACK, model)
-        others = {name: median_green(cells, GPU_JOB, name, model) for name in BASELINES}
-        finished = [name for name, value in others.items() if value is not None]
-        if pack is not None and len(finished) < len(BASELINES):
-            missing = sorted(set(BASELINES) - set(finished))
-            detail.append(note(GPU_JOB, model, True, f"miri-pack finished where {', '.join(missing)} did not"))
-            continue
-        cheapest = min((value for value in others.values() if value is not None), default=None)
-        held = pack is not None and cheapest is not None and pack < cheapest / 2
-        detail.append(note(GPU_JOB, model, held, f"miri-pack {pack} against the cheapest baseline {cheapest}"))
+    """C3 — each GPU job is in reach where a baseline's is not, or is half the cost."""
+    detail = [gpu_note(cells, job, model) for model in models for job in GPU_JOBS]
     return verdict(detail)
+
+
+def gpu_note(cells, job, model):
+    unrun = [name for name in BASELINES if (job, name, model) not in cells]
+    if unrun:
+        return note(job, model, False, f"{', '.join(unrun)} not run")
+    pack = median_green(cells, job, PACK, model)
+    others = {name: median_green(cells, job, name, model) for name in BASELINES}
+    finished = [name for name, value in others.items() if value is not None]
+    if pack is not None and len(finished) < len(BASELINES):
+        missing = sorted(set(BASELINES) - set(finished))
+        return note(job, model, True, f"miri-pack finished where {', '.join(missing)} did not")
+    cheapest = min((value for value in others.values() if value is not None), default=None)
+    held = pack is not None and cheapest is not None and pack < cheapest / 2
+    return note(job, model, held, f"miri-pack {pack} against the cheapest baseline {cheapest}")
 
 
 def judge_pack_against_bare(cells, models, jobs):

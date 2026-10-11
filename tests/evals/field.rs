@@ -62,11 +62,11 @@ const JOBS: [Job; 5] = [
     },
 ];
 
-/// The five arms every job is run under.
-const ARMS: [&str; 5] = ["miri-pack", "miri-bare", "python", "rust", "typescript"];
+/// The four arms every job is run under.
+const ARMS: [&str; 4] = ["miri-pack", "miri-bare", "python", "rust"];
 
 /// The languages a seeded job commits a starting source for.
-const SEED_LANGUAGES: [&str; 4] = ["miri", "python", "rust", "typescript"];
+const SEED_LANGUAGES: [&str; 3] = ["miri", "python", "rust"];
 
 /// Words that would tell a subject which language it is being measured in.
 ///
@@ -314,7 +314,7 @@ fn collect_sources(dir: &Path, text: &mut String) {
 }
 
 #[test]
-fn test_arms_are_the_five_the_benchmark_compares() {
+fn test_arms_are_the_four_the_benchmark_compares() {
     let path = field_dir().join("arms.toml");
     let parsed: ArmsFile = toml::from_str(&read(&path))
         .unwrap_or_else(|e| panic!("cannot parse {}: {}", path.display(), e));
@@ -531,7 +531,7 @@ const CPU_JOBS: [&str; 4] = [
 ];
 
 /// The languages a Miri arm is compared against.
-const BASELINE_ARMS: [&str; 3] = ["python", "rust", "typescript"];
+const BASELINE_ARMS: [&str; 2] = ["python", "rust"];
 
 /// What one synthetic run cost and whether it reached green.
 #[derive(Clone, Copy)]
@@ -2121,6 +2121,186 @@ fn test_the_benchmark_carries_no_internal_planning_numbers() {
             "a committed benchmark file carries the planning identifier {}, \
              which a reader of this directory cannot resolve",
             number
+        );
+    }
+}
+
+/// Runs `code` with `bench.py` imported as `bench`, and returns what it printed.
+fn with_bench(code: &str) -> String {
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(format!(
+            "import sys\nsys.path.insert(0, {:?})\nimport bench\n{}",
+            field_dir().display().to_string(),
+            code
+        ))
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        output.status.success(),
+        "the scorer failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// The comparison a numeric job declares: 1% of a value, or 0.5 near zero,
+/// and a labelled line held to 0.001.
+const NUMERIC: &str = r#"{"kind": "numeric", "relative": 0.01, "absolute": 0.5, "labels": {"MEAN": {"relative": 0.0, "absolute": 0.001}}}"#;
+
+#[test]
+fn test_a_numeric_job_accepts_values_within_its_tolerance() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the scorer was not run");
+        return;
+    }
+    let verdict = with_bench(&format!(
+        "print(bench.first_difference('COUNT 1000 7\\nMEAN 2.500', 'COUNT 1009 7.4\\nMEAN 2.5005', {}))",
+        NUMERIC
+    ));
+    assert_eq!(verdict, "None", "values inside the tolerance were refused");
+}
+
+#[test]
+fn test_a_numeric_job_refuses_a_value_outside_its_tolerance_and_names_it() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the scorer was not run");
+        return;
+    }
+    let verdict = with_bench(&format!(
+        "print(bench.first_difference('COUNT 1000 7\\nMEAN 2.500', 'COUNT 1000 7\\nMEAN 2.502', {}))",
+        NUMERIC
+    ));
+    assert_eq!(
+        verdict, "{'line': 2, 'field': 2, 'expected': '2.500', 'actual': '2.502'}",
+        "a labelled line was not held to its own tolerance, or the difference was not named"
+    );
+    let words = with_bench(&format!(
+        "print(bench.first_difference('COUNT 1000', 'TOTAL 1000', {}))",
+        NUMERIC
+    ));
+    assert!(
+        words.contains("'expected': 'COUNT'"),
+        "a word was compared within a tolerance: {}",
+        words
+    );
+}
+
+#[test]
+fn test_an_exact_job_names_the_first_line_that_differs() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the scorer was not run");
+        return;
+    }
+    let verdict = with_bench("print(bench.first_difference('a\\nb', 'a\\nc', {}))");
+    assert_eq!(verdict, "{'line': 2, 'expected': 'b', 'actual': 'c'}");
+}
+
+/// Score `program` as the python arm's answer to the heat job, with `files`
+/// beside it, and return the score.
+fn score_heat_workspace(case: &str, program: &Path, files: &[(&str, &str)]) -> String {
+    let workspace = std::env::temp_dir().join(format!("miri-field-kernel-{}", case));
+    let _ = fs::remove_dir_all(&workspace);
+    fs::create_dir_all(&workspace).expect("cannot create a workspace");
+    fs::copy(program, workspace.join("main.py")).expect("cannot place the program");
+    for (name, text) in files {
+        fs::write(workspace.join(name), text).expect("cannot write a workspace file");
+    }
+    let output = Command::new("python3")
+        .arg(field_dir().join("bench.py"))
+        .args(["--job", "05-gpu-heat", "--arm", "python", "--score-only"])
+        .arg(&workspace)
+        .arg("--scratch")
+        .arg(std::env::temp_dir().join(format!("miri-field-kernel-scratch-{}", case)))
+        .output()
+        .expect("cannot run python3");
+    let _ = fs::remove_dir_all(&workspace);
+    assert!(
+        output.status.success(),
+        "scoring failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn test_a_gpu_job_answered_on_the_processor_is_not_on_the_gpu() {
+    if !available("python3") || !available("uv") {
+        println!("skipping: python3 or uv is not on PATH, so the program was not scored");
+        return;
+    }
+    let reference = field_dir()
+        .join("jobs")
+        .join("05-gpu-heat")
+        .join("reference")
+        .join("solution.py");
+    let score = score_heat_workspace("cpu", &reference, &[]);
+    assert!(
+        score.contains("\"notOnGpu\": true")
+            && score.contains("\"missing\": [\n      \"@compute\""),
+        "a program with no kernel was not recorded as off the GPU:\n{}",
+        score
+    );
+    let summed = score
+        .split("\"passed\": ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .unwrap_or("");
+    assert_ne!(
+        summed, "0",
+        "the processor program should still pass the cases themselves"
+    );
+}
+
+#[test]
+fn test_a_gpu_job_with_a_shader_and_a_dispatch_is_on_the_gpu() {
+    if !available("python3") || !available("uv") {
+        println!("skipping: python3 or uv is not on PATH, so the program was not scored");
+        return;
+    }
+    let reference = field_dir()
+        .join("jobs")
+        .join("05-gpu-heat")
+        .join("reference")
+        .join("solution.py");
+    let score = score_heat_workspace(
+        "gpu",
+        &reference,
+        &[
+            ("stencil.wgsl", "@compute @workgroup_size(64) fn main() {}"),
+            (
+                "launch.py",
+                "def run(pass_):\n    pass_.dispatch_workgroups(1)\n",
+            ),
+        ],
+    );
+    assert!(
+        score.contains("\"notOnGpu\": false"),
+        "a shader and its dispatch were not taken as evidence of a kernel:\n{}",
+        score
+    );
+}
+
+#[test]
+fn test_every_arm_says_how_a_kernel_is_evidenced() {
+    let path = field_dir().join("arms.toml");
+    let parsed: toml::Value = toml::from_str(&read(&path))
+        .unwrap_or_else(|e| panic!("cannot parse {}: {}", path.display(), e));
+    let arms = parsed["arm"].as_array().expect("arms.toml lists no arms");
+    for arm in arms {
+        let id = arm["id"].as_str().unwrap_or("?");
+        let evidence = arm.get("kernel_evidence").unwrap_or_else(|| {
+            panic!(
+                "arm {} does not say how a GPU job's kernel is evidenced",
+                id
+            )
+        });
+        let files = evidence["files"].as_array().map_or(0, Vec::len);
+        let patterns = evidence["patterns"].as_array().map_or(0, Vec::len);
+        assert!(
+            files > 0 && patterns > 0,
+            "arm {} names no files or no patterns for its kernel evidence",
+            id
         );
     }
 }

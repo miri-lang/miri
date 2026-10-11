@@ -1,14 +1,22 @@
-# The five arms every job is run under.
+# The four arms every job is run under.
 #
 # The brief is one text with three substitutions. `language` and `toolchain`
 # are the only sentences that differ between arms, and `entry_point` is the
 # path the subject writes its program to. Everything else a subject reads is
-# byte-identical across the five.
+# byte-identical across the four.
 #
 # `run` is how the harness runs the finished program. The path of a hidden
 # test's input is appended to it as one more argument. It is the way the arm's
 # own toolchain runs a project, so a package the subject installed with that
 # toolchain is there when the hidden tests run.
+#
+# `kernel_evidence` is how a GPU job tells a kernel from a loop on the
+# processor that prints the same numbers: every pattern must match somewhere in
+# the files the globs name, or the run is recorded `notOnGpu` and is not green.
+# A Miri kernel is a `forall` in the entry point that runs on the device —
+# spelled `gpu forall`, or reading a `gpu let` / `gpu var` binding, since a bare
+# `forall` over host data runs as a loop on the processor. A baseline's is a
+# WGSL compute shader and a call that dispatches it.
 
 [[arm]]
 id = "miri-pack"
@@ -18,6 +26,7 @@ entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
 install_pack = true
 notes = "The release binary with the skill pack installed into the workspace."
+kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
 
 [[arm]]
 id = "miri-bare"
@@ -27,6 +36,7 @@ entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
 install_pack = false
 notes = "The release binary and `miri --help`. No prose file of any kind."
+kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
 
 [[arm]]
 id = "python"
@@ -36,6 +46,7 @@ entry_point = "main.py"
 run = ["uv", "run", "--quiet", "python", "main.py"]
 install_pack = false
 notes = "A baseline language. Baselines get no skill file: their guidance is in the weights, and that asymmetry is the experiment."
+kernel_evidence = { files = ["**/*.py", "**/*.wgsl"], patterns = ['@compute', '\bdispatch_workgroups\b'] }
 
 [[arm]]
 id = "rust"
@@ -45,12 +56,4 @@ entry_point = "src/main.rs"
 run = ["cargo", "run", "--quiet", "--release", "--"]
 install_pack = false
 notes = "A baseline language."
-
-[[arm]]
-id = "typescript"
-language = "TypeScript"
-toolchain = "Deno — `deno run`, `deno check` and `deno test`"
-entry_point = "main.ts"
-run = ["deno", "run", "--quiet", "--allow-read", "main.ts"]
-install_pack = false
-notes = "A baseline language."
+kernel_evidence = { files = ["src/**/*.rs", "**/*.wgsl"], patterns = ['@compute', '\bdispatch_workgroups\b'] }
