@@ -181,7 +181,8 @@ pub unsafe extern "C" fn miri_rt_string_substring(
 
 /// Returns the character at the given Unicode scalar index as a single-character string.
 ///
-/// This is O(n) because UTF-8 characters are variable-width.
+/// Reading characters in increasing index order costs O(1) amortized per
+/// character; see the `char_index` module.
 /// Returns an empty string if the index is out of bounds or `ptr` is null.
 ///
 /// # Safety
@@ -196,8 +197,7 @@ pub unsafe extern "C" fn miri_rt_string_char_at(
     if ptr.is_null() {
         return miri_rt_string_new();
     }
-    let s = (*ptr).as_str();
-    match s.chars().nth(index) {
+    match super::char_index::char_at(&*ptr, index) {
         Some(ch) => {
             let mut buf = [0u8; 4];
             let char_str = ch.encode_utf8(&mut buf);

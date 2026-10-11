@@ -14,6 +14,7 @@
 //! - [`list`] — Dynamic list type ([`MiriList`]) with FFI interface.
 //! - [`map`] — Hash map type ([`MiriMap`]) with FFI interface.
 //! - [`set`] — Hash set type ([`MiriSet`]) with FFI interface.
+//! - `slot_cursor` — Positional access into a hash table without a rescan per step.
 //! - [`string`] — UTF-8 string type ([`MiriString`]) with full FFI interface.
 //! - [`time`] — Time utilities.
 //! - [`tuple`] — Tuple length helper.
@@ -40,6 +41,7 @@ pub mod process;
 pub mod rc;
 pub mod regex;
 pub mod set;
+pub(crate) mod slot_cursor;
 pub mod string;
 pub mod time;
 pub(crate) mod trap;

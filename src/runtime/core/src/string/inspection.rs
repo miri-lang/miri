@@ -25,7 +25,8 @@ pub unsafe extern "C" fn miri_rt_string_len(ptr: *const MiriString) -> usize {
 
 /// Returns the Unicode scalar (character) count of a string.
 ///
-/// This is an O(n) operation since UTF-8 characters are variable-width.
+/// Counting is O(n) since UTF-8 characters are variable-width, so the count
+/// is remembered: asking again for the same string is O(1).
 ///
 /// # Safety
 /// - `ptr` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
@@ -36,7 +37,7 @@ pub unsafe extern "C" fn miri_rt_string_char_count(ptr: *const MiriString) -> us
     if ptr.is_null() {
         return 0;
     }
-    (*ptr).as_str().chars().count()
+    super::char_index::char_count(&*ptr)
 }
 
 /// Returns 1 if the string is empty (or null), 0 otherwise.
@@ -186,12 +187,7 @@ pub unsafe extern "C" fn miri_rt_string_code_at(ptr: *const MiriString, index: i
     if ptr.is_null() || index < 0 {
         return -1;
     }
-    let s = (*ptr).as_str();
-    // TODO: `chars().nth` walks from the start on every call, so `code_at(i)` is
-    // O(i) and a loop over `0..length()` is quadratic: counting over a 1 MB
-    // input takes tens of seconds. Positional character access needs a cursor or
-    // an ASCII fast path rather than a rescan.
-    match s.chars().nth(index as usize) {
+    match super::char_index::char_at(&*ptr, index as usize) {
         Some(ch) => ch as isize,
         None => -1,
     }

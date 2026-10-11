@@ -8,11 +8,13 @@
 //!
 //! # Module Organization
 //! - [`core`] — `MiriString` type definition, inherent methods, and `Drop`/`Default` impls.
+//! - [`char_index`] — Character positions found without a rescan per step.
 //! - [`constructors`] — FFI functions for creating, cloning, and freeing strings.
 //! - [`inspection`] — FFI functions for querying string properties (length, contains, etc.).
 //! - [`transformation`] — FFI functions that produce new strings (concat, trim, replace, etc.).
 //! - [`conversion`] — FFI functions for converting primitive types to strings.
 
+mod char_index;
 mod constructors;
 mod conversion;
 mod core;

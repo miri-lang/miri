@@ -66,3 +66,31 @@ fn main()
         "10 5",
     );
 }
+
+#[test]
+fn set_walks_see_removals_and_insertions_made_between_them() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn total(s Set<int>) int
+    var sum = 0
+    for x in s
+        sum = sum + x
+    return sum
+
+fn main()
+    var s = Set<int>()
+    for i in 0..1000
+        s.add(i)
+    let before = total(s)
+    for i in 0..500
+        s.remove(i * 2)
+    let after_removal = total(s)
+    for i in 1000..1100
+        s.add(i)
+    println(f"{before} {after_removal} {total(s)}")
+"#,
+        "499500 250000 354950",
+    );
+}

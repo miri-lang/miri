@@ -337,3 +337,31 @@ fn main()
         "kept!",
     );
 }
+
+#[test]
+fn map_walks_see_removals_and_insertions_made_between_them() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn total(m Map<int, int>) int
+    var sum = 0
+    for k, v in m
+        sum = sum + k + v
+    return sum
+
+fn main()
+    var m = Map<int, int>()
+    for i in 0..1000
+        m.set(i, 1)
+    let before = total(m)
+    for i in 0..500
+        m.remove(i * 2)
+    let after_removal = total(m)
+    for i in 1000..1100
+        m.set(i, 1)
+    println(f"{before} {after_removal} {total(m)}")
+"#,
+        "500500 250500 355550",
+    );
+}

@@ -14,6 +14,7 @@ use std::ptr;
 
 use crate::element_identity::ElementIdentity;
 use crate::rc::{alloc_with_rc, free_with_rc};
+use crate::slot_cursor::SlotCursor;
 
 /// State flags for hash table slots.
 const SLOT_EMPTY: u8 = 0;
@@ -46,6 +47,9 @@ const LOAD_FACTOR_DEN: usize = 4;
 /// - `key_drop_fn`: If non-zero, called on each key pointer when that entry is
 ///   discarded by `remove`, `clear`, or `free`. Allows managed keys (e.g. strings)
 ///   to have their RC decremented when removed. Set via `miri_rt_map_set_key_drop_fn`.
+/// - `cursor`: where the last positional lookup landed, so iteration walks the
+///   slots once in total — see [`SlotCursor`]. Zeroed bytes are an empty
+///   cursor.
 #[repr(C)]
 pub struct MiriMap {
     states: *mut u8,
@@ -66,6 +70,7 @@ pub struct MiriMap {
     /// When non-zero, `miri_rt_map_clone` calls this per entry to produce an
     /// independent deep copy instead of IncRef-ing the shared pointer.
     val_clone_fn: usize,
+    cursor: SlotCursor,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
@@ -110,21 +115,14 @@ impl MiriMap {
 
     /// The slot of the entry at sequential `nth`, counting occupied slots only,
     /// or `None` past the last entry.
-    // TODO: this scans from slot 0 on every call, and iteration calls it once per
-    // entry, so walking the whole collection is quadratic. A subject's program
-    // over ~124k distinct keys took 47 s. Iteration wants a dense entry array
-    // beside the hash index, or a cursor the `for` lowering carries.
+    ///
+    /// Asking for consecutive positions resumes from the previous answer, so a
+    /// full walk inspects each slot once.
     unsafe fn nth_entry(&self, nth: usize) -> Option<usize> {
-        let mut count = 0usize;
-        for i in 0..self.capacity {
-            if *self.states.add(i) == SLOT_OCCUPIED {
-                if count == nth {
-                    return Some(i);
-                }
-                count += 1;
-            }
-        }
-        None
+        let states = self.states;
+        self.cursor.nth_occupied(self.capacity, nth, |slot| {
+            *states.add(slot) == SLOT_OCCUPIED
+        })
     }
 
     /// Finds the slot for a given key (for lookup or insertion).
@@ -271,6 +269,7 @@ impl MiriMap {
         self.values = new_values;
         self.capacity = new_capacity;
         self.len = 0;
+        self.cursor.forget();
 
         for i in 0..old_capacity {
             if *old_states.add(i) == SLOT_OCCUPIED {
@@ -325,6 +324,7 @@ impl MiriMap {
         if !found {
             *self.states.add(idx) = SLOT_OCCUPIED;
             self.len += 1;
+            self.cursor.forget();
         }
     }
 
@@ -388,6 +388,7 @@ impl MiriMap {
             }
             *self.states.add(idx) = SLOT_TOMBSTONE;
             self.len -= 1;
+            self.cursor.forget();
             true
         } else {
             false
@@ -448,6 +449,7 @@ impl MiriMap {
             }
         }
         self.len = 0;
+        self.cursor.forget();
     }
 }
 
@@ -502,6 +504,7 @@ pub mod ffi {
         (*map).val_drop_fn = 0;
         (*map).key_drop_fn = 0;
         (*map).val_clone_fn = 0;
+        (*map).cursor.forget();
         map
     }
 
@@ -1020,3 +1023,104 @@ pub mod ffi {
         }
     }
 } // pub mod ffi
+
+#[cfg(test)]
+mod walk_tests {
+    use super::ffi::*;
+    use super::MiriMap;
+    use crate::slot_cursor::take_probes;
+
+    const WORD: usize = std::mem::size_of::<usize>();
+
+    /// A map of plain word keys `0..len`, each holding twice its key.
+    unsafe fn map_of(len: usize) -> *mut MiriMap {
+        let map = miri_rt_map_new(WORD, WORD, 0);
+        for key in 0..len {
+            set(map, key, key * 2);
+        }
+        map
+    }
+
+    unsafe fn set(map: *mut MiriMap, key: usize, value: usize) {
+        miri_rt_map_set(map, word_addr(&key), WORD, word_addr(&value), WORD);
+    }
+
+    unsafe fn key_at(map: *const MiriMap, nth: usize) -> usize {
+        let mut key = 0usize;
+        miri_rt_map_key_at(map, nth, &mut key as *mut usize as *mut u8, WORD);
+        key
+    }
+
+    unsafe fn value_at(map: *const MiriMap, nth: usize) -> usize {
+        let mut value = 0usize;
+        miri_rt_map_value_at(map, nth, &mut value as *mut usize as *mut u8, WORD);
+        value
+    }
+
+    fn word_addr(word: &usize) -> *const u8 {
+        word as *const usize as *const u8
+    }
+
+    #[test]
+    fn full_walk_of_a_large_map_probes_linearly() {
+        let _balance = crate::rc::balance_guard();
+        unsafe {
+            let len = 100_000;
+            let map = map_of(len);
+            let capacity = (*map).capacity;
+            take_probes();
+            let mut seen = vec![false; len];
+            for nth in 0..len {
+                let key = key_at(map, nth);
+                assert_eq!(value_at(map, nth), key * 2);
+                seen[key] = true;
+            }
+            let probes = take_probes();
+            assert!(seen.iter().all(|&s| s), "every key is walked once");
+            assert!(
+                probes <= capacity + 2 * len,
+                "a walk of {len} entries over {capacity} slots probed {probes} slots"
+            );
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn removal_mid_walk_counts_positions_in_the_changed_map() {
+        let _balance = crate::rc::balance_guard();
+        unsafe {
+            let map = map_of(50);
+            let fifth = key_at(map, 5);
+            let sixth = key_at(map, 6);
+            miri_rt_map_remove(map, word_addr(&fifth), WORD);
+            assert_eq!(
+                key_at(map, 5),
+                sixth,
+                "the entry after a removed one moves up"
+            );
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn insertion_mid_walk_counts_positions_in_the_changed_map() {
+        let _balance = crate::rc::balance_guard();
+        unsafe {
+            let map = map_of(20);
+            key_at(map, 10);
+            for key in 1_000..1_100 {
+                set(map, key, 0);
+            }
+            let walked: Vec<_> = (0..120).map(|nth| key_at(map, nth)).collect();
+            let mut sorted = walked.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                sorted.len(),
+                120,
+                "a walk after growth sees each entry once"
+            );
+            miri_rt_map_free(map);
+        }
+    }
+}

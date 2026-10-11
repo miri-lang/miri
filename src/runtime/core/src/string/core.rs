@@ -113,6 +113,7 @@ impl Default for MiriString {
 
 impl Drop for MiriString {
     fn drop(&mut self) {
+        super::char_index::forget(self);
         if !self.data.is_null() && self.capacity > 0 {
             // SAFETY: `data` was allocated via `miri_alloc` with alignment 1
             // and `self.capacity` bytes. It has not been freed yet.
