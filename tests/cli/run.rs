@@ -189,3 +189,49 @@ fn test_signal_death_names_the_signal_on_stderr_in_pretty_mode() {
     );
     assert_eq!(output.status.code(), Some(139));
 }
+
+/// Program arguments written straight after the path, without `--`, are the
+/// commonest way to call `run` wrongly. The refusal shows the same command with
+/// the separator in place, so the next attempt is a copy rather than a lookup.
+#[test]
+fn test_run_arguments_without_the_separator_are_shown_with_it() {
+    let file = create_test_file(SIMPLE_MAIN);
+    let path = file.path().to_str().unwrap();
+
+    miri_cmd()
+        .arg("run")
+        .arg(path)
+        .arg("input.txt")
+        .arg("7")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("unexpected argument 'input.txt'"))
+        .stderr(predicates::str::contains(format!(
+            "miri run {} -- input.txt 7",
+            path
+        )));
+}
+
+#[test]
+fn test_run_arguments_after_the_separator_reach_the_program() {
+    let file = create_test_file(
+        "use system.os\n\nfn main()\n    let args = Args()\n    println(f\"{args.length()}\")\n",
+    );
+    let path = file.path().to_str().unwrap();
+
+    miri_cmd()
+        .env(
+            "MIRI_STDLIB_PATH",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/stdlib"),
+        )
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
+        .arg("run")
+        .arg(path)
+        .arg("--")
+        .arg("input.txt")
+        .arg("7")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("2"));
+}

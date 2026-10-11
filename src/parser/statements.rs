@@ -582,7 +582,7 @@ impl<'source> Parser<'source> {
             .with_foreign_form(crate::error::foreign_syntax::ForeignForm::BraceBlock);
             return Err(err);
         } else {
-            return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
+            return Err(self.error_missing_body_opener("a colon or an expression end"));
         }
 
         if self.lookahead.is_some() {

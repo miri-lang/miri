@@ -1537,3 +1537,49 @@ fn main()
         }
     });
 }
+
+#[test]
+fn test_an_unknown_module_lists_the_modules_there_are() {
+    let (_, stderr, ok) = view(&["system.env", "--outline"]);
+
+    assert!(!ok, "a module that does not exist should fail");
+    assert!(
+        stderr.contains("system.os") && stderr.contains("system.string"),
+        "the report should list the modules that can be viewed, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_a_type_named_where_a_module_belongs_points_at_its_module() {
+    let (_, stderr, ok) = view(&["Args", "--outline"]);
+
+    assert!(!ok, "a type name is not a module");
+    assert!(
+        stderr.contains("miri view system.os --type Args"),
+        "the report should give the command that reads the type, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_a_library_type_the_file_does_not_import_names_the_use_line() {
+    with_source("fn main()\n    println(\"x\")\n", |path| {
+        let (_, stderr, ok) = view(&[&path.display().to_string(), "--type", "Args"]);
+
+        assert!(!ok, "a type the file cannot see is not in scope");
+        assert!(
+            stderr.contains("MER_BLD_022") && stderr.contains("use system.os"),
+            "the report should name the import that brings the type in, got:\n{stderr}"
+        );
+    });
+}
+
+#[test]
+fn test_a_primitive_type_is_said_to_have_no_members_to_list() {
+    let (_, stderr, ok) = view(&["--type", "int"]);
+
+    assert!(!ok, "a primitive has no member listing");
+    assert!(
+        stderr.contains("built-in") && !stderr.contains("did you mean"),
+        "the report should say the type is built in rather than guess a name, got:\n{stderr}"
+    );
+}

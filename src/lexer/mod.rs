@@ -3,7 +3,7 @@
 
 use logos::Logos;
 
-use crate::error::foreign_syntax::ForeignForm;
+use crate::error::foreign_syntax::{ForeignForm, SymbolOperator};
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 
 pub mod formatted_string;
@@ -148,7 +148,11 @@ impl<'source> Lexer<'source> {
                 Some(Ok(t)) => t,
                 Some(Err(_)) => {
                     let mut error = self.span_error(SyntaxErrorKind::InvalidToken);
-                    if let Some(form) = self.macro_bang_at(self.inner.span().start) {
+                    let position = self.inner.span().start;
+                    if let Some(form) = self
+                        .macro_bang_at(position)
+                        .or_else(|| self.negation_bang_at(position))
+                    {
                         error = error.with_foreign_form(form);
                     }
                     return Some(Err(error));
@@ -249,6 +253,35 @@ impl<'source> Lexer<'source> {
 
         Some(ForeignForm::MacroBang {
             bang_start: position,
+        })
+    }
+
+    /// Recognizes `!` used as logical negation at `position`.
+    ///
+    /// A `!` that no name runs up to and that an operand follows — `!done`,
+    /// `!s.is_empty()`, `!(a or b)` — is the negation Miri spells `not`.
+    fn negation_bang_at(&self, position: usize) -> Option<ForeignForm> {
+        if self.source.as_bytes().get(position) != Some(&b'!') {
+            return None;
+        }
+        let follows_a_name = self
+            .source
+            .get(..position)?
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let starts_an_operand = self
+            .source
+            .get(position + 1..)?
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_' || c == '(');
+        if follows_a_name || !starts_an_operand {
+            return None;
+        }
+        Some(ForeignForm::SymbolOperator {
+            start: position,
+            operator: SymbolOperator::Not,
         })
     }
 

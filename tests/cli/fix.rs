@@ -844,6 +844,111 @@ fn test_a_macro_style_call_loses_its_bang() {
 }
 
 #[test]
+fn test_a_bang_negation_becomes_not() {
+    assert_eq!(
+        repaired(
+            "word-operator-not",
+            "fn main()\n    let s = \"a\"\n    if !s.is_empty()\n        println(s)\n",
+            "word-operator",
+        ),
+        "fn main()\n    let s = \"a\"\n    if not s.is_empty()\n        println(s)\n"
+    );
+}
+
+#[test]
+fn test_a_double_ampersand_becomes_and() {
+    assert_eq!(
+        repaired(
+            "word-operator-and",
+            "fn main()\n    let a = true\n    if a && a\n        println(\"y\")\n",
+            "word-operator",
+        ),
+        "fn main()\n    let a = true\n    if a and a\n        println(\"y\")\n"
+    );
+}
+
+#[test]
+fn test_a_tight_double_pipe_becomes_a_spaced_or() {
+    // Writing the word in place of the symbols alone would run it into its
+    // operands, so the repair supplies the spaces the symbols did not need.
+    assert_eq!(
+        repaired(
+            "word-operator-or",
+            "fn main()\n    let a = true\n    if a||a\n        println(\"y\")\n",
+            "word-operator",
+        ),
+        "fn main()\n    let a = true\n    if a or a\n        println(\"y\")\n"
+    );
+}
+
+#[test]
+fn test_a_then_after_an_if_condition_becomes_a_colon() {
+    assert_eq!(
+        repaired(
+            "if-colon-then",
+            "fn main()\n    let d = true\n    if d then\n        println(\"y\")\n",
+            "if-colon",
+        ),
+        "fn main()\n    let d = true\n    if d:\n        println(\"y\")\n"
+    );
+}
+
+#[test]
+fn test_an_inline_else_gains_its_colon() {
+    assert_eq!(
+        repaired(
+            "if-colon-else",
+            "fn main()\n    let d = true\n    let m = if d: \"x\" else \"-\"\n    println(m)\n",
+            "if-colon",
+        ),
+        "fn main()\n    let d = true\n    let m = if d: \"x\" else: \"-\"\n    println(m)\n"
+    );
+}
+
+#[test]
+fn test_an_inline_if_then_else_is_repaired_in_two_passes() {
+    let fixture = Fixture::new(
+        "if-colon-then-else",
+        "fn main()\n    let d = true\n    let m = if d then \"x\" else \"-\"\n    println(m)\n",
+    );
+    for _ in 0..2 {
+        let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+        assert!(ok, "each pass should apply the repair it plans");
+    }
+    assert_eq!(
+        fixture.contents(),
+        "fn main()\n    let d = true\n    let m = if d: \"x\" else: \"-\"\n    println(m)\n"
+    );
+    assert!(checks_clean(fixture.path()));
+}
+
+#[test]
+fn test_quotes_nested_in_an_interpolation_take_the_other_quote() {
+    assert_eq!(
+        repaired(
+            "interpolation-quotes",
+            "fn main()\n    println(f\"{\"a\".compare(\"b\")} done\")\n",
+            "interpolation-quotes",
+        ),
+        "fn main()\n    println(f\"{'a'.compare('b')} done\")\n"
+    );
+}
+
+#[test]
+fn test_an_interpolation_already_holding_both_quotes_is_not_repaired() {
+    let fixture = Fixture::new(
+        "interpolation-quotes-mixed",
+        "fn main()\n    println(f\"{\"it's\".length()}\")\n",
+    );
+    let envelope = plan(fixture.path());
+    assert!(
+        repair_ids(&envelope).is_empty(),
+        "swapping the quotes would collide with the apostrophe: {:?}",
+        repair_ids(&envelope)
+    );
+}
+
+#[test]
 fn test_a_null_literal_becomes_none() {
     assert_eq!(
         repaired(

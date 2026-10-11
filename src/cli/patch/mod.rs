@@ -1287,7 +1287,7 @@ struct Checked {
 }
 
 fn check_source_anchored(path: Option<&Path>, source: &str) -> Checked {
-    let outcome = anchor::pipeline_for(path).frontend(source);
+    let outcome = anchor::pipeline_for(path).frontend_program(source);
     match outcome {
         Ok(result) => Checked {
             ok: true,

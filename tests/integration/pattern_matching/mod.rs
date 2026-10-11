@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod booleans;
 pub mod integration;
+pub mod jump_arms;
 pub mod literals;
 pub mod nested_payloads;
 pub mod or_patterns;

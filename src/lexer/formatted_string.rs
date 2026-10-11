@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::token::{Token, TokenSpan};
+use crate::error::foreign_syntax::ForeignForm;
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Lexer;
 use logos::Lexer as LogosLexer;
@@ -35,8 +36,9 @@ pub fn lex_formatted_string(
         );
 
         let expr_start = brace_pos + 1;
-        let expr_end = find_matching_close_brace(string_body, expr_start)
-            .ok_or_else(|| error_here(lexer, SyntaxErrorKind::InvalidFormattedStringExpression))?;
+        let expr_end = find_matching_close_brace(string_body, expr_start).ok_or_else(|| {
+            unclosed_interpolation_error(lexer, token_offset + expr_start, quote_character)
+        })?;
         let expression_slice = &string_body[expr_start..expr_end];
 
         if let Some(backslash_pos) = expression_slice.find('\\') {
@@ -203,6 +205,47 @@ fn lex_expression_into(
         ));
     }
     Ok(())
+}
+
+/// The error for an interpolation the f-string ended inside of.
+///
+/// When the braces close further along the line, the f-string ended at a quote
+/// between them: a literal written with the quote that opened it. That form is
+/// named, with the swap that repairs it when the swap is unambiguous.
+fn unclosed_interpolation_error(
+    lexer: &LogosLexer<Token>,
+    expr_start: usize,
+    quote: char,
+) -> SyntaxError {
+    let error = error_here(lexer, SyntaxErrorKind::InvalidFormattedStringExpression);
+    match interpolation_end_on_line(lexer.source(), expr_start) {
+        Some(expr_end) => error.with_foreign_form(ForeignForm::NestedInterpolationQuote {
+            start: expr_start,
+            end: expr_end,
+            quote,
+        }),
+        None => error,
+    }
+}
+
+/// Where the braces opened just before `expr_start` close, reading the raw
+/// line past any quote, or `None` when they do not close on this line.
+fn interpolation_end_on_line(source: &str, expr_start: usize) -> Option<usize> {
+    let mut depth = 1;
+    for (offset, c) in source.get(expr_start..)?.char_indices() {
+        match c {
+            '\n' => return None,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(expr_start + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn error_here(lexer: &LogosLexer<Token>, kind: SyntaxErrorKind) -> SyntaxError {

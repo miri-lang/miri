@@ -51,6 +51,12 @@ pub enum RepairId {
     RenameToSuggestion,
     /// Prefix a binding nothing reads with an underscore.
     UnderscoreUnreadBinding,
+    /// Spell a symbolic logical operator as the word Miri uses.
+    WordOperator,
+    /// Write the `:` that opens an inline `if` or `else` body.
+    IfColon,
+    /// Write the string literals inside an interpolation with the other quote.
+    InterpolationQuotes,
 }
 
 impl RepairId {
@@ -70,6 +76,9 @@ impl RepairId {
             Self::QualifyVariantPattern => "qualify-variant-pattern",
             Self::RenameToSuggestion => "rename-to-suggestion",
             Self::UnderscoreUnreadBinding => "underscore-unread-binding",
+            Self::WordOperator => "word-operator",
+            Self::IfColon => "if-colon",
+            Self::InterpolationQuotes => "interpolation-quotes",
         }
     }
 
@@ -104,6 +113,12 @@ impl RepairId {
                 DiagnosticCode::TypUnusedLocal,
                 DiagnosticCode::TypUnusedParameter,
             ],
+            Self::WordOperator => &[
+                DiagnosticCode::LexInvalidToken,
+                DiagnosticCode::ParUnsupportedCStyleOperator,
+            ],
+            Self::IfColon => &[DiagnosticCode::ParUnexpectedToken],
+            Self::InterpolationQuotes => &[DiagnosticCode::LexInvalidFormattedStringExpression],
         }
     }
 
@@ -137,6 +152,11 @@ impl RepairId {
             Self::UnderscoreUnreadBinding => {
                 "Prefix a binding nothing reads with `_` to say the value is not meant to be read."
             }
+            Self::WordOperator => "Rewrite `!`, `&&` or `||` as `not`, `and` or `or`.",
+            Self::IfColon => "Write `:` in place of `then`, or after an inline `else`.",
+            Self::InterpolationQuotes => {
+                "Write the string literals inside an f-string's braces with the other quote."
+            }
         }
     }
 
@@ -156,6 +176,9 @@ impl RepairId {
             Self::QualifyVariantPattern,
             Self::RenameToSuggestion,
             Self::UnderscoreUnreadBinding,
+            Self::WordOperator,
+            Self::IfColon,
+            Self::InterpolationQuotes,
         ]
     }
 }
@@ -288,6 +311,52 @@ pub enum RepairRequest {
     /// already spelled with the underscore is never recorded, because the check
     /// that raises the diagnostic treats such a binding as deliberately unread.
     UnderscoreUnreadBinding { name_start: usize, name: String },
+    /// Rewrite the symbolic operator `spelling` at `start` as `word`.
+    ///
+    /// The spelling travels with the offset so the projection can confirm the
+    /// symbols are still there before writing the word over them.
+    WordOperator {
+        start: usize,
+        spelling: String,
+        word: String,
+    },
+    /// Write the colon an `if` or `else` body opens with.
+    ///
+    /// `keyword_start` holds `then`, which the colon replaces, or an inline
+    /// `else`, which the colon follows. The keyword travels with the offset so
+    /// the projection can confirm it before editing.
+    IfColon {
+        keyword_start: usize,
+        keyword: IfColonKeyword,
+    },
+    /// Swap every `quote` in `start..end`, the text between an interpolation's
+    /// braces, for the other quote character.
+    ///
+    /// Recorded only for an interpolation holding no other quote and no
+    /// backslash, so the swap cannot close or escape anything the author wrote.
+    InterpolationQuotes {
+        start: usize,
+        end: usize,
+        quote: char,
+    },
+}
+
+/// The word an [`RepairRequest::IfColon`] repair is anchored on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IfColonKeyword {
+    /// `if c then`, where Miri writes `if c:`.
+    Then,
+    /// `else v` in an inline `if`, where Miri writes `else: v`.
+    Else,
+}
+
+impl IfColonKeyword {
+    fn spelling(self) -> &'static str {
+        match self {
+            Self::Then => "then",
+            Self::Else => "else",
+        }
+    }
 }
 
 /// One leaf of a `+` chain being rewritten as a formatted string.
@@ -356,6 +425,9 @@ impl RepairRequest {
             Self::QualifyVariantPattern { .. } => RepairId::QualifyVariantPattern,
             Self::RenameToSuggestion { .. } => RepairId::RenameToSuggestion,
             Self::UnderscoreUnreadBinding { .. } => RepairId::UnderscoreUnreadBinding,
+            Self::WordOperator { .. } => RepairId::WordOperator,
+            Self::IfColon { .. } => RepairId::IfColon,
+            Self::InterpolationQuotes { .. } => RepairId::InterpolationQuotes,
         }
     }
 
@@ -429,6 +501,18 @@ impl RepairRequest {
             ),
             Self::UnderscoreUnreadBinding { name_start, name } => {
                 Self::project_underscore_unread_binding(path, source, *name_start, name)
+            }
+            Self::WordOperator {
+                start,
+                spelling,
+                word,
+            } => Self::project_word_operator(path, source, *start, spelling, word),
+            Self::IfColon {
+                keyword_start,
+                keyword,
+            } => Self::project_if_colon(path, source, *keyword_start, *keyword),
+            Self::InterpolationQuotes { start, end, quote } => {
+                Self::project_interpolation_quotes(path, source, *start, *end, *quote)
             }
         }
     }
@@ -757,6 +841,102 @@ impl RepairRequest {
         })
     }
 
+    /// Write `word` over the symbols, with a space on each side the symbols'
+    /// neighbours do not already supply: `a&&b` and `!x` need them, because a
+    /// word run into its operand reads as one longer name.
+    fn project_word_operator(
+        path: &str,
+        source: &str,
+        start: usize,
+        spelling: &str,
+        word: &str,
+    ) -> Option<JsonRepair> {
+        let end = start.checked_add(spelling.len())?;
+        if spelling.is_empty() || source.get(start..end)? != spelling {
+            return None;
+        }
+        let spaced = |text: Option<char>| text.is_some_and(|c| !c.is_whitespace() && c != '(');
+        let before = source.get(..start)?.chars().next_back();
+        let after = source.get(end..)?.chars().next();
+        let mut replacement = String::new();
+        if spaced(before) {
+            replacement.push(' ');
+        }
+        replacement.push_str(word);
+        if after.is_some_and(|c| !c.is_whitespace()) {
+            replacement.push(' ');
+        }
+        Some(JsonRepair {
+            id: RepairId::WordOperator.as_str().to_string(),
+            summary: format!("Write `{}` as `{}`.", spelling, word),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start,
+                end,
+                replacement,
+            }],
+        })
+    }
+
+    /// `then` gives way to a colon pressed against the condition; an inline
+    /// `else` keeps its place and gains the colon after it.
+    fn project_if_colon(
+        path: &str,
+        source: &str,
+        keyword_start: usize,
+        keyword: IfColonKeyword,
+    ) -> Option<JsonRepair> {
+        let spelling = keyword.spelling();
+        let keyword_end = keyword_start.checked_add(spelling.len())?;
+        if source.get(keyword_start..keyword_end)? != spelling {
+            return None;
+        }
+        let (start, end, replacement) = match keyword {
+            IfColonKeyword::Then => {
+                let condition_end = source.get(..keyword_start)?.trim_end().len();
+                (condition_end, keyword_end, ":")
+            }
+            IfColonKeyword::Else => (keyword_end, keyword_end, ":"),
+        };
+        Some(JsonRepair {
+            id: RepairId::IfColon.as_str().to_string(),
+            summary: match keyword {
+                IfColonKeyword::Then => "Write `:` in place of `then`.".to_string(),
+                IfColonKeyword::Else => "Write `:` after the inline `else`.".to_string(),
+            },
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start,
+                end,
+                replacement: replacement.to_string(),
+            }],
+        })
+    }
+
+    fn project_interpolation_quotes(
+        path: &str,
+        source: &str,
+        start: usize,
+        end: usize,
+        quote: char,
+    ) -> Option<JsonRepair> {
+        let other = other_quote(quote)?;
+        let text = source.get(start..end)?;
+        if !text.contains(quote) || text.contains(other) || text.contains(['\\', '\n']) {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::InterpolationQuotes.as_str().to_string(),
+            summary: format!("Write the literals inside the braces with {}.", other),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start,
+                end,
+                replacement: text.replace(quote, &other.to_string()),
+            }],
+        })
+    }
+
     fn project_println_bang(path: &str, source: &str, bang_start: usize) -> Option<JsonRepair> {
         if source.get(bang_start..bang_start + 1)? != "!" {
             return None;
@@ -771,6 +951,15 @@ impl RepairRequest {
                 replacement: String::new(),
             }],
         })
+    }
+}
+
+/// The quote character that does not close a string opened with `quote`.
+pub fn other_quote(quote: char) -> Option<char> {
+    match quote {
+        '"' => Some('\''),
+        '\'' => Some('"'),
+        _ => None,
     }
 }
 

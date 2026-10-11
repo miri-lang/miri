@@ -6,6 +6,7 @@ pub mod attributes;
 pub mod captures;
 pub mod common;
 pub mod doc_comments;
+pub mod exit_status;
 pub mod expression;
 pub mod extent;
 pub mod factory;

@@ -73,6 +73,26 @@ const PROVOCATIONS: &[Provocation] = &[
         source: "fn main()\n    println!(\"hi\")\n",
     },
     Provocation {
+        repair: RepairId::WordOperator,
+        code: "MER_LEX_001",
+        source: "fn main()\n    let s = \"a\"\n    if !s.is_empty()\n        println(s)\n",
+    },
+    Provocation {
+        repair: RepairId::WordOperator,
+        code: "MER_PAR_020",
+        source: "fn main()\n    let a = true\n    if a && a\n        println(\"y\")\n",
+    },
+    Provocation {
+        repair: RepairId::IfColon,
+        code: "MER_PAR_001",
+        source: "fn main()\n    let d = true\n    if d then\n        println(\"y\")\n",
+    },
+    Provocation {
+        repair: RepairId::InterpolationQuotes,
+        code: "MER_LEX_012",
+        source: "fn main()\n    println(f\"{\"a\".compare(\"b\")}\")\n",
+    },
+    Provocation {
         repair: RepairId::DropIteratorAccessor,
         code: "MER_TYP_033",
         source: "use system.collections.map.{Map}\n\nfn main()\n    let tags = \

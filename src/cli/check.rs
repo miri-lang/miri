@@ -57,7 +57,7 @@ pub fn check_anchored(path: Option<&Path>, source: &str, verify_mir: bool) -> Ch
     let pipeline = anchor::pipeline_for(path).with_verify_mir(verify_mir);
 
     let start = std::time::Instant::now();
-    let outcome = pipeline.frontend(source);
+    let outcome = pipeline.frontend_program(source);
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let source_path = pipeline.source_path().map(str::to_string);
 

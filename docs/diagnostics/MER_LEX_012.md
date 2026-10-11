@@ -8,7 +8,8 @@ The commonest way to reach it is a string literal written inside the braces with
 the same quote character: that quote ends the f-string where it stands, leaving
 the interpolation unclosed. The braces are balanced, so counting them finds
 nothing — the inner quote is what to change. Write the nested literal with the
-other quote character, or bind the value to a name above the f-string.
+other quote character, or bind the value to a name above the f-string. `miri fix`
+swaps the quotes when the braces hold no other quote (`interpolation-quotes`).
 
 ## Messages
 
@@ -16,6 +17,7 @@ other quote character, or bind the value to a name above the f-string.
 
 ## Help
 
+- `` A quote inside the braces closes the f-string at that quote, so write the nested string literal with the other quote character: `f"{name.replace('o', '0')}"`. ``
 - `The '{' that opened this interpolation is never closed by a '}'. A quote inside the braces closes the f-string at that quote, so write a nested string literal with the other quote character.`
 
 ## Before

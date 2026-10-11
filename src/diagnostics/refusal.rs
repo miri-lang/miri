@@ -51,7 +51,10 @@ pub fn repair_fix_safety(repair: &RepairRequest) -> FixSafety {
         | RepairRequest::ConcatToFormattedString { .. }
         | RepairRequest::QualifyVariantPattern { .. }
         | RepairRequest::RenameToSuggestion { .. }
-        | RepairRequest::UnderscoreUnreadBinding { .. } => FixSafety::LocalEdit,
+        | RepairRequest::UnderscoreUnreadBinding { .. }
+        | RepairRequest::WordOperator { .. }
+        | RepairRequest::IfColon { .. }
+        | RepairRequest::InterpolationQuotes { .. } => FixSafety::LocalEdit,
     }
 }
 

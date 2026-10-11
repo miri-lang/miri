@@ -434,7 +434,8 @@ fn wrap_script_in_main(program: &mut Program) {
     }
 
     body_stmts.push(return_zero);
-    let body = crate::ast::factory::block(body_stmts);
+    let mut body = crate::ast::factory::block(body_stmts);
+    crate::ast::exit_status::bare_returns_exit_zero(&mut body);
     let main_fn = func("main").return_type(int_ret).build(body);
     top_level.push(main_fn);
     program.body = top_level;
@@ -443,12 +444,14 @@ fn wrap_script_in_main(program: &mut Program) {
 /// Ensures that a user-defined `main()` function returns `Int` with an
 /// implicit `return 0` at the end, so the process exits cleanly.
 ///
-/// TODO: a bare `return` written inside `main` is not rewritten here, so it is
-/// checked against the `Int` signature this installs and reported as a type
-/// mismatch — while `miri check` runs the frontend without this patch and
-/// accepts the same file. A program is therefore clean to `check` and rejected
-/// by `build` and `run`. Either the bare returns of `main` are rewritten to
-/// `return 0` alongside the appended one, or both paths patch alike.
+/// A bare `return` the author wrote in that body is given the same `0`, since
+/// it would otherwise be checked against the `Int` installed here.
+/// Give the program the entry point it is compiled with.
+fn install_entry_point(program: &mut Program) {
+    wrap_script_in_main(program);
+    patch_main_return(program);
+}
+
 fn patch_main_return(program: &mut Program) {
     use crate::ast::factory::stmt_with_span;
 
@@ -463,6 +466,7 @@ fn patch_main_return(program: &mut Program) {
 
                 // Append `return 0` to the body
                 if let Some(body_stmt) = &mut decl.body {
+                    crate::ast::exit_status::bare_returns_exit_zero(body_stmt);
                     match &mut body_stmt.node {
                         StatementKind::Block(stmts) => {
                             stmts.push(return_zero);
@@ -1362,13 +1366,41 @@ impl Pipeline {
     }
 
     /// Run the frontend (lexer, parser, type checker) on source code.
+    ///
+    /// The program is checked as written: a script is not wrapped in `main`
+    /// and `main` is not given an exit status. A command deciding whether a
+    /// file compiles uses [`Self::frontend_program`] instead.
     pub fn frontend(&self, source: &str) -> Result<PipelineResult, CompilerError> {
+        let ast = self.parse(source)?;
+        self.check_parsed(ast)
+    }
+
+    /// Run the frontend with `main` given the exit status `build` and `run`
+    /// compile it with.
+    ///
+    /// `check` and `fix` judge a file through here, so neither reads a `main`
+    /// differently from `build`.
+    ///
+    /// TODO: a script is checked unwrapped, while `build` wraps it in `main`
+    /// first. The use-after-move rule that consumes a managed value passed at
+    /// the top level reads only unwrapped code, so `check` refuses a script
+    /// that `build` compiles. Wrapping here would make the two agree by
+    /// dropping that rule; the fix is for the rule to see the wrapped body.
+    pub fn frontend_program(&self, source: &str) -> Result<PipelineResult, CompilerError> {
+        let mut ast = self.parse(source)?;
+        patch_main_return(&mut ast);
+        self.check_parsed(ast)
+    }
+
+    fn parse(&self, source: &str) -> Result<Program, CompilerError> {
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
         let mut ast = parser.parse_all().map_err(CompilerError::Parser)?;
-
         crate::ast::normalize::normalize(&mut ast);
+        Ok(ast)
+    }
 
+    fn check_parsed(&self, mut ast: Program) -> Result<PipelineResult, CompilerError> {
         let mut type_checker = self.make_type_checker();
         type_checker
             .check(&mut ast)
@@ -1390,26 +1422,14 @@ impl Pipeline {
     /// Run the frontend with script-mode wrapping: simple programs without function
     /// declarations are wrapped in a synthetic `main`.
     pub fn frontend_script(&self, source: &str) -> Result<PipelineResult, CompilerError> {
-        let mut lexer = Lexer::new(source);
-        let mut parser = Parser::new(&mut lexer, source);
-        let mut ast = parser.parse_all().map_err(CompilerError::Parser)?;
-
-        crate::ast::normalize::normalize(&mut ast);
+        let mut ast = self.parse(source)?;
 
         let nothing_to_run = !has_executable_entry_point(&ast);
         let declares_tests = declares_a_test(&ast);
 
-        wrap_script_in_main(&mut ast);
-        patch_main_return(&mut ast);
-
-        let mut type_checker = self.make_type_checker();
-        type_checker
-            .check(&mut ast)
-            .map_err(|errors| CompilerError::TypeErrors {
-                errors,
-                warnings: type_checker.warnings().to_vec(),
-            })?;
-        complete_generic_instantiation_registry(&mut type_checker, &ast)?;
+        install_entry_point(&mut ast);
+        let mut result = self.check_parsed(ast)?;
+        let type_checker = &mut result.type_checker;
 
         // Reported after checking, so a file that also has real errors reports
         // those instead: a module whose imports collide should say so, not that
@@ -1443,13 +1463,7 @@ impl Pipeline {
             );
         }
 
-        Ok(PipelineResult {
-            ast,
-            type_checker,
-            vtable_fills: Default::default(),
-            withheld_methods: Default::default(),
-            device_helpers: Default::default(),
-        })
+        Ok(result)
     }
 
     /// Compile and execute the source, capturing and returning output.

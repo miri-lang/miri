@@ -135,7 +135,7 @@ pub fn diagnose(path: &Path, source: &str) -> (Vec<JsonDiagnostic>, bool) {
     }
     pipeline = pipeline.with_source_path(absolute.display().to_string());
 
-    match pipeline.frontend(source) {
+    match pipeline.frontend_program(source) {
         Ok(result) => {
             let warnings = result
                 .type_checker
