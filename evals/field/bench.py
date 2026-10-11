@@ -195,8 +195,6 @@ def launch_command(model, workspace, prompt):
             "--add-dir",
             str(workspace),
         ]
-    if model["harness"] == "gemini":
-        return ["gemini", "-p", prompt, "-m", model["id"], "--yolo", "-o", "stream-json"]
     raise SystemExit(f"unknown harness {model['harness']}")
 
 
@@ -224,9 +222,9 @@ def run_agent(model, workspace, time_cap, prompt):
 def parse_transcript(transcript):
     """Read tokens, turns and tool use out of a harness's own stream.
 
-    Both harnesses stream one JSON object per line. What the two agree on is
-    read here; what they do not is left absent rather than guessed, because a
-    metric invented for one column would not be comparable to the other.
+    The harness streams one JSON object per line. What it reports is read
+    here; what it does not is left absent rather than guessed, because an
+    invented metric would not be comparable across rounds.
     """
     usage = {"in": 0, "out": 0, "observed": False}
     turns, tools, toolchain_calls = 0, 0, 0
