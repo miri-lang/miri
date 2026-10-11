@@ -657,6 +657,11 @@ fn lower_match_branch_bodies(
         let fallthrough = arm_fallthrough_target(arm_idx, branch_blocks, this_discrs, join_bb);
         bind_arm_patterns(ctx, branch, subject_local, subject_span, fallthrough)?;
 
+        // TODO: matching `None` against a guarded `Some(c) if c == 1` arm followed
+        // by `_` segfaults, for `int?` as well as `String?`; the same match with
+        // `None` spelled out, or on a `Some` value, runs. Either the binding above
+        // reads the absent payload before the tag is tested or the guard's
+        // fallthrough into `_` does; the root cause is not yet traced.
         if let Some(guard) = &branch.guard {
             emit_guard_and_branch(ctx, guard, arm_idx, branch_blocks, this_discrs, join_bb)?;
         }

@@ -2383,6 +2383,10 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let result = match op {
             BinOp::Add if is_float => builder.ins().fadd(lhs, rhs),
+            // TODO: integer `+ - *` wrap silently at the result width (`i64::MAX + 1`
+            // prints i64::MIN), and SPEC.md states no overflow rule at all. Trap
+            // or wrap, on CPU and GPU alike, is an open language decision; until it
+            // is made a program that overflows a total answers wrongly in silence.
             BinOp::Add => builder.ins().iadd(lhs, rhs),
             BinOp::Sub if is_float => builder.ins().fsub(lhs, rhs),
             BinOp::Sub => builder.ins().isub(lhs, rhs),

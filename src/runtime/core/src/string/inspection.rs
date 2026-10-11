@@ -187,6 +187,10 @@ pub unsafe extern "C" fn miri_rt_string_code_at(ptr: *const MiriString, index: i
         return -1;
     }
     let s = (*ptr).as_str();
+    // TODO: `chars().nth` walks from the start on every call, so `code_at(i)` is
+    // O(i) and a loop over `0..length()` is quadratic: counting over a 1 MB
+    // input takes tens of seconds. Positional character access needs a cursor or
+    // an ASCII fast path rather than a rescan.
     match s.chars().nth(index as usize) {
         Some(ch) => ch as isize,
         None => -1,
