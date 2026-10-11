@@ -304,22 +304,26 @@ def parse_transcript(transcript):
     The harness streams one JSON object per line. What it reports is read
     here; what it does not is left absent rather than guessed, because an
     invented metric would not be comparable across rounds.
+
+    A turn is one model response. The `claude` stream splits a response into
+    one event per content block, each repeating the message's id, so turns
+    are counted by distinct id rather than by event.
     """
-    usage = {"in": 0, "out": 0, "observed": False}
-    turns, tools, toolchain_calls = 0, 0, 0
+    usage = unobserved_usage()
+    responses, tools, toolchain_calls = set(), 0, 0
     for line in transcript.splitlines():
         event = decode_event(line)
         if event is None:
             continue
-        turns += 1 if event.get("type") == "assistant" else 0
-        counted = count_usage(event)
-        usage["observed"] = usage["observed"] or counted != (0, 0)
-        usage["in"] += counted[0]
-        usage["out"] += counted[1]
+        if event.get("type") == "assistant":
+            message = event.get("message", {})
+            responses.add(message.get("id") or f"event-{len(responses)}")
+        if event.get("type") == "result":
+            usage = settled_usage(event)
         for command in tool_commands(event):
             tools += 1
             toolchain_calls += 1 if command.split(" ")[0] in TOOLCHAINS else 0
-    return usage, turns, tools, toolchain_calls
+    return usage, len(responses), tools, toolchain_calls
 
 
 def decode_event(line):
@@ -329,15 +333,36 @@ def decode_event(line):
         return None
 
 
-def count_usage(event):
-    """The tokens one streamed event reports.
+def unobserved_usage():
+    """The cost of a run whose harness never settled its usage.
 
-    A harness that reports none leaves `observed` false rather than a zero. A
-    cost of zero and a cost nobody measured are not the same number, and the
+    A cost of zero and a cost nobody measured are not the same number, and the
     folder must not treat a silent harness as a free one.
     """
-    usage = event.get("message", {}).get("usage") or event.get("usage") or {}
-    return int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
+    return {"in": 0, "out": 0, "cacheRead": 0, "cacheCreation": 0, "observed": False}
+
+
+def settled_usage(event):
+    """The tokens the harness's closing `result` event reports for the run.
+
+    Only that event is read. The usage on each streamed message is a snapshot
+    taken when the message started, repeated on every content block, so
+    summing it counts neither the output nor the input. `in` is every input
+    token the model processed, cached or not; the cached parts are also kept
+    apart, since they are billed differently.
+    """
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return unobserved_usage()
+    cache_read = int(usage.get("cache_read_input_tokens", 0))
+    cache_creation = int(usage.get("cache_creation_input_tokens", 0))
+    return {
+        "in": int(usage.get("input_tokens", 0)) + cache_read + cache_creation,
+        "out": int(usage.get("output_tokens", 0)),
+        "cacheRead": cache_read,
+        "cacheCreation": cache_creation,
+        "observed": True,
+    }
 
 
 def tool_commands(event):
