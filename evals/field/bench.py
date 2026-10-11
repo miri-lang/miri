@@ -182,7 +182,7 @@ def launch_command(model, workspace, prompt):
     """The one non-interactive invocation a run is allowed."""
     if model["harness"] == "claude":
         return [
-            "claude",
+            model["command"],
             "-p",
             prompt,
             "--output-format",
@@ -319,7 +319,7 @@ def compiler_stamp():
 
 
 def harness_version(model):
-    finished = subprocess.run([model["harness"], "--version"], capture_output=True, text=True)
+    finished = subprocess.run([model["command"], "--version"], capture_output=True, text=True)
     return finished.stdout.strip()
 
 
@@ -333,7 +333,11 @@ def record_for(arguments, arm, model, job, outcome):
         "run": outcome["run"],
         "model": model["key"],
         "modelId": model["id"],
-        "harness": {"name": model["harness"], "version": harness_version(model)},
+        "harness": {
+            "name": model["harness"],
+            "command": model["command"],
+            "version": harness_version(model),
+        },
         "compilerCommit": commit,
         "compilerVersion": version,
         "packInstalled": arm["install_pack"],
@@ -374,7 +378,11 @@ def probe_record(arguments, arm, model, outcome):
         "run": outcome["run"],
         "model": model["key"],
         "modelId": model["id"],
-        "harness": {"name": model["harness"], "version": harness_version(model)},
+        "harness": {
+            "name": model["harness"],
+            "command": model["command"],
+            "version": harness_version(model),
+        },
         "compilerCommit": commit,
         "compilerVersion": version,
         "packInstalled": arm["install_pack"],
@@ -495,6 +503,11 @@ def parse_arguments(argv):
     parser.add_argument("--arm", required=True)
     parser.add_argument("--model")
     parser.add_argument("--model-id", help="pin a model whose id models.toml leaves open")
+    parser.add_argument(
+        "--harness-command",
+        help="the executable that runs the harness, when it is not the harness's own name "
+        "(a wrapper that selects an account, say); every record names the one that ran",
+    )
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--round", default="r1")
     parser.add_argument("--scratch", default=str(Path.home() / ".cache" / "miri-field"))
@@ -515,6 +528,7 @@ def parse_arguments(argv):
 
 def resolved_model(arguments):
     model = dict(model_named(arguments.model))
+    model["command"] = arguments.harness_command or model["harness"]
     if arguments.model_id:
         model["id"] = arguments.model_id
     if not model["id"]:
