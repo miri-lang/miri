@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::*;
+use crate::utils::miri_run;
 
 #[test]
 fn test_code_at_ascii() {
@@ -235,4 +236,57 @@ fn main()
 "#,
         "2:48 2:49 2:50 2:51 2:52 ",
     );
+}
+
+/// One text per UTF-8 width, from one byte a character to four.
+const WIDTHS: [(&str, &str); 4] = [
+    ("ascii", "abcd"),
+    ("two_byte", "éàüö"),
+    ("three_byte", "日本語文"),
+    ("four_byte", "😀🦀🎉🚀"),
+];
+
+#[test]
+fn test_every_index_counts_characters_at_every_utf8_width() {
+    // `length()` is the one count an agent reaches for, so every method that
+    // takes or returns a position must count the same thing it does, at every
+    // character width. A unit mismatch works on ASCII and fails silently on
+    // everything else, which is the failure this pins.
+    for (width, text) in WIDTHS {
+        let chars: Vec<char> = text.chars().collect();
+        let code = format!(
+            r#"
+use system.text
+
+fn main()
+    let t = "{text}"
+    println(t.substring(1, t.length()))
+    println(t.element_at(1))
+    match t.code_at(1)
+        Some(c): println(f"{{c}}")
+        None: println("none")
+    match Regex.compile("{second}")
+        Result.Ok(re)
+            match re.find(t)
+                Some(m): println(f"{{m.start()}} {{m.end()}} {{t.substring(m.start(), m.end())}}")
+                None: println("no match")
+        Result.Err(_): println("bad pattern")
+"#,
+            text = text,
+            second = chars[1],
+        );
+        let tail: String = chars[1..].iter().collect();
+        let expected = format!(
+            "{}\n{}\n{}\n1 2 {}",
+            tail, chars[1], chars[1] as u32, chars[1]
+        );
+        let result = miri_run(&code);
+        assert_eq!(
+            result.stdout.trim_end(),
+            expected,
+            "{} text disagrees on character positions:\n{}",
+            width,
+            result.output()
+        );
+    }
 }

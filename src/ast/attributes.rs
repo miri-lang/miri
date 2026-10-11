@@ -26,6 +26,11 @@ pub const XFAIL_ATTRIBUTE: &str = "xfail";
 /// bounds checking. The argument is the parameter name (e.g., `@index_bounds_check("index")`).
 pub const INDEX_BOUNDS_CHECK_ATTRIBUTE: &str = "index_bounds_check";
 
+/// Marks two method parameters as the `[start, end)` range into the receiver,
+/// enabling compile-time range checking when the receiver's size is known. The
+/// argument names both parameters (e.g., `@index_range_check("start, end")`).
+pub const INDEX_RANGE_CHECK_ATTRIBUTE: &str = "index_range_check";
+
 /// Represents a declaration that can carry attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeTarget {

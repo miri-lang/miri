@@ -92,13 +92,17 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     public fn replace(old String, to String) String
         return miri_rt_string_replace(self, old, to)
 
-    // TODO: `length()` counts characters but these indices are bytes, so the
-    // natural `s.substring(1, s.length())` silently returns "" on non-ASCII text.
-    // The units must agree, or an index off a boundary must fail loudly.
-    /// Returns a substring from byte index `start` to `end` (exclusive).
+    /// Returns the characters from index `start` to `end` (exclusive), counted
+    /// the way `length()`, `element_at()` and `code_at()` count them, so
+    /// `s.substring(1, s.length())` drops the first character of any text.
     ///
-    /// Returns an empty string if indices are out of bounds or not at
-    /// valid UTF-8 character boundaries.
+    /// An index outside `0 <= start <= end <= length()` stops the program with
+    /// an index-out-of-bounds error; when the text and both indices are
+    /// constants, the compiler reports it instead.
+    ///
+    /// Example:
+    ///     "héllo".substring(1, 4) → "éll"
+    @index_range_check("start, end")
     public fn substring(start int, end int) String
         return miri_rt_string_substring(self, start, end)
 

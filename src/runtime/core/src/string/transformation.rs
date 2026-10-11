@@ -146,13 +146,13 @@ pub unsafe extern "C" fn miri_rt_string_replace(
     into_raw_ptr(MiriString::from_str(&replaced))
 }
 
-/// Returns a substring given byte indices `[start, end)`.
+/// Returns the characters `[start, end)` of a string, counted the way
+/// `length()` counts them.
 ///
-/// Returns an empty string if:
-/// - `s` is null
-/// - `start > end`
-/// - `end` exceeds the string length
-/// - `start` or `end` falls on a non-UTF-8-char boundary
+/// An index outside `0 <= start <= end <= length` traps with the
+/// index-out-of-bounds code: a range that runs off the string is a fault in
+/// the program, and an empty string in its place would let it carry on with a
+/// wrong value.
 ///
 /// # Safety
 /// - `s` must be a valid `MiriString` pointer with valid UTF-8, or null.
@@ -160,23 +160,33 @@ pub unsafe extern "C" fn miri_rt_string_replace(
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_substring(
     s: *const MiriString,
-    start: usize,
-    end: usize,
+    start: isize,
+    end: isize,
 ) -> *mut MiriString {
     guard::guard_check(s as *mut u8);
     if s.is_null() {
         return miri_rt_string_new();
     }
-    let str_val = (*s).as_str();
-
-    if start > end || end > str_val.len() {
-        return miri_rt_string_new();
-    }
-    if !str_val.is_char_boundary(start) || !str_val.is_char_boundary(end) {
-        return miri_rt_string_new();
-    }
-
-    into_raw_ptr(MiriString::from_str(&str_val[start..end]))
+    let string = &*s;
+    let length = super::char_index::char_count(string);
+    let in_range = 0 <= start && start <= end && end as usize <= length;
+    let bounds = in_range
+        .then(|| {
+            let from = super::char_index::char_boundary(string, start as usize)?;
+            let to = super::char_index::char_boundary(string, end as usize)?;
+            Some((from, to))
+        })
+        .flatten();
+    let Some((from, to)) = bounds else {
+        crate::trap::trap(
+            crate::trap::code::INDEX_OUT_OF_BOUNDS,
+            &format!(
+                "substring range out of bounds: [{}, {}) but the string has {} characters",
+                start, end, length
+            ),
+        )
+    };
+    into_raw_ptr(MiriString::from_str(&string.as_str()[from..to]))
 }
 
 /// Returns the character at the given Unicode scalar index as a single-character string.

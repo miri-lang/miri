@@ -14,7 +14,7 @@
 //! - [`transformation`] — FFI functions that produce new strings (concat, trim, replace, etc.).
 //! - [`conversion`] — FFI functions for converting primitive types to strings.
 
-mod char_index;
+pub(crate) mod char_index;
 mod constructors;
 mod conversion;
 mod core;

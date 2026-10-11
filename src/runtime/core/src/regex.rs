@@ -216,9 +216,9 @@ pub unsafe extern "C" fn miri_rt_regex_matches(handle: i64, text: *const MiriStr
 /// Finds the first match of the regex in the input string.
 ///
 /// Returns true if a match is found; false otherwise.
-/// If a match is found, the start and end byte offsets are stored in thread-locals
-/// and can be retrieved via `miri_rt_regex_match_start()` and `miri_rt_regex_match_end()`.
-/// On invalid handle, returns false.
+/// If a match is found, its start and end character positions are stored in
+/// thread-locals and can be retrieved via `miri_rt_regex_match_start()` and
+/// `miri_rt_regex_match_end()`. On invalid handle, returns false.
 ///
 /// # Safety
 /// - `handle` must be a valid index into the regex slab or -1.
@@ -240,24 +240,41 @@ pub unsafe extern "C" fn miri_rt_regex_find(handle: i64, text: *const MiriString
     });
 
     if let Some((start, end)) = match_info {
-        set_match_result(start, end);
+        set_match_in_characters(text, start, end);
         true
     } else {
         false
     }
 }
 
-/// Finds the first match of the regex starting from a given byte offset.
+/// Records a match found at byte offsets `[start, end)` of `text` as the
+/// character positions `String.substring` and `length()` count in.
+///
+/// # Safety
+/// `text` is a valid `MiriString` pointer or null, and both offsets are
+/// character boundaries in it.
+unsafe fn set_match_in_characters(text: *const MiriString, start: i64, end: i64) {
+    if text.is_null() {
+        set_match_result(start, end);
+        return;
+    }
+    let string = &*text;
+    let start_char = crate::string::char_index::char_index_of_byte(string, start as usize);
+    let end_char = crate::string::char_index::char_index_of_byte(string, end as usize);
+    set_match_result(start_char as i64, end_char as i64);
+}
+
+/// Finds the first match of the regex starting from a given character position.
 ///
 /// Returns true if a match is found; false otherwise.
-/// If a match is found, the start and end byte offsets are stored in thread-locals
-/// and can be retrieved via `miri_rt_regex_match_start()` and `miri_rt_regex_match_end()`.
-/// On invalid handle or if `from` >= text length, returns false.
+/// If a match is found, its start and end character positions are stored in
+/// thread-locals and can be retrieved via `miri_rt_regex_match_start()` and
+/// `miri_rt_regex_match_end()`. On invalid handle or if `from` is past the
+/// text's last character, returns false.
 ///
 /// # Safety
 /// - `handle` must be a valid index into the regex slab or -1.
 /// - `text` must be a valid `MiriString` pointer or null.
-/// - `from` must be a valid byte offset at a UTF-8 boundary.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_find_from(
     handle: i64,
@@ -267,19 +284,17 @@ pub unsafe extern "C" fn miri_rt_regex_find_from(
     guard::guard_check(text as *mut u8);
     let text_str = if text.is_null() { "" } else { (*text).as_str() };
 
-    if from < 0 || from as usize > text_str.len() {
+    if from < 0 {
         return false;
     }
-
-    let start_idx = from as usize;
-
-    // Check if start_idx is at a UTF-8 character boundary
-    if start_idx > 0 && start_idx < text_str.len() {
-        let bytes = text_str.as_bytes();
-        if (bytes[start_idx] & 0xC0) == 0x80 {
-            return false;
+    let start_idx = if text.is_null() {
+        0
+    } else {
+        match crate::string::char_index::char_boundary(&*text, from as usize) {
+            Some(offset) => offset,
+            None => return false,
         }
-    }
+    };
 
     let match_info = REGEX_STATE.with(|state| {
         let s = state.borrow();
@@ -294,20 +309,20 @@ pub unsafe extern "C" fn miri_rt_regex_find_from(
     });
 
     if let Some((start, end)) = match_info {
-        set_match_result(start, end);
+        set_match_in_characters(text, start, end);
         true
     } else {
         false
     }
 }
 
-/// Returns the start byte offset of the last match found by `miri_rt_regex_find()`.
+/// Returns the start character position of the last match found by `miri_rt_regex_find()`.
 #[no_mangle]
 pub extern "C" fn miri_rt_regex_match_start() -> i64 {
     REGEX_STATE.with(|state| state.borrow().match_result.0)
 }
 
-/// Returns the end byte offset of the last match found by `miri_rt_regex_find()`.
+/// Returns the end character position of the last match found by `miri_rt_regex_find()`.
 #[no_mangle]
 pub extern "C" fn miri_rt_regex_match_end() -> i64 {
     REGEX_STATE.with(|state| state.borrow().match_result.1)

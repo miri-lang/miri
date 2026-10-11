@@ -158,6 +158,47 @@ pub(crate) unsafe fn char_byte_offset(string: &MiriString, index: usize) -> Opti
     })
 }
 
+/// The byte offset of the boundary before character `index`: where that
+/// character starts, or the string's end when `index` equals its character
+/// count. `None` past that.
+///
+/// # Safety
+/// `string` holds valid UTF-8.
+pub(crate) unsafe fn char_boundary(string: &MiriString, index: usize) -> Option<usize> {
+    if index == char_count(string) {
+        return Some(string.len);
+    }
+    char_byte_offset(string, index)
+}
+
+/// How many characters of `string` lie before byte offset `byte`, which must
+/// be a character boundary. A run of lookups at increasing offsets, the way
+/// the matches of one search arrive, steps over each character once in total.
+///
+/// # Safety
+/// `string` holds valid UTF-8 and `byte` is a character boundary in it.
+pub(crate) unsafe fn char_index_of_byte(string: &MiriString, byte: usize) -> usize {
+    let text = string.as_str();
+    with_entry(string, |entry| {
+        if entry.is_ascii() {
+            return byte;
+        }
+        let (from_index, from_offset) = if entry.byte_offset <= byte {
+            (entry.char_index, entry.byte_offset)
+        } else {
+            (0, 0)
+        };
+        let between = text.get(from_offset..byte).unwrap_or("");
+        count_probes(between.len());
+        let index = from_index + between.chars().count();
+        if byte < text.len() {
+            entry.char_index = index;
+            entry.byte_offset = byte;
+        }
+        index
+    })
+}
+
 /// The character at `index` of `string`, or `None` past its end.
 ///
 /// # Safety
@@ -294,5 +335,34 @@ mod tests {
         assert_eq!(unsafe { char_count(&slot) }, 6);
         assert_eq!(unsafe { char_at(&slot, 2) }, Some('w'));
         unsafe { std::mem::ManuallyDrop::drop(&mut slot) };
+    }
+
+    #[test]
+    fn byte_offsets_become_character_positions_in_one_pass() {
+        let text = MiriString::from_str("a😀b😀");
+        let offsets = [0, 1, 5, 6, 10];
+        let positions: Vec<usize> = offsets
+            .iter()
+            .map(|&byte| unsafe { char_index_of_byte(&text, byte) })
+            .collect();
+        assert_eq!(positions, [0, 1, 2, 3, 4]);
+        take_probes();
+        let long = megabyte_of("é");
+        for byte in (0..long.len).step_by(2) {
+            unsafe { char_index_of_byte(&long, byte) };
+        }
+        assert!(
+            take_probes() <= long.len + 2,
+            "increasing offsets rescanned the string"
+        );
+    }
+
+    #[test]
+    fn the_boundary_after_the_last_character_is_the_end() {
+        let text = MiriString::from_str("héllo");
+        assert_eq!(unsafe { char_boundary(&text, 5) }, Some(6));
+        assert_eq!(unsafe { char_boundary(&text, 1) }, Some(1));
+        assert_eq!(unsafe { char_boundary(&text, 2) }, Some(3));
+        assert_eq!(unsafe { char_boundary(&text, 6) }, None);
     }
 }

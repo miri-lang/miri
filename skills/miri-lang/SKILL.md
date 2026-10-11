@@ -96,8 +96,9 @@ fn main()
 
 - **Quotes inside f-string braces** must be the other quote character:
   `f"{m['a']}"`. The same quote ends the string (MER_LEX_012).
-- **`length()` counts characters; `substring(start, end)` takes byte offsets.**
-  On non-ASCII text they disagree silently; check with a test that uses one.
+- **Positions count characters**, in `length()`, `substring`, `element_at`,
+  `code_at` and regex matches alike; only `size()` counts bytes. A `substring`
+  range outside the text stops the program (or fails to compile, if constant).
 - **Integer overflow wraps silently** at the declared width (`int` is 64-bit).
   Guard a sum that can exceed it before you add.
 - **Walk with `for`, not by position.** `for ch in s` and `for k in m` are one

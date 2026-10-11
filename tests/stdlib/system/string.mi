@@ -50,7 +50,9 @@ fn test_substring()
     assert_eq(banner.substring(0, 5), "Hello")
     assert_eq(banner.substring(7, 12), "World")
     assert_eq(banner.substring(0, 0), "", "empty range is empty")
-    assert_eq(banner.substring(100, 200), "", "out-of-bounds yields empty")
+    assert_eq(banner.substring(13, 13), "", "an empty range at the end is empty")
+    let accented = "héllo"
+    assert_eq(accented.substring(1, accented.length()), "éllo", "indices count characters, not bytes")
 
 fn test_search_predicates()
     let banner = "Hello, World!"

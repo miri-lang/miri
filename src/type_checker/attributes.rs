@@ -9,8 +9,8 @@
 
 use crate::ast::{
     Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, IGNORE_ATTRIBUTE,
-    INDEX_BOUNDS_CHECK_ATTRIBUTE, MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, TEST_ATTRIBUTE,
-    XFAIL_ATTRIBUTE,
+    INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, MUST_USE_ATTRIBUTE,
+    NON_EXHAUSTIVE_ATTRIBUTE, TEST_ATTRIBUTE, XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -107,6 +107,12 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
     },
     AttributeSpec {
         name: INDEX_BOUNDS_CHECK_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: true,
+        requires: &[],
+    },
+    AttributeSpec {
+        name: INDEX_RANGE_CHECK_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
         takes_argument: true,
         requires: &[],
