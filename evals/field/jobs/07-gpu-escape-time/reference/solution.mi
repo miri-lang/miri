@@ -52,11 +52,7 @@ fn main() int
         var zx = 0.0 as f32
         var zy = 0.0 as f32
         var steps = 0
-        // One condition per test: a two-operand `while` condition loses the
-        // statements after the loop on the GPU when its first operand ends it.
-        while steps < limit
-            if zx * zx + zy * zy > 4.0
-                break
+        while steps < limit and zx * zx + zy * zy <= 4.0
             let next_x = zx * zx - zy * zy + cx
             zy = 2.0 * zx * zy + cy
             zx = next_x
