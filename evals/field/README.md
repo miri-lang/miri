@@ -140,6 +140,11 @@ python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
 python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
     --score-only "$TMPDIR/miri-field/r1/02-ledger-repair/rust/claude-sonnet/1"
 
+# Score a recorded run again after a defect in the scorer, rewriting its
+# record; the score it replaces is kept under `rescored.previous`.
+python3 evals/field/bench.py --job 05-gpu-heat --arm python \
+    --rescore evals/field/runs/r1/05-gpu-heat/python/claude-sonnet/1.json
+
 # Fold the round and judge the claims.
 python3 evals/field/report.py --round r1
 

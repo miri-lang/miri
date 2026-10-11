@@ -1369,6 +1369,72 @@ fn test_a_failed_hidden_case_keeps_its_exit_status_and_stderr() {
 
 #[test]
 #[cfg(unix)]
+fn test_a_rescored_record_keeps_the_score_it_replaced() {
+    if !available("python3") || !available("uv") {
+        println!("skipping: python3 or uv is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-rescore");
+    let _ = fs::remove_dir_all(&root);
+    install_scripted_harness(&root.join("bin"), &[CLEAN_INIT]);
+    let ran = run_bench(&root, &[]);
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert!(
+        measured_record(&root).contains("\"silentWrongAnswer\": true"),
+        "a workspace with no program was not scored as a wrong answer"
+    );
+    let workspace = root
+        .join("scratch")
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("python")
+        .join("claude-sonnet")
+        .join("1");
+    fs::copy(
+        field_dir()
+            .join("jobs")
+            .join(PROBE_JOB)
+            .join("reference")
+            .join("solution.py"),
+        workspace.join("main.py"),
+    )
+    .expect("cannot place the reference program");
+    let record_path = root
+        .join("runs")
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("python")
+        .join("claude-sonnet")
+        .join("1.json");
+    let rescored = Command::new("python3")
+        .arg(field_dir().join("bench.py"))
+        .args(["--job", PROBE_JOB, "--arm", "python", "--rescore"])
+        .arg(&record_path)
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        rescored.status.success(),
+        "the rescore failed:\n{}",
+        String::from_utf8_lossy(&rescored.stderr)
+    );
+    let record = read(&record_path);
+    assert!(
+        record.contains("\"silentWrongAnswer\": false")
+            && record.contains("\"rescored\"")
+            && record.contains("\"previous\"")
+            && record.contains("\"silentWrongAnswer\": true"),
+        "the rescore did not replace the score and keep the old one:\n{}",
+        record
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+#[cfg(unix)]
 fn test_a_stream_that_never_settled_leaves_its_tokens_unobserved() {
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the run was not launched");
