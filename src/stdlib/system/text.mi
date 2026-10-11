@@ -29,11 +29,11 @@ public enum RegexError
     SizeExceeded(String)
     Other(String)
 
-/// A match result carrying the byte range and matched text.
+/// A match result carrying the character range and matched text.
 ///
 /// Match is a value object with private fields accessed via public methods.
-/// The start and end offsets are byte positions in the subject string,
-/// corresponding to the byte indices used by `String.substring()`.
+/// The start and end are character positions in the subject string, the
+/// indices `String.substring()` and `String.length()` count in.
 ///
 /// Example:
 ///     use system.text
@@ -56,11 +56,11 @@ public class Match
         self.end_pos = end
         self.matched_text = text
 
-    /// Returns the start byte offset of the match (inclusive).
+    /// Returns the character position where the match starts (inclusive).
     public fn start() int
         return self.start_pos
 
-    /// Returns the end byte offset of the match (exclusive).
+    /// Returns the character position where the match ends (exclusive).
     public fn end() int
         return self.end_pos
 
@@ -111,7 +111,6 @@ public class Regex
     runtime "core" fn miri_rt_regex_match_start() int
     runtime "core" fn miri_rt_regex_match_end() int
     runtime "core" fn miri_rt_regex_replace(handle int, text String, replacement String) String
-    runtime "core" fn miri_rt_string_next_char_boundary(s String, byte_pos int) int
 
     /// Compiles a regex pattern into a reusable Regex object.
     ///
@@ -187,8 +186,8 @@ public class Regex
     /// Returns a list of all non-overlapping matches of the pattern in the input string.
     ///
     /// If the pattern matches zero-width strings (e.g., `a*` against `"bbb"`),
-    /// the loop advances past each empty match to ensure termination and to
-    /// respect UTF-8 boundaries. An input with no matches returns an empty list.
+    /// the loop advances one character past each empty match to ensure
+    /// termination. An input with no matches returns an empty list.
     ///
     /// Example:
     ///     use system.text
@@ -202,7 +201,7 @@ public class Regex
     ///         Result.Err(e): println("error")
     public fn find_all(text String) [Match]
         let result = List<Match>()
-        let size = text.size()
+        let size = text.length()
         var pos = 0
         while pos <= size
             if miri_rt_regex_find_from(self.handle, text, pos)
@@ -215,7 +214,7 @@ public class Regex
                 else if start >= size
                     pos = size + 1
                 else
-                    pos = miri_rt_string_next_char_boundary(text, start)
+                    pos = start + 1
             else
                 pos = size + 1
         return result

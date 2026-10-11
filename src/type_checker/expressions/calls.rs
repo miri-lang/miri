@@ -202,17 +202,19 @@ impl TypeChecker {
         result_type
     }
 
-    /// Position of the parameter a method marks as an index into its receiver,
-    /// or None when the method carries no such marker.
+    /// The positions of the parameters a method's `attribute` names, in the
+    /// order its argument lists them (`@index_range_check("start, end")`), or
+    /// None when the method carries no such marker.
     ///
     /// Borrows the type definition rather than cloning it: the definition owns
     /// the class's whole method table, and this is consulted per method call.
-    fn index_param_position(
+    fn attribute_param_positions(
         &self,
         type_name: &str,
         method_name: &str,
+        attribute: &str,
         context: &Context,
-    ) -> Option<usize> {
+    ) -> Option<Vec<usize>> {
         let definition = self.resolve_visible_type(type_name, context).or_else(|| {
             if BuiltinCollectionKind::from_name(type_name).is_some() {
                 self.type_table.global_type_definitions.get(type_name)
@@ -224,16 +226,21 @@ impl TypeChecker {
             return None;
         };
         let method_info = class_def.methods.get(method_name)?;
-        let index_param = method_info
+        let named = method_info
             .attributes
             .iter()
-            .find(|attr| attr.name == crate::ast::INDEX_BOUNDS_CHECK_ATTRIBUTE)?
+            .find(|attr| attr.name == attribute)?
             .argument
             .as_deref()?;
-        method_info
-            .params
-            .iter()
-            .position(|(name, _)| name == index_param)
+        named
+            .split(',')
+            .map(|param| {
+                method_info
+                    .params
+                    .iter()
+                    .position(|(name, _)| name == param.trim())
+            })
+            .collect()
     }
 
     /// Rejects a call inside device code whose result is an optional value.
@@ -1798,18 +1805,36 @@ impl TypeChecker {
             None => return,
         };
 
-        let param_index = match self.index_param_position(&type_name, method_name, context) {
-            Some(idx) => idx,
-            None => return,
-        };
+        let size_val = Self::static_receiver_size(recv, &recv_type, context);
+        let index_bounds = crate::ast::INDEX_BOUNDS_CHECK_ATTRIBUTE;
+        if let Some(positions) =
+            self.attribute_param_positions(&type_name, method_name, index_bounds, context)
+        {
+            if let Some(index_arg) = positions.first().and_then(|&at| args.get(at)) {
+                self.validate_const_index_against_size(index_arg, size_val, context);
+            }
+        }
+        let index_range = crate::ast::INDEX_RANGE_CHECK_ATTRIBUTE;
+        if let Some(positions) =
+            self.attribute_param_positions(&type_name, method_name, index_range, context)
+        {
+            if let [start, end] = positions.as_slice() {
+                if let (Some(start), Some(end)) = (args.get(*start), args.get(*end)) {
+                    self.validate_const_range_against_size(start, end, size_val, context);
+                }
+            }
+        }
+    }
 
-        let index_arg = match args.get(param_index) {
-            Some(arg) => arg,
-            None => return,
-        };
-
-        // Get the static size from the receiver type
-        let size_val = match &recv_type.kind {
+    /// The receiver's size when it is known before the program runs: an
+    /// `Array`'s declared length, a tuple's arity, or the character count of a
+    /// string whose text is a constant.
+    fn static_receiver_size(
+        recv: &Expression,
+        recv_type: &Type,
+        context: &Context,
+    ) -> Option<i128> {
+        match &recv_type.kind {
             TypeKind::Custom(cname, Some(cargs))
                 if BuiltinCollectionKind::from_name(cname.as_str())
                     == Some(BuiltinCollectionKind::Array) =>
@@ -1817,11 +1842,66 @@ impl TypeChecker {
                 cargs.get(1).and_then(Self::try_eval_const_int)
             }
             TypeKind::Tuple(elements) => Some(elements.len() as i128),
+            _ => Self::constant_text(recv, context).map(|text| text.chars().count() as i128),
+        }
+    }
+
+    /// The text of a string literal, or of an immutable binding whose
+    /// initializer folded to one.
+    fn constant_text(expr: &Expression, context: &Context) -> Option<String> {
+        match &expr.node {
+            ExpressionKind::Literal(Literal::String(text)) => Some(text.clone()),
+            ExpressionKind::Identifier(name, _) => {
+                let info = context.resolve_info(name)?;
+                if info.mutable && !info.is_constant {
+                    return None;
+                }
+                match &info.value {
+                    Some(Literal::String(text)) => Some(text.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Refuses a constant `[start, end)` range that cannot lie inside a
+    /// receiver of `size_val` elements: a negative start, an end before its
+    /// start, or an end past the size. A bound that is not a constant is left
+    /// to the runtime, which traps on the same conditions.
+    fn validate_const_range_against_size(
+        &mut self,
+        start: &Expression,
+        end: &Expression,
+        size_val: Option<i128>,
+        context: &Context,
+    ) {
+        let start_val = Self::try_eval_const_int_with_context(start, context);
+        let end_val = Self::try_eval_const_int_with_context(end, context);
+        let refusal = match (start_val, end_val, size_val) {
+            (Some(s), _, _) if s < 0 => {
+                Some((start.span, format!("Range start {} is negative", s)))
+            }
+            (Some(s), Some(e), _) if e < s => Some((
+                end.span,
+                format!("Range end {} is before its start {}", e, s),
+            )),
+            (_, Some(e), Some(size)) if e > size => Some((
+                end.span,
+                format!("Range out of bounds: end {} but the length is {}", e, size),
+            )),
+            (Some(s), _, Some(size)) if s > size => Some((
+                start.span,
+                format!(
+                    "Range out of bounds: start {} but the length is {}",
+                    s, size
+                ),
+            )),
             _ => None,
         };
-
-        // Apply the bounds check
-        self.validate_const_index_against_size(index_arg, size_val, context);
+        if let Some((span, message)) = refusal {
+            self.report_error(DiagnosticCode::TypIndexOperation, message, span);
+        }
     }
 
     /// Validates gpu-resident arguments against function residency.

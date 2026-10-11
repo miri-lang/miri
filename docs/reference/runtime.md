@@ -8,7 +8,7 @@ Runtime errors are exceptions that occur during program execution, not during co
 - Remainder by zero (a value modulo zero)
 - Integer overflow (result exceeds the width of the target type)
 - Invalid operands (values outside the valid range for an operation, e.g., negative input to square root)
-- An index outside the collection it was applied to, including a command-line argument asked for by a position that was not supplied
+- An index outside the collection it was applied to, including a command-line argument asked for by a position that was not supplied and a `substring` range that runs outside its string
 - An explicit `panic`, which the program raises when it has reached a state it cannot continue from
 
 ## Guarding Against Runtime Errors

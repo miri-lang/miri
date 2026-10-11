@@ -178,7 +178,8 @@ fn main()
         Result.Ok(pattern): test_find_all(pattern)
         Result.Err(e): println("error")
 "#,
-        "4\n0,0\n2,2\n3,3\n4,4",
+        // Character positions: `ä` is one character though two bytes.
+        "4\n0,0\n1,1\n2,2\n3,3",
     );
 }
 

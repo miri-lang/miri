@@ -2,7 +2,7 @@
 
 An index fell outside the collection it was applied to. The bounds check that guards every index caught it and ended the program rather than reading memory the collection does not own. Compare the index against the collection's length before using it, or reach for an accessor that answers with nothing when the index is out of range.
 
-The same code reports a command-line argument asked for by a position that was not supplied.
+The same code reports a command-line argument asked for by a position that was not supplied, and a `substring` range that runs outside its string: positions count characters, from `0` to `length()`.
 
 ## Before
 
