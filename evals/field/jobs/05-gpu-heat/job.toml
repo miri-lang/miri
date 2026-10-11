@@ -2,6 +2,7 @@ id = "05-gpu-heat"
 title = "Heat diffusion, computed on the GPU"
 turn_cap = 60
 time_cap_seconds = 2700
+gpu = true
 
 # The GPU library is part of the toolchain line, which is the one sentence that
 # differs between arms. Naming it in the brief itself would tell every arm which
@@ -11,4 +12,3 @@ time_cap_seconds = 2700
 "miri-bare" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. Its `forall` loops lower to a GPU kernel"
 python = "`uv` and `pytest`, and the `wgpu` package for the GPU"
 rust = "`cargo` and `clippy`, and the `wgpu` crate for the GPU"
-typescript = "Deno — `deno run`, `deno check` and `deno test` — and its built-in WebGPU"

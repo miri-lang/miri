@@ -31,6 +31,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -63,7 +64,7 @@ INHERITED_MEMORY = ("CLAUDE.md", "CLAUDE.local.md")
 # Commands that cost a toolchain invocation, counted from the transcript. They
 # are reported beside the token counts and never added to them: `cargo build`
 # and `miri check` are not the same unit of work.
-TOOLCHAINS = ("miri", "cargo", "python3", "python", "deno", "uv", "pytest", "rustc")
+TOOLCHAINS = ("miri", "cargo", "python3", "python", "uv", "pytest", "rustc")
 
 MEASURED_PROMPT = (
     "Read BRIEF.md in this directory and do what it asks. "
@@ -479,23 +480,104 @@ def score(workspace, job_id, arm, case_timeout=120):
     """Run every hidden test against what the agent left, after it stopped.
 
     The tests are run here and never before: the agent does not see them, so a
-    run that passes passed on the contract rather than on the cases.
+    run that passes passed on the contract rather than on the cases. A job that
+    asks for a GPU kernel is also checked for one in what the subject wrote: a
+    program printing the right numbers from a loop on the processor answered a
+    different job.
     """
+    job = job_named(job_id)
+    comparison = job.get("compare", {})
     passed, failures, detail = 0, [], {}
     for case in hidden_tests(job_id):
-        expected = case.with_suffix(".out").read_text(encoding="utf-8")
+        expected = case.with_suffix(".out").read_text(encoding="utf-8").rstrip("\n")
         stdout, why = run_case(workspace, arm, case, case_timeout)
-        if stdout == expected.rstrip("\n"):
+        difference = None if stdout is None else first_difference(expected, stdout, comparison)
+        if stdout is not None and difference is None:
             passed += 1
         else:
             failures.append(case.stem)
-            detail[case.stem] = why
-    return {
+            detail[case.stem] = why if difference is None else {**why, "firstDifference": difference}
+    result = {
         "passed": passed,
         "total": len(hidden_tests(job_id)),
         "failures": failures,
         "failureDetail": detail,
     }
+    if job.get("gpu", False):
+        evidence = kernel_evidence(workspace, arm)
+        result["kernelEvidence"] = evidence
+        result["notOnGpu"] = bool(evidence["missing"])
+    return result
+
+
+def first_difference(expected, actual, comparison):
+    """Where `actual` first departs from `expected`, or None when it does not.
+
+    A job compares exactly unless its `[compare]` table says `kind = "numeric"`.
+    Then a field that reads as a number on both sides matches within the
+    tolerance — the larger of `absolute` and `relative` times the expected
+    value — and every other field still matches exactly. A line whose first
+    field is a word takes the tolerance `[compare.labels.<word>]` gives it, so a
+    count and a mean on neighbouring lines need not share one.
+    """
+    if comparison.get("kind", "exact") == "exact":
+        return None if actual == expected else line_difference(expected, actual)
+    expected_lines, actual_lines = expected.split("\n"), actual.split("\n")
+    if len(expected_lines) != len(actual_lines):
+        return {"line": min(len(expected_lines), len(actual_lines)) + 1, "expected": f"{len(expected_lines)} lines", "actual": f"{len(actual_lines)} lines"}
+    for number, (want, got) in enumerate(zip(expected_lines, actual_lines), start=1):
+        wanted, gotten = want.split(), got.split()
+        if len(wanted) != len(gotten):
+            return {"line": number, "expected": want, "actual": got}
+        tolerance = {**comparison, **comparison.get("labels", {}).get(wanted[0] if wanted else "", {})}
+        for field, (want_field, got_field) in enumerate(zip(wanted, gotten), start=1):
+            if not field_matches(want_field, got_field, tolerance):
+                return {"line": number, "field": field, "expected": want_field, "actual": got_field}
+    return None
+
+
+def line_difference(expected, actual):
+    """The first line two texts disagree on, for an exact comparison."""
+    expected_lines, actual_lines = expected.split("\n"), actual.split("\n")
+    for number in range(max(len(expected_lines), len(actual_lines))):
+        want = expected_lines[number] if number < len(expected_lines) else None
+        got = actual_lines[number] if number < len(actual_lines) else None
+        if want != got:
+            return {"line": number + 1, "expected": want, "actual": got}
+    return None
+
+
+def field_matches(expected, actual, tolerance):
+    try:
+        want, got = float(expected), float(actual)
+    except ValueError:
+        return expected == actual
+    allowed = max(tolerance.get("absolute", 0.0), tolerance.get("relative", 0.0) * abs(want))
+    return abs(got - want) <= allowed
+
+
+# Directories a toolchain fills with code nobody in the run wrote.
+VENDORED = {".venv", "target", "node_modules", "__pycache__", ".git"}
+
+
+def kernel_evidence(workspace, arm):
+    """Which of the arm's kernel patterns the subject's sources carry.
+
+    An arm names, under `kernel_evidence` in `arms.toml`, the files a kernel
+    would be written in and the patterns that show one is written and
+    dispatched. Every pattern must match somewhere in those files; the ones
+    that match nowhere are the evidence missing.
+    """
+    declared = arm.get("kernel_evidence", {})
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for pattern in declared.get("files", [])
+        for path in sorted(Path(workspace).glob(pattern))
+        if path.is_file() and not VENDORED.intersection(path.relative_to(workspace).parts)
+    )
+    patterns = declared.get("patterns", [])
+    missing = [pattern for pattern in patterns if not re.search(pattern, text)]
+    return {"required": patterns, "missing": missing}
 
 
 def run_case(workspace, arm, case, case_timeout):
@@ -649,6 +731,12 @@ def normalized_rating(entry):
     return {"surface": entry["surface"].strip(), "score": entry["score"], "reason": str(entry.get("reason", ""))}
 
 
+def declared_wrongly(outcome, tests):
+    """A run the subject declared finished that the contract refuses: a hidden
+    test fails, or the job asked for a GPU kernel and none was written."""
+    return outcome == "finished" and (tests["passed"] < tests["total"] or tests.get("notOnGpu", False))
+
+
 def outcome_of(exit_code, timed_out, turns, cap):
     if timed_out:
         return "capped"
@@ -683,7 +771,7 @@ def one_run(arguments, arm, model, job, index):
         "toolchainCalls": toolchain_calls,
         "outcome": outcome,
         "hiddenTests": tests,
-        "silentWrongAnswer": outcome == "finished" and tests["passed"] < tests["total"],
+        "silentWrongAnswer": declared_wrongly(outcome, tests),
         "isolation": isolation_of(transcript),
         "workspace": str(workspace),
     }
@@ -831,7 +919,7 @@ def rescore(record_path, arguments, arm):
         },
     }
     record["hiddenTests"] = tests
-    record["silentWrongAnswer"] = record["outcome"] == "finished" and tests["passed"] < tests["total"]
+    record["silentWrongAnswer"] = declared_wrongly(record["outcome"], tests)
     record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     print(f"{record_path}: {record['outcome']}, {tests['passed']}/{tests['total']} hidden tests (rescored)")
     return 0

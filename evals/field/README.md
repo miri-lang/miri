@@ -26,7 +26,7 @@ jobs/<job>/job.toml        its caps and title
 jobs/<job>/cases/*.in,.out the hidden tests
 jobs/<job>/seeds/<lang>/   what the subject starts from, per language
 jobs/<job>/reference/      the program the expectations come from
-arms.toml                  the five arms
+arms.toml                  the four arms
 models.toml                the three model columns
 bench.py                   runs one cell and writes its records
 report.py                  folds a round's records into summary.json
@@ -42,7 +42,6 @@ runs/<round>.probe/...     the opinion probe's ratings, never folded into a clai
 | `miri-bare` | The release binary and `miri --help`. No prose file of any kind. |
 | `python` | The language and its toolchain. |
 | `rust` | The language and its toolchain. |
-| `typescript` | The language and its toolchain. |
 
 The baselines get no skill file. Their guidance is in the weights, and that
 asymmetry **is** the experiment: `miri-pack` against `python` asks whether a
@@ -62,7 +61,7 @@ whether the pack is what is doing the standing.
 Every brief is language-neutral, and the three substitutions — the language
 name, the toolchain line and the entry point — are the only text that differs
 between arms. The planted faults of `02-ledger-repair` are the same six
-*semantic* faults at the same points in all four ports; `FAULTS.md` there is the
+*semantic* faults at the same points in all three ports; `FAULTS.md` there is the
 map, and a structural test in this repository fails when a port stops carrying
 one. Faults are never syntax errors: a fault a compiler points at measures the
 compiler, and it would measure a different one in every language.
@@ -73,7 +72,7 @@ Each job's program reads its input from the path in its first command-line
 argument, not from standard input. Miri has no way to read standard input
 today — there is no runtime intrinsic and no standard-library call for it — so a
 contract written on standard input would be a contract one arm cannot satisfy
-at all. Naming a file is equally ordinary in all five arms and advantages none
+at all. Naming a file is equally ordinary in all four arms and advantages none
 of them.
 
 ## The rules a run is subject to
@@ -107,6 +106,29 @@ of them.
   computed from gross numbers, because a user of the language pays for its
   defects as well.
 - **Caps are identical across arms** and live in each `job.toml`.
+
+## How a hidden test is judged
+
+A job's output is compared exactly unless its `job.toml` carries a `[compare]`
+table with `kind = "numeric"`. Then a field that reads as a number on both sides
+matches within the larger of `absolute` and `relative` times the expected value,
+and every other field still matches exactly. A line whose first field is a word
+can be held to its own tolerance under `[compare.labels.<word>]`. A GPU computes
+in single precision while the references compute in double, so a float job
+states its tolerance next to the measurement that sized it. A failed case
+records its first differing value under `failureDetail`.
+
+A job with `gpu = true` asks for a kernel, and a program that prints the right
+numbers from a loop on the processor answered a different job. Each arm says in
+`arms.toml`, under `kernel_evidence`, which files a kernel would be written in
+and which patterns show one is written and dispatched: a device `forall` for
+Miri, a WGSL `@compute` shader and a `dispatch_workgroups` call for the
+baselines. A run missing any of them is recorded `notOnGpu`; it is never green,
+and a run that declared itself finished without one is a silent wrong answer.
+
+The TypeScript arm was dropped on 2026-10-11, when the benchmark turned toward
+GPU compute: Python and Rust remain the baselines. Rounds recorded before then
+keep their TypeScript cells.
 
 ## What is measured
 
