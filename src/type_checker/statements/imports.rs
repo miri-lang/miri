@@ -1401,6 +1401,9 @@ pub fn locate_module(path_str: &str, source_dir: Option<&Path>) -> Option<PathBu
 ///    `<prefix>/bin/miri` + `<prefix>/{lib,share}/miri/stdlib` install layouts.
 /// 3. `src/stdlib` relative to `CARGO_MANIFEST_DIR` (the repo root at build time),
 ///    as a compile-time fallback for development and agent-in-the-loop workflows.
+///    It is left out when one of the binary-derived roots exists: a binary that
+///    ships its own stdlib is installed, and the tree it was built in is neither
+///    its stdlib nor a path it should print.
 ///
 /// Deriving from the binary location (rather than the current directory) is
 /// what lets an installed `miri` resolve the stdlib from any working directory.
@@ -1426,19 +1429,26 @@ fn stdlib_search_roots(env_override: Option<PathBuf>, exe_dir: Option<&Path>) ->
     if let Some(base) = env_override {
         roots.push(base);
     }
+    let mut ships_stdlib = false;
     if let Some(dir) = exe_dir {
-        roots.push(dir.join("stdlib"));
+        let mut shipped = vec![dir.join("stdlib")];
         if let Some(prefix) = dir.parent() {
-            roots.push(prefix.join("lib").join("miri").join("stdlib"));
-            roots.push(prefix.join("share").join("miri").join("stdlib"));
+            shipped.push(prefix.join("lib").join("miri").join("stdlib"));
+            shipped.push(prefix.join("share").join("miri").join("stdlib"));
         }
+        ships_stdlib = shipped.iter().any(|root| root.is_dir());
+        roots.extend(shipped);
     }
-    // Compile-time fallback: src/stdlib relative to the repo root (CARGO_MANIFEST_DIR)
-    roots.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("stdlib"),
-    );
+    // Compile-time fallback: src/stdlib relative to the repo root (CARGO_MANIFEST_DIR).
+    // A binary that ships its own stdlib is installed, not a build tree: it must
+    // neither fall back to nor name the machine it was built on.
+    if !ships_stdlib {
+        roots.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("stdlib"),
+        );
+    }
     roots
 }
 
@@ -1539,6 +1549,24 @@ mod stdlib_search_root_tests {
                 manifest_stdlib,
             ]
         );
+    }
+
+    #[test]
+    fn a_binary_that_ships_its_stdlib_never_reaches_the_build_tree() {
+        let install = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(install.path().join("lib").join("miri").join("stdlib"))
+            .expect("cannot lay out an install prefix");
+        let bin = install.path().join("bin");
+        let roots = stdlib_search_roots(None, Some(&bin));
+        let manifest_stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("stdlib");
+        assert!(
+            !roots.contains(&manifest_stdlib),
+            "an installed binary still searches the tree it was built in: {:?}",
+            roots
+        );
+        assert!(roots.contains(&install.path().join("lib").join("miri").join("stdlib")));
     }
 
     #[test]
