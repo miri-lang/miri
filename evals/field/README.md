@@ -248,13 +248,14 @@ diff.
 `CLAIMS.md` holds the pre-registered claims, and `report.py` computes each
 verdict from the records — no verdict is typed by hand. It computes every
 condition of the exit criterion too: that no Miri run answered wrongly in
-silence, that the packed loop costs no more invocations than the bare one, and
+silence, that the arm taught from the pack costs no more invocations than the
+arm taught from the grammar, and
 that no surface the published page recommends came back rated 2 out of 5 or
 lower. That last one is joined against `skills/surfaces.toml`, which lists the
 surfaces the page recommends and which the packs themselves are gated against —
 a free-text surface name would match nothing, and a verdict that matched nothing
 would read as held by having asked no one. `report.py` also labels every
-comparison a lead claim loses as `parity` or `behind`, so a failing round still
-shows its distance from the claim. `baseline.md` holds the
+comparison C1 and C5 make against a baseline as `beats`, `parity` or `behind`,
+so a round shows its distance from a lead whichever way the bar went. `baseline.md` holds the
 2026-09-09 numbers that predate this instrument, with the reasons they are not
 comparable to anything produced here. `LOG.md` carries one entry per round.

@@ -24,8 +24,14 @@ FIELD = Path(__file__).resolve().parent
 REPO = FIELD.parent.parent
 
 BASELINES = ("python", "rust")
-PACK = "miri-pack"
-BARE = "miri-bare"
+# The Miri arm the claims are about, and the onboarding arms it is compared with.
+SKILL = "miri-skill"
+GRAMMAR = "miri-grammar"
+BOTH = "miri-both"
+
+# How far above the cheaper (or faster) baseline the skill arm may land and
+# still hold C1 or C5.
+BAR_FACTOR = 1.5
 
 # How far above a baseline a result still reads as parity rather than behind.
 # It was C1's threshold until C1 was tightened to a lead on 2026-09-14; it now
@@ -218,32 +224,41 @@ def build_cells(records):
     return cells, jobs, models
 
 
-def judge_lead(cells, models, metric):
-    """Whether the pack leads every baseline on one to-green metric, per CPU job.
+def judge_within_bar(cells, models, metric):
+    """Whether the skill arm lands within the bar of the better baseline, per GPU job.
 
-    Each comparison carries a standing — `beats`, `parity` or `behind` — so a
-    round that fails the claim still shows how far it is from holding it.
+    The verdict compares against the cheaper (or faster) of the baselines that
+    reached green. Each baseline is also reported with a standing — `beats`,
+    `parity` or `behind` — so a round shows how far it is from a lead.
     """
     detail = []
     for model in models:
-        for job in CPU_JOBS:
-            pack = median_green(cells, job, PACK, model, metric)
-            if pack is None:
-                detail.append(note(job, model, False, "miri-pack reached no green run", "behind"))
-                continue
-            for baseline in BASELINES:
-                if (job, baseline, model) not in cells:
-                    detail.append(note(job, model, False, f"{baseline} was not run"))
-                    continue
-                other = median_green(cells, job, baseline, model, metric)
-                detail.append(lead_note(job, model, baseline, pack, other))
+        for job in GPU_JOBS:
+            detail.extend(bar_notes(cells, job, model, metric))
     return verdict(detail)
 
 
-def lead_note(job, model, baseline, pack, other):
+def bar_notes(cells, job, model, metric):
+    skill = median_green(cells, job, SKILL, model, metric)
+    if skill is None:
+        return [note(job, model, False, f"{SKILL} reached no green run", "behind")]
+    unrun = [name for name in BASELINES if (job, name, model) not in cells]
+    if unrun:
+        return [note(job, model, False, f"{', '.join(unrun)} not run")]
+    others = {name: median_green(cells, job, name, model, metric) for name in BASELINES}
+    standings = [standing_note(job, model, name, skill, value) for name, value in others.items()]
+    best = min((value for value in others.values() if value is not None), default=None)
+    if best is None:
+        return [note(job, model, True, f"no baseline reached green; {SKILL} did", "beats"), *standings]
+    held = skill <= best * BAR_FACTOR
+    return [note(job, model, held, f"{SKILL} {skill} against the better baseline {best}"), *standings]
+
+
+def standing_note(job, model, baseline, skill, other):
+    """A label beside the verdict: where the skill arm stands against one baseline."""
     if other is None:
-        return note(job, model, True, f"{baseline} reached no green run; miri-pack did", "beats")
-    return note(job, model, pack < other, f"miri-pack {pack} against {baseline} {other}", standing(pack, other))
+        return note(job, model, True, f"{baseline} reached no green run; {SKILL} did", "beats")
+    return note(job, model, True, f"{SKILL} {skill} against {baseline} {other}", standing(skill, other))
 
 
 def standing(pack, other):
@@ -255,17 +270,17 @@ def standing(pack, other):
 
 
 def judge_wrong_answers(cells, models):
-    """C2 — the pack declares a wrong answer no more often than a baseline."""
+    """C2 — the skill arm declares a wrong answer no more often than a baseline."""
     detail = []
     for model in models:
-        pack = sum(cells[(job, PACK, model)]["silentWrongAnswers"] for job in CPU_JOBS if (job, PACK, model) in cells)
+        skill = sum(cells[(job, SKILL, model)]["silentWrongAnswers"] for job in GPU_JOBS if (job, SKILL, model) in cells)
         for baseline in BASELINES:
             other = sum(
                 cells[(job, baseline, model)]["silentWrongAnswers"]
-                for job in CPU_JOBS
+                for job in GPU_JOBS
                 if (job, baseline, model) in cells
             )
-            detail.append(note("cpu jobs", model, pack <= other, f"miri-pack {pack} against {baseline} {other}"))
+            detail.append(note("gpu jobs", model, skill <= other, f"{SKILL} {skill} against {baseline} {other}"))
     return verdict(detail)
 
 
@@ -279,54 +294,67 @@ def gpu_note(cells, job, model):
     unrun = [name for name in BASELINES if (job, name, model) not in cells]
     if unrun:
         return note(job, model, False, f"{', '.join(unrun)} not run")
-    pack = median_green(cells, job, PACK, model)
+    skill = median_green(cells, job, SKILL, model)
     others = {name: median_green(cells, job, name, model) for name in BASELINES}
     finished = [name for name, value in others.items() if value is not None]
-    if pack is not None and len(finished) < len(BASELINES):
+    if skill is not None and len(finished) < len(BASELINES):
         missing = sorted(set(BASELINES) - set(finished))
-        return note(job, model, True, f"miri-pack finished where {', '.join(missing)} did not")
+        return note(job, model, True, f"{SKILL} finished where {', '.join(missing)} did not")
     cheapest = min((value for value in others.values() if value is not None), default=None)
-    held = pack is not None and cheapest is not None and pack < cheapest / 2
-    return note(job, model, held, f"miri-pack {pack} against the cheapest baseline {cheapest}")
+    held = skill is not None and cheapest is not None and skill < cheapest / 2
+    return note(job, model, held, f"{SKILL} {skill} against the cheapest baseline {cheapest}")
 
 
-def judge_pack_against_bare(cells, models, jobs):
-    """C4 — the pack substitutes for pretraining the model never had."""
-    detail = []
-    for model in models:
-        for job in jobs:
-            pack, bare = median_green(cells, job, PACK, model), median_green(cells, job, BARE, model)
-            pack_cell, bare_cell = cells.get((job, PACK, model)), cells.get((job, BARE, model))
-            if pack_cell is None or bare_cell is None:
-                detail.append(note(job, model, False, "a cell of the pair was not run"))
-                continue
-            cheaper = pack is not None and (bare is None or pack < bare)
-            # No lower, rather than higher: a bare arm that finishes every run
-            # leaves no rate to beat, and the claim must stay reachable.
-            finishes = pack_cell["finishRate"] >= bare_cell["finishRate"]
-            detail.append(
-                note(job, model, cheaper and finishes, f"cost {pack} against {bare}, finish rate {pack_cell['finishRate']} against {bare_cell['finishRate']}")
-            )
-    return verdict(detail)
+def judge_skill_against_grammar(cells, models, jobs):
+    """C4 — teaching from the skill pack beats teaching from the grammar alone.
 
-
-def judge_pack_loop(cells, models, jobs):
-    """The exit criterion's loop condition — the pack costs no more invocations than bare.
-
-    Measured gross. Both Miri arms run on the same compiler, so a defect falls
-    on either arm alike, and netting it out would add a hand-typed number to a
-    verdict that needs none.
+    The arm taught from both is reported beside it as a label: whether adding
+    the grammar to the pack moved anything is worth seeing, and is not claimed.
     """
     detail = []
     for model in models:
-        for job in jobs:
-            if (job, PACK, model) not in cells or (job, BARE, model) not in cells:
+        for job in ran_gpu_jobs(jobs):
+            skill, grammar = median_green(cells, job, SKILL, model), median_green(cells, job, GRAMMAR, model)
+            skill_cell, grammar_cell = cells.get((job, SKILL, model)), cells.get((job, GRAMMAR, model))
+            if skill_cell is None or grammar_cell is None:
                 detail.append(note(job, model, False, "a cell of the pair was not run"))
                 continue
-            pack = median_green(cells, job, PACK, model, "invocationsToGreen")
-            bare = median_green(cells, job, BARE, model, "invocationsToGreen")
-            held = pack is not None and (bare is None or pack <= bare)
-            detail.append(note(job, model, held, f"invocations to green {pack} against {bare}"))
+            cheaper = skill is not None and (grammar is None or skill < grammar)
+            # No lower, rather than higher: an arm that finishes every run
+            # leaves no rate to beat, and the claim must stay reachable.
+            finishes = skill_cell["finishRate"] >= grammar_cell["finishRate"]
+            detail.append(
+                note(job, model, cheaper and finishes, f"cost {skill} against {grammar}, finish rate {skill_cell['finishRate']} against {grammar_cell['finishRate']}")
+            )
+            both = median_green(cells, job, BOTH, model)
+            if skill is not None and both is not None:
+                detail.append(note(job, model, True, f"{BOTH} {both} against {SKILL} {skill}", standing(both, skill)))
+    return verdict(detail)
+
+
+def ran_gpu_jobs(jobs):
+    """The GPU jobs a round ran, which the pairwise Miri comparisons are judged over."""
+    return [job for job in GPU_JOBS if job in jobs]
+
+
+def judge_pack_loop(cells, models, jobs):
+    """The exit criterion's loop condition — the arm taught from the pack needs no
+    more invocations than the arm taught from the grammar.
+
+    Measured gross. Both arms run on the same compiler, so a defect falls on
+    either alike, and netting it out would add a hand-typed number to a verdict
+    that needs none.
+    """
+    detail = []
+    for model in models:
+        for job in ran_gpu_jobs(jobs):
+            if (job, SKILL, model) not in cells or (job, GRAMMAR, model) not in cells:
+                detail.append(note(job, model, False, "a cell of the pair was not run"))
+                continue
+            skill = median_green(cells, job, SKILL, model, "invocationsToGreen")
+            grammar = median_green(cells, job, GRAMMAR, model, "invocationsToGreen")
+            held = skill is not None and (grammar is None or skill <= grammar)
+            detail.append(note(job, model, held, f"invocations to green {skill} against {grammar}"))
     return verdict(detail)
 
 
@@ -430,11 +458,11 @@ def summarize(round_name, records, probe_records):
             for (job, arm, model), values in sorted(cells.items())
         ],
         "claims": {
-            "C1": judge_lead(cells, models, "tokensToGreen"),
+            "C1": judge_within_bar(cells, models, "tokensToGreen"),
             "C2": judge_wrong_answers(cells, models),
             "C3": judge_gpu(cells, models),
-            "C4": judge_pack_against_bare(cells, models, jobs),
-            "C5": judge_lead(cells, models, "wallClockToGreen"),
+            "C4": judge_skill_against_grammar(cells, models, jobs),
+            "C5": judge_within_bar(cells, models, "wallClockToGreen"),
         },
         "exitCriterion": {
             "silentWrongAnswers": judge_silent_wrong_answers(cells, models, jobs),
