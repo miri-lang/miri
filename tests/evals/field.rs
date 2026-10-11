@@ -1406,8 +1406,8 @@ fn test_a_turn_is_a_message_and_tokens_are_what_the_harness_settled() {
 #[test]
 #[cfg(unix)]
 fn test_a_failed_hidden_case_keeps_its_exit_status_and_stderr() {
-    if !available("python3") {
-        println!("skipping: python3 is not on PATH, so the run was not launched");
+    if !available("python3") || !available("uv") {
+        println!("skipping: python3 or uv is not on PATH, so the run was not launched");
         return;
     }
     let root = std::env::temp_dir().join("miri-field-failure-detail");
