@@ -994,6 +994,63 @@ fn test_a_probe_refuses_ratings_it_cannot_read() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_the_harness_command_is_the_one_launched_and_recorded() {
+    // An operator may reach the harness through a wrapper of their own, for
+    // instance to pick an account. The wrapper must be what runs, and the
+    // record must say so; a plain `claude` on the path is a decoy that fails.
+    use std::os::unix::fs::PermissionsExt;
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-harness-command");
+    let _ = fs::remove_dir_all(&root);
+    let bin = root.join("bin");
+    install_fake_harness(
+        &bin,
+        Some(r#"{"ratings": [{"surface": "pytest", "score": 4, "reason": "fine"}]}"#),
+    );
+    fs::rename(bin.join("claude"), bin.join("personal-claude")).expect("cannot rename");
+    let decoy = bin.join("claude");
+    fs::write(&decoy, "#!/bin/sh\necho 'decoy launched' >&2\nexit 3\n").expect("cannot write");
+    fs::set_permissions(&decoy, fs::Permissions::from_mode(0o755)).expect("cannot chmod");
+
+    let dry = run_bench(
+        &root,
+        &["--dry-run", "--harness-command", "personal-claude"],
+    );
+    assert!(
+        String::from_utf8_lossy(&dry.stdout).contains("launch     personal-claude -p"),
+        "the dry run renders a launch through another command:\n{}",
+        String::from_utf8_lossy(&dry.stdout)
+    );
+
+    let probed = run_bench(&root, &["--probe", "--harness-command", "personal-claude"]);
+    assert!(
+        probed.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&probed.stderr)
+    );
+    let record = read(
+        &root
+            .join("runs")
+            .join("synthetic.probe")
+            .join(PROBE_JOB)
+            .join("python")
+            .join("claude-sonnet")
+            .join("1.json"),
+    );
+    assert!(
+        record.contains("\"command\": \"personal-claude\"")
+            && record.contains("\"version\": \"fake harness 1\""),
+        "the record does not name the command that ran:\n{}",
+        record
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_only_a_probe_is_asked_for_ratings() {
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the launch was not rendered");
