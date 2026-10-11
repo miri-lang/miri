@@ -93,6 +93,8 @@ fn main()
 
 If no main function is defined, the program wraps all top-level code in a main function.
 
+A `main` without a return type ends with exit status 0, and a bare `return` anywhere in it ends the program there with the same status. `return n` sets the status to `n`; a `main` declared `fn main() int` must return a value on every path.
+
 ---
 
 ## Control Flow

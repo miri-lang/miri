@@ -15,7 +15,7 @@
 //! form named is settled later, when the repair is projected against the source
 //! it will edit, so a form never needs the source text to describe itself.
 
-use crate::diagnostics::repair::RepairRequest;
+use crate::diagnostics::repair::{IfColonKeyword, RepairRequest};
 
 /// A construct from another language, recognised where Miri rejects it.
 ///
@@ -56,6 +56,51 @@ pub enum ForeignForm {
         keyword_start: usize,
         mut_end: usize,
     },
+    /// `if c then a` — an `if` condition closed by `then` rather than `:`.
+    ThenKeyword { then_start: usize },
+    /// `if c: a else b` — an inline `else` without the colon its body opens with.
+    InlineElseWithoutColon { else_start: usize },
+    /// `f"{"a".upper()}"` — a literal inside an interpolation written with the
+    /// quote that opened the f-string, which Python 3.12 allows and Miri reads
+    /// as the f-string's end. `start..end` is the text between the braces.
+    NestedInterpolationQuote {
+        start: usize,
+        end: usize,
+        quote: char,
+    },
+    /// `!x`, `a && b`, `a || b` — a logical operator spelled with symbols.
+    SymbolOperator {
+        start: usize,
+        operator: SymbolOperator,
+    },
+}
+
+/// A logical operator other languages spell with symbols and Miri with a word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolOperator {
+    Not,
+    And,
+    Or,
+}
+
+impl SymbolOperator {
+    /// The symbols as the author wrote them.
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Self::Not => "!",
+            Self::And => "&&",
+            Self::Or => "||",
+        }
+    }
+
+    /// The word Miri spells the operator with.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Not => "not",
+            Self::And => "and",
+            Self::Or => "or",
+        }
+    }
 }
 
 impl ForeignForm {
@@ -86,6 +131,23 @@ impl ForeignForm {
                 "Miri has no destructuring binding: bind one name, then read its parts."
             }
             Self::LetMut { .. } => "Miri declares a mutable binding with `var`: `var x = 5`.",
+            Self::ThenKeyword { .. } => {
+                "Miri has no `then`: an `if` condition ends with `:`, as in \
+                 `if c: a else: b`, or with a new line and an indented block."
+            }
+            Self::InlineElseWithoutColon { .. } => {
+                "An inline `else` takes a colon too: `if c: a else: b`."
+            }
+            Self::NestedInterpolationQuote { .. } => {
+                "A quote inside the braces closes the f-string at that quote, so write \
+                 the nested string literal with the other quote character: \
+                 `f\"{name.replace('o', '0')}\"`."
+            }
+            Self::SymbolOperator { operator, .. } => match operator {
+                SymbolOperator::Not => "Miri negates with the word `not`: `if not s.is_empty()`.",
+                SymbolOperator::And => "Miri spells logical and as the word `and`: `if a and b`.",
+                SymbolOperator::Or => "Miri spells logical or as the word `or`: `if a or b`.",
+            },
         }
     }
 
@@ -128,6 +190,26 @@ impl ForeignForm {
                 keyword_start: *keyword_start,
                 mut_end: *mut_end,
             }),
+            Self::SymbolOperator { start, operator } => Some(RepairRequest::WordOperator {
+                start: *start,
+                spelling: operator.spelling().to_string(),
+                word: operator.word().to_string(),
+            }),
+            Self::ThenKeyword { then_start } => Some(RepairRequest::IfColon {
+                keyword_start: *then_start,
+                keyword: IfColonKeyword::Then,
+            }),
+            Self::InlineElseWithoutColon { else_start } => Some(RepairRequest::IfColon {
+                keyword_start: *else_start,
+                keyword: IfColonKeyword::Else,
+            }),
+            Self::NestedInterpolationQuote { start, end, quote } => {
+                Some(RepairRequest::InterpolationQuotes {
+                    start: *start,
+                    end: *end,
+                    quote: *quote,
+                })
+            }
             Self::BraceBlock
             | Self::Elif
             | Self::ImplBlock
@@ -243,6 +325,12 @@ mod tests {
                 keyword_start: 0,
                 mut_end: 7,
             },
+            ForeignForm::SymbolOperator {
+                start: 0,
+                operator: SymbolOperator::Not,
+            },
+            ForeignForm::ThenKeyword { then_start: 0 },
+            ForeignForm::InlineElseWithoutColon { else_start: 0 },
         ];
 
         for form in all_forms {

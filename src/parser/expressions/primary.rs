@@ -3,6 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
+use crate::error::foreign_syntax::{ForeignForm, SymbolOperator};
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
@@ -92,26 +93,28 @@ impl<'source> Parser<'source> {
             Some((Token::FormattedStringStart(_), _)) => self.formatted_string_expression(),
             Some((Token::If, _)) | Some((Token::Unless, _)) => self.prefix_if_expression(),
             Some((Token::Ampersand, span)) => {
-                let span = *span;
-                Err(SyntaxError::new(
-                    SyntaxErrorKind::UnsupportedCStyleOperator {
-                        found: "&&".to_string(),
-                        suggestion: "and".to_string(),
-                    },
-                    span,
-                ))
+                Err(self.symbol_operator_error(*span, SymbolOperator::And))
             }
-            Some((Token::Pipe, span)) => {
-                let span = *span;
-                Err(SyntaxError::new(
-                    SyntaxErrorKind::UnsupportedCStyleOperator {
-                        found: "||".to_string(),
-                        suggestion: "or".to_string(),
-                    },
-                    span,
-                ))
-            }
+            Some((Token::Pipe, span)) => Err(self.symbol_operator_error(*span, SymbolOperator::Or)),
             _ => Err(self.error_unexpected_lookahead_token("an expression")),
+        }
+    }
+
+    /// The error for `&&` or `||`, reached at the second of its two symbols:
+    /// the first already parsed as the bitwise operator it spells alone.
+    fn symbol_operator_error(&self, span: Span, operator: SymbolOperator) -> SyntaxError {
+        let error = SyntaxError::new(
+            SyntaxErrorKind::UnsupportedCStyleOperator {
+                found: operator.spelling().to_string(),
+                suggestion: operator.word().to_string(),
+            },
+            span,
+        );
+        let start = span.start.saturating_sub(1);
+        if self.source.get(start..span.end) == Some(operator.spelling()) {
+            error.with_foreign_form(ForeignForm::SymbolOperator { start, operator })
+        } else {
+            error
         }
     }
 

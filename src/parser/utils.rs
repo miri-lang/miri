@@ -102,6 +102,11 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_else)
     }
 
+    /// True at `return`, `break` or `continue`: a statement that leaves.
+    pub(crate) fn lookahead_is_jump(&self) -> bool {
+        self.match_lookahead_type(|t| matches!(t, Token::Return | Token::Break | Token::Continue))
+    }
+
     pub(crate) fn lookahead_is_indent(&self) -> bool {
         self.match_lookahead_type(is_indent)
     }
@@ -334,6 +339,20 @@ impl<'source> Parser<'source> {
             "elif" => Some(ForeignForm::Elif),
             "impl" => Some(ForeignForm::ImplBlock),
             _ => None,
+        }
+    }
+
+    /// The error for a body that should open here, naming `then` when the
+    /// author closed the condition with it.
+    pub(crate) fn error_missing_body_opener(&self, expected: &str) -> SyntaxError {
+        let error = self.error_unexpected_lookahead_token(expected);
+        let span = self.current_token_span();
+        if self.source.get(span.start..span.end) == Some("then") {
+            error.with_foreign_form(ForeignForm::ThenKeyword {
+                then_start: span.start,
+            })
+        } else {
+            error
         }
     }
 

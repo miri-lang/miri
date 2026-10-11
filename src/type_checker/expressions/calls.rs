@@ -2364,6 +2364,12 @@ impl TypeChecker {
     }
 
     /// Validates the type of an out parameter.
+    ///
+    /// TODO: the comparison is structural `==`, so a parameter sized by a
+    /// constant (`dst out Array<int, N>` with `const N = 4`) refuses an
+    /// argument of `Array<int, 4>` — the size is still the name `N` on one side
+    /// and the folded `4` on the other. An ordinary parameter accepts the same
+    /// argument, because `accepts_value_at` compares them after folding.
     fn validate_out_parameter_type(
         &mut self,
         param_name: &str,

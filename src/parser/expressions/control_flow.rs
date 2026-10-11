@@ -3,6 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
+use crate::error::foreign_syntax::ForeignForm;
 use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::Token;
 
@@ -149,13 +150,14 @@ impl<'source> Parser<'source> {
             }
             return Err(self.error_unexpected_lookahead_token("an indented block"));
         }
-        Err(self.error_unexpected_lookahead_token("':' or newline after if condition"))
+        Err(self.error_missing_body_opener("':' or newline after if condition"))
     }
 
     fn optional_else_branch(&mut self) -> Result<Option<Expression>, SyntaxError> {
         if !self.lookahead_is_else() {
             return Ok(None);
         }
+        let else_start = self.current_token_span().start;
         self.eat_token(&Token::Else)?;
 
         if self.lookahead_is_colon() {
@@ -172,7 +174,9 @@ impl<'source> Parser<'source> {
         if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
             return Ok(Some(self.prefix_if_expression()?));
         }
-        Ok(None)
+        Err(self
+            .error_unexpected_lookahead_token("':' after 'else'")
+            .with_foreign_form(ForeignForm::InlineElseWithoutColon { else_start }))
     }
 
     pub(crate) fn match_expression(&mut self) -> Result<Expression, SyntaxError> {
@@ -305,6 +309,11 @@ impl<'source> Parser<'source> {
                 // remember which colon may end a line.
                 if self.lookahead_is_expression_end() {
                     return self.indented_match_branch_body(body_error);
+                }
+                // A body on the arm's line is a statement, so an arm can
+                // leave with `None: return 0` exactly as `if c: return 0` can.
+                if self.lookahead_is_jump() {
+                    return self.statement();
                 }
                 let expr = self.expression()?;
                 Ok(ast::expression_statement(expr))

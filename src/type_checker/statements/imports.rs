@@ -1253,6 +1253,11 @@ impl TypeChecker {
     }
 }
 
+/// Every stdlib module there is, sorted.
+pub(crate) fn stdlib_module_names() -> Vec<String> {
+    modules_declaring("", |_, _| true)
+}
+
 /// Every stdlib module whose source satisfies `declares`, sorted.
 ///
 /// The result is sorted so it does not depend on directory iteration order,

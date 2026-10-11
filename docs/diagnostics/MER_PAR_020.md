@@ -1,6 +1,6 @@
 ## Rule
 
-A C-style operator has been used instead of the Miri keyword equivalent. Miri does not support operators like `++` (increment) or `--` (decrement). Use the appropriate Miri keyword or function instead (e.g. `+= 1` for increment).
+A logical operator has been spelled with symbols. Miri spells logical and as the word `and` and logical or as the word `or`; `&&` and `||` are not operators. `miri fix` rewrites them (`word-operator`).
 
 ## Messages
 
@@ -8,18 +8,24 @@ A C-style operator has been used instead of the Miri keyword equivalent. Miri do
 
 ## Help
 
+- `` Miri spells logical and as the word `and`: `if a and b`. ``
+- `` Miri spells logical or as the word `or`: `if a or b`. ``
 - `Use '{suggestion}' instead of '{found}'.`
 
 ## Before
 
 ```miri
-let x = &true
+let a = true
+let b = false
+let both = a && b
 ```
 
 ## After
 
 ```miri
-let x = true and true
+let a = true
+let b = false
+let both = a and b
 ```
 
 ## Reference

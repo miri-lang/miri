@@ -1237,13 +1237,9 @@ fn type_not_found(
     type_name: &str,
     definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
 ) -> Box<Diagnostic> {
-    let mut names: Vec<&str> = definitions.keys().map(String::as_str).collect();
-    names.sort_unstable();
-    let help = match crate::error::format::find_best_match(type_name, &names) {
-        Some(nearest) => format!("did you mean '{}'?", nearest),
-        None => "run `miri view <MODULE> --outline --public` to list what a module declares."
-            .to_string(),
-    };
+    let help = unimported_type_help(type_name)
+        .or_else(|| primitive_type_help(type_name))
+        .unwrap_or_else(|| nearest_type_help(type_name, definitions));
     coded(
         DiagnosticCode::BldTypeNotInScope,
         format!(
@@ -1252,6 +1248,41 @@ fn type_not_found(
         ),
         &help,
     )
+}
+
+/// The help for a library type the file does not import: the `use` line that
+/// brings it in, and the command that reads it without one.
+fn unimported_type_help(type_name: &str) -> Option<String> {
+    let modules = crate::type_checker::TypeChecker::modules_declaring_type(type_name);
+    let module = modules.first()?;
+    let name = sanitize_for_terminal(type_name);
+    Some(format!(
+        "'{name}' is declared in {module}, which this file does not import: add \
+         `use {module}`, or run `miri view {module} --type {name}`."
+    ))
+}
+
+/// The help for a primitive, which has no declaration to list members from.
+fn primitive_type_help(type_name: &str) -> Option<String> {
+    crate::ast::types::primitive_type_kind(type_name)?;
+    Some(format!(
+        "'{}' is a built-in type with no members to list; `--type` reads a class, \
+         struct, enum or trait.",
+        sanitize_for_terminal(type_name)
+    ))
+}
+
+fn nearest_type_help(
+    type_name: &str,
+    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+) -> String {
+    let mut names: Vec<&str> = definitions.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    match crate::error::format::find_best_match(type_name, &names) {
+        Some(nearest) => format!("did you mean '{}'?", nearest),
+        None => "run `miri view <MODULE> --outline --public` to list what a module declares."
+            .to_string(),
+    }
 }
 
 /// The file a `view` argument names: a path on disk, or a module resolved the
@@ -1272,23 +1303,48 @@ pub fn resolve_target(argument: &str) -> Result<std::path::PathBuf, Box<Diagnost
 }
 
 /// Report an argument that names neither a readable file nor a known module.
+///
+/// A type name given where a module belongs is answered with the command that
+/// reads the type; anything else with the modules there are, so the next
+/// attempt is chosen from a list rather than guessed again.
 fn target_not_found(argument: &str) -> Box<Diagnostic> {
-    let roots = crate::type_checker::statements::imports::stdlib_roots()
-        .iter()
-        .map(|root| format!("  - {}", root.display()))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let modules = crate::type_checker::statements::imports::stdlib_module_names();
+    let help = crate::type_checker::TypeChecker::modules_declaring_type(argument)
+        .first()
+        .map(|module| {
+            format!(
+                "'{name}' is a type, not a module: run `miri view {module} --type {name}`.",
+                name = sanitize_for_terminal(argument)
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "the modules there are: {}.\n{}",
+                modules.join(", "),
+                search_roots_help()
+            )
+        });
     coded(
         DiagnosticCode::BldInputNotReadable,
         format!(
             "could not read {}: no such file, and no module of that name",
             sanitize_for_terminal(argument)
         ),
-        &format!(
-            "a module name is searched in these roots, highest priority first:\n{}\n\
-             set MIRI_STDLIB_PATH to search somewhere else.",
-            roots
-        ),
+        &help,
+    )
+}
+
+/// Where a module name is searched, and how to search somewhere else.
+fn search_roots_help() -> String {
+    let roots = crate::type_checker::statements::imports::stdlib_roots()
+        .iter()
+        .map(|root| format!("  - {}", root.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "a module name is searched in these roots, highest priority first:\n{}\n\
+         set MIRI_STDLIB_PATH to search somewhere else.",
+        roots
     )
 }
 

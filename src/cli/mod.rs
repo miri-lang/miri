@@ -13,6 +13,7 @@ pub mod fix;
 pub mod fmt;
 pub mod patch;
 pub mod resolve;
+pub mod separator_hint;
 pub mod skill;
 pub mod source;
 pub mod token_align;

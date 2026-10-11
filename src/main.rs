@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
 use std::path::PathBuf;
 
-use miri::cli::skill;
+use miri::cli::{separator_hint, skill};
 use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillCommand};
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonGpuTelemetry};
 use miri::diagnostics::DiagnosticCode;
@@ -13,7 +13,12 @@ use miri::error::diagnostic::to_json;
 use miri::pipeline::{BuildOptions, Pipeline, RunCaptureResult};
 
 pub fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|error| {
+        let argv: Vec<String> = std::env::args_os()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        separator_hint::with_separator_hint(error, &argv).exit()
+    });
 
     // Run the whole command on a worker thread with a large stack. Compilation
     // recurses on expression-nesting depth (type inference and MIR lowering both

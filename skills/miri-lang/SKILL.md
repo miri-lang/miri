@@ -62,7 +62,6 @@ fn main()
 
 This core powers all Miri programs. The rest of this skill covers what the language **does not** support, because those gaps matter just as much as the syntax that works.
 
-
 ## Anti-Hallucination: Syntax That Does Not Exist
 
 Miri deliberately leaves these off the surface to avoid ambiguity. Every example below is a compile error. Before guessing a member name, ask: `miri view --type String --public` lists what can be called on a type, including what it inherits and what a trait supplies, and needs no path for a prelude type.
@@ -377,9 +376,7 @@ fn main()
 
 ## Verification Loop
 
-This is the one loop the compiler's documentation recommends; everything else defers to it.
-
-**Loop:** `miri check --format json` → edit → `miri test` (or `miri run`). Iterate until clean.
+This is the one loop the compiler's documentation recommends; everything else defers to it. **Loop:** `miri check --format json` → edit → `miri test` (or `miri run`). Iterate until clean.
 
 1. **miri check** — `miri check myfile.mi --format json`. The envelope gives each diagnostic a `code`, a `help` and, where one exists, a `repair` with its edits. A diagnostic carrying no `repair` is one you have to edit yourself, and that is the whole reason to read the envelope rather than the text. The repair column `miri explain --list` prints is per code, and a code stands for every condition it is raised for, so it is a lower bound: only the `repair` on the diagnostic in front of you says whether this one can be applied.
 2. **Edit** — where a diagnostic carries a `repair`, `miri fix myfile.mi --apply --yes` writes every recorded repair in one call; there is no separate preview step, because the check already showed the edits. Everything else is an ordinary edit in your own editor. Where the file is already in canonical layout, `miri patch myfile.mi --replace-in-fn name --old text --new text` makes a scoped edit and re-checks the program before anything reaches disk.
@@ -394,6 +391,8 @@ The auto-applicable repairs are:
 - `concat-to-formatted-string`: Rewrite a `+` chain joining text to values as one f-string.
 - `drop-extra-arguments`: Drop positional arguments a call does not declare.
 - `drop-iterator-accessor`: Drop a `keys` accessor on a keyed collection and iterate it directly.
+- `if-colon`: Write `:` in place of `then`, or after an inline `else`.
+- `interpolation-quotes`: Write the string literals inside an f-string's braces with the other quote.
 - `let-mut-to-var`: Rewrite a `let mut` binding as `var`.
 - `let-to-var`: Rebind an immutable declaration as mutable.
 - `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
@@ -401,3 +400,4 @@ The auto-applicable repairs are:
 - `qualify-variant-pattern`: Prefix a bare variant pattern with the enum that declares it.
 - `rename-to-suggestion`: Rewrite a name as the one spelling the help offers in its place.
 - `underscore-unread-binding`: Prefix a binding nothing reads with `_` to say the value is not meant to be read.
+- `word-operator`: Rewrite `!`, `&&` or `||` as `not`, `and` or `or`.
