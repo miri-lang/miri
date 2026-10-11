@@ -73,6 +73,9 @@ MEASURED_PROMPT = (
 # asked for: rating a tool buys invocations a real job would not spend.
 RATINGS_FILE = "RATINGS.json"
 
+# How much of a failed hidden case's stderr a record keeps.
+STDERR_KEPT = 2000
+
 # Where the surfaces the published page recommends are listed. The probe hands
 # the subject those names so its answers can be joined against them: a free-text
 # surface (`check`, `the check command`) matches nothing, and a verdict that
@@ -389,17 +392,30 @@ def score(workspace, job_id, arm, case_timeout=120):
     The tests are run here and never before: the agent does not see them, so a
     run that passes passed on the contract rather than on the cases.
     """
-    passed, failures = 0, []
+    passed, failures, detail = 0, [], {}
     for case in hidden_tests(job_id):
         expected = case.with_suffix(".out").read_text(encoding="utf-8")
-        if run_case(workspace, arm, case, case_timeout) == expected.rstrip("\n"):
+        stdout, why = run_case(workspace, arm, case, case_timeout)
+        if stdout == expected.rstrip("\n"):
             passed += 1
         else:
             failures.append(case.stem)
-    return {"passed": passed, "total": len(hidden_tests(job_id)), "failures": failures}
+            detail[case.stem] = why
+    return {
+        "passed": passed,
+        "total": len(hidden_tests(job_id)),
+        "failures": failures,
+        "failureDetail": detail,
+    }
 
 
 def run_case(workspace, arm, case, case_timeout):
+    """Run one hidden case: its stdout, and how the process ended.
+
+    The ending is kept for a failed case. Stdout alone cannot tell a wrong
+    answer from a program that never compiled, trapped or ran out of time,
+    and a silent-wrong-answer verdict must rest on evidence that survives.
+    """
     try:
         finished = subprocess.run(
             [*arm["run"], str(case)],
@@ -408,9 +424,12 @@ def run_case(workspace, arm, case, case_timeout):
             text=True,
             timeout=case_timeout,
         )
-        return finished.stdout.rstrip("\n")
-    except (subprocess.TimeoutExpired, OSError):
-        return None
+        ending = {"exitCode": finished.returncode, "stderr": finished.stderr[-STDERR_KEPT:]}
+        return finished.stdout.rstrip("\n"), ending
+    except subprocess.TimeoutExpired:
+        return None, {"exitCode": None, "stderr": f"timed out after {case_timeout}s"}
+    except OSError as error:
+        return None, {"exitCode": None, "stderr": str(error)}
 
 
 def compiler_stamp():

@@ -1317,6 +1317,33 @@ fn test_a_turn_is_a_message_and_tokens_are_what_the_harness_settled() {
 
 #[test]
 #[cfg(unix)]
+fn test_a_failed_hidden_case_keeps_its_exit_status_and_stderr() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-failure-detail");
+    let _ = fs::remove_dir_all(&root);
+    install_scripted_harness(&root.join("bin"), &[CLEAN_INIT]);
+    let ran = run_bench(&root, &[]);
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let record = measured_record(&root);
+    assert!(
+        record.contains("\"failureDetail\"")
+            && record.contains("\"exitCode\": 2")
+            && record.contains("main.py"),
+        "a failed case does not say why it failed:\n{}",
+        record
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+#[cfg(unix)]
 fn test_a_stream_that_never_settled_leaves_its_tokens_unobserved() {
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the run was not launched");
