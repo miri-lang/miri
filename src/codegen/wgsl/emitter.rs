@@ -555,6 +555,11 @@ struct LoopInfo {
     continuing: Option<BasicBlock>,
     /// The block to jump to on `continue` (either continuing block or header).
     continue_target: BasicBlock,
+    /// The block whose `SwitchInt` decides whether the loop runs again. It is
+    /// the header itself, unless the condition short-circuits (`a and b`): then
+    /// the header only tests `a`, and the test is the block the condition's
+    /// branches meet at, where the combined value is tested.
+    test: BasicBlock,
 }
 
 /// A frame on the loop stack, tracking where break/continue should jump.
@@ -649,7 +654,7 @@ impl<'a> BodyEmitter<'a> {
 
         let reachability = Self::compute_reachability(body, &loop_headers);
 
-        Ok(Self {
+        let mut emitter = Self {
             body,
             bindings,
             workgroup_size,
@@ -664,7 +669,55 @@ impl<'a> BodyEmitter<'a> {
             loop_stack: Vec::new(),
             return_local: None,
             device_helpers: None,
-        })
+        };
+        emitter.resolve_loop_tests();
+        Ok(emitter)
+    }
+
+    /// Moves each loop's test past a short-circuit condition.
+    ///
+    /// A `while a and b` header tests only `a`. Its false branch records the
+    /// condition as false and joins `b`'s branch at the block that tests the
+    /// combined value, so it can still reach the header again: it is inside
+    /// the condition, not out of the loop. While the recorded exit can reach
+    /// the header, the test moves to the block the two branches meet at, and
+    /// the body and exit become that block's targets.
+    fn resolve_loop_tests(&mut self) {
+        let headers: Vec<BasicBlock> = self.loop_info.keys().copied().collect();
+        for header in headers {
+            let Some(mut info) = self.loop_info.get(&header).cloned() else {
+                continue;
+            };
+            while self.forward_reachable(info.exit, header) {
+                let Some(join) = self.find_merge(info.body_entry, info.exit) else {
+                    break;
+                };
+                let Some((body_entry, exit)) = self.true_test_targets(join) else {
+                    break;
+                };
+                if join == header {
+                    break;
+                }
+                info.test = join;
+                info.body_entry = body_entry;
+                info.exit = exit;
+            }
+            self.loop_info.insert(header, info);
+        }
+    }
+
+    /// The (true, false) targets of a block ending in a boolean `SwitchInt` on
+    /// `true`, the shape a loop test has.
+    fn true_test_targets(&self, block: BasicBlock) -> Option<(BasicBlock, BasicBlock)> {
+        let term = self.body.basic_blocks.get(block.0)?.terminator.as_ref()?;
+        match &term.kind {
+            TerminatorKind::SwitchInt {
+                targets, otherwise, ..
+            } if targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true() => {
+                Some((targets[0].1, *otherwise))
+            }
+            _ => None,
+        }
     }
 
     /// Precompute, for every block, the set of blocks forward-reachable from it
@@ -837,11 +890,9 @@ impl<'a> BodyEmitter<'a> {
         }
 
         let body_entry = targets[0].1;
-        // TODO: for a short-circuit condition (`while a and b`) the header's
-        // `otherwise` is the block that records `a` was false, not the loop's
-        // exit; the real exit is then emitted inside the loop on `b`'s false
-        // branch, so a kernel whose loop ends on `a` skips every statement after
-        // the loop. The exit must be the join both condition paths reach.
+        // For a short-circuit condition this is provisional: the header's
+        // `otherwise` is then still inside the condition, and
+        // `resolve_loop_tests` moves the exit to the condition's real test.
         let exit = *otherwise;
         if latch_set.len() > 1 {
             return HeaderClass::MultiLatch;
@@ -861,6 +912,7 @@ impl<'a> BodyEmitter<'a> {
             body_entry,
             continuing,
             continue_target,
+            test: header,
         })
     }
 
@@ -1328,7 +1380,9 @@ impl<'a> BodyEmitter<'a> {
             self.emit_statement_mapped(stmt)?;
         }
 
-        if let Some(term) = &header_block.terminator {
+        if loop_info.test != header {
+            self.emit_short_circuit_test(header, loop_info.test, visited)?;
+        } else if let Some(term) = &header_block.terminator {
             if let TerminatorKind::SwitchInt {
                 discr,
                 targets,
@@ -1384,6 +1438,79 @@ impl<'a> BodyEmitter<'a> {
         self.write_indent()?;
         writeln!(self.output, "}}").map_err(emit_err)?;
 
+        Ok(())
+    }
+
+    /// Emit a short-circuit loop condition: the header's branch as an `if` whose
+    /// arms run to the block testing the combined value, that block's
+    /// statements, and a `break` when its test is false.
+    fn emit_short_circuit_test(
+        &mut self,
+        header: BasicBlock,
+        test: BasicBlock,
+        visited: &mut HashSet<BasicBlock>,
+    ) -> Result<(), CodegenError> {
+        let header_term = self
+            .body
+            .basic_blocks
+            .get(header.0)
+            .and_then(|block| block.terminator.as_ref())
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: loop header bb{} has no terminator",
+                    header.0
+                ))
+            })?;
+        let TerminatorKind::SwitchInt {
+            discr,
+            targets,
+            otherwise,
+        } = &header_term.kind
+        else {
+            return Err(CodegenError::Internal(format!(
+                "WGSL backend: loop header bb{} is not a SwitchInt",
+                header.0
+            )));
+        };
+        let (then_bb, else_bb) = (targets[0].1, *otherwise);
+        let cond = self.render_operand(discr)?;
+        self.record(header_term.span);
+        self.write_indent()?;
+        writeln!(self.output, "if (bool({})) {{", cond).map_err(emit_err)?;
+        self.indent += 1;
+        self.emit_from(then_bb, Some(test), visited)?;
+        self.indent -= 1;
+        self.write_indent()?;
+        writeln!(self.output, "}} else {{").map_err(emit_err)?;
+        self.indent += 1;
+        self.emit_from(else_bb, Some(test), visited)?;
+        self.indent -= 1;
+        self.write_indent()?;
+        writeln!(self.output, "}}").map_err(emit_err)?;
+
+        visited.insert(test);
+        let test_block = self.body.basic_blocks.get(test.0).ok_or_else(|| {
+            CodegenError::Internal(format!("WGSL backend: block bb{} out of bounds", test.0))
+        })?;
+        for stmt in &test_block.statements {
+            self.emit_statement_mapped(stmt)?;
+        }
+        let Some(term) = &test_block.terminator else {
+            return Err(CodegenError::Internal(format!(
+                "WGSL backend: loop test bb{} has no terminator",
+                test.0
+            )));
+        };
+        let TerminatorKind::SwitchInt { discr, .. } = &term.kind else {
+            return Err(CodegenError::Internal(format!(
+                "WGSL backend: loop test bb{} is not a SwitchInt",
+                test.0
+            )));
+        };
+        let cond = self.render_operand(discr)?;
+        self.record(term.span);
+        self.write_indent()?;
+        writeln!(self.output, "if (!(bool({}))) {{ break; }}", cond).map_err(emit_err)?;
         Ok(())
     }
 

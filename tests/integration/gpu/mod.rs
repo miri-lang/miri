@@ -65,6 +65,7 @@ pub mod residency_polymorphic;
 pub mod run_telemetry_envelope;
 pub mod runtime_start_gpu_for;
 pub mod scalar_capture;
+pub mod short_circuit_loops;
 pub mod sized_constructor;
 pub mod slice_readback;
 pub mod uniform_portability;
