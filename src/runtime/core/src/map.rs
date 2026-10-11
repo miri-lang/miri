@@ -110,6 +110,10 @@ impl MiriMap {
 
     /// The slot of the entry at sequential `nth`, counting occupied slots only,
     /// or `None` past the last entry.
+    // TODO: this scans from slot 0 on every call, and iteration calls it once per
+    // entry, so walking the whole collection is quadratic. A subject's program
+    // over ~124k distinct keys took 47 s. Iteration wants a dense entry array
+    // beside the hash index, or a cursor the `for` lowering carries.
     unsafe fn nth_entry(&self, nth: usize) -> Option<usize> {
         let mut count = 0usize;
         for i in 0..self.capacity {

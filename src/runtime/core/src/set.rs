@@ -214,6 +214,10 @@ impl MiriSet {
 
     /// The slot of the element at sequential `index`, counting occupied slots
     /// only, or null past the last element.
+    // TODO: this scans from slot 0 on every call, and iteration calls it once per
+    // element, so walking the whole collection is quadratic. A subject's program
+    // over ~124k distinct keys took 47 s. Iteration wants a dense entry array
+    // beside the hash index, or a cursor the `for` lowering carries.
     unsafe fn nth_element(&self, index: usize) -> *const u8 {
         let mut count: usize = 0;
         for i in 0..self.capacity {
