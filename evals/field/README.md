@@ -114,6 +114,13 @@ are tokens-to-green and silent wrong answers. Toolchain invocations are
 secondary and never summed across languages: `cargo build` and `miri check` are
 not the same unit of work.
 
+Tokens are the ones the harness settles in its closing `result` event. Input
+counts every token the model processed, cache reads and cache writes included,
+and the cached parts are also recorded apart; a run whose stream never settled,
+because it hit the wall-clock cap, records its tokens as unobserved rather than
+as zero. A turn is one model response, however many events the harness split
+it into.
+
 Nothing is read from a field the subject populates about itself.
 
 ## Running one cell

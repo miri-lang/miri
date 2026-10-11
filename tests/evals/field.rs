@@ -1265,6 +1265,83 @@ fn test_a_run_a_hook_touched_is_recorded_unclean_and_never_folded() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// One model response streamed the way the `claude` harness streams it: one
+/// event per content block, every block repeating the message's id and the
+/// partial usage it had when the message started.
+const SPLIT_RESPONSE: [&str; 3] = [
+    r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"thinking","thinking":"plan"}],"usage":{"input_tokens":2,"cache_read_input_tokens":900,"output_tokens":2}}}"#,
+    r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"checking"}],"usage":{"input_tokens":2,"cache_read_input_tokens":900,"output_tokens":2}}}"#,
+    r#"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":2,"cache_read_input_tokens":900,"output_tokens":2}}}"#,
+];
+
+#[test]
+#[cfg(unix)]
+fn test_a_turn_is_a_message_and_tokens_are_what_the_harness_settled() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-settled-usage");
+    let _ = fs::remove_dir_all(&root);
+    let mut events = vec![CLEAN_INIT];
+    events.extend(SPLIT_RESPONSE);
+    events.push(
+        r#"{"type":"result","subtype":"success","num_turns":1,"usage":{"input_tokens":5,"cache_creation_input_tokens":40,"cache_read_input_tokens":900,"output_tokens":70}}"#,
+    );
+    install_scripted_harness(&root.join("bin"), &events);
+    let ran = run_bench(&root, &[]);
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let record = measured_record(&root);
+    for expected in [
+        "\"turns\": 1,",
+        "\"toolInvocations\": 1,",
+        "\"in\": 945,",
+        "\"out\": 70,",
+        "\"cacheRead\": 900,",
+        "\"cacheCreation\": 40,",
+        "\"observed\": true",
+    ] {
+        assert!(
+            record.contains(expected),
+            "the record does not carry {}:\n{}",
+            expected,
+            record
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_stream_that_never_settled_leaves_its_tokens_unobserved() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-unsettled-usage");
+    let _ = fs::remove_dir_all(&root);
+    let mut events = vec![CLEAN_INIT];
+    events.extend(SPLIT_RESPONSE);
+    install_scripted_harness(&root.join("bin"), &events);
+    let ran = run_bench(&root, &[]);
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let record = measured_record(&root);
+    assert!(
+        record.contains("\"observed\": false") && record.contains("\"turns\": 1,"),
+        "partial per-block usage was read as a settled cost:\n{}",
+        record
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn test_only_a_probe_is_asked_for_ratings() {
     if !available("python3") {
