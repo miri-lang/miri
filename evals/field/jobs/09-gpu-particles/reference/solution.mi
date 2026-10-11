@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// A Miri solution to the particles job, written to prove the job can be won in
+// Miri today. Each step is two kernels: one computes every acceleration from
+// the step's starting positions, the next integrates velocities and positions.
+
+use system.os
+use system.fs
+use system.math
+use system.collections.array
+use system.collections.list
+
+const MAX_PARTICLES = 2048
+
+fn read_fields(path String) [String]
+    var fields = List<String>()
+    match Fs().read_file(path)
+        Result.Ok(text)
+            for line in text.split("\n")
+                for field in line.trim().split(" ")
+                    if field.trim().length() > 0
+                        fields.push(field.trim())
+        Result.Err(_): fields.length()
+    fields
+
+fn decimal(field String) float
+    match field.to_float()
+        Some(value): value
+        None: 0.0
+
+fn whole(field String) int
+    match field.to_int()
+        Some(value): value
+        None: 0
+
+fn six(value float) String
+    let negative = value < 0.0
+    let millionths = ((value if not negative else 0.0 - value) * 1000000.0 + 0.5) as int
+    let fraction = f"{millionths % 1000000 + 1000000}"
+    let sign = "-" if negative and millionths > 0 else ""
+    f"{sign}{millionths / 1000000}.{fraction.substring(1, 7)}"
+
+fn main() int
+    let fields = read_fields(Args().element_at(0))
+    let n = whole(fields[0])
+    let steps = whole(fields[1])
+    let dt = decimal(fields[2]) as f32
+    var hx = Array<f32, MAX_PARTICLES>()
+    var hy = Array<f32, MAX_PARTICLES>()
+    var hvx = Array<f32, MAX_PARTICLES>()
+    var hvy = Array<f32, MAX_PARTICLES>()
+    for i in 0..n
+        hx[i] = decimal(fields[3 + 4 * i]) as f32
+        hy[i] = decimal(fields[4 + 4 * i]) as f32
+        hvx[i] = decimal(fields[5 + 4 * i]) as f32
+        hvy[i] = decimal(fields[6 + 4 * i]) as f32
+    gpu var px = Array<f32, MAX_PARTICLES>()
+    gpu var py = Array<f32, MAX_PARTICLES>()
+    gpu var vx = Array<f32, MAX_PARTICLES>()
+    gpu var vy = Array<f32, MAX_PARTICLES>()
+    gpu var ax = Array<f32, MAX_PARTICLES>()
+    gpu var ay = Array<f32, MAX_PARTICLES>()
+    px = hx
+    py = hy
+    vx = hvx
+    vy = hvy
+    var s = 0
+    while s < steps
+        forall i in 0..n
+            var sum_x = 0.0 as f32
+            var sum_y = 0.0 as f32
+            for j in 0..n
+                if j != i
+                    let dx = px[j] - px[i]
+                    let dy = py[j] - py[i]
+                    let d2 = dx * dx + dy * dy + 0.01
+                    let scale = 1.0 / (d2 * sqrt(d2))
+                    sum_x = sum_x + dx * scale
+                    sum_y = sum_y + dy * scale
+            ax[i] = sum_x
+            ay[i] = sum_y
+        forall i in 0..n
+            vx[i] = vx[i] + ax[i] * dt
+            vy[i] = vy[i] + ay[i] * dt
+            px[i] = px[i] + vx[i] * dt
+            py[i] = py[i] + vy[i] * dt
+        s = s + 1
+    hx = px
+    hy = py
+    hvx = vx
+    hvy = vy
+    var cx = 0.0
+    var cy = 0.0
+    var mx = 0.0
+    var my = 0.0
+    var kinetic = 0.0
+    for i in 0..n
+        cx = cx + hx[i] as float
+        cy = cy + hy[i] as float
+        mx = mx + hvx[i] as float
+        my = my + hvy[i] as float
+        kinetic = kinetic + ((hvx[i] * hvx[i] + hvy[i] * hvy[i]) as float) / 2.0
+    cx = cx / (n as float)
+    cy = cy / (n as float)
+    var squares = 0.0
+    for i in 0..n
+        let dx = hx[i] as float - cx
+        let dy = hy[i] as float - cy
+        squares = squares + dx * dx + dy * dy
+    println(f"CENTER {six(cx)} {six(cy)}")
+    println(f"MOMENTUM {six(mx)} {six(my)}")
+    println(f"KINETIC {six(kinetic)}")
+    println(f"SPREAD {six(sqrt(squares / (n as float)))}")
+    0

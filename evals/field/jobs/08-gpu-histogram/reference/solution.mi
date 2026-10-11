@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// A Miri solution to the histogram job, written to prove the job can be won in
+// Miri today. One kernel generates each value and adds it to its bin
+// atomically; a second copies the bins into a buffer the host can read.
+
+use system.os
+use system.fs
+use system.collections.array
+use system.collections.list
+use system.gpu.atomic
+
+const MAX_BINS = 256
+
+fn read_numbers(path String) [int]
+    var numbers = List<int>()
+    match Fs().read_file(path)
+        Result.Ok(text)
+            for field in text.trim().split(" ")
+                match field.trim().to_int()
+                    Some(value): numbers.push(value)
+                    None: numbers.length()
+        Result.Err(_): numbers.length()
+    numbers
+
+fn main() int
+    let numbers = read_numbers(Args().element_at(0))
+    let count = numbers[0]
+    let seed = numbers[1]
+    let bins = numbers[2]
+    gpu var hist = Array<Atomic<u32>, MAX_BINS>()
+    gpu var counts = Array<u32, MAX_BINS>()
+    forall i in 0..count
+        let a = ((i % 40000) * 1597 + seed + 51749) % 40000
+        let b = (a * a + a * 37 + 11) % 40009
+        let c = (b * 613 + 7919) % 40009
+        let d = (c + (i / 40000) * 7919) % 40009
+        atomic_add(hist, (d % 1000) * bins / 1000, 1 as u32)
+    forall k in 0..bins
+        counts[k] = hist[k]
+    let host = counts
+    for k in 0..bins
+        println(f"BIN {k} {host[k]}")
+    println(f"TOTAL {count}")
+    0

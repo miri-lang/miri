@@ -1,0 +1,29 @@
+id = "07-gpu-escape-time"
+title = "Mandelbrot escape times, computed on the GPU"
+turn_cap = 60
+time_cap_seconds = 2700
+gpu = true
+
+# A GPU computes in single precision, so a point on the boundary of the set can
+# escape a step away from the double-precision reference. A count may differ by
+# 2% of itself or by 6 points, whichever is larger; the mean by 1%. Measured
+# against single-precision kernels, that absorbs the drift, and it still refuses
+# a grid sampled at pixel corners instead of centres and an escape time off by
+# one, the two mistakes the contract's formulas exist to pin.
+[compare]
+kind = "numeric"
+relative = 0.02
+absolute = 6
+
+[compare.labels.MEAN]
+relative = 0.01
+absolute = 0.0
+
+# The GPU library is part of the toolchain line, which is the one sentence that
+# differs between arms. Naming it in the brief itself would tell every arm which
+# language it is being measured in.
+[toolchain]
+"miri-pack" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. A `forall` over `gpu var` buffers runs as a GPU kernel"
+"miri-bare" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. A `forall` over `gpu var` buffers runs as a GPU kernel"
+python = "`uv` and `pytest`, and the `wgpu` package for the GPU"
+rust = "`cargo` and `clippy`, and the `wgpu` crate for the GPU"
