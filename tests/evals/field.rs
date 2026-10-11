@@ -1229,9 +1229,37 @@ fn test_the_subject_gets_no_harness_routing_and_its_isolation_is_recorded() {
     ] {
         assert!(!seen.contains(name), "the subject inherited {}", name);
     }
+    let repository = field_dir()
+        .parent()
+        .and_then(Path::parent)
+        .expect("the field directory sits two levels below the repository")
+        .display()
+        .to_string();
     assert!(
-        seen.contains("MIRI_STDLIB_PATH="),
-        "the subject lost the stdlib path"
+        !seen.contains(&repository),
+        "the subject's environment names the compiler repository:\n{}",
+        seen
+    );
+    assert!(
+        seen.contains("MIRI_RUNTIME_DIR="),
+        "the subject was not handed a staged runtime"
+    );
+    let staged = fs::read_dir(root.join("scratch").join("toolchain"))
+        .expect("no toolchain directory was staged")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.join("bin").join("miri").is_file())
+        .expect("no staged toolchain carries a compiler");
+    assert!(
+        staged.join("lib").join("miri").join("stdlib").is_dir(),
+        "the staged toolchain carries no standard library"
+    );
+    assert!(
+        seen.contains(&format!(
+            "MIRI_RUNTIME_DIR={}",
+            staged.join("runtime").display()
+        )),
+        "the subject's runtime directory is not the staged one"
     );
     let record = measured_record(&root);
     assert!(
@@ -1286,6 +1314,41 @@ fn test_a_run_a_hook_touched_is_recorded_unclean_and_never_folded() {
         String::from_utf8_lossy(&folded.stderr).contains("not isolated"),
         "the refusal does not say why:\n{}",
         String::from_utf8_lossy(&folded.stderr)
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_run_that_reached_into_the_repository_is_not_clean() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-repository-reach");
+    let _ = fs::remove_dir_all(&root);
+    let repository = field_dir()
+        .parent()
+        .and_then(Path::parent)
+        .expect("the field directory sits two levels below the repository")
+        .display()
+        .to_string();
+    let reach = format!(
+        r#"{{"type":"assistant","message":{{"id":"m1","content":[{{"type":"tool_use","name":"Bash","input":{{"command":"ls {}/docs"}}}}]}}}}"#,
+        repository
+    );
+    install_scripted_harness(&root.join("bin"), &[CLEAN_INIT, reach.as_str()]);
+    let ran = run_bench(&root, &[]);
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let record = measured_record(&root);
+    assert!(
+        record.contains("\"clean\": false") && record.contains("\"repoReferences\": 1"),
+        "a run that read the compiler repository is recorded clean:\n{}",
+        record
     );
     let _ = fs::remove_dir_all(&root);
 }
