@@ -25,7 +25,13 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
    pre-registered claims and their thresholds; neither may be loosened to fit
    a result.
 
-2. Run every cell exactly as specified: briefs verbatim, the models pinned in
+2. A round runs every GPU job (each `job.toml` with `gpu = true`) under the
+   arms `miri-skill`, `miri-grammar`, `miri-both`, `python` and `rust`, in
+   every model column, three runs a cell. Start with one smoke cell and read
+   its record before spending on the rest; stop on any record that is not
+   clean.
+
+   Run every cell exactly as specified: briefs verbatim, the models pinned in
    models.toml, subjects barred from the compiler's own repository, scratch
    directories outside it. A model column whose id is empty needs --model-id
    before it can run; a round whose model moved under it is not a round.
@@ -98,8 +104,9 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
      defect behind such an answer is new is a fact about the compiler's
      history rather than about the round, so the round is judged on the
      stronger thing the records carry: that none was produced at all;
-   - the packed Miri arm needs no more tool invocations to reach green than
-     the bare Miri arm, in every job. Measured from `toolInvocations`,
+   - the Miri arm taught from the skill pack (`miri-skill`) needs no more tool
+     invocations to reach green than the arm taught from the grammar
+     (`miri-grammar`), in every GPU job. Measured from `toolInvocations`,
      `outcome`, `hiddenTests`; judged as `packLoop`;
    - no surface the published page recommends was rated 2 out of 5 or lower
      by the unmeasured opinion probe. Measured from `ratings`; judged as

@@ -9,30 +9,37 @@ Each claim ends by naming the record fields it is measured from and the key
 `report.py` publishes its verdict under. A claim stated in terms of something a
 record does not carry could only be judged by hand, so the gate refuses one.
 
-- **C1 — Cheaper than the agent's native languages.** On every CPU job, the
-  median tokens-to-green for `miri-pack` is below that of `python`, of
-  `typescript` and of `rust`, per model. Measured from `tokens`, `outcome`,
-  `hiddenTests`; judged as `C1`.
-- **C2 — Fewer wrong answers.** Across the CPU jobs, the silent-wrong-answer
-  count for `miri-pack` is no higher than any baseline's, where a silent wrong
-  answer is a run the agent declared finished that fails a hidden test.
-  Measured from `silentWrongAnswer`; judged as `C2`.
-- **C3 — GPU in reach.** On the GPU job, `miri-pack` finishes in every model
+The claims are judged over the GPU jobs — every job whose `job.toml` says
+`gpu = true` — with Miri measured after onboarding and the baselines cold.
+`miri-skill` is the Miri arm the claims are about; `miri-grammar` and
+`miri-both` are the onboarding arms it is compared with.
+
+- **C1 — Within reach of the agent's native languages on cost.** On every GPU
+  job, per model, the median tokens-to-green for `miri-skill` is at most 1.5
+  times the cheaper of `python` and `rust`. A baseline that reached no green run
+  leaves `miri-skill` the cheaper by default when it reached one. Measured from
+  `tokens`, `outcome`, `hiddenTests`; judged as `C1`.
+- **C2 — Fewer wrong answers.** Across the GPU jobs, the silent-wrong-answer
+  count for `miri-skill` is no higher than any baseline's, where a silent wrong
+  answer is a run the agent declared finished that fails a hidden test or never
+  put its work on the GPU. Measured from `silentWrongAnswer`; judged as `C2`.
+- **C3 — GPU in reach.** On every GPU job, `miri-skill` finishes in every model
   where at least one baseline abandons or hits the turn cap, or its median cost
   is under half the cheapest baseline's. Measured from `tokens`, `outcome`,
   `hiddenTests`; judged as `C3`.
-- **C4 — The pack substitutes for pretraining.** In every job, `miri-pack` is
-  cheaper than `miri-bare` and finishes at least as often. Measured from
+- **C4 — The pack earns its place.** On every GPU job, per model, `miri-skill`
+  is cheaper than `miri-grammar` and finishes at least as often: teaching from
+  the skill pack beats teaching from the grammar alone. `miri-both` is reported
+  beside it with its standing against `miri-skill`, as a label. Measured from
   `tokens`, `outcome`, `hiddenTests`; judged as `C4`.
-- **C5 — Faster than the agent's native languages.** On every CPU job, the
-  median wall-clock-to-green for `miri-pack` is below that of `python`, of
-  `typescript` and of `rust`, per model. Measured from `wallClockSeconds`,
+- **C5 — Within reach of the agent's native languages on speed.** On every GPU
+  job, per model, the median wall-clock-to-green for `miri-skill` is at most 1.5
+  times the faster of `python` and `rust`. Measured from `wallClockSeconds`,
   `outcome`, `hiddenTests`; judged as `C5`.
 
-A comparison C1 or C5 loses is still reported with its standing: `beats`,
-`parity` (no more than 1.25× the baseline) or `behind`. Parity is a label, never
-a verdict — it shows how far a round is from the claim, and it is the evidence
-the programme reads when deciding whether a lead is out of reach.
+Every comparison C1 or C5 makes against a baseline is still reported with its
+standing: `beats`, `parity` (no more than 1.25× the baseline) or `behind`. The
+standing is a label, never a verdict — it shows how far a round is from a lead.
 
 ## Changes
 
@@ -49,6 +56,22 @@ the programme reads when deciding whether a lead is out of reach.
   run leaves no rate to beat, so the strict form could fail every round on the
   bare arm's success rather than the pack's shortfall, and the article gate
   would never open. The cost half stays strict.
+- **2026-10-12, before round r2, the user's decision** — the claims are
+  re-registered for a different experiment. Round r1 (2026-10-11, in `LOG.md`)
+  measured a cold start on CPU jobs and showed C1 and C5 out of reach of any
+  tooling: the native baselines sat at the floor, about 4.8 calls a run, no
+  lookups and almost no compile errors, an advantage that lives in the model's
+  weights. The question is now GPU compute written by agents, the domain Miri is
+  designed for, with Miri taught before the job (the onboarding arms) and the
+  baselines cold. C1 and C5 become a bar of 1.5× the cheaper (faster) baseline
+  instead of a lead, with standings still reported; C2 and C3 keep their form
+  over the GPU jobs; C4 compares the onboarding arms, since the cold `miri-pack`
+  and `miri-bare` arms are not part of the round. The TypeScript baseline was
+  dropped the day before. One brief sentence changes with them: the heat job's
+  Miri toolchain line said every `forall` lowers to a GPU kernel, which is not
+  so for a bare `forall` over host data, and now says what the newer GPU jobs
+  say. r1's verdicts stand as the cold-start result and are not refolded under
+  these claims. No record of the new round existed when this was written.
 
 ## What may not change between rounds
 

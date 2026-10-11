@@ -422,11 +422,11 @@ fn test_claims_are_pre_registered_with_their_thresholds() {
         assert!(claims.contains(id), "CLAIMS.md does not carry {}", id);
     }
     assert!(
-        claims.contains("1.25"),
-        "CLAIMS.md drops C1's cost-parity threshold"
+        claims.contains("1.5"),
+        "CLAIMS.md drops C1's bar against the cheaper baseline"
     );
     assert!(
-        claims.contains("miri-bare"),
+        claims.contains("miri-grammar"),
         "CLAIMS.md drops the arm C4 compares against"
     );
 }
@@ -551,12 +551,13 @@ fn run_seed(seed: &Path, input: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// The jobs the CPU claims are judged over. The GPU job has a claim of its own.
-const CPU_JOBS: [&str; 4] = [
-    "01-word-frequency",
-    "02-ledger-repair",
-    "03-tracker-extension",
-    "04-data-edges",
+/// The jobs the claims are judged over: every job marked `gpu = true`.
+const GPU_JOBS: [&str; 5] = [
+    "05-gpu-heat",
+    "06-gpu-life",
+    "07-gpu-escape-time",
+    "08-gpu-histogram",
+    "09-gpu-particles",
 ];
 
 /// The languages a Miri arm is compared against.
@@ -625,11 +626,11 @@ fn write_synthetic_run(root: &Path, job: &str, arm: &str, index: u32, run: Synth
         .expect("cannot write a synthetic record");
 }
 
-/// A synthetic round over every CPU job: the pack at one cost, every baseline
-/// at another.
+/// A synthetic round over every GPU job: the skill arm at one cost, every
+/// baseline at another.
 fn write_pack_against_baselines(root: &Path, pack: SyntheticRun, baseline: SyntheticRun) {
-    for job in CPU_JOBS {
-        write_synthetic_record(root, job, "miri-pack", pack);
+    for job in GPU_JOBS {
+        write_synthetic_record(root, job, "miri-skill", pack);
         for arm in BASELINE_ARMS {
             write_synthetic_record(root, job, arm, baseline);
         }
@@ -679,13 +680,13 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     let _ = fs::remove_dir_all(&scratch);
 
     // The pack is cheaper than the bare arm and finishes where it does not.
-    let job = "01-word-frequency";
-    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1000, 1, 1));
+    let job = "05-gpu-heat";
+    write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(1000, 1, 1));
     let unfinished = SyntheticRun {
         green: false,
         ..SyntheticRun::green(3000, 1, 1)
     };
-    write_synthetic_record(&scratch, job, "miri-bare", unfinished);
+    write_synthetic_record(&scratch, job, "miri-grammar", unfinished);
     let held = fold(&scratch);
     assert!(
         claim_held(&held, "C4"),
@@ -697,8 +698,13 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     // already finishes everything leaves no finish rate to beat, so a claim
     // that demanded a strictly higher one could never hold.
     let _ = fs::remove_dir_all(&scratch);
-    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1000, 1, 1));
-    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(3000, 1, 1));
+    write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(1000, 1, 1));
+    write_synthetic_record(
+        &scratch,
+        job,
+        "miri-grammar",
+        SyntheticRun::green(3000, 1, 1),
+    );
     let both_finish = fold(&scratch);
     assert!(
         claim_held(&both_finish, "C4"),
@@ -711,12 +717,17 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     write_synthetic_run(
         &scratch,
         job,
-        "miri-pack",
+        "miri-skill",
         1,
         SyntheticRun::green(1000, 1, 1),
     );
-    write_synthetic_run(&scratch, job, "miri-pack", 2, unfinished);
-    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(3000, 1, 1));
+    write_synthetic_run(&scratch, job, "miri-skill", 2, unfinished);
+    write_synthetic_record(
+        &scratch,
+        job,
+        "miri-grammar",
+        SyntheticRun::green(3000, 1, 1),
+    );
     let finishes_less = fold(&scratch);
     assert!(
         !claim_held(&finishes_less, "C4"),
@@ -727,8 +738,13 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     // The same shape with the pack dearer than the bare arm must fail C4, or
     // the verdict is a constant and the article would publish on a constant.
     let _ = fs::remove_dir_all(&scratch);
-    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(4000, 1, 1));
-    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(1000, 1, 1));
+    write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(4000, 1, 1));
+    write_synthetic_record(
+        &scratch,
+        job,
+        "miri-grammar",
+        SyntheticRun::green(1000, 1, 1),
+    );
     let refused = fold(&scratch);
     assert!(
         !claim_held(&refused, "C4"),
@@ -739,15 +755,15 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
 }
 
 #[test]
-fn test_the_pack_must_beat_every_baseline_on_cost_and_on_speed() {
+fn test_the_skill_arm_must_land_within_the_bar_of_the_better_baseline() {
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the folder was not run");
         return;
     }
-    let scratch = std::env::temp_dir().join("miri-field-lead-claims");
+    let scratch = std::env::temp_dir().join("miri-field-bar-claims");
     let _ = fs::remove_dir_all(&scratch);
 
-    // Cheaper and faster than every language in every CPU job.
+    // Cheaper and faster than every baseline in every GPU job.
     write_pack_against_baselines(
         &scratch,
         SyntheticRun::green(1000, 100, 1),
@@ -757,46 +773,58 @@ fn test_the_pack_must_beat_every_baseline_on_cost_and_on_speed() {
     for claim in ["C1", "C5"] {
         assert!(
             claim_held(&leads, claim),
-            "the judge does not report {} as held when the pack leads every baseline:\n{}",
+            "the judge does not report {} as held when the skill arm leads:\n{}",
             claim,
             leads
         );
     }
+    assert!(leads.contains("\"standing\": \"beats\""));
 
-    // Within a tenth of every baseline, but behind it. Parity is reported as
-    // parity and is not a win, or the article would call a tie a lead.
+    // 1.4 times the baselines: inside the bar, and reported as behind, so a
+    // held claim never reads as a lead.
     let _ = fs::remove_dir_all(&scratch);
     write_pack_against_baselines(
         &scratch,
-        SyntheticRun::green(1100, 110, 1),
+        SyntheticRun::green(1400, 140, 1),
         SyntheticRun::green(1000, 100, 1),
     );
-    let tied = fold(&scratch);
+    let inside = fold(&scratch);
     for claim in ["C1", "C5"] {
         assert!(
-            !claim_held(&tied, claim),
-            "the judge reports {} as held when the pack only matches the baselines:\n{}",
+            claim_held(&inside, claim),
+            "the judge refuses {} inside the 1.5x bar:\n{}",
             claim,
-            tied
+            inside
         );
     }
     assert!(
-        tied.contains("\"standing\": \"parity\""),
-        "the judge does not report a result inside the parity band as parity:\n{}",
-        tied
+        inside.contains("\"standing\": \"behind\""),
+        "a result past the parity band is not labelled behind:\n{}",
+        inside
     );
 
-    // A baseline that was never run is not a baseline the pack beat.
+    // 1.6 times the baselines: past the bar, so neither claim holds.
     let _ = fs::remove_dir_all(&scratch);
-    for job in CPU_JOBS {
-        write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1, 1, 1));
-    }
-    write_synthetic_record(
+    write_pack_against_baselines(
         &scratch,
-        "05-gpu-heat",
-        "miri-pack",
-        SyntheticRun::green(1, 1, 1),
+        SyntheticRun::green(1600, 160, 1),
+        SyntheticRun::green(1000, 100, 1),
     );
+    let past = fold(&scratch);
+    for claim in ["C1", "C5"] {
+        assert!(
+            !claim_held(&past, claim),
+            "the judge reports {} as held past the 1.5x bar:\n{}",
+            claim,
+            past
+        );
+    }
+
+    // A baseline that was never run is not a baseline the skill arm reached.
+    let _ = fs::remove_dir_all(&scratch);
+    for job in GPU_JOBS {
+        write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(1, 1, 1));
+    }
     let alone = fold(&scratch);
     for claim in ["C1", "C3", "C5"] {
         assert!(
@@ -810,17 +838,17 @@ fn test_the_pack_must_beat_every_baseline_on_cost_and_on_speed() {
 }
 
 #[test]
-fn test_the_exit_criterion_compares_the_pack_loop_against_the_bare_loop() {
+fn test_the_exit_criterion_compares_the_skill_loop_against_the_grammar_loop() {
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the folder was not run");
         return;
     }
     let scratch = std::env::temp_dir().join("miri-field-pack-loop");
     let _ = fs::remove_dir_all(&scratch);
-    let job = "01-word-frequency";
+    let job = "05-gpu-heat";
 
-    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1, 1, 10));
-    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(1, 1, 12));
+    write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(1, 1, 10));
+    write_synthetic_record(&scratch, job, "miri-grammar", SyntheticRun::green(1, 1, 12));
     let held = fold(&scratch);
     assert!(
         claim_held(&held, "packLoop"),
@@ -829,8 +857,8 @@ fn test_the_exit_criterion_compares_the_pack_loop_against_the_bare_loop() {
     );
 
     let _ = fs::remove_dir_all(&scratch);
-    write_synthetic_record(&scratch, job, "miri-pack", SyntheticRun::green(1, 1, 14));
-    write_synthetic_record(&scratch, job, "miri-bare", SyntheticRun::green(1, 1, 12));
+    write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(1, 1, 14));
+    write_synthetic_record(&scratch, job, "miri-grammar", SyntheticRun::green(1, 1, 12));
     let refused = fold(&scratch);
     assert!(
         !claim_held(&refused, "packLoop"),
