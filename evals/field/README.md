@@ -131,7 +131,7 @@ python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
 
 # Score a workspace again without re-running the agent.
 python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
-    --score-only ~/.cache/miri-field/r1/02-ledger-repair/rust/claude-sonnet/1
+    --score-only "$TMPDIR/miri-field/r1/02-ledger-repair/rust/claude-sonnet/1"
 
 # Fold the round and judge the claims.
 python3 evals/field/report.py --round r1
@@ -150,6 +150,20 @@ named with `--harness-command` and recorded in every record), the arm's
 toolchain, and a `miri` on the path for the Miri arms. A model column whose
 `id` is empty in `models.toml` refuses to run until `--model-id` pins the exact
 model that ran: a round whose model moved under it is not a round.
+
+A subject runs apart from the operator's own Claude Code configuration. The
+harness is launched with only the user-independent setting sources, no MCP
+servers, and `harness-settings.json`, which pins the subscription login and
+carries no hook; passed last, it replaces any settings a wrapper passed first.
+The subject's environment loses every `CLAUDE*`, `ANTHROPIC_*` and `AWS_*`
+variable and `MAX_THINKING_TOKENS`, so nothing routes it to another backend or
+account and the model runs at the harness's defaults. The scratch
+directory defaults to the system temporary directory, and a scratch directory
+with a `CLAUDE.md` in any ancestor is refused, because the harness reads those
+on its way up. Each record carries what the harness reported loading under
+`isolation`; `report.py` refuses a round holding a run that was not clean — a
+hook that ran, an MCP server, a plugin the harness does not ship — since such
+a run measured the operator's setup as well as the language.
 
 ## The claims
 

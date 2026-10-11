@@ -33,6 +33,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from datetime import datetime, timezone
@@ -40,6 +41,23 @@ from pathlib import Path
 
 FIELD = Path(__file__).resolve().parent
 REPO = FIELD.parent.parent
+
+# The only settings a subject's harness is launched with. The operator's own
+# settings, CLAUDE.md files, hooks, plugins and MCP servers belong to no arm: a
+# hook that rewrites shell output changes the very bytes being measured, and
+# not equally across languages. Passed last, this file also replaces whatever
+# settings a wrapper named by --harness-command passed before it.
+HARNESS_SETTINGS = FIELD / "harness-settings.json"
+
+# Environment variables that route the harness to a backend, an account or a
+# configuration, or tune how the model works (a thinking budget). A subject
+# inherits none of them; the account is the one the settings file's
+# subscription login selects, and the model runs at the harness's defaults.
+HARNESS_ROUTING_PREFIXES = ("CLAUDE", "ANTHROPIC_", "AWS_")
+HARNESS_TUNING = ("MAX_THINKING_TOKENS",)
+
+# Files the harness reads from every ancestor of its working directory.
+INHERITED_MEMORY = ("CLAUDE.md", "CLAUDE.local.md")
 
 # Commands that cost a toolchain invocation, counted from the transcript. They
 # are reported beside the token counts and never added to them: `cargo build`
@@ -194,6 +212,13 @@ def launch_command(model, workspace, prompt):
             model["id"],
             "--add-dir",
             str(workspace),
+            "--setting-sources",
+            "project,local",
+            "--strict-mcp-config",
+            "--no-chrome",
+            "--include-hook-events",
+            "--settings",
+            str(HARNESS_SETTINGS),
         ]
     raise SystemExit(f"unknown harness {model['harness']}")
 
@@ -201,12 +226,12 @@ def launch_command(model, workspace, prompt):
 def run_agent(model, workspace, time_cap, prompt):
     """Launch the harness once, capped on wall clock, and keep its transcript."""
     started = time.monotonic()
-    environment = dict(os.environ, MIRI_STDLIB_PATH=str(REPO / "src" / "stdlib"))
     try:
         finished = subprocess.run(
             launch_command(model, workspace, prompt),
             cwd=workspace,
-            env=environment,
+            env=subject_environment(),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=time_cap,
@@ -217,6 +242,60 @@ def run_agent(model, workspace, time_cap, prompt):
         if isinstance(transcript, bytes):
             transcript = transcript.decode("utf-8", "replace")
         return transcript, None, time.monotonic() - started, True
+
+
+def subject_environment():
+    """The operator's environment without what routes the harness, plus the stdlib."""
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(HARNESS_ROUTING_PREFIXES) and name not in HARNESS_TUNING
+    }
+    environment["MIRI_STDLIB_PATH"] = str(REPO / "src" / "stdlib")
+    return environment
+
+
+def inherited_memory(scratch):
+    """Every CLAUDE.md the harness would load from above a workspace under `scratch`."""
+    directory = Path(scratch).resolve()
+    return [
+        candidate
+        for folder in (directory, *directory.parents)
+        for candidate in (folder / name for name in INHERITED_MEMORY)
+        if candidate.is_file()
+    ]
+
+
+def isolation_of(transcript):
+    """What the harness reported loading, and whether the run was apart from the operator.
+
+    The harness states its MCP servers, plugins and skills in its first event
+    and streams an event for every hook it runs. A run is clean when that first
+    event was seen, no hook ran, no MCP server was loaded and every plugin is
+    one the harness itself ships.
+    """
+    init, hook_events = None, 0
+    for line in transcript.splitlines():
+        event = decode_event(line)
+        if not isinstance(event, dict) or event.get("type") != "system":
+            continue
+        if event.get("subtype") == "init" and init is None:
+            init = event
+        elif str(event.get("subtype", "")).startswith("hook_started"):
+            hook_events += 1
+    init = init or {}
+    servers = [server.get("name", server) if isinstance(server, dict) else server for server in init.get("mcp_servers", [])]
+    plugins = [plugin for plugin in init.get("plugins", []) if isinstance(plugin, dict)]
+    foreign = [plugin.get("name") for plugin in plugins if plugin.get("path") != "builtin"]
+    return {
+        "clean": bool(init) and hook_events == 0 and not servers and not foreign,
+        "initObserved": bool(init),
+        "hookEvents": hook_events,
+        "mcpServers": servers,
+        "plugins": foreign,
+        "skills": init.get("skills", []),
+        "apiKeySource": init.get("apiKeySource"),
+    }
 
 
 def parse_transcript(transcript):
@@ -358,6 +437,7 @@ def record_for(arguments, arm, model, job, outcome):
         "outcome": outcome["outcome"],
         "hiddenTests": outcome["hiddenTests"],
         "silentWrongAnswer": outcome["silentWrongAnswer"],
+        "isolation": outcome["isolation"],
         "workspace": outcome["workspace"],
     }
 
@@ -390,6 +470,7 @@ def probe_record(arguments, arm, model, outcome):
         "outcome": outcome["outcome"],
         "ratings": outcome["ratings"],
         "ratingsProblem": outcome["ratingsProblem"],
+        "isolation": outcome["isolation"],
         "workspace": outcome["workspace"],
     }
 
@@ -465,6 +546,7 @@ def one_run(arguments, arm, model, job, index):
         "outcome": outcome,
         "hiddenTests": tests,
         "silentWrongAnswer": outcome == "finished" and tests["passed"] < tests["total"],
+        "isolation": isolation_of(transcript),
         "workspace": str(workspace),
     }
 
@@ -485,6 +567,7 @@ def one_probe(arguments, arm, model, job, index):
         "outcome": outcome_of(exit_code, timed_out, turns, job["turn_cap"]),
         "ratings": ratings,
         "ratingsProblem": problem,
+        "isolation": isolation_of(transcript),
         "workspace": str(workspace),
     }
 
@@ -510,7 +593,11 @@ def parse_arguments(argv):
     )
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--round", default="r1")
-    parser.add_argument("--scratch", default=str(Path.home() / ".cache" / "miri-field"))
+    parser.add_argument(
+        "--scratch",
+        default=str(Path(tempfile.gettempdir()) / "miri-field"),
+        help="where workspaces are made; no ancestor of it may hold a CLAUDE.md",
+    )
     parser.add_argument(
         "--records-root",
         default=str(FIELD / "runs"),
@@ -590,6 +677,13 @@ def main(argv):
             raise SystemExit("a probe is never scored: --probe and --score-only do not combine")
         print(json.dumps(score(Path(arguments.score_only), arguments.job, arm), indent=2))
         return 0
+    found = inherited_memory(arguments.scratch)
+    if found:
+        raise SystemExit(
+            "a subject in this scratch directory would load the operator's instructions from "
+            + ", ".join(str(path) for path in found)
+            + "; pass a --scratch outside it"
+        )
     if arguments.dry_run:
         dry_run(arguments, arm, job)
         return 0
