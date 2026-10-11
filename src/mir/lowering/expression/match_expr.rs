@@ -571,6 +571,13 @@ fn setup_match_dispatch_table<'a>(
         branch_blocks.push((branch_bb, branch, arm_discrs));
     }
 
+    route_unnamed_none(
+        subject_ty,
+        &branch_blocks,
+        &seen_discrs,
+        &mut switch_targets,
+    );
+
     let mut predicate_arm_indices: Vec<usize> = Vec::new();
     let mut predicate_test_blocks: Vec<crate::mir::BasicBlock> = Vec::new();
     for (idx, (_bb, branch, _discrs)) in branch_blocks.iter().enumerate() {
@@ -593,6 +600,36 @@ fn setup_match_dispatch_table<'a>(
         predicate_arm_indices,
         predicate_test_blocks,
         otherwise_target,
+    }
+}
+
+/// Send `None` to the first catch-all arm when no arm names it.
+///
+/// A `Some` arm takes no discriminant of its own: it claims the switch's
+/// `otherwise`, which every non-`None` value reaches. Unless `None` has a
+/// target too, it reaches that same `otherwise` and the `Some` arm binds a
+/// payload `None` does not have.
+fn route_unnamed_none(
+    subject_ty: &Type,
+    branch_blocks: &[(
+        crate::mir::BasicBlock,
+        &crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )],
+    seen_discrs: &std::collections::HashSet<u128>,
+    switch_targets: &mut Vec<(Discriminant, crate::mir::BasicBlock)>,
+) {
+    if !matches!(subject_ty.kind, TypeKind::Option(_)) || seen_discrs.contains(&0) {
+        return;
+    }
+    let catch_all = branch_blocks.iter().find(|(_, branch, _)| {
+        branch
+            .patterns
+            .iter()
+            .any(|pattern| matches!(pattern, Pattern::Default | Pattern::Identifier(_)))
+    });
+    if let Some((catch_all_bb, _, _)) = catch_all {
+        switch_targets.push((Discriminant::from(0u128), *catch_all_bb));
     }
 }
 
@@ -657,11 +694,6 @@ fn lower_match_branch_bodies(
         let fallthrough = arm_fallthrough_target(arm_idx, branch_blocks, this_discrs, join_bb);
         bind_arm_patterns(ctx, branch, subject_local, subject_span, fallthrough)?;
 
-        // TODO: matching `None` against a guarded `Some(c) if c == 1` arm followed
-        // by `_` segfaults, for `int?` as well as `String?`; the same match with
-        // `None` spelled out, or on a `Some` value, runs. Either the binding above
-        // reads the absent payload before the tag is tested or the guard's
-        // fallthrough into `_` does; the root cause is not yet traced.
         if let Some(guard) = &branch.guard {
             emit_guard_and_branch(ctx, guard, arm_idx, branch_blocks, this_discrs, join_bb)?;
         }

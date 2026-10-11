@@ -20,6 +20,7 @@
 
 mod cells;
 mod known_red;
+mod match_arms;
 mod ownership;
 mod program;
 mod runner;
@@ -114,6 +115,7 @@ fn matrix_known_red_lists_only_real_cells() {
                 .into_iter()
                 .map(|cell| cell.name),
         )
+        .chain(match_arms::match_cells().into_iter().map(|cell| cell.name))
         .collect();
     let unknown: Vec<&String> = known.keys().filter(|name| !real.contains(*name)).collect();
     assert!(
@@ -226,4 +228,13 @@ fn matrix_resource() {
     red.sort();
     record_observation("resource", &red);
     check_against_known_red("resource", &red);
+}
+
+/// Every match cell: which arm each variant reaches under each arm shape.
+#[test]
+fn matrix_match() {
+    let mut red = match_arms::red_match_cells(&match_arms::match_cells());
+    red.sort();
+    record_observation("match", &red);
+    check_against_known_red("match", &red);
 }

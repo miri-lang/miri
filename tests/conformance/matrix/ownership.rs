@@ -309,7 +309,7 @@ fn judge(cell: &ResourceCell) -> Option<String> {
 }
 
 /// The first line of `text` that says something, trimmed for a comment.
-fn first_line(text: &str) -> String {
+pub(super) fn first_line(text: &str) -> String {
     text.lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
@@ -320,7 +320,7 @@ fn first_line(text: &str) -> String {
 }
 
 /// Runs `source` the way every matrix program runs.
-fn execute(source: &str) -> (bool, String, String) {
+pub(super) fn execute(source: &str) -> (bool, String, String) {
     let mut file = NamedTempFile::with_suffix(".mi").expect("create a temporary source file");
     file.write_all(source.as_bytes())
         .expect("write the temporary source file");
