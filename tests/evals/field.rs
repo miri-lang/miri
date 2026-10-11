@@ -344,6 +344,31 @@ fn test_arms_are_the_five_the_benchmark_compares() {
     }
 }
 
+/// The hidden tests run a program the way its own toolchain runs a project. A
+/// subject told to use `uv` installs its packages into the workspace's
+/// environment, and a scorer that runs a bare interpreter misses them: the
+/// program dies on an import and reads as a wrong answer it never gave.
+#[test]
+fn test_the_python_arm_is_run_through_its_project_runner() {
+    let path = field_dir().join("arms.toml");
+    let parsed: ArmsFile = toml::from_str(&read(&path))
+        .unwrap_or_else(|e| panic!("cannot parse {}: {}", path.display(), e));
+    let python = parsed
+        .arm
+        .iter()
+        .find(|arm| arm.id == "python")
+        .expect("no python arm");
+    assert!(
+        python.toolchain.contains("`uv`"),
+        "the python arm's toolchain no longer names uv"
+    );
+    assert_eq!(
+        python.run.iter().take(2).collect::<Vec<_>>(),
+        ["uv", "run"],
+        "the python arm is scored outside the environment its toolchain built"
+    );
+}
+
 #[test]
 fn test_readme_states_the_two_measurement_rules() {
     let readme = read(&field_dir().join("README.md"));
