@@ -1,24 +1,24 @@
-# The three model columns of a round.
+# The three model columns of a round, all run through the `claude` harness.
 #
 # Language arms are compared within a column only. A chart across columns is
-# never drawn: the two harnesses' tool loops differ, so the number would
-# measure the harness.
+# never drawn: the models differ in price and capability, so a number across
+# them would measure the model rather than the language.
 #
 # `id` pins the exact model. A column whose `id` is empty cannot be run until
 # the operator passes `--model-id`, and the id that ran is written into every
 # record — a round whose model moved under it is not a round.
 
 [[model]]
+key = "claude-haiku"
+harness = "claude"
+id = "claude-haiku-5-5"
+
+[[model]]
 key = "claude-sonnet"
 harness = "claude"
-id = "claude-sonnet-5"
+id = "claude-sonnet-5-5"
 
 [[model]]
 key = "claude-opus"
 harness = "claude"
-id = "claude-opus-5"
-
-[[model]]
-key = "gemini-pro"
-harness = "gemini"
-id = ""
+id = "claude-opus-5-5"

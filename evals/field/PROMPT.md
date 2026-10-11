@@ -115,7 +115,7 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
 
 ## What the operator provides
 
-`bench.py` needs the harnesses on the path (`claude`, `gemini`), each arm's
+`bench.py` needs the `claude` harness on the path, each arm's
 toolchain, and a `miri` on the path built from the commit under test —
 `cargo build --release` and then that binary, not a stale one. `MIRI_STDLIB_PATH`
 must point at the compiler's standard library so a subject can compile without

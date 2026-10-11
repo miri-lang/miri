@@ -145,7 +145,7 @@ A probe prints each rating it read. A probe whose subject left no readable
 `RATINGS.json` — missing, not JSON, or a score outside 1 to 5 — keeps its record
 and transcript with the problem named in `ratingsProblem`, and exits non-zero.
 
-`bench.py` needs the harness on the path (`claude`, `gemini`), the arm's
+`bench.py` needs the `claude` harness on the path, the arm's
 toolchain, and a `miri` on the path for the Miri arms. A model column whose
 `id` is empty in `models.toml` refuses to run until `--model-id` pins the exact
 model that ran: a round whose model moved under it is not a round.
