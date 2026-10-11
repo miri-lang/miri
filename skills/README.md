@@ -5,7 +5,7 @@ Publishable skills that teach code-generation agents to write Miri, following th
 ## Three Skills at Launch
 
 ### 1. **miri-lang** — Core Language
-The foundation for writing `.mi` source files. Covers Miri's indentation-sensitive syntax, the core type system (no type annotations on bindings), pattern matching, structs, enums, and classes. Includes an anti-hallucination section documenting syntax that does **not** exist and the verification loop for arriving at correct code.
+The short core for writing `.mi` source files: the syntax in one example, where Miri differs from Python and Rust, the traps that cost agents the most, how to look up the rest (`miri view`, `miri explain`), and the verification loop. It is kept to about 150 lines because an agent re-reads it on every later turn; API lists and long examples belong behind those lookups, not in the page.
 
 **Activation triggers:** "writing Miri source," "Miri syntax," "`.mi` files," "editing Miri programs."
 
@@ -69,11 +69,12 @@ description: <one-line activation trigger>
 
 # Title
 
-Body: ≤400 lines. Three sections:
+Body: ≤400 lines (the gate); `miri-lang` aims for about 150. Its sections:
 
-1. **Positive Grammar** — what the language supports (compact, no exhaustive reference).
-2. **Anti-Hallucination** — syntax that does NOT exist (fenced code blocks, each marked `miri,fails=CODE`).
-3. **Verification Loop** — the one recommended loop: `miri check --format json` → edit (`miri fix --apply --yes` where a diagnostic carries a repair) → `miri test`. It is written once, in `miri-lang`; the other packs, the docs and the website defer to it.
+1. **Core Syntax** — one compact example, not a reference.
+2. **Where Miri Differs** — syntax that does NOT exist, with fenced blocks marked `miri,fails=CODE`.
+3. **Traps** and **Looking things up** — what goes wrong silently, and the commands that answer API questions.
+4. **Verification Loop** — the one recommended loop: `miri check --format json` → edit (`miri fix --apply --yes` where a diagnostic carries a repair) → `miri test`. It is written once, in `miri-lang`; the other packs, the docs and the website defer to it.
 ```
 
 ## Quality Gate
