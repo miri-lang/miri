@@ -78,6 +78,12 @@ def decode(path):
         )
     if not isinstance(content, dict) or "job" not in content or "hiddenTests" not in content:
         return None
+    if not (content.get("isolation") or {}).get("clean"):
+        raise SystemExit(
+            f"{path} records a run that was not isolated from the operator's configuration "
+            f"({content.get('isolation')!r}); a hook, MCP server or plugin the benchmark did "
+            "not ship belongs to no arm, so the run is re-run rather than folded"
+        )
     return content
 
 

@@ -1,0 +1,9 @@
+{
+  "forceLoginMethod": "claudeai",
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "",
+    "CLAUDE_CODE_USE_VERTEX": "",
+    "AWS_PROFILE": "",
+    "AWS_REGION": ""
+  }
+}

@@ -555,7 +555,9 @@ fn write_synthetic_run(root: &Path, job: &str, arm: &str, index: u32, run: Synth
             "tokens":{{"in":{half},"out":{half}}},"turns":1,"toolInvocations":{invocations},
             "toolchainInvocations":1,"outcome":"finished",
             "hiddenTests":{{"passed":{passed},"total":6,"failures":[]}},
-            "silentWrongAnswer":{silent},"workspace":"/tmp"}}"#,
+            "silentWrongAnswer":{silent},"workspace":"/tmp",
+            "isolation":{{"clean":true,"initObserved":true,"hookEvents":0,"mcpServers":[],
+            "plugins":[],"skills":[],"apiKeySource":"none"}}}}"#,
         job = job,
         arm = arm,
         half = run.tokens / 2,
@@ -1046,6 +1048,219 @@ fn test_the_harness_command_is_the_one_launched_and_recorded() {
             && record.contains("\"version\": \"fake harness 1\""),
         "the record does not name the command that ran:\n{}",
         record
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A stand-in harness that streams `events` (one JSON object per line) and
+/// writes the environment it was launched with to `env.txt` in its workspace.
+#[cfg(unix)]
+fn install_scripted_harness(bin: &Path, events: &[&str]) {
+    use std::os::unix::fs::PermissionsExt;
+    install_fake_harness(bin, None);
+    let mut script = String::from(
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'fake harness 1'; exit 0; fi\nenv > env.txt\n",
+    );
+    for event in events {
+        script.push_str(&format!("echo '{}'\n", event));
+    }
+    let path = bin.join("claude");
+    fs::write(&path, script).expect("cannot write a scripted harness");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+        .expect("cannot make a scripted harness executable");
+}
+
+/// The measured record of the first run of the synthetic python cell.
+fn measured_record(root: &Path) -> String {
+    read(
+        &root
+            .join("runs")
+            .join("synthetic")
+            .join(PROBE_JOB)
+            .join("python")
+            .join("claude-sonnet")
+            .join("1.json"),
+    )
+}
+
+const CLEAN_INIT: &str = r#"{"type":"system","subtype":"init","apiKeySource":"none","mcp_servers":[],"plugins":[{"name":"core","path":"builtin"}],"skills":["miri-lang"]}"#;
+
+#[test]
+fn test_a_subject_is_launched_apart_from_the_operators_configuration() {
+    // The operator's CLAUDE.md files, hooks, plugins and MCP servers are not
+    // part of any arm. A hook that rewrites shell output would change the very
+    // bytes the benchmark measures, and not equally across languages.
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the launch was not rendered");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-isolated-launch");
+    let _ = fs::remove_dir_all(&root);
+    let dry = run_bench(&root, &["--dry-run"]);
+    let launch = String::from_utf8_lossy(&dry.stdout);
+    let settings = field_dir().join("harness-settings.json");
+    for flag in [
+        "--setting-sources project,local".to_string(),
+        "--strict-mcp-config".to_string(),
+        "--no-chrome".to_string(),
+        format!("--settings {}", settings.display()),
+    ] {
+        assert!(
+            launch.contains(&flag),
+            "the launch lacks `{}`:\n{}",
+            flag,
+            launch
+        );
+    }
+    let shipped = read(&settings);
+    assert!(
+        shipped.contains("\"forceLoginMethod\": \"claudeai\"") && !shipped.contains("hooks"),
+        "the benchmark's settings must pin the subscription login and carry no hook:\n{}",
+        shipped
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_a_workspace_below_a_claude_md_is_refused() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the launch was not rendered");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-ancestor-memory");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("cannot create the root");
+    fs::write(root.join("CLAUDE.md"), "operator instructions").expect("cannot plant it");
+    let dry = run_bench(&root, &["--dry-run"]);
+    assert!(
+        !dry.status.success(),
+        "a workspace under a CLAUDE.md was prepared"
+    );
+    assert!(
+        String::from_utf8_lossy(&dry.stderr)
+            .contains(&root.join("CLAUDE.md").display().to_string()),
+        "the refusal does not name the file:\n{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_the_subject_gets_no_harness_routing_and_its_isolation_is_recorded() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-subject-environment");
+    let _ = fs::remove_dir_all(&root);
+    install_scripted_harness(&root.join("bin"), &[CLEAN_INIT]);
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new("python3")
+        .arg(field_dir().join("bench.py"))
+        .args([
+            "--job",
+            PROBE_JOB,
+            "--arm",
+            "python",
+            "--model",
+            "claude-sonnet",
+        ])
+        .args(["--round", "synthetic", "--records-root"])
+        .arg(root.join("runs"))
+        .arg("--scratch")
+        .arg(root.join("scratch"))
+        .env("PATH", path)
+        .env("CLAUDE_CODE_USE_BEDROCK", "1")
+        .env("AWS_PROFILE", "company")
+        .env("ANTHROPIC_DEFAULT_SONNET_MODEL", "elsewhere")
+        .env("MAX_THINKING_TOKENS", "1")
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        output.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let seen = read(
+        &root
+            .join("scratch")
+            .join("synthetic")
+            .join(PROBE_JOB)
+            .join("python")
+            .join("claude-sonnet")
+            .join("1")
+            .join("env.txt"),
+    );
+    for name in [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "AWS_PROFILE",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "MAX_THINKING_TOKENS",
+    ] {
+        assert!(!seen.contains(name), "the subject inherited {}", name);
+    }
+    assert!(
+        seen.contains("MIRI_STDLIB_PATH="),
+        "the subject lost the stdlib path"
+    );
+    let record = measured_record(&root);
+    assert!(
+        record.contains("\"clean\": true") && record.contains("\"miri-lang\""),
+        "the record does not carry the isolation the harness reported:\n{}",
+        record
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_a_run_a_hook_touched_is_recorded_unclean_and_never_folded() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-hooked-run");
+    let _ = fs::remove_dir_all(&root);
+    install_scripted_harness(
+        &root.join("bin"),
+        &[
+            CLEAN_INIT,
+            r#"{"type":"system","subtype":"hook_started","hook_event":"PreToolUse"}"#,
+        ],
+    );
+    let ran = run_bench(&root, &[]);
+    assert!(
+        ran.status.success(),
+        "the run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let record = measured_record(&root);
+    assert!(
+        record.contains("\"clean\": false") && record.contains("\"hookEvents\": 1"),
+        "a hooked run is not recorded as unclean:\n{}",
+        record
+    );
+    let folded = Command::new("python3")
+        .arg(field_dir().join("report.py"))
+        .args(["--round", "synthetic", "--runs-root"])
+        .arg(root.join("runs"))
+        .arg("--out")
+        .arg(root.join("summary.json"))
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        !folded.status.success(),
+        "the folder folded a run a hook touched"
+    );
+    assert!(
+        String::from_utf8_lossy(&folded.stderr).contains("not isolated"),
+        "the refusal does not say why:\n{}",
+        String::from_utf8_lossy(&folded.stderr)
     );
     let _ = fs::remove_dir_all(&root);
 }
