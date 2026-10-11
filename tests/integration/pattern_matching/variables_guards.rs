@@ -121,3 +121,21 @@ fn main()
         "small 1 x|big 5 y",
     );
 }
+
+#[test]
+fn test_none_skips_a_guarded_some_arm_for_the_wildcard() {
+    // No arm names `None`, so it belongs to the `_` arm. The `Some` arm before
+    // it binds the payload, which `None` does not have.
+    assert_runs_with_output(
+        r#"
+fn pick(x int?) int
+    match x
+        Some(c) if c == 1: c
+        _: 7
+
+fn main()
+    println(f"{pick(None)} {pick(1)} {pick(2)}")
+"#,
+        "7 1 7",
+    );
+}
