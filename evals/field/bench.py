@@ -434,11 +434,15 @@ def run_case(workspace, arm, case, case_timeout):
 
 def compiler_stamp():
     """What the subject's toolchain was, read from the repository, not the run."""
+    version = subprocess.run(["miri", "--version"], capture_output=True, text=True)
+    return repository_commit(), version.stdout.strip()
+
+
+def repository_commit():
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True
     )
-    version = subprocess.run(["miri", "--version"], capture_output=True, text=True)
-    return commit.stdout.strip(), version.stdout.strip()
+    return commit.stdout.strip()
 
 
 def harness_version(model):
@@ -650,6 +654,10 @@ def parse_arguments(argv):
     parser.add_argument("--dry-run", action="store_true", help="prepare and report, launch nothing")
     parser.add_argument("--score-only", help="score an existing workspace and report")
     parser.add_argument(
+        "--rescore",
+        help="score a recorded run's workspace again and rewrite its record, keeping the old score",
+    )
+    parser.add_argument(
         "--probe",
         action="store_true",
         help="run as an unmeasured opinion probe, into runs/<round>.probe/",
@@ -711,6 +719,34 @@ def probe_cell(arguments, arm, model, job):
     return 1 if unreadable else 0
 
 
+def rescore(record_path, arguments, arm):
+    """Score a recorded run again, after a defect in the scorer itself.
+
+    Only the hidden tests are run again, against the workspace the subject
+    left; nothing the agent did is re-measured. The score it replaces stays in
+    the record under `rescored.previous`, with the commit that rescored it, so
+    the correction is visible to anyone reading the round.
+    """
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    if record.get("job") != arguments.job or record.get("arm") != arguments.arm:
+        raise SystemExit(f"{record_path} is not a {arguments.job} / {arguments.arm} record")
+    tests = score(Path(record["workspace"]), arguments.job, arm)
+    record["rescored"] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "commit": repository_commit(),
+        "run": arm["run"],
+        "previous": {
+            "hiddenTests": record["hiddenTests"],
+            "silentWrongAnswer": record["silentWrongAnswer"],
+        },
+    }
+    record["hiddenTests"] = tests
+    record["silentWrongAnswer"] = record["outcome"] == "finished" and tests["passed"] < tests["total"]
+    record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    print(f"{record_path}: {record['outcome']}, {tests['passed']}/{tests['total']} hidden tests (rescored)")
+    return 0
+
+
 def main(argv):
     arguments = parse_arguments(argv)
     arm = arm_named(arguments.arm)
@@ -721,6 +757,8 @@ def main(argv):
             raise SystemExit("a probe is never scored: --probe and --score-only do not combine")
         print(json.dumps(score(Path(arguments.score_only), arguments.job, arm), indent=2))
         return 0
+    if arguments.rescore:
+        return rescore(Path(arguments.rescore), arguments, arm)
     found = inherited_memory(arguments.scratch)
     if found:
         raise SystemExit(
