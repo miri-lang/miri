@@ -26,7 +26,8 @@ jobs/<job>/job.toml        its caps and title
 jobs/<job>/cases/*.in,.out the hidden tests
 jobs/<job>/seeds/<lang>/   what the subject starts from, per language
 jobs/<job>/reference/      the program the expectations come from
-arms.toml                  the four arms
+arms.toml                  the arms
+onboarding/                what an onboarded arm is taught from first
 models.toml                the three model columns
 bench.py                   runs one cell and writes its records
 report.py                  folds a round's records into summary.json
@@ -40,6 +41,9 @@ runs/<round>.probe/...     the opinion probe's ratings, never folded into a clai
 |---|---|
 | `miri-pack` | The release binary with the skill pack installed in the workspace. |
 | `miri-bare` | The release binary and `miri --help`. No prose file of any kind. |
+| `miri-skill` | The release binary, taught from the skill pack before the brief. |
+| `miri-grammar` | The release binary, taught from the formal grammar before the brief. |
+| `miri-both` | The release binary, taught from the pack and the grammar together. |
 | `python` | The language and its toolchain. |
 | `rust` | The language and its toolchain. |
 
@@ -47,6 +51,25 @@ The baselines get no skill file. Their guidance is in the weights, and that
 asymmetry **is** the experiment: `miri-pack` against `python` asks whether a
 pack can stand in for pretraining, and `miri-pack` against `miri-bare` asks
 whether the pack is what is doing the standing.
+
+### Onboarded arms
+
+Python and Rust arrive taught: what a model knows of them is in its weights, an
+advantage no page can match. The onboarded arms ask a different question: once
+an agent has been taught Miri, what does a program cost? Each is two launches of
+one harness session. The first hands the subject `onboarding/ONBOARDING.md` —
+the same text for every job, naming nothing job-specific — with only the arm's
+material in the workspace (`onboarding/materials.toml` says which, and copies
+it in from the operator's side). The subject reads it and gets a small warm-up
+program of its own to run. Only then are the job's seed and brief laid in, and
+the session is resumed on the measured prompt.
+
+Everything a record measures is the second launch's. The onboarding phase's
+own cost, turns and transcript are kept beside it under `onboarding` and in
+`<run>.onboarding.jsonl`, never added in; but the onboarding context stays in
+the conversation, so every measured turn still pays to re-read it as cached
+input, and the measured numbers carry that cost. A run is clean only if both
+launches were. The baselines and the two cold Miri arms stay single-launch.
 
 ## The jobs
 
@@ -83,7 +106,7 @@ Each job's program reads its input from the path in its first command-line
 argument, not from standard input. Miri has no way to read standard input
 today — there is no runtime intrinsic and no standard-library call for it — so a
 contract written on standard input would be a contract one arm cannot satisfy
-at all. Naming a file is equally ordinary in all four arms and advantages none
+at all. Naming a file is equally ordinary in every arm and advantages none
 of them.
 
 ## The rules a run is subject to

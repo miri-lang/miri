@@ -33,6 +33,12 @@ Re-run the frozen agent-loop benchmark. Do not design a new experiment.
        python3 evals/field/bench.py --job <job> --arm <arm> \
            --model <model> --runs 3 --round <round>
 
+   An onboarded arm (one with `onboarding` in arms.toml) is launched the same
+   way. bench.py teaches it first from evals/field/onboarding/ONBOARDING.md,
+   unmeasured, then resumes that session with the brief and measures from
+   there; the onboarding cost is kept in the record apart from the measured
+   one, and the onboarding context is still paid for on every measured turn.
+
    A measured arm is never asked for a per-tool verdict. Asking a subject
    what it thought of a tool buys invocations a real job would not spend.
    Opinions are collected afterwards, by re-running one cell per arm as an

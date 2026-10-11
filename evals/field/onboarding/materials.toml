@@ -1,0 +1,18 @@
+# The materials an onboarded arm is taught from, and the onboarding phase's caps.
+#
+# `describes` is the phrase substituted for {{MATERIAL}} in ONBOARDING.md; an arm
+# taught from two materials has both phrases joined by "and". `stage` copies a
+# file from this repository into the workspace before the phase starts, which is
+# the operator's side reading the repository, never the subject's. The skill pack
+# is staged by the arm's `install_pack`, the way the cold pack arm gets it.
+
+[phase]
+turn_cap = 40
+time_cap_seconds = 900
+
+[skill]
+describes = "the Miri skill pack installed in this directory under `.claude/skills/`"
+
+[grammar]
+describes = "the Miri grammar in `GRAMMAR.peg` in this directory"
+stage = { from = "docs/grammar.peg", to = "GRAMMAR.peg" }

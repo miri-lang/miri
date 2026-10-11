@@ -9,6 +9,7 @@ gpu = true
 # language it is being measured in.
 [toolchain]
 "miri-pack" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. Its `forall` loops lower to a GPU kernel"
+miri = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. Its `forall` loops lower to a GPU kernel"
 "miri-bare" = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`. Its `forall` loops lower to a GPU kernel"
 python = "`uv` and `pytest`, and the `wgpu` package for the GPU"
 rust = "`cargo` and `clippy`, and the `wgpu` crate for the GPU"

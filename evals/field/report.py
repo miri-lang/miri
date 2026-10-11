@@ -43,8 +43,14 @@ SURFACES = REPO / "skills" / "surfaces.toml"
 # The score at or below which a surface fails the probe's condition.
 LOW_RATING = 2
 
+def miri_arms():
+    """The arms that run on the compiler under test, as `arms.toml` declares them."""
+    with open(FIELD / "arms.toml", "rb") as handle:
+        return tuple(arm["id"] for arm in tomllib.load(handle)["arm"] if arm["language"] == "Miri")
+
+
 # The arms that run on the compiler under test.
-MIRI_ARMS = (PACK, BARE)
+MIRI_ARMS = miri_arms()
 
 
 def load_records(round_name, runs_root):
@@ -337,6 +343,8 @@ def judge_silent_wrong_answers(cells, models, jobs):
     for model in models:
         for job in jobs:
             for arm in MIRI_ARMS:
+                if not any(key[1] == arm for key in cells):
+                    continue
                 cell = cells.get((job, arm, model))
                 if cell is None:
                     detail.append(note(job, model, False, f"{arm} was not run"))
