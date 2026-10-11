@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "round": "r1",
+  "job": "05-gpu-heat",
+  "arm": "miri-bare",
+  "run": 1,
+  "model": "claude-sonnet",
+  "modelId": "claude-sonnet-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "e2ed19af7e2d2c9e3e2febb4b792bacbc8edacce",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-11T13:59:08.458586+00:00",
+  "wallClockSeconds": 170.3,
+  "tokens": {
+    "in": 589595,
+    "out": 5574,
+    "cacheRead": 556665,
+    "cacheCreation": 32892,
+    "observed": true
+  },
+  "turns": 19,
+  "toolInvocations": 18,
+  "toolchainInvocations": 6,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 5,
+    "total": 5,
+    "failures": [],
+    "failureDetail": {}
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field/r1/05-gpu-heat/miri-bare/claude-sonnet/1"
+}

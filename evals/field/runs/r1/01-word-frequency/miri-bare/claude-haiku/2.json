@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "round": "r1",
+  "job": "01-word-frequency",
+  "arm": "miri-bare",
+  "run": 2,
+  "model": "claude-haiku",
+  "modelId": "claude-haiku-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "e2ed19af7e2d2c9e3e2febb4b792bacbc8edacce",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 40,
+    "timeSeconds": 1800
+  },
+  "startedAt": "2026-10-11T13:38:24.950754+00:00",
+  "wallClockSeconds": 490.3,
+  "tokens": {
+    "in": 1996663,
+    "out": 27007,
+    "cacheRead": 1936698,
+    "cacheCreation": 59879,
+    "observed": true
+  },
+  "turns": 43,
+  "toolInvocations": 43,
+  "toolchainInvocations": 8,
+  "outcome": "capped",
+  "hiddenTests": {
+    "passed": 6,
+    "total": 6,
+    "failures": [],
+    "failureDetail": {}
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field/r1/01-word-frequency/miri-bare/claude-haiku/2"
+}

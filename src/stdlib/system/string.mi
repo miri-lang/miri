@@ -91,6 +91,9 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     public fn replace(old String, to String) String
         return miri_rt_string_replace(self, old, to)
 
+    // TODO: `length()` counts characters but these indices are bytes, so the
+    // natural `s.substring(1, s.length())` silently returns "" on non-ASCII text.
+    // The units must agree, or an index off a boundary must fail loudly.
     /// Returns a substring from byte index `start` to `end` (exclusive).
     ///
     /// Returns an empty string if indices are out of bounds or not at
