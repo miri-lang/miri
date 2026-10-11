@@ -179,7 +179,7 @@ println(f"{counter}")
 }
 
 #[test]
-fn test_plan_never_refuses() {
+fn test_listing_never_refuses() {
     let fixture = Fixture::new(
         "plan_never_refuses",
         r#"let counter = 0
@@ -192,15 +192,14 @@ fn main()
 "#,
     );
 
-    // Plan should succeed
+    // Listing without --apply should succeed
     let output = miri_cmd()
         .arg("fix")
-        .arg("--plan")
         .arg(fixture.path())
         .output()
-        .expect("run miri fix --plan");
+        .expect("run miri fix");
 
-    assert!(output.status.success(), "--plan should never refuse");
+    assert!(output.status.success(), "listing should never refuse");
 
     // Verify the plan contains repair details
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -210,23 +209,22 @@ fn main()
         stdout
     );
 
-    // Plan with --allow-risky should also succeed
+    // Listing with --allow-risky should also succeed
     let output2 = miri_cmd()
         .arg("fix")
-        .arg("--plan")
         .arg("--allow-risky")
         .arg(fixture.path())
         .output()
-        .expect("run miri fix --plan --allow-risky");
+        .expect("run miri fix --allow-risky");
 
     assert!(
         output2.status.success(),
-        "--plan --allow-risky should never refuse"
+        "listing with --allow-risky should never refuse"
     );
 }
 
 #[test]
-fn test_plan_contains_repairs() {
+fn test_listing_contains_repairs() {
     let fixture = Fixture::new(
         "plan_contains_repairs",
         r#"let counter = 0
@@ -239,13 +237,12 @@ fn main()
 "#,
     );
 
-    // Plan should output details about the repair
+    // Listing should output details about the repair
     let output = miri_cmd()
         .arg("fix")
-        .arg("--plan")
         .arg(fixture.path())
         .output()
-        .expect("run miri fix --plan");
+        .expect("run miri fix");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -471,5 +468,25 @@ fn main()
     assert!(
         has_refusal_code,
         "JSON envelope should include MER_BLD_002 in diagnostics"
+    );
+}
+
+#[test]
+fn test_plan_is_not_a_fix_flag() {
+    // `miri check --format json` carries each repair, so a flag that only
+    // previews them is a round trip with no information in it.
+    let fixture = Fixture::new("plan_is_not_a_flag", "fn main():\n    println(\"hi\")\n");
+    let output = miri_cmd()
+        .arg("fix")
+        .arg("--plan")
+        .arg(fixture.path())
+        .output()
+        .expect("run miri fix --plan");
+
+    assert!(!output.status.success(), "--plan must be refused");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--plan"),
+        "the refusal names the flag: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

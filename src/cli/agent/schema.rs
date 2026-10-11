@@ -254,17 +254,6 @@ pub const METHODS: &[MethodSchema] = &[
         constraint: None,
     },
     MethodSchema {
-        method: "fixPlan",
-        params: &[Param {
-            name: "path",
-            shape: Shape::Text,
-            required: true,
-            requires: None,
-            description: "path to the source file",
-        }],
-        constraint: None,
-    },
-    MethodSchema {
         method: "fixApply",
         params: &[
             Param {

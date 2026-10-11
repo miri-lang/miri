@@ -18,7 +18,6 @@
 
 # Commands, spelled as a reader types them.
 commands = [
-    "miri agent",
     "miri check",
     "miri explain",
     "miri fix",

@@ -68,6 +68,9 @@ pub enum AgentFlavor {
     about = "Miri Compiler",
     author = "Slavik Shynkarenko <slavik@slavikdev.com>",
     long_about = "Miri Compiler - a modern, GPU-first, statically-typed programming language.\n\n\
+Recommended loop: `miri check FILE --format json` -> edit (`miri fix FILE --apply --yes` where a \
+diagnostic carries a repair) -> `miri test`. `miri view --type NAME --public` lists what a type \
+offers. The full guide is the miri-lang skill pack (`miri skill install`).\n\n\
 Global options:\n\n\
 --verify-mir: Run the MIR verification pass after Perceus RC insertion, checking RC invariants \
 (StorageLive/Dead balance, no RC ops on parameters) and that every copy of a gpu-resident \
@@ -227,6 +230,9 @@ pub enum Commands {
     ///
     /// One compiler process answers many requests, so a tool driving the
     /// compiler pays the start-up cost once instead of once per invocation.
+    /// This is plumbing for an integration that holds the compiler open — an
+    /// editor, or an embedder with no shell. An agent with a shell runs the
+    /// recommended loop on the command line instead (see `miri --help`).
     ///
     /// FRAMING. Messages are framed the way a language server frames them: a
     /// `Content-Length: N` header line, then `\r\n\r\n` — that is, a blank
@@ -262,15 +268,16 @@ pub enum Commands {
     /// docs/agent-protocol.md.
     Agent {},
 
-    /// Emit repair suggestions for compiler diagnostics
+    /// Apply the repairs the compiler recorded for a file
+    ///
+    /// Without `--apply` the repairs are listed and nothing is written. That
+    /// listing is for a person reading before an apply: `miri check --format
+    /// json` already carries each diagnostic's repair, edits included, so a
+    /// tool reads the check and goes straight to `--apply --yes`.
     Fix {
         /// Path to the Miri source file to fix
         #[arg(required = true)]
         path: PathBuf,
-
-        /// Report the repairs without modifying any file. This is the default.
-        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "apply")]
-        plan: bool,
 
         /// Apply repairs to the source file
         #[arg(long, action = ArgAction::SetTrue)]

@@ -128,7 +128,7 @@ would otherwise leave a fixture that asserts nothing and still reports success.
 | `WriteFile` | Not a compiler invocation: the agent authoring content itself. |
 | `Check` | `miri check <file> --format json` |
 | `Explain` | `miri explain <code>` |
-| `FixPlan` / `FixApply` | `miri fix <file> --plan` / `--apply --yes` |
+| `FixApply` | `miri fix <file> --apply --yes` |
 | `ViewFn` / `ViewOutline` | `miri view <file> --fn <name>` / `--outline` |
 | `Patch` | `miri patch <file> --replace-in-fn <fn> --old <t> --new <t>` |
 | `ReplaceFn` | `miri patch <file> --replace-fn <fn> --body-file …` |

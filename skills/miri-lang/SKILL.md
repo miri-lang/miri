@@ -377,14 +377,15 @@ fn main()
 
 ## Verification Loop
 
-**Loop:** `check --format json` → `fix --apply --yes` → re-check → `run` or `test`. Iterate until clean.
+This is the one loop the compiler's documentation recommends; everything else defers to it.
 
-1. **miri check** — `miri check myfile.mi --format json`. The envelope gives each diagnostic a `code`, a `help` and, where one exists, a `repair`. A diagnostic carrying no `repair` is one you have to edit yourself, and that is the whole reason to read the envelope rather than the text. The repair column `miri explain --list` prints is per code, and a code stands for every condition it is raised for, so it is a lower bound: only the `repair` on the diagnostic in front of you says whether this one can be applied.
-2. **miri fix** — `miri fix myfile.mi --apply --yes` writes every repair the check recorded, in one call. `miri explain CODE` describes the rule behind one. `miri fix myfile.mi --plan --format json` previews the edits without writing them; it is a preview, not a step — the check already said which diagnostics carry a repair, so `--plan` adds a round trip and no information.
-3. **miri run** / **miri test** — `miri run myfile.mi`, `miri test --dir <DIR>`; both take `--format json`. Only a run finds a fault the frontend cannot see.
-4. **miri view** — read part of a file instead of all of it. `miri view myfile.mi --outline --public` gives the surface a caller can reach and is much smaller than the outline alone; `miri view myfile.mi --fn name` reads one function and `miri view myfile.mi --fn name --around text` narrows to the innermost block holding that text; `miri view --type Name --public` lists what can be called on a type; `miri view myfile.mi --raw --format json` returns the file's own bytes, comments and all, behind their line numbers. Without `--raw` the output is canonical, not literal, and a module name works wherever a path does.
-5. **miri patch** — scoped edits: `miri patch myfile.mi --replace-in-fn name --old text --new text`. The edited program is re-checked before anything reaches disk.
-6. **miri agent** — tool integration over JSON-RPC; `miri agent --help` carries the framing, the handshake and the method list. It does not run, build or test a program.
+**Loop:** `miri check --format json` → edit → `miri test` (or `miri run`). Iterate until clean.
+
+1. **miri check** — `miri check myfile.mi --format json`. The envelope gives each diagnostic a `code`, a `help` and, where one exists, a `repair` with its edits. A diagnostic carrying no `repair` is one you have to edit yourself, and that is the whole reason to read the envelope rather than the text. The repair column `miri explain --list` prints is per code, and a code stands for every condition it is raised for, so it is a lower bound: only the `repair` on the diagnostic in front of you says whether this one can be applied.
+2. **Edit** — where a diagnostic carries a `repair`, `miri fix myfile.mi --apply --yes` writes every recorded repair in one call; there is no separate preview step, because the check already showed the edits. Everything else is an ordinary edit in your own editor. Where the file is already in canonical layout, `miri patch myfile.mi --replace-in-fn name --old text --new text` makes a scoped edit and re-checks the program before anything reaches disk.
+3. **miri test** / **miri run** — `miri test --dir <DIR>`, `miri run myfile.mi`; both take `--format json`. Only a run finds a fault the frontend cannot see.
+
+Alongside the loop, for API discovery: `miri view --type Name --public` lists what can be called on a type; `miri view myfile.mi --outline --public` gives the surface a caller can reach; `miri view myfile.mi --fn name` reads one function. Without `--raw` the output is canonical, not literal, and a module name works wherever a path does. `miri explain CODE` describes the rule behind a diagnostic code.
 
 The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.
