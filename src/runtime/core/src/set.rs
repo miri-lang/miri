@@ -12,6 +12,7 @@ use std::ptr;
 
 use crate::element_identity::ElementIdentity;
 use crate::rc::{alloc_with_rc, free_with_rc};
+use crate::slot_cursor::SlotCursor;
 
 /// State flags for hash table slots.
 const SLOT_EMPTY: u8 = 0;
@@ -38,6 +39,9 @@ const LOAD_FACTOR_DEN: usize = 4;
 ///   produce a deep copy. Signature: `fn(*mut u8) -> *mut u8`.
 /// - `elem_identity`: how two elements are recognised as the same element —
 ///   see [`ElementIdentity`].
+/// - `cursor`: where the last positional lookup landed, so iteration walks the
+///   slots once in total — see [`SlotCursor`]. Zeroed bytes are an empty
+///   cursor.
 ///
 /// The first two fields (`data`, `len`) match MiriList/MiriArray layout so
 /// that `Rvalue::Len` and `element_at` use the same offsets.
@@ -51,6 +55,7 @@ pub struct MiriSet {
     elem_drop_fn: usize,
     elem_clone_fn: usize,
     elem_identity: ElementIdentity,
+    cursor: SlotCursor,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
@@ -157,6 +162,7 @@ impl MiriSet {
             .unwrap_or_else(|| std::process::abort());
         self.alloc_tables(new_capacity);
         self.len = 0;
+        self.cursor.forget();
 
         for i in 0..old_capacity {
             if *old_states.add(i) == SLOT_OCCUPIED {
@@ -214,21 +220,17 @@ impl MiriSet {
 
     /// The slot of the element at sequential `index`, counting occupied slots
     /// only, or null past the last element.
-    // TODO: this scans from slot 0 on every call, and iteration calls it once per
-    // element, so walking the whole collection is quadratic. A subject's program
-    // over ~124k distinct keys took 47 s. Iteration wants a dense entry array
-    // beside the hash index, or a cursor the `for` lowering carries.
+    ///
+    /// Asking for consecutive positions resumes from the previous answer, so a
+    /// full walk inspects each slot once.
     unsafe fn nth_element(&self, index: usize) -> *const u8 {
-        let mut count: usize = 0;
-        for i in 0..self.capacity {
-            if *self.states.add(i) == SLOT_OCCUPIED {
-                if count == index {
-                    return self.data.add(i * self.elem_size);
-                }
-                count += 1;
-            }
+        let states = self.states;
+        match self.cursor.nth_occupied(self.capacity, index, |slot| {
+            *states.add(slot) == SLOT_OCCUPIED
+        }) {
+            Some(slot) => self.data.add(slot * self.elem_size),
+            None => std::ptr::null(),
         }
-        std::ptr::null()
     }
 
     /// Releases one reference to a managed element, whose reference is the word
@@ -264,6 +266,7 @@ impl MiriSet {
         ptr::copy_nonoverlapping(elem, self.data.add(slot * self.elem_size), self.elem_size);
         *self.states.add(slot) = SLOT_OCCUPIED;
         self.len += 1;
+        self.cursor.forget();
         true
     }
 }
@@ -294,6 +297,7 @@ pub mod ffi {
         (*set).elem_drop_fn = 0;
         (*set).elem_clone_fn = 0;
         (*set).elem_identity = ElementIdentity::BYTES;
+        (*set).cursor.forget();
         set
     }
 
@@ -466,6 +470,7 @@ pub mod ffi {
         set.release_element(set.data.add(idx * set.elem_size));
         *set.states.add(idx) = SLOT_TOMBSTONE;
         set.len -= 1;
+        set.cursor.forget();
         1
     }
 
@@ -512,6 +517,7 @@ pub mod ffi {
             ptr::write_bytes(set.states, 0, set.capacity);
         }
         set.len = 0;
+        set.cursor.forget();
     }
 
     /// Hands the element at the given sequential index (skipping empty and
@@ -673,3 +679,70 @@ pub mod ffi {
         }
     }
 } // pub mod ffi
+
+#[cfg(test)]
+mod walk_tests {
+    use super::ffi::*;
+    use super::MiriSet;
+    use crate::slot_cursor::take_probes;
+
+    const WORD: usize = std::mem::size_of::<usize>();
+
+    /// A set of the plain words `0..len`.
+    unsafe fn set_of(len: usize) -> *mut MiriSet {
+        let set = miri_rt_set_new(WORD);
+        for elem in 0..len {
+            miri_rt_set_add(set, word_addr(&elem), WORD);
+        }
+        set
+    }
+
+    unsafe fn element_at(set: *const MiriSet, index: usize) -> usize {
+        let mut elem = 0usize;
+        miri_rt_set_element_at(set, index, &mut elem as *mut usize as *mut u8, WORD);
+        elem
+    }
+
+    fn word_addr(word: &usize) -> *const u8 {
+        word as *const usize as *const u8
+    }
+
+    #[test]
+    fn full_walk_of_a_large_set_probes_linearly() {
+        let _balance = crate::rc::balance_guard();
+        unsafe {
+            let len = 100_000;
+            let set = set_of(len);
+            let capacity = (*set).capacity;
+            take_probes();
+            let mut seen = vec![false; len];
+            for index in 0..len {
+                seen[element_at(set, index)] = true;
+            }
+            let probes = take_probes();
+            assert!(seen.iter().all(|&s| s), "every element is walked once");
+            assert!(
+                probes <= capacity + len,
+                "a walk of {len} elements over {capacity} slots probed {probes} slots"
+            );
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn removal_mid_walk_counts_positions_in_the_changed_set() {
+        let _balance = crate::rc::balance_guard();
+        unsafe {
+            let set = set_of(50);
+            let fifth = element_at(set, 5);
+            let sixth = element_at(set, 6);
+            miri_rt_set_remove(set, word_addr(&fifth), WORD);
+            assert_eq!(
+                element_at(set, 5),
+                sixth,
+                "the element after a removed one moves up"
+            );
+            miri_rt_set_free(set);
+        }
+    }
+}

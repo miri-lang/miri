@@ -169,3 +169,70 @@ fn main()
         "é",
     );
 }
+
+#[test]
+fn for_loop_visits_each_character_of_a_mixed_width_string_once() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let s = "añ" + "€😀z"
+    var seen = ""
+    for ch in s
+        seen = seen + ch + "|"
+    println(seen)
+"#,
+        "a|ñ|€|😀|z|",
+    );
+}
+
+#[test]
+fn code_at_reads_out_of_order_after_a_walk() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let s = "añ" + "€😀z"
+    var count = 0
+    for ch in s
+        count = count + 1
+    let late = s.code_at(4) ?? -1
+    let early = s.code_at(1) ?? -1
+    let past = s.code_at(5) ?? -1
+    println(f"{count} {late} {early} {past}")
+"#,
+        "5 122 241 -1",
+    );
+}
+
+#[test]
+fn two_strings_walked_in_step_read_their_own_characters() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let left = "añ" + "€"
+    let right = "x" + "yz"
+    var pairs = ""
+    for i in 0..3
+        pairs = pairs + left.element_at(i) + right.element_at(i) + " "
+    println(pairs)
+"#,
+        "ax ñy €z ",
+    );
+}
+
+/// Each pass builds a new string of the same length and frees the last one, so
+/// the allocator is free to hand the new string the old one's address.
+#[test]
+fn a_new_string_at_a_freed_strings_address_reads_its_own_characters() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var codes = ""
+    for i in 0..5
+        let s = "é" + f"{i}"
+        let count = s.length()
+        codes = codes + f"{count}:{s.code_at(1) ?? -1} "
+    println(codes)
+"#,
+        "2:48 2:49 2:50 2:51 2:52 ",
+    );
+}

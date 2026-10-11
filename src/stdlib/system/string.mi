@@ -56,7 +56,8 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
 
     /// Returns the number of Unicode characters in the string.
     ///
-    /// This is an O(n) operation for UTF-8 strings.
+    /// The first call counts the string in O(n); the count is remembered, so a
+    /// loop that asks again each pass pays for it once.
     public fn length() int: miri_rt_string_char_count(self)
         
     /// Returns the byte length of the string.
