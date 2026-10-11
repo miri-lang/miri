@@ -14,7 +14,8 @@
 
 use miri::diagnostics::DiagnosticCode;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Codes whose `Before` example is verified to emit that code.
 const VERIFIED: &[&str] = &[
@@ -231,30 +232,56 @@ struct Reported {
     help: Option<String>,
 }
 
-/// Compile a source file and extract the first diagnostic it reports.
+/// Run `miri check` on one source file and return the JSON envelope it prints.
 ///
 /// The file is written inside the repository because module resolution is
 /// relative to the working directory: the same source checked from elsewhere
 /// fails to find the standard library and reports that instead of the error
 /// under test.
-fn first_diagnostic(source: &str, slot: &str) -> Option<Reported> {
+///
+/// Each check writes its own file. Several gates check the same example at
+/// once, and a shared file is truncated by one writer while another check is
+/// reading it — the compiler then sees an empty program and reports nothing.
+///
+/// A run that prints no envelope (a crash, a signal, an exit status `check`
+/// never uses) is an `Err` carrying the status and stderr, so a broken run is
+/// never mistaken for an example that reports no diagnostic.
+fn check_snippet(source: &str, slot: &str) -> Result<serde_json::Value, String> {
+    static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
     std::fs::create_dir_all(&dir).expect("could not create the snippet directory");
-    let path = dir.join(format!("{}.mi", slot));
+    let unique = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{}-{}-{}.mi", slot, std::process::id(), unique));
     std::fs::write(&path, source).expect("could not write the snippet");
 
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_miri"));
     let output = Command::new(binary)
         .args(["check", &path.display().to_string(), "--format", "json"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("could not run the compiler");
+        .output();
+    let _ = std::fs::remove_file(&path);
+    envelope_of(&output.map_err(|e| format!("could not run the compiler: {}", e))?)
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&stdout) else {
-        return None;
-    };
-    envelope["diagnostics"]
+/// The envelope a finished `miri check` printed, or a description of a run
+/// that printed none: its exit status, stdout and stderr.
+fn envelope_of(output: &Output) -> Result<serde_json::Value, String> {
+    let envelope = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+    match (output.status.code(), envelope) {
+        (Some(0 | 1), Some(envelope)) => Ok(envelope),
+        (_, _) => Err(format!(
+            "`miri check` printed no diagnostic envelope ({}); stdout: {:?}; stderr: {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )),
+    }
+}
+
+/// Compile a source file and extract the first diagnostic it reports.
+fn first_diagnostic(source: &str, slot: &str) -> Result<Option<Reported>, String> {
+    let envelope = check_snippet(source, slot)?;
+    Ok(envelope["diagnostics"]
         .as_array()
         .and_then(|items| items.first())
         .and_then(|d| {
@@ -262,28 +289,13 @@ fn first_diagnostic(source: &str, slot: &str) -> Option<Reported> {
                 message: d["message"].as_str()?.to_string(),
                 help: d["help"].as_str().map(str::to_string),
             })
-        })
+        }))
 }
 
 /// All diagnostic codes reported by `miri check` for one source file.
-fn codes_reported_for(source: &str, slot: &str) -> Vec<String> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
-    std::fs::create_dir_all(&dir).expect("could not create the snippet directory");
-    let path = dir.join(format!("{}.mi", slot));
-    std::fs::write(&path, source).expect("could not write the snippet");
-
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_miri"));
-    let output = Command::new(binary)
-        .args(["check", &path.display().to_string(), "--format", "json"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("could not run the compiler");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&stdout) else {
-        return vec![];
-    };
-    envelope["diagnostics"]
+fn codes_reported_for(source: &str, slot: &str) -> Result<Vec<String>, String> {
+    let envelope = check_snippet(source, slot)?;
+    Ok(envelope["diagnostics"]
         .as_array()
         .map(|items| {
             items
@@ -291,7 +303,7 @@ fn codes_reported_for(source: &str, slot: &str) -> Vec<String> {
                 .filter_map(|d| d["code"].as_str().map(str::to_string))
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 /// Check if a message matches one of the documented shapes.
@@ -410,12 +422,15 @@ fn verified_examples_emit_the_code_they_document() {
             }
         };
 
-        let reported = codes_reported_for(&example, wire);
-        if reported.first().map(String::as_str) != Some(*wire) {
-            failures.push(format!(
-                "{}: the documented example must report it first; it reported {:?}",
-                wire, reported
-            ));
+        match codes_reported_for(&example, wire) {
+            Ok(reported) if reported.first().map(String::as_str) != Some(*wire) => {
+                failures.push(format!(
+                    "{}: the documented example must report it first; it reported {:?}",
+                    wire, reported
+                ));
+            }
+            Ok(_) => {}
+            Err(run) => failures.push(format!("{}: {}", wire, run)),
         }
 
         // Also verify that the message matches a documented shape
@@ -430,7 +445,7 @@ fn verified_examples_emit_the_code_they_document() {
         }
 
         match first_diagnostic(&example, wire) {
-            Some(reported) => {
+            Ok(Some(reported)) => {
                 let matches_any = explanation
                     .messages
                     .iter()
@@ -443,9 +458,10 @@ fn verified_examples_emit_the_code_they_document() {
                     ));
                 }
             }
-            None => {
+            Ok(None) => {
                 failures.push(format!("{}: could not extract the first diagnostic", wire));
             }
+            Err(run) => failures.push(format!("{}: {}", wire, run)),
         }
     }
 
@@ -521,9 +537,16 @@ fn verified_pages_declare_the_help_that_fires() {
             failures.push(format!("{} has no Before example", wire));
             continue;
         };
-        let Some(reported) = first_diagnostic(&example, wire) else {
-            failures.push(format!("{}: could not extract the first diagnostic", wire));
-            continue;
+        let reported = match first_diagnostic(&example, wire) {
+            Ok(Some(reported)) => reported,
+            Ok(None) => {
+                failures.push(format!("{}: could not extract the first diagnostic", wire));
+                continue;
+            }
+            Err(run) => {
+                failures.push(format!("{}: {}", wire, run));
+                continue;
+            }
         };
         let declared = code.explanation().helps;
         let silent = NO_HELP_EMITTED.contains(wire);
@@ -813,7 +836,8 @@ fn excused_examples_still_fail_to_report_their_code() {
         if example.contains("// file:") {
             continue;
         }
-        let reported = codes_reported_for(&example, wire);
+        let reported =
+            codes_reported_for(&example, wire).unwrap_or_else(|run| panic!("{}: {}", wire, run));
         assert!(
             !reported.iter().any(|c| c == wire),
             "{} is on the excused list, but its example now reports it ({:?}); \
@@ -822,6 +846,79 @@ fn excused_examples_still_fail_to_report_their_code() {
             reported
         );
     }
+}
+
+/// Several gates check the same documented example at the same moment, so a
+/// check must read the whole source no matter what the others are doing. A
+/// check that read a file another check was rewriting saw an empty program,
+/// which reports nothing and read as "the example emits no code".
+#[test]
+fn concurrent_checks_of_one_example_each_see_the_whole_source() {
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Rewrites the file a shared slot would use, as a sibling gate checking
+    // the same example does.
+    let rewriter = {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = std::fs::write(dir.join("MER_PAR_002.mi"), "let x = (\n");
+            }
+        })
+    };
+    let workers: Vec<_> = (0..8)
+        .map(|_| {
+            std::thread::spawn(|| {
+                (0..10)
+                    .map(|_| {
+                        codes_reported_for("let x = (\n", "MER_PAR_002")
+                            .unwrap_or_else(|run| panic!("{}", run))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let results: Vec<_> = workers
+        .into_iter()
+        .flat_map(|worker| worker.join().expect("a checking thread panicked"))
+        .collect();
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    rewriter.join().expect("the rewriting thread panicked");
+    for reported in results {
+        assert_eq!(reported.first().map(String::as_str), Some("MER_PAR_002"));
+    }
+}
+
+/// A compiler run that dies prints no envelope; the gate must say so, with
+/// the run's stderr, rather than read the silence as "no diagnostics".
+#[cfg(unix)]
+#[test]
+fn a_killed_check_is_reported_with_its_stderr() {
+    use std::os::unix::process::ExitStatusExt;
+    let killed = Output {
+        status: std::process::ExitStatus::from_raw(9),
+        stdout: Vec::new(),
+        stderr: b"thread 'main' has overflowed its stack".to_vec(),
+    };
+    let Err(report) = envelope_of(&killed) else {
+        panic!("a killed run must not yield an envelope");
+    };
+    assert!(report.contains("signal: 9"), "{}", report);
+    assert!(report.contains("overflowed its stack"), "{}", report);
+}
+
+/// A run that exits with a status `check` never uses is broken even when it
+/// printed something that parses.
+#[cfg(unix)]
+#[test]
+fn a_check_exiting_outside_its_statuses_is_reported() {
+    use std::os::unix::process::ExitStatusExt;
+    let crashed = Output {
+        status: std::process::ExitStatus::from_raw(101 << 8),
+        stdout: br#"{"diagnostics": []}"#.to_vec(),
+        stderr: b"panicked at src/main.rs".to_vec(),
+    };
+    assert!(envelope_of(&crashed).is_err());
 }
 
 #[test]

@@ -2437,6 +2437,11 @@ fn read_one_frame(output: &mut BufReader<ChildStdout>) -> Value {
 ///
 /// A response the protocol never sends would otherwise stop the suite instead
 /// of reporting, which is the very failure these tests are about.
+///
+/// TODO: the budget is fixed wall-clock time, and four sessions have run past
+/// it under full-suite load while passing alone. Whether they answer late or
+/// stall is not yet proven; once it is, size the budget for a loaded machine
+/// or fix the stall.
 fn within<T: Send + 'static>(seconds: u64, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
