@@ -402,13 +402,6 @@ fn run_step(
                 cmd.arg("--format").arg("json");
             }
         }
-        "FixPlan" => {
-            cmd.arg("fix")
-                .arg(require(&spec.file, "file", &spec.kind)?)
-                .arg("--plan")
-                .arg("--format")
-                .arg("json");
-        }
         "FixApply" => {
             cmd.arg("fix")
                 .arg(require(&spec.file, "file", &spec.kind)?)

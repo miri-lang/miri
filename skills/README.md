@@ -73,7 +73,7 @@ Body: ≤400 lines. Three sections:
 
 1. **Positive Grammar** — what the language supports (compact, no exhaustive reference).
 2. **Anti-Hallucination** — syntax that does NOT exist (fenced code blocks, each marked `miri,fails=CODE`).
-3. **Verification Loop** — workflow: `miri check` → `miri explain` → `miri fix --plan`.
+3. **Verification Loop** — the one recommended loop: `miri check --format json` → edit (`miri fix --apply --yes` where a diagnostic carries a repair) → `miri test`. It is written once, in `miri-lang`; the other packs, the docs and the website defer to it.
 ```
 
 ## Quality Gate

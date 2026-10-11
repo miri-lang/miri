@@ -213,18 +213,17 @@ fn test_one_session_checks_plans_applies_and_rechecks_clean() {
         .expect("the diagnostic carries a code")
         .to_string();
 
-    let planned = session.call(2, "fixPlan", json!({ "path": path }));
-    let repair = &planned["result"]["diagnostics"][0]["repair"];
+    let repair = &envelope["diagnostics"][0]["repair"];
     assert!(
         !repair.is_null(),
-        "the diagnostic {} should carry a repair: {}",
+        "the diagnostic {} should carry its repair in the check: {}",
         reported,
-        planned
+        checked
     );
     assert_eq!(
         std::fs::read_to_string(&directory.path().join("main.mi")).expect("the file exists"),
         REASSIGNED_LET,
-        "planning must not modify the file"
+        "checking must not modify the file"
     );
 
     let applied = session.call(3, "fixApply", json!({ "path": path }));
@@ -394,6 +393,33 @@ fn test_skills_get_refuses_a_name_it_does_not_carry() {
         answer["result"]["diagnostics"][0]["code"],
         json!("MER_BLD_013")
     );
+    session.finish();
+}
+
+#[test]
+fn test_no_method_reports_repairs_without_writing_them() {
+    // A check already carries each diagnostic's repair, edits included, so a
+    // report-only fix method would answer the same question a second time.
+    let directory = project("no-fix-plan", &[("main.mi", REASSIGNED_LET)]);
+    let path = directory.path().join("main.mi");
+    let mut session = Session::start(directory.path());
+
+    let initialized = session.call(1, "initialize", json!({}));
+    let capabilities = &initialized["result"]["capabilities"];
+    for list in ["methods", "reservedMethods"] {
+        assert!(
+            !capabilities[list]
+                .as_array()
+                .expect("a list")
+                .contains(&json!("fixPlan")),
+            "fixPlan must not be offered under {}: {}",
+            list,
+            capabilities
+        );
+    }
+
+    let refused = session.call(2, "fixPlan", json!({ "path": path.to_str().unwrap() }));
+    assert_eq!(refused["error"]["code"], json!(-32601), "{}", refused);
     session.finish();
 }
 
@@ -789,7 +815,7 @@ fn test_a_check_runs_with_mir_verification_when_asked() {
 }
 
 #[test]
-fn test_planning_a_file_with_nothing_to_repair_reports_no_repairs() {
+fn test_applying_to_a_file_with_nothing_to_repair_succeeds() {
     let directory = project(
         "nothing-to-repair",
         &[("main.mi", "fn main():\n    println(\"hi\")\n")],
@@ -798,16 +824,13 @@ fn test_planning_a_file_with_nothing_to_repair_reports_no_repairs() {
     let path = path.to_str().unwrap();
     let mut session = Session::start(directory.path());
 
-    let planned = session.call(1, "fixPlan", json!({ "path": path }));
-    assert_eq!(planned["result"]["ok"], json!(true));
-    assert!(planned["result"]["diagnostics"]
+    // Applying nothing is a success, not a failure.
+    let applied = session.call(1, "fixApply", json!({ "path": path }));
+    assert_eq!(applied["result"]["ok"], json!(true), "{}", applied);
+    assert!(applied["result"]["diagnostics"]
         .as_array()
         .expect("a list")
         .is_empty());
-
-    // Applying nothing is a success, not a failure.
-    let applied = session.call(2, "fixApply", json!({ "path": path }));
-    assert_eq!(applied["result"]["ok"], json!(true), "{}", applied);
     session.finish();
 }
 
@@ -840,7 +863,7 @@ fn test_every_file_taking_method_refuses_a_request_naming_no_file() {
     let directory = project("no-path-any-method", &[]);
     let mut session = Session::start(directory.path());
 
-    for (id, method) in [(1, "check"), (2, "fixPlan"), (3, "fixApply")] {
+    for (id, method) in [(1, "check"), (2, "fixApply")] {
         let refused = session.call(id, method, json!({}));
         assert_eq!(
             refused["error"]["code"],
@@ -1141,16 +1164,11 @@ fn extract_parameter_reads(
     fn_to_methods.insert("run_view", vec!["view"]);
     fn_to_methods.insert("run_patch", vec!["patch"]);
     fn_to_methods.insert("run_skills_get", vec!["skillsGet"]);
-    // run_fix is called for both fixPlan and fixApply, but allowRisky is only read
-    // when apply=true (fixApply). Map run_fix only to fixApply for its allowRisky read.
     fn_to_methods.insert("run_fix", vec!["fixApply"]);
     // patch_operations reads the "operations" request parameter
     fn_to_methods.insert("patch_operations", vec!["patch"]);
     // path_param is the single reader used by all file-taking methods
-    fn_to_methods.insert(
-        "path_param",
-        vec!["check", "patch", "view", "fixPlan", "fixApply"],
-    );
+    fn_to_methods.insert("path_param", vec!["check", "patch", "view", "fixApply"]);
 
     // Map of schema methods for initialization
     let schema_methods: Vec<&str> = miri::cli::agent::schema::METHODS
@@ -1385,21 +1403,6 @@ fn test_schema_does_not_over_claim() {
         patch_without_operations["error"]["code"],
         json!(-32602),
         "patch without required operations should fail with -32602"
-    );
-
-    // Test fixPlan: path is required
-    let fix_plan_with_required = session.call(10, "fixPlan", json!({ "path": path_str }));
-    assert_eq!(
-        fix_plan_with_required["error"]["code"],
-        json!(null),
-        "fixPlan with required path should not fail with -32602"
-    );
-
-    let fix_plan_without_path = session.call(11, "fixPlan", json!({}));
-    assert_eq!(
-        fix_plan_without_path["error"]["code"],
-        json!(-32602),
-        "fixPlan without required path should fail with -32602"
     );
 
     // Test fixApply: path is required
@@ -1678,7 +1681,6 @@ fn test_every_advertised_method_is_actually_served() {
         ("initialize", json!({})),
         ("check", json!({ "path": path_str })),
         ("explain", json!({ "code": "MER_TYP_030" })),
-        ("fixPlan", json!({ "path": path_str })),
         ("fixApply", json!({ "path": path_str })),
         ("view", json!({ "path": path_str })),
         (
@@ -2604,14 +2606,6 @@ fn test_every_ok_agrees_with_the_command_line() {
             command: &["explain", "MER_XYZ_999", "--format", "json"],
             method: "explain",
             params: |_| json!({ "code": "MER_XYZ_999" }),
-            on_stderr: false,
-        },
-        Pair {
-            name: "fixPlan, unrepairable",
-            file: Some(UNREPAIRABLE),
-            command: &["fix", "{path}", "--format", "json"],
-            method: "fixPlan",
-            params: |path| json!({ "path": path }),
             on_stderr: false,
         },
         Pair {

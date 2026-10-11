@@ -1,5 +1,5 @@
 # Repair a broken program using only the diagnostic surface: check names the
-# fault, explain describes the rule, fix proposes and then applies the edit.
+# fault and carries the repair, explain describes the rule, fix applies the edit.
 # The agent never reads or writes the source itself.
 
 [[step]]
@@ -7,6 +7,7 @@ type = "Check"
 file = "program.mi"
 must_succeed = false
 assert_diagnostic_code = "MER_TYP_042"
+assert_output_contains = ["let-to-var"]
 
 [[step]]
 type = "Explain"
@@ -14,12 +15,6 @@ code = "MER_TYP_042"
 format_json = false
 must_succeed = true
 assert_output_contains = ["Immutability Violation"]
-
-[[step]]
-type = "FixPlan"
-file = "program.mi"
-must_succeed = true
-assert_output_contains = ["let-to-var"]
 
 [[step]]
 type = "FixApply"

@@ -4,6 +4,13 @@
 answers many requests, so a tool that drives the compiler pays the start-up cost
 once for a session rather than once per invocation.
 
+**This is plumbing, not part of the recommended loop.** It serves one case: an
+integration that holds the compiler open — an editor, or an embedder with no
+shell to run commands in. An agent that has a shell runs the command line: the
+loop it should run is written down once, in the `miri-lang` skill pack's
+*Verification Loop*, and every command this session serves is a command that
+loop already reaches.
+
 Every method answers with the same envelope its command-line equivalent prints,
 described by [`diagnostics-schema.json`](diagnostics-schema.json). The command
 line, this session, and the editor surface that will consume it later therefore
@@ -55,7 +62,7 @@ near either bound.
 
 **This session cannot run a program.** It type-checks, explains, repairs, reads
 and edits source; the served methods are `initialize`, `check`, `explain`,
-`fixPlan`, `fixApply`, `view`, `patch` and `skillsGet`, and none of them
+`fixApply`, `view`, `patch` and `skillsGet`, and none of them
 produces an artifact or a program's output. There is no `run`, `build`, `test`,
 `fmt` or `determinism` method, and none is reserved for a later build.
 
@@ -100,7 +107,7 @@ not serve, or omitted a parameter.
 | `build` | the artifact was produced | 0 / 1 | *command line only* |
 | `run` | the program compiled **and** was not killed by a runtime trap | the program's own status; 1 when the compile failed | *command line only* |
 | `test` | nothing failed and no file was rejected | 0 green / 1 failure / 2 rejected file | *command line only* |
-| `fix --plan` | the plan was produced (**always true when the file was read**) | 0 | `fixPlan` |
+| `fix` (no `--apply`) | the repairs were listed (**always true when the file was read**) | 0 | *command line only* |
 | `fix --apply` | every repair this run owned was written, or there was nothing to repair | 0 / 1 | `fixApply` |
 | `fmt` | the file is canonical, or was rewritten; with `--check`, already canonical | 0 / 1 | *command line only* |
 | `view` | the requested source was read | 0 / 1 | `view` |
@@ -130,7 +137,7 @@ Response:
   "result": {
     "serverInfo": { "name": "miri", "version": "0.7.0-beta.5", "schemaVersion": 1 },
     "capabilities": {
-      "methods": ["initialize", "check", "explain", "fixPlan", "fixApply", "view", "patch", "skillsGet"],
+      "methods": ["initialize", "check", "explain", "fixApply", "view", "patch", "skillsGet"],
       "reservedMethods": ["tokens", "parse", "graph", "targets", "doctor"],
       "methodSchemas": {
         "initialize": { "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "properties": {} },
@@ -234,27 +241,6 @@ Response:
 A code that is not in the registry is answered as a diagnostic carrying
 `MER_BLD_001`, not as a protocol error: the command's whole subject is codes, so
 an unrecognised one is something it has an opinion about.
-
-### `fixPlan`
-
-Request: `{ "path": "main.mi" }`
-
-Response:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 4,
-  "result": {
-    "schemaVersion": 1,
-    "ok": true,
-    "command": "fix",
-    "diagnostics": []
-  }
-}
-```
-
-Reports the repairs the compiler recorded and edits nothing.
 
 ### `fixApply`
 
@@ -595,12 +581,9 @@ reuse it afterwards.
 → {"jsonrpc":"2.0","id":1,"method":"check","params":{"path":"main.mi"}}
 ← {"jsonrpc":"2.0","id":1,"result":{"schemaVersion":1,"ok":false,"command":"check","diagnostics":[…]}}
 
-→ {"jsonrpc":"2.0","id":2,"method":"fixPlan","params":{"path":"main.mi"}}
-← {"jsonrpc":"2.0","id":2,"result":{"schemaVersion":1,"ok":false,"command":"fix","diagnostics":[…]}}
+→ {"jsonrpc":"2.0","id":2,"method":"fixApply","params":{"path":"main.mi"}}
+← {"jsonrpc":"2.0","id":2,"result":{"schemaVersion":1,"ok":true,"command":"fix","diagnostics":[…]}}
 
-→ {"jsonrpc":"2.0","id":3,"method":"fixApply","params":{"path":"main.mi"}}
-← {"jsonrpc":"2.0","id":3,"result":{"schemaVersion":1,"ok":true,"command":"fix","diagnostics":[…]}}
-
-→ {"jsonrpc":"2.0","id":4,"method":"check","params":{"path":"main.mi"}}
-← {"jsonrpc":"2.0","id":4,"result":{"schemaVersion":1,"ok":true,"command":"check","diagnostics":[]}}
+→ {"jsonrpc":"2.0","id":3,"method":"check","params":{"path":"main.mi"}}
+← {"jsonrpc":"2.0","id":3,"result":{"schemaVersion":1,"ok":true,"command":"check","diagnostics":[]}}
 ```

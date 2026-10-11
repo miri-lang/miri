@@ -9,8 +9,8 @@
   {
     "task": "b",
     "success": true,
-    "invocations": 6,
-    "bytes_read": 2952,
+    "invocations": 5,
+    "bytes_read": 2277,
     "bytes_written": 74
   },
   {
@@ -23,8 +23,8 @@
   {
     "task": "d",
     "success": true,
-    "invocations": 4,
-    "bytes_read": 2013,
+    "invocations": 3,
+    "bytes_read": 1361,
     "bytes_written": 85
   },
   {

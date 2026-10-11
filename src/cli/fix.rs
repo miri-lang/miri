@@ -226,17 +226,6 @@ pub fn apply(
     }
 }
 
-/// The envelope reporting the repairs the compiler found, having edited nothing.
-///
-/// `ok` reports that the plan was produced, not that the file compiles. Those
-/// are different questions and a caller needs both: the diagnostics the plan
-/// was built from travel in the same envelope, and `check` is the command that
-/// answers the second one. Reporting the file's verdict here would say `false`
-/// about a plan produced exactly as asked.
-pub fn plan_envelope(diagnostics: &[JsonDiagnostic]) -> DiagnosticsEnvelope {
-    DiagnosticsEnvelope::new(JsonCommand::Fix, true, diagnostics.to_vec()).with_exit_code(0)
-}
-
 /// The envelope reporting what an apply did.
 ///
 /// `ok` says whether the apply succeeded, not whether the file now compiles.

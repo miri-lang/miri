@@ -562,8 +562,7 @@ fn dispatch(request: &RpcRequest, id: Option<RpcId>) -> RpcResponse {
         "initialize" => serialize(id, &initialize()),
         "check" => run_check(request, id),
         "explain" => run_explain(request, id),
-        "fixPlan" => run_fix(request, id, "fixPlan", false),
-        "fixApply" => run_fix(request, id, "fixApply", true),
+        "fixApply" => run_fix(request, id, "fixApply"),
         "view" => run_view(request, id),
         "patch" => run_patch(request, id),
         "skillsGet" => run_skills_get(request, id),
@@ -868,12 +867,16 @@ fn patch_operation(entry: &serde_json::Value) -> Result<patch::Operation, String
     }
 }
 
-/// Report the repairs for the file the request names, and optionally write them.
+/// Write the repairs the compiler recorded for the file the request names.
+///
+/// There is no method that only reports them: a `check` already carries each
+/// diagnostic's repair, edits included, so a report-only method would answer
+/// the same question twice.
 ///
 /// `fixApply` has no terminal to confirm at, so the caller says outright
 /// whether a repair the compiler classes as risky may be written. The default
 /// is that it may not.
-fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str, apply: bool) -> RpcResponse {
+fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str) -> RpcResponse {
     let Some(path) = path_param(request) else {
         return missing_path(id, method);
     };
@@ -884,10 +887,6 @@ fn run_fix(request: &RpcRequest, id: Option<RpcId>, method: &str, apply: bool) -
     };
 
     let (diagnostics, _) = fix::diagnose(&path, &source);
-    if !apply {
-        return serialize(id, &fix::plan_envelope(&diagnostics));
-    }
-
     let allow_risky = request
         .params
         .as_ref()

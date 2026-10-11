@@ -125,7 +125,6 @@ fn run_command(cli: Cli) -> Result<()> {
             ),
             Commands::Fix {
                 path,
-                plan: _plan,
                 apply,
                 yes,
                 allow_risky,

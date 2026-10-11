@@ -111,6 +111,11 @@ const VERIFIED: &[&str] = &[
 ];
 
 /// Codes whose example cannot be verified this way, each with the reason.
+///
+/// TODO: these pages' examples are still unverified, and about thirty of them
+/// show an example that raises a different code first. Each needs gating
+/// through the surface that actually raises it (run, build, test, view,
+/// patch), or an example rewritten so `check` reaches it.
 const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_BLD_021", "raised by run/build about the program as a whole; documented with shell prose because no source line carries it"),
     ("MER_BLD_022", "raised by the view command when asked about a type name not in scope, not by compiling a source file"),
