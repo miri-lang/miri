@@ -19,10 +19,11 @@
 # and the onboarding context stays in the conversation as cached input. The
 # baselines and the two cold Miri arms are launched straight on the brief.
 #
-# A Miri kernel is a `forall` in the entry point that runs on the device —
-# spelled `gpu forall`, or reading a `gpu let` / `gpu var` binding, since a bare
-# `forall` over host data runs as a loop on the processor. A baseline's is a
-# WGSL compute shader and a call that dispatches it.
+# A Miri kernel is a `gpu fn`, or a `forall` in the entry point that runs on the
+# device — spelled `gpu forall`, or reading a `gpu let` / `gpu var` binding,
+# since a bare `forall` over host data runs as a loop on the processor. So the
+# source needs a `gpu` construct and something that runs: a `forall` or a
+# `gpu fn`. A baseline's is a WGSL compute shader and a call that dispatches it.
 
 [[arm]]
 id = "miri-pack"
@@ -32,7 +33,7 @@ entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
 install_pack = true
 notes = "The release binary with the skill pack installed into the workspace."
-kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
+kernel_evidence = { files = ["main.mi"], patterns = ['\bgpu\s+(fn|forall|let|var)\b', '\b(forall|gpu\s+fn)\b'] }
 
 [[arm]]
 id = "miri-bare"
@@ -42,7 +43,7 @@ entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
 install_pack = false
 notes = "The release binary and `miri --help`. No prose file of any kind."
-kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
+kernel_evidence = { files = ["main.mi"], patterns = ['\bgpu\s+(fn|forall|let|var)\b', '\b(forall|gpu\s+fn)\b'] }
 
 [[arm]]
 id = "miri-skill"
@@ -50,7 +51,7 @@ language = "Miri"
 toolchain = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`"
 entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
-kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
+kernel_evidence = { files = ["main.mi"], patterns = ['\bgpu\s+(fn|forall|let|var)\b', '\b(forall|gpu\s+fn)\b'] }
 install_pack = true
 onboarding = ["skill"]
 notes = "The release binary, onboarded from the skill pack before the brief."
@@ -61,7 +62,7 @@ language = "Miri"
 toolchain = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`"
 entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
-kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
+kernel_evidence = { files = ["main.mi"], patterns = ['\bgpu\s+(fn|forall|let|var)\b', '\b(forall|gpu\s+fn)\b'] }
 install_pack = false
 onboarding = ["grammar"]
 notes = "The release binary, onboarded from the formal grammar before the brief: does a grammar stop guesses like `let x: int`?"
@@ -72,7 +73,7 @@ language = "Miri"
 toolchain = "the `miri` compiler: `miri check`, `miri build`, `miri run` and `miri test`"
 entry_point = "main.mi"
 run = ["miri", "run", "main.mi", "--"]
-kernel_evidence = { files = ["main.mi"], patterns = ['\bforall\b', '\bgpu\s+(forall|let|var)\b'] }
+kernel_evidence = { files = ["main.mi"], patterns = ['\bgpu\s+(fn|forall|let|var)\b', '\b(forall|gpu\s+fn)\b'] }
 install_pack = true
 onboarding = ["skill", "grammar"]
 notes = "The release binary, onboarded from the skill pack and the grammar together."

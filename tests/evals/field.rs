@@ -2636,3 +2636,48 @@ fn test_an_onboarded_arm_is_taught_first_and_measured_from_its_brief() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn test_a_miri_kernel_is_evidenced_by_a_gpu_fn_or_a_device_forall() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the evidence was not read");
+        return;
+    }
+    let cases = [
+        (
+            "gpu_fn",
+            "gpu fn step(src Array<i32, 4>)\n    return\n",
+            true,
+        ),
+        (
+            "device_forall",
+            "gpu var a = Array<i32, 4>()\nforall i in 0..4\n    a[i] = i\n",
+            true,
+        ),
+        ("gpu_forall", "gpu forall i in 0..4\n    out[i] = i\n", true),
+        (
+            "host_forall",
+            "var a = Array<i32, 4>()\nforall i in 0..4\n    a[i] = i\n",
+            false,
+        ),
+        ("buffer_only", "gpu var a = Array<i32, 4>()\n", false),
+    ];
+    for (name, source, on_gpu) in cases {
+        let workspace = std::env::temp_dir().join(format!("miri-field-evidence-{}", name));
+        let _ = fs::remove_dir_all(&workspace);
+        fs::create_dir_all(&workspace).expect("cannot create a workspace");
+        fs::write(workspace.join("main.mi"), source).expect("cannot write main.mi");
+        let missing = with_bench(&format!(
+            "print(bool(bench.kernel_evidence(__import__('pathlib').Path({:?}), bench.arm_named('miri-skill'))['missing']))",
+            workspace.display().to_string()
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+        assert_eq!(
+            missing == "False",
+            on_gpu,
+            "{}: a Miri source was judged {} the GPU",
+            name,
+            if on_gpu { "off" } else { "on" }
+        );
+    }
+}
