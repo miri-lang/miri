@@ -8,7 +8,9 @@
 //! otherwise an overflow the host wraps survives on the device and a later
 //! division or comparison sees a different number. Each program here computes
 //! the same expression on the host and in a kernel and prints both, so a
-//! device that disagrees with the host prints a mismatched pair.
+//! device that disagrees with the host prints a mismatched pair. Overflow
+//! stops a program, so the programs that mean to wrap say so with
+//! `system.math`'s `wrapping_add`, `wrapping_sub` and `wrapping_mul`.
 
 use super::helpers::compile_to_wgsl;
 use super::utils::{assert_compiler_error, assert_runs_with_output};
@@ -26,6 +28,7 @@ fn narrow_program(
     format!(
         "
 use system.gpu
+use system.math
 use system.collections.array
 
 fn main()
@@ -50,7 +53,12 @@ fn assert_device_matches_host(program: &str, expected: &str) {
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_u8_add_wraps_at_eight_bits() {
-    let program = narrow_program("u8", "10", "buf[i] + 250 as u8", "h + 250 as u8");
+    let program = narrow_program(
+        "u8",
+        "10",
+        "wrapping_add(buf[i], 250 as u8)",
+        "wrapping_add(h, 250 as u8)",
+    );
     assert_device_matches_host(&program, "4");
 }
 
@@ -63,8 +71,8 @@ fn test_gpu_u8_divide_after_overflow_sees_the_wrapped_value() {
     let program = narrow_program(
         "u8",
         "10",
-        "(buf[i] + 250 as u8) / 2 as u8",
-        "(h + 250 as u8) / 2 as u8",
+        "wrapping_add(buf[i], 250 as u8) / 2 as u8",
+        "wrapping_add(h, 250 as u8) / 2 as u8",
     );
     assert_device_matches_host(&program, "2");
 }
@@ -78,8 +86,8 @@ fn test_gpu_u8_compare_after_overflow_sees_the_wrapped_value() {
     let program = narrow_program(
         "u8",
         "10",
-        "1 as u8 if buf[i] + 250 as u8 < 10 as u8 else 0 as u8",
-        "1 as u8 if h + 250 as u8 < 10 as u8 else 0 as u8",
+        "1 as u8 if wrapping_add(buf[i], 250 as u8) < 10 as u8 else 0 as u8",
+        "1 as u8 if wrapping_add(h, 250 as u8) < 10 as u8 else 0 as u8",
     );
     assert_device_matches_host(&program, "1");
 }
@@ -90,7 +98,12 @@ fn test_gpu_u8_compare_after_overflow_sees_the_wrapped_value() {
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_i8_add_wraps_to_a_negative_value() {
-    let program = narrow_program("i8", "100", "buf[i] + 100 as i8", "h + 100 as i8");
+    let program = narrow_program(
+        "i8",
+        "100",
+        "wrapping_add(buf[i], 100 as i8)",
+        "wrapping_add(h, 100 as i8)",
+    );
     assert_device_matches_host(&program, "-56");
 }
 
@@ -100,7 +113,12 @@ fn test_gpu_i8_add_wraps_to_a_negative_value() {
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_i8_subtract_wraps_to_a_positive_value() {
-    let program = narrow_program("i8", "-100", "buf[i] - 100 as i8", "h - 100 as i8");
+    let program = narrow_program(
+        "i8",
+        "-100",
+        "wrapping_sub(buf[i], 100 as i8)",
+        "wrapping_sub(h, 100 as i8)",
+    );
     assert_device_matches_host(&program, "56");
 }
 
@@ -110,7 +128,12 @@ fn test_gpu_i8_subtract_wraps_to_a_positive_value() {
     ignore = "requires a real GPU; runs on the macos-14 hardware job"
 )]
 fn test_gpu_i16_multiply_wraps_at_sixteen_bits() {
-    let program = narrow_program("i16", "300", "buf[i] * 300 as i16", "h * 300 as i16");
+    let program = narrow_program(
+        "i16",
+        "300",
+        "wrapping_mul(buf[i], 300 as i16)",
+        "wrapping_mul(h, 300 as i16)",
+    );
     assert_device_matches_host(&program, "24464");
 }
 
@@ -123,8 +146,8 @@ fn test_gpu_u16_multiply_then_modulo_sees_the_wrapped_value() {
     let program = narrow_program(
         "u16",
         "300",
-        "(buf[i] * 300 as u16) % 1000 as u16",
-        "(h * 300 as u16) % 1000 as u16",
+        "wrapping_mul(buf[i], 300 as u16) % 1000 as u16",
+        "wrapping_mul(h, 300 as u16) % 1000 as u16",
     );
     assert_device_matches_host(&program, "464");
 }

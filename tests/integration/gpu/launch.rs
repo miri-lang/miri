@@ -924,7 +924,7 @@ use system.collections.array
 
 fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
-    let p = a.reduce(1.0, fn(x float, y float) float: x * y)
+    let p = a.reduce(1.0, fn(x f32, y f32) f32: x * y)
     println(f'{p}')
 ",
         "24",

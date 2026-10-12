@@ -40,8 +40,9 @@ use crate::mir::lambda::LambdaInfo;
 use crate::mir::symbol::{GpuKernelKind, Symbol};
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
-    GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
-    StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
+    GpuLaunchArgs, Local, LocalDecl, MathIntrinsic, Operand, Place, Rvalue,
+    Statement as MirStatement, StatementKind as MirStatementKind, StorageClass, Terminator,
+    TerminatorKind,
 };
 use crate::type_checker::utils::AcceleratorBindingKind;
 
@@ -1958,14 +1959,15 @@ pub fn compute_clamped_length(
 ) -> Local {
     let i64_ty = Type::new(TypeKind::Int, span);
 
+    // The distance wraps rather than traps: for an empty range it may not fit
+    // an `int` (`1000..-i64::MAX`), and the in-range flag below zeroes it then.
     let length_local = ctx.push_temp(i64_ty.clone(), span);
     push_assign(
         ctx,
         length_local,
-        Rvalue::BinaryOp(
-            BinOp::Sub,
-            Box::new(end_op.clone()),
-            Box::new(start_op.clone()),
+        Rvalue::MathIntrinsic(
+            MathIntrinsic::WrappingSub,
+            vec![end_op.clone(), start_op.clone()],
         ),
         span,
     );

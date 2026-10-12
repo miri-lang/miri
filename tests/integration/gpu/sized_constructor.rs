@@ -152,7 +152,7 @@ use system.collections.array
 gpu var out = Array<i32, 4>()
 gpu forall t in 0..1
     var h = Array<i32, 4>()
-    var w = 0
+    var w i32 = 0
     while w < 4
         h[w] = (w + 1) * 10
         w = w + 1
