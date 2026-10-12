@@ -448,10 +448,16 @@ def parse_transcript(transcript):
 
 
 def decode_event(line):
+    """One streamed event, or None for a line that is not a JSON object.
+
+    The stream is mostly objects, but a harness can interleave other output;
+    a bare JSON string or number on a line is not an event and is skipped.
+    """
     try:
-        return json.loads(line)
+        event = json.loads(line)
     except json.JSONDecodeError:
         return None
+    return event if isinstance(event, dict) else None
 
 
 def unobserved_usage():
@@ -931,6 +937,12 @@ def parse_arguments(argv):
         "(a wrapper that selects an account, say); every record names the one that ran",
     )
     parser.add_argument("--runs", type=int, default=1)
+    parser.add_argument(
+        "--from-run",
+        type=int,
+        default=1,
+        help="the first run number; a cell an interrupted round left short resumes here",
+    )
     parser.add_argument("--round", default="r1")
     parser.add_argument(
         "--scratch",
@@ -986,7 +998,7 @@ def dry_run(arguments, arm, job):
 
 
 def measured_cell(arguments, arm, model, job):
-    for index in range(1, arguments.runs + 1):
+    for index in range(arguments.from_run, arguments.from_run + arguments.runs):
         transcript, outcome = one_run(arguments, arm, model, job, index)
         record = record_for(arguments, arm, model, job, outcome)
         path = write_record(arguments, arm, model, record, transcript, index, outcome["onboardingTranscript"])
@@ -1003,7 +1015,7 @@ def probe_cell(arguments, arm, model, job):
     about that verdict is decided here.
     """
     unreadable = 0
-    for index in range(1, arguments.runs + 1):
+    for index in range(arguments.from_run, arguments.from_run + arguments.runs):
         transcript, outcome = one_probe(arguments, arm, model, job, index)
         record = probe_record(arguments, arm, model, outcome)
         path = write_record(arguments, arm, model, record, transcript, index, outcome["onboardingTranscript"])

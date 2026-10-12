@@ -2681,3 +2681,20 @@ fn test_a_miri_kernel_is_evidenced_by_a_gpu_fn_or_a_device_forall() {
         );
     }
 }
+
+#[test]
+fn test_a_stream_line_that_is_not_an_event_is_skipped() {
+    // Round r2 lost two runs to a transcript line that decoded to a bare JSON
+    // string: the parser took it for an event and crashed the cell.
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the parser was not run");
+        return;
+    }
+    let parsed = with_bench(
+        "print(bench.parse_transcript('\"stray\"\\n{\"type\":\"result\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}\\n42\\n')[0]['in'])",
+    );
+    assert_eq!(
+        parsed, "2",
+        "a stray line stopped the transcript from being read"
+    );
+}
