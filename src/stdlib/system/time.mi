@@ -17,9 +17,10 @@ runtime "core" fn miri_rt_sleep_nanos(nanos int)
 /// Overflow Behavior: Each constructor multiplies its input by a fixed factor:
 /// from_nanos(n) is n * 1 (no scaling); from_micros(n) is n * 1_000;
 /// from_millis(n) is n * 1_000_000; from_seconds(n) is n * 1_000_000_000.
-/// The result is stored internally as a signed 64-bit nanosecond count.
-/// Multiplication that overflows wraps in two's complement; accessor methods
-/// then truncate the stored value toward zero.
+/// The result is stored internally as a signed 64-bit nanosecond count. An
+/// input whose nanosecond count does not fit stops the program with an
+/// integer-overflow error rather than wrapping; accessor methods truncate the
+/// stored value toward zero.
 ///
 /// Example:
 ///     use system.time

@@ -592,7 +592,6 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_PAR_009", "Shadowed by MER_PAR_001 (parser error fires first)"),
     ("MER_PAR_022", "No Before snippet in doc"),
     ("MER_PAR_023", "No Before snippet in doc"),
-    ("MER_RT_003", "Integer overflow wraps silently in unchecked arithmetic"),
     ("MER_RT_004", "No compiled-code path exists"),
     ("MER_RT_007", "A bus error needs a misaligned or unmapped access the compiler never emits"),
     ("MER_RT_008", "An illegal instruction needs a corrupt code page, which no .mi source produces"),

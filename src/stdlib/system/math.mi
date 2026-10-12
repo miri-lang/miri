@@ -7,6 +7,17 @@
 // `abs`, `min` and `max` also take integers, typed at their argument.
 public type Real is f16 or f32 or f64 or float
 
+/// The integer types that compute on every target, the GPU included.
+public type Integer is i8 or i16 or i32 or i64 or int or u8 or u16 or u32 or u64
+
+/// `a + b`, `a - b` and `a * b` wrapped at the width of their type. The plain
+/// operators stop the program when a result does not fit; these are for code
+/// that means to wrap, such as a hash or a checksum, and wrap the same way on
+/// the processor and the GPU.
+public intrinsic fn wrapping_add(a Integer, b Integer) Integer
+public intrinsic fn wrapping_sub(a Integer, b Integer) Integer
+public intrinsic fn wrapping_mul(a Integer, b Integer) Integer
+
 public intrinsic fn abs(x Real) Real
 public intrinsic fn min(a Real, b Real) Real
 public intrinsic fn max(a Real, b Real) Real
@@ -41,14 +52,15 @@ public const INF = 1e309
 
 // Deterministic integer hash (the MurmurHash3 `fmix32` finalizer). Maps any
 // `u32` seed to a well-distributed `u32`; adjacent seeds avalanche to unrelated
-// outputs. Portable across CPU and GPU because 32-bit integer multiply wraps
-// identically on both. The all-zero seed is the one fixed point (maps to 0).
+// outputs. Portable across CPU and GPU because `wrapping_mul` wraps 32-bit
+// products identically on both. The all-zero seed is the one fixed point
+// (maps to 0).
 public fn hash_u32(seed u32) u32
-    var h = seed * 374761393 as u32
+    var h = wrapping_mul(seed, 374761393 as u32)
     h = h ^ (h / 65536 as u32)
-    h = h * 2246822519 as u32
+    h = wrapping_mul(h, 2246822519 as u32)
     h = h ^ (h / 8192 as u32)
-    h = h * 3266489917 as u32
+    h = wrapping_mul(h, 3266489917 as u32)
     h = h ^ (h / 65536 as u32)
     return h
 
@@ -57,7 +69,7 @@ public fn hash_u32(seed u32) u32
 fn lattice_unit(xi float, yi float) float
     let kx = (xi as i32) as u32
     let ky = (yi as i32) as u32
-    let key = kx * 1973 as u32 + ky * 9277 as u32 + 101 as u32
+    let key = wrapping_add(wrapping_add(wrapping_mul(kx, 1973 as u32), wrapping_mul(ky, 9277 as u32)), 101 as u32)
     return hash_u32(key) as float / 4294967295.0
 
 // TODO: the noise functions below compute in `float` only. Taking `Real`

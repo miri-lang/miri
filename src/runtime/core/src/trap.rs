@@ -21,6 +21,8 @@ pub(crate) mod code {
     pub(crate) const DIVISION_BY_ZERO: &str = "MER_RT_001";
     /// An integer remainder whose divisor was zero.
     pub(crate) const REMAINDER_BY_ZERO: &str = "MER_RT_002";
+    /// An integer `+`, `-`, `*` or negation whose result does not fit its type.
+    pub(crate) const INTEGER_OVERFLOW: &str = "MER_RT_003";
     /// An assertion that did not hold.
     pub(crate) const ASSERTION_FAILED: &str = "MER_RT_005";
     /// An index outside the collection it was applied to.

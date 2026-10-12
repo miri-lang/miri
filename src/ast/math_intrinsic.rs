@@ -33,6 +33,11 @@ pub enum MathIntrinsic {
     Smoothstep,
     Step,
     Sign,
+    /// Integer `+`, `-` and `*` that wrap at the result width instead of
+    /// trapping on overflow, for code that means to wrap — a hash, a checksum.
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
     // Vector builtins (GPU-only)
     VecDot,
     VecLength,
@@ -68,6 +73,9 @@ impl MathIntrinsic {
             "smoothstep" => Some(MathIntrinsic::Smoothstep),
             "step" => Some(MathIntrinsic::Step),
             "sign" => Some(MathIntrinsic::Sign),
+            "wrapping_add" => Some(MathIntrinsic::WrappingAdd),
+            "wrapping_sub" => Some(MathIntrinsic::WrappingSub),
+            "wrapping_mul" => Some(MathIntrinsic::WrappingMul),
             _ => None,
         }
     }
@@ -99,6 +107,9 @@ impl fmt::Display for MathIntrinsic {
             MathIntrinsic::Smoothstep => "smoothstep",
             MathIntrinsic::Step => "step",
             MathIntrinsic::Sign => "sign",
+            MathIntrinsic::WrappingAdd => "wrapping_add",
+            MathIntrinsic::WrappingSub => "wrapping_sub",
+            MathIntrinsic::WrappingMul => "wrapping_mul",
             MathIntrinsic::VecDot => "dot",
             MathIntrinsic::VecLength => "length",
             MathIntrinsic::VecNormalize => "normalize",
