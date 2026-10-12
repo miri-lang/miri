@@ -187,37 +187,17 @@ fn test_fail_fixture(path: &Path) -> Result<usize, String> {
 
     let test_path = file.path().to_str().unwrap().to_string();
 
-    let mut cmd = miri_cmd();
-    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("stdlib");
-
-    cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
-        .env("RUST_BACKTRACE", "0")
-        // A sibling test sets these process-wide to prove the linker is chosen
-        // from them, and the setting outlives it. A fixture that builds would
-        // inherit that bogus linker and fail for a reason that has nothing to
-        // do with the fixture.
-        .env_remove("MIRI_CC")
-        .env_remove("CC")
-        .arg(directives.command_or("check"))
-        .arg(&test_path)
-        .arg("--format")
-        .arg("json");
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to run miri: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {}", e))?;
-
-    if parsed["ok"] != false {
-        return Err(format!(
-            "Expected compilation to fail, but ok=true. Code: {}",
-            expect_code
-        ));
+    let command = directives.command_or("check");
+    let parsed = refusal_envelope(&test_path, command, &expect_code)?;
+    // A refusal `build` reaches before any code is generated is the frontend's,
+    // and `check` judges a program by the same stages, so the two agree.
+    if command == "build" {
+        refusal_envelope(&test_path, "check", &expect_code).map_err(|error| {
+            format!(
+                "`check` disagrees with `build` on {}: {error}",
+                path.display()
+            )
+        })?;
     }
 
     let diags = parsed["diagnostics"]
@@ -288,6 +268,59 @@ fn test_fail_fixture(path: &Path) -> Result<usize, String> {
 
     verify_repairs_are_published(path, diags)?;
     count_locatable_diagnostics(path, diags)
+}
+
+/// The JSON envelope `command` prints for the program at `test_path`, once it
+/// is known to refuse the program with `expect_code` among its diagnostics.
+fn refusal_envelope(
+    test_path: &str,
+    command: &str,
+    expect_code: &str,
+) -> Result<serde_json::Value, String> {
+    let mut cmd = miri_cmd();
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+
+    cmd.env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
+        .env("RUST_BACKTRACE", "0")
+        // A sibling test sets these process-wide to prove the linker is chosen
+        // from them, and the setting outlives it. A fixture that builds would
+        // inherit that bogus linker and fail for a reason that has nothing to
+        // do with the fixture.
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
+        .arg(command)
+        .arg(test_path)
+        .arg("--format")
+        .arg("json");
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run miri: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON output: {}", e))?;
+
+    if parsed["ok"] != false {
+        return Err(format!(
+            "Expected `{command}` to fail, but ok=true. Code: {}",
+            expect_code
+        ));
+    }
+    let reports_the_code = parsed["diagnostics"].as_array().is_some_and(|diags| {
+        diags
+            .iter()
+            .any(|d| d["code"].as_str() == Some(expect_code))
+    });
+    if !reports_the_code {
+        return Err(format!(
+            "`{command}` did not report {expect_code}: {}",
+            parsed["diagnostics"]
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Verify that warn/<CODE>.mi contains expected warning code and ok=true.

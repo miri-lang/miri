@@ -11,6 +11,7 @@
 //! argument nobody checked — a string's address compared with an integer.
 
 use super::utils::*;
+use crate::utils::{miri_build, miri_check};
 
 const CANNOT_COMPARE: &str = "cannot compare String and int";
 
@@ -879,4 +880,47 @@ fn main()
         ),
         "true true",
     );
+}
+
+/// A class method calling another method of its own on `self`, where that
+/// method builds the class at a larger instance, grows without end through a
+/// comparison. `build` finds it while lowering the bodies it reaches, and
+/// `check` judges the program by the same lowering, so it refuses it too.
+const GROWS_THROUGH_SELF_CALL: &str = r#"
+use system.ops
+
+class Holder<T> implements Comparable
+    v T
+    public fn compare(other Self) int
+        if self.v < other.v
+            return -1
+        return 1
+
+class C<T> implements Comparable
+    v T
+    fn g() int
+        let h = Holder<C<Option<T>>>(v: C<Option<T>>(v: None))
+        if h < h
+            return 1
+        return 0
+    public fn compare(other Self) int
+        return self.g() - other.g()
+
+fn main()
+    let c = C<int>(v: 1)
+    println(f"{c.g()}")
+"#;
+
+#[test]
+fn growth_through_a_call_on_self_is_refused_by_check_as_by_build() {
+    for (command, result) in [
+        ("check", miri_check(GROWS_THROUGH_SELF_CALL)),
+        ("build", miri_build(GROWS_THROUGH_SELF_CALL)),
+    ] {
+        let output = result.output();
+        assert!(
+            !result.success && output.contains("MER_MIR_016"),
+            "`{command}` should refuse with MER_MIR_016, got:\n{output}"
+        );
+    }
 }

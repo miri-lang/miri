@@ -118,12 +118,9 @@ fn gpu_resident_array_reduce_method_still_allowed() {
         "
 use system.collections.array
 
-fn add(a i32, b i32) i32
-    a + b
-
 fn main()
     gpu let a = Array<i32, 4>(1, 2, 3, 4)
-    let sum = a.reduce(0, add)
+    let sum = a.reduce(0, fn(x i32, y i32) i32: x + y)
 ",
     );
 }
