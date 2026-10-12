@@ -430,6 +430,17 @@ impl TypeChecker {
     ///
     /// `self` refers to the current class instance. It can only be used inside a class method.
     pub(crate) fn infer_self(&mut self, span: Span, context: &Context) -> Type {
+        if context.in_field_initializer {
+            self.report_error_with_help(
+                DiagnosticCode::TypClassDefinition,
+                "a field initializer cannot read 'self': it runs before the instance exists"
+                    .to_string(),
+                span,
+                "set the field from the other in `init`, where `self` is the instance being built"
+                    .to_string(),
+            );
+            return ast_factory::make_type(TypeKind::Error);
+        }
         if context.in_static_method {
             self.report_error(
                 DiagnosticCode::TypStaticMethodRestriction,
