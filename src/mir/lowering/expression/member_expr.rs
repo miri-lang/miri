@@ -429,6 +429,37 @@ fn super_receiver(ctx: &LoweringContext, obj: &Expression) -> Option<crate::mir:
     ctx.variable_map.get("self").copied()
 }
 
+/// The enum and discriminant of `obj.prop` when it names a variant without a
+/// payload. The enum is named bare (`GE.Nothing`) or with its arguments
+/// (`GE<int>.Nothing`); either way the checker recorded which type it names,
+/// and the type expression is never lowered as a value.
+fn enum_unit_variant(
+    ctx: &LoweringContext,
+    obj: &Expression,
+    prop: &Expression,
+) -> Option<(String, usize)> {
+    let type_name = ctx.type_checker.type_identity_named_by(obj)?;
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(type_name)
+    else {
+        return None;
+    };
+    let ExpressionKind::Identifier(variant_name, _) = &prop.node else {
+        return None;
+    };
+    let (discriminant, (_, associated_types)) = enum_def
+        .variants
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _))| name.as_str() == variant_name)?;
+    associated_types
+        .is_empty()
+        .then(|| (type_name.to_string(), discriminant))
+}
+
 pub(crate) fn lower_member_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -452,6 +483,13 @@ pub(crate) fn lower_member_expr(
                 }
             }
         }
+    }
+
+    if let Some((type_name, discriminant)) = enum_unit_variant(ctx, obj, prop) {
+        let ExpressionKind::Identifier(variant_name, _) = &prop.node else {
+            unreachable!("enum_unit_variant matched a variant by its identifier")
+        };
+        return lower_enum_unit_variant(ctx, &type_name, variant_name, discriminant, expr, dest);
     }
 
     let obj_watermark = ctx.body.local_decls.len();
@@ -529,49 +567,6 @@ pub(crate) fn lower_member_expr(
                     let result = lower_custom_field_access(ctx, place, idx, expr, dest)?;
                     release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
                     return Ok(result);
-                }
-            }
-        }
-    }
-
-    if let (ExpressionKind::Identifier(..), Some(type_name)) =
-        (&obj.node, ctx.type_checker.type_identity_named_by(obj))
-    {
-        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
-            .type_checker
-            .type_table
-            .global_type_definitions
-            .get(type_name)
-        {
-            if let ExpressionKind::Identifier(variant_name, _) = &prop.node {
-                if let Some((discriminant, _)) = enum_def
-                    .variants
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (name, _))| name.as_str() == variant_name)
-                {
-                    let associated_types = match enum_def.variants.get(variant_name) {
-                        Some(types) => types,
-                        None => {
-                            return Err(LoweringError::unsupported_expression(
-                                format!(
-                                    "Unknown variant '{}' for enum '{}'",
-                                    variant_name, type_name
-                                ),
-                                expr.span,
-                            ));
-                        }
-                    };
-                    if associated_types.is_empty() {
-                        return lower_enum_unit_variant(
-                            ctx,
-                            type_name,
-                            variant_name,
-                            discriminant,
-                            expr,
-                            dest,
-                        );
-                    }
                 }
             }
         }

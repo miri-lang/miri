@@ -572,11 +572,17 @@ fn monomorphized_lowering_failure(
     if refuses_the_program {
         return CompilerError::Lowering(error);
     }
-    CompilerError::Codegen(format!(
-        "MIR lowering failed for {}: {}",
-        symbol.written(),
-        error
-    ))
+    // Still the compiler's own failure, but reported where lowering stopped,
+    // so an author is pointed at the construct rather than at nothing.
+    let source = error.source_override.as_deref().cloned();
+    CompilerError::Lowering(
+        crate::error::lowering::LoweringError::internal(
+            DiagnosticCode::CgInternalCodegenError,
+            format!("MIR lowering failed for {}: {}", symbol.written(), error),
+            error.span,
+        )
+        .in_source(source),
+    )
 }
 
 fn called_functions(bodies: &[(Symbol, mir::Body)]) -> HashSet<Symbol> {
@@ -4140,4 +4146,28 @@ enum ElementBody {
     Equality,
     /// The hash consistent with an element's equality.
     Hash,
+}
+
+#[cfg(test)]
+mod lowering_failure_tests {
+    use super::monomorphized_lowering_failure;
+    use crate::error::lowering::LoweringError;
+    use crate::error::syntax::Span;
+    use crate::mir::symbol::Symbol;
+
+    /// A lowering failure of the compiler's own is reported where lowering
+    /// stopped: the internal-error code, and the span of the construct, so an
+    /// author has a line to look at rather than nothing.
+    #[test]
+    fn an_internal_lowering_failure_carries_its_location() {
+        let span = Span::new(40, 52);
+        let error = LoweringError::unsupported_expression("a construct lowering refuses", span);
+        let diagnostics = monomorphized_lowering_failure(&Symbol::entry(), error).to_diagnostics();
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(diagnostic.code, Some("MER_CG_008"));
+        assert_eq!(diagnostic.span, Some(span));
+        assert!(diagnostic.message.contains("a construct lowering refuses"));
+    }
 }
