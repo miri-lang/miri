@@ -27,7 +27,7 @@ fn main()
     gpu let src = [1.0, 2.0, 3.0]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = my_double(src[i])
+        dst[i] = my_double(src[i]) as f32
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 ";
@@ -137,7 +137,7 @@ fn unit(s u32) float
 fn main()
     gpu var dst = [0.0, 0.0]
     gpu forall i in 0..2
-        dst[i] = unit((i + 1) as u32)
+        dst[i] = unit((i + 1) as u32) as f32
     let host = dst
     println(f'{host[0]} {host[1]}')
 ";
@@ -162,7 +162,7 @@ fn in_unit(v float) float: 1.0 if v >= 0.0 and v < 1.0 else 0.0
 fn main()
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = in_unit(value_noise(i as float * 0.7, 1.3))
+        dst[i] = in_unit(value_noise(i as float * 0.7, 1.3)) as f32
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 ";
@@ -184,7 +184,7 @@ use system.collections.array
 fn main()
     gpu var dst = [9.0, 9.0]
     gpu forall i in 0..2
-        dst[i] = value_noise(2.2, 3.3) - value_noise(2.2, 3.3)
+        dst[i] = (value_noise(2.2, 3.3) - value_noise(2.2, 3.3)) as f32
     let host = dst
     println(f'{host[0]} {host[1]}')
 ";
@@ -254,7 +254,7 @@ fn main()
     gpu let src = [0.1, 0.2, 0.3]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = in_unit(value_noise(src[i], 0.5)) + lattice_unit(0.0, 0.0)
+        dst[i] = (in_unit(value_noise(src[i], 0.5)) + lattice_unit(0.0, 0.0)) as f32
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 ";
@@ -294,7 +294,7 @@ use system.collections.array
 fn main()
     gpu var dst = [7.0, 7.0]
     gpu forall i in 0..2
-        dst[i] = curl_noise_x(1.5, 2.5) - curl_noise_x(1.5, 2.5)
+        dst[i] = (curl_noise_x(1.5, 2.5) - curl_noise_x(1.5, 2.5)) as f32
     let host = dst
     println(f'{host[0]} {host[1]}')
 ";

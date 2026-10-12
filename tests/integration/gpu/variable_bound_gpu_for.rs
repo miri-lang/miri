@@ -4,7 +4,7 @@
 // Tests for variable-bound `forall` loops.
 // The range end can be a runtime Int expression (not just a literal).
 
-use super::device::{assert_gpu_runs_with_output, require_gpu_int64};
+use super::device::{assert_gpu_runs_with_output, gpu_int64_available, require_gpu_int64};
 use super::helpers::assert_gpu_wgsl_valid;
 use super::utils::{assert_runs_with_output, assert_runtime_error};
 
@@ -294,4 +294,30 @@ fn main()
     println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ";
     assert_gpu_runs_with_output(source, "777 777 777 777");
+}
+
+/// The launch length `end - start` is the compiler's own arithmetic, not the
+/// program's, so it must not stop the program on overflow: an empty range
+/// whose distance does not fit an `int` launches nothing. Runs in the local
+/// suite wherever an adapter with 64-bit integers exists, so it does not wait
+/// for the hardware job to notice.
+#[test]
+fn empty_range_whose_length_overflows_launches_nothing() {
+    if !gpu_int64_available() {
+        eprintln!("[skipped: no SHADER_INT64-capable GPU adapter available]");
+        return;
+    }
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [777, 777]
+    let very_negative = -(9223372036854775807)
+    gpu forall i in 1000..very_negative
+        dst[i] = i
+    let host = dst
+    println(f'{host[0]} {host[1]}')
+";
+    assert_gpu_runs_with_output(source, "777 777");
 }

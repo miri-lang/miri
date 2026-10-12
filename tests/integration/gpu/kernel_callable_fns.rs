@@ -32,7 +32,7 @@ fn main()
     gpu let src = [1.0, 2.0, 3.0]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = dbl(src[i])
+        dst[i] = dbl(src[i]) as f32
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 ";
@@ -76,7 +76,7 @@ fn main()
     gpu let b = [10.0, 20.0, 30.0]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = madd(a[i], b[i])
+        dst[i] = madd(a[i], b[i]) as f32
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 ";
@@ -104,7 +104,7 @@ fn main()
     gpu let src = [1.0, 2.0, 3.0]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = double_then_add_one(src[i])
+        dst[i] = double_then_add_one(src[i]) as f32
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]}')
 ";
@@ -153,7 +153,7 @@ fn main()
     gpu let src = [0.0, 1.0, -1.0]
     gpu var dst = [0.0, 0.0, 0.0]
     gpu forall i in 0..3
-        dst[i] = clamp_tanh(src[i])
+        dst[i] = clamp_tanh(src[i]) as f32
     let host = dst
     println(f'{host[0]}')
 ";

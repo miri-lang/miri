@@ -46,7 +46,7 @@ use system.collections.array
 
 fn main()
     gpu var data = [1.5, 2.5, 3.0, 4.0]
-    gpu let total = data.reduce(0.0, fn(a float, b float) float: a + b)
+    gpu let total = data.reduce(0.0, fn(a f32, b f32) f32: a + b)
     let host_total = total
     println(f'{host_total}')
 ",
