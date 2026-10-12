@@ -175,3 +175,109 @@ pack-loop condition fails.
 are the distance; the largest single lever the transcripts show is the O(n)
 positional access, which accounts for most of the gap on the two jobs that read
 large inputs.
+
+
+## r2 — 2026-10-12
+
+**Compiler and instrument.** Every arm ran on the release build of `8a4ac959`
+(`miri 0.7.0-beta.5`, macOS aarch64, Metal), staged from the scorer at
+`00d18787`–`e255924a`, whose later commits changed only the instrument.
+Models `claude-haiku-5-5`, `claude-sonnet-5-5` and `claude-opus-5-5` through
+Claude Code 2.1.296 on a subscription login. 225 measured runs, every record
+isolated (`apiKeySource` none, no hook, no MCP server, no repository reference);
+no opinion probe was run.
+
+**What moved since r1.** A different experiment under re-registered claims
+(`CLAIMS.md`, 2026-10-12): five GPU jobs, the four drawn from the website demos
+new; Miri measured after onboarding (`miri-skill`, `miri-grammar`, `miri-both`),
+the baselines cold; TypeScript dropped. Scoring now compares floats within a
+job's tolerance and refuses a run whose source shows no GPU kernel. The compiler
+gained, among others: the 147-line pack, `substring` in characters, overflow
+traps on the host, and a fix for GPU `while a and b` loops that skipped the code
+after them. Only the heat job and the Python/Rust baselines are comparable with
+r1, and r1 ran a different Miri arm (`miri-pack`, cold).
+
+**Getting a valid round took four instrument fixes during the round.** The smoke
+cell found the scorer taking a `gpu fn` kernel for a processor loop (fixed before
+any spend). At 04:08 the driver halted on a run that had listed the shared
+scratch root, found leftover operator files naming this repository, and read its
+sources; the files were moved away, the round continued in a fresh root, and the
+run was repeated there. A transcript line that was not an event crashed one
+cell's parser; its two lost runs were run. And the system's temporary-directory
+cleaner deleted most of the staged standard library at 03:29, because staging
+kept the repository's old timestamps: 25 Miri runs that started after it met a
+stdlib of four modules, and all 25 were run again on a whole one. The
+escape-time job carried two defects of its own — a hidden case that broke the
+brief's contract (`x_min == x_max`) and a mean tolerance tighter than
+independent single-precision kernels land — so its records were rescored after
+the job was corrected, each keeping the score it replaced.
+
+Each cell reads green/runs · median tokens to green · median tool invocations to
+green · median wall clock to green; a silent wrong answer is counted after it.
+
+### 05-gpu-heat
+
+| Model | miri-skill | miri-grammar | miri-both | python | rust |
+|---|---|---|---|---|---|
+| claude-haiku | 3/3 · 999k · 23 · 149s | 3/3 · 1044k · 22 · 179s | 3/3 · 831k · 18 · 194s | 3/3 · 215k · 8 · 73s | 3/3 · 285k · 14 · 280s |
+| claude-opus | 3/3 · 362k · 10 · 162s | 3/3 · 594k · 15 · 304s | 3/3 · 820k · 17 · 281s | 3/3 · 121k · 5 · 60s | 3/3 · 255k · 10 · 118s |
+| claude-sonnet | 3/3 · 273k · 9 · 129s | 3/3 · 447k · 12 · 149s | 3/3 · 408k · 11 · 154s | 3/3 · 94k · 4 · 33s | 3/3 · 151k · 6 · 79s |
+
+### 06-gpu-life
+
+| Model | miri-skill | miri-grammar | miri-both | python | rust |
+|---|---|---|---|---|---|
+| claude-haiku | 3/3 · 1035k · 22 · 266s | 2/3 · 1143k · 24 · 172s · 1 silent | 3/3 · 1148k · 21 · 234s | 3/3 · 469k · 19 · 234s | 2/3 · 179k · 22 · 335s |
+| claude-opus | 3/3 · 360k · 10 · 113s | 3/3 · 522k · 13 · 64s | 3/3 · 503k · 11 · 92s | 3/3 · 121k · 5 · 60s | 3/3 · 281k · 11 · 155s |
+| claude-sonnet | 3/3 · 307k · 10 · 166s | 3/3 · 409k · 11 · 61s | 2/3 · 177k · 10 · 159s · 1 silent | 3/3 · 140k · 6 · 41s | 3/3 · 177k · 7 · 82s |
+
+### 07-gpu-escape-time
+
+| Model | miri-skill | miri-grammar | miri-both | python | rust |
+|---|---|---|---|---|---|
+| claude-haiku | 3/3 · 1248k · 25 · 234s | 1/3 · 1016k · 22 · 146s · 2 silent | 3/3 · 1308k · 25 · 171s | 2/3 · 321k · 11 · 107s · 1 silent | 3/3 · 543k · 17 · 212s |
+| claude-opus | 3/3 · 415k · 12 · 92s | 3/3 · 518k · 13 · 94s | 3/3 · 550k · 13 · 153s | 3/3 · 179k · 7 · 110s | 3/3 · 257k · 10 · 141s |
+| claude-sonnet | 3/3 · 270k · 9 · 38s | 3/3 · 397k · 11 · 47s | 1/3 · 272k · 6 · 34s · 2 silent | 3/3 · 75k · 3 · 29s | 3/3 · 129k · 6 · 89s |
+
+### 08-gpu-histogram
+
+| Model | miri-skill | miri-grammar | miri-both | python | rust |
+|---|---|---|---|---|---|
+| claude-haiku | 3/3 · 1315k · 29 · 132s | 1/3 · 1350k · 25 · 96s · 2 silent | 3/3 · 1096k · 26 · 113s | 3/3 · 220k · 10 · 60s | 3/3 · 440k · 14 · 140s |
+| claude-opus | 3/3 · 615k · 16 · 84s | 3/3 · 672k · 16 · 88s | 3/3 · 658k · 14 · 88s | 3/3 · 98k · 4 · 56s | 3/3 · 198k · 9 · 105s |
+| claude-sonnet | 3/3 · 708k · 21 · 73s | 2/3 · 671k · 18 · 56s · 1 silent | 3/3 · 647k · 17 · 60s | 3/3 · 96k · 4 · 39s | 3/3 · 159k · 6 · 84s |
+
+### 09-gpu-particles
+
+| Model | miri-skill | miri-grammar | miri-both | python | rust |
+|---|---|---|---|---|---|
+| claude-haiku | 2/3 · 871k · 18 · 189s · 1 silent | 3/3 · 1864k · 28 · 328s | 3/3 · 1370k · 25 · 151s | 3/3 · 252k · 9 · 69s | 3/3 · 321k · 12 · 117s |
+| claude-opus | 3/3 · 518k · 14 · 77s | 3/3 · 705k · 17 · 97s | 3/3 · 637k · 15 · 88s | 3/3 · 179k · 7 · 75s | 3/3 · 272k · 11 · 156s |
+| claude-sonnet | 3/3 · 462k · 14 · 68s | 3/3 · 519k · 14 · 60s | 3/3 · 416k · 9 · 51s | 3/3 · 120k · 5 · 72s | 3/3 · 182k · 7 · 102s |
+
+**Onboarding.** A Miri run's onboarding phase cost a median 120k input tokens,
+recorded apart from the numbers above; its context is in them, as cached input
+re-read on every measured turn.
+
+**Silent wrong answers are one fault, and the two-phase launch shares it.** All
+ten on the Miri arms are runs that wrote their program in a subdirectory
+(`job/`, `escape/`, `histogram/`, `particles/`) instead of at `main.mi`: the shell's working
+directory, moved during onboarding, carried into the resumed session. A cold arm
+cannot meet this. They are scored as the contract reads — no program at
+`main.mi` — and the instrument is to name the workspace root in the measured
+prompt before another onboarded round.
+
+**Verdicts, as `report.py` computed them.** No claim holds. C1 (`miri-skill`
+within 1.5× the cheaper baseline's tokens) fails 15 of 45 comparisons; where it
+reached green the skill arm cost 2.2–7.4× Python and 1.3–5.8× Rust. C2 fails one model of three. C3 fails
+everywhere: every baseline finished every GPU job, so only the half-cost branch
+applies, and the skill arm is never under half. C4 (skill against grammar) fails
+3 of 30. C5 (wall clock within 1.5×) fails 10 of 45. Exit criterion: silent wrong
+answers fail (the ten above), the pack loop fails 4 of 15, and the opinion
+condition is unanswered, since no probe was run.
+
+**The testing loop does not end and the skill pack stays unpublished:** all
+three conditions of the exit criterion fail. **The article cannot be written:**
+no claim in `CLAIMS.md` holds. Every standing is in `summary.json`: on cost
+the skill arm is `behind` both baselines in every cell it reached green; no
+comparison reaches `parity`.

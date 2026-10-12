@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "round": "r2",
+  "job": "07-gpu-escape-time",
+  "arm": "miri-both",
+  "run": 2,
+  "model": "claude-sonnet",
+  "modelId": "claude-sonnet-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "00d1878789086999bc1cc4ca2de7eeedee3730ba",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": true,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-12T02:23:05.356154+00:00",
+  "wallClockSeconds": 102.6,
+  "tokens": {
+    "in": 391694,
+    "out": 4817,
+    "cacheRead": 382514,
+    "cacheCreation": 9160,
+    "observed": true
+  },
+  "turns": 10,
+  "toolInvocations": 9,
+  "toolchainInvocations": 4,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 0,
+    "total": 6,
+    "failures": [
+      "01-one-point",
+      "02-whole-set",
+      "03-left-lobe",
+      "04-all-escape",
+      "05-limit-one",
+      "06-tall-strip"
+    ],
+    "failureDetail": {
+      "01-one-point": {
+        "exitCode": 1,
+        "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+        "firstDifference": {
+          "line": 2,
+          "expected": "10 lines",
+          "actual": "1 lines"
+        }
+      },
+      "02-whole-set": {
+        "exitCode": 1,
+        "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+        "firstDifference": {
+          "line": 2,
+          "expected": "10 lines",
+          "actual": "1 lines"
+        }
+      },
+      "03-left-lobe": {
+        "exitCode": 1,
+        "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+        "firstDifference": {
+          "line": 2,
+          "expected": "10 lines",
+          "actual": "1 lines"
+        }
+      },
+      "04-all-escape": {
+        "exitCode": 1,
+        "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+        "firstDifference": {
+          "line": 2,
+          "expected": "10 lines",
+          "actual": "1 lines"
+        }
+      },
+      "05-limit-one": {
+        "exitCode": 1,
+        "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+        "firstDifference": {
+          "line": 2,
+          "expected": "10 lines",
+          "actual": "1 lines"
+        }
+      },
+      "06-tall-strip": {
+        "exitCode": 1,
+        "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+        "firstDifference": {
+          "line": 2,
+          "expected": "10 lines",
+          "actual": "1 lines"
+        }
+      }
+    },
+    "kernelEvidence": {
+      "required": [
+        "\\bgpu\\s+(fn|forall|let|var)\\b",
+        "\\b(forall|gpu\\s+fn)\\b"
+      ],
+      "missing": [
+        "\\bgpu\\s+(fn|forall|let|var)\\b",
+        "\\b(forall|gpu\\s+fn)\\b"
+      ]
+    },
+    "notOnGpu": true
+  },
+  "silentWrongAnswer": true,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "miri-gpu",
+      "miri-lang",
+      "miri-testing",
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field-r2b/r2/07-gpu-escape-time/miri-both/claude-sonnet/2",
+  "onboarding": {
+    "material": [
+      "skill",
+      "grammar"
+    ],
+    "tokens": {
+      "in": 100935,
+      "out": 1049,
+      "cacheRead": 77791,
+      "cacheCreation": 23136,
+      "observed": true
+    },
+    "turns": 4,
+    "toolInvocations": 6,
+    "toolchainInvocations": 0,
+    "wallClockSeconds": 14.5,
+    "outcome": "finished",
+    "isolation": {
+      "clean": true,
+      "initObserved": true,
+      "hookEvents": 0,
+      "repoReferences": 0,
+      "mcpServers": [],
+      "plugins": [],
+      "skills": [
+        "miri-gpu",
+        "miri-lang",
+        "miri-testing",
+        "deep-research",
+        "design",
+        "design-sync",
+        "dataviz",
+        "update-config",
+        "verify",
+        "debug",
+        "code-review",
+        "simplify",
+        "batch",
+        "fewer-permission-prompts",
+        "doctor",
+        "loop",
+        "schedule",
+        "claude-api",
+        "workflow-authoring",
+        "run",
+        "run-skill-generator",
+        "plugin-authoring"
+      ],
+      "apiKeySource": "none"
+    },
+    "sessionId": "75e94a38-c4f5-4504-afed-adabc94e65f9"
+  },
+  "rescored": {
+    "at": "2026-10-12T03:45:04.061379+00:00",
+    "commit": "8721b823f56e93e830012e74eb19d0f721219bc4",
+    "run": [
+      "miri",
+      "run",
+      "main.mi",
+      "--"
+    ],
+    "previous": {
+      "hiddenTests": {
+        "passed": 0,
+        "total": 6,
+        "failures": [
+          "01-one-point",
+          "02-whole-set",
+          "03-left-lobe",
+          "04-all-escape",
+          "05-limit-one",
+          "06-tall-strip"
+        ],
+        "failureDetail": {
+          "01-one-point": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "02-whole-set": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "03-left-lobe": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "04-all-escape": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "05-limit-one": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "06-tall-strip": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          }
+        },
+        "kernelEvidence": {
+          "required": [
+            "\\bgpu\\s+(fn|forall|let|var)\\b",
+            "\\b(forall|gpu\\s+fn)\\b"
+          ],
+          "missing": [
+            "\\bgpu\\s+(fn|forall|let|var)\\b",
+            "\\b(forall|gpu\\s+fn)\\b"
+          ]
+        },
+        "notOnGpu": true
+      },
+      "silentWrongAnswer": true
+    }
+  }
+}

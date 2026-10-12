@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "round": "r2",
+  "job": "09-gpu-particles",
+  "arm": "rust",
+  "run": 2,
+  "model": "claude-opus",
+  "modelId": "claude-opus-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "5b1da74eac314351d4534386a3823eef109073fe",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-12T03:40:11.921623+00:00",
+  "wallClockSeconds": 146.9,
+  "tokens": {
+    "in": 261742,
+    "out": 9907,
+    "cacheRead": 246427,
+    "cacheCreation": 15293,
+    "observed": true
+  },
+  "turns": 11,
+  "toolInvocations": 11,
+  "toolchainInvocations": 3,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 6,
+    "total": 6,
+    "failures": [],
+    "failureDetail": {},
+    "kernelEvidence": {
+      "required": [
+        "@compute",
+        "\\bdispatch_workgroups\\b"
+      ],
+      "missing": []
+    },
+    "notOnGpu": false
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field-r2b/r2/09-gpu-particles/rust/claude-opus/2",
+  "onboarding": null
+}
