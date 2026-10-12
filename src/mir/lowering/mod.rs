@@ -1239,6 +1239,9 @@ fn emit_param_guard(
     let ExpressionKind::Guard(guard_op, guard_value) = &guard.node else {
         return Ok(());
     };
+    if let Some(negated) = membership_guard(guard_op) {
+        return emit_membership_guard(ctx, param, guard_value, guard, negated);
+    }
 
     let arg_watermark = ctx.body.local_decls.len();
     let guard_val = lower_expression(ctx, guard_value, None)?;
@@ -1271,6 +1274,67 @@ fn emit_param_guard(
             span: guard.span,
         });
     }
+    emit_guard_fail_branch(ctx, check_result, guard.span);
+    Ok(())
+}
+
+/// For a membership guard, whether it is negated (`not in`); `None` for any
+/// other guard.
+fn membership_guard(op: &crate::ast::operator::GuardOp) -> Option<bool> {
+    use crate::ast::operator::GuardOp;
+    match op {
+        GuardOp::In => Some(false),
+        GuardOp::NotIn => Some(true),
+        GuardOp::NotEqual
+        | GuardOp::LessThan
+        | GuardOp::LessThanEqual
+        | GuardOp::GreaterThan
+        | GuardOp::GreaterThanEqual
+        | GuardOp::Not => None,
+    }
+}
+
+/// Emit `param in value` — negated for `not in` — and the fail branch, so a
+/// membership guard answers as the same test written in the body does: a set
+/// or map through its runtime lookup, a list or array through `contains`.
+fn emit_membership_guard(
+    ctx: &mut LoweringContext,
+    param: &crate::ast::common::Parameter,
+    guard_value: &Expression,
+    guard: &Expression,
+    negated: bool,
+) -> Result<(), LoweringError> {
+    let test = Expression {
+        id: guard.id,
+        node: ExpressionKind::Binary(
+            Box::new(Expression {
+                id: guard.id,
+                node: ExpressionKind::Identifier(param.name.clone(), None),
+                span: guard.span,
+            }),
+            crate::ast::operator::BinaryOp::In,
+            Box::new(guard_value.clone()),
+        ),
+        span: guard.span,
+    };
+    let found = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
+    lower_expression(ctx, &test, Some(Place::new(found)))?;
+    let check_result = if negated {
+        let kept = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(kept),
+                Rvalue::UnaryOp(
+                    crate::mir::UnOp::Not,
+                    Box::new(Operand::Copy(Place::new(found))),
+                ),
+            ),
+            span: guard.span,
+        });
+        kept
+    } else {
+        found
+    };
     emit_guard_fail_branch(ctx, check_result, guard.span);
     Ok(())
 }
@@ -1326,8 +1390,8 @@ fn guard_op_to_binary_op(
         GuardOp::GreaterThanEqual => Some(BinaryOp::GreaterThanEqual),
         GuardOp::LessThan => Some(BinaryOp::LessThan),
         GuardOp::LessThanEqual => Some(BinaryOp::LessThanEqual),
-        GuardOp::NotEqual => Some(BinaryOp::NotEqual),
-        GuardOp::Not | GuardOp::In | GuardOp::NotIn => None,
+        GuardOp::NotEqual | GuardOp::Not => Some(BinaryOp::NotEqual),
+        GuardOp::In | GuardOp::NotIn => None,
     }
 }
 
@@ -1338,8 +1402,10 @@ fn guard_op_to_binop(op: &crate::ast::operator::GuardOp) -> Option<BinOp> {
         crate::ast::operator::GuardOp::GreaterThanEqual => Some(BinOp::Ge),
         crate::ast::operator::GuardOp::LessThan => Some(BinOp::Lt),
         crate::ast::operator::GuardOp::LessThanEqual => Some(BinOp::Le),
-        crate::ast::operator::GuardOp::NotEqual => Some(BinOp::Ne),
-        _ => None,
+        crate::ast::operator::GuardOp::NotEqual | crate::ast::operator::GuardOp::Not => {
+            Some(BinOp::Ne)
+        }
+        crate::ast::operator::GuardOp::In | crate::ast::operator::GuardOp::NotIn => None,
     }
 }
 

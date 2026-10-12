@@ -8,4 +8,5 @@ pub mod arg_count;
 pub mod basic;
 pub mod main_return;
 pub mod nested;
+pub mod parameter_guards;
 pub mod recursive;
