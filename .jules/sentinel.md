@@ -40,3 +40,8 @@
 **Vulnerability:** Capacity growth (`capacity * 2`) and load factor threshold multiplication (`len * LOAD_FACTOR_DEN`, `capacity * LOAD_FACTOR_NUM`) in `src/runtime/core/src/set.rs` and `src/runtime/core/src/map.rs` used unchecked arithmetic operations that could wrap `usize`.
 **Learning:** Hash tables and dynamic collection structures evaluating growth conditions or doubling capacities on large element counts can experience integer wrapping, leading to missed resizes or undersized table allocations.
 **Prevention:** Use `checked_mul` and `saturating_add` when computing thresholds and target capacities for collection growth.
+
+## 2026-05-28 - [Panic Across extern "C" ABI Boundary in Runtime Regex FFI]
+**Vulnerability:** `miri_rt_regex_from_validated_pattern` in `src/runtime/core/src/regex.rs` used `panic!` on regex compilation failure, unwinding across an `extern "C"` FFI boundary.
+**Learning:** Panicking across `extern "C"` ABI boundaries in Rust is undefined behavior or causes unhandled process abort. Runtime FFI functions called by compiled Miri code must never invoke `panic!`.
+**Prevention:** Use structured runtime trap handlers (e.g. `crate::trap::trap(crate::trap::code::EXPLICIT_PANIC, ...)`) in `extern "C"` runtime functions to generate diagnostic trap reports and exit cleanly via `libc::_exit`.
