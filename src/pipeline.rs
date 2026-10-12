@@ -558,17 +558,19 @@ impl Default for Pipeline {
 /// Every function name a lowered body calls.
 /// A failure lowering the per-instantiation body `symbol`.
 ///
-/// A refusal of the program — an instantiation its arguments do not name, or
-/// one it needs past a bound — is reported as the diagnostic it is; anything
-/// else is a failure of the compiler's own, reported against the body.
+/// A refusal of the program — an instantiation its arguments do not name, one
+/// it needs past a bound, or code a target cannot run as written — is reported
+/// as the diagnostic it is; anything else is a failure of the compiler's own,
+/// reported against the body.
 fn monomorphized_lowering_failure(
     symbol: &Symbol,
     error: crate::error::lowering::LoweringError,
 ) -> CompilerError {
+    let code = error.kind.properties().code;
     let refuses_the_program = matches!(
-        error.kind.properties().code,
+        code,
         DiagnosticCode::MirInvalidInstantiationArgument | DiagnosticCode::MirPolymorphicRecursion
-    );
+    ) || code.area() == "TAR";
     if refuses_the_program {
         return CompilerError::Lowering(error);
     }

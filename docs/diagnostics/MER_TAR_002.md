@@ -7,6 +7,7 @@ An operation is not supported in GPU code. This code covers a family of GPU rest
 - `recursion is not allowed in GPU code`
 - `Static methods cannot be GPU kernels`
 - `{target} returns an optional value, which cannot be represented in device code`
+- `reduce fold must be a function literal` (and the other `reduce fold …` forms): `reduce` over device data runs a fold written in place, `fn(x T, y T) T: x + y` or `x * y`
 
 ## Before
 
