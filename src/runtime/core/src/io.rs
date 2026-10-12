@@ -443,6 +443,20 @@ pub mod ffi {
         trap(code::DIVISION_BY_ZERO, "division by zero");
     }
 
+    /// Reports an integer `+`, `-`, `*` or negation whose result does not fit
+    /// its type as MER_RT_003 and ends the process.
+    ///
+    /// Called from compiled Miri code when the overflow check after the
+    /// operation fails, the same way the division checks call their panics.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_integer_overflow_panic() {
+        trap(
+            code::INTEGER_OVERFLOW,
+            "integer overflow: the result does not fit its type",
+        );
+    }
+
     /// Reports an integer remainder-by-zero as MER_RT_002 and ends the process.
     ///
     /// Called from compiled Miri code in place of a Cranelift `trapz`

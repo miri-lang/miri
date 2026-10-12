@@ -57,6 +57,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_PAR_021 | Triggers MER_PAR_021: Recursion Limit Exceeded. |
 | MER_RT_001 | Triggers MER_RT_001: an integer division whose divisor is zero at run time. |
 | MER_RT_002 | Triggers MER_RT_002: an integer remainder whose divisor is zero at run time. |
+| MER_RT_003 | Triggers MER_RT_003: an integer sum that does not fit its type at run time. |
 | MER_RT_005 | Triggers MER_RT_005: an assertion failed at run time. |
 | MER_RT_006 | Triggers MER_RT_006: a stack overflow from unbounded recursion causes a segmentation fault. |
 | MER_RT_011 | Triggers MER_RT_011: an index past the end of a fixed-size array at run time. |
@@ -184,6 +185,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_PAR_021 | Accepted counterpart of MER_PAR_021: Recursion Limit Exceeded does not fire. |
 | MER_RT_001 | Accepted counterpart of MER_RT_001: a non-zero divisor divides normally. |
 | MER_RT_002 | Accepted counterpart of MER_RT_002: a non-zero divisor yields a remainder. |
+| MER_RT_003 | Accepted counterpart of MER_RT_003: a sum that fits its type adds normally. |
 | MER_RT_005 | Accepted counterpart of MER_RT_005: an assertion passes at run time. |
 | MER_RT_006 | Accepted counterpart of MER_RT_006: bounded recursion completes without stack overflow. |
 | MER_RT_011 | Accepted counterpart of MER_RT_011: an index inside the array reads its element. |

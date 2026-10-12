@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_RT_003: a sum that fits its type adds normally.
+// expect-stdout: 2147483647
+use system.io
+
+fn main()
+    var total i32 = 2147483646
+    total = total + 1
+    println(f"{total}")

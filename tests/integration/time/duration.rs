@@ -118,10 +118,11 @@ fn main()
 }
 
 #[test]
-fn test_duration_overflow_wrapping() {
-    // Overflow behavior: large input multiplication wraps in two's complement.
-    // from_seconds(9223372036854775) * 1_000_000_000 overflows and wraps.
-    assert_runs_with_output(
+fn test_a_duration_too_long_for_its_nanosecond_count_stops_the_program() {
+    // 9223372036854775 seconds is more nanoseconds than an `int` holds, so the
+    // scaling multiply overflows; it stops the program rather than wrapping
+    // to a negative duration.
+    assert_runtime_error(
         r#"
 use system.time
 
@@ -129,7 +130,7 @@ fn main()
     let d = Duration.from_seconds(9223372036854775)
     println(f"{d.as_nanos()}")
 "#,
-        "-808000000",
+        "integer overflow",
     );
 }
 

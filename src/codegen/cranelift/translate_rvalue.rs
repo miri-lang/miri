@@ -108,6 +108,10 @@ impl<'a> FunctionTranslator<'a> {
 
             Rvalue::UnaryOp(op, operand) => {
                 let val = Self::translate_operand(builder, ctx, operand, locals, type_ctx, None)?;
+                if *op == UnOp::Neg && !builder.func.dfg.value_type(val).is_float() {
+                    let is_unsigned = Self::operand_is_unsigned(operand, type_ctx)?;
+                    return Self::emit_checked_negate(builder, ctx, val, is_unsigned);
+                }
                 Self::translate_unop(builder, *op, val)
             }
 
@@ -1319,6 +1323,9 @@ impl<'a> FunctionTranslator<'a> {
             }
             MathIntrinsic::Step => Self::emit_math_step(builder, ty, &arg_values),
             MathIntrinsic::Sign => Self::emit_math_sign(builder, ty, arg_values[0]),
+            MathIntrinsic::WrappingAdd => Ok(builder.ins().iadd(arg_values[0], arg_values[1])),
+            MathIntrinsic::WrappingSub => Ok(builder.ins().isub(arg_values[0], arg_values[1])),
+            MathIntrinsic::WrappingMul => Ok(builder.ins().imul(arg_values[0], arg_values[1])),
             MathIntrinsic::VecDot
             | MathIntrinsic::VecLength
             | MathIntrinsic::VecNormalize
@@ -1464,6 +1471,9 @@ impl<'a> FunctionTranslator<'a> {
             | (MathIntrinsic::Smoothstep, _)
             | (MathIntrinsic::Step, _)
             | (MathIntrinsic::Sign, _)
+            | (MathIntrinsic::WrappingAdd, _)
+            | (MathIntrinsic::WrappingSub, _)
+            | (MathIntrinsic::WrappingMul, _)
             | (MathIntrinsic::VecDot, _)
             | (MathIntrinsic::VecLength, _)
             | (MathIntrinsic::VecNormalize, _)
@@ -2322,6 +2332,78 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Emit an integer `+`, `-` or `*` that ends the program with the
+    /// integer-overflow trap when its result does not fit `ty`, rather than
+    /// wrapping. Signedness picks the overflow test; a 128-bit product has no
+    /// checked instruction and is computed by the runtime, which traps itself.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_checked_int_op(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        op: BinOp,
+        lhs: Value,
+        rhs: Value,
+        ty: cl_types::Type,
+        is_unsigned: bool,
+    ) -> Result<Value, CodegenError> {
+        if op == BinOp::Mul && ty == cl_types::I128 {
+            let name = if is_unsigned {
+                rt::U128_MUL
+            } else {
+                rt::I128_MUL
+            };
+            return Self::emit_int128_div_or_rem(builder, ctx, name, lhs, rhs);
+        }
+        let (result, overflowed) = match (op, is_unsigned) {
+            (BinOp::Add, false) => builder.ins().sadd_overflow(lhs, rhs),
+            (BinOp::Add, true) => builder.ins().uadd_overflow(lhs, rhs),
+            (BinOp::Sub, false) => builder.ins().ssub_overflow(lhs, rhs),
+            (BinOp::Sub, true) => builder.ins().usub_overflow(lhs, rhs),
+            (BinOp::Mul, false) => builder.ins().smul_overflow(lhs, rhs),
+            (BinOp::Mul, true) => builder.ins().umul_overflow(lhs, rhs),
+            (other, _) => {
+                return Err(CodegenError::Internal(format!(
+                    "overflow-checked arithmetic reached with {:?}",
+                    other
+                )))
+            }
+        };
+        Self::emit_overflow_trap_if(builder, ctx, overflowed)?;
+        Ok(result)
+    }
+
+    /// Branch to the integer-overflow trap when `overflowed` is set; otherwise
+    /// fall through. The trap is the runtime's, called like the division
+    /// checks call theirs, so the program ends with a code and a sentence.
+    pub(crate) fn emit_overflow_trap_if(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        overflowed: Value,
+    ) -> Result<(), CodegenError> {
+        let panic_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder
+            .ins()
+            .brif(overflowed, panic_block, &[], cont_block, &[]);
+        builder.switch_to_block(panic_block);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::INTEGER_OVERFLOW_PANIC,
+                param_types: &[],
+                return_types: &[],
+                args: &[],
+            },
+        )?;
+        builder.ins().trap(TrapCode::unwrap_user(1));
+        builder.seal_block(panic_block);
+        builder.switch_to_block(cont_block);
+        builder.seal_block(cont_block);
+        Ok(())
+    }
+
     /// Emits an explicit branch: if `rhs == 0`, call `miri_rt_rem_by_zero_panic`
     /// (which prints the runtime error and `_exit(1)`s) then trap as unreachable;
     /// otherwise fall through to the continuation block. Avoids Cranelift `trapz`
@@ -2383,15 +2465,17 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let result = match op {
             BinOp::Add if is_float => builder.ins().fadd(lhs, rhs),
-            // TODO: integer `+ - *` wrap silently at the result width (`i64::MAX + 1`
-            // prints i64::MIN), and SPEC.md states no overflow rule at all. Trap
-            // or wrap, on CPU and GPU alike, is an open language decision; until it
-            // is made a program that overflows a total answers wrongly in silence.
-            BinOp::Add => builder.ins().iadd(lhs, rhs),
+            BinOp::Add => {
+                return Self::emit_checked_int_op(builder, ctx, op, lhs, rhs, ty, is_unsigned)
+            }
             BinOp::Sub if is_float => builder.ins().fsub(lhs, rhs),
-            BinOp::Sub => builder.ins().isub(lhs, rhs),
+            BinOp::Sub => {
+                return Self::emit_checked_int_op(builder, ctx, op, lhs, rhs, ty, is_unsigned)
+            }
             BinOp::Mul if is_float => builder.ins().fmul(lhs, rhs),
-            BinOp::Mul => builder.ins().imul(lhs, rhs),
+            BinOp::Mul => {
+                return Self::emit_checked_int_op(builder, ctx, op, lhs, rhs, ty, is_unsigned)
+            }
             BinOp::Div if is_float => builder.ins().fdiv(lhs, rhs),
             BinOp::Div => {
                 Self::emit_div_by_zero_check(builder, ctx, rhs, ty)?;
@@ -2774,6 +2858,21 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         Ok(result)
+    }
+
+    /// Negate an integer, ending the program with the integer-overflow trap
+    /// when the negation does not fit: the most negative value of a signed
+    /// type, or any non-zero value of an unsigned one. Computed as `0 - x`,
+    /// whose overflow test is exactly that condition.
+    fn emit_checked_negate(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        val: Value,
+        is_unsigned: bool,
+    ) -> Result<Value, CodegenError> {
+        let ty = builder.func.dfg.value_type(val);
+        let zero = Self::int_const_at(builder, ty, 0);
+        Self::emit_checked_int_op(builder, ctx, BinOp::Sub, zero, val, ty, is_unsigned)
     }
 
     /// Translate a unary operation.

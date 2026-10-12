@@ -1,0 +1,6 @@
+// expect: MER_RT_003
+// command: run
+// summary: Triggers MER_RT_003: an integer sum that does not fit its type at run time.
+fn main()
+    var total i32 = 2147483647
+    total = total + 1

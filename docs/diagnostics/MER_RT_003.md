@@ -1,22 +1,23 @@
 ## Rule
 
-An arithmetic operation caused an integer overflow at runtime. The result exceeded the maximum value that can be represented in the integer type. Use a wider type or add range checks before operations that could overflow.
+An integer `+`, `-`, `*` or negation produced a result that does not fit the type it is computed at, and the program stopped rather than carry on with a wrapped value. The rule is the same on the processor and on the GPU. Guard the operation, compute at a wider type, or, where wrapping is what the program means — a hash, a checksum — say so with `wrapping_add`, `wrapping_sub` or `wrapping_mul` from `system.math`.
 
 ## Before
 
 ```miri
-let x = i32(2147483647)
-let y = 1
-let result = x + y
+fn main()
+    var total i32 = 2147483647
+    total = total + 1
+    println(f"{total}")
 ```
 
 ## After
 
 ```miri
-let x = i64(2147483647)
-let y = i64(1)
-let result = x + y
-println(result)
+fn main()
+    var total i64 = 2147483647
+    total = total + 1
+    println(f"{total}")
 ```
 
 ## Reference

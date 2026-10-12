@@ -180,7 +180,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_PAR_009", "shadowed: MER_PAR_001 is reported first"),
     ("MER_RT_001", "traps while the program runs, which a static check cannot observe"),
     ("MER_RT_002", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_003", "shadowed: MER_TYP_034 is reported first"),
+    ("MER_RT_003", "traps while the program runs, which a static check cannot observe"),
     ("MER_RT_004", "shadowed: MER_TYP_034 is reported first"),
     ("MER_RT_005", "traps while the program runs, which a static check cannot observe"),
     ("MER_RT_006", "kills the program with a signal at run time, which a static check cannot observe"),

@@ -1849,6 +1849,12 @@ impl<'a> BodyEmitter<'a> {
                 let rhs_str = self.render_operand(rhs)?;
                 let sym = binop_symbol(*op)?;
 
+                // TODO: integer `+ - *` here (and `-x` below) still wrap on the
+                // device, while the host traps them with MER_RT_003. One rule on
+                // every target needs checked helpers that set a fault flag the
+                // host raises after the dispatch; `wrapping_*` already renders
+                // as the plain operator.
+
                 // Browser-portability: `Int` is now i32 in WGSL, so div/mod on int no longer
                 // requires the i64 narrowing workaround. The workaround was needed only for
                 // naga's MSL backend's i64 select ambiguity on Metal. Since `Int` → `i32`,
@@ -1868,13 +1874,20 @@ impl<'a> BodyEmitter<'a> {
             )),
             Rvalue::GpuIntrinsic(intrinsic) => self.render_gpu_intrinsic(intrinsic.clone()),
             Rvalue::MathIntrinsic(intrinsic, args) => {
-                let rendered: Result<Vec<_>, _> =
-                    args.iter().map(|a| self.render_operand(a)).collect();
-                Ok(format!(
-                    "{}({})",
-                    math_intrinsic_name(*intrinsic),
-                    rendered?.join(", ")
-                ))
+                let rendered: Vec<String> = args
+                    .iter()
+                    .map(|a| self.render_operand(a))
+                    .collect::<Result<_, _>>()?;
+                match math_intrinsic_form(*intrinsic) {
+                    MathForm::Call(name) => Ok(format!("{}({})", name, rendered.join(", "))),
+                    MathForm::Infix(operator) => match rendered.as_slice() {
+                        [lhs, rhs] => Ok(format!("({} {} {})", lhs, operator, rhs)),
+                        _ => Err(CodegenError::Internal(format!(
+                            "WGSL backend: {:?} takes two operands",
+                            intrinsic
+                        ))),
+                    },
+                }
             }
             Rvalue::Aggregate(kind, operands) => self.render_aggregate(kind, operands),
             Rvalue::AtomicOp {
@@ -2153,6 +2166,23 @@ fn unop_symbol(op: UnOp) -> Result<&'static str, CodegenError> {
     }
 }
 
+/// How a math intrinsic is spelled in WGSL: a builtin function, or an infix
+/// operator for the wrapping arithmetic, which is WGSL's own integer `+`, `-`
+/// and `*` — those wrap at the type's width on the device.
+enum MathForm {
+    Call(&'static str),
+    Infix(&'static str),
+}
+
+fn math_intrinsic_form(intrinsic: MathIntrinsic) -> MathForm {
+    match intrinsic {
+        MathIntrinsic::WrappingAdd => MathForm::Infix("+"),
+        MathIntrinsic::WrappingSub => MathForm::Infix("-"),
+        MathIntrinsic::WrappingMul => MathForm::Infix("*"),
+        other => MathForm::Call(math_intrinsic_name(other)),
+    }
+}
+
 fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
     match intrinsic {
         // WGSL `abs` of the most-negative signed integer (e.g. `i32::MIN`) wraps
@@ -2188,6 +2218,9 @@ fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
         MathIntrinsic::VecCross => "cross",
         MathIntrinsic::VecReflect => "reflect",
         MathIntrinsic::VecMix => "mix",
+        MathIntrinsic::WrappingAdd => "wrapping_add",
+        MathIntrinsic::WrappingSub => "wrapping_sub",
+        MathIntrinsic::WrappingMul => "wrapping_mul",
     }
 }
 

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Division, remainder and float conversion for the 128-bit integer widths.
+//! Multiplication, division, remainder and float conversion for the 128-bit
+//! integer widths.
 //!
 //! The code generator has no instruction for these: its backend lowers the
 //! narrower widths to a hardware divide or conversion, and at 128 bits there is
@@ -29,7 +30,7 @@ unsafe fn write_halves(out: *mut u64, value: u128) {
     out.add(1).write_unaligned((value >> 64) as u64);
 }
 
-/// FFI surface for 128-bit division, remainder and float conversion.
+/// FFI surface for 128-bit multiplication, division, remainder and float conversion.
 pub mod ffi {
     use super::{from_halves, write_halves};
 
@@ -135,6 +136,60 @@ pub mod ffi {
             return;
         }
         write_halves(out, from_halves(lhs_lo, lhs_hi) % rhs);
+    }
+
+    /// Multiplies two 128-bit signed integers, ending the process with the
+    /// integer-overflow trap when the product does not fit. The backend has no
+    /// overflow-checked multiply at this width, so the check lives here.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point to sixteen writable bytes.
+    #[no_mangle]
+    pub unsafe extern "C" fn miri_rt_i128_mul(
+        lhs_lo: u64,
+        lhs_hi: u64,
+        rhs_lo: u64,
+        rhs_hi: u64,
+        out: *mut u64,
+    ) {
+        let lhs = from_halves(lhs_lo, lhs_hi) as i128;
+        let rhs = from_halves(rhs_lo, rhs_hi) as i128;
+        match lhs.checked_mul(rhs) {
+            Some(product) if !out.is_null() => write_halves(out, product as u128),
+            Some(_) => {}
+            None => overflow(),
+        }
+    }
+
+    /// Multiplies two 128-bit unsigned integers, ending the process with the
+    /// integer-overflow trap when the product does not fit.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point to sixteen writable bytes.
+    #[no_mangle]
+    pub unsafe extern "C" fn miri_rt_u128_mul(
+        lhs_lo: u64,
+        lhs_hi: u64,
+        rhs_lo: u64,
+        rhs_hi: u64,
+        out: *mut u64,
+    ) {
+        let lhs = from_halves(lhs_lo, lhs_hi);
+        let rhs = from_halves(rhs_lo, rhs_hi);
+        match lhs.checked_mul(rhs) {
+            Some(product) if !out.is_null() => write_halves(out, product),
+            Some(_) => {}
+            None => overflow(),
+        }
+    }
+
+    fn overflow() -> ! {
+        crate::trap::trap(
+            crate::trap::code::INTEGER_OVERFLOW,
+            "integer overflow: the result does not fit its type",
+        )
     }
 
     /// Converts a float to a 128-bit signed integer, truncating toward zero.

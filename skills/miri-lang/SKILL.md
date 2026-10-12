@@ -99,8 +99,9 @@ fn main()
 - **Positions count characters**, in `length()`, `substring`, `element_at`,
   `code_at` and regex matches alike; only `size()` counts bytes. A `substring`
   range outside the text stops the program (or fails to compile, if constant).
-- **Integer overflow wraps silently** at the declared width (`int` is 64-bit).
-  Guard a sum that can exceed it before you add.
+- **Integer overflow stops the program** (`MER_RT_003`) instead of wrapping.
+  Where wrapping is meant — a hash, a checksum — write `wrapping_add`,
+  `wrapping_sub` or `wrapping_mul` from `system.math`.
 - **Walk with `for`, not by position.** `for ch in s` and `for k in m` are one
   pass; indexing a `String`, `Map` or `Set` by a counter repeats lookups.
 - **Imports are explicit.** A name from another module needs its `use` line;

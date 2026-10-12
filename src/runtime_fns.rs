@@ -210,6 +210,9 @@ pub mod rt {
     /// Compiler-internal: reports MER_RT_002 and ends the process.
     /// Separate from division so the two are distinguishable in the envelope.
     pub const REM_BY_ZERO_PANIC: &str = "miri_rt_rem_by_zero_panic";
+    /// Compiler-internal: reports MER_RT_003 and ends the process when an
+    /// integer `+`, `-`, `*` or negation overflowed its type.
+    pub const INTEGER_OVERFLOW_PANIC: &str = "miri_rt_integer_overflow_panic";
     /// Compiler-internal: reports MER_RT_013 and ends the process after the
     /// GPU runtime refused a kernel launch and printed why.
     pub const GPU_LAUNCH_FAILED_PANIC: &str = "miri_rt_gpu_launch_failed_panic";
@@ -288,6 +291,10 @@ pub mod rt {
     pub const I128_REM: &str = "miri_rt_i128_rem";
     pub const U128_DIV: &str = "miri_rt_u128_div";
     pub const U128_REM: &str = "miri_rt_u128_rem";
+    /// Compiler-internal: overflow-checked 128-bit multiplication, which the
+    /// backend has no checked instruction for at that width.
+    pub const I128_MUL: &str = "miri_rt_i128_mul";
+    pub const U128_MUL: &str = "miri_rt_u128_mul";
     /// Compiler-internal: conversions between the 128-bit integers and the
     /// floats, which the backend has no instruction for at that width. A float
     /// converts by truncating and saturating, NaN to zero; the integer arrives
@@ -456,6 +463,7 @@ pub mod rt {
         ASSERT_NE_FAIL,
         DIV_BY_ZERO_PANIC,
         REM_BY_ZERO_PANIC,
+        INTEGER_OVERFLOW_PANIC,
         GPU_LAUNCH_FAILED_PANIC,
         METHOD_NOT_CHECKED_PANIC,
         // Filesystem
@@ -525,6 +533,8 @@ pub mod rt {
         I128_REM,
         U128_DIV,
         U128_REM,
+        I128_MUL,
+        U128_MUL,
         F64_TO_I128,
         F64_TO_U128,
         I128_TO_F64,
@@ -720,6 +730,7 @@ pub fn diverges(name: &str) -> bool {
             | rt::ARRAY_PANIC_OOB
             | rt::DIV_BY_ZERO_PANIC
             | rt::REM_BY_ZERO_PANIC
+            | rt::INTEGER_OVERFLOW_PANIC
             | rt::GPU_LAUNCH_FAILED_PANIC
             | rt::METHOD_NOT_CHECKED_PANIC
     )
