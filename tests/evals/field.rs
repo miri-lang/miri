@@ -2698,3 +2698,46 @@ fn test_a_stream_line_that_is_not_an_event_is_skipped() {
         "a stray line stopped the transcript from being read"
     );
 }
+
+#[test]
+fn test_a_pruned_staged_stdlib_is_staged_again() {
+    // The system's temporary-directory cleaner once deleted most of a staged
+    // standard library during a round; staging must notice and copy it again.
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so staging was not run");
+        return;
+    }
+    let scratch = std::env::temp_dir().join("miri-field-staging-prune");
+    let _ = fs::remove_dir_all(&scratch);
+    let bin = scratch.join("bin");
+    fs::create_dir_all(&bin).expect("cannot create a fake miri directory");
+    fs::write(bin.join("miri"), "#!/bin/sh\necho fake\n").expect("cannot write a fake miri");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(bin.join("miri"), fs::Permissions::from_mode(0o755))
+            .expect("cannot make the fake miri executable");
+    }
+    let code = [
+        "import os".to_string(),
+        format!(
+            "os.environ['PATH'] = {:?} + os.pathsep + os.environ['PATH']",
+            bin.display().to_string()
+        ),
+        format!(
+            "target = bench.stage_toolchain({:?})",
+            scratch.display().to_string()
+        ),
+        "os.remove(target / 'lib/miri/stdlib/system/io.mi')".to_string(),
+        "print(bench.staged_stdlib_is_whole(target))".to_string(),
+        format!(
+            "again = bench.stage_toolchain({:?})",
+            scratch.display().to_string()
+        ),
+        "print(bench.staged_stdlib_is_whole(again))".to_string(),
+    ]
+    .join("\n");
+    let printed = with_bench(&code);
+    let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(printed, "False\nTrue", "a pruned staged stdlib was reused");
+}
