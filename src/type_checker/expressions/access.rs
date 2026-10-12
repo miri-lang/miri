@@ -904,11 +904,6 @@ impl TypeChecker {
                 make_type(TypeKind::Error)
             }
             _ => {
-                // TODO: a class value whose type the file reached only through
-                // a callee's declared return (`let f = make(); f.v`, `Foo`
-                // never imported here) lands in this arm: the definition is
-                // hidden from this file, so a field it does have is reported
-                // as no members at all.
                 self.report_error(
                     DiagnosticCode::TypFieldNotFound,
                     format!("Type '{}' does not have members", obj_type),
@@ -1013,10 +1008,15 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Option<Type> {
+        // Importing a type is what lets a file write its name; a value of it
+        // the file was handed (`let f = make(); f.v`) is read through its own
+        // definition whether or not the name is imported here, as in Rust, Swift
+        // and TypeScript. Visibility of each member is still checked below.
+        let reads_a_value = !matches!(obj_type.kind, TypeKind::Meta(_));
         let def_opt = self
             .resolve_visible_type(type_name, context)
             .or_else(|| {
-                if BuiltinCollectionKind::from_name(type_name).is_some() {
+                if reads_a_value || BuiltinCollectionKind::from_name(type_name).is_some() {
                     self.type_table.global_type_definitions.get(type_name)
                 } else {
                     None

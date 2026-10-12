@@ -325,3 +325,68 @@ fn test_a_caller_still_cannot_write_a_type_it_did_not_import() {
         "Unknown type: Id",
     );
 }
+
+/// A file that declares a class whose value another module hands out.
+const HANDED_OUT_CLASS: &str = concat!(
+    "public class Foo\n",
+    "    public var v int\n",
+    "    private var hidden int\n",
+    "    public fn doubled() int\n",
+    "        return self.v * 2\n",
+);
+
+/// A module whose public function returns the class, which its callers never
+/// import.
+const HANDS_OUT_FOO: &str = concat!(
+    "use local.other.{Foo}\n",
+    "\n",
+    "public fn make() Foo\n",
+    "    return Foo(v: 6, hidden: 1)\n",
+);
+
+/// A value handed to a file is read through its own type's definition: the
+/// file reads its public field and calls its public method without importing
+/// the type, as importing is what lets a file write the type's name.
+#[test]
+fn test_a_handed_value_is_read_without_importing_its_type() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.sig.{make}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let f = make()\n",
+                    "    println(f\"{f.v} {f.doubled()}\")\n",
+                ),
+            ),
+            ("sig.mi", HANDS_OUT_FOO),
+            ("other.mi", HANDED_OUT_CLASS),
+        ],
+        "6 12",
+    );
+}
+
+/// Reading a handed value does not reach past the members its type keeps
+/// private.
+#[test]
+fn test_a_handed_value_keeps_its_private_fields_private() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.sig.{make}\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let f = make()\n",
+                    "    println(f\"{f.hidden}\")\n",
+                ),
+            ),
+            ("sig.mi", HANDS_OUT_FOO),
+            ("other.mi", HANDED_OUT_CLASS),
+        ],
+        "hidden",
+    );
+}

@@ -556,6 +556,8 @@ Visibility modifiers control which symbols are accessible from other modules:
 
 Top-level functions and classes are `public` by default. Fields and methods follow OOP visibility rules. Accessing a private symbol from another module produces a compile error.
 
+Importing a type is what lets a file write its name. A value of a type the file never imported — one a function it calls returns — is still read through that type's definition: `let f = make(); f.v` reads `v` without `use`-ing `Foo`, while `let f Foo = make()` needs the import. The members' own visibility applies as everywhere else.
+
 ```miri
 // utils/helper.mi
 public fn add(a int, b int) int
