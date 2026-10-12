@@ -6,17 +6,18 @@ gpu = true
 
 # A GPU computes in single precision, so a point on the boundary of the set can
 # escape a step away from the double-precision reference. A count may differ by
-# 2% of itself or by 6 points, whichever is larger; the mean by 1%. Measured
-# against single-precision kernels, that absorbs the drift, and it still refuses
-# a grid sampled at pixel corners instead of centres and an escape time off by
-# one, the two mistakes the contract's formulas exist to pin.
+# 2% of itself or by 6 points, whichever is larger; the mean by 2%. Measured
+# against single-precision kernels — round r2's independent ones put the tall
+# strip's mean 1.1% from the reference — that absorbs the drift, and it still
+# refuses a grid sampled at pixel corners instead of centres and an escape time
+# off by one, the two mistakes the contract's formulas exist to pin.
 [compare]
 kind = "numeric"
 relative = 0.02
 absolute = 6
 
 [compare.labels.MEAN]
-relative = 0.01
+relative = 0.02
 absolute = 0.0
 
 # The GPU library is part of the toolchain line, which is the one sentence that
