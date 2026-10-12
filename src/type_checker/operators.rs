@@ -456,7 +456,11 @@ impl TypeChecker {
             TypeKind::Custom(name, Some(args))
                 if matches!(
                     BuiltinCollectionKind::from_name(name.as_str()),
-                    Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
+                    Some(
+                        BuiltinCollectionKind::List
+                            | BuiltinCollectionKind::Array
+                            | BuiltinCollectionKind::Set
+                    )
                 ) && !args.is_empty() =>
             {
                 let inner = self.resolve_type_expression(&args[0], context);

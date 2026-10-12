@@ -434,6 +434,23 @@ fn main()
 }
 
 #[test]
+fn a_membership_test_relying_on_an_elements_equals_is_refused_at_the_elements_argument() {
+    assert_compiler_error(
+        &with(
+            EQUAL_BOX,
+            r#"
+fn main()
+    var l = List<Box<String>>()
+    l.push(Box<String>(v: "x" + "y"))
+    let found = Box<String>(v: "x") in l
+    println(f"{found}")
+"#,
+        ),
+        CANNOT_COMPARE,
+    );
+}
+
+#[test]
 fn a_generic_body_comparing_instances_is_refused_at_the_instances_argument() {
     assert_compiler_error(
         &with(

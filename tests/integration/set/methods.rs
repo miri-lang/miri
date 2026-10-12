@@ -154,3 +154,20 @@ fn main()
         "1\ntrue",
     );
 }
+
+/// A set built only to be asked about is released once it answers.
+#[test]
+fn membership_in_a_set_literal_releases_the_set() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+
+fn small(a int) bool
+    return a in {1, 2, 3}
+
+fn main()
+    println(f"{small(2)} {small(9)}")
+"#,
+        "true false",
+    );
+}

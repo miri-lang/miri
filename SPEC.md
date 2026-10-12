@@ -337,6 +337,8 @@ println(f"{nums.length()}")
 
 Methods: `length`, `element_at`, `set`, `is_empty`, `first`, `last`, `contains`, `index_of`, `reverse`, `sort`.
 
+`x in a` is `a.contains(x)`: it compares elements with `==`.
+
 Two arrays are equal under `==` when they hold equal elements in the same order; two lists likewise, and lists of different lengths are never equal. An array or list of elements `==` cannot compare cannot itself be compared.
 
 ### List
@@ -352,6 +354,8 @@ println(f"{items.length()}")
 ```
 
 Methods: `length`, `element_at`, `get`, `set`, `push`, `pop`, `insert`, `remove`, `remove_at`, `clear`, `is_empty`, `first`, `last`, `contains`, `index_of`, `last_index`, `reverse`, `sort`.
+
+`x in l` is `l.contains(x)`: it compares elements with `==`, so a class's own `equals` decides.
 
 ### Map
 
