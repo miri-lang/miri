@@ -139,16 +139,13 @@ pub extern "C" fn miri_rt_regex_compile_message() -> *mut MiriString {
 /// This function is called by MIR lowering when constructing regex literals.
 /// Because the compiler validated the pattern at compile time, a failure
 /// here indicates a version mismatch between the compiler's and runtime's
-/// regex crate versions. In that case, the runtime aborts with a diagnostic.
+/// regex crate versions. In that case, the runtime aborts securely with a trap.
 ///
 /// Patterns are cached to avoid recompilation across multiple evaluations
 /// (e.g. inside a loop).
 ///
 /// # Safety
 /// - `pattern` must be a valid `MiriString` pointer or null.
-///
-/// # Panics
-/// If the pattern fails to compile, indicating a compiler/runtime version mismatch.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_regex_from_validated_pattern(pattern: *const MiriString) -> i64 {
     guard::guard_check(pattern as *mut u8);
@@ -182,10 +179,15 @@ pub unsafe extern "C" fn miri_rt_regex_from_validated_pattern(pattern: *const Mi
             handle
         }),
         Err(e) => {
-            panic!(
-                "Regex pattern validation mismatch: compiler and runtime regex versions disagree. \
-                 Pattern '{}' compiled successfully at type-check time but failed at runtime: {}",
-                pattern_str, e
+            // Security invariant: extern "C" FFI functions must never panic across the ABI boundary.
+            // Use trap to report the fault and exit cleanly.
+            crate::trap::trap(
+                crate::trap::code::EXPLICIT_PANIC,
+                &format!(
+                    "Regex pattern validation mismatch: compiler and runtime regex versions disagree. \
+                     Pattern '{}' compiled successfully at type-check time but failed at runtime: {}",
+                    pattern_str, e
+                ),
             );
         }
     }
@@ -377,4 +379,28 @@ pub mod ffi {
         miri_rt_regex_match_end, miri_rt_regex_match_start, miri_rt_regex_matches,
         miri_rt_regex_replace,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rc::balance_guard;
+
+    #[test]
+    fn validated_pattern_compiles_valid_regex() {
+        let _balance = balance_guard();
+        unsafe {
+            let pat = MiriString::from_str("[a-z]+");
+            let pat_ptr = crate::string::into_raw_ptr(pat);
+            let handle = miri_rt_regex_from_validated_pattern(pat_ptr);
+            assert!(handle >= 0);
+
+            let text = MiriString::from_str("hello");
+            let text_ptr = crate::string::into_raw_ptr(text);
+            assert!(miri_rt_regex_matches(handle, text_ptr));
+
+            crate::string::miri_rt_string_free(text_ptr);
+            crate::string::miri_rt_string_free(pat_ptr);
+        }
+    }
 }
