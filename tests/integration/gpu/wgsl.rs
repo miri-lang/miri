@@ -2189,7 +2189,7 @@ fn main()
     );
     // Only the `out` storage buffer is bound; the scratch local synthesizes none.
     assert_eq!(
-        wgsl.matches("@binding").count(),
+        wgsl.matches("@group(0) @binding").count(),
         1,
         "scratch array must not synthesize a storage binding, got:\n{}",
         wgsl

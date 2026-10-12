@@ -7,6 +7,7 @@
 //! GPU intrinsics and storage classes onto the WGSL compute pipeline.
 //! Intended to be consumed by a host runtime (Wasm/JS or native `wgpu`).
 
+mod checked;
 mod emitter;
 pub mod identifiers;
 pub(crate) mod types;

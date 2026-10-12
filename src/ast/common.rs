@@ -110,6 +110,26 @@ impl RuntimeKind {
         }
     }
 
+    /// The runtimes this runtime's library calls into, named again after it
+    /// on the link line when they are linked at all: a linker that resolves
+    /// archives in order (GNU ld) only sees a reference from a library to one
+    /// named before it if that library is repeated. The GPU runtime reports a
+    /// kernel's integer overflow through the core runtime's trap. The macOS
+    /// linker resolves archives in any order and warns about a repeated
+    /// library, so nothing is repeated there.
+    pub fn link_dependencies(&self) -> &'static [RuntimeKind] {
+        match self {
+            Self::Core => &[],
+            Self::Gpu => {
+                if cfg!(target_os = "macos") {
+                    &[]
+                } else {
+                    &[Self::Core]
+                }
+            }
+        }
+    }
+
     /// Extra linker arguments required by a runtime's transitive
     /// dependencies. Kept on the enum rather than in `pipeline.rs` so
     /// that adding a new runtime does not force a pipeline edit.

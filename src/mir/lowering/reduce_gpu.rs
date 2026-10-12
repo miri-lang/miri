@@ -21,8 +21,9 @@ use crate::mir::lambda::LambdaInfo;
 use crate::mir::symbol::{GpuKernelKind, Symbol};
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
-    GpuLaunchArgs, Local, LocalDecl, Operand, Place, Rvalue, Statement as MirStatement,
-    StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
+    GpuLaunchArgs, Local, LocalDecl, MathIntrinsic, Operand, Place, Rvalue,
+    Statement as MirStatement, StatementKind as MirStatementKind, StorageClass, Terminator,
+    TerminatorKind,
 };
 
 use super::context::LoweringContext;
@@ -561,13 +562,17 @@ fn emit_grid_stride_body(
         span,
     );
 
+    // The stride is the compiler's own arithmetic, so it wraps rather than
+    // checks; the loop's `< n` test ends it long before it could.
     push_assign(
         ctx,
         loop_idx,
-        Rvalue::BinaryOp(
-            BinOp::Add,
-            Box::new(Operand::Copy(Place::new(loop_idx))),
-            Box::new(int_constant(i64::from(workgroup_size), span)),
+        Rvalue::MathIntrinsic(
+            MathIntrinsic::WrappingAdd,
+            vec![
+                Operand::Copy(Place::new(loop_idx)),
+                int_constant(i64::from(workgroup_size), span),
+            ],
         ),
         span,
     );
@@ -677,10 +682,12 @@ fn compute_tree_reduction_result(
     push_assign(
         ctx,
         other_idx,
-        Rvalue::BinaryOp(
-            BinOp::Add,
-            Box::new(Operand::Copy(Place::new(thread_idx))),
-            Box::new(Operand::Copy(Place::new(stride))),
+        Rvalue::MathIntrinsic(
+            MathIntrinsic::WrappingAdd,
+            vec![
+                Operand::Copy(Place::new(thread_idx)),
+                Operand::Copy(Place::new(stride)),
+            ],
         ),
         span,
     );

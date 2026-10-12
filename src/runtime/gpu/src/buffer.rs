@@ -126,7 +126,9 @@ impl GpuBuffer {
         Ok(())
     }
 
-    /// Reads buffer contents back to host memory via a staging buffer.
+    /// Reads buffer contents back to host memory via a staging buffer. The
+    /// device fault word is read in the same submission, and an overflow it
+    /// records ends the program before the contents are returned.
     pub fn read(&self) -> Result<Vec<u8>, GpuError> {
         let ctx = get_gpu_context()?;
         let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -141,14 +143,19 @@ impl GpuBuffer {
                 label: Some("Read Encoder"),
             });
         encoder.copy_buffer_to_buffer(&self.buffer, 0, &staging, 0, self.size);
+        let staged_fault = ctx.fault.stage(&mut encoder);
         ctx.queue.submit(std::iter::once(encoder.finish()));
 
+        let pending_fault = staged_fault.map(|staged| staged.request());
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
         let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        if let Some(pending) = pending_fault {
+            pending.finish()?;
+        }
         rx.recv()
             .map_err(|_| GpuError::BufferCreationFailed)?
             .map_err(|_| GpuError::BufferCreationFailed)?;
@@ -341,5 +348,28 @@ pub unsafe extern "C" fn miri_gpu_buffer_free(handle: *mut GpuBufferHandle) {
         let id = (*handle).id;
         remove_buffer(id);
         let _ = Box::from_raw(handle);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BufferUsage, GpuBuffer};
+    use crate::context::{init_gpu_context, CONTEXT_TEST_LOCK};
+
+    #[test]
+    fn a_read_reports_the_overflow_the_device_recorded() {
+        let _serialize = CONTEXT_TEST_LOCK.lock();
+        let Ok(ctx) = init_gpu_context() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let usage = BufferUsage(BufferUsage::STORAGE.0 | BufferUsage::COPY_SRC.0);
+        let Ok(buffer) = GpuBuffer::from_data(&[0u8; 4], usage, 4) else {
+            panic!("a 4-byte buffer must allocate");
+        };
+        ctx.fault.record_overflow_for_test(&ctx.queue);
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| buffer.read()));
+        ctx.fault.clear_for_test(&ctx.queue);
+        assert!(read.is_err(), "the read must raise the recorded overflow");
     }
 }

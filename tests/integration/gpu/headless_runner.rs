@@ -1040,3 +1040,218 @@ fn stats_readback_samples_the_named_buffer_below_frame_rate() {
         );
     }
 }
+
+/// The vector-add demo with one element at `i32::MAX`, so `a[0] + 1` does not
+/// fit the device's 32-bit `int` and the kernel records an overflow.
+const VECTOR_ADD_OVERFLOW: &str = r#"
+use system.gpu
+
+gpu let a = [2147483647, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+
+gpu forall i in 0..4
+    dst[i] = a[i] + 1
+"#;
+
+/// A kernel whose arithmetic overflows under a real WebGPU device must fail
+/// the headless run with the integer-overflow error rather than hand back the
+/// wrapped values.
+#[test]
+fn headless_runner_reports_an_overflowing_kernel_under_deno() {
+    let deno = match resolve_runtime("MIRI_DENO", "deno") {
+        Some(d) => d,
+        None => {
+            eprintln!("skipping: no Deno runtime found (set MIRI_DENO or install deno)");
+            return;
+        }
+    };
+
+    let bundle = build_bundle(VECTOR_ADD_OVERFLOW);
+    let runner = bundle.join("miri-gpu-headless.js");
+    let manifest = manifest_path(&bundle);
+
+    let output = Command::new(&deno)
+        .arg("run")
+        .arg("--allow-read")
+        .arg("--unstable-webgpu")
+        .arg(&runner)
+        .arg(&manifest)
+        .output()
+        .expect("run deno headless runner");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "an overflowing kernel must fail the headless run:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stderr.contains("integer overflow: the result does not fit its type"),
+        "the headless run must report the integer overflow:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "no values may be reported from a run that overflowed, got: {}",
+        stdout
+    );
+}
+
+/// An animated demo whose frame pass does checked integer arithmetic.
+const FRAME_COUNTER: &str = r#"
+use system.gpu
+use system.collections.array
+
+gpu var count_a = Array<i32, 4>()
+gpu var count_b = Array<i32, 4>()
+
+gpu frame
+    gpu forall i in 0..4
+        count_b[i] = count_a[i] + 1
+"#;
+
+/// Drives `mount` on a stub device whose fault word starts at the value given
+/// as the second argument — `1` is an overflow already recorded, the way the
+/// device holds it after a kernel set it. Copies move the stub bytes, so the
+/// word read back is the word on the device. Prints how many frame-pass
+/// dispatches ran, what was reported, and whether the loop was cancelled.
+const FAULT_STUB_DRIVER: &str = r#"
+import { mount } from "./miri-gpu.js";
+import fs from "fs";
+globalThis.GPUBufferUsage = { STORAGE:1, COPY_SRC:2, COPY_DST:4, UNIFORM:8, MAP_READ:16 };
+globalThis.GPUShaderStage = { COMPUTE:1, FRAGMENT:2, VERTEX:4 };
+globalThis.GPUMapMode = { READ:1 };
+
+const errors = [];
+console.error = (...args) => errors.push(args.join(" "));
+let frameDispatches = 0;
+let pipeline = null;
+const faultGroups = [];
+const manifest = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const frameEntries = new Set((manifest.framePasses ?? []).map((p) => p.entryPoint));
+function buf(label, size){ const ab = new ArrayBuffer(size||4);
+  if (label === "miri-fault") new Uint32Array(ab)[0] = Number(process.argv[3]);
+  return { label, ab, getMappedRange:(o=0,l)=>l?ab.slice(o,o+l):ab, unmap(){}, destroy(){}, mapAsync:async()=>{}, size }; }
+const device = {
+  limits:{}, lost:new Promise(()=>{}),
+  createBuffer:({label,size})=>buf(label,size),
+  createShaderModule:()=>({}), createBindGroupLayout:()=>({}), createPipelineLayout:(d)=>d,
+  createComputePipeline:(d)=>({ entry:d.compute.entryPoint }),
+  createRenderPipeline:()=>({}),
+  createBindGroup:(d)=>({ entries:d.entries.map(e=>({ binding:e.binding, label:e.resource.buffer.label })) }),
+  createCommandEncoder:()=>({
+    beginComputePass:()=>({ setPipeline(p){ pipeline = p; }, end(){},
+      dispatchWorkgroups(){ if (frameEntries.has(pipeline.entry)) frameDispatches++; },
+      setBindGroup(g,bg){ if (g === 1) faultGroups.push(bg.entries[0].label); } }),
+    beginRenderPass:()=>({ setPipeline(){}, setBindGroup(){}, draw(){}, end(){} }),
+    copyBufferToBuffer(src, so, dst, d, n){ new Uint8Array(dst.ab, d, n).set(new Uint8Array(src.ab, so, n)); },
+    finish:()=>({}) }),
+  queue:{ submit(){}, writeBuffer(){}, onSubmittedWorkDone:async()=>{} }, destroy(){},
+};
+Object.defineProperty(globalThis, "navigator",
+  { value:{ gpu:{ requestAdapter:async()=>({ requestDevice:async()=>device, limits:{} }),
+    getPreferredCanvasFormat:()=>"bgra8unorm" } }, configurable:true });
+
+let rafCb = null;
+let cancelled = 0;
+globalThis.requestAnimationFrame = (cb) => { rafCb = cb; return 1; };
+globalThis.cancelAnimationFrame = () => { cancelled++; };
+const ctx = { configure(){}, getCurrentTexture:()=>({ createView:()=>({}) }) };
+const canvas = { width:0, height:0, getContext:()=>ctx,
+  getBoundingClientRect:()=>({ left:0, top:0, width:512, height:512 }),
+  addEventListener(){}, removeEventListener(){} };
+
+const handle = await mount(canvas, manifest, {});
+let ts = 0;
+for (let f = 0; f < 5; f++) {
+  const cb = rafCb; rafCb = null; if (cb) cb(ts); ts += 16;
+  await new Promise((r) => setTimeout(r, 0));
+}
+handle.stop();
+console.log(JSON.stringify({ frameDispatches, faultGroups, cancelled, errors }));
+"#;
+
+/// Runs the fault stub driver over the `FRAME_COUNTER` demo with the fault word
+/// starting at `initial_word`, and returns the trace it prints; `None` when no
+/// Node runtime is available.
+fn run_fault_stub(initial_word: u32) -> Option<serde_json::Value> {
+    let Some(node) = resolve_runtime("MIRI_NODE", "node") else {
+        eprintln!("skipping: no Node runtime found (set MIRI_NODE or install node)");
+        return None;
+    };
+    let bundle = build_bundle(FRAME_COUNTER);
+    let driver = bundle.join("fault-stub-driver.mjs");
+    fs::write(&driver, FAULT_STUB_DRIVER).expect("write fault stub driver");
+    let manifest = manifest_path(&bundle);
+
+    let output = Command::new(&node)
+        .arg(&driver)
+        .arg(&manifest)
+        .arg(initial_word.to_string())
+        .output()
+        .expect("run node fault stub driver");
+    assert!(
+        output.status.success(),
+        "fault stub driver must run:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("fault stub driver must print JSON"),
+    )
+}
+
+/// A frame pass that overflows stops the animation and reports the overflow:
+/// the fault word is bound at group 1 for the pass, read back after the frame
+/// without blocking it, and once it reads non-zero no further frame runs.
+#[test]
+fn an_overflowing_frame_pass_stops_the_mounted_demo() {
+    let Some(trace) = run_fault_stub(1) else {
+        return;
+    };
+    assert_eq!(
+        trace["frameDispatches"].as_u64(),
+        Some(1),
+        "the frame that overflowed runs, and no frame after it: {trace}"
+    );
+    let groups = trace["faultGroups"].as_array().expect("faultGroups");
+    assert!(
+        !groups.is_empty() && groups.iter().all(|g| g.as_str() == Some("miri-fault")),
+        "the frame pass must bind the fault word at group 1, got {groups:?}"
+    );
+    assert!(
+        trace["cancelled"].as_u64().unwrap_or(0) >= 1,
+        "the scheduled frame must be cancelled: {trace}"
+    );
+    let errors = trace["errors"].as_array().expect("errors");
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e
+                .as_str()
+                .is_some_and(|s| s.contains("integer overflow: the result does not fit its type")))
+            .count(),
+        1,
+        "the overflow must be reported exactly once, got {errors:?}"
+    );
+}
+
+/// A fault word that reads zero keeps the animation running: every frame
+/// dispatches its pass, and nothing is reported.
+#[test]
+fn a_clear_fault_word_keeps_the_mounted_demo_running() {
+    let Some(trace) = run_fault_stub(0) else {
+        return;
+    };
+    assert_eq!(
+        trace["frameDispatches"].as_u64(),
+        Some(5),
+        "every frame must dispatch its pass: {trace}"
+    );
+    let errors = trace["errors"].as_array().expect("errors");
+    assert!(errors.is_empty(), "nothing may be reported, got {errors:?}");
+}

@@ -15,6 +15,7 @@
 
 use crate::compute::{get_kernel_by_name, CompiledKernel};
 use crate::context::{init_gpu_context, with_validation_scope, GpuContext, GpuError};
+use crate::fault::{declares_fault_word, FaultWord, FAULT_GROUP};
 use crate::wire::WireConversion;
 use crate::{device_table, telemetry};
 use once_cell::sync::OnceCell;
@@ -98,6 +99,12 @@ pub(crate) fn gpu_launch_error_message(err: &GpuError) -> String {
         }
         GpuError::InactiveHandle(reason) => {
             format!("Runtime error: GPU launch failed: {}", reason)
+        }
+        GpuError::FaultWordUnreadable(reason) => {
+            format!(
+                "Runtime error: GPU launch failed: the device fault word could not be read: {}",
+                reason
+            )
         }
     }
 }
@@ -441,9 +448,15 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         });
         pass.set_pipeline(&kernel.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
+        if kernel.has_fault {
+            pass.set_bind_group(FAULT_GROUP, ctx.fault.bind_group(), &[]);
+        }
         pass.dispatch_workgroups(desc.grid_x, desc.grid_y, desc.grid_z);
     }
     queue.submit(std::iter::once(encoder.finish()));
+    if kernel.has_fault {
+        ctx.fault.record_dispatch();
+    }
     telemetry::record_launch();
 
     // A pure `gpu`-resident launch fences nothing: device-side ordering on
@@ -453,10 +466,13 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     if !transient_captures.is_empty() {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         telemetry::record_fence();
-        for i in transient_captures {
+        // The fault word is read once, alongside the last capture.
+        let last = transient_captures.len() - 1;
+        for (position, i) in transient_captures.into_iter().enumerate() {
             readback_device_buffer(
                 device,
                 queue,
+                (position == last).then_some(&ctx.fault),
                 &storage_buffers[i],
                 buf_data_ptrs[i],
                 buf_byte_lens[i],
@@ -724,6 +740,7 @@ fn compile_kernel_inline(
     workgroup_size: [u32; 3],
 ) -> Result<CompiledKernel, GpuError> {
     let ctx = ensure_context()?;
+    let has_fault = declares_fault_word(wgsl);
     let (module, bind_group_layout, pipeline) = with_validation_scope(&ctx.device, || {
         let module = ctx
             .device
@@ -740,11 +757,18 @@ fn compile_kernel_inline(
             buf_read_only,
         );
 
+        // A kernel that may fault binds the fault word at group 1.
+        let with_fault = [Some(&bind_group_layout), Some(ctx.fault.layout())];
+        let bind_group_layouts = if has_fault {
+            &with_fault[..]
+        } else {
+            &with_fault[..1]
+        };
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{}_pl", cache_name)),
-                bind_group_layouts: &[Some(&bind_group_layout)],
+                bind_group_layouts,
                 immediate_size: 0,
             });
 
@@ -769,6 +793,7 @@ fn compile_kernel_inline(
         bind_group_layout,
         num_bindings,
         workgroup_size,
+        has_fault,
     })
 }
 
@@ -833,9 +858,14 @@ fn next_kernel_id() -> u64 {
     NEXT.fetch_add(1, Ordering::SeqCst)
 }
 
+/// Copies `src` back into the host bytes at `host_ptr`, decoding each element
+/// from its device lane. The device fault word, when given, is read in the
+/// same submission, and an overflow it records ends the program before
+/// anything is decoded.
 unsafe fn readback_device_buffer(
     device: &Device,
     queue: &Queue,
+    fault: Option<&FaultWord>,
     src: &wgpu::Buffer,
     host_ptr: *mut u8,
     byte_len: usize,
@@ -856,14 +886,19 @@ unsafe fn readback_device_buffer(
         label: Some("miri_gpu_launch_inline readback encoder"),
     });
     encoder.copy_buffer_to_buffer(src, 0, &staging, 0, padded);
+    let staged_fault = fault.and_then(|fault| fault.stage(&mut encoder));
     queue.submit(std::iter::once(encoder.finish()));
 
+    let pending_fault = staged_fault.map(|staged| staged.request());
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = tx.send(result);
     });
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    if let Some(pending) = pending_fault {
+        pending.finish()?;
+    }
     rx.recv()
         .map_err(|_| GpuError::BufferCreationFailed)?
         .map_err(|_| GpuError::BufferCreationFailed)?;
@@ -1008,6 +1043,7 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
     match readback_device_buffer(
         &ctx.device,
         &ctx.queue,
+        Some(&ctx.fault),
         &buffer,
         header.data,
         byte_len,
@@ -1279,6 +1315,14 @@ mod gpu_launch_error_message_tests {
         let msg = gpu_launch_error_message(&err);
         assert!(msg.starts_with("Runtime error: GPU launch failed"));
         assert!(msg.contains("gpu binding 7 was released with no live activation"));
+    }
+
+    #[test]
+    fn fault_word_unreadable_error() {
+        let err = GpuError::FaultWordUnreadable("the mapping was dropped".to_string());
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU launch failed"));
+        assert!(msg.contains("the device fault word could not be read: the mapping was dropped"));
     }
 
     #[test]

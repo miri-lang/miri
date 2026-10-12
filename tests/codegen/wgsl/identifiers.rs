@@ -28,6 +28,7 @@ fn names_in_the_synthesized_namespace_are_escaped() {
     assert_eq!(source_identifier("_inputs"), "_src__inputs");
     assert_eq!(source_identifier("_src_x"), "_src__src_x");
     assert_eq!(source_identifier("SUBGROUP_SIZE"), "_src_SUBGROUP_SIZE");
+    assert_eq!(source_identifier("miri_fault"), "_src_miri_fault");
 }
 
 #[test]

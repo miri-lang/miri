@@ -127,7 +127,12 @@ fn main()
     );
     let source = std::str::from_utf8(&bytes).expect("WGSL output is UTF-8");
     let read_only_count = source.matches("var<storage, read>").count();
-    let read_write_count = source.matches("var<storage, read_write>").count();
+    // The fault word the checked `+` records an overflow in is read-write
+    // storage too, but is no captured buffer.
+    let read_write_count = source
+        .lines()
+        .filter(|line| line.contains("var<storage, read_write>") && line.contains(": array<"))
+        .count();
     assert_eq!(
         read_only_count, 2,
         "expected 2 read-only captured buffers, got:\n{}",
