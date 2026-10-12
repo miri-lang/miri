@@ -142,6 +142,24 @@ fn main()
     assert_runs_with_output(source, "9.0 2.0 8.0");
 }
 
+/// A component write into a vector element changes the bytes the array holds,
+/// so it neither copies the element nor leaves anything to release.
+#[test]
+fn cpu_vec3_element_component_write_allocates_nothing_it_keeps() {
+    assert_heap_guard_output(
+        "
+use system.gpu.vector
+
+fn main()
+    var arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    arr[0].x = 9.0
+    arr[1].z = 8.0
+    println(f'{arr[0].x} {arr[0].y} {arr[1].z}')
+",
+        "9.0 2.0 8.0",
+    );
+}
+
 /// Inline whole-element write: `arr[i] = VecN(...)` replaces all components.
 #[test]
 fn cpu_vec3_array_whole_element_write() {

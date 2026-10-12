@@ -278,6 +278,9 @@ fn lower_index_local(
 /// closure takes it, so outside a collection no second holder exists. A
 /// collection's clone copies its elements' pointers rather than the elements,
 /// so one held in a collection (`in_collection`) may be shared all the same.
+/// A vector is the exception: a collection holds it inline, as its components'
+/// bytes, so no element of one is ever shared, and a copy built for it would
+/// be stored by value and never released.
 fn unsharing(ctx: &LoweringContext, ty: &Type, in_collection: bool) -> Option<Unsharing> {
     if let Some(kind) = ty.kind.as_builtin_collection() {
         return Some(Unsharing::Collection(kind));
@@ -285,6 +288,9 @@ fn unsharing(ctx: &LoweringContext, ty: &Type, in_collection: bool) -> Option<Un
     let TypeKind::Custom(name, _) = &ty.kind else {
         return None;
     };
+    if crate::ast::types::vec_dim(name).is_some() {
+        return None;
+    }
     let Some(TypeDefinition::Struct(definition)) =
         ctx.type_checker.type_definitions().get(name.as_str())
     else {
