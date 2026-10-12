@@ -193,13 +193,16 @@ fn main()
     assert_runs_with_output(code, "4294967295");
 }
 
+/// Checked arithmetic at a narrow width computes through a helper that
+/// returns its result brought back to that width.
 #[test]
 fn test_wgsl_u8_arithmetic_is_brought_back_to_eight_bits() {
     let wgsl = compile_to_wgsl(&narrow_program("u8", "10", "buf[i] + 250 as u8", "h"));
     assert!(
-        wgsl.contains("extractBits((buf[i32(_9)] + _11), 0u, 8u)"),
+        wgsl.contains("_checked_add__u8(buf[i32(_9)], _11)"),
         "{wgsl}"
     );
+    assert!(wgsl.contains("return extractBits(r, 0u, 8u);"), "{wgsl}");
 }
 
 #[test]
@@ -207,7 +210,18 @@ fn test_wgsl_i16_arithmetic_and_cast_are_brought_back_to_sixteen_bits() {
     let wgsl = compile_to_wgsl(&narrow_program("i16", "300", "buf[i] * 300 as i16", "h"));
     assert!(wgsl.contains("extractBits(i32(300), 0u, 16u)"), "{wgsl}");
     assert!(
-        wgsl.contains("extractBits((buf[i32(_9)] * _11), 0u, 16u)"),
+        wgsl.contains("_checked_mul__i16(buf[i32(_9)], _11)"),
+        "{wgsl}"
+    );
+    assert!(wgsl.contains("return extractBits(r, 0u, 16u);"), "{wgsl}");
+}
+
+#[test]
+fn test_wgsl_u8_wrapping_arithmetic_is_brought_back_to_eight_bits() {
+    let program = narrow_program("u8", "10", "wrapping_add(buf[i], 250 as u8)", "h");
+    let wgsl = compile_to_wgsl(&program);
+    assert!(
+        wgsl.contains("extractBits((buf[i32(_9)] + _11), 0u, 8u)"),
         "{wgsl}"
     );
 }

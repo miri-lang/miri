@@ -9,6 +9,9 @@ use crate::ast::gpu_wire::{
 };
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
+use crate::codegen::wgsl::checked::{
+    checked_section, narrow_expr, CheckedArith, CheckedHelper, IntLane,
+};
 use crate::codegen::wgsl::identifiers::{source_identifier, SUBGROUP_INVOCATION_ID, SUBGROUP_SIZE};
 use crate::codegen::wgsl::types::{
     buffer_element, buffer_element_typename, is_atomic_element_buffer, scalar, vector_swizzle,
@@ -25,7 +28,8 @@ use crate::mir::{
     Local, LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind,
     StorageClass, TerminatorKind, UnOp, I32_INDEX_MAX,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Write;
 
 pub(super) struct Emitter<'o> {
@@ -34,6 +38,8 @@ pub(super) struct Emitter<'o> {
     source_map: Vec<WgslSourceSpan>,
     /// The bodies the module declares as device helpers.
     device_helpers: &'o HashSet<Symbol>,
+    /// The overflow-checked arithmetic helpers the emitted bodies call.
+    checked_helpers: BTreeSet<CheckedHelper>,
 }
 
 /// Lines the `enable f16;` preamble prepends to the module (`enable f16;` plus a
@@ -46,6 +52,7 @@ impl<'o> Emitter<'o> {
             output: String::new(),
             source_map: Vec::new(),
             device_helpers,
+            checked_helpers: BTreeSet::new(),
         }
     }
 
@@ -60,17 +67,16 @@ impl<'o> Emitter<'o> {
     }
 
     pub(super) fn finish(self) -> String {
-        if self.needs_f16_preamble() {
-            format!("enable f16;\n\n{}", self.output)
-        } else {
-            self.output
-        }
+        self.finish_with_map().0
     }
 
     /// Like [`finish`], but also returns the source map. The `enable f16;`
     /// preamble shifts every mapped WGSL line down, so entries are rebased when
-    /// it is prepended.
-    pub(super) fn finish_with_map(self) -> (String, Vec<WgslSourceSpan>) {
+    /// it is prepended. The checked arithmetic helpers follow the kernel code,
+    /// so they move no mapped line.
+    pub(super) fn finish_with_map(mut self) -> (String, Vec<WgslSourceSpan>) {
+        self.output
+            .push_str(&checked_section(&self.checked_helpers));
         if self.needs_f16_preamble() {
             let map = self
                 .source_map
@@ -266,8 +272,7 @@ impl<'o> Emitter<'o> {
             &mut self.source_map,
         )?;
         ctx.device_helpers = Some(self.device_helpers);
-        ctx.emit_local_declarations()?;
-        ctx.emit_blocks()?;
+        emit_body_absorbing_checked(ctx, &mut self.checked_helpers)?;
 
         writeln!(self.output, "}}").map_err(emit_err)?;
         writeln!(self.output).map_err(emit_err)
@@ -320,12 +325,30 @@ impl<'o> Emitter<'o> {
             BodyEmitter::new(body, &[], [1, 1, 1], &mut self.output, &mut self.source_map)?;
         ctx.return_local = Some(Local(0));
         ctx.device_helpers = Some(self.device_helpers);
-        ctx.emit_local_declarations()?;
-        ctx.emit_blocks()?;
+        emit_body_absorbing_checked(ctx, &mut self.checked_helpers)?;
 
         writeln!(self.output, "}}").map_err(emit_err)?;
         writeln!(self.output).map_err(emit_err)
     }
+}
+
+/// Emits the declarations and blocks of the body `ctx` writes, then adds the
+/// checked helpers it called to the module's `checked_helpers`.
+fn emit_body_absorbing_checked(
+    mut ctx: BodyEmitter<'_>,
+    checked_helpers: &mut BTreeSet<CheckedHelper>,
+) -> Result<(), CodegenError> {
+    ctx.emit_local_declarations()?;
+    ctx.emit_blocks()?;
+    checked_helpers.append(&mut ctx.checked_helpers);
+    Ok(())
+}
+
+/// An overflow-checked operation: the helper it calls and the operands it
+/// passes, in order.
+struct CheckedCall<'r> {
+    helper: CheckedHelper,
+    operands: Vec<&'r Operand>,
 }
 
 fn emit_err(err: std::fmt::Error) -> CodegenError {
@@ -614,6 +637,8 @@ struct BodyEmitter<'a> {
     /// The bodies the module declares as device helpers, which a call names
     /// by their WGSL names; `None` where the module declares none.
     device_helpers: Option<&'a HashSet<Symbol>>,
+    /// The overflow-checked arithmetic helpers this body calls.
+    checked_helpers: BTreeSet<CheckedHelper>,
 }
 
 impl<'a> BodyEmitter<'a> {
@@ -669,6 +694,7 @@ impl<'a> BodyEmitter<'a> {
             loop_stack: Vec::new(),
             return_local: None,
             device_helpers: None,
+            checked_helpers: BTreeSet::new(),
         };
         emitter.resolve_loop_tests();
         Ok(emitter)
@@ -1642,9 +1668,7 @@ impl<'a> BodyEmitter<'a> {
                     return Ok(());
                 }
                 self.write_indent()?;
-                let rhs = self.render_rvalue(rvalue)?;
-                let rhs = self.coerce_intrinsic_to_dest(place, rvalue, rhs);
-                let rhs = self.wrap_to_stored_width(place, rvalue, rhs);
+                let rhs = self.render_assigned_value(place, rvalue)?;
                 if self.is_atomic_buffer_element_write(place) {
                     // Wrap bare writes to atomic buffer elements with atomicStore
                     let rendered = self.render_place(place)?;
@@ -1661,6 +1685,84 @@ impl<'a> BodyEmitter<'a> {
             | StatementKind::Dealloc(_)
             | StatementKind::Nop => Ok(()),
         }
+    }
+
+    /// The WGSL value `rvalue` assigns to `place`: a call to its checked
+    /// helper for integer arithmetic that can overflow the stored type,
+    /// otherwise the plain rendering at the stored width.
+    fn render_assigned_value(
+        &mut self,
+        place: &Place,
+        rvalue: &Rvalue,
+    ) -> Result<String, CodegenError> {
+        if let Some(call) = self.checked_call(place, rvalue) {
+            return self.render_checked(call);
+        }
+        let rhs = self.render_rvalue(rvalue)?;
+        let rhs = self.coerce_intrinsic_to_dest(place, rvalue, rhs);
+        Ok(self.wrap_to_stored_width(place, rvalue, rhs))
+    }
+
+    /// The checked helper call `rvalue` computes through when it is integer
+    /// arithmetic that can overflow the type it is computed at. Compiler-
+    /// generated device math is spelled with the wrapping intrinsics instead,
+    /// so every operator reaching here is the program's.
+    fn checked_call<'r>(&self, place: &Place, rvalue: &'r Rvalue) -> Option<CheckedCall<'r>> {
+        let (arith, operands) = match rvalue {
+            Rvalue::BinaryOp(op, lhs, rhs) => {
+                let arith = CheckedArith::of_binop(*op)?;
+                if arith.always_fits_with_divisor(rhs) {
+                    return None;
+                }
+                (arith, vec![&**lhs, &**rhs])
+            }
+            Rvalue::UnaryOp(UnOp::Neg, value) => (CheckedArith::Neg, vec![&**value]),
+            Rvalue::UnaryOp(UnOp::Not | UnOp::BitwiseNot | UnOp::Await, _)
+            | Rvalue::Use(_)
+            | Rvalue::Ref(_)
+            | Rvalue::Len(_)
+            | Rvalue::Cast(..)
+            | Rvalue::GpuIntrinsic(_)
+            | Rvalue::MathIntrinsic(..)
+            | Rvalue::AtomicOp { .. }
+            | Rvalue::Aggregate(..)
+            | Rvalue::Phi(_) => return None,
+        };
+        let helper = CheckedHelper::new(arith, self.computed_lane(place, &operands)?)?;
+        Some(CheckedCall { helper, operands })
+    }
+
+    /// The integer lane `operands` are computed in: the type of the first
+    /// operand stored in a local or buffer element, else of a constant
+    /// operand, else of the destination `place`. `None` for a non-integer.
+    fn computed_lane(&self, place: &Place, operands: &[&Operand]) -> Option<IntLane> {
+        let stored = operands.iter().find_map(|operand| match operand {
+            Operand::Copy(stored) | Operand::Move(stored) => self.stored_kind(stored),
+            Operand::Constant(_) | Operand::Function(_) => None,
+        });
+        if let Some(kind) = stored {
+            return IntLane::of(&kind);
+        }
+        let constant = operands.iter().find_map(|operand| match operand {
+            Operand::Constant(constant) => Some(&constant.ty.kind),
+            Operand::Copy(_) | Operand::Move(_) | Operand::Function(_) => None,
+        });
+        match constant {
+            Some(kind) => IntLane::of(kind),
+            None => IntLane::of(&*self.stored_kind(place)?),
+        }
+    }
+
+    /// The call to `call`'s helper over its operands, recording that the
+    /// module must define the helper.
+    fn render_checked(&mut self, call: CheckedCall<'_>) -> Result<String, CodegenError> {
+        let rendered = call
+            .operands
+            .into_iter()
+            .map(|operand| self.render_operand(operand))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.checked_helpers.insert(call.helper);
+        Ok(format!("{}({})", call.helper.name(), rendered.join(", ")))
     }
 
     /// Coerces a kernel dimension-intrinsic read to the destination scalar
@@ -1698,8 +1800,9 @@ impl<'a> BodyEmitter<'a> {
 
     /// Brings a freshly computed 8- or 16-bit integer back to its own width.
     ///
-    /// The device computes it in a full 32-bit lane, so an overflow the host
-    /// wraps would otherwise survive into a later division or comparison.
+    /// The device computes it in a full 32-bit lane, so a wrapping operation
+    /// or a narrowing cast would otherwise carry bits past the width into a
+    /// later division or comparison.
     /// `extractBits` keeps the low bits and sign-extends them for a signed
     /// lane (zero-extends for an unsigned one), and — unlike a shift pair —
     /// cannot overflow when naga folds it over a constant.
@@ -1708,7 +1811,7 @@ impl<'a> BodyEmitter<'a> {
             return rhs;
         }
         match self.stored_sub_lane_bits(place) {
-            Some(bits) => format!("extractBits({rhs}, 0u, {bits}u)"),
+            Some(bits) => narrow_expr(&rhs, bits),
             None => rhs,
         }
     }
@@ -1716,12 +1819,18 @@ impl<'a> BodyEmitter<'a> {
     /// The sub-lane width of the integer stored at `place` — a scalar local or
     /// a buffer element — or `None` when it fills its lane.
     fn stored_sub_lane_bits(&self, place: &Place) -> Option<u32> {
+        sub_lane_bits(&*self.stored_kind(place)?)
+    }
+
+    /// The type of the value stored at `place` — a scalar local or a buffer
+    /// element — or `None` for any other projection.
+    fn stored_kind(&self, place: &Place) -> Option<Cow<'_, TypeKind>> {
         let declared = &self.body.local_decls.get(place.local.0)?.ty.kind;
         if place.projection.is_empty() {
-            return sub_lane_bits(declared);
+            return Some(Cow::Borrowed(declared));
         }
         if let [PlaceElem::Index(_)] = place.projection.as_slice() {
-            return sub_lane_bits(&collection_element_kind(declared)?);
+            return collection_element_kind(declared).map(Cow::Owned);
         }
         None
     }
@@ -1848,12 +1957,6 @@ impl<'a> BodyEmitter<'a> {
                 let lhs_str = self.render_operand(lhs)?;
                 let rhs_str = self.render_operand(rhs)?;
                 let sym = binop_symbol(*op)?;
-
-                // TODO: integer `+ - *` here (and `-x` below) still wrap on the
-                // device, while the host traps them with MER_RT_003. One rule on
-                // every target needs checked helpers that set a fault flag the
-                // host raises after the dispatch; `wrapping_*` already renders
-                // as the plain operator.
 
                 // Browser-portability: `Int` is now i32 in WGSL, so div/mod on int no longer
                 // requires the i64 narrowing workaround. The workaround was needed only for
@@ -2427,6 +2530,7 @@ mod tests {
             loop_stack: Vec::new(),
             return_local: None,
             device_helpers: None,
+            checked_helpers: BTreeSet::new(),
         };
 
         // Render the place.
@@ -2488,6 +2592,7 @@ mod tests {
             loop_stack: Vec::new(),
             return_local: None,
             device_helpers: None,
+            checked_helpers: BTreeSet::new(),
         };
 
         // Render the place.
@@ -2548,6 +2653,7 @@ mod tests {
             loop_stack: Vec::new(),
             return_local: None,
             device_helpers: None,
+            checked_helpers: BTreeSet::new(),
         };
 
         // Render the place.

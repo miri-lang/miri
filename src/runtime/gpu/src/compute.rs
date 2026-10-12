@@ -37,6 +37,9 @@ pub struct CompiledKernel {
     pub bind_group_layout: BindGroupLayout,
     pub num_bindings: usize,
     pub workgroup_size: [u32; 3],
+    /// Whether the kernel declares the fault word, so its pipeline includes
+    /// the fault bind group and every dispatch binds it.
+    pub has_fault: bool,
 }
 
 #[repr(C)]
@@ -109,6 +112,9 @@ impl CompiledKernel {
             bind_group_layout,
             num_bindings,
             workgroup_size,
+            // A kernel compiled here is hand-written WGSL, which binds group 0
+            // alone and declares no fault word.
+            has_fault: false,
         })
     }
 

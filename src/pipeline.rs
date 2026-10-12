@@ -3639,6 +3639,10 @@ impl Pipeline {
             for arg in runtime.extra_link_args() {
                 cmd.arg(arg);
             }
+            let dependencies = runtime.link_dependencies().iter();
+            for dependency in dependencies.filter(|dep| required_runtimes.contains(dep)) {
+                cmd.arg(format!("-l{}", dependency.library_name()));
+            }
         }
 
         let status = cmd.status().map_err(|e| {

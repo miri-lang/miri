@@ -14,6 +14,7 @@ pub mod buffer;
 pub mod compute;
 pub mod context;
 pub mod device_table;
+pub mod fault;
 pub mod launch;
 pub mod telemetry;
 pub mod wire;

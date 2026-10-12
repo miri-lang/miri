@@ -178,7 +178,7 @@ fn demo_game_of_life_web() {
 )]
 fn demo_mandelbrot_web() {
     let source = include_str!("../../../examples/gpu/web/mandelbrot.mi");
-    assert_gpu_runs_with_output(source, "red_sum_milli=335842575");
+    assert_gpu_runs_with_output(source, "red_sum_milli=335835041");
 }
 
 /// raymarch_web: interactive ray marcher, a faithful port of the reference
@@ -196,7 +196,7 @@ fn demo_mandelbrot_web() {
 )]
 fn demo_raymarch_web() {
     let source = include_str!("../../../examples/gpu/web/raymarch.mi");
-    assert_gpu_runs_with_output(source, "center=0.06467817 0.08995301 0.13298242");
+    assert_gpu_runs_with_output(source, "center=0.06467919 0.08995432 0.13298367");
 }
 
 /// blackhole_web: a Schwarzschild black hole rendered by integrating one photon

@@ -457,13 +457,15 @@ fn build_loop_locals(
         let start_uniform = indexing.start_uniforms.get(i).copied().flatten();
         let start = axis_start_operand(ctx, axis, start_uniform, span);
         let local = ctx.push_local(axis.name.clone(), i64_ty.clone(), span);
+        // Wraps rather than checks: a thread past the end of the range may
+        // carry the index past the device `int`, which the bounds guard
+        // (see `index_may_wrap`) then turns away.
         push_assign(
             ctx,
             local,
-            Rvalue::BinaryOp(
-                BinOp::Add,
-                Box::new(Operand::Copy(Place::new(thread_int))),
-                Box::new(start.clone()),
+            Rvalue::MathIntrinsic(
+                MathIntrinsic::WrappingAdd,
+                vec![Operand::Copy(Place::new(thread_int)), start.clone()],
             ),
             span,
         );
@@ -1700,14 +1702,18 @@ pub fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Spa
         span,
     );
 
+    // The thread index is the compiler's own arithmetic, so it wraps: the
+    // launch already refuses a grid whose threads a device index cannot number.
     let grid_term_u32 = ctx.push_temp(u32_ty.clone(), span);
     push_assign(
         ctx,
         grid_term_u32,
-        Rvalue::BinaryOp(
-            BinOp::Mul,
-            Box::new(Operand::Copy(Place::new(block_id_u32))),
-            Box::new(Operand::Copy(Place::new(block_dim_u32))),
+        Rvalue::MathIntrinsic(
+            MathIntrinsic::WrappingMul,
+            vec![
+                Operand::Copy(Place::new(block_id_u32)),
+                Operand::Copy(Place::new(block_dim_u32)),
+            ],
         ),
         span,
     );
@@ -1738,10 +1744,12 @@ pub fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Spa
     push_assign(
         ctx,
         global_idx,
-        Rvalue::BinaryOp(
-            BinOp::Add,
-            Box::new(Operand::Copy(Place::new(global_idx_i64))),
-            Box::new(Operand::Copy(Place::new(grid_term_i64))),
+        Rvalue::MathIntrinsic(
+            MathIntrinsic::WrappingAdd,
+            vec![
+                Operand::Copy(Place::new(global_idx_i64)),
+                Operand::Copy(Place::new(grid_term_i64)),
+            ],
         ),
         span,
     );
@@ -1760,21 +1768,32 @@ pub fn compute_spilled_thread_index(ctx: &mut LoweringContext, span: Span) -> Lo
     let columns = push_u32_intrinsic(ctx, GpuIntrinsic::GridDim(Dimension::X), span);
     let block_dim = push_u32_intrinsic(ctx, GpuIntrinsic::BlockDim(Dimension::X), span);
 
-    // Each result takes its left operand's type.
-    let binary = |ctx: &mut LoweringContext, op: BinOp, lhs: Local, rhs: Local| {
+    // Each result takes its left operand's type. The index is the compiler's
+    // own arithmetic, so it wraps rather than checks.
+    let wrapping = |ctx: &mut LoweringContext, op: MathIntrinsic, lhs: Local, rhs: Local| {
         let local = ctx.push_temp(ctx.body.local_decls[lhs.0].ty.clone(), span);
-        let copy = |operand: Local| Box::new(Operand::Copy(Place::new(operand)));
-        push_assign(ctx, local, Rvalue::BinaryOp(op, copy(lhs), copy(rhs)), span);
+        let copy = |operand: Local| Operand::Copy(Place::new(operand));
+        push_assign(
+            ctx,
+            local,
+            Rvalue::MathIntrinsic(op, vec![copy(lhs), copy(rhs)]),
+            span,
+        );
         local
     };
-    let row_start = binary(ctx, BinOp::Mul, row, columns);
-    let workgroup = binary(ctx, BinOp::Add, row_start, column);
+    let row_start = wrapping(ctx, MathIntrinsic::WrappingMul, row, columns);
+    let workgroup = wrapping(ctx, MathIntrinsic::WrappingAdd, row_start, column);
 
     let workgroup_int = push_int_cast(ctx, workgroup, span);
     let block_dim_int = push_int_cast(ctx, block_dim, span);
     let local_id_int = push_int_cast(ctx, local_id, span);
-    let first_thread = binary(ctx, BinOp::Mul, workgroup_int, block_dim_int);
-    binary(ctx, BinOp::Add, local_id_int, first_thread)
+    let first_thread = wrapping(
+        ctx,
+        MathIntrinsic::WrappingMul,
+        workgroup_int,
+        block_dim_int,
+    );
+    wrapping(ctx, MathIntrinsic::WrappingAdd, local_id_int, first_thread)
 }
 
 /// Spreads a runtime count of 1-D workgroups over the x and y grid axes so

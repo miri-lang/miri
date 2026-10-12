@@ -6,6 +6,7 @@
 //! A single process-wide `GpuContext` is held in a `OnceCell`. All
 //! buffer / kernel FFI functions look it up via `get_gpu_context`.
 
+use crate::fault::{register_exit_check, FaultWord};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,6 +72,10 @@ pub enum GpuError {
     /// the compiled acquire/release pairing went wrong, so the device table is
     /// not trusted to resolve it to the right buffer.
     InactiveHandle(String),
+    /// The device fault word could not be read back: the device could not be
+    /// waited on or the copy could not be mapped. The reason string says
+    /// which. The word stays on the device and is read again at the next look.
+    FaultWordUnreadable(String),
 }
 
 #[repr(C)]
@@ -119,6 +124,8 @@ pub struct GpuContext {
     /// at device creation. Cached so launch sites can refuse kernels that
     /// reference unsupported scalars without re-querying the device.
     pub enabled_shader_features: Features,
+    /// The word a kernel's checked integer arithmetic records an overflow in.
+    pub fault: FaultWord,
 }
 
 /// Optional wgpu features the runtime tries to enable when the adapter
@@ -219,6 +226,7 @@ impl GpuContext {
 
         let enabled_shader_features = device.features() & optional_shader_features();
         let info = build_device_info(&adapter);
+        let fault = FaultWord::new(&device);
         Ok(Self {
             instance,
             adapter,
@@ -226,6 +234,7 @@ impl GpuContext {
             queue,
             info: RwLock::new(info),
             enabled_shader_features,
+            fault,
         })
     }
 
@@ -304,6 +313,7 @@ pub(crate) fn init_gpu_context() -> Result<Arc<GpuContext>, GpuError> {
     }
     let ctx = Arc::new(GpuContext::new()?);
     *slot = Some(ctx.clone());
+    register_exit_check();
     Ok(ctx)
 }
 
@@ -383,13 +393,25 @@ pub extern "C" fn miri_gpu_is_available() -> u8 {
 /// the fresh device.
 #[no_mangle]
 pub extern "C" fn miri_gpu_reset_context() -> u64 {
+    reset_context()
+}
+
+/// [`miri_gpu_reset_context`]. The released context's fault word is looked at
+/// first, so an overflow its kernels recorded is reported rather than dropped
+/// with the device.
+pub fn reset_context() -> u64 {
     // Advance the generation first so a buffer allocated concurrently under the
     // old device is already considered stale by the time the tables are cleared.
     let new_generation = DEVICE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    // Release the device/queue. A lost device is deliberately not polled here —
-    // waiting on it could hang — so the `Arc` is simply dropped and wgpu tears
-    // the old device down.
-    GPU_CONTEXT.write().take();
+    // Release the device/queue. A lost device is not looked at, and any other
+    // is waited on for a bounded time only, so the reset cannot hang; the `Arc`
+    // is then dropped and wgpu tears the old device down.
+    let released = GPU_CONTEXT.write().take();
+    if let Some(ctx) = released {
+        if let Err(err) = ctx.fault.look_before_release(&ctx.device, &ctx.queue) {
+            log::error!("GPU context reset could not read the fault word: {:?}", err);
+        }
+    }
     // The reset exists to pick up a changed adapter, so the cached
     // availability answer describes the previous one and must be re-probed.
     ADAPTER_AVAILABLE.write().take();
@@ -443,26 +465,51 @@ pub extern "C" fn miri_gpu_max_buffer_size() -> u64 {
     }
 }
 
-/// Blocks until all submitted GPU work is complete.
+/// Blocks until all submitted GPU work is complete, then ends the program if a
+/// kernel recorded an integer overflow. The fault word's copy rides on the same
+/// wait.
 #[no_mangle]
 pub extern "C" fn miri_gpu_sync() {
     if let Ok(ctx) = get_gpu_context() {
-        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        if let Err(err) = ctx.fault.sync(&ctx.device, &ctx.queue) {
+            log::error!("miri_gpu_sync failed: {:?}", err);
+        }
     }
 }
 
-/// Drains pending work. The context itself outlives the call because
-/// `OnceCell` has no removal API; reuse remains safe.
+/// Drains pending work and looks at the fault word for the last time. The
+/// context itself outlives the call because `OnceCell` has no removal API;
+/// reuse remains safe.
 #[no_mangle]
 pub extern "C" fn miri_gpu_shutdown() {
     if let Ok(ctx) = get_gpu_context() {
-        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        if let Err(err) = ctx.fault.look_before_release(&ctx.device, &ctx.queue) {
+            log::error!("miri_gpu_shutdown could not read the fault word: {:?}", err);
+        }
     }
 }
 
+/// Serializes this crate's unit tests that create, observe, or reset the
+/// process-wide context.
+#[cfg(test)]
+pub(crate) static CONTEXT_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
-    use super::is_transient_device_error;
+    use super::{init_gpu_context, is_transient_device_error, reset_context, CONTEXT_TEST_LOCK};
+
+    #[test]
+    fn a_reset_reports_the_overflow_the_released_context_recorded() {
+        let _serialize = CONTEXT_TEST_LOCK.lock();
+        let Ok(ctx) = init_gpu_context() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        ctx.fault.record_overflow_for_test(&ctx.queue);
+        drop(ctx);
+        let reset = std::panic::catch_unwind(reset_context);
+        assert!(reset.is_err(), "the reset must raise the recorded overflow");
+    }
 
     #[test]
     fn parent_device_lost_is_transient() {

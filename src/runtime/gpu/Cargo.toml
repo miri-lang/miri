@@ -14,8 +14,16 @@ parking_lot = "0.12"
 once_cell = "1"
 log = "0.4"
 
+# This crate's own tests link no core runtime, so they build it with the
+# overflow trap that panics in-process instead.
+[dev-dependencies]
+miri-runtime-gpu = { path = ".", features = ["panic-trap"] }
+
 [features]
 default = []
+# End a kernel's recorded integer overflow with a Rust panic rather than the
+# core runtime's trap. Only this crate's own tests enable it.
+panic-trap = []
 vulkan = ["wgpu/vulkan-portability"]
 metal = []
 dx12 = ["wgpu/dx12"]

@@ -249,7 +249,54 @@ function writeInputUniform(device, uniform, state) {
     device.queue.writeBuffer(uniform.buffer, 0, data);
 }
 
-function compilePipeline(device, kernel) {
+// A kernel whose integer arithmetic is checked declares a sticky fault word,
+// `@group(1) @binding(0) var<storage, read_write> miri_fault: atomic<u32>;`,
+// and sets bit 0 of it when a result does not fit its type. The word is
+// recognised by its whole declaration line, binding group and slot included,
+// the same text the native runtime looks for, so neither a function merely
+// named `miri_fault` nor a word bound elsewhere is mistaken for it.
+const FAULT_DECLARATION = "@group(1) @binding(0) var<storage, read_write> miri_fault: atomic<u32>;";
+const FAULT_GROUP = 1;
+const INTEGER_OVERFLOW = 0x1;
+const INTEGER_OVERFLOW_MESSAGE = "integer overflow: the result does not fit its type";
+
+function declaresFaultWord(kernel) {
+    return typeof kernel.wgsl === "string" && kernel.wgsl.includes(FAULT_DECLARATION);
+}
+
+// A manifest's per-frame passes, or null for a static demo. The single-pass
+// `frame` field is the older spelling of a one-element `framePasses`.
+function manifestFramePasses(manifest) {
+    return manifest.framePasses ?? (manifest.frame ? [manifest.frame] : null);
+}
+
+// Allocate a program's fault word — a zeroed 4-byte storage buffer — with the
+// layout a faulting kernel's pipeline declares at group 1 and the bind group
+// that binds it there. Null when none of the manifest's kernels declares the
+// word, so a demo without checked arithmetic allocates nothing.
+function createFaultWord(device, manifest) {
+    const kernels = [...(manifest.seed ?? []), ...(manifestFramePasses(manifest) ?? [])];
+    if (!kernels.some(declaresFaultWord)) return null;
+    const buffer = device.createBuffer({
+        label: "miri-fault",
+        size: 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    const layout = device.createBindGroupLayout({
+        label: "miri-fault-bgl",
+        entries: [
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+        ],
+    });
+    const bindGroup = device.createBindGroup({
+        label: "miri-fault-bg",
+        layout,
+        entries: [{ binding: 0, resource: { buffer } }],
+    });
+    return { buffer, layout, bindGroup };
+}
+
+function compilePipeline(device, kernel, fault) {
     const module = device.createShaderModule({ label: kernel.entryPoint, code: kernel.wgsl });
     const entries = kernel.bindings.map((b, i) => ({
         binding: i,
@@ -265,12 +312,22 @@ function compilePipeline(device, kernel) {
         });
     }
     const layout = device.createBindGroupLayout({ label: `${kernel.entryPoint}-bgl`, entries });
+    let faultGroup = null;
+    if (declaresFaultWord(kernel)) {
+        if (!fault) {
+            throw new MiriGpuError(
+                `kernel '${kernel.entryPoint}' declares a fault word, but none was allocated`,
+            );
+        }
+        faultGroup = fault.bindGroup;
+    }
+    const bindGroupLayouts = faultGroup ? [layout, fault.layout] : [layout];
     const pipeline = device.createComputePipeline({
         label: `${kernel.entryPoint}-pipeline`,
-        layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+        layout: device.createPipelineLayout({ bindGroupLayouts }),
         compute: { module, entryPoint: kernel.entryPoint },
     });
-    return { pipeline, layout };
+    return { pipeline, layout, faultGroup };
 }
 
 // Dispatch one kernel. `resolve(name)` maps a binding name to the GPUBuffer to
@@ -294,6 +351,7 @@ function dispatchKernel(device, compiled, kernel, resolve, uniform) {
     const pass = encoder.beginComputePass();
     pass.setPipeline(compiled.pipeline);
     pass.setBindGroup(0, bindGroup);
+    if (compiled.faultGroup) pass.setBindGroup(FAULT_GROUP, compiled.faultGroup);
     pass.dispatchWorkgroups(gx || 1, gy || 1, gz || 1);
     pass.end();
     device.queue.submit([encoder.finish()]);
@@ -314,6 +372,62 @@ async function readBackInto(device, src, byteLength, ArrayType) {
     staging.unmap();
     staging.destroy();
     return view;
+}
+
+// Whether a fault word read back from the device records an integer overflow.
+function recordsOverflow(word) {
+    return (word & INTEGER_OVERFLOW) !== 0;
+}
+
+// Report an overflow the way the runtime reports a lost device: on the console,
+// since a mounted demo runs inside a page that has no other error channel.
+function reportOverflow() {
+    console.error(`[miri-gpu] ${INTEGER_OVERFLOW_MESSAGE}`);
+}
+
+// Watch a mounted demo's fault word without ever blocking a frame. `check()`
+// copies the word into a staging buffer and maps it asynchronously, unless a
+// check is already in flight; when a mapped word records an overflow,
+// `onOverflow` runs once. Null when the demo has no fault word.
+function createFaultMonitor(device, fault, onOverflow) {
+    if (!fault) return null;
+    const staging = device.createBuffer({
+        label: "miri-fault-readback",
+        size: 4,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    let inFlight = false;
+    let done = false;
+
+    return {
+        staging,
+        check() {
+            if (done || inFlight) return;
+            inFlight = true;
+            const encoder = device.createCommandEncoder();
+            encoder.copyBufferToBuffer(fault.buffer, 0, staging, 0, 4);
+            device.queue.submit([encoder.finish()]);
+            staging
+                .mapAsync(GPUMapMode.READ, 0, 4)
+                .then(() => {
+                    const word = new Uint32Array(staging.getMappedRange(0, 4).slice(0))[0];
+                    staging.unmap();
+                    if (!done && recordsOverflow(word)) {
+                        done = true;
+                        onOverflow();
+                    }
+                })
+                .catch(() => {
+                    // A demo stopped mid-map rejects here as a matter of course.
+                })
+                .finally(() => {
+                    inFlight = false;
+                });
+        },
+        stop() {
+            done = true;
+        },
+    };
 }
 
 // GPU present: blit the compute output straight to the canvas with a fullscreen
@@ -566,9 +680,9 @@ function makeBufferResolver(buffers) {
 }
 
 // Seed kernels: compile + dispatch once, binding each kernel's buffers by name.
-function runSeedKernels(device, manifest, bufferOf) {
+function runSeedKernels(device, manifest, bufferOf, fault) {
     for (const kernel of manifest.seed ?? []) {
-        const compiled = compilePipeline(device, kernel);
+        const compiled = compilePipeline(device, kernel, fault);
         dispatchKernel(device, compiled, kernel, (name) => bufferOf(name).buffer);
     }
 }
@@ -665,15 +779,16 @@ export async function runHeadless(manifest, opts = {}) {
     try {
         const buffers = createBuffers(device, manifest);
         const bufferOf = makeBufferResolver(buffers);
-        runSeedKernels(device, manifest, bufferOf);
+        const fault = createFaultWord(device, manifest);
+        runSeedKernels(device, manifest, bufferOf, fault);
 
         const paintBuffer = bufferOf(manifest.paint);
-        const framePasses = manifest.framePasses ?? (manifest.frame ? [manifest.frame] : null);
+        const framePasses = manifestFramePasses(manifest);
         let outputBuffer = paintBuffer.buffer;
 
         if (framePasses) {
             const frames = Math.max(0, opts.frames ?? 1);
-            const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass));
+            const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass, fault));
             const passUniforms = framePasses.map((pass) => createInputUniform(device, pass));
             // Headless has no pointer/wheel source: feed zeroed inputs so passes
             // that read `frame.*` still validate and dispatch deterministically.
@@ -693,6 +808,12 @@ export async function runHeadless(manifest, opts = {}) {
         }
 
         await device.queue.onSubmittedWorkDone();
+        // Every kernel has finished, so the fault word is final: a run that
+        // overflowed fails rather than hand back wrapped values.
+        if (fault) {
+            const [word] = await readBackInto(device, fault.buffer, 4, Uint32Array);
+            if (recordsOverflow(word)) throw new MiriGpuError(INTEGER_OVERFLOW_MESSAGE);
+        }
         const ArrayType = typedArrayFor(paintBuffer.elemType);
         const view = await readBackInto(
             device,
@@ -796,22 +917,33 @@ export async function mount(canvas, manifest, opts = {}) {
     resources.push(presenter.infoBuf, presenter.minmaxBuf);
     if (presenter.reduce) resources.push(presenter.reduce.rinfoBuf);
 
+    // The demo's own fault word: a page shares one device between its demos,
+    // so an overflow in one stops that demo and leaves the others running.
+    const fault = createFaultWord(device, manifest);
+    if (fault) resources.push(fault.buffer);
+
     // Seed kernels: compile + dispatch once, binding by name.
-    runSeedKernels(device, manifest, bufferOf);
+    runSeedKernels(device, manifest, bufferOf, fault);
 
     // Determine whether this is static (no animation) or animated.
     // New multi-pass syntax: framePasses is an array. Old single-pass: frame is a Kernel.
-    const framePasses = manifest.framePasses ?? (manifest.frame ? [manifest.frame] : null);
+    const framePasses = manifestFramePasses(manifest);
 
     // Static demo: run-once already done by seed; present a single frame.
     if (!framePasses) {
         presentFrame(device, presenter, bufferOf(manifest.paint).buffer);
+        const faults = createFaultMonitor(device, fault, reportOverflow);
+        if (faults) {
+            resources.push(faults.staging);
+            faults.check();
+        }
         // A static demo has nothing to pause: its single frame is already on the
         // canvas and no work is scheduled.
         return {
             pause() {},
             resume() {},
             stop() {
+                if (faults) faults.stop();
                 destroyAll(resources);
             },
         };
@@ -820,7 +952,7 @@ export async function mount(canvas, manifest, opts = {}) {
     // Animated demo: dispatch all frame passes in order each animation frame,
     // double-buffering the state pair (see `statePair`) so each frame reads the
     // previous frame's result.
-    const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass));
+    const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass, fault));
     const passUniforms = framePasses.map((pass) => createInputUniform(device, pass));
     for (const uniform of passUniforms) {
         if (uniform) resources.push(uniform.buffer);
@@ -845,7 +977,20 @@ export async function mount(canvas, manifest, opts = {}) {
 
     let running = true;
     let stopped = false;
+    let overflowed = false;
     let rafId = null;
+
+    // An overflow ends the demo the way it ends a native program: no further
+    // frame runs, not even after `resume()`, and the canvas keeps the last
+    // frame presented.
+    const faults = createFaultMonitor(device, fault, () => {
+        overflowed = true;
+        running = false;
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        rafId = null;
+        reportOverflow();
+    });
+    if (faults) resources.push(faults.staging);
 
     const step = (now) => {
         if (!running) return;
@@ -880,6 +1025,10 @@ export async function mount(canvas, manifest, opts = {}) {
         if (typeof opts.onFrame === "function") opts.onFrame(state.dt);
         // Sample before the swap, so the copy reads the buffer this frame wrote.
         if (stats) stats.tick(state.dt);
+        // Look at the fault word without waiting on it, so the frame loop never
+        // blocks. While a check is in flight this frame starts none; the word
+        // is sticky, so the next check still sees an overflow this frame set.
+        if (faults) faults.check();
         // Swap every ping-pong pair: next frame reads what this frame produced.
         swapState.swap();
         rafId = requestAnimationFrame(step);
@@ -900,7 +1049,7 @@ export async function mount(canvas, manifest, opts = {}) {
             rafId = null;
         },
         resume() {
-            if (running || stopped) return;
+            if (running || stopped || overflowed) return;
             running = true;
             // Re-anchor the clock so the gap counts as no elapsed time.
             lastTime = null;
@@ -911,6 +1060,7 @@ export async function mount(canvas, manifest, opts = {}) {
             stopped = true;
             running = false;
             if (stats) stats.stop();
+            if (faults) faults.stop();
             detachInput();
             if (rafId !== null) cancelAnimationFrame(rafId);
             rafId = null;

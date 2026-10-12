@@ -10,8 +10,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    BinOp, Constant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
-    TerminatorKind, UnOp,
+    BinOp, Constant, Local, MathIntrinsic, Operand, Place, Rvalue,
+    StatementKind as MirStatementKind, Terminator, TerminatorKind, UnOp,
 };
 use crate::runtime_fns::rt;
 
@@ -1023,10 +1023,13 @@ pub(crate) fn lower_three_way_comparison(
         Some(place) => place,
         None => Place::new(ctx.push_temp(int_ty.clone(), span)),
     };
+    // Two flags in `0..=1` subtract to `-1..=1`, which always fits, so the
+    // difference is the compiler's own arithmetic: it wraps rather than
+    // checks, and a device kernel that only compares records no overflow.
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             target.clone(),
-            Rvalue::BinaryOp(BinOp::Sub, Box::new(above), Box::new(below)),
+            Rvalue::MathIntrinsic(MathIntrinsic::WrappingSub, vec![above, below]),
         ),
         span,
     });

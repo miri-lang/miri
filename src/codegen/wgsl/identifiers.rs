@@ -8,15 +8,17 @@
 //! unsafe when WGSL reserves it, when it would shadow a predeclared WGSL type,
 //! enumerant or built-in function, or when it could clash with a name the
 //! emitter synthesizes. Every synthesized name begins with `_` (`_inputs`,
-//! `_global_id`, `_3`, …) apart from the subgroup built-in parameters, so any
-//! source name beginning with `_` is treated as unsafe. An unsafe name is
-//! emitted as [`ESCAPE_PREFIX`] followed by the name.
+//! `_global_id`, `_3`, …) apart from the subgroup built-in parameters and the
+//! overflow fault word, so any source name beginning with `_`, or spelled as
+//! one of those, is treated as unsafe. An unsafe name is emitted as
+//! [`ESCAPE_PREFIX`] followed by the name.
 //!
 //! The mapping is injective: a safe name never begins with `_`, while every
 //! escaped name does, and prefixing preserves distinctness among escaped names.
 //! No synthesized name begins with [`ESCAPE_PREFIX`], so an escaped name cannot
 //! meet one either.
 
+use crate::codegen::wgsl::checked::FAULT_WORD;
 use crate::gpu_target::wgsl_name_conflict;
 
 /// Prefix of an escaped source name. It must begin with `_` (the injectivity
@@ -287,6 +289,7 @@ pub fn source_identifier(name: &str) -> String {
 
 fn is_unsafe(name: &str) -> bool {
     name.starts_with('_')
+        || name == FAULT_WORD
         || name == SUBGROUP_SIZE
         || name == SUBGROUP_INVOCATION_ID
         || wgsl_name_conflict(name).is_some()
