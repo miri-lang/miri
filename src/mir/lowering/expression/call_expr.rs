@@ -603,9 +603,8 @@ fn try_lower_enum_variant(
     let ExpressionKind::Member(enum_expr, variant_expr) = &func.node else {
         return Ok(None);
     };
-    let ExpressionKind::Identifier(..) = &enum_expr.node else {
-        return Ok(None);
-    };
+    // The enum is named bare (`GE.Has`) or with its arguments (`GE<String>.Has`);
+    // either way the checker recorded which type it names.
     let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node else {
         return Ok(None);
     };
