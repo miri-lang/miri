@@ -695,6 +695,9 @@ pub struct Context {
     pub current_class_type: Option<Type>,
     /// Whether we are currently inside a static method (cannot use `self`).
     pub in_static_method: bool,
+    /// Whether a field initializer is being checked. It runs before any
+    /// instance exists, so it cannot read `self`.
+    pub in_field_initializer: bool,
     /// Escape summaries for all functions analyzed so far.
     /// Keyed by qualified function name (`"fn_name"` or `"ClassName_method"`).
     /// Populated during escape analysis; empty until then.
@@ -725,6 +728,7 @@ impl Context {
             current_base_class: None,
             current_class_type: None,
             in_static_method: false,
+            in_field_initializer: false,
             escape_summaries: load_ffi_summaries(),
             must_use_exempt_spans: HashSet::new(),
         }

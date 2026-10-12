@@ -231,7 +231,9 @@ impl TypeChecker {
                     .find(|(name, _)| *name == decl.name)
                     .is_some_and(|(_, field)| !matches!(field.ty.kind, TypeKind::Error));
                 if resolved {
+                    let outer = std::mem::replace(&mut context.in_field_initializer, true);
                     self.determine_variable_type(decl, context, stmt.span);
+                    context.in_field_initializer = outer;
                 }
             }
         }
@@ -802,12 +804,10 @@ impl TypeChecker {
             let field_type = if let Some(type_expr) = &decl.typ {
                 self.resolve_type_expression(type_expr, context)
             } else if let Some(init) = &decl.initializer {
-                // TODO: an initializer reading `self` (`var b = self.a`) is
-                // refused as "Type 'C' has no field or method 'a'", because
-                // the class's fields are registered only after this loop. The
-                // refusal is right, since no instance exists yet, but the
-                // message should say an initializer cannot read `self`.
-                self.infer_expression(init, context)
+                let outer = std::mem::replace(&mut context.in_field_initializer, true);
+                let ty = self.infer_expression(init, context);
+                context.in_field_initializer = outer;
+                ty
             } else {
                 self.report_error(
                     DiagnosticCode::TypTypeInference,

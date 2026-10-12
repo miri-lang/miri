@@ -178,3 +178,38 @@ fn main()
         "Type mismatch",
     );
 }
+
+/// An initializer runs before the instance exists, so reading `self` in one
+/// is refused with that reason, untyped field or typed, rather than as a
+/// missing member the class does have.
+#[test]
+fn an_untyped_initializer_reading_self_is_refused_for_reading_self() {
+    assert_compiler_error(
+        r#"
+class Crate
+    var a = 1
+    var b = self.a
+
+fn main()
+    let c = Crate()
+    println(f"{c.b}")
+"#,
+        "a field initializer cannot read 'self'",
+    );
+}
+
+#[test]
+fn a_typed_initializer_reading_self_is_refused_for_reading_self() {
+    assert_compiler_error(
+        r#"
+class Crate
+    var a int = 1
+    var b int = self.a + 1
+
+fn main()
+    let c = Crate()
+    println(f"{c.b}")
+"#,
+        "a field initializer cannot read 'self'",
+    );
+}
