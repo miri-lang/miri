@@ -273,9 +273,9 @@ fn assign_to_member(
         let lowered = lower_expression(ctx, rhs, None)?;
         let rhs_ty = resolve_arg_type(ctx, rhs, &lowered);
         let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
-        let obj_operand = match super::unshare::lower_written_place(ctx, obj)? {
-            Some(place) => Operand::Copy(place),
-            None => super::value_copy::lower_projection_base(ctx, obj)?,
+        let (obj_operand, write_back) = match super::unshare::lower_written_entry_place(ctx, obj)? {
+            Some(written) => (Operand::Copy(written.place), written.write_back),
+            None => (super::value_copy::lower_projection_base(ctx, obj)?, None),
         };
         let obj_ty = ctx
             .recorded_type(obj.id)
@@ -301,7 +301,7 @@ fn assign_to_member(
             watermark: rhs_watermark,
         };
         let slot_ty = field_slot_type(ctx, &obj_ty, type_name, idx);
-        store_into_field(
+        let stored = store_into_field(
             ctx,
             assigned,
             FieldTarget {
@@ -314,7 +314,11 @@ fn assign_to_member(
             rhs.span,
             expr,
             dest,
-        )
+        )?;
+        if let Some(write_back) = write_back {
+            super::unshare::store_entry_back(ctx, write_back, obj);
+        }
+        Ok(stored)
     } else {
         Err(LoweringError::unsupported_lhs(
             "Expected Member expression",

@@ -66,6 +66,26 @@ enum Unsharing {
     Collection(BuiltinCollectionKind),
 }
 
+/// A map entry a write lands in that the lookup handed back as a copy.
+///
+/// A map holds a vector inline, as its components' bytes, so looking one up
+/// copies it out: a component written into that copy reaches the map only
+/// once the copy is stored back under the same key.
+pub(crate) struct EntryWriteBack {
+    map: Place,
+    key: Place,
+    key_ty: Type,
+    key_watermark: usize,
+    value: Place,
+}
+
+/// The place a write goes into, and the entry it has to be stored back into
+/// afterwards when the place is a copy of a map's inline value.
+pub(crate) struct WrittenPlace {
+    pub place: Place,
+    pub write_back: Option<EntryWriteBack>,
+}
+
 /// Lowers `obj`, the value a write goes into, as a place every value on whose
 /// path is the program's own.
 ///
@@ -73,10 +93,49 @@ enum Unsharing {
 /// elements and map entries, leaving the caller to lower it as before. Nothing
 /// is emitted in that case: the path is read in full before any of it is
 /// lowered, so an index or key expression is never evaluated twice.
+///
+/// For a collection receiver — what an indexed store or a mutating method
+/// writes into — the place is the collection itself, never a copy of a map's
+/// inline value, so no write-back arises; a component write calls
+/// [`lower_written_entry_place`] instead.
 pub(crate) fn lower_written_place(
     ctx: &mut LoweringContext,
     obj: &Expression,
 ) -> Result<Option<Place>, LoweringError> {
+    Ok(lower_written_entry_place(ctx, obj)?.map(|written| written.place))
+}
+
+/// Stores a copied-out map value back under its key once the write into it is
+/// done, the map taking the key, then releases the copy.
+pub(crate) fn store_entry_back(
+    ctx: &mut LoweringContext,
+    write_back: EntryWriteBack,
+    obj: &Expression,
+) {
+    let (donated_key, _) = crate::mir::lowering::dispatch::donate_operand_to_container(
+        ctx,
+        Operand::Copy(write_back.key.clone()),
+        write_back.key_ty,
+        obj.span,
+    );
+    super::assignment_expr::emit_map_set_call(
+        ctx,
+        Operand::Copy(write_back.map),
+        donated_key,
+        Operand::Copy(write_back.value.clone()),
+        obj,
+    );
+    ctx.emit_temp_drop(write_back.key.local, write_back.key_watermark, obj.span);
+    let copy = write_back.value.local;
+    ctx.emit_temp_drop(copy, copy.0, obj.span);
+}
+
+/// [`lower_written_place`], reporting the entry the place has to be stored
+/// back into when it is a copy of a map's inline value.
+pub(crate) fn lower_written_entry_place(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+) -> Result<Option<WrittenPlace>, LoweringError> {
     // Reference counts exist on the host only; a GPU body writes in place.
     if ctx.body.is_gpu() {
         return Ok(None);
@@ -90,6 +149,7 @@ pub(crate) fn lower_written_place(
     };
     let mut place = Place::new(*root);
     let mut in_collection = false;
+    let mut write_back = None;
     for step in &steps {
         match step {
             Step::Root(..) => {}
@@ -100,7 +160,9 @@ pub(crate) fn lower_written_place(
                 in_collection = true;
             }
             Step::Entry(key, map_ty, value_ty) => {
-                place = lower_entry_place(ctx, &place, map_ty, key, value_ty, obj)?;
+                let entry = lower_entry_place(ctx, &place, map_ty, key, value_ty, obj)?;
+                place = entry.place;
+                write_back = entry.write_back;
                 in_collection = true;
                 continue;
             }
@@ -109,7 +171,7 @@ pub(crate) fn lower_written_place(
             emit_unshare(ctx, &place, step.ty(), unsharing, obj.span)?;
         }
     }
-    Ok(Some(place))
+    Ok(Some(WrittenPlace { place, write_back }))
 }
 
 /// Reads the path `expr` names into `steps`, outermost first. False when any
@@ -213,7 +275,7 @@ fn lower_entry_place(
     key: &Expression,
     value_ty: &Type,
     obj: &Expression,
-) -> Result<Place, LoweringError> {
+) -> Result<WrittenPlace, LoweringError> {
     use super::assignment_expr::emit_map_get_checked_call;
     let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = crate::mir::lowering::dispatch::lower_stored_value(
@@ -230,8 +292,24 @@ fn lower_entry_place(
         crate::mir::lowering::helpers::ensure_place(ctx, entry, obj.span)
     };
     let entry = lookup(ctx);
+    if crate::ast::types::element_layout(&value_ty.kind).is_address {
+        return Ok(WrittenPlace {
+            place: entry.clone(),
+            write_back: Some(EntryWriteBack {
+                map: map.clone(),
+                key: key_place,
+                key_ty,
+                key_watermark,
+                value: entry,
+            }),
+        });
+    }
     let Some(unsharing) = unsharing(ctx, value_ty, true) else {
-        return Ok(entry);
+        ctx.emit_temp_drop(key_place.local, key_watermark, key.span);
+        return Ok(WrittenPlace {
+            place: entry,
+            write_back: None,
+        });
     };
     let join_bb = branch_when_shared(ctx, &entry, obj.span);
     let copy = ctx.push_temp(value_ty.clone(), obj.span);
@@ -259,7 +337,10 @@ fn lower_entry_place(
     ctx.set_current_block(join_bb);
     let entry = lookup(ctx);
     ctx.emit_temp_drop(key_place.local, key_watermark, key.span);
-    Ok(entry)
+    Ok(WrittenPlace {
+        place: entry,
+        write_back: None,
+    })
 }
 
 fn lower_index_local(
