@@ -359,37 +359,36 @@ fn test_ffi_substring() {
         let sub = miri_rt_string_substring(s, 7, 12);
         assert_eq!((*sub).as_str(), "World");
 
-        // Out of bounds
-        let oob = miri_rt_string_substring(s, 5, 100);
-        assert!((*oob).is_empty());
-
-        // Reversed indices
-        let rev = miri_rt_string_substring(s, 10, 5);
-        assert!((*rev).is_empty());
+        // An empty range inside the text is an empty string. A range past the
+        // end, or a reversed one, ends the process with a runtime error, so
+        // the integration suite covers those (tests/integration/strings).
+        let empty = miri_rt_string_substring(s, 5, 5);
+        assert!((*empty).is_empty());
 
         miri_rt_string_free(s);
         miri_rt_string_free(sub);
-        miri_rt_string_free(oob);
-        miri_rt_string_free(rev);
+        miri_rt_string_free(empty);
     }
 }
 
 #[test]
-fn test_ffi_substring_unicode_boundary() {
+fn test_ffi_substring_counts_characters_not_bytes() {
     unsafe {
-        // "café" = [99, 97, 102, 195, 169] — 'é' is 2 bytes
+        // "café" is five bytes, 'é' taking two, but four characters.
         let s = make_str("café");
-        // Trying to slice at byte 4 (middle of 'é') should return empty
-        let bad = miri_rt_string_substring(s, 0, 4);
-        assert!((*bad).is_empty());
+        let whole = miri_rt_string_substring(s, 0, 4);
+        assert_eq!((*whole).as_str(), "café");
 
-        // Valid slice up to 'f'
-        let good = miri_rt_string_substring(s, 0, 3);
-        assert_eq!((*good).as_str(), "caf");
+        let accented = miri_rt_string_substring(s, 3, 4);
+        assert_eq!((*accented).as_str(), "é");
+
+        let head = miri_rt_string_substring(s, 0, 3);
+        assert_eq!((*head).as_str(), "caf");
 
         miri_rt_string_free(s);
-        miri_rt_string_free(bad);
-        miri_rt_string_free(good);
+        miri_rt_string_free(whole);
+        miri_rt_string_free(accented);
+        miri_rt_string_free(head);
     }
 }
 
