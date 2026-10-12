@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_RT_004: an argument that satisfies its parameter's guard.
+// expect-stdout: 2
+use system.io
+
+fn half(n int > 0) int
+    return n / 2
+
+fn main()
+    println(f"{half(4)}")

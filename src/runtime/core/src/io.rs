@@ -193,6 +193,31 @@ pub mod ffi {
         trap(code::EXPLICIT_PANIC, &msg);
     }
 
+    /// Reports an argument its parameter's guard refused as MER_RT_004 and
+    /// ends the process. `s` is the sentence compiled code built for the
+    /// guard, naming the function, the parameter and what it must be.
+    ///
+    /// A guard is a precondition the program states, so a test asserting the
+    /// call panics catches it exactly as it catches an explicit `panic`.
+    ///
+    /// # Safety
+    /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_guard_failed(s: *const MiriString) {
+        let msg: String = if s.is_null() {
+            "an argument does not satisfy its parameter's guard".to_string()
+        } else {
+            (*s).as_str().to_string()
+        };
+        let catch_buf = PANIC_CATCH_BUF.with(|c| c.get());
+        if !catch_buf.is_null() {
+            CAUGHT_PANIC_MSG.with(|m| *m.borrow_mut() = Some(msg));
+            siglongjmp(catch_buf, 1);
+        }
+        trap(code::INVALID_OPERAND, &msg);
+    }
+
     /// Helper that formats prefix from separate location components.
     fn format_assert_prefix_structured(path: &str, line: i64, column: i64) -> String {
         if path.is_empty() {
