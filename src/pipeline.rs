@@ -1392,10 +1392,18 @@ impl Pipeline {
     /// the top level reads only unwrapped code, so `check` refuses a script
     /// that `build` compiles. Wrapping here would make the two agree by
     /// dropping that rule; the fix is for the rule to see the wrapped body.
+    ///
+    /// The program is also lowered to MIR, as `build` lowers it, and the bodies
+    /// thrown away: an instantiation that grows without bound, an argument no
+    /// instance can be built at, or a body the verifier refuses is found only
+    /// while lowering, so a check that stopped at the type checker would accept
+    /// a program `build` refuses.
     pub fn frontend_program(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut ast = self.parse(source)?;
         patch_main_return(&mut ast);
-        self.check_parsed(ast)
+        let mut result = self.check_parsed(ast)?;
+        self.lower_to_mir(&mut result, false)?;
+        Ok(result)
     }
 
     fn parse(&self, source: &str) -> Result<Program, CompilerError> {

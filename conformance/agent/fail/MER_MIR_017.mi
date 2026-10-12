@@ -1,8 +1,8 @@
 // expect: MER_MIR_017
 // summary: Triggers MER_MIR_017: Invalid Instantiation Argument.
 // command: build
-// The argument is folded while lowering the method bodies a build reaches, a
-// stage `check` does not run.
+// The argument is folded while lowering the method bodies a build reaches;
+// `check` lowers them too, and the suite checks that it agrees.
 use system.io
 
 class Buf<T, Size>

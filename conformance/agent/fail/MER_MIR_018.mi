@@ -2,7 +2,7 @@
 // summary: Triggers MER_MIR_018: Symbol Name Collision.
 // command: build
 // Bodies GPU code reaches claim their kernel-side names while a build lowers
-// them, a stage `check` does not run; building stops before any dispatch.
+// them, which `check` does too; building stops before any dispatch.
 use system.io
 
 fn miri_gpu_forall_0(x int) int
