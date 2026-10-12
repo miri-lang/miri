@@ -234,3 +234,30 @@ fn test_lowering_error_in_an_imported_body_names_the_module_file() {
         "buf.mi:6:17",
     );
 }
+
+/// An assertion that fails in a function an imported module declares names
+/// that module's file and the assertion's own line, not an offset into the
+/// program's file.
+#[test]
+fn test_failed_assertion_in_an_imported_module_names_its_file_and_line() {
+    let result = crate::utils::miri_run_project(&[
+        (
+            "main.mi",
+            "use local.k.a as a\n\nfn main()\n    a.check()\n",
+        ),
+        (
+            "k/a.mi",
+            "use system.testing\n\npublic fn check()\n    let x = 1\n    assert_eq(x, 2)\n",
+        ),
+    ]);
+    let output = result.output();
+    assert!(
+        !result.success,
+        "the assertion should fail the run:\n{output}"
+    );
+    assert!(
+        output.contains("a.mi:5:5"),
+        "the failure should name k/a.mi line 5, column 5:\n{output}"
+    );
+    assert!(!output.contains("main.mi:0:0"), "{output}");
+}

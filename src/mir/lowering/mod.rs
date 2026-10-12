@@ -189,6 +189,7 @@ fn lower_function_body(
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
     ctx.use_compilation_ids(compilation_ids);
+    ctx.read_source_of(ast_func);
 
     // Populate generic type parameter names so that `is_managed_type` can
     // distinguish unresolved generic placeholders from concrete user types.
@@ -612,6 +613,7 @@ fn lower_instantiation_body(
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
     ctx.use_compilation_ids(compilation_ids);
+    ctx.read_source_of(ast_func);
 
     // For an instantiated generic, `subs` maps each generic name to its concrete
     // type — those names no longer remain as unresolved placeholders after
@@ -884,6 +886,7 @@ fn lower_class_method_body(
     );
     let mut ctx = LoweringContext::new(body, tc, is_release);
     ctx.use_compilation_ids(compilation_ids);
+    ctx.read_source_of(ast_method);
     // `Self` inside this body names the class being lowered. Recorded so that a
     // declared type spelling `Self` resolves to the class's real layout instead
     // of falling through codegen's unknown-type path.
