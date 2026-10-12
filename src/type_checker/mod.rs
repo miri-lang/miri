@@ -397,6 +397,15 @@ impl TypeChecker {
     /// The (file_path, source_text) of the imported file that declares the
     /// function `statement_id`. `None` for the program's own functions, whose
     /// spans index the program's file.
+    /// The file and text the declaration `statement_id` was read from, when
+    /// an imported module declared it, borrowed for as long as the checker.
+    pub fn declaration_source_text(&self, statement_id: usize) -> Option<(&str, &str)> {
+        self.modules
+            .declaration_sources
+            .get(&statement_id)
+            .map(|source| (source.0.as_str(), source.1.as_str()))
+    }
+
     pub fn declaration_source(&self, statement_id: usize) -> Option<(String, String)> {
         self.modules
             .declaration_sources

@@ -349,6 +349,17 @@ impl<'a> LoweringContext<'a> {
             .index_for(ast_id, &instantiation)
     }
 
+    /// Read spans against the file that declares `declaration` when an
+    /// imported module declared it, so a location baked into the body — an
+    /// assertion's line, a runtime error's place — names that file and line
+    /// rather than an offset into the program's own file.
+    pub fn read_source_of(&mut self, declaration: &crate::ast::statement::Statement) {
+        if let Some((path, text)) = self.type_checker.declaration_source_text(declaration.id) {
+            self.source_path = Some(path);
+            self.source = Some(text);
+        }
+    }
+
     /// Compute a 1-based line number for the given byte offset within
     /// `self.source`. Returns `0` if no source is attached or the offset
     /// is out of range.
