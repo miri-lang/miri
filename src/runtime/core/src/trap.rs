@@ -23,6 +23,8 @@ pub(crate) mod code {
     pub(crate) const REMAINDER_BY_ZERO: &str = "MER_RT_002";
     /// An integer `+`, `-`, `*` or negation whose result does not fit its type.
     pub(crate) const INTEGER_OVERFLOW: &str = "MER_RT_003";
+    /// An argument that does not satisfy its parameter's guard.
+    pub(crate) const INVALID_OPERAND: &str = "MER_RT_004";
     /// An assertion that did not hold.
     pub(crate) const ASSERTION_FAILED: &str = "MER_RT_005";
     /// An index outside the collection it was applied to.

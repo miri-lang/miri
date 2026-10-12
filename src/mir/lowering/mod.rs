@@ -215,7 +215,7 @@ fn lower_function_body(
     }
 
     // Emit guard checks for parameters with guards
-    emit_parameter_guards(&mut ctx, params)?;
+    emit_parameter_guards(&mut ctx, name, params)?;
 
     // Lower body with support for implicit return
     if let Some(body_box) = body_stmt {
@@ -652,7 +652,7 @@ fn lower_instantiation_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
-    emit_parameter_guards(&mut ctx, params)?;
+    emit_parameter_guards(&mut ctx, name, params)?;
 
     if let Some(body_box) = body_stmt {
         lower_as_return(&mut ctx, body_box, &ret_ty)?;
@@ -1216,10 +1216,11 @@ fn inject_allocator_param(
 /// by a conditional branch to an unreachable block on failure.
 fn emit_parameter_guards(
     ctx: &mut LoweringContext,
+    function: &str,
     params: &[crate::ast::common::Parameter],
 ) -> Result<(), LoweringError> {
     for param in params {
-        emit_param_guard(ctx, param)?;
+        emit_param_guard(ctx, function, param)?;
     }
     Ok(())
 }
@@ -1228,6 +1229,7 @@ fn emit_parameter_guards(
 /// Parameters without a (supported) guard are left untouched.
 fn emit_param_guard(
     ctx: &mut LoweringContext,
+    function: &str,
     param: &crate::ast::common::Parameter,
 ) -> Result<(), LoweringError> {
     let Some(guard) = &param.guard else {
@@ -1239,8 +1241,12 @@ fn emit_param_guard(
     let ExpressionKind::Guard(guard_op, guard_value) = &guard.node else {
         return Ok(());
     };
+    let refusal = GuardRefusal {
+        message: guard_refusal_message(function, &param.name, guard_op, guard_value),
+        span: guard.span,
+    };
     if let Some(negated) = membership_guard(guard_op) {
-        return emit_membership_guard(ctx, param, guard_value, guard, negated);
+        return emit_membership_guard(ctx, param, guard_value, guard, negated, refusal);
     }
 
     let arg_watermark = ctx.body.local_decls.len();
@@ -1274,8 +1280,37 @@ fn emit_param_guard(
             span: guard.span,
         });
     }
-    emit_guard_fail_branch(ctx, check_result, guard.span);
+    emit_guard_fail_branch(ctx, check_result, refusal);
     Ok(())
+}
+
+/// What a failing guard reports, and where the guard is written.
+struct GuardRefusal {
+    message: String,
+    span: crate::error::syntax::Span,
+}
+
+/// The sentence a failing guard ends the program with: the function, the
+/// parameter and what the guard requires of it (`pos: x must be > 0`).
+fn guard_refusal_message(
+    function: &str,
+    param: &str,
+    op: &crate::ast::operator::GuardOp,
+    value: &Expression,
+) -> String {
+    use crate::ast::operator::GuardOp;
+    let requirement = match op {
+        GuardOp::NotEqual => "must be !=",
+        GuardOp::LessThan => "must be <",
+        GuardOp::LessThanEqual => "must be <=",
+        GuardOp::GreaterThan => "must be >",
+        GuardOp::GreaterThanEqual => "must be >=",
+        GuardOp::Not => "must not be",
+        GuardOp::In => "must be in",
+        GuardOp::NotIn => "must not be in",
+    };
+    let value = crate::ast::formatter::expression_text(value);
+    format!("{function}: {param} {requirement} {value}")
 }
 
 /// For a membership guard, whether it is negated (`not in`); `None` for any
@@ -1303,6 +1338,7 @@ fn emit_membership_guard(
     guard_value: &Expression,
     guard: &Expression,
     negated: bool,
+    refusal: GuardRefusal,
 ) -> Result<(), LoweringError> {
     let test = Expression {
         id: guard.id,
@@ -1335,7 +1371,7 @@ fn emit_membership_guard(
     } else {
         found
     };
-    emit_guard_fail_branch(ctx, check_result, guard.span);
+    emit_guard_fail_branch(ctx, check_result, refusal);
     Ok(())
 }
 
@@ -1409,13 +1445,15 @@ fn guard_op_to_binop(op: &crate::ast::operator::GuardOp) -> Option<BinOp> {
     }
 }
 
-/// Branch on `check_result`: continue when true, else jump to an unreachable
-/// fail block. Leaves the current block at the continue path.
+/// Branch on `check_result`: continue when true, else report the refusal
+/// through the runtime's guard trap, which ends the program. Leaves the current
+/// block at the continue path.
 fn emit_guard_fail_branch(
     ctx: &mut LoweringContext,
     check_result: crate::mir::Local,
-    span: crate::error::syntax::Span,
+    refusal: GuardRefusal,
 ) {
+    let span = refusal.span;
     let continue_bb = ctx.new_basic_block();
     let fail_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -1427,6 +1465,32 @@ fn emit_guard_fail_branch(
         span,
     ));
     ctx.set_current_block(fail_bb);
+    let message = ctx.push_temp(Type::new(TypeKind::String, span), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(message),
+            Rvalue::Use(Operand::Constant(Box::new(crate::mir::Constant {
+                span,
+                ty: Type::new(TypeKind::String, span),
+                literal: crate::ast::literal::Literal::String(refusal.message),
+            }))),
+        ),
+        span,
+    });
+    let unreachable_bb = ctx.new_basic_block();
+    let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: Operand::runtime(crate::runtime_fns::rt::GUARD_FAILED_PANIC, span),
+            args: vec![Operand::Copy(Place::new(message))],
+            out_args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(void_temp),
+            target: Some(unreachable_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(unreachable_bb);
     ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, span));
     ctx.set_current_block(continue_bb);
 }

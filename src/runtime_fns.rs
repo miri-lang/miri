@@ -220,6 +220,10 @@ pub mod rt {
     /// vtable slot, and backs a container's comparison thunk, for a method
     /// withheld at an instance its obligations were not checked at.
     pub const METHOD_NOT_CHECKED_PANIC: &str = "miri_rt_method_not_checked_panic";
+    /// Compiler-internal: reports MER_RT_004 and ends the process when an
+    /// argument does not satisfy its parameter's guard; takes the sentence
+    /// naming the function, the parameter and the guard.
+    pub const GUARD_FAILED_PANIC: &str = "miri_rt_guard_failed";
 
     // String
     pub const STRING_NEW: &str = "miri_rt_string_new";
@@ -466,6 +470,7 @@ pub mod rt {
         INTEGER_OVERFLOW_PANIC,
         GPU_LAUNCH_FAILED_PANIC,
         METHOD_NOT_CHECKED_PANIC,
+        GUARD_FAILED_PANIC,
         // Filesystem
         FS_STATUS,
         FS_ERROR_MESSAGE,
@@ -733,6 +738,7 @@ pub fn diverges(name: &str) -> bool {
             | rt::INTEGER_OVERFLOW_PANIC
             | rt::GPU_LAUNCH_FAILED_PANIC
             | rt::METHOD_NOT_CHECKED_PANIC
+            | rt::GUARD_FAILED_PANIC
     )
 }
 

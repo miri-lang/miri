@@ -83,6 +83,18 @@ fn square(x int) int
     x * x
 ```
 
+### Parameter Guards
+
+A parameter may state what every argument for it must be, after its type: a comparison (`> 0`, `>= 1`, `< 10`, `<= 9`, `!= 0`), `not v` (the same as `!= v`), `in c` or `not in c`. The guard is checked when the function is called, with the operator it spells, before the body runs: a list's or array's `in` is its `contains`. A call whose argument fails a guard ends the program with `MER_RT_004` and a sentence naming the function, the parameter and the guard (`half: n must be > 0`).
+
+```miri
+fn half(n int > 0) int
+    return n / 2
+
+fn weekday(d String in {"mon", "tue", "wed", "thu", "fri"}) bool
+    return true
+```
+
 ### Main Function
 
 The entry point of a Miri program is the `main` function.

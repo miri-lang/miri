@@ -1,0 +1,8 @@
+// expect: MER_RT_004
+// command: run
+// summary: Triggers MER_RT_004: an argument that fails its parameter's guard.
+fn half(n int > 0) int
+    return n / 2
+
+fn main()
+    let h = half(0)
