@@ -258,3 +258,23 @@ fn main()
 1",
     );
 }
+
+/// A field written through an entry looked up by a literal key releases the
+/// key the lookup built.
+#[test]
+fn field_write_through_a_literal_string_key_releases_the_key() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+class Counter
+    var n int
+
+fn main()
+    var m = {"a" + "b": Counter(n: 1)}
+    m["ab"].n = 5
+    println(f"{m['ab'].n}")
+"#,
+        "5",
+    );
+}

@@ -160,6 +160,63 @@ fn main()
     );
 }
 
+/// A component write into a vector a map holds lands in the map's entry.
+#[test]
+fn cpu_vec3_map_value_component_write_lands_in_the_entry() {
+    assert_heap_guard_output(
+        "
+use system.gpu.vector
+use system.collections.map
+
+fn main()
+    var m = {1: Vec3<f32>(1.0, 2.0, 3.0)}
+    m[1].x = 9.0
+    m[1].z += 1.0
+    println(f'{m[1].x} {m[1].y} {m[1].z}')
+",
+        "9.0 2.0 4.0",
+    );
+}
+
+/// The write goes to the map being written, never to a second binding that
+/// shared it.
+#[test]
+fn cpu_vec3_map_value_component_write_leaves_a_shared_copy_alone() {
+    assert_heap_guard_output(
+        "
+use system.gpu.vector
+use system.collections.map
+
+fn main()
+    var m = {1: Vec3<f32>(1.0, 2.0, 3.0)}
+    let n = m
+    m[1].x = 9.0
+    println(f'{m[1].x} {n[1].x}')
+",
+        "9.0 1.0",
+    );
+}
+
+/// A component write into a vector under a string key stores it back under
+/// that key, whether the key is a binding or a literal.
+#[test]
+fn cpu_vec2_map_value_component_write_under_a_string_key() {
+    assert_heap_guard_output(
+        "
+use system.gpu.vector
+use system.collections.map
+
+fn main()
+    var m = {'a' + 'b': Vec2<f32>(1.0, 2.0)}
+    let k = 'a' + 'b'
+    m[k].y = 5.0
+    m['ab'].x *= 3.0
+    println(f'{m[k].x} {m[k].y} {m.length()}')
+",
+        "3.0 5.0 1",
+    );
+}
+
 /// Inline whole-element write: `arr[i] = VecN(...)` replaces all components.
 #[test]
 fn cpu_vec3_array_whole_element_write() {
