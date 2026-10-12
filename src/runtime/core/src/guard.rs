@@ -375,53 +375,53 @@ impl GuardState {
     }
 
     /// Validates that a pointer is Live and accessible (not Freed).
+    ///
+    /// `payload_ptr` may belong to either layout a payload comes in (see
+    /// [`Self::payload_records`]); a live record at either key settles it, so
+    /// a stale freed record another block left at the same address is not a
+    /// use-after-free.
     pub fn validate(&self, payload_ptr: usize) -> TouchVerdict {
         if payload_ptr == 0 {
             return TouchVerdict::Ok;
         }
-
-        match self.table.get(&payload_ptr) {
+        let candidates = self.payload_records(payload_ptr);
+        let mut records = candidates.iter().flatten();
+        let live = records
+            .clone()
+            .find(|(_, record)| record.state == AllocState::Live);
+        match live {
+            // A block compiled code allocated lays out its own header, which
+            // the guard never reads.
+            Some((_, record)) if record.raw_block => TouchVerdict::Ok,
+            Some(_) => Self::runtime_header_verdict(payload_ptr),
+            None if records.next().is_some() => TouchVerdict::UseAfterFree,
             None => TouchVerdict::Ok,
-            Some(record) => match record.state {
-                AllocState::Live => {
-                    // A codegen-owned block's header does not sit at
-                    // `payload_ptr - RC_HEADER_SIZE`, so there is no RC to read
-                    // there and reading one would leave the allocation.
-                    if record.raw_block {
-                        return TouchVerdict::Ok;
-                    }
-                    unsafe {
-                        let rc_ptr = (payload_ptr - RC_HEADER_SIZE) as *const usize;
-                        let rc = *rc_ptr;
-                        // An immortal object stores its RC as a negative
-                        // `isize`, which read as a `usize` sits far above any
-                        // plausible owner count. It is live by design, never
-                        // freed, and skipped by `incref` and by the leak scan;
-                        // only a non-immortal RC is bounded.
-                        if (rc as isize) >= 0 && (rc == 0 || rc > 1_000_000) {
-                            return TouchVerdict::HeaderCorrupt;
-                        }
-                    }
-                    TouchVerdict::Ok
-                }
-                AllocState::Freed { .. } => TouchVerdict::UseAfterFree,
-            },
         }
     }
 
-    /// The key of the freed block that releasing `payload_ptr` would reach, or
-    /// `None` when the release is sound as far as the table knows.
+    /// Whether the RC word below the payload of a live runtime allocation is
+    /// plausible.
+    fn runtime_header_verdict(payload_ptr: usize) -> TouchVerdict {
+        let rc = unsafe { *((payload_ptr - RC_HEADER_SIZE) as *const usize) };
+        // An immortal object stores its RC as a negative `isize`, which read
+        // as a `usize` sits far above any plausible owner count. It is live by
+        // design, never freed, and skipped by `incref` and by the leak scan;
+        // only a non-immortal RC is bounded.
+        if (rc as isize) >= 0 && (rc == 0 || rc > 1_000_000) {
+            return TouchVerdict::HeaderCorrupt;
+        }
+        TouchVerdict::Ok
+    }
+
+    /// The records a payload pointer can belong to, each with the key it is
+    /// recorded under.
     ///
-    /// Compiled code releases two layouts through one inline sequence: a
+    /// Compiled code hands out two layouts through one pointer shape: a
     /// runtime allocation, recorded under its payload, and a block compiled
     /// code allocated itself, recorded under its base [`INLINE_PAYLOAD_OFFSET`]
     /// below the payload. Records outlive their blocks, so a stale record of
-    /// either layout can sit at the other's key once an address is reused; a
-    /// live record at either key therefore settles the pointer as live.
-    pub fn freed_release_target(&self, payload_ptr: usize) -> Option<usize> {
-        if payload_ptr == 0 {
-            return None;
-        }
+    /// either layout can sit at the other's key once an address is reused.
+    fn payload_records(&self, payload_ptr: usize) -> [Option<(usize, &AllocRecord)>; 2] {
         let runtime_block = self
             .table
             .get(&payload_ptr)
@@ -431,7 +431,20 @@ impl GuardState {
             .checked_sub(INLINE_PAYLOAD_OFFSET)
             .and_then(|base| self.table.get(&base).map(|record| (base, record)))
             .filter(|(_, record)| record.raw_block);
-        let candidates = [runtime_block, inline_block];
+        [runtime_block, inline_block]
+    }
+
+    /// The key of the freed block that releasing `payload_ptr` would reach, or
+    /// `None` when the release is sound as far as the table knows.
+    ///
+    /// Compiled code releases both layouts [`Self::payload_records`] names
+    /// through one inline sequence; a live record at either key settles the
+    /// pointer as live.
+    pub fn freed_release_target(&self, payload_ptr: usize) -> Option<usize> {
+        if payload_ptr == 0 {
+            return None;
+        }
+        let candidates = self.payload_records(payload_ptr);
         if candidates
             .iter()
             .flatten()
@@ -1445,6 +1458,40 @@ mod tests {
             );
             dealloc((stale_payload - RC_HEADER_SIZE) as *mut u8, stale_layout);
         }
+    }
+
+    /// A freed inline block leaves its record under its base. When that
+    /// address comes back as the payload of a live inline block, touching the
+    /// payload is not a use-after-free: the live record a word pair below it
+    /// settles it. Raw records are never read through, so plain addresses
+    /// stand in for real blocks.
+    #[test]
+    fn touch_of_live_inline_block_ignores_stale_base_record_at_its_payload() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+        let site = Location::caller();
+        let reused = 0x20_0000;
+
+        state.record_alloc_raw(reused, AllocKind::Class, site);
+        state.record_free_raw(reused, site);
+        state.record_alloc_raw(reused - INLINE_PAYLOAD_OFFSET, AllocKind::Class, site);
+
+        assert_eq!(state.validate(reused), TouchVerdict::Ok);
+    }
+
+    /// Touching the payload of an inline block after it was freed is a
+    /// use-after-free, found through the base the block was recorded under.
+    #[test]
+    fn touch_of_freed_inline_block_is_use_after_free() {
+        let mut state = GuardState::new(DEFAULT_QUARANTINE_CAPACITY);
+        let site = Location::caller();
+        let base = 0x30_0000;
+        let payload = base + INLINE_PAYLOAD_OFFSET;
+
+        state.record_alloc_raw(base, AllocKind::Class, site);
+        assert_eq!(state.validate(payload), TouchVerdict::Ok);
+
+        state.record_free_raw(base, site);
+        assert_eq!(state.validate(payload), TouchVerdict::UseAfterFree);
     }
 
     /// A pointer the guard never saw is not reported.
