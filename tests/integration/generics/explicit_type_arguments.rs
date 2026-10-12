@@ -421,3 +421,23 @@ fn main()
     );
     assert_runs_with_output(&code, "7\n8\n9\n10\n11");
 }
+
+/// An optional written as a call's type argument binds the parameter to the
+/// optional, with a payload or with none, and the result keeps its payload.
+#[test]
+fn an_optional_written_as_a_type_argument() {
+    assert_heap_guard_output(
+        r#"
+fn ident<T>(x T) T
+    return x
+
+fn main()
+    let v int? = ident<int?>(Some(3))
+    let n int? = ident<int?>(None)
+    let s String? = ident<String?>(Some("a" + "b"))
+    let t String? = ident<String?>(None)
+    println(f"{v} {n} {s} {t}")
+"#,
+        "Some(3) None Some(ab) None",
+    );
+}
