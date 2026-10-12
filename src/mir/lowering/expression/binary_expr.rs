@@ -4,6 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::implicit_methods::MEMBERSHIP_METHOD_NAME;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -385,28 +386,50 @@ fn return_method_call(
     Ok(ret_op)
 }
 
-/// Pick the runtime membership-test function for the collection `rhs`, read
-/// at the instantiation a generic body is lowered for.
-fn resolve_contains_fn(ctx: &LoweringContext, rhs: &Expression) -> &'static str {
-    match ctx.recorded_type(rhs.id).as_ref().map(|t| &t.kind) {
-        Some(TypeKind::Set(_)) | Some(TypeKind::Map(_, _)) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
-        Some(TypeKind::Custom(name, _))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
-        {
-            rt::SET_CONTAINS
-        }
-        Some(TypeKind::Custom(name, _))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
-        {
-            rt::MAP_CONTAINS_KEY
-        }
-        // TODO: nothing defines `__contains`, so `x in l` on a List or Array
-        // type-checks and then fails to link; it needs to lower as the
-        // collection's own `contains` method at the instantiation.
-        _ => "__contains",
+/// The runtime membership test for the collection `rhs`, read at the
+/// instantiation a generic body is lowered for: a set's or a map's. `None` for
+/// a list or an array, whose membership test is its own `contains` method.
+fn runtime_contains_fn(ctx: &LoweringContext, rhs: &Expression) -> Option<&'static str> {
+    let Some(TypeKind::Custom(name, _)) = ctx.recorded_type(rhs.id).map(|t| t.kind) else {
+        return None;
+    };
+    match BuiltinCollectionKind::from_name(&name)? {
+        BuiltinCollectionKind::Set => Some(rt::SET_CONTAINS),
+        BuiltinCollectionKind::Map => Some(rt::MAP_CONTAINS_KEY),
+        BuiltinCollectionKind::List | BuiltinCollectionKind::Array => None,
     }
+}
+
+/// Lowers `lhs in rhs` on a list or an array as the call `rhs.contains(lhs)`,
+/// through the method dispatch a written call takes, so the elements are
+/// compared by the `equals` the instantiation answers.
+fn lower_sequence_membership(
+    ctx: &mut LoweringContext,
+    lhs: &Expression,
+    rhs: &Expression,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let method = Expression {
+        id: expr.id,
+        node: ExpressionKind::Identifier(MEMBERSHIP_METHOD_NAME.to_string(), None),
+        span: expr.span,
+    };
+    let call = crate::mir::lowering::method_dispatch::try_lower_method_call(
+        ctx,
+        &expr.span,
+        expr.id,
+        rhs,
+        &method,
+        std::slice::from_ref(lhs),
+        dest,
+    )?;
+    call.ok_or_else(|| {
+        LoweringError::unsupported_expression(
+            format!("`in` on a collection without a `{MEMBERSHIP_METHOD_NAME}` method"),
+            expr.span,
+        )
+    })
 }
 
 fn lower_in_operator(
@@ -416,7 +439,11 @@ fn lower_in_operator(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let Some(fn_name) = runtime_contains_fn(ctx, rhs) else {
+        return lower_sequence_membership(ctx, lhs, rhs, expr, dest);
+    };
     let lhs_op = lower_expression(ctx, lhs, None)?;
+    let rhs_watermark = ctx.body.local_decls.len();
     let rhs_op = lower_expression(ctx, rhs, None)?;
 
     let lhs_op = conform_lookup_operand(ctx, lhs_op, lhs, rhs);
@@ -429,14 +456,13 @@ fn lower_in_operator(
         (Place::new(temp), Operand::Copy(Place::new(temp)))
     };
 
-    let fn_name = resolve_contains_fn(ctx, rhs);
     let contains_fn = Operand::runtime(fn_name, expr.span);
 
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: contains_fn,
-            args: vec![rhs_op, lhs_op], // (collection, element)
+            args: vec![rhs_op.clone(), lhs_op], // (collection, element)
             out_args: Vec::new(),
             arg_handles: Vec::new(),
             destination,
@@ -445,6 +471,11 @@ fn lower_in_operator(
         expr.span,
     ));
     ctx.set_current_block(target_bb);
+    // The lookup borrows the collection, so one built for the test — a set
+    // literal — is released here, once it has answered.
+    if let Operand::Copy(place) | Operand::Move(place) = &rhs_op {
+        ctx.emit_temp_drop(place.local, rhs_watermark, expr.span);
+    }
 
     Ok(ret_op)
 }

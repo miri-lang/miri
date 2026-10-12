@@ -271,13 +271,12 @@ foo(5)
 
 #[test]
 fn test_guard_in_list() {
-    type_checker_error_test(
+    type_checker_test(
         "
 fn foo(a int in [1, 2, 3])
     return
 foo(1)
 ",
-        "Invalid type for 'in' operator",
     );
 }
 

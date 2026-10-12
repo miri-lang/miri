@@ -12,6 +12,7 @@ pub mod errors;
 pub mod float_assignment;
 pub mod indexing;
 pub mod integration;
+pub mod membership;
 pub mod methods;
 pub mod optional_elements;
 pub mod rc;

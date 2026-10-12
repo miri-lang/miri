@@ -32,7 +32,7 @@ use super::TypeChecker;
 use crate::ast::expression::Expression;
 use crate::ast::implicit_methods::{
     operator_method_name, operator_receiver, CLONE_METHOD_NAME, CONSTRUCTION_METHOD_NAMES,
-    EQUALS_METHOD_NAME,
+    EQUALS_METHOD_NAME, MEMBERSHIP_METHOD_NAME,
 };
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
 use crate::ast::BinaryOp;
@@ -244,9 +244,10 @@ impl TypeChecker {
         );
     }
 
-    /// Record the `equals` a membership test `op` on `container` runs, when
-    /// the container is a set or a map: its elements, or keys, are matched
-    /// against the value tested.
+    /// Record what a membership test `op` on `container` runs: on a set or a
+    /// map, the `equals` its elements, or keys, are matched by; on a list or
+    /// an array, its `contains`, which is what `x in s` calls there, so the
+    /// test pins exactly what the written call `s.contains(x)` pins.
     pub(crate) fn record_membership_sites(
         &mut self,
         op: &BinaryOp,
@@ -254,8 +255,23 @@ impl TypeChecker {
         span: Span,
         context: &Context,
     ) {
-        if matches!(op, BinaryOp::In) {
-            self.record_keyed_lookup(container, span, context);
+        if !matches!(op, BinaryOp::In) {
+            return;
+        }
+        self.record_keyed_lookup(container, span, context);
+        let sequences = [BuiltinCollectionKind::List, BuiltinCollectionKind::Array];
+        if self.container_element_type(container, &sequences).is_none() {
+            return;
+        }
+        if let Some((class_name, substitution)) = self.class_instance(container) {
+            self.record_receiver_method_sites(
+                &class_name,
+                MEMBERSHIP_METHOD_NAME,
+                &substitution,
+                container,
+                span,
+                context,
+            );
         }
     }
 

@@ -46,6 +46,10 @@ pub const CONCAT_METHOD_NAME: &str = "concat";
 /// The method `*` dispatches to on a type that defines it.
 pub const REPEAT_METHOD_NAME: &str = "repeat";
 
+/// The method `x in s` runs on a list or an array: the membership test is
+/// `s.contains(x)`, matched by the elements' own `equals`.
+pub const MEMBERSHIP_METHOD_NAME: &str = "contains";
+
 /// Every method an operator dispatches to on a type that defines it.
 pub const OPERATOR_METHOD_NAMES: [&str; 4] = [
     CONCAT_METHOD_NAME,

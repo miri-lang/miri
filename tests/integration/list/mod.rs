@@ -14,6 +14,7 @@ pub mod float_collections;
 pub mod float_widths;
 pub mod indexing_iteration;
 pub mod integration;
+pub mod membership;
 pub mod methods;
 pub mod optional_elements;
 pub mod rc;
