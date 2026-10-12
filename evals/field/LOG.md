@@ -281,3 +281,14 @@ three conditions of the exit criterion fail. **The article cannot be written:**
 no claim in `CLAIMS.md` holds. Every standing is in `summary.json`: on cost
 the skill arm is `behind` both baselines in every cell it reached green; no
 comparison reaches `parity`.
+
+## Instrument change, 2026-10-12 (after r2)
+
+The measured prompt names the workspace by its absolute path and tells the
+subject to change to it first, and the onboarding text asks for the warm-up to
+be written from the workspace without changing into `warmup/`. In r2 every
+silent wrong answer on a Miri arm was a run whose resumed session started in
+the directory onboarding left it in, so the job's program landed where the
+scorer never looks. Cold arms get the same prompt, so the arms stay comparable;
+rounds before this change are not, for the onboarded arms' C2 and silent-wrong
+numbers.

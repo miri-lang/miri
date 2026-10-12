@@ -2606,6 +2606,15 @@ fn test_an_onboarded_arm_is_taught_first_and_measured_from_its_brief() {
         "the measured launch does not resume the onboarding session:\n{}",
         lines[1]
     );
+    // The resumed session's shell may still be wherever onboarding left it, so
+    // the measured prompt names the workspace by its absolute path.
+    let root_path = fs::canonicalize(&workspace).expect("the workspace exists");
+    assert!(
+        lines[1].contains(&format!("Your workspace is {}.", root_path.display())),
+        "the measured prompt does not name the workspace root {}:\n{}",
+        root_path.display(),
+        lines[1]
+    );
     let saw = read(&workspace.join("onboarding-saw.txt"));
     assert!(
         saw.contains("GRAMMAR.peg") && !saw.contains("BRIEF.md"),

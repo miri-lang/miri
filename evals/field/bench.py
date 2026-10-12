@@ -66,8 +66,14 @@ INHERITED_MEMORY = ("CLAUDE.md", "CLAUDE.local.md")
 # and `miri check` are not the same unit of work.
 TOOLCHAINS = ("miri", "cargo", "python3", "python", "uv", "pytest", "rustc")
 
+# The workspace is named by its absolute path: an onboarded arm's measured
+# session resumes the onboarding one, whose shell may have been left in a
+# subdirectory (`warmup/`), and a prompt that said "this directory" then put the
+# job's files where the scorer never looks.
 MEASURED_PROMPT = (
-    "Read BRIEF.md in this directory and do what it asks. "
+    "Your workspace is {workspace}. If your shell is anywhere else, change to it "
+    "first. Read BRIEF.md there and do what it asks, keeping every file it names at "
+    "the path it gives, relative to {workspace}. "
     "You have no one to ask: finish the job on your own, and stop when it is done."
 )
 
@@ -227,8 +233,9 @@ def probe_request():
     )
 
 
-def prompt_for(arguments):
-    return MEASURED_PROMPT + probe_request() if arguments.probe else MEASURED_PROMPT
+def prompt_for(arguments, workspace):
+    measured = MEASURED_PROMPT.format(workspace=Path(workspace).resolve())
+    return measured + probe_request() if arguments.probe else measured
 
 
 def round_directory(arguments):
@@ -875,7 +882,7 @@ def launch(arguments, arm, model, job, index):
     prepare_job(workspace, arguments.job, arm, job)
     started = datetime.now(timezone.utc).isoformat()
     transcript, exit_code, wall_clock, timed_out = run_agent(
-        model, workspace, job["time_cap_seconds"], prompt_for(arguments), session
+        model, workspace, job["time_cap_seconds"], prompt_for(arguments, workspace), session
     )
     return workspace, started, transcript, exit_code, wall_clock, timed_out, onboarding_transcript, onboarding
 
@@ -1012,7 +1019,7 @@ def dry_run(arguments, arm, job):
         if taught:
             print("onboard    " + " ".join(launch_command(model, workspace, taught)))
         resume = "<onboarding session>" if taught else None
-        print("launch     " + " ".join(launch_command(model, workspace, prompt_for(arguments), resume)))
+        print("launch     " + " ".join(launch_command(model, workspace, prompt_for(arguments, workspace), resume)))
 
 
 def measured_cell(arguments, arm, model, job):
