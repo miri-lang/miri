@@ -154,7 +154,7 @@ fn extract_reduce_fold_op(
 ) -> Result<BinOp, LoweringError> {
     if let ExpressionKind::Lambda(lambda_data) = &fold_expr.node {
         if lambda_data.params.len() != 2 {
-            return Err(LoweringError::unsupported_expression(
+            return Err(unsupported_reduce(
                 format!(
                     "reduce fold function must take exactly 2 parameters, got {}",
                     lambda_data.params.len()
@@ -178,7 +178,7 @@ fn extract_reduce_fold_op(
                         && is_identifier_param(rhs, param1_name));
 
                 if !names_both_params {
-                    return Err(LoweringError::unsupported_expression(
+                    return Err(unsupported_reduce(
                         "reduce fold operands must be the two fold parameters".to_string(),
                         span,
                     ));
@@ -187,25 +187,25 @@ fn extract_reduce_fold_op(
                 // Check the operator is associative and commutative.
                 match op {
                     BinaryOp::Add | BinaryOp::Mul => Ok(mir_binop_from_ast(*op)),
-                    _ => Err(LoweringError::unsupported_expression(
+                    _ => Err(unsupported_reduce(
                         "reduce fold must use an associative binary operator (+ or *) over its two parameters".to_string(),
                         span,
                     )),
                 }
             } else {
-                Err(LoweringError::unsupported_expression(
+                Err(unsupported_reduce(
                     "reduce fold body must be a single binary operation".to_string(),
                     span,
                 ))
             }
         } else {
-            Err(LoweringError::unsupported_expression(
+            Err(unsupported_reduce(
                 "reduce fold body must be an expression".to_string(),
                 span,
             ))
         }
     } else {
-        Err(LoweringError::unsupported_expression(
+        Err(unsupported_reduce(
             "reduce fold must be a function literal".to_string(),
             span,
         ))
@@ -244,7 +244,7 @@ fn extract_array_length_from_type(arr_ty: &Type, span: Span) -> Result<i64, Lowe
             }
         }
     }
-    Err(LoweringError::unsupported_expression(
+    Err(unsupported_reduce(
         "reduce requires an Array<T, N> with a const-evaluable size N".to_string(),
         span,
     ))
@@ -260,7 +260,7 @@ fn extract_element_type(arr_ty: &Type) -> Result<Type, LoweringError> {
             }
         }
     }
-    Err(LoweringError::unsupported_expression(
+    Err(unsupported_reduce(
         "expected Array<T, N>".to_string(),
         Span::default(),
     ))
@@ -1216,4 +1216,20 @@ fn emit_gpu_reduce_launch(
 
     let result_op = extract_reduce_result(ctx, output_local, span);
     Ok((result_op, handle_id))
+}
+
+/// A `reduce` over device data written in a form the GPU cannot run: refused
+/// under the GPU-restriction code with the fold it can run, rather than as a
+/// failure of the compiler's own.
+fn unsupported_reduce(message: impl Into<String>, span: Span) -> LoweringError {
+    LoweringError::coded(
+        crate::diagnostics::DiagnosticCode::TarGpuCodeRestriction,
+        message.into(),
+        span,
+        Some(
+            "on device data, `reduce` runs a fold written in place over its two parameters, \
+             such as `a.reduce(0, fn(x i32, y i32) i32: x + y)` (or `*`)"
+                .to_string(),
+        ),
+    )
 }

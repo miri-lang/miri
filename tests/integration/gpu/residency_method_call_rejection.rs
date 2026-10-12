@@ -140,3 +140,23 @@ fn main()
 ",
     );
 }
+
+/// `reduce` on device data runs a fold written in place over its two
+/// parameters; a named function is refused as a GPU restriction, located at
+/// the call and naming the form that runs, by `check` as by `build`.
+#[test]
+fn gpu_resident_array_reduce_with_a_named_fold_is_refused_with_the_form_that_runs() {
+    let source = "
+use system.collections.array
+
+fn add(a i32, b i32) i32
+    a + b
+
+fn main()
+    gpu let a = Array<i32, 4>(1, 2, 3, 4)
+    let sum = a.reduce(0, add)
+";
+    assert_compiler_error(source, "MER_TAR_002");
+    assert_compiler_error(source, "reduce fold must be a function literal");
+    assert_compiler_error(source, "fn(x i32, y i32) i32: x + y");
+}
