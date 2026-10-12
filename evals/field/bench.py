@@ -353,21 +353,39 @@ def stage_toolchain(scratch):
         return None
     key = hashlib.sha256(Path(binary).read_bytes()).hexdigest()[:16]
     target = Path(scratch) / "toolchain" / key
-    if (target / "bin" / "miri").is_file():
+    if (target / "bin" / "miri").is_file() and staged_stdlib_is_whole(target):
         return target
     building = target.with_name(f"{key}.{os.getpid()}")
     shutil.rmtree(building, ignore_errors=True)
     (building / "bin").mkdir(parents=True)
-    shutil.copy2(binary, building / "bin" / "miri")
-    shutil.copytree(REPO / "src" / "stdlib", building / "lib" / "miri" / "stdlib")
+    # `shutil.copy`, not `copy2`: a copy keeps the repository's modification
+    # times otherwise, and the system's temporary-directory cleaner deletes
+    # files that look days old. It emptied a staged standard library under a
+    # running round once, so every later Miri run met a stdlib of four modules.
+    shutil.copy(binary, building / "bin" / "miri")
+    shutil.copytree(
+        REPO / "src" / "stdlib", building / "lib" / "miri" / "stdlib", copy_function=shutil.copy
+    )
     (building / "runtime").mkdir()
     for library in REPO.glob("src/runtime/*/target/release/libmiri_runtime_*.a"):
-        shutil.copy2(library, building / "runtime" / library.name)
+        shutil.copy(library, building / "runtime" / library.name)
+    shutil.rmtree(target, ignore_errors=True)
     try:
         building.rename(target)
     except OSError:
         shutil.rmtree(building, ignore_errors=True)
     return target
+
+
+def staged_stdlib_is_whole(target):
+    """Whether a staged copy still holds every standard-library file the
+    repository has; a copy something pruned is staged again."""
+    source = REPO / "src" / "stdlib"
+    staged = target / "lib" / "miri" / "stdlib"
+    return all(
+        (staged / path.relative_to(source)).is_file()
+        for path in source.rglob("*.mi")
+    )
 
 
 def inherited_memory(scratch):
