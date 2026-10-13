@@ -93,7 +93,13 @@ fn main()
     fill(out).launch(Dim3(4, 1, 1), Dim3(1, 1, 1))
 ```
 
-The `.launch()` method takes grid and block dimensions.
+The `.launch()` method takes grid and block dimensions. The block size must be
+written as literals in the `Dim3(...)` call; a named constant is refused at build
+(MER_CG_008).
+
+Atomic buffers are `Array<Atomic<i32>, N>` or `Array<Atomic<u32>, N>` from
+`use system.gpu.atomic`, updated in a kernel with `atomic_add`, `atomic_sub` and
+`atomic_max`; there is no `atomic_load`.
 
 ### Kernel Context
 
