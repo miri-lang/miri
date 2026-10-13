@@ -11,3 +11,4 @@ pub mod nested_payloads;
 pub mod or_patterns;
 pub mod predicate_arms;
 pub mod variables_guards;
+pub mod written_number_arms;

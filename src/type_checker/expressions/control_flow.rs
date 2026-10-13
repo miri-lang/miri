@@ -454,6 +454,7 @@ impl TypeChecker {
         if !has_genuine_value {
             return make_type(TypeKind::Void);
         }
+        self.adapt_written_number_arms(branches, &mut arm_types, context);
 
         let joined = self.check_branch_agreement(
             &arm_types,
@@ -471,6 +472,43 @@ impl TypeChecker {
             }
         }
         joined
+    }
+
+    /// Give each arm whose value is a number written in the source (`0.0`,
+    /// `-1`, `2 * 3`) the type the first other arm settles, as a literal takes
+    /// the type of the other operand: `None: 0.0` beside `Some(v): v / 2.0`
+    /// with `v f32` is an `f32`, whichever arm comes first. An arm whose value
+    /// already has a width keeps it, so a `float` value beside an `f32` one is
+    /// still refused.
+    fn adapt_written_number_arms(
+        &mut self,
+        branches: &[MatchBranch],
+        arm_types: &mut [(Type, Span)],
+        context: &Context,
+    ) {
+        let yielded: Vec<Option<&Expression>> = branches
+            .iter()
+            .map(|branch| super::types::yielded_expression(&branch.body))
+            .collect();
+        let settled = yielded
+            .iter()
+            .zip(arm_types.iter())
+            .find_map(|(expr, (ty, _))| {
+                let written = expr.is_some_and(is_written_number);
+                (!written && !matches!(ty.kind, TypeKind::Void | TypeKind::Error))
+                    .then(|| ty.clone())
+            });
+        let Some(settled) = settled else {
+            return;
+        };
+        for (expr, (ty, _)) in yielded.iter().zip(arm_types.iter_mut()) {
+            let Some(expr) = expr.filter(|expr| is_written_number(expr)) else {
+                continue;
+            };
+            if let Some(adapted) = self.number_at_width(expr, &settled, ty, context) {
+                *ty = adapted;
+            }
+        }
     }
 
     /// Returns the span of the expression inside a statement body.
@@ -1093,4 +1131,17 @@ fn unresolved_variant_patterns(
         }
     }
     unresolved
+}
+
+/// Whether `expr` is a number written in the source: a literal, a negated
+/// one, or arithmetic built only from such numbers.
+fn is_written_number(expr: &Expression) -> bool {
+    match &expr.node {
+        ExpressionKind::Binary(left, op, right) => {
+            super::binary::is_arithmetic_op(op)
+                && is_written_number(left)
+                && is_written_number(right)
+        }
+        _ => super::binary::is_number_literal(expr),
+    }
 }
