@@ -36,8 +36,8 @@ pub mod ffi {
 
     /// Divides two 128-bit signed integers, truncating toward zero.
     ///
-    /// Overflow (the most negative value divided by `-1`) wraps to the most
-    /// negative value, which is what the narrower widths do here too. A zero
+    /// Overflow (the most negative value divided by `-1`) ends the program with
+    /// the integer-overflow trap, as it does at the narrower widths. A zero
     /// divisor is reported before this is reached, so it writes zero rather than
     /// bringing the process down on a path that cannot be taken.
     ///
@@ -61,11 +61,16 @@ pub mod ffi {
             return;
         }
         let lhs = from_halves(lhs_lo, lhs_hi) as i128;
-        write_halves(out, lhs.wrapping_div(rhs) as u128);
+        match lhs.checked_div(rhs) {
+            Some(quotient) => write_halves(out, quotient as u128),
+            None => overflow(),
+        }
     }
 
     /// The remainder of dividing two 128-bit signed integers, taking the sign of
-    /// the dividend. Overflow wraps to zero, as it does at the narrower widths.
+    /// the dividend. The most negative value by `-1` ends the program with the
+    /// integer-overflow trap, as it does at the narrower widths: the remainder
+    /// is computed by the same division.
     ///
     /// # Safety
     ///
@@ -87,7 +92,10 @@ pub mod ffi {
             return;
         }
         let lhs = from_halves(lhs_lo, lhs_hi) as i128;
-        write_halves(out, lhs.wrapping_rem(rhs) as u128);
+        match lhs.checked_rem(rhs) {
+            Some(remainder) => write_halves(out, remainder as u128),
+            None => overflow(),
+        }
     }
 
     /// Divides two 128-bit unsigned integers.

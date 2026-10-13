@@ -2372,6 +2372,42 @@ impl<'a> FunctionTranslator<'a> {
         Ok(result)
     }
 
+    /// Emit a signed `/` or `%` that ends the program with the integer-overflow
+    /// trap when the dividend is the type's minimum and the divisor -1: the
+    /// quotient is one past the maximum, and the remainder is computed by the
+    /// same division. The check runs before `sdiv`/`srem`, which would otherwise
+    /// fault in hardware. A 128-bit operand is divided by the runtime instead.
+    fn emit_checked_signed_div_or_rem(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        op: BinOp,
+        lhs: Value,
+        rhs: Value,
+    ) -> Result<Value, CodegenError> {
+        let ty = builder.func.dfg.value_type(lhs);
+        let min = match ty {
+            cl_types::I8 => i8::MIN as i128,
+            cl_types::I16 => i16::MIN as i128,
+            cl_types::I32 => i32::MIN as i128,
+            cl_types::I64 => i64::MIN as i128,
+            other => {
+                return Err(CodegenError::Internal(format!(
+                    "signed division reached with a {other} operand"
+                )))
+            }
+        };
+        let min_val = Self::int_const_at(builder, ty, min);
+        let minus_one = Self::int_const_at(builder, ty, -1);
+        let lhs_is_min = builder.ins().icmp(IntCC::Equal, lhs, min_val);
+        let rhs_is_minus_one = builder.ins().icmp(IntCC::Equal, rhs, minus_one);
+        let overflows = builder.ins().band(lhs_is_min, rhs_is_minus_one);
+        Self::emit_overflow_trap_if(builder, ctx, overflows)?;
+        Ok(match op {
+            BinOp::Rem => builder.ins().srem(lhs, rhs),
+            _ => builder.ins().sdiv(lhs, rhs),
+        })
+    }
+
     /// Branch to the integer-overflow trap when `overflowed` is set; otherwise
     /// fall through. The trap is the runtime's, called like the division
     /// checks call theirs, so the program ends with a code and a sentence.
@@ -2490,46 +2526,13 @@ impl<'a> FunctionTranslator<'a> {
                 if is_unsigned {
                     builder.ins().udiv(lhs, rhs)
                 } else {
-                    // 128 bits never reaches here — it returned above, through
-                    // the runtime, which wraps this same overflow itself.
-                    let min_val = match ty {
-                        cl_types::I8 => i8::MIN as i64,
-                        cl_types::I16 => i16::MIN as i64,
-                        cl_types::I32 => i32::MIN as i64,
-                        cl_types::I64 => i64::MIN,
-                        _ => 0,
-                    };
-                    let min_val_val = Self::int_const_at(builder, ty, min_val as i128);
-                    let neg1_val = Self::int_const_at(builder, ty, -1);
-
-                    let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min_val_val);
-                    let rhs_neg1 = builder.ins().icmp(IntCC::Equal, rhs, neg1_val);
-                    let is_overflow = builder.ins().band(lhs_min, rhs_neg1);
-
-                    let overflow_block = builder.create_block();
-                    let normal_block = builder.create_block();
-                    let merge_block = builder.create_block();
-                    let res_var = builder.declare_var(ty);
-
-                    builder
-                        .ins()
-                        .brif(is_overflow, overflow_block, &[], normal_block, &[]);
-
-                    builder.switch_to_block(overflow_block);
-                    builder.def_var(res_var, min_val_val);
-                    builder.ins().jump(merge_block, &[]);
-                    builder.seal_block(overflow_block);
-
-                    builder.switch_to_block(normal_block);
-                    let div_res = builder.ins().sdiv(lhs, rhs);
-                    builder.def_var(res_var, div_res);
-                    builder.ins().jump(merge_block, &[]);
-                    builder.seal_block(normal_block);
-
-                    builder.switch_to_block(merge_block);
-                    builder.seal_block(merge_block);
-
-                    builder.use_var(res_var)
+                    return Self::emit_checked_signed_div_or_rem(
+                        builder,
+                        ctx,
+                        BinOp::Div,
+                        lhs,
+                        rhs,
+                    );
                 }
             }
             BinOp::Rem if is_float => return Self::emit_float_rem(builder, ctx, ty, lhs, rhs),
@@ -2546,47 +2549,13 @@ impl<'a> FunctionTranslator<'a> {
                 if is_unsigned {
                     builder.ins().urem(lhs, rhs)
                 } else {
-                    // 128 bits never reaches here — it returned above, through
-                    // the runtime, which wraps this same overflow itself.
-                    let min_val = match ty {
-                        cl_types::I8 => i8::MIN as i64,
-                        cl_types::I16 => i16::MIN as i64,
-                        cl_types::I32 => i32::MIN as i64,
-                        cl_types::I64 => i64::MIN,
-                        _ => 0,
-                    };
-                    let min_val_val = Self::int_const_at(builder, ty, min_val as i128);
-                    let neg1_val = Self::int_const_at(builder, ty, -1);
-
-                    let lhs_min = builder.ins().icmp(IntCC::Equal, lhs, min_val_val);
-                    let rhs_neg1 = builder.ins().icmp(IntCC::Equal, rhs, neg1_val);
-                    let is_overflow = builder.ins().band(lhs_min, rhs_neg1);
-
-                    let overflow_block = builder.create_block();
-                    let normal_block = builder.create_block();
-                    let merge_block = builder.create_block();
-                    let res_var = builder.declare_var(ty);
-
-                    builder
-                        .ins()
-                        .brif(is_overflow, overflow_block, &[], normal_block, &[]);
-
-                    builder.switch_to_block(overflow_block);
-                    let zero_val = Self::int_const_at(builder, ty, 0);
-                    builder.def_var(res_var, zero_val);
-                    builder.ins().jump(merge_block, &[]);
-                    builder.seal_block(overflow_block);
-
-                    builder.switch_to_block(normal_block);
-                    let rem_res = builder.ins().srem(lhs, rhs);
-                    builder.def_var(res_var, rem_res);
-                    builder.ins().jump(merge_block, &[]);
-                    builder.seal_block(normal_block);
-
-                    builder.switch_to_block(merge_block);
-                    builder.seal_block(merge_block);
-
-                    builder.use_var(res_var)
+                    return Self::emit_checked_signed_div_or_rem(
+                        builder,
+                        ctx,
+                        BinOp::Rem,
+                        lhs,
+                        rhs,
+                    );
                 }
             }
             BinOp::BitAnd
