@@ -3,12 +3,13 @@
 
 //! Expression lowering - converts AST expressions to MIR.
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::{Expression, ExpressionKind, RangeExpressionType};
+use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
-    Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
-    TerminatorKind,
+    BinOp, Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind,
+    Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
 
@@ -29,6 +30,11 @@ pub(crate) fn lower_index_expr(
     // Map index access dispatches to a runtime call.
     if is_map_index(ctx, obj) {
         return lower_map_index_read(ctx, expr, obj, index_expr, dest);
+    }
+
+    // String character indexing and range slicing dispatch to runtime calls.
+    if is_string_index(ctx, obj) {
+        return lower_string_index_read(ctx, expr, obj, index_expr, dest);
     }
 
     // Watermark so we can release any managed temp created for `obj` (e.g. an
@@ -54,6 +60,148 @@ pub(crate) fn lower_index_expr(
         expr,
         dest,
     )
+}
+
+/// True when `obj` is a `String` (indexing it lowers to a runtime call).
+fn is_string_index(ctx: &LoweringContext, obj: &Expression) -> bool {
+    ctx.type_checker
+        .get_type(obj.id)
+        .map(|t| t.kind == TypeKind::String)
+        .unwrap_or(false)
+}
+
+/// Lowers `string[index]` or `string[range]` to a runtime call (`rt::STRING_CHAR_AT` or `rt::STRING_SUBSTRING`).
+fn lower_string_index_read(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    obj: &Expression,
+    index_expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let obj_watermark = ctx.body.local_decls.len();
+    let obj_operand = lower_expression(ctx, obj, None)?;
+    let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
+    let obj_place = ensure_place(ctx, obj_operand.clone(), obj.span);
+
+    let result_ty = Type::new(TypeKind::String, expr.span);
+    let destination = match &dest {
+        Some(d) => d.clone(),
+        None => Place::new(ctx.push_temp(result_ty, expr.span)),
+    };
+
+    if let ExpressionKind::Range(start_expr, end_opt, range_type) = &index_expr.node {
+        let start_watermark = ctx.body.local_decls.len();
+        let start_op = lower_expression(ctx, start_expr, None)?;
+        let start_op = crate::mir::lowering::helpers::index_at_int(ctx, start_op, start_expr);
+        let start_place = match &start_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+            _ => None,
+        };
+
+        let (end_op, end_watermark, end_place) = if let Some(end_expr_box) = end_opt {
+            let end_expr = end_expr_box.as_ref();
+            let watermark = ctx.body.local_decls.len();
+            let raw_op = lower_expression(ctx, end_expr, None)?;
+            let raw_op = crate::mir::lowering::helpers::index_at_int(ctx, raw_op, end_expr);
+            let place = match &raw_op {
+                Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+                _ => None,
+            };
+            let op = if *range_type == RangeExpressionType::Inclusive {
+                let one = Operand::Constant(Box::new(Constant {
+                    span: index_expr.span,
+                    ty: Type::new(TypeKind::Int, index_expr.span),
+                    literal: Literal::Integer(IntegerLiteral::I64(1)),
+                }));
+                let temp =
+                    ctx.push_temp(Type::new(TypeKind::Int, index_expr.span), index_expr.span);
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::BinaryOp(BinOp::Add, Box::new(raw_op), Box::new(one)),
+                    ),
+                    span: index_expr.span,
+                });
+                Operand::Copy(Place::new(temp))
+            } else {
+                raw_op
+            };
+            (op, watermark, place)
+        } else {
+            let watermark = ctx.body.local_decls.len();
+            let temp = ctx.push_temp(Type::new(TypeKind::Int, index_expr.span), index_expr.span);
+            let func = Operand::runtime(rt::STRING_CHAR_COUNT, index_expr.span);
+            let bb = ctx.new_basic_block();
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Call {
+                    func,
+                    args: vec![obj_operand.clone()],
+                    out_args: Vec::new(),
+                    arg_handles: Vec::new(),
+                    destination: Place::new(temp),
+                    target: Some(bb),
+                },
+                index_expr.span,
+            ));
+            ctx.set_current_block(bb);
+            (Operand::Copy(Place::new(temp)), watermark, None)
+        };
+
+        let func_op = Operand::runtime(rt::STRING_SUBSTRING, expr.span);
+        let target_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: vec![obj_operand, start_op, end_op],
+                out_args: Vec::new(),
+                arg_handles: Vec::new(),
+                destination: destination.clone(),
+                target: Some(target_bb),
+            },
+            expr.span,
+        ));
+        ctx.set_current_block(target_bb);
+
+        if let Some(end_local) = end_place {
+            ctx.emit_temp_drop(end_local, end_watermark, index_expr.span);
+        }
+        if let Some(start_local) = start_place {
+            ctx.emit_temp_drop(start_local, start_watermark, index_expr.span);
+        }
+    } else {
+        let index_watermark = ctx.body.local_decls.len();
+        let index_op = lower_expression(ctx, index_expr, None)?;
+        let index_op = crate::mir::lowering::helpers::index_at_int(ctx, index_op, index_expr);
+        let index_place = match &index_op {
+            Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+            _ => None,
+        };
+
+        let func_op = Operand::runtime(rt::STRING_CHAR_AT, expr.span);
+        let target_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: vec![obj_operand, index_op],
+                out_args: Vec::new(),
+                arg_handles: Vec::new(),
+                destination: destination.clone(),
+                target: Some(target_bb),
+            },
+            expr.span,
+        ));
+        ctx.set_current_block(target_bb);
+
+        if let Some(index_local) = index_place {
+            ctx.emit_temp_drop(index_local, index_watermark, index_expr.span);
+        }
+    }
+
+    if obj_op_is_copy {
+        ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
+    }
+
+    Ok(Operand::Copy(destination))
 }
 
 /// True when `obj` is a `Map` (indexing it lowers to a runtime call).
