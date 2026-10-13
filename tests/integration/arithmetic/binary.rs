@@ -27,17 +27,17 @@ fn test_binary_operations_on_floats() {
 }
 
 #[test]
-fn test_min_int_div_neg_one() {
-    let source = r#"
-fn main() int:
-    let x = -9223372036854775808
-    let y = -1
-    let div_res = x / y
-    let rem_res = x % y
-    println(f"{div_res} {rem_res}")
-    return 0
-"#;
-    assert_runs_with_output(source, "-9223372036854775808 0\n");
+fn test_min_int_div_neg_one_stops_the_program() {
+    // The quotient is one past the maximum, so it overflows; the remainder is
+    // computed by the same division and stops the program the same way.
+    for op in ["/", "%"] {
+        assert_runtime_error(
+            &format!(
+                "fn main() int:\n    var x = -9223372036854775807 - 1\n    var y = -1\n    println(f\"{{x {op} y}}\")\n    return 0\n"
+            ),
+            "integer overflow: the result does not fit its type",
+        );
+    }
 }
 
 #[test]
@@ -78,20 +78,19 @@ println(f"{a / b} {a % b}")
 #[test]
 fn test_128bit_division_overflow_and_signs() {
     // The one case that overflows — the most negative value over -1, whose true
-    // quotient is one past the maximum — wraps to the most negative value, and
-    // its remainder is zero, which is what the narrower widths do.
+    // quotient is one past the maximum — stops the program, as it does at the
+    // narrower widths; its remainder comes from the same division and stops too.
     //
     // The most negative value is built rather than written: it cannot be spelled
     // as a literal, since the magnitude is parsed before the sign is applied.
-    assert_runs_with_output(
-        r#"
-let maxv i128 = 170141183460469231731687303715884105727
-let minv = -maxv - 1
-let neg1 i128 = -1
-println(f"{minv / neg1} {minv % neg1}")
-"#,
-        "-170141183460469231731687303715884105728 0",
-    );
+    for op in ["/", "%"] {
+        assert_runtime_error(
+            &format!(
+                "let maxv i128 = 170141183460469231731687303715884105727\nlet minv = -maxv - 1\nlet neg1 i128 = -1\nprintln(f\"{{minv {op} neg1}}\")\n"
+            ),
+            "integer overflow: the result does not fit its type",
+        );
+    }
     // A remainder takes the sign of the dividend, not the divisor.
     assert_runs_with_output(
         r#"

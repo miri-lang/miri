@@ -129,3 +129,34 @@ fn test_128_bit_overflow_stops_the_program_and_a_fitting_product_computes() {
         "true",
     );
 }
+
+#[test]
+fn test_min_divided_or_reduced_by_minus_one_stops_the_program() {
+    // The quotient of a signed type's minimum by -1 is one past its maximum,
+    // and the remainder is computed by the same division, so both stop.
+    for (ty, min) in [
+        ("i8", "-128"),
+        ("i16", "-32768"),
+        ("i32", "-2147483648"),
+        ("i64", "-9223372036854775807 - 1"),
+        ("int", "-9223372036854775807 - 1"),
+        ("i128", "-170141183460469231731687303715884105727 - 1"),
+    ] {
+        for op in ["/", "%"] {
+            assert_runtime_error(
+                &format!(
+                    "fn main()\n    var x {ty} = {min}\n    var d {ty} = -1\n    x = x {op} d\n    println(\"unreachable\")\n"
+                ),
+                "integer overflow: the result does not fit its type",
+            );
+        }
+    }
+}
+
+#[test]
+fn test_division_next_to_the_minimum_computes_its_value() {
+    assert_runs_with_output(
+        "fn main()\n    var x i32 = -2147483648\n    var d i32 = -2\n    var one i32 = 1\n    println(f\"{x / d} {x % d} {x / one} {(x + 1) / -1}\")\n",
+        "1073741824 0 -2147483648 2147483647",
+    );
+}
