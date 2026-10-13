@@ -577,6 +577,24 @@ impl TypeChecker {
         refined
     }
 
+    /// The payload of the optional element type `decl` declares its
+    /// collection to hold, or `None`. The declared type is resolved again,
+    /// reporting nothing, where the binding is checked against it.
+    fn declared_optional_element(
+        &mut self,
+        decl: &VariableDeclaration,
+        context: &Context,
+    ) -> Option<Type> {
+        let type_expr = decl.typ.as_ref()?;
+        let outer = std::mem::replace(&mut self.suppress_diagnostics, true);
+        let declared = self.resolve_type_expression(type_expr, context);
+        self.suppress_diagnostics = outer;
+        match self.sequence_element_type(&declared)?.kind {
+            TypeKind::Option(payload) => Some(*payload),
+            _ => None,
+        }
+    }
+
     pub(crate) fn determine_variable_type(
         &mut self,
         decl: &VariableDeclaration,
@@ -592,7 +610,11 @@ impl TypeChecker {
             context.in_gpu_resident_initializer =
                 outer_resident || decl.residency == BindingResidency::Gpu;
             let open_calls = self.open_generic_call_mark();
+            let declared_optional = self.declared_optional_element(decl, context);
+            let outer_optional =
+                std::mem::replace(&mut context.declared_optional_element, declared_optional);
             let inferred = self.infer_expression(init, context);
+            context.declared_optional_element = outer_optional;
             context.in_gpu_resident_initializer = outer_resident;
             // With no declared type, nothing is left to bind a call the
             // initializer leaves open; the binding takes the refusal rather

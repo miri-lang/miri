@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod basic;
 pub mod coalescing;
+pub mod declared_optional_literals;
 pub mod edge_cases;
 pub mod matching;
 pub mod nested;

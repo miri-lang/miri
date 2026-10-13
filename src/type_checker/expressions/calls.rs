@@ -132,7 +132,13 @@ impl TypeChecker {
         // Must run AFTER infer_expression to avoid re-inferring module alias receivers.
         self.check_method_index_bounds(func, args, span, context);
 
-        // Process arguments
+        // Process arguments. A collection constructor's arguments hold the
+        // elements of the collection it builds, so they take the optional
+        // element type it names, or the one its binding declares; any other
+        // call's arguments are its own and take none.
+        let argument_optional = self.constructed_optional_element(&func_type, context);
+        let outer_optional =
+            std::mem::replace(&mut context.declared_optional_element, argument_optional);
         let mut positional_args = Vec::with_capacity(args.len());
         let mut named_args = HashMap::with_capacity(args.len());
 
@@ -163,6 +169,8 @@ impl TypeChecker {
                 }
             }
         }
+
+        context.declared_optional_element = outer_optional;
 
         if !context.in_gpu_function {
             self.reject_gpu_resident_call_args(func, args, context);
@@ -3521,6 +3529,27 @@ impl TypeChecker {
             span,
         );
         Some(make_type(TypeKind::Error))
+    }
+
+    /// The payload of the optional element type the arguments of a call to
+    /// `func_type` hold: a collection constructor's own (`List<int?>(..)`),
+    /// or, when it names none, the one its binding declares. `None` for any
+    /// other call.
+    fn constructed_optional_element(&self, func_type: &Type, context: &Context) -> Option<Type> {
+        let TypeKind::Meta(built) = &func_type.kind else {
+            return None;
+        };
+        let TypeKind::Custom(name, arguments) = &built.kind else {
+            return None;
+        };
+        BuiltinCollectionKind::from_name(name)?;
+        if arguments.is_none() {
+            return context.declared_optional_element.clone();
+        }
+        match self.sequence_element_type(built)?.kind {
+            TypeKind::Option(payload) => Some(*payload),
+            _ => None,
+        }
     }
 
     /// Check each element written into `Array<T, N>(e1, …, eN)` against `T`.

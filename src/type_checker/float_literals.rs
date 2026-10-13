@@ -248,7 +248,7 @@ impl TypeChecker {
     /// `TypeKind::List`/`Array`/`Set` variants a field or parameter declaration
     /// carries, and the normalized `Custom("List", [..])` form inference
     /// produces.
-    fn sequence_element_type(&self, collection: &Type) -> Option<Type> {
+    pub(crate) fn sequence_element_type(&self, collection: &Type) -> Option<Type> {
         match &collection.kind {
             TypeKind::List(inner) | TypeKind::Set(inner) | TypeKind::Array(inner, _) => {
                 self.extract_type_from_expression(inner).ok()
