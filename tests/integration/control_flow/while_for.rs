@@ -86,3 +86,36 @@ for i, j, k in items
         "Invalid number of loop variables",
     );
 }
+
+/// An inclusive range that ends at its type's maximum runs once per value and
+/// ends: the loop stops at the last value instead of computing one past it.
+#[test]
+fn test_inclusive_range_ending_at_the_maximum_runs_each_value_and_ends() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var n = 0
+    var last = 0
+    for i in 9223372036854775805..=9223372036854775807
+        n = n + 1
+        last = i
+    println(f"{n} {last == 9223372036854775807}")
+"#,
+        "3 true",
+    );
+}
+
+/// The exclusive form up to the maximum stops one short, as it always did.
+#[test]
+fn test_exclusive_range_ending_at_the_maximum_stops_before_it() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var n = 0
+    for i in 9223372036854775805..9223372036854775807
+        n = n + 1
+    println(f"{n}")
+"#,
+        "2",
+    );
+}

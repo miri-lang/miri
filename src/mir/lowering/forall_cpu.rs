@@ -8,15 +8,12 @@
 //! execution is a correct (if non-parallel) implementation.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::statement::{Statement, VariableDeclaration};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{
-    BinOp, Constant, Discriminant, Local, Operand, Place, Rvalue, Terminator, TerminatorKind,
-};
+use crate::mir::{BinOp, Discriminant, Local, Operand, Place, Rvalue, Terminator, TerminatorKind};
 
 use super::context::LoweringContext;
 use super::expression::lower_expression;
@@ -344,35 +341,6 @@ fn emit_loop_header(
     Ok(())
 }
 
-/// Emits loop increment: add 1 to loop variable and jump back to header.
-fn emit_loop_increment(
-    ctx: &mut LoweringContext,
-    span: &Span,
-    loop_var: Local,
-    loop_var_ty: &Type,
-    header_bb: crate::mir::BasicBlock,
-) {
-    let one = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: loop_var_ty.clone(),
-        literal: Literal::Integer(IntegerLiteral::I32(1)),
-    }));
-    let current_i = Operand::Copy(Place::new(loop_var));
-
-    ctx.push_statement(crate::mir::Statement {
-        kind: crate::mir::StatementKind::Assign(
-            Place::new(loop_var),
-            Rvalue::BinaryOp(BinOp::Add, Box::new(current_i), Box::new(one)),
-        ),
-        span: *span,
-    });
-
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Goto { target: header_bb },
-        *span,
-    ));
-}
-
 /// Connects the exit of an inner loop dimension to the increment of the outer.
 /// Builds one sequential loop dimension over a range.
 ///
@@ -405,10 +373,22 @@ fn build_sequential_loop_dimension(
 
     ctx.set_current_block(header_bb);
     let end_op = lower_expression(ctx, end_expr, None)?;
+    let end_local = crate::mir::lowering::helpers::ensure_place(ctx, end_op, *span).local;
+    let end_op = Operand::Copy(Place::new(end_local));
     emit_loop_header(ctx, span, loop_var, end_op, range_type, body_bb, exit_bb)?;
 
     ctx.set_current_block(increment_bb);
-    emit_loop_increment(ctx, span, loop_var, &loop_var_ty, header_bb);
+    crate::mir::lowering::loops::emit_range_step(
+        ctx,
+        crate::mir::lowering::loops::RangeStep {
+            loop_var,
+            loop_var_ty,
+            inclusive_end: (*range_type == RangeExpressionType::Inclusive).then_some(end_local),
+            header_bb,
+            exit_bb,
+        },
+        span,
+    );
 
     ctx.set_current_block(exit_bb);
 
