@@ -2,6 +2,10 @@
 
 A division operation was attempted with a zero divisor at runtime. The operation cannot complete because division by zero is mathematically undefined. Guard against zero values before dividing.
 
+## Messages
+
+- `Division by Zero`
+
 ## Before
 
 ```miri

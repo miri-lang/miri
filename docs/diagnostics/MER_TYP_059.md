@@ -1,29 +1,39 @@
 ## Rule
 
-An enum definition violates structural requirements. This code covers multiple family members: duplicate variant names, invalid variant syntax, forbidden generic constraints, or other violations specific to enum definitions.
+A name used where an enum is required does not name an enum, or an enum definition violates its structural requirements. A variant pattern or a `Type.Variant` path must name an enum the program declares or imports; matching a struct or class against `Type.Variant` causes this error. Match on the value's fields, or declare the type as an enum.
+
+## Messages
+
+- `'{name}' is not an Enum`
+- `Invalid enum name`
 
 ## Before
 
 ```miri
-enum Color:
-  Red
-  Red
-  Blue
+struct Point
+    x int
+    y int
 
-fn main() i32:
-  0
+fn main()
+    let p = Point(x: 1, y: 2)
+    match p
+        Point.Origin: println("origin")
+        _: println("elsewhere")
 ```
 
 ## After
 
 ```miri
-enum Color:
-  Red
-  Green
-  Blue
+struct Point
+    x int
+    y int
 
-fn main() i32:
-  0
+fn main()
+    let p = Point(x: 1, y: 2)
+    if p.x == 0 and p.y == 0
+        println("origin")
+    else
+        println("elsewhere")
 ```
 
 ## Reference

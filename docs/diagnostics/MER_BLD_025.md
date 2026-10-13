@@ -30,21 +30,36 @@ under `not run:`, because tests were discovered in it.
 
 ## Before
 
-```sh
-# plain.mi declares functions, none of them marked @test
-miri test --dir .
-# error[MER_BLD_025]: No Tests Discovered
-# exit status 2
+`plain.mi`:
+
+```miri
+fn add(a int, b int) int
+    return a + b
 ```
+
+```sh
+miri test plain.mi
+```
+
+`plain.mi` declares a function, and none is marked `@test`.
 
 ## After
 
+Mark the function the runner should call:
+
+```miri
+use system.testing
+
+fn add(a int, b int) int
+    return a + b
+
+@test
+fn adds_two_numbers()
+    assert_eq(add(1, 2), 3)
+```
+
 ```sh
-# Mark the function the runner should call.
-#   @test
-#   fn test_adds()
-#       assert(1 + 1 == 2)
-miri test --dir .
+miri test plain.mi
 ```
 
 ## Reference

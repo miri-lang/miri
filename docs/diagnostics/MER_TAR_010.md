@@ -11,6 +11,13 @@ A program built with `--target web-gpu` does something a web bundle cannot carry
 - `kernel {kernel} is never launched, so a web bundle cannot tell which buffers it binds`
 - `this launch passes kernel {kernel} different buffers than an earlier one; a web bundle binds each kernel to one set of buffers`
 
+## Help
+
+- `` initialize it with a literal of constants or `Array<T, N>()` and fill it from a kernel ``
+- `` bound the loop with a literal or a `const` ``
+- `` express the launch as a `forall` over a literal or `const` range ``
+- `call the kernel from the program, or remove it`
+
 ## Before
 
 ```miri

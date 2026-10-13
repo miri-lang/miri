@@ -4,6 +4,10 @@ An index fell outside the collection it was applied to. The bounds check that gu
 
 The same code reports a command-line argument asked for by a position that was not supplied, and a `substring` range that runs outside its string: positions count characters, from `0` to `length()`.
 
+## Messages
+
+- `Index Out of Bounds`
+
 ## Before
 
 ```miri

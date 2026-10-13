@@ -2,6 +2,10 @@
 
 The program called `panic`, which stops it where it stands and reports the message it was given. This is the program saying it has reached a state it has no way to continue from, so the fix is to remove the reason rather than the call — handle the case the panic guards, or answer with a value the caller can inspect.
 
+## Messages
+
+- `Explicit Panic`
+
 ## Before
 
 ```miri

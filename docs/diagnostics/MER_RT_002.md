@@ -2,6 +2,10 @@
 
 A remainder (modulo) operation was attempted with a zero divisor at runtime. The remainder operation cannot complete because taking a remainder with a zero divisor is mathematically undefined. Guard against zero values before computing a remainder.
 
+## Messages
+
+- `Remainder by Zero`
+
 ## Before
 
 ```miri

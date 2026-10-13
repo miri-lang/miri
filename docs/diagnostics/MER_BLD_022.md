@@ -17,14 +17,25 @@ outside the prelude needs a file that imports it.
 
 - `no type named '{name}' is in scope`
 
+## Help
+
+- `did you mean '{name}'?`
+- `` '{name}' is declared in {module}, which this file does not import: add `use {module}`, or run `miri view {module} --type {name}`. ``
+
 ## Before
 
-```sh
-# The name is misspelled, or its module is not imported.
-miri view app.mi --type Circel
-# error[MER_BLD_022]: Type Not In Scope
-#   = help: did you mean 'Circle'?
+`app.mi`:
+
+```miri
+class Circle
+    var radius float
 ```
+
+```sh
+miri view app.mi --type Circel
+```
+
+The name is misspelled, or its module is not imported.
 
 ## After
 

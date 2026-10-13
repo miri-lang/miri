@@ -2,6 +2,10 @@
 
 An assertion failed at runtime. The program expected a certain condition to be true, but it was false when evaluated. Fix the bug in your program or update the assertion if the expectation was incorrect.
 
+## Messages
+
+- `Assertion Failure`
+
 ## Before
 
 ```miri

@@ -2,24 +2,42 @@
 
 A name exists in the type system but is not visible from the current scope due to visibility restrictions (e.g., private module members accessed from another module). The compiler enforces strict visibility rules to prevent unintended access to implementation details.
 
+## Messages
+
+- `Field '{field}' of class '{class}' is {visibility} and cannot be accessed from here`
+- `Method '{method}' of class '{class}' is {visibility} and cannot be accessed from here`
+- `Type '{name}' is not visible`
+- `'{name}' is not visible`
+
 ## Before
 
 ```miri
-use system.io.println
+class Account
+    private balance int
 
-fn main() i32:
-  let x = system.io.print("hidden")
-  0
+    fn init(start int)
+        self.balance = start
+
+fn main()
+    let a = Account(start: 10)
+    println(f"{a.balance}")
 ```
 
 ## After
 
 ```miri
-use system.io.{print, println}
+class Account
+    private balance int
 
-fn main() i32:
-  print("visible")
-  0
+    fn init(start int)
+        self.balance = start
+
+    fn current() int
+        return self.balance
+
+fn main()
+    let a = Account(start: 10)
+    println(f"{a.current()}")
 ```
 
 ## Reference

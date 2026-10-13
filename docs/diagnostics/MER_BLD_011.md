@@ -4,9 +4,18 @@
 
 To proceed, fix the issues identified in the errors and try the patch again. Alternatively, use `--check-only` to validate without writing.
 
+## Messages
+
+- `the edited program does not check, so the file was left as it was`
+
+## Help
+
+- `the errors below describe the edited program; correct the replacement text and retry`
+
 ## Before
 
-Source file with an existing error:
+`code.mi`:
+
 ```miri
 fn add(a int, b int) int
     return a + b
@@ -15,12 +24,11 @@ fn broken() int
     return "text"
 ```
 
-Patch that introduces a new error:
 ```sh
 miri patch --replace-in-fn add --old "a + b" --new "a + true" code.mi
 ```
 
-This is rejected because the edit introduces a new type error.
+`broken` already fails to check; the edit is refused because it adds a new error of its own, in `add`.
 
 ## After
 

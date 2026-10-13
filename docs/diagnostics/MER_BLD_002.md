@@ -4,25 +4,41 @@ Repairs are classified by safety level to protect you from unintended changes. T
 
 An api-changing repair modifies a public API surface that other functions and modules observe — changing a module-scope binding from immutable to mutable affects callers. A target-changing repair alters where or how the program runs (GPU residency, target capability, scalar width). A requires-human-review repair is ambiguous or carries sufficient risk that a human should inspect the edit before it applies.
 
+## Messages
+
+- `Refused: Repairs Require Human Review`
+
+## Help
+
+- `Pass --allow-risky to apply these repairs anyway.`
+
 ## Before
 
+`main.mi`:
+
+```miri
+let counter = 0
+
+fn bump()
+    counter = counter + 1
+
+bump()
+println(f"{counter}")
 ```
-miri fix --apply main.mi
-# File declares a module-scope `let counter = 0` that is reassigned in a function.
-# The repair would make `counter` mutable, changing a public surface.
-# MER_BLD_002: refused repairs require human review (pass --allow-risky to override)
+
+```sh
+miri fix --apply --yes main.mi
 ```
+
+The repair would make the module-scope `counter` mutable, which changes a surface other code observes, so it is refused.
 
 ## After
 
-```
-# Option 1: Review and approve the specific changes
-miri fix --apply --allow-risky main.mi
+Review the proposed repair, then approve it explicitly:
 
-# Option 2: List the repairs first to inspect the changes before applying
+```sh
 miri fix main.mi
-# then, after reviewing the proposed repairs, apply them with --allow-risky
-miri fix --apply --allow-risky main.mi
+miri fix --apply --yes --allow-risky main.mi
 ```
 
 ## Reference

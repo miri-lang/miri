@@ -16,16 +16,37 @@ came back.
 
 ## Messages
 
-- `` `{anchor}` did not narrow the read: no block holds it, so the whole declaration came back ``
-- `` `{anchor}` did not narrow the read: it sits at the top level of the body, so the whole body came back ``
+- `` `{anchor}` did not narrow the read: {reason} ``
+
+## Help
+
+- `anchor on text inside the block you want, such as a statement within a loop or a branch`
 
 ## Before
 
-```sh
-# `float` occurs only in the signature, so no block holds it.
-miri view app.mi --fn Inventory.total_value --around "float"
-# warning[MER_BLD_023]: Read Could Not Be Narrowed
+`app.mi`:
+
+```miri
+use system.collections.list
+
+class Item
+    var price float
+
+class Inventory
+    var items List<Item>
+
+    fn total_value() float
+        var total = 0.0
+        for it in self.items
+            total = total + it.price
+        return total
 ```
+
+```sh
+miri view app.mi --fn Inventory.total_value --around "float"
+```
+
+`float` occurs only in the signature, so no block holds it.
 
 ## After
 

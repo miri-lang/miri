@@ -6,20 +6,25 @@
 //!
 //! A documented example that does not reproduce its own error is worse than no
 //! example: a reader copies it, sees something else, and stops trusting the
-//! page. Every live code therefore sits in exactly one of two lists below —
-//! either its example is checked here against the real compiler, or it carries
-//! a written reason why no single source file can produce it. A newly added
-//! code that appears in neither list fails the partition test, so the lists
-//! cannot quietly fall behind the registry.
+//! page. Every live code therefore sits in exactly one list below: either its
+//! example is checked here against the real compiler, through the command that
+//! raises the code (`check`, `run`, or another command with its flags), or it
+//! carries a written reason why no source file can produce it. A newly added
+//! code that appears in no list fails the partition test, so the lists cannot
+//! quietly fall behind the registry, and the excused list has a ceiling that
+//! only comes down.
 
 use miri::diagnostics::DiagnosticCode;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Codes whose `Before` example is verified to emit that code.
+/// Codes whose `Before` example is verified through `miri check` to emit
+/// that code first.
 const VERIFIED: &[&str] = &[
+    "MER_CG_008",
     "MER_IMP_002",
+    "MER_IMP_003",
     "MER_IMP_004",
     "MER_IMP_005",
     "MER_LEX_001",
@@ -45,6 +50,7 @@ const VERIFIED: &[&str] = &[
     "MER_PAR_003",
     "MER_PAR_004",
     "MER_PAR_005",
+    "MER_PAR_009",
     "MER_PAR_010",
     "MER_PAR_011",
     "MER_PAR_012",
@@ -57,7 +63,10 @@ const VERIFIED: &[&str] = &[
     "MER_PAR_019",
     "MER_PAR_020",
     "MER_PAR_021",
+    "MER_TAR_001",
     "MER_TAR_002",
+    "MER_TAR_003",
+    "MER_TAR_004",
     "MER_TAR_005",
     "MER_TAR_006",
     "MER_TAR_007",
@@ -82,6 +91,9 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_032",
     "MER_TYP_033",
     "MER_TYP_034",
+    "MER_TYP_035",
+    "MER_TYP_036",
+    "MER_TYP_037",
     "MER_TYP_038",
     "MER_TYP_039",
     "MER_TYP_040",
@@ -89,13 +101,25 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_042",
     "MER_TYP_043",
     "MER_TYP_044",
+    "MER_TYP_047",
     "MER_TYP_048",
+    "MER_TYP_049",
+    "MER_TYP_050",
     "MER_TYP_051",
+    "MER_TYP_052",
     "MER_TYP_053",
     "MER_TYP_054",
+    "MER_TYP_055",
+    "MER_TYP_056",
+    "MER_TYP_057",
+    "MER_TYP_058",
+    "MER_TYP_059",
     "MER_TYP_060",
+    "MER_TYP_062",
     "MER_TYP_063",
+    "MER_TYP_064",
     "MER_TYP_065",
+    "MER_TYP_066",
     "MER_TYP_067",
     "MER_TYP_068",
     "MER_TYP_069",
@@ -113,110 +137,192 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_081",
 ];
 
-/// Codes whose example cannot be verified this way, each with the reason.
+/// Codes whose `Before` example is verified through `miri run`.
 ///
-/// TODO: these pages' examples are still unverified, and about thirty of them
-/// show an example that raises a different code first. Each needs gating
-/// through the surface that actually raises it (run, build, test, view,
-/// patch), or an example rewritten so `check` reaches it.
+/// Each stops the running program — a trap, or a signal that kills it — which
+/// a static check cannot observe, so the example is compiled and run and the
+/// code must be the one the run reports.
+const VERIFIED_BY_RUN: &[&str] = &[
+    "MER_RT_001",
+    "MER_RT_002",
+    "MER_RT_003",
+    "MER_RT_004",
+    "MER_RT_005",
+    "MER_RT_006",
+    "MER_RT_008",
+    "MER_RT_009",
+    "MER_RT_010",
+    "MER_RT_011",
+    "MER_RT_012",
+];
+
+/// Codes whose `Before` example is verified through `miri run` on a machine
+/// with a GPU: the device is what refuses the launch, so a run without one
+/// cannot reach the code.
+const VERIFIED_BY_RUN_ON_GPU: &[&str] = &["MER_RT_013"];
+
+/// Codes whose `Before` example is verified through another command, given
+/// the file and the flags that make the request.
+///
+/// The page's `Before` spells the same command and flags, so a reader can
+/// repeat it; the gate checks that it does.
+const VERIFIED_BY_COMMAND: &[(&str, &str, &[&str])] = &[
+    ("MER_BLD_004", "view", &["--fn", "lenght"]),
+    ("MER_BLD_005", "view", &["--fn", "draw"]),
+    (
+        "MER_BLD_006",
+        "view",
+        &["--fn", "main", "--around", "// tally the results"],
+    ),
+    (
+        "MER_BLD_007",
+        "view",
+        &["--fn", "main", "--around", "index"],
+    ),
+    (
+        "MER_BLD_009",
+        "patch",
+        &[
+            "--replace-in-fn",
+            "main",
+            "--old",
+            "x + 1",
+            "--new",
+            "x * 2",
+            "--expect-sha",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ],
+    ),
+    (
+        "MER_BLD_010",
+        "patch",
+        &[
+            "--replace-in-fn",
+            "demo",
+            "--old",
+            "1 + 1",
+            "--new",
+            "2 + 2",
+        ],
+    ),
+    (
+        "MER_BLD_011",
+        "patch",
+        &[
+            "--replace-in-fn",
+            "add",
+            "--old",
+            "a + b",
+            "--new",
+            "a + true",
+        ],
+    ),
+    (
+        "MER_BLD_012",
+        "patch",
+        &["--replace-in-fn", "total", "--old", "sum + 1"],
+    ),
+    (
+        "MER_BLD_017",
+        "patch",
+        &["--insert-fn", "helper", "--body-file", "-"],
+    ),
+    ("MER_BLD_022", "view", &["--type", "Circel"]),
+    (
+        "MER_BLD_023",
+        "view",
+        &["--fn", "Inventory.total_value", "--around", "float"],
+    ),
+    ("MER_BLD_025", "test", &[]),
+    ("MER_TAR_010", "build", &["--target", "web-gpu"]),
+];
+
+/// Codes whose `Before` example is verified through `miri fix`, with the
+/// flags that ask it to apply.
+const VERIFIED_BY_FIX: &[(&str, &[&str])] = &[
+    ("MER_BLD_002", &["--apply", "--yes"]),
+    ("MER_BLD_020", &["--apply", "--yes"]),
+];
+
+/// Why a refusal made while lowering a function body does not reach the
+/// author under its own code: the pipeline reports every lowering failure
+/// outside the target and instantiation-limit codes as `MER_CG_008`, an
+/// internal compiler error, with the original message after
+/// "MIR lowering failed for".
+const LOWERING_REPORTS_INTERNAL_ERROR: &str =
+    "raised while lowering a function body, and the pipeline reports every lowering \
+     refusal outside the target and instantiation-limit codes as MER_CG_008";
+
+/// Codes no documented example can reach, each with the reason.
+///
+/// A code belongs here only when no source file raises it through any
+/// command. The ceiling below keeps the list from growing.
 const NOT_VERIFIABLE: &[(&str, &str)] = &[
-    ("MER_BLD_021", "raised by run/build about the program as a whole; documented with shell prose because no source line carries it"),
-    ("MER_BLD_022", "raised by the view command when asked about a type name not in scope, not by compiling a source file"),
-    ("MER_BLD_023", "raised by the view command when an anchor narrows nothing, not by compiling a source file"),
+    ("MER_BLD_021", "`run` and `build` report it as a warning, and their JSON envelope carries errors only, printing warnings to stderr as text; no envelope a gate can read holds it"),
     ("MER_BLD_024", "raised by the agent session when a message on stdin is not a Content-Length frame, not by compiling a source file"),
-    ("MER_BLD_025", "raised by the test runner when a walk turned up no `@test` at all, not by compiling a source file"),
-    ("MER_BLD_026", "raised by run/build about a file whose only callable code is tests; reports which command was used rather than a property of any source line"),
-    ("MER_BLD_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_BLD_002", "emitted by CLI refusal logic, not by compiling a source file"),
-    ("MER_BLD_003", "emitted by comparing two builds' artifacts, not by compiling a source file"),
-    ("MER_BLD_004", "emitted by the view command's name resolution, not by compiling a source file"),
-    ("MER_BLD_005", "emitted by the view command's name resolution, not by compiling a source file"),
-    ("MER_BLD_006", "emitted by the view or patch command's anchor matching, not by compiling a source file"),
-    ("MER_BLD_007", "emitted by the view or patch command's anchor matching, not by compiling a source file"),
-    ("MER_BLD_008", "reports a file the command could not read, not a property of any source file"),
-    ("MER_BLD_009", "emitted by the patch command when given a stale SHA-256, not by compiling a source file"),
-    ("MER_BLD_010", "emitted by the patch command's token alignment, not by compiling a source file"),
-    ("MER_BLD_011", "emitted by the patch command when re-validation fails, not by compiling a source file"),
-    ("MER_BLD_012", "reports edit flags that do not describe a coherent edit, not a property of any source file"),
+    ("MER_BLD_026", "`build` reports it as a note, and its JSON envelope carries errors only, printing notes to stderr as text; no envelope a gate can read holds it"),
+    ("MER_BLD_001", "raised by `miri explain` for a code the registry does not hold, not by any source file"),
+    ("MER_BLD_003", "raised by comparing two builds of one file, and no known source builds differently twice, so there is no example to run"),
+    ("MER_BLD_008", "reports a file the command could not read; a source file an example writes is always readable"),
     ("MER_BLD_013", "names a skill the build does not carry, which is a property of the binary rather than of any source file"),
     ("MER_BLD_014", "reports an installed skill file that has been edited since it was written, not a property of any source file"),
     ("MER_BLD_015", "reports a directory the skill command cannot write to, not a property of any source file"),
     ("MER_BLD_016", "reports a skill embedded in this build whose header cannot be read, not a property of any source file"),
-    ("MER_BLD_017", "emitted by the patch command's insert operation when a declaration already exists, not by compiling a source file"),
-    ("MER_BLD_018", "emitted by the fmt command when a second render disagrees with the first, not by compiling a source file"),
-    ("MER_BLD_019", "emitted by the fmt command when rendering would drop a comment, not by compiling a source file"),
-    ("MER_BLD_020", "reports that an apply wrote nothing because no error carried a repair, not a property of any source file"),
-    ("MER_CG_001", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_CG_002", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_CG_003", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_CG_004", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_CG_005", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_CG_006", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_CG_007", "selected by a build flag rather than by source"),
-    ("MER_CG_008", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_IMP_001", "needs several files; there is no single-file reproduction"),
-    ("MER_IMP_003", "needs several files; there is no single-file reproduction"),
-    ("MER_LEX_009", "no check currently reports this condition"),
-    ("MER_LEX_010", "shadowed: MER_LEX_001 is reported first"),
-    ("MER_MIR_001", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_MIR_002", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_MIR_003", "shadowed: MER_TYP_034 is reported first"),
+    ("MER_BLD_018", "a guard against a formatter defect: no known source renders differently a second time, so there is no example to run"),
+    ("MER_BLD_019", "a guard against a formatter defect: no known source makes the renderer drop a comment or a word, so there is no example to run"),
+    ("MER_CG_001", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_002", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_003", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_004", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_005", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_006", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_007", "`build --cpu-backend llvm` reports the refusal as MER_CG_008: the backend error reaches the report as text, which drops its own code"),
+    ("MER_IMP_001", "needs two files that import each other; an example is a single file"),
+    ("MER_LEX_009", "the lexer forms a regex token only when both quotes are present, so the check never fails; an unterminated regex is MER_LEX_001"),
+    ("MER_LEX_010", "the lexer forms an f-string token only when both quotes are present, so the check never fails; an unterminated f-string is MER_LEX_001"),
+    ("MER_MIR_001", "every expression the type checker accepts lowers; one lowering could not handle would be reported as MER_CG_008, as every lowering refusal is"),
+    ("MER_MIR_002", "every statement the type checker accepts lowers; one lowering could not handle would be reported as MER_CG_008, as every lowering refusal is"),
+    ("MER_MIR_003", "the type checker refuses an undefined name first (MER_TYP_034), and lowering's own check would be reported as MER_CG_008"),
     ("MER_MIR_004", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_MIR_005", "shadowed: MER_TAR_005 is reported first"),
-    ("MER_MIR_006", "shadowed: MER_TYP_050 is reported first"),
-    ("MER_MIR_007", "shadowed: MER_PAR_004 is reported first"),
-    ("MER_MIR_008", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_MIR_009", "no check currently reports this condition"),
-    ("MER_MIR_010", "shadowed: MER_TYP_030 is reported first"),
-    ("MER_MIR_011", "shadowed: MER_TYP_043 is reported first"),
-    ("MER_MIR_012", "shadowed: MER_TYP_030 is reported first"),
+    ("MER_MIR_005", "the type checker refuses a `break` outside a loop first (MER_TAR_005), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_006", "the type checker refuses a `continue` outside a loop first (MER_TYP_050), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_007", "the parser refuses an invalid assignment target first (MER_PAR_004), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_008", "every operator the type checker accepts lowers; one lowering could not handle would be reported as MER_CG_008, as every lowering refusal is"),
+    ("MER_MIR_009", "raised only for a range form the type checker accepts and lowering cannot iterate, and none is known; lowering's refusal would be reported as MER_CG_008 in any case"),
+    ("MER_MIR_010", "the type checker refuses a launch with the wrong arguments first (MER_TYP_030), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_011", "the type checker refuses an unknown type first (MER_TYP_043), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_012", "the type checker refuses a missing struct field first (MER_TYP_030), and lowering's own check would be reported as MER_CG_008"),
     ("MER_MIR_013", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_MIR_014", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_NAM_003", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_OWN_002", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_PAR_006", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_PAR_007", "shadowed: MER_LEX_001 is reported first"),
-    ("MER_PAR_008", "shadowed: MER_TYP_034 is reported first"),
-    ("MER_PAR_009", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_RT_001", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_002", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_003", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_004", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_005", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_006", "kills the program with a signal at run time, which a static check cannot observe"),
-    ("MER_RT_007", "kills the program with a signal at run time, which a static check cannot observe"),
-    ("MER_RT_008", "kills the program with a signal at run time, which a static check cannot observe"),
-    ("MER_RT_009", "kills the program with a signal at run time, which a static check cannot observe"),
-    ("MER_RT_010", "kills the program with a signal at run time, which a static check cannot observe"),
-    ("MER_RT_011", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_012", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_013", "traps while the program runs, which a static check cannot observe"),
-    ("MER_RT_014", "traps while the program runs, which a static check cannot observe"),
-    ("MER_TAR_001", "shadowed: MER_TYP_034 is reported first"),
-    ("MER_TAR_003", "needs GPU lowering, which a host check does not perform"),
-    ("MER_TAR_010", "raised only by `build --target web-gpu`, which a host check does not perform"),
-    ("MER_TAR_004", "shadowed: MER_TYP_034 is reported first"),
-    ("MER_TYP_019", "no check currently reports this condition"),
-    ("MER_TYP_020", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_021", "no check currently reports this condition"),
-    ("MER_TYP_022", "no check currently reports this condition"),
-    ("MER_TYP_029", "shadowed: MER_TYP_033 is reported first"),
-    ("MER_TYP_035", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_036", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_037", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_047", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_049", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_050", "shadowed: MER_TAR_005 is reported first"),
-    ("MER_TYP_052", "shadowed: MER_TYP_034 is reported first"),
-    ("MER_TYP_055", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_056", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_057", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_058", "shadowed: MER_PAR_013 is reported first"),
-    ("MER_TYP_059", "shadowed: MER_PAR_014 is reported first"),
-    ("MER_TYP_062", "shadowed: MER_PAR_001 is reported first"),
-    ("MER_TYP_064", "no check currently reports this condition"),
-    ("MER_TYP_066", "shadowed: MER_PAR_001 is reported first"),
+    ("MER_NAM_003", "the parser builds an import path from names joined by dots, so the path never holds `/`, `\\` or `..`; such a path is refused by the parser first (MER_PAR_001)"),
+    ("MER_OWN_002", "no source spelling produces a linear type: the parser never builds one, so no variable is ever tracked as linear"),
+    ("MER_PAR_006", "every float token the lexer forms parses as a float (an exponent past the range reads as infinity), so the check never fails"),
+    ("MER_PAR_007", "the lexer forms a string token only when both quotes are present, so the check never fails; an unterminated string is MER_LEX_001"),
+    ("MER_PAR_008", "the lexer forms a boolean token only from `true` or `false`, so the check never fails; any other word is a name"),
+    ("MER_RT_007", "a bus error needs a misaligned or unmapped access the compiler never emits, and SIGBUS has a different number on macOS and Linux, so no portable program raises it"),
+    ("MER_RT_014", "documented with prose: reaching it means the type checker let through a call it should have refused, so no program it handles correctly reproduces it"),
+    ("MER_TYP_019", LOWERING_REPORTS_INTERNAL_ERROR),
+    ("MER_TYP_020", "the type checker refuses an unbounded `slice` range first (MER_TYP_041), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_TYP_021", LOWERING_REPORTS_INTERNAL_ERROR),
+    ("MER_TYP_022", LOWERING_REPORTS_INTERNAL_ERROR),
+    ("MER_TYP_029", LOWERING_REPORTS_INTERNAL_ERROR),
 ];
+
+/// The most codes `NOT_VERIFIABLE` may hold.
+///
+/// Lowering this number is the only allowed direction: a code leaves the list
+/// when an example reaches it, and the ceiling follows it down. Raising it
+/// would hide a page whose example nobody checks.
+const NOT_VERIFIABLE_CEILING: usize = 48;
+
+/// Codes whose example reaches the condition its page documents, while the
+/// compiler reports it as `MER_CG_008` instead.
+///
+/// Each example is checked to report `MER_CG_008` with the refusal after
+/// "MIR lowering failed for", so the excuse stays true: once the code
+/// reaches the author as itself, this fails and the code moves to `VERIFIED`.
+const REPORTED_AS_INTERNAL_ERROR: &[&str] =
+    &["MER_TYP_019", "MER_TYP_021", "MER_TYP_022", "MER_TYP_029"];
 
 /// Read the `Before` example out of a code's documentation.
 fn before_example(code: DiagnosticCode) -> Option<String> {
@@ -231,13 +337,89 @@ fn before_example(code: DiagnosticCode) -> Option<String> {
     Some(body[..close].trim_start_matches('\n').to_string())
 }
 
-/// What one documented example reports when the compiler really reads it.
-struct Reported {
-    message: String,
+/// The command a documented example is handed to.
+#[derive(Clone, Copy, Debug)]
+enum Surface {
+    /// `miri check`: everything decided before code generation.
+    Check,
+    /// `miri run`: what stops the program while it runs.
+    Run,
+    /// Another command, with the flags that make the request.
+    Command(&'static str, &'static [&'static str]),
+    /// `miri fix`, which lists the errors it read before its verdict on them,
+    /// so the code under test is the one it reports after them.
+    Fix(&'static [&'static str]),
+}
+
+impl Surface {
+    /// The subcommand this surface names.
+    fn command(self) -> &'static str {
+        match self {
+            Surface::Check => "check",
+            Surface::Run => "run",
+            Surface::Command(command, _) => command,
+            Surface::Fix(_) => "fix",
+        }
+    }
+
+    /// The flags the request carries beyond the file.
+    fn flags(self) -> &'static [&'static str] {
+        match self {
+            Surface::Check | Surface::Run => &[],
+            Surface::Command(_, flags) | Surface::Fix(flags) => flags,
+        }
+    }
+
+    /// The arguments that hand `path` to this command, asking for JSON.
+    fn arguments(self, path: &str) -> Vec<&str> {
+        let mut arguments = vec![self.command(), path];
+        arguments.extend_from_slice(self.flags());
+        arguments.extend(["--format", "json"]);
+        arguments
+    }
+
+    /// Whether the command can finish with `status` and still have printed
+    /// its envelope. `check` exits 0 or 1, and the test runner exits 2 when it
+    /// has no verdict to give. A run exits with its program's status: 1 for a
+    /// trap, 128 plus the number of a signal that killed it.
+    fn finishes_with(self, status: i32) -> bool {
+        match self {
+            Surface::Check | Surface::Fix(_) => matches!(status, 0 | 1),
+            Surface::Command(..) => matches!(status, 0..=2),
+            Surface::Run => matches!(status, 0 | 1 | 129..=159),
+        }
+    }
+
+    /// Where the diagnostic answering for `wire` sits: first, or for `fix`
+    /// wherever the code is, since its verdict follows the errors it read.
+    fn subject_index(self, reported: &[Diagnostic], wire: &str) -> Option<usize> {
+        match self {
+            Surface::Check | Surface::Run | Surface::Command(..) => {
+                (!reported.is_empty()).then_some(0)
+            }
+            Surface::Fix(_) => reported
+                .iter()
+                .position(|d| d.code.as_deref() == Some(wire)),
+        }
+    }
+
+    /// Where the code must appear in what the command reports, in words.
+    fn expected_position(self) -> &'static str {
+        match self {
+            Surface::Check | Surface::Run | Surface::Command(..) => "first",
+            Surface::Fix(_) => "after the errors it read",
+        }
+    }
+}
+
+/// One diagnostic a command reported.
+struct Diagnostic {
+    code: Option<String>,
+    message: Option<String>,
     help: Option<String>,
 }
 
-/// Run `miri check` on one source file and return the JSON envelope it prints.
+/// Hand one source file to `surface` and return the JSON envelope it prints.
 ///
 /// The file is written inside the repository because module resolution is
 /// relative to the working directory: the same source checked from elsewhere
@@ -248,10 +430,14 @@ struct Reported {
 /// once, and a shared file is truncated by one writer while another check is
 /// reading it — the compiler then sees an empty program and reports nothing.
 ///
-/// A run that prints no envelope (a crash, a signal, an exit status `check`
-/// never uses) is an `Err` carrying the status and stderr, so a broken run is
-/// never mistaken for an example that reports no diagnostic.
-fn check_snippet(source: &str, slot: &str) -> Result<serde_json::Value, String> {
+/// A run that prints no envelope (a crash, a signal, an exit status the
+/// command never uses) is an `Err` carrying the status and stderr, so a broken
+/// run is never mistaken for an example that reports no diagnostic.
+fn snippet_envelope(
+    source: &str,
+    slot: &str,
+    surface: Surface,
+) -> Result<serde_json::Value, String> {
     static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/explain-snippets");
     std::fs::create_dir_all(&dir).expect("could not create the snippet directory");
@@ -260,22 +446,27 @@ fn check_snippet(source: &str, slot: &str) -> Result<serde_json::Value, String> 
     std::fs::write(&path, source).expect("could not write the snippet");
 
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_miri"));
+    let shown = path.display().to_string();
     let output = Command::new(binary)
-        .args(["check", &path.display().to_string(), "--format", "json"])
+        .args(surface.arguments(&shown))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output();
     let _ = std::fs::remove_file(&path);
-    envelope_of(&output.map_err(|e| format!("could not run the compiler: {}", e))?)
+    envelope_of(
+        &output.map_err(|e| format!("could not run the compiler: {}", e))?,
+        surface,
+    )
 }
 
-/// The envelope a finished `miri check` printed, or a description of a run
-/// that printed none: its exit status, stdout and stderr.
-fn envelope_of(output: &Output) -> Result<serde_json::Value, String> {
+/// The envelope a finished command printed, or a description of a run that
+/// printed none: its exit status, stdout and stderr.
+fn envelope_of(output: &Output, surface: Surface) -> Result<serde_json::Value, String> {
     let envelope = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
     match (output.status.code(), envelope) {
-        (Some(0 | 1), Some(envelope)) => Ok(envelope),
+        (Some(status), Some(envelope)) if surface.finishes_with(status) => Ok(envelope),
         (_, _) => Err(format!(
-            "`miri check` printed no diagnostic envelope ({}); stdout: {:?}; stderr: {:?}",
+            "`miri {}` printed no diagnostic envelope ({}); stdout: {:?}; stderr: {:?}",
+            surface.command(),
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -283,32 +474,51 @@ fn envelope_of(output: &Output) -> Result<serde_json::Value, String> {
     }
 }
 
-/// Compile a source file and extract the first diagnostic it reports.
-fn first_diagnostic(source: &str, slot: &str) -> Result<Option<Reported>, String> {
-    let envelope = check_snippet(source, slot)?;
+/// Hand a source file to `surface` and read every diagnostic it reports, in
+/// order.
+fn report_of(source: &str, slot: &str, surface: Surface) -> Result<Vec<Diagnostic>, String> {
+    let envelope = snippet_envelope(source, slot, surface)?;
+    let text_of = |d: &serde_json::Value, field: &str| d[field].as_str().map(str::to_string);
     Ok(envelope["diagnostics"]
         .as_array()
-        .and_then(|items| items.first())
-        .and_then(|d| {
-            Some(Reported {
-                message: d["message"].as_str()?.to_string(),
-                help: d["help"].as_str().map(str::to_string),
-            })
-        }))
+        .into_iter()
+        .flatten()
+        .map(|d| Diagnostic {
+            code: text_of(d, "code"),
+            message: text_of(d, "message"),
+            help: text_of(d, "help"),
+        })
+        .collect())
 }
 
 /// All diagnostic codes reported by `miri check` for one source file.
 fn codes_reported_for(source: &str, slot: &str) -> Result<Vec<String>, String> {
-    let envelope = check_snippet(source, slot)?;
-    Ok(envelope["diagnostics"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|d| d["code"].as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default())
+    Ok(codes_of(&report_of(source, slot, Surface::Check)?))
+}
+
+/// The codes a report carries, in order.
+fn codes_of(reported: &[Diagnostic]) -> Vec<String> {
+    reported.iter().filter_map(|d| d.code.clone()).collect()
+}
+
+/// Every code whose documented example a host gate verifies, with the command
+/// it is verified through.
+fn verified_on_host() -> impl Iterator<Item = (&'static str, Surface)> {
+    let checked = VERIFIED.iter().map(|wire| (*wire, Surface::Check));
+    let run = VERIFIED_BY_RUN.iter().map(|wire| (*wire, Surface::Run));
+    let commanded = VERIFIED_BY_COMMAND
+        .iter()
+        .map(|(wire, command, flags)| (*wire, Surface::Command(command, flags)));
+    let fixed = VERIFIED_BY_FIX
+        .iter()
+        .map(|(wire, flags)| (*wire, Surface::Fix(flags)));
+    checked.chain(run).chain(commanded).chain(fixed)
+}
+
+/// Every code whose documented example some gate verifies, on any machine.
+fn verified_anywhere() -> impl Iterator<Item = &'static str> {
+    let on_gpu = VERIFIED_BY_RUN_ON_GPU.iter().copied();
+    verified_on_host().map(|(wire, _)| wire).chain(on_gpu)
 }
 
 /// Check if a message matches one of the documented shapes.
@@ -395,88 +605,140 @@ fn every_live_code_is_either_verified_or_carries_a_reason() {
             continue;
         }
         let wire = code.as_str();
-        let verified = VERIFIED.contains(&wire);
-        let excused = NOT_VERIFIABLE.iter().any(|(c, _)| *c == wire);
+        let verified = verified_anywhere().filter(|gated| *gated == wire).count();
+        let excused = NOT_VERIFIABLE.iter().filter(|(c, _)| *c == wire).count();
         assert!(
-            verified != excused,
-            "{} must be in exactly one of the two lists: its example is either \
-             checked against the compiler, or it states why it cannot be",
+            verified + excused == 1,
+            "{} must be in exactly one list: its example is either checked \
+             against the compiler through one command, or it states why it cannot be",
             wire
         );
     }
 }
 
+/// The unverifiable list may shrink, never grow.
+#[test]
+fn the_unverifiable_list_stays_under_its_ceiling() {
+    assert!(
+        NOT_VERIFIABLE.len() <= NOT_VERIFIABLE_CEILING,
+        "NOT_VERIFIABLE holds {} codes, past its ceiling of {}: give the new code \
+         an example some command reaches instead of an excuse",
+        NOT_VERIFIABLE.len(),
+        NOT_VERIFIABLE_CEILING
+    );
+}
+
+/// Panic with every failure a gate collected, or return when there is none.
+fn assert_no_failures(what: &str, failures: Vec<String>) {
+    if !failures.is_empty() {
+        panic!("{} {}:\n  {}", failures.len(), what, failures.join("\n  "));
+    }
+}
+
+/// What the `Before` example on one page reports through its command.
+struct Example {
+    code: DiagnosticCode,
+    codes: Vec<String>,
+    subject: Option<Diagnostic>,
+}
+
+/// Hand the `Before` example on `wire`'s page to `surface`, and read what it
+/// reports.
+fn reported_example(wire: &str, surface: Surface) -> Result<Example, String> {
+    let code: DiagnosticCode = wire
+        .parse()
+        .map_err(|_| format!("{} is not a registered code", wire))?;
+    let example = before_example(code).ok_or_else(|| format!("{} has no Before example", wire))?;
+    let reported =
+        report_of(&example, wire, surface).map_err(|run| format!("{}: {}", wire, run))?;
+    let codes = codes_of(&reported);
+    let subject = surface
+        .subject_index(&reported, wire)
+        .and_then(|index| reported.into_iter().nth(index));
+    Ok(Example {
+        code,
+        codes,
+        subject,
+    })
+}
+
+/// What is wrong with one gated example: it must report its own code where
+/// its command puts it, in a message one of its page's declared shapes
+/// matches, and its page must spell the command it is verified through.
+fn example_failures(wire: &str, surface: Surface) -> Vec<String> {
+    let example = match reported_example(wire, surface) {
+        Ok(found) => found,
+        Err(failure) => return vec![failure],
+    };
+    let mut failures: Vec<String> = page_spelling_failure(example.code, surface)
+        .into_iter()
+        .collect();
+    let subject = example.subject.as_ref();
+    if subject.and_then(|d| d.code.as_deref()) != Some(wire) {
+        failures.push(format!(
+            "{}: `miri {}` on the documented example must report it {}; it reported {:?}",
+            wire,
+            surface.command(),
+            surface.expected_position(),
+            example.codes
+        ));
+    }
+    let shapes = example.code.explanation().messages;
+    match subject.and_then(|d| d.message.as_deref()) {
+        _ if shapes.is_empty() => failures.push(format!(
+            "{} has no ## Messages section documenting the shapes this code can emit. \
+             Add a ## Messages section with backticked message shapes.",
+            wire
+        )),
+        None => failures.push(format!("{}: could not extract the first diagnostic", wire)),
+        Some(message)
+            if !shapes
+                .iter()
+                .any(|shape| message_matches_shape(message, shape)) =>
+        {
+            failures.push(format!(
+                "{}: the first diagnostic message '{}' does not match any declared shape: {:?}",
+                wire, message, shapes
+            ))
+        }
+        Some(_) => {}
+    }
+    failures
+}
+
+/// A page verified through a command other than `check` or `run` must spell
+/// that command and every flag in its `Before`, so a reader repeating it gets
+/// what the gate got.
+fn page_spelling_failure(code: DiagnosticCode, surface: Surface) -> Option<String> {
+    if matches!(surface, Surface::Check | Surface::Run) {
+        return None;
+    }
+    let doc = code.doc();
+    let before = doc
+        .split("## Before")
+        .nth(1)
+        .and_then(|rest| rest.split("## After").next())
+        .unwrap_or_default();
+    let invocation = format!("miri {}", surface.command());
+    let missing: Vec<&str> = std::iter::once(invocation.as_str())
+        .chain(surface.flags().iter().copied())
+        .filter(|part| !before.contains(part))
+        .collect();
+    (!missing.is_empty()).then(|| {
+        format!(
+            "{}: its Before section must spell the command it is verified through; it lacks {:?}",
+            code.as_str(),
+            missing
+        )
+    })
+}
+
 #[test]
 fn verified_examples_emit_the_code_they_document() {
-    let mut failures = Vec::new();
-
-    for wire in VERIFIED {
-        let code: DiagnosticCode = match wire.parse() {
-            Ok(c) => c,
-            Err(_) => {
-                failures.push(format!("{} is not a registered code", wire));
-                continue;
-            }
-        };
-
-        let example = match before_example(code) {
-            Some(e) => e,
-            None => {
-                failures.push(format!("{} has no Before example", wire));
-                continue;
-            }
-        };
-
-        match codes_reported_for(&example, wire) {
-            Ok(reported) if reported.first().map(String::as_str) != Some(*wire) => {
-                failures.push(format!(
-                    "{}: the documented example must report it first; it reported {:?}",
-                    wire, reported
-                ));
-            }
-            Ok(_) => {}
-            Err(run) => failures.push(format!("{}: {}", wire, run)),
-        }
-
-        // Also verify that the message matches a documented shape
-        let explanation = code.explanation();
-        if explanation.messages.is_empty() {
-            failures.push(format!(
-                "{} has no ## Messages section documenting the shapes this code can emit. \
-                 Add a ## Messages section with backticked message shapes.",
-                wire
-            ));
-            continue;
-        }
-
-        match first_diagnostic(&example, wire) {
-            Ok(Some(reported)) => {
-                let matches_any = explanation
-                    .messages
-                    .iter()
-                    .any(|shape| message_matches_shape(&reported.message, shape));
-
-                if !matches_any {
-                    failures.push(format!(
-                        "{}: the first diagnostic message '{}' does not match any declared shape: {:?}",
-                        wire, reported.message, explanation.messages
-                    ));
-                }
-            }
-            Ok(None) => {
-                failures.push(format!("{}: could not extract the first diagnostic", wire));
-            }
-            Err(run) => failures.push(format!("{}: {}", wire, run)),
-        }
-    }
-
-    if !failures.is_empty() {
-        panic!(
-            "{} verified codes failed:\n  {}",
-            failures.len(),
-            failures.join("\n  ")
-        );
-    }
+    let failures = verified_on_host()
+        .flat_map(|(wire, surface)| example_failures(wire, surface))
+        .collect();
+    assert_no_failures("verified codes failed", failures);
 }
 
 /// Codes whose documented example reports a diagnostic carrying no `help`.
@@ -487,10 +749,25 @@ fn verified_examples_emit_the_code_they_document() {
 /// here keeps that gap countable and stops it growing silently.
 const NO_HELP_EMITTED: &[&str] = &[
     "MER_IMP_002",
+    "MER_IMP_003",
     "MER_OWN_003",
     "MER_OWN_004",
     "MER_PAR_001",
+    "MER_RT_001",
+    "MER_RT_002",
+    "MER_RT_003",
+    "MER_RT_004",
+    "MER_RT_005",
+    "MER_RT_006",
+    "MER_RT_008",
+    "MER_RT_009",
+    "MER_RT_010",
+    "MER_RT_011",
+    "MER_RT_012",
+    "MER_RT_013",
+    "MER_TAR_001",
     "MER_TAR_002",
+    "MER_TAR_004",
     "MER_TAR_005",
     "MER_TAR_006",
     "MER_TAR_007",
@@ -504,19 +781,32 @@ const NO_HELP_EMITTED: &[&str] = &[
     "MER_TYP_031",
     "MER_TYP_032",
     "MER_TYP_034",
+    "MER_TYP_035",
+    "MER_TYP_036",
+    "MER_TYP_037",
     "MER_TYP_039",
     "MER_TYP_040",
     "MER_TYP_041",
     "MER_TYP_042",
     "MER_TYP_043",
     "MER_TYP_044",
+    "MER_TYP_047",
     "MER_TYP_048",
+    "MER_TYP_049",
+    "MER_TYP_050",
     "MER_TYP_051",
+    "MER_TYP_052",
     "MER_TYP_053",
     "MER_TYP_054",
+    "MER_TYP_055",
+    "MER_TYP_056",
+    "MER_TYP_059",
     "MER_TYP_060",
+    "MER_TYP_062",
     "MER_TYP_063",
+    "MER_TYP_064",
     "MER_TYP_065",
+    "MER_TYP_066",
     "MER_TYP_067",
     "MER_TYP_068",
 ];
@@ -531,85 +821,88 @@ const NO_HELP_EMITTED: &[&str] = &[
 /// quotes it.
 #[test]
 fn verified_pages_declare_the_help_that_fires() {
-    let mut failures = Vec::new();
+    let failures = verified_on_host()
+        .flat_map(|(wire, surface)| help_failures(wire, surface))
+        .collect();
+    assert_no_failures("pages disagree with the help that fires", failures);
+}
 
-    for wire in VERIFIED {
-        let Ok(code) = wire.parse::<DiagnosticCode>() else {
-            failures.push(format!("{} is not a registered code", wire));
-            continue;
-        };
-        let Some(example) = before_example(code) else {
-            failures.push(format!("{} has no Before example", wire));
-            continue;
-        };
-        let reported = match first_diagnostic(&example, wire) {
-            Ok(Some(reported)) => reported,
-            Ok(None) => {
-                failures.push(format!("{}: could not extract the first diagnostic", wire));
-                continue;
-            }
-            Err(run) => {
-                failures.push(format!("{}: {}", wire, run));
-                continue;
-            }
-        };
-        let declared = code.explanation().helps;
-        let silent = NO_HELP_EMITTED.contains(wire);
-
-        match reported.help {
-            Some(help) => {
-                if silent {
-                    failures.push(format!(
-                        "{} is listed as emitting no help, but it emitted '{}'; \
-                         remove it from NO_HELP_EMITTED and declare the help on its page",
-                        wire, help
-                    ));
-                    continue;
-                }
-                if declared.is_empty() {
-                    failures.push(format!(
-                        "{} emits the help '{}' but its page declares none. \
-                         Add a ## Help section carrying it as a backticked shape.",
-                        wire, help
-                    ));
-                    continue;
-                }
-                if !declared
-                    .iter()
-                    .any(|shape| message_matches_shape(&help, shape))
-                {
-                    failures.push(format!(
-                        "{}: the help that fires, '{}', matches no shape its page declares: {:?}",
-                        wire, help, declared
-                    ));
-                }
-            }
-            None => {
-                if !silent {
-                    failures.push(format!(
-                        "{} emits no help; add it to NO_HELP_EMITTED, or give the \
-                         diagnostic a help line that states the rule",
-                        wire
-                    ));
-                }
-                if !declared.is_empty() {
-                    failures.push(format!(
-                        "{} declares a ## Help section but its example emits no help, \
-                         so nothing proves the declaration: {:?}",
-                        wire, declared
-                    ));
-                }
-            }
+/// What is wrong with the help one gated page declares, against the help its
+/// example really reports.
+fn help_failures(wire: &str, surface: Surface) -> Vec<String> {
+    let example = match reported_example(wire, surface) {
+        Ok(found) => found,
+        Err(failure) => return vec![failure],
+    };
+    let Some(subject) = example.subject.filter(|d| d.message.is_some()) else {
+        return vec![format!("{}: could not extract the first diagnostic", wire)];
+    };
+    let declared = example.code.explanation().helps;
+    let silent = NO_HELP_EMITTED.contains(&wire);
+    match subject.help {
+        Some(help) if silent => vec![format!(
+            "{} is listed as emitting no help, but it emitted '{}'; \
+             remove it from NO_HELP_EMITTED and declare the help on its page",
+            wire, help
+        )],
+        Some(help) if declared.is_empty() => vec![format!(
+            "{} emits the help '{}' but its page declares none. \
+             Add a ## Help section carrying it as a backticked shape.",
+            wire, help
+        )],
+        Some(help)
+            if !declared
+                .iter()
+                .any(|shape| message_matches_shape(&help, shape)) =>
+        {
+            vec![format!(
+                "{}: the help that fires, '{}', matches no shape its page declares: {:?}",
+                wire, help, declared
+            )]
         }
+        Some(_) => Vec::new(),
+        None => silent_help_failures(wire, silent, &declared),
     }
+}
 
-    if !failures.is_empty() {
-        panic!(
-            "{} pages disagree with the help that fires:\n  {}",
-            failures.len(),
-            failures.join("\n  ")
-        );
+/// What is wrong with a page whose example reports no help: the code must be
+/// listed as silent, and the page must declare no help nothing proves.
+fn silent_help_failures(wire: &str, silent: bool, declared: &[String]) -> Vec<String> {
+    let mut failures = Vec::new();
+    if !silent {
+        failures.push(format!(
+            "{} emits no help; add it to NO_HELP_EMITTED, or give the \
+             diagnostic a help line that states the rule",
+            wire
+        ));
     }
+    if !declared.is_empty() {
+        failures.push(format!(
+            "{} declares a ## Help section but its example emits no help, \
+             so nothing proves the declaration: {:?}",
+            wire, declared
+        ));
+    }
+    failures
+}
+
+/// The GPU's own refusals are verified like every other run, on a machine
+/// that has one.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn gpu_examples_emit_the_code_and_help_they_document() {
+    let failures = VERIFIED_BY_RUN_ON_GPU
+        .iter()
+        .flat_map(|wire| {
+            let mut failures = example_failures(wire, Surface::Run);
+            failures.extend(help_failures(wire, Surface::Run));
+            failures
+        })
+        .collect();
+    assert_no_failures("GPU examples failed", failures);
 }
 
 /// A code listed as silent must be a live code whose page is verified.
@@ -617,7 +910,7 @@ fn verified_pages_declare_the_help_that_fires() {
 fn every_silent_code_is_verified() {
     for wire in NO_HELP_EMITTED {
         assert!(
-            VERIFIED.contains(wire),
+            verified_anywhere().any(|gated| gated == *wire),
             "{} is listed as emitting no help, but its example is not verified, \
              so nothing ever runs it to find out",
             wire
@@ -661,7 +954,7 @@ fn declared_shapes_appear_in_compiler_sources() {
             if path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .map_or(false, |n| n == "target")
+                .is_some_and(|n| n == "target")
             {
                 continue;
             }
@@ -686,7 +979,7 @@ fn declared_shapes_appear_in_compiler_sources() {
 
     let mut failures = Vec::new();
 
-    for wire in VERIFIED {
+    for wire in verified_anywhere() {
         let Ok(code) = wire.parse::<DiagnosticCode>() else {
             continue;
         };
@@ -853,6 +1146,51 @@ fn excused_examples_still_fail_to_report_their_code() {
     }
 }
 
+/// An excuse that names `MER_CG_008` has to stay true as well.
+///
+/// Each of these examples reaches the condition its page documents, and the
+/// compiler reports it as an internal error, with the refusal after "MIR
+/// lowering failed for". When the code starts reaching the author as itself,
+/// this fails, and the code belongs on the verified list.
+#[test]
+fn excused_lowering_refusals_still_surface_as_internal_errors() {
+    let internal = DiagnosticCode::CgInternalCodegenError.as_str();
+    let failures = REPORTED_AS_INTERNAL_ERROR
+        .iter()
+        .filter_map(|wire| {
+            let excused = NOT_VERIFIABLE
+                .iter()
+                .any(|(c, reason)| c == wire && *reason == LOWERING_REPORTS_INTERNAL_ERROR);
+            if !excused {
+                return Some(format!(
+                    "{} must be excused with the reason that names MER_CG_008",
+                    wire
+                ));
+            }
+            let example = match reported_example(wire, Surface::Check) {
+                Ok(found) => found,
+                Err(failure) => return Some(failure),
+            };
+            let subject = example.subject.as_ref();
+            let reported_internal = subject.and_then(|d| d.code.as_deref()) == Some(internal);
+            let carries_documented_text = subject
+                .and_then(|d| d.message.as_deref())
+                .is_some_and(|m| m.contains("MIR lowering failed for"));
+            (!reported_internal || !carries_documented_text).then(|| {
+                format!(
+                    "{}: its example no longer surfaces as {} ({:?}, {:?}); \
+                     if it now reports itself, move it to VERIFIED",
+                    wire,
+                    internal,
+                    example.codes,
+                    subject.and_then(|d| d.message.as_deref())
+                )
+            })
+        })
+        .collect();
+    assert_no_failures("lowering refusals changed how they surface", failures);
+}
+
 /// Several gates check the same documented example at the same moment, so a
 /// check must read the whole source no matter what the others are doing. A
 /// check that read a file another check was rewriting saw an empty program,
@@ -905,7 +1243,7 @@ fn a_killed_check_is_reported_with_its_stderr() {
         stdout: Vec::new(),
         stderr: b"thread 'main' has overflowed its stack".to_vec(),
     };
-    let Err(report) = envelope_of(&killed) else {
+    let Err(report) = envelope_of(&killed, Surface::Check) else {
         panic!("a killed run must not yield an envelope");
     };
     assert!(report.contains("signal: 9"), "{}", report);
@@ -923,7 +1261,7 @@ fn a_check_exiting_outside_its_statuses_is_reported() {
         stdout: br#"{"diagnostics": []}"#.to_vec(),
         stderr: b"panicked at src/main.rs".to_vec(),
     };
-    assert!(envelope_of(&crashed).is_err());
+    assert!(envelope_of(&crashed, Surface::Check).is_err());
 }
 
 #[test]
