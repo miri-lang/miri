@@ -292,3 +292,26 @@ the directory onboarding left it in, so the job's program landed where the
 scorer never looks. Cold arms get the same prompt, so the arms stay comparable;
 rounds before this change are not, for the onboarded arms' C2 and silent-wrong
 numbers.
+
+## r2b — 2026-10-13: the ten spoiled Miri cells, run again
+
+**What was re-run and why.** The 10 Miri-arm records that r2 scored as silent
+wrong answers, all caused by the onboarding working directory carrying into the
+measured session (see the instrument change above), were run again with the
+fixed prompt: 06-gpu-life/miri-both/claude-sonnet/1, 06-gpu-life/miri-grammar/claude-haiku/3, 07-gpu-escape-time/miri-both/claude-sonnet/1, 07-gpu-escape-time/miri-both/claude-sonnet/2, 07-gpu-escape-time/miri-grammar/claude-haiku/1, 07-gpu-escape-time/miri-grammar/claude-haiku/2, 08-gpu-histogram/miri-grammar/claude-haiku/1, 08-gpu-histogram/miri-grammar/claude-haiku/3, 08-gpu-histogram/miri-grammar/claude-sonnet/1, 09-gpu-particles/miri-skill/claude-haiku/3.
+Each ran through `bench.py --replace`, so its record keeps the one it replaced,
+with the reason, under `replaced`. Same jobs, arms, models and caps; a fresh
+scratch root; every run isolated (`apiKeySource` none). The compiler is newer
+than the rest of the round: release build of `0abbc3c7` against r2's
+`8a4ac959`, so these ten runs also carry the compiler changes between them.
+
+**Result.** 10 of 10 finished green on every hidden case; none
+answered wrong silently. Across the Miri arms, silent wrong answers went from
+10 to 0 and green runs from 125 to 135 of 135. The
+ten r2 silent wrong answers were the instrument, not the language.
+
+**Verdicts, as `report.py` recomputed them.** Claims held: none before,
+C2 after (C2 is correctness against both baselines). Exit
+conditions held: none before, silentWrongAnswers after. The pack loop
+still fails 4 of 15 model-job pairs and the opinion condition is unanswered,
+so the testing loop does not end. No cost claim is made from this round.

@@ -649,21 +649,21 @@
       "arm": "miri-both",
       "model": "claude-sonnet",
       "runs": 3,
-      "green": 2,
-      "finishRate": 0.667,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
-        "median": 176552.0,
+        "median": 218451,
         "min": 46490,
         "max": 306614
       },
       "wallClockToGreen": {
-        "median": 159.20000000000002,
-        "min": 52.3,
+        "median": 52.3,
+        "min": 37.7,
         "max": 266.1
       },
       "invocationsToGreen": {
-        "median": 10.5,
-        "min": 10,
+        "median": 10,
+        "min": 7,
         "max": 11
       },
       "toolchainInvocations": {
@@ -673,11 +673,11 @@
       },
       "wallClockSeconds": {
         "median": 52.3,
-        "min": 41.6,
+        "min": 37.7,
         "max": 266.1
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 1,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -686,35 +686,35 @@
       "arm": "miri-grammar",
       "model": "claude-haiku",
       "runs": 3,
-      "green": 2,
-      "finishRate": 0.667,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
-        "median": 1143236.5,
-        "min": 935283,
+        "median": 935283,
+        "min": 789403,
         "max": 1351190
       },
       "wallClockToGreen": {
-        "median": 171.65,
-        "min": 131.8,
+        "median": 131.8,
+        "min": 130.0,
         "max": 211.5
       },
       "invocationsToGreen": {
-        "median": 23.5,
+        "median": 21,
         "min": 21,
         "max": 26
       },
       "toolchainInvocations": {
         "median": 7,
-        "min": 3,
+        "min": 7,
         "max": 7
       },
       "wallClockSeconds": {
         "median": 131.8,
-        "min": 97.6,
+        "min": 130.0,
         "max": 211.5
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 1,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -1204,22 +1204,22 @@
       "arm": "miri-both",
       "model": "claude-sonnet",
       "runs": 3,
-      "green": 1,
-      "finishRate": 0.333,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
         "median": 271763,
-        "min": 271763,
-        "max": 271763
+        "min": 265812,
+        "max": 359757
       },
       "wallClockToGreen": {
-        "median": 33.5,
+        "median": 38.9,
         "min": 33.5,
-        "max": 33.5
+        "max": 69.4
       },
       "invocationsToGreen": {
         "median": 6,
         "min": 6,
-        "max": 6
+        "max": 8
       },
       "toolchainInvocations": {
         "median": 4,
@@ -1227,12 +1227,12 @@
         "max": 5
       },
       "wallClockSeconds": {
-        "median": 99.9,
+        "median": 38.9,
         "min": 33.5,
-        "max": 102.6
+        "max": 69.4
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 2,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -1241,35 +1241,35 @@
       "arm": "miri-grammar",
       "model": "claude-haiku",
       "runs": 3,
-      "green": 1,
-      "finishRate": 0.333,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
-        "median": 1016035,
+        "median": 1540405,
         "min": 1016035,
-        "max": 1016035
+        "max": 1798356
       },
       "wallClockToGreen": {
-        "median": 146.5,
+        "median": 212.0,
         "min": 146.5,
-        "max": 146.5
+        "max": 240.8
       },
       "invocationsToGreen": {
-        "median": 22,
+        "median": 29,
         "min": 22,
-        "max": 22
+        "max": 33
       },
       "toolchainInvocations": {
-        "median": 3,
+        "median": 8,
         "min": 3,
-        "max": 5
+        "max": 12
       },
       "wallClockSeconds": {
-        "median": 161.0,
+        "median": 212.0,
         "min": 146.5,
-        "max": 166.9
+        "max": 240.8
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 2,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -1796,35 +1796,35 @@
       "arm": "miri-grammar",
       "model": "claude-haiku",
       "runs": 3,
-      "green": 1,
-      "finishRate": 0.333,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
-        "median": 1349685,
-        "min": 1349685,
+        "median": 1349549,
+        "min": 1183644,
         "max": 1349685
       },
       "wallClockToGreen": {
-        "median": 95.5,
+        "median": 101.6,
         "min": 95.5,
-        "max": 95.5
+        "max": 114.8
       },
       "invocationsToGreen": {
-        "median": 25,
+        "median": 26,
         "min": 25,
-        "max": 25
+        "max": 26
       },
       "toolchainInvocations": {
-        "median": 6,
-        "min": 4,
-        "max": 7
+        "median": 10,
+        "min": 6,
+        "max": 11
       },
       "wallClockSeconds": {
-        "median": 97.8,
+        "median": 101.6,
         "min": 95.5,
-        "max": 119.1
+        "max": 114.8
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 2,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -1870,21 +1870,21 @@
       "arm": "miri-grammar",
       "model": "claude-sonnet",
       "runs": 3,
-      "green": 2,
-      "finishRate": 0.667,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
-        "median": 670661.5,
-        "min": 592063,
+        "median": 592063,
+        "min": 516498,
         "max": 749260
       },
       "wallClockToGreen": {
-        "median": 55.85,
+        "median": 52.3,
         "min": 50.5,
         "max": 61.2
       },
       "invocationsToGreen": {
-        "median": 18.0,
-        "min": 16,
+        "median": 16,
+        "min": 15,
         "max": 20
       },
       "toolchainInvocations": {
@@ -1893,12 +1893,12 @@
         "max": 7
       },
       "wallClockSeconds": {
-        "median": 61.2,
+        "median": 52.3,
         "min": 50.5,
-        "max": 62.2
+        "max": 61.2
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 1,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -2462,35 +2462,35 @@
       "arm": "miri-skill",
       "model": "claude-haiku",
       "runs": 3,
-      "green": 2,
-      "finishRate": 0.667,
+      "green": 3,
+      "finishRate": 1.0,
       "tokensToGreen": {
-        "median": 870846.5,
+        "median": 912872,
         "min": 828821,
-        "max": 912872
+        "max": 1080131
       },
       "wallClockToGreen": {
-        "median": 189.39999999999998,
-        "min": 124.1,
+        "median": 124.1,
+        "min": 122.8,
         "max": 254.7
       },
       "invocationsToGreen": {
-        "median": 17.5,
+        "median": 18,
         "min": 17,
-        "max": 18
+        "max": 21
       },
       "toolchainInvocations": {
         "median": 4,
-        "min": 4,
+        "min": 3,
         "max": 5
       },
       "wallClockSeconds": {
-        "median": 181.4,
-        "min": 124.1,
+        "median": 124.1,
+        "min": 122.8,
         "max": 254.7
       },
       "costUnobserved": 0,
-      "silentWrongAnswers": 1,
+      "silentWrongAnswers": 0,
       "capped": 0,
       "abandoned": 0
     },
@@ -2879,20 +2879,20 @@
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": false,
-          "reason": "miri-skill 870846.5 against the better baseline 251659"
+          "reason": "miri-skill 912872 against the better baseline 251659"
         },
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": true,
-          "reason": "miri-skill 870846.5 against python 251659",
+          "reason": "miri-skill 912872 against python 251659",
           "standing": "behind"
         },
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": true,
-          "reason": "miri-skill 870846.5 against rust 321495",
+          "reason": "miri-skill 912872 against rust 321495",
           "standing": "behind"
         },
         {
@@ -3098,19 +3098,19 @@
       ]
     },
     "C2": {
-      "held": false,
+      "held": true,
       "detail": [
         {
           "job": "gpu jobs",
           "model": "claude-haiku",
           "held": true,
-          "reason": "miri-skill 1 against python 1"
+          "reason": "miri-skill 0 against python 1"
         },
         {
           "job": "gpu jobs",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "miri-skill 1 against rust 0"
+          "held": true,
+          "reason": "miri-skill 0 against rust 0"
         },
         {
           "job": "gpu jobs",
@@ -3169,7 +3169,7 @@
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": false,
-          "reason": "miri-skill 870846.5 against the cheapest baseline 251659"
+          "reason": "miri-skill 912872 against the cheapest baseline 251659"
         },
         {
           "job": "05-gpu-heat",
@@ -3252,8 +3252,8 @@
         {
           "job": "06-gpu-life",
           "model": "claude-haiku",
-          "held": true,
-          "reason": "cost 1034999 against 1143236.5, finish rate 1.0 against 0.667"
+          "held": false,
+          "reason": "cost 1034999 against 935283, finish rate 1.0 against 1.0"
         },
         {
           "job": "06-gpu-life",
@@ -3265,8 +3265,8 @@
         {
           "job": "07-gpu-escape-time",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "cost 1247894 against 1016035, finish rate 1.0 against 0.333"
+          "held": true,
+          "reason": "cost 1247894 against 1540405, finish rate 1.0 against 1.0"
         },
         {
           "job": "07-gpu-escape-time",
@@ -3279,7 +3279,7 @@
           "job": "08-gpu-histogram",
           "model": "claude-haiku",
           "held": true,
-          "reason": "cost 1314864 against 1349685, finish rate 1.0 against 0.333"
+          "reason": "cost 1314864 against 1349549, finish rate 1.0 against 1.0"
         },
         {
           "job": "08-gpu-histogram",
@@ -3291,14 +3291,14 @@
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "cost 870846.5 against 1864023, finish rate 0.667 against 1.0"
+          "held": true,
+          "reason": "cost 912872 against 1864023, finish rate 1.0 against 1.0"
         },
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": true,
-          "reason": "miri-both 1370057 against miri-skill 870846.5",
+          "reason": "miri-both 1370057 against miri-skill 912872",
           "standing": "behind"
         },
         {
@@ -3389,7 +3389,7 @@
           "job": "06-gpu-life",
           "model": "claude-sonnet",
           "held": true,
-          "reason": "miri-both 176552.0 against miri-skill 306953",
+          "reason": "miri-both 218451 against miri-skill 306953",
           "standing": "beats"
         },
         {
@@ -3409,7 +3409,7 @@
           "job": "08-gpu-histogram",
           "model": "claude-sonnet",
           "held": false,
-          "reason": "cost 708307 against 670661.5, finish rate 1.0 against 0.667"
+          "reason": "cost 708307 against 592063, finish rate 1.0 against 1.0"
         },
         {
           "job": "08-gpu-histogram",
@@ -3520,21 +3520,21 @@
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": false,
-          "reason": "miri-skill 189.39999999999998 against the better baseline 69.3"
+          "reason": "miri-skill 124.1 against the better baseline 69.3"
         },
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": true,
-          "reason": "miri-skill 189.39999999999998 against python 69.3",
+          "reason": "miri-skill 124.1 against python 69.3",
           "standing": "behind"
         },
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": true,
-          "reason": "miri-skill 189.39999999999998 against rust 117.4",
-          "standing": "behind"
+          "reason": "miri-skill 124.1 against rust 117.4",
+          "standing": "parity"
         },
         {
           "job": "05-gpu-heat",
@@ -3741,7 +3741,7 @@
   },
   "exitCriterion": {
     "silentWrongAnswers": {
-      "held": false,
+      "held": true,
       "detail": [
         {
           "job": "05-gpu-heat",
@@ -3770,8 +3770,8 @@
         {
           "job": "06-gpu-life",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "miri-grammar recorded 1 silent wrong answers"
+          "held": true,
+          "reason": "miri-grammar recorded 0 silent wrong answers"
         },
         {
           "job": "06-gpu-life",
@@ -3788,8 +3788,8 @@
         {
           "job": "07-gpu-escape-time",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "miri-grammar recorded 2 silent wrong answers"
+          "held": true,
+          "reason": "miri-grammar recorded 0 silent wrong answers"
         },
         {
           "job": "07-gpu-escape-time",
@@ -3806,8 +3806,8 @@
         {
           "job": "08-gpu-histogram",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "miri-grammar recorded 2 silent wrong answers"
+          "held": true,
+          "reason": "miri-grammar recorded 0 silent wrong answers"
         },
         {
           "job": "08-gpu-histogram",
@@ -3818,8 +3818,8 @@
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "miri-skill recorded 1 silent wrong answers"
+          "held": true,
+          "reason": "miri-skill recorded 0 silent wrong answers"
         },
         {
           "job": "09-gpu-particles",
@@ -3956,8 +3956,8 @@
         {
           "job": "06-gpu-life",
           "model": "claude-sonnet",
-          "held": false,
-          "reason": "miri-both recorded 1 silent wrong answers"
+          "held": true,
+          "reason": "miri-both recorded 0 silent wrong answers"
         },
         {
           "job": "07-gpu-escape-time",
@@ -3974,8 +3974,8 @@
         {
           "job": "07-gpu-escape-time",
           "model": "claude-sonnet",
-          "held": false,
-          "reason": "miri-both recorded 2 silent wrong answers"
+          "held": true,
+          "reason": "miri-both recorded 0 silent wrong answers"
         },
         {
           "job": "08-gpu-histogram",
@@ -3986,8 +3986,8 @@
         {
           "job": "08-gpu-histogram",
           "model": "claude-sonnet",
-          "held": false,
-          "reason": "miri-grammar recorded 1 silent wrong answers"
+          "held": true,
+          "reason": "miri-grammar recorded 0 silent wrong answers"
         },
         {
           "job": "08-gpu-histogram",
@@ -4027,26 +4027,26 @@
         {
           "job": "06-gpu-life",
           "model": "claude-haiku",
-          "held": true,
-          "reason": "invocations to green 22 against 23.5"
+          "held": false,
+          "reason": "invocations to green 22 against 21"
         },
         {
           "job": "07-gpu-escape-time",
           "model": "claude-haiku",
-          "held": false,
-          "reason": "invocations to green 25 against 22"
+          "held": true,
+          "reason": "invocations to green 25 against 29"
         },
         {
           "job": "08-gpu-histogram",
           "model": "claude-haiku",
           "held": false,
-          "reason": "invocations to green 29 against 25"
+          "reason": "invocations to green 29 against 26"
         },
         {
           "job": "09-gpu-particles",
           "model": "claude-haiku",
           "held": true,
-          "reason": "invocations to green 17.5 against 28"
+          "reason": "invocations to green 18 against 28"
         },
         {
           "job": "05-gpu-heat",
@@ -4100,7 +4100,7 @@
           "job": "08-gpu-histogram",
           "model": "claude-sonnet",
           "held": false,
-          "reason": "invocations to green 21 against 18.0"
+          "reason": "invocations to green 21 against 16"
         },
         {
           "job": "09-gpu-particles",
@@ -4138,10 +4138,10 @@
           "MER_IMP_005": 95,
           "MER_TYP_002": 68,
           "MER_TYP_033": 33,
-          "MER_PAR_001": 29,
+          "MER_PAR_001": 28,
           "MER_TYP_042": 22,
           "MER_TYP_069": 20,
-          "MER_CG_008": 15,
+          "MER_CG_008": 16,
           "MER_TYP_043": 10,
           "MER_TYP_034": 9,
           "MER_TAR_007": 8,
@@ -4150,11 +4150,11 @@
           "MER_TAR_006": 4,
           "MER_TAR_008": 4,
           "MER_LEX_012": 3,
-          "MER_BLD_022": 2,
           "MER_TYP_072": 2,
           "MER_TYP_063": 2,
           "MER_TYP_029": 2,
           "MER_BLD_004": 1,
+          "MER_BLD_022": 1,
           "MER_TAR_003": 1,
           "MER_BLD_008": 1
         },
@@ -4166,8 +4166,9 @@
           "MER_TYP_042": 1
         },
         "lookups": {
-          "view": 357,
-          "explain": 21
+          "view": 356,
+          "explain": 21,
+          "skill": 3
         },
         "explained": {
           "MER_TYP_029": 4,
@@ -4180,13 +4181,13 @@
           "MER_TYP_020": 1,
           "MER_TAR_006": 1,
           "MER_TYP_002": 1,
-          "MER_RT_003": 1
+          "MER_CG_008": 1
         },
         "failedCycles": {
           "type": 56,
-          "syntax": 21,
+          "syntax": 20,
           "compiler": 9,
-          "build": 4,
+          "build": 3,
           "target": 3
         },
         "repairRatio": 0.026,
@@ -4194,80 +4195,79 @@
       },
       "miri-grammar": {
         "runs": 45,
-        "compiles": 387,
+        "compiles": 388,
         "fixApplied": 0,
         "diagnostics": {
-          "MER_IMP_005": 57,
-          "MER_TYP_002": 43,
-          "MER_PAR_001": 32,
-          "MER_TYP_034": 20,
+          "MER_IMP_005": 53,
+          "MER_TYP_002": 48,
+          "MER_PAR_001": 29,
+          "MER_TYP_034": 19,
           "MER_TYP_033": 13,
-          "MER_TAR_005": 11,
-          "MER_TYP_069": 7,
-          "MER_TYP_063": 7,
-          "MER_TYP_043": 5,
+          "MER_TAR_005": 9,
+          "MER_TYP_032": 8,
+          "MER_TYP_069": 5,
           "MER_CG_008": 4,
-          "MER_TYP_071": 4,
-          "MER_TAR_007": 4,
+          "MER_BLD_022": 4,
           "MER_LEX_012": 4,
-          "MER_BLD_022": 3,
+          "MER_TYP_071": 3,
+          "MER_TYP_040": 3,
           "MER_TAR_006": 2,
-          "MER_LEX_001": 2,
+          "MER_TYP_063": 2,
           "MER_BLD_008": 2,
-          "MER_TYP_067": 2,
+          "MER_TYP_043": 2,
           "MER_BLD_021": 1,
           "MER_TYP_048": 1,
-          "MER_TYP_036": 1,
-          "MER_TYP_032": 1,
           "MER_TYP_029": 1,
+          "MER_TYP_067": 1,
+          "MER_TYP_037": 1,
+          "MER_TAR_007": 1,
           "MER_TYP_065": 1,
-          "MER_BLD_025": 1
+          "MER_BLD_025": 1,
+          "MER_LEX_001": 1
         },
         "repairedDiagnostics": {
           "MER_TYP_033": 3,
-          "MER_TYP_071": 2,
-          "MER_TYP_043": 2
+          "MER_TYP_071": 2
         },
         "lookups": {
-          "view": 292,
-          "skill": 190,
+          "view": 326,
+          "skill": 193,
           "explain": 18,
           "test": 5
         },
         "explained": {
           "MER_TYP_043": 3,
-          "MER_TAR_008": 2,
           "MER_TAR_007": 2,
-          "MER_TYP_036": 1,
+          "MER_TAR_008": 1,
           "MER_TYP_029": 1
         },
         "failedCycles": {
-          "type": 46,
-          "syntax": 31,
-          "compiler": 3,
-          "build": 3,
-          "target": 1
+          "type": 45,
+          "syntax": 28,
+          "build": 4,
+          "target": 3,
+          "compiler": 3
         },
-        "repairRatio": 0.031,
-        "onboardingShare": 0.183
+        "repairRatio": 0.023,
+        "onboardingShare": 0.187
       },
       "miri-both": {
         "runs": 45,
-        "compiles": 416,
+        "compiles": 407,
         "fixApplied": 1,
         "diagnostics": {
-          "MER_IMP_005": 72,
-          "MER_TYP_002": 64,
-          "MER_PAR_001": 31,
-          "MER_TYP_033": 23,
-          "MER_TYP_069": 17,
-          "MER_TYP_034": 17,
+          "MER_IMP_005": 74,
+          "MER_TYP_002": 63,
+          "MER_PAR_001": 28,
+          "MER_TYP_033": 24,
+          "MER_TYP_034": 19,
+          "MER_TYP_069": 16,
           "MER_TAR_006": 14,
           "MER_TAR_005": 11,
           "MER_TYP_043": 10,
           "MER_TAR_007": 9,
-          "MER_TYP_040": 7,
           "MER_CG_008": 5,
+          "MER_TYP_040": 5,
           "MER_TYP_071": 4,
           "MER_TYP_063": 3,
           "MER_BLD_022": 2,
@@ -4278,15 +4278,15 @@
           "MER_LEX_012": 1
         },
         "repairedDiagnostics": {
+          "MER_TYP_033": 4,
           "MER_TYP_043": 4,
-          "MER_TYP_033": 3,
           "MER_PAR_001": 2,
+          "MER_TYP_034": 2,
           "MER_TYP_071": 1,
-          "MER_TYP_034": 1,
           "MER_TYP_072": 1
         },
         "lookups": {
-          "view": 377,
+          "view": 372,
           "explain": 14,
           "skill": 4
         },
@@ -4305,13 +4305,13 @@
         },
         "failedCycles": {
           "type": 51,
-          "syntax": 24,
-          "target": 4,
+          "syntax": 21,
+          "target": 5,
           "build": 3,
           "compiler": 2
         },
-        "repairRatio": 0.041,
-        "onboardingShare": 0.163
+        "repairRatio": 0.048,
+        "onboardingShare": 0.166
       }
     },
     "runs": [
@@ -4971,16 +4971,21 @@
       {
         "run": "06-gpu-life/miri-both/claude-sonnet/1",
         "arm": "miri-both",
-        "compiles": 5,
-        "diagnostics": {},
+        "compiles": 4,
+        "diagnostics": {
+          "MER_TYP_033": 1,
+          "MER_IMP_005": 1
+        },
         "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
           "view": 5
         },
         "explained": {},
-        "failedCycles": {},
-        "onboardingShare": 0.177
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.209
       },
       {
         "run": "06-gpu-life/miri-both/claude-sonnet/2",
@@ -5061,22 +5066,28 @@
       {
         "run": "06-gpu-life/miri-grammar/claude-haiku/3",
         "arm": "miri-grammar",
-        "compiles": 6,
+        "compiles": 7,
         "diagnostics": {
-          "MER_TYP_002": 2,
+          "MER_BLD_022": 1,
+          "MER_TYP_033": 1,
+          "MER_TYP_071": 1,
           "MER_IMP_005": 1
         },
-        "repairedDiagnostics": {},
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1,
+          "MER_TYP_071": 1
+        },
         "fixApplied": 0,
         "lookups": {
-          "skill": 2,
-          "view": 4
+          "skill": 5,
+          "view": 9
         },
         "explained": {},
         "failedCycles": {
+          "build": 1,
           "type": 1
         },
-        "onboardingShare": 0.208
+        "onboardingShare": 0.2
       },
       {
         "run": "06-gpu-life/miri-grammar/claude-opus/1",
@@ -5494,49 +5505,50 @@
       {
         "run": "07-gpu-escape-time/miri-both/claude-sonnet/1",
         "arm": "miri-both",
-        "compiles": 12,
+        "compiles": 4,
         "diagnostics": {
-          "MER_TYP_033": 1,
-          "MER_PAR_001": 2,
-          "MER_TYP_069": 1,
-          "MER_TYP_002": 2,
           "MER_TAR_006": 1,
           "MER_TYP_063": 1,
-          "MER_TYP_040": 2
+          "MER_TYP_002": 1,
+          "MER_TYP_034": 1
         },
         "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
-          "view": 7
+          "view": 3
         },
         "explained": {},
         "failedCycles": {
-          "type": 2,
-          "syntax": 2
+          "target": 1
         },
-        "onboardingShare": 0.169
+        "onboardingShare": 0.278
       },
       {
         "run": "07-gpu-escape-time/miri-both/claude-sonnet/2",
         "arm": "miri-both",
         "compiles": 6,
         "diagnostics": {
-          "MER_PAR_001": 1,
+          "MER_TYP_033": 1,
           "MER_TAR_006": 1,
           "MER_TYP_063": 1,
           "MER_TYP_002": 1,
-          "MER_TYP_040": 2
+          "MER_TYP_040": 2,
+          "MER_TYP_034": 1,
+          "MER_IMP_005": 1
         },
-        "repairedDiagnostics": {},
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1,
+          "MER_TYP_034": 1
+        },
         "fixApplied": 0,
         "lookups": {
-          "view": 5
+          "view": 4
         },
         "explained": {},
         "failedCycles": {
-          "syntax": 1
+          "type": 1
         },
-        "onboardingShare": 0.205
+        "onboardingShare": 0.221
       },
       {
         "run": "07-gpu-escape-time/miri-both/claude-sonnet/3",
@@ -5559,55 +5571,45 @@
       {
         "run": "07-gpu-escape-time/miri-grammar/claude-haiku/1",
         "arm": "miri-grammar",
-        "compiles": 11,
+        "compiles": 15,
         "diagnostics": {
-          "MER_PAR_001": 1,
-          "MER_TYP_036": 1,
-          "MER_LEX_001": 1,
-          "MER_TYP_002": 2,
-          "MER_TYP_063": 2,
-          "MER_TAR_005": 2
+          "MER_TYP_002": 6
         },
         "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
-          "skill": 6,
-          "view": 7,
-          "explain": 1
+          "skill": 5,
+          "explain": 1,
+          "view": 7
         },
-        "explained": {
-          "MER_TYP_036": 1
-        },
+        "explained": {},
         "failedCycles": {
-          "syntax": 1
+          "type": 2
         },
-        "onboardingShare": 0.093
+        "onboardingShare": 0.084
       },
       {
         "run": "07-gpu-escape-time/miri-grammar/claude-haiku/2",
         "arm": "miri-grammar",
-        "compiles": 15,
+        "compiles": 17,
         "diagnostics": {
-          "MER_PAR_001": 1,
-          "MER_TYP_002": 5,
-          "MER_TYP_033": 1,
-          "MER_IMP_005": 1
+          "MER_TYP_002": 3,
+          "MER_TAR_005": 2,
+          "MER_TYP_032": 6,
+          "MER_IMP_005": 3
         },
         "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
-          "skill": 1,
-          "view": 7,
-          "explain": 1
+          "skill": 2,
+          "view": 17
         },
-        "explained": {
-          "MER_TAR_008": 1
-        },
+        "explained": {},
         "failedCycles": {
-          "syntax": 1,
-          "type": 1
+          "type": 5,
+          "target": 1
         },
-        "onboardingShare": 0.174
+        "onboardingShare": 0.137
       },
       {
         "run": "07-gpu-escape-time/miri-grammar/claude-haiku/3",
@@ -6152,34 +6154,24 @@
       {
         "run": "08-gpu-histogram/miri-grammar/claude-haiku/1",
         "arm": "miri-grammar",
-        "compiles": 15,
+        "compiles": 11,
         "diagnostics": {
-          "MER_TYP_043": 1,
-          "MER_TAR_007": 1,
-          "MER_TAR_005": 2,
-          "MER_TYP_067": 2,
-          "MER_TYP_034": 2,
-          "MER_TYP_002": 6,
-          "MER_IMP_005": 3,
-          "MER_PAR_001": 2,
-          "MER_TYP_063": 3,
-          "MER_TYP_071": 1
+          "MER_TYP_002": 1,
+          "MER_IMP_005": 2,
+          "MER_PAR_001": 1
         },
-        "repairedDiagnostics": {
-          "MER_TYP_043": 1,
-          "MER_TYP_071": 1
-        },
+        "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
           "skill": 4,
-          "view": 3
+          "view": 22
         },
         "explained": {},
         "failedCycles": {
-          "type": 6,
-          "syntax": 2
+          "type": 1,
+          "syntax": 1
         },
-        "onboardingShare": 0.078
+        "onboardingShare": 0.16
       },
       {
         "run": "08-gpu-histogram/miri-grammar/claude-haiku/2",
@@ -6212,29 +6204,29 @@
       {
         "run": "08-gpu-histogram/miri-grammar/claude-haiku/3",
         "arm": "miri-grammar",
-        "compiles": 10,
+        "compiles": 11,
         "diagnostics": {
-          "MER_TYP_043": 2,
-          "MER_TAR_007": 2,
-          "MER_TAR_005": 2,
+          "MER_TYP_002": 10,
+          "MER_IMP_005": 3,
+          "MER_TYP_034": 1,
+          "MER_TYP_067": 1,
+          "MER_TYP_037": 1,
           "MER_TYP_033": 2,
-          "MER_TYP_002": 2,
-          "MER_IMP_005": 1
+          "MER_TYP_040": 3,
+          "MER_TAR_005": 1
         },
-        "repairedDiagnostics": {
-          "MER_TYP_043": 1,
-          "MER_TYP_033": 1
-        },
+        "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
           "skill": 4,
-          "view": 9
+          "explain": 1,
+          "view": 5
         },
         "explained": {},
         "failedCycles": {
-          "type": 4
+          "type": 2
         },
-        "onboardingShare": 0.103
+        "onboardingShare": 0.217
       },
       {
         "run": "08-gpu-histogram/miri-grammar/claude-opus/1",
@@ -6304,24 +6296,25 @@
       {
         "run": "08-gpu-histogram/miri-grammar/claude-sonnet/1",
         "arm": "miri-grammar",
-        "compiles": 9,
+        "compiles": 6,
         "diagnostics": {
-          "MER_TYP_071": 1,
-          "MER_IMP_005": 9,
-          "MER_TYP_069": 2,
-          "MER_TYP_002": 2
+          "MER_TAR_005": 1,
+          "MER_TYP_032": 1,
+          "MER_TYP_002": 4,
+          "MER_IMP_005": 2
         },
         "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
           "skill": 4,
-          "view": 5
+          "view": 9
         },
         "explained": {},
         "failedCycles": {
+          "target": 1,
           "type": 2
         },
-        "onboardingShare": 0.13
+        "onboardingShare": 0.148
       },
       {
         "run": "08-gpu-histogram/miri-grammar/claude-sonnet/2",
@@ -7048,24 +7041,21 @@
         "arm": "miri-skill",
         "compiles": 11,
         "diagnostics": {
-          "MER_BLD_022": 1,
-          "MER_PAR_001": 1,
-          "MER_IMP_005": 3
+          "MER_IMP_005": 3,
+          "MER_CG_008": 1
         },
         "repairedDiagnostics": {},
         "fixApplied": 0,
         "lookups": {
-          "view": 10,
+          "view": 9,
+          "skill": 3,
           "explain": 1
         },
         "explained": {
-          "MER_RT_003": 1
+          "MER_CG_008": 1
         },
-        "failedCycles": {
-          "build": 1,
-          "syntax": 1
-        },
-        "onboardingShare": 0.135
+        "failedCycles": {},
+        "onboardingShare": 0.125
       },
       {
         "run": "09-gpu-particles/miri-skill/claude-opus/1",
