@@ -45,6 +45,8 @@ pub(super) enum CheckedArith {
     Div,
     Rem,
     Neg,
+    /// The magnitude of a signed value, whose minimum has none at its width.
+    Abs,
 }
 
 impl CheckedArith {
@@ -77,7 +79,7 @@ impl CheckedArith {
     pub(super) fn always_fits_with_divisor(self, divisor: &Operand) -> bool {
         let is_quotient = match self {
             Self::Div | Self::Rem => true,
-            Self::Add | Self::Sub | Self::Mul | Self::Neg => false,
+            Self::Add | Self::Sub | Self::Mul | Self::Neg | Self::Abs => false,
         };
         is_quotient
             && matches!(
@@ -96,6 +98,7 @@ impl CheckedArith {
             Self::Div => "div",
             Self::Rem => "rem",
             Self::Neg => "neg",
+            Self::Abs => "abs",
         }
     }
 }
@@ -183,10 +186,12 @@ pub(super) struct CheckedHelper {
 
 impl CheckedHelper {
     /// The helper for `arith` at `lane`, or `None` when the operation cannot
-    /// overflow there: an unsigned quotient or remainder always fits.
+    /// overflow there: an unsigned quotient, remainder or magnitude always fits.
     pub(super) fn new(arith: CheckedArith, lane: IntLane) -> Option<Self> {
-        let always_fits =
-            matches!(arith, CheckedArith::Div | CheckedArith::Rem) && !lane.is_signed();
+        let always_fits = matches!(
+            arith,
+            CheckedArith::Div | CheckedArith::Rem | CheckedArith::Abs
+        ) && !lane.is_signed();
         (!always_fits).then_some(Self { arith, lane })
     }
 
@@ -200,7 +205,7 @@ impl CheckedHelper {
     fn source(self) -> String {
         let ty = self.lane.wgsl_type();
         let params = match self.arith {
-            CheckedArith::Neg => format!("a: {ty}"),
+            CheckedArith::Neg | CheckedArith::Abs => format!("a: {ty}"),
             CheckedArith::Add
             | CheckedArith::Sub
             | CheckedArith::Mul
@@ -226,6 +231,7 @@ impl CheckedHelper {
             (CheckedArith::Rem, _) => "a % b",
             (CheckedArith::Neg, true) => "-a",
             (CheckedArith::Neg, false) => "0u - a",
+            (CheckedArith::Abs, _) => "abs(a)",
         }
     }
 
@@ -242,13 +248,16 @@ impl CheckedHelper {
             (CheckedArith::Mul, None, true) => format!(
                 "(a == {min} && b == -1) || (b == {min} && a == -1) || (b != 0 && r / b != a)"
             ),
-            (CheckedArith::Neg, None, true) => format!("a == {min}"),
+            (CheckedArith::Neg | CheckedArith::Abs, None, true) => format!("a == {min}"),
             (CheckedArith::Add, None, false) => "r < a".to_string(),
             (CheckedArith::Sub, None, false) => "a < b".to_string(),
             (CheckedArith::Mul, None, false) => "b != 0u && r / b != a".to_string(),
             (CheckedArith::Neg, None, false) => "a != 0u".to_string(),
-            // `new` never builds an unsigned quotient or remainder helper.
-            (CheckedArith::Div | CheckedArith::Rem, None, false) => "false".to_string(),
+            // `new` never builds an unsigned quotient, remainder or magnitude
+            // helper.
+            (CheckedArith::Div | CheckedArith::Rem | CheckedArith::Abs, None, false) => {
+                "false".to_string()
+            }
         }
     }
 

@@ -1717,6 +1717,9 @@ impl<'a> BodyEmitter<'a> {
                 (arith, vec![&**lhs, &**rhs])
             }
             Rvalue::UnaryOp(UnOp::Neg, value) => (CheckedArith::Neg, vec![&**value]),
+            Rvalue::MathIntrinsic(MathIntrinsic::Abs, args) if args.len() == 1 => {
+                (CheckedArith::Abs, vec![&args[0]])
+            }
             Rvalue::UnaryOp(UnOp::Not | UnOp::BitwiseNot | UnOp::Await, _)
             | Rvalue::Use(_)
             | Rvalue::Ref(_)

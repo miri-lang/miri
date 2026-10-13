@@ -1277,7 +1277,10 @@ impl<'a> FunctionTranslator<'a> {
         let is_f32 = ty == cl_types::F32;
 
         match intrinsic {
-            MathIntrinsic::Abs => Ok(Self::emit_math_abs(builder, ty, arg_values[0])),
+            MathIntrinsic::Abs => {
+                let is_unsigned = Self::operand_is_unsigned(&args[0], type_ctx)?;
+                Self::emit_math_abs(builder, ctx, ty, arg_values[0], is_unsigned)
+            }
             MathIntrinsic::Sqrt => Self::emit_math_sqrt(builder, ty, arg_values[0]),
             MathIntrinsic::Ceil => Ok(Self::emit_math_unary_int_passthrough(
                 builder,
@@ -1338,25 +1341,30 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// `abs(x)`: native `fabs` for floats; bit-twiddle for integers.
-    fn emit_math_abs(builder: &mut FunctionBuilder, ty: cl_types::Type, val: Value) -> Value {
+    /// `abs(x)`: the float's magnitude, an unsigned value unchanged, and a
+    /// signed value's magnitude, which ends the program with the
+    /// integer-overflow trap at the type's minimum, whose magnitude does not fit.
+    fn emit_math_abs(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ty: cl_types::Type,
+        val: Value,
+        is_unsigned: bool,
+    ) -> Result<Value, CodegenError> {
         if ty.is_float() {
-            return builder.ins().fabs(val);
+            return Ok(builder.ins().fabs(val));
         }
-        // Integer abs: (x ^ (x >> (bits-1))) - (x >> (bits-1))
-        //
-        // For the most-negative value (e.g. `i64::MIN`, whose magnitude has no
-        // representable positive counterpart) this wraps back to that same value:
-        // `x >> 63` is all-ones (-1), so `x ^ -1` is `!MIN == MAX`, and
-        // `MAX - (-1) == MAX + 1` overflows two's-complement back to `MIN`.
-        // This is deliberate: the result stays in range and is bit-identical to
-        // the platform `abs`/WGSL `abs` builtin (see `math_intrinsic_name`), so
-        // CPU and GPU agree. It is correct-by-semantics (defined two's-complement
-        // wrap), not by mathematics (|MIN| is not representable). Callers that need
-        // the mathematically-correct magnitude must widen before taking `abs`.
+        if is_unsigned {
+            return Ok(val);
+        }
+        // (x ^ (x >> (bits-1))) - (x >> (bits-1)), once x is known not to be MIN.
         let shift = ty.bits() - 1;
+        let min = Self::int_const_at(builder, ty, i128::MIN >> (127 - shift));
+        let is_min = builder.ins().icmp(IntCC::Equal, val, min);
+        Self::emit_overflow_trap_if(builder, ctx, is_min)?;
         let sign_mask = builder.ins().sshr_imm(val, shift as i64);
         let xor = builder.ins().bxor(val, sign_mask);
-        builder.ins().isub(xor, sign_mask)
+        Ok(builder.ins().isub(xor, sign_mask))
     }
 
     /// `sqrt(x)`: native `sqrt` for floats; rejected for integers.

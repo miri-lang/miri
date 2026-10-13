@@ -160,3 +160,31 @@ fn test_division_next_to_the_minimum_computes_its_value() {
         "1073741824 0 -2147483648 2147483647",
     );
 }
+
+#[test]
+fn test_abs_of_the_minimum_stops_the_program() {
+    // The minimum of a signed type has no magnitude at its width.
+    for (ty, min) in [
+        ("i8", "-128"),
+        ("i16", "-32768"),
+        ("i32", "-2147483648"),
+        ("i64", "-9223372036854775807 - 1"),
+        ("int", "-9223372036854775807 - 1"),
+        ("i128", "-170141183460469231731687303715884105727 - 1"),
+    ] {
+        assert_runtime_error(
+            &format!(
+                "use system.math\n\nfn main()\n    var x {ty} = {min}\n    x = abs(x)\n    println(\"unreachable\")\n"
+            ),
+            "integer overflow: the result does not fit its type",
+        );
+    }
+}
+
+#[test]
+fn test_abs_computes_magnitudes_and_leaves_unsigned_values_alone() {
+    assert_runs_with_output(
+        "use system.math\n\nfn main()\n    let a i32 = -2147483647\n    let b i8 = -5\n    let u u32 = 3000000000\n    let w u8 = 200\n    println(f\"{abs(a)} {abs(b)} {abs(u)} {abs(w)}\")\n",
+        "2147483647 5 3000000000 200",
+    );
+}

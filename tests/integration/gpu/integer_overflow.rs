@@ -578,3 +578,36 @@ fn main()
 ";
     assert_runtime_error(code, OVERFLOW);
 }
+
+/// The minimum of a signed type has no magnitude at its width, so `abs` of it
+/// in a kernel stops the program as it does on the host.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_abs_of_the_minimum_stops_the_program() {
+    for element in ["i8", "i32"] {
+        let min = device_bounds(element).0.to_string();
+        let program = kernel_program(element, &min, "abs(buf[i])");
+        assert_runtime_error(&program, OVERFLOW);
+    }
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_abs_next_to_the_minimum_computes_its_value() {
+    let program = kernel_program("i32", "-2147483647", "abs(buf[i])");
+    assert_runs_with_output(&program, "2147483647");
+}
+
+#[test]
+fn test_wgsl_signed_abs_is_checked_and_unsigned_abs_is_not() {
+    let signed = compile_to_wgsl(&kernel_program("i32", "-5", "abs(buf[i])"));
+    assert!(signed.contains("_checked_abs__i32(buf["), "{signed}");
+    let unsigned = compile_to_wgsl(&kernel_program("u32", "5", "abs(buf[i])"));
+    assert!(!unsigned.contains(FAULT_DECLARATION), "{unsigned}");
+}
