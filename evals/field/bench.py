@@ -940,8 +940,12 @@ def one_probe(arguments, arm, model, job, index):
     }
 
 
+def records_directory(arguments, arm_id, model_key):
+    return Path(arguments.records_root) / round_directory(arguments) / arguments.job / arm_id / model_key
+
+
 def write_record(arguments, arm, model, record, transcript, index, onboarding_transcript=None):
-    directory = Path(arguments.records_root) / round_directory(arguments) / arguments.job / arm["id"] / model["key"]
+    directory = records_directory(arguments, arm["id"], model["key"])
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{index}.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     (directory / f"{index}.transcript.jsonl").write_text(transcript, encoding="utf-8")
@@ -980,6 +984,11 @@ def parse_arguments(argv):
         help="where the rounds live; this directory's runs/ by default",
     )
     parser.add_argument("--dry-run", action="store_true", help="prepare and report, launch nothing")
+    parser.add_argument(
+        "--replace",
+        metavar="REASON",
+        help="run recorded runs again; each new record keeps the one it replaces, with this reason",
+    )
     parser.add_argument("--score-only", help="score an existing workspace and report")
     parser.add_argument(
         "--rescore",
@@ -1022,10 +1031,40 @@ def dry_run(arguments, arm, job):
         print("launch     " + " ".join(launch_command(model, workspace, prompt_for(arguments, workspace), resume)))
 
 
+def recorded_runs(arguments, model_key):
+    """The records this invocation would overwrite, by run number."""
+    directory = records_directory(arguments, arguments.arm, model_key)
+    found = {}
+    for index in range(arguments.from_run, arguments.from_run + arguments.runs):
+        path = directory / f"{index}.json"
+        if path.exists():
+            found[index] = json.loads(path.read_text(encoding="utf-8"))
+    return found
+
+
+def refuse_silent_overwrite(arguments):
+    """Stop before anything is launched when a run would overwrite a record
+    and `--replace` does not say why. A measured run is never lost silently:
+    a re-run keeps the record it replaces, with the reason, under `replaced`."""
+    if arguments.replace or not arguments.model or arguments.score_only or arguments.rescore:
+        return
+    if arguments.dry_run:
+        return
+    found = recorded_runs(arguments, model_named(arguments.model)["key"])
+    if found:
+        numbers = ", ".join(str(index) for index in sorted(found))
+        raise SystemExit(
+            f"run {numbers} of this cell is already recorded; pass --replace REASON to run it again"
+        )
+
+
 def measured_cell(arguments, arm, model, job):
+    predecessors = recorded_runs(arguments, model["key"]) if arguments.replace else {}
     for index in range(arguments.from_run, arguments.from_run + arguments.runs):
         transcript, outcome = one_run(arguments, arm, model, job, index)
         record = record_for(arguments, arm, model, job, outcome)
+        if index in predecessors:
+            record["replaced"] = {"reason": arguments.replace, "record": predecessors[index]}
         path = write_record(arguments, arm, model, record, transcript, index, outcome["onboardingTranscript"])
         tests = outcome["hiddenTests"]
         print(f"{path}: {outcome['outcome']}, {tests['passed']}/{tests['total']} hidden tests")
@@ -1085,6 +1124,7 @@ def main(argv):
     arguments = parse_arguments(argv)
     arm = arm_named(arguments.arm)
     job = job_named(arguments.job)
+    refuse_silent_overwrite(arguments)
     global STAGED_TOOLCHAIN
     STAGED_TOOLCHAIN = stage_toolchain(arguments.scratch)
 

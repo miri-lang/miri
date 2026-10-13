@@ -1327,6 +1327,53 @@ fn test_the_subject_gets_no_harness_routing_and_its_isolation_is_recorded() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// A run whose record already exists is refused before anything is launched,
+/// unless `--replace` says why; a replacing run keeps the record it replaces,
+/// with the reason, so a re-run never erases what the round first measured.
+#[test]
+#[cfg(unix)]
+fn test_a_recorded_run_is_replaced_only_on_request_and_keeps_its_predecessor() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the run was not launched");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-replaced-run");
+    let _ = fs::remove_dir_all(&root);
+    install_scripted_harness(&root.join("bin"), &[CLEAN_INIT]);
+    let mut predecessor = SyntheticRun::green(10, 1, 1);
+    predecessor.green = false;
+    write_synthetic_record(&root.join("runs"), PROBE_JOB, "python", predecessor);
+    let recorded = measured_record(&root);
+
+    let refused = run_bench(&root, &[]);
+    assert!(!refused.status.success(), "a recorded run was overwritten");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--replace"),
+        "the refusal does not name the way to re-run:\n{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert_eq!(
+        measured_record(&root),
+        recorded,
+        "the refusal touched the record"
+    );
+
+    let replaced = run_bench(&root, &["--replace", "the workspace moved"]);
+    assert!(
+        replaced.status.success(),
+        "the replacing run failed:\n{}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+    let record: serde_json::Value =
+        serde_json::from_str(&measured_record(&root)).expect("the record is not JSON");
+    assert_eq!(record["replaced"]["reason"], "the workspace moved");
+    assert_eq!(
+        record["replaced"]["record"]["hiddenTests"]["passed"], 3,
+        "the replaced record is not the one the round measured first"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 #[cfg(unix)]
 fn test_a_run_a_hook_touched_is_recorded_unclean_and_never_folded() {
