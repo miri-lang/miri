@@ -4127,5 +4127,3068 @@
         "miri-testing"
       ]
     }
+  },
+  "usage": {
+    "arms": {
+      "miri-skill": {
+        "runs": 45,
+        "compiles": 411,
+        "fixApplied": 0,
+        "diagnostics": {
+          "MER_IMP_005": 95,
+          "MER_TYP_002": 68,
+          "MER_TYP_033": 33,
+          "MER_PAR_001": 29,
+          "MER_TYP_042": 22,
+          "MER_TYP_069": 20,
+          "MER_CG_008": 15,
+          "MER_TYP_043": 10,
+          "MER_TYP_034": 9,
+          "MER_TAR_007": 8,
+          "MER_TAR_005": 7,
+          "MER_TYP_071": 6,
+          "MER_TAR_006": 4,
+          "MER_TAR_008": 4,
+          "MER_LEX_012": 3,
+          "MER_BLD_022": 2,
+          "MER_TYP_072": 2,
+          "MER_TYP_063": 2,
+          "MER_TYP_029": 2,
+          "MER_BLD_004": 1,
+          "MER_TAR_003": 1,
+          "MER_BLD_008": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 4,
+          "MER_PAR_001": 2,
+          "MER_TYP_071": 1,
+          "MER_TYP_072": 1,
+          "MER_TYP_042": 1
+        },
+        "lookups": {
+          "view": 357,
+          "explain": 21
+        },
+        "explained": {
+          "MER_TYP_029": 4,
+          "MER_TAR_007": 3,
+          "MER_TAR_003": 3,
+          "MER_TAR_005": 2,
+          "MER_TYP_033": 2,
+          "MER_TAR_008": 1,
+          "MER_TAR_009": 1,
+          "MER_TYP_020": 1,
+          "MER_TAR_006": 1,
+          "MER_TYP_002": 1,
+          "MER_RT_003": 1
+        },
+        "failedCycles": {
+          "type": 56,
+          "syntax": 21,
+          "compiler": 9,
+          "build": 4,
+          "target": 3
+        },
+        "repairRatio": 0.026,
+        "onboardingShare": 0.154
+      },
+      "miri-grammar": {
+        "runs": 45,
+        "compiles": 387,
+        "fixApplied": 0,
+        "diagnostics": {
+          "MER_IMP_005": 57,
+          "MER_TYP_002": 43,
+          "MER_PAR_001": 32,
+          "MER_TYP_034": 20,
+          "MER_TYP_033": 13,
+          "MER_TAR_005": 11,
+          "MER_TYP_069": 7,
+          "MER_TYP_063": 7,
+          "MER_TYP_043": 5,
+          "MER_CG_008": 4,
+          "MER_TYP_071": 4,
+          "MER_TAR_007": 4,
+          "MER_LEX_012": 4,
+          "MER_BLD_022": 3,
+          "MER_TAR_006": 2,
+          "MER_LEX_001": 2,
+          "MER_BLD_008": 2,
+          "MER_TYP_067": 2,
+          "MER_BLD_021": 1,
+          "MER_TYP_048": 1,
+          "MER_TYP_036": 1,
+          "MER_TYP_032": 1,
+          "MER_TYP_029": 1,
+          "MER_TYP_065": 1,
+          "MER_BLD_025": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_033": 3,
+          "MER_TYP_071": 2,
+          "MER_TYP_043": 2
+        },
+        "lookups": {
+          "view": 292,
+          "skill": 190,
+          "explain": 18,
+          "test": 5
+        },
+        "explained": {
+          "MER_TYP_043": 3,
+          "MER_TAR_008": 2,
+          "MER_TAR_007": 2,
+          "MER_TYP_036": 1,
+          "MER_TYP_029": 1
+        },
+        "failedCycles": {
+          "type": 46,
+          "syntax": 31,
+          "compiler": 3,
+          "build": 3,
+          "target": 1
+        },
+        "repairRatio": 0.031,
+        "onboardingShare": 0.183
+      },
+      "miri-both": {
+        "runs": 45,
+        "compiles": 416,
+        "fixApplied": 1,
+        "diagnostics": {
+          "MER_IMP_005": 72,
+          "MER_TYP_002": 64,
+          "MER_PAR_001": 31,
+          "MER_TYP_033": 23,
+          "MER_TYP_069": 17,
+          "MER_TYP_034": 17,
+          "MER_TAR_006": 14,
+          "MER_TAR_005": 11,
+          "MER_TYP_043": 10,
+          "MER_TAR_007": 9,
+          "MER_TYP_040": 7,
+          "MER_CG_008": 5,
+          "MER_TYP_071": 4,
+          "MER_TYP_063": 3,
+          "MER_BLD_022": 2,
+          "MER_BLD_004": 1,
+          "MER_TYP_048": 1,
+          "MER_TYP_052": 1,
+          "MER_TYP_072": 1,
+          "MER_LEX_012": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 4,
+          "MER_TYP_033": 3,
+          "MER_PAR_001": 2,
+          "MER_TYP_071": 1,
+          "MER_TYP_034": 1,
+          "MER_TYP_072": 1
+        },
+        "lookups": {
+          "view": 377,
+          "explain": 14,
+          "skill": 4
+        },
+        "explained": {
+          "MER_TAR_007": 6,
+          "MER_TAR_008": 2,
+          "MER_TYP_029": 1,
+          "MER_TAR_003": 1,
+          "MER_TAR_005": 1,
+          "MER_TAR_006": 1,
+          "MER_TAR_009": 1,
+          "MER_TYP_020": 1,
+          "MER_TAR_002": 1,
+          "MER_TYP_034": 1,
+          "MER_PAR_001": 1
+        },
+        "failedCycles": {
+          "type": 51,
+          "syntax": 24,
+          "target": 4,
+          "build": 3,
+          "compiler": 2
+        },
+        "repairRatio": 0.041,
+        "onboardingShare": 0.163
+      }
+    },
+    "runs": [
+      {
+        "run": "05-gpu-heat/miri-both/claude-haiku/1",
+        "arm": "miri-both",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_TYP_033": 1,
+          "MER_TYP_063": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2
+        },
+        "onboardingShare": 0.178
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-haiku/2",
+        "arm": "miri-both",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_BLD_004": 1,
+          "MER_TYP_034": 1,
+          "MER_BLD_022": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 14
+        },
+        "explained": {},
+        "failedCycles": {
+          "build": 2
+        },
+        "onboardingShare": 0.187
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-haiku/3",
+        "arm": "miri-both",
+        "compiles": 13,
+        "diagnostics": {
+          "MER_IMP_005": 1,
+          "MER_CG_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "compiler": 1
+        },
+        "onboardingShare": 0.07
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-opus/1",
+        "arm": "miri-both",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7,
+          "skill": 2
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.145
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-opus/2",
+        "arm": "miri-both",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.131
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-opus/3",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7,
+          "skill": 2
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.16
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-sonnet/1",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TYP_034": 1,
+          "MER_IMP_005": 3
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.151
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-sonnet/2",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_TYP_033": 6,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.127
+      },
+      {
+        "run": "05-gpu-heat/miri-both/claude-sonnet/3",
+        "arm": "miri-both",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_IMP_005": 1,
+          "MER_TYP_033": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.176
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-haiku/1",
+        "arm": "miri-grammar",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_TAR_006": 2,
+          "MER_TYP_033": 1,
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 3,
+          "MER_CG_008": 3,
+          "MER_TYP_034": 3
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 3,
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "target": 1,
+          "type": 3,
+          "compiler": 2
+        },
+        "onboardingShare": 0.13
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-haiku/2",
+        "arm": "miri-grammar",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_BLD_021": 1,
+          "MER_IMP_005": 5,
+          "MER_TYP_071": 1,
+          "MER_TYP_033": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_071": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "explain": 1,
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.142
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-haiku/3",
+        "arm": "miri-grammar",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 2,
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.209
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-opus/1",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.219
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-opus/2",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.251
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-opus/3",
+        "arm": "miri-grammar",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_071": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.162
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-sonnet/1",
+        "arm": "miri-grammar",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.168
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-sonnet/2",
+        "arm": "miri-grammar",
+        "compiles": 3,
+        "diagnostics": {
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.333
+      },
+      {
+        "run": "05-gpu-heat/miri-grammar/claude-sonnet/3",
+        "arm": "miri-grammar",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_033": 3
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "explain": 1,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.26
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-haiku/1",
+        "arm": "miri-skill",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_002": 4,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.176
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-haiku/2",
+        "arm": "miri-skill",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 1,
+          "MER_CG_008": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "compiler": 2
+        },
+        "onboardingShare": 0.109
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-haiku/3",
+        "arm": "miri-skill",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 15
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "syntax": 1
+        },
+        "onboardingShare": 0.102
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-opus/1",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_071": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_071": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.191
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-opus/2",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.223
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-opus/3",
+        "arm": "miri-skill",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 11
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.134
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-sonnet/1",
+        "arm": "miri-skill",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_TYP_033": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.196
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-sonnet/2",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_002": 2,
+          "MER_TYP_033": 1,
+          "MER_IMP_005": 2,
+          "MER_CG_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "compiler": 1
+        },
+        "onboardingShare": 0.172
+      },
+      {
+        "run": "05-gpu-heat/miri-skill/claude-sonnet/3",
+        "arm": "miri-skill",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_033": 3,
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 1,
+          "MER_CG_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2,
+          "compiler": 1
+        },
+        "onboardingShare": 0.115
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-haiku/1",
+        "arm": "miri-both",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_IMP_005": 4,
+          "MER_TYP_033": 1,
+          "MER_TYP_040": 3
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 16,
+          "explain": 2
+        },
+        "explained": {
+          "MER_TAR_007": 2,
+          "MER_TAR_008": 2
+        },
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.12
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-haiku/2",
+        "arm": "miri-both",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_TAR_006": 3,
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 11
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "target": 2,
+          "syntax": 1
+        },
+        "onboardingShare": 0.155
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-haiku/3",
+        "arm": "miri-both",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_IMP_005": 2,
+          "MER_TYP_002": 4
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.149
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-opus/1",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.189
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-opus/2",
+        "arm": "miri-both",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_IMP_005": 2,
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.163
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-opus/3",
+        "arm": "miri-both",
+        "compiles": 6,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.197
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-sonnet/1",
+        "arm": "miri-both",
+        "compiles": 5,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.177
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-sonnet/2",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TYP_071": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_071": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.688
+      },
+      {
+        "run": "06-gpu-life/miri-both/claude-sonnet/3",
+        "arm": "miri-both",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_IMP_005": 3,
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.157
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-haiku/1",
+        "arm": "miri-grammar",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 8
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.132
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-haiku/2",
+        "arm": "miri-grammar",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1,
+          "MER_TYP_034": 4
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 11,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_008": 1
+        },
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.209
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-haiku/3",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 2,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.208
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-opus/1",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TYP_002": 1,
+          "MER_TYP_034": 1,
+          "MER_TYP_048": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 7,
+          "view": 10,
+          "test": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2
+        },
+        "onboardingShare": 0.145
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-opus/2",
+        "arm": "miri-grammar",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.215
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-opus/3",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.257
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-sonnet/1",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.308
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-sonnet/2",
+        "arm": "miri-grammar",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.183
+      },
+      {
+        "run": "06-gpu-life/miri-grammar/claude-sonnet/3",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_069": 3
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.29
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-haiku/1",
+        "arm": "miri-skill",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_BLD_004": 1,
+          "MER_TYP_002": 4,
+          "MER_IMP_005": 1,
+          "MER_CG_008": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 13
+        },
+        "explained": {},
+        "failedCycles": {
+          "build": 1,
+          "type": 2,
+          "compiler": 1
+        },
+        "onboardingShare": 0.13
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-haiku/2",
+        "arm": "miri-skill",
+        "compiles": 19,
+        "diagnostics": {
+          "MER_TYP_069": 1,
+          "MER_IMP_005": 6,
+          "MER_TYP_002": 2,
+          "MER_BLD_022": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 3,
+          "build": 1
+        },
+        "onboardingShare": 0.106
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-haiku/3",
+        "arm": "miri-skill",
+        "compiles": 14,
+        "diagnostics": {
+          "MER_TYP_069": 1,
+          "MER_TYP_002": 1,
+          "MER_TAR_006": 2,
+          "MER_TYP_033": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 13
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2,
+          "target": 1
+        },
+        "onboardingShare": 0.112
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-opus/1",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.204
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-opus/2",
+        "arm": "miri-skill",
+        "compiles": 7,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.191
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-opus/3",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.147
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-sonnet/1",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_002": 4,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {
+          "MER_PAR_001": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.156
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-sonnet/2",
+        "arm": "miri-skill",
+        "compiles": 4,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.346
+      },
+      {
+        "run": "06-gpu-life/miri-skill/claude-sonnet/3",
+        "arm": "miri-skill",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_IMP_005": 4
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.157
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-haiku/1",
+        "arm": "miri-both",
+        "compiles": 17,
+        "diagnostics": {
+          "MER_PAR_001": 4,
+          "MER_TYP_002": 7,
+          "MER_TAR_006": 4,
+          "MER_TYP_034": 1,
+          "MER_TYP_048": 1,
+          "MER_IMP_005": 8,
+          "MER_CG_008": 4
+        },
+        "repairedDiagnostics": {
+          "MER_PAR_001": 1
+        },
+        "fixApplied": 1,
+        "lookups": {
+          "view": 10
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 3,
+          "type": 4,
+          "compiler": 1
+        },
+        "onboardingShare": 0.069
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-haiku/2",
+        "arm": "miri-both",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_IMP_005": 3,
+          "MER_TYP_043": 2,
+          "MER_TYP_052": 1,
+          "MER_TAR_007": 1,
+          "MER_TYP_002": 4
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 13
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2
+        },
+        "onboardingShare": 0.141
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-haiku/3",
+        "arm": "miri-both",
+        "compiles": 13,
+        "diagnostics": {
+          "MER_TAR_005": 2,
+          "MER_TYP_033": 1,
+          "MER_IMP_005": 4,
+          "MER_TYP_034": 3
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_034": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 1,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_007": 1
+        },
+        "failedCycles": {
+          "target": 1,
+          "type": 2
+        },
+        "onboardingShare": 0.138
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-opus/1",
+        "arm": "miri-both",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 2,
+          "MER_BLD_022": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7,
+          "explain": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "build": 1
+        },
+        "onboardingShare": 0.133
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-opus/2",
+        "arm": "miri-both",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_TYP_002": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.184
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-opus/3",
+        "arm": "miri-both",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_002": 1,
+          "MER_TYP_071": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.184
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-sonnet/1",
+        "arm": "miri-both",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_TYP_033": 1,
+          "MER_PAR_001": 2,
+          "MER_TYP_069": 1,
+          "MER_TYP_002": 2,
+          "MER_TAR_006": 1,
+          "MER_TYP_063": 1,
+          "MER_TYP_040": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2,
+          "syntax": 2
+        },
+        "onboardingShare": 0.169
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-sonnet/2",
+        "arm": "miri-both",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TAR_006": 1,
+          "MER_TYP_063": 1,
+          "MER_TYP_002": 1,
+          "MER_TYP_040": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.205
+      },
+      {
+        "run": "07-gpu-escape-time/miri-both/claude-sonnet/3",
+        "arm": "miri-both",
+        "compiles": 4,
+        "diagnostics": {
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.276
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-haiku/1",
+        "arm": "miri-grammar",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_036": 1,
+          "MER_LEX_001": 1,
+          "MER_TYP_002": 2,
+          "MER_TYP_063": 2,
+          "MER_TAR_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 6,
+          "view": 7,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TYP_036": 1
+        },
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.093
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-haiku/2",
+        "arm": "miri-grammar",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_002": 5,
+          "MER_TYP_033": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 1,
+          "view": 7,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_008": 1
+        },
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.174
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-haiku/3",
+        "arm": "miri-grammar",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_TYP_033": 1,
+          "MER_TYP_002": 2,
+          "MER_TYP_063": 2,
+          "MER_TAR_005": 2,
+          "MER_IMP_005": 1,
+          "MER_BLD_008": 2
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_033": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 1,
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1,
+          "build": 1
+        },
+        "onboardingShare": 0.157
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-opus/1",
+        "arm": "miri-grammar",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.207
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-opus/2",
+        "arm": "miri-grammar",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.232
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-opus/3",
+        "arm": "miri-grammar",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.216
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-sonnet/1",
+        "arm": "miri-grammar",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 3
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.216
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-sonnet/2",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.182
+      },
+      {
+        "run": "07-gpu-escape-time/miri-grammar/claude-sonnet/3",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TYP_002": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 3
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.185
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-haiku/1",
+        "arm": "miri-skill",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_072": 2,
+          "MER_TYP_002": 4,
+          "MER_IMP_005": 5,
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_072": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.096
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-haiku/2",
+        "arm": "miri-skill",
+        "compiles": 13,
+        "diagnostics": {
+          "MER_PAR_001": 4,
+          "MER_TYP_042": 2,
+          "MER_TYP_071": 2,
+          "MER_TYP_002": 1,
+          "MER_IMP_005": 3,
+          "MER_TYP_043": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_042": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 13
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2,
+          "type": 3
+        },
+        "onboardingShare": 0.09
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-haiku/3",
+        "arm": "miri-skill",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_TYP_002": 1,
+          "MER_IMP_005": 1,
+          "MER_CG_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {},
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "compiler": 1
+        },
+        "onboardingShare": 0.101
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-opus/1",
+        "arm": "miri-skill",
+        "compiles": 5,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.171
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-opus/2",
+        "arm": "miri-skill",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_TYP_002": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6,
+          "explain": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.16
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-opus/3",
+        "arm": "miri-skill",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_002": 1,
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "syntax": 1
+        },
+        "onboardingShare": 0.659
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-sonnet/1",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_071": 1,
+          "MER_IMP_005": 1,
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.174
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-sonnet/2",
+        "arm": "miri-skill",
+        "compiles": 4,
+        "diagnostics": {
+          "MER_TYP_002": 4,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2
+        },
+        "onboardingShare": 0.206
+      },
+      {
+        "run": "07-gpu-escape-time/miri-skill/claude-sonnet/3",
+        "arm": "miri-skill",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_002": 3,
+          "MER_TYP_033": 4,
+          "MER_IMP_005": 3
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.169
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-haiku/1",
+        "arm": "miri-both",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_069": 6,
+          "MER_TYP_043": 2,
+          "MER_TAR_007": 2,
+          "MER_TAR_005": 2,
+          "MER_TYP_002": 6,
+          "MER_TAR_006": 2,
+          "MER_TYP_034": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_007": 1
+        },
+        "failedCycles": {
+          "type": 4
+        },
+        "onboardingShare": 0.143
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-haiku/2",
+        "arm": "miri-both",
+        "compiles": 14,
+        "diagnostics": {
+          "MER_TYP_072": 1,
+          "MER_IMP_005": 7,
+          "MER_TYP_034": 2,
+          "MER_TYP_002": 2,
+          "MER_TYP_071": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_072": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 13
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.128
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-haiku/3",
+        "arm": "miri-both",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_TYP_043": 3,
+          "MER_TAR_007": 3,
+          "MER_TAR_005": 3,
+          "MER_TYP_002": 4,
+          "MER_TYP_034": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 14
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 5
+        },
+        "onboardingShare": 0.147
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-opus/1",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.158
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-opus/2",
+        "arm": "miri-both",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_043": 2,
+          "MER_TAR_007": 2,
+          "MER_TYP_002": 2,
+          "MER_TYP_033": 6,
+          "MER_TAR_005": 4,
+          "MER_TYP_034": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8,
+          "explain": 5
+        },
+        "explained": {
+          "MER_TYP_029": 1,
+          "MER_TAR_003": 1,
+          "MER_TAR_005": 1,
+          "MER_TAR_006": 1,
+          "MER_TAR_009": 1,
+          "MER_TYP_020": 1,
+          "MER_TAR_002": 1
+        },
+        "failedCycles": {
+          "type": 3
+        },
+        "onboardingShare": 0.111
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-opus/3",
+        "arm": "miri-both",
+        "compiles": 9,
+        "diagnostics": {},
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {},
+        "onboardingShare": 0.157
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-sonnet/1",
+        "arm": "miri-both",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_TAR_006": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 11
+        },
+        "explained": {},
+        "failedCycles": {
+          "target": 1
+        },
+        "onboardingShare": 0.162
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-sonnet/2",
+        "arm": "miri-both",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_002": 3,
+          "MER_TYP_034": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 11,
+          "explain": 2
+        },
+        "explained": {
+          "MER_TAR_007": 1,
+          "MER_TYP_034": 1
+        },
+        "failedCycles": {
+          "type": 5
+        },
+        "onboardingShare": 0.118
+      },
+      {
+        "run": "08-gpu-histogram/miri-both/claude-sonnet/3",
+        "arm": "miri-both",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_TYP_043": 1,
+          "MER_TAR_007": 1,
+          "MER_TYP_002": 4,
+          "MER_TYP_071": 1,
+          "MER_IMP_005": 3,
+          "MER_TYP_034": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_007": 1
+        },
+        "failedCycles": {
+          "type": 5
+        },
+        "onboardingShare": 0.084
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-haiku/1",
+        "arm": "miri-grammar",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_TYP_043": 1,
+          "MER_TAR_007": 1,
+          "MER_TAR_005": 2,
+          "MER_TYP_067": 2,
+          "MER_TYP_034": 2,
+          "MER_TYP_002": 6,
+          "MER_IMP_005": 3,
+          "MER_PAR_001": 2,
+          "MER_TYP_063": 3,
+          "MER_TYP_071": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1,
+          "MER_TYP_071": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 3
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 6,
+          "syntax": 2
+        },
+        "onboardingShare": 0.078
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-haiku/2",
+        "arm": "miri-grammar",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_034": 7,
+          "MER_TAR_005": 2,
+          "MER_TYP_032": 1,
+          "MER_TYP_029": 1,
+          "MER_TYP_033": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 14,
+          "explain": 4
+        },
+        "explained": {
+          "MER_TAR_007": 2,
+          "MER_TYP_029": 1
+        },
+        "failedCycles": {
+          "type": 4
+        },
+        "onboardingShare": 0.23
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-haiku/3",
+        "arm": "miri-grammar",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_043": 2,
+          "MER_TAR_007": 2,
+          "MER_TAR_005": 2,
+          "MER_TYP_033": 2,
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1,
+          "MER_TYP_033": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 4
+        },
+        "onboardingShare": 0.103
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-opus/1",
+        "arm": "miri-grammar",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_TYP_002": 3,
+          "MER_TYP_034": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 5,
+          "explain": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 3
+        },
+        "onboardingShare": 0.175
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-opus/2",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_002": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 5,
+          "test": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.179
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-opus/3",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_IMP_005": 2,
+          "MER_TYP_002": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 6,
+          "explain": 1,
+          "test": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.173
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-sonnet/1",
+        "arm": "miri-grammar",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_071": 1,
+          "MER_IMP_005": 9,
+          "MER_TYP_069": 2,
+          "MER_TYP_002": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 2
+        },
+        "onboardingShare": 0.13
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-sonnet/2",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_TYP_002": 4,
+          "MER_TYP_034": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "explain": 1,
+          "view": 11
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 3
+        },
+        "onboardingShare": 0.22
+      },
+      {
+        "run": "08-gpu-histogram/miri-grammar/claude-sonnet/3",
+        "arm": "miri-grammar",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_043": 2,
+          "MER_TAR_007": 1,
+          "MER_TYP_033": 2,
+          "MER_TAR_005": 1,
+          "MER_TYP_002": 3,
+          "MER_TYP_034": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 9,
+          "explain": 5
+        },
+        "explained": {
+          "MER_TYP_043": 3
+        },
+        "failedCycles": {
+          "type": 5
+        },
+        "onboardingShare": 0.107
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-haiku/1",
+        "arm": "miri-skill",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_TYP_043": 4,
+          "MER_TAR_008": 2,
+          "MER_TAR_007": 2,
+          "MER_TYP_002": 4,
+          "MER_PAR_001": 2,
+          "MER_TYP_033": 4,
+          "MER_TYP_034": 2,
+          "MER_IMP_005": 1,
+          "MER_CG_008": 6
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 2
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_008": 1
+        },
+        "failedCycles": {
+          "type": 6,
+          "syntax": 1,
+          "compiler": 1
+        },
+        "onboardingShare": 0.085
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-haiku/2",
+        "arm": "miri-skill",
+        "compiles": 17,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_TYP_043": 2,
+          "MER_TAR_007": 2,
+          "MER_TAR_005": 2,
+          "MER_TYP_034": 3,
+          "MER_IMP_005": 8,
+          "MER_TYP_002": 5,
+          "MER_LEX_012": 3
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_007": 1
+        },
+        "failedCycles": {
+          "type": 4,
+          "syntax": 2
+        },
+        "onboardingShare": 0.073
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-haiku/3",
+        "arm": "miri-skill",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_TYP_069": 1,
+          "MER_TAR_007": 1,
+          "MER_IMP_005": 4,
+          "MER_TYP_034": 2,
+          "MER_CG_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 12,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_007": 1
+        },
+        "failedCycles": {
+          "type": 3,
+          "compiler": 1
+        },
+        "onboardingShare": 0.12
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-opus/1",
+        "arm": "miri-skill",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_002": 1,
+          "MER_TAR_007": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TAR_007": 1
+        },
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.155
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-opus/2",
+        "arm": "miri-skill",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_TYP_002": 2,
+          "MER_TYP_033": 4,
+          "MER_TYP_063": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8,
+          "explain": 4
+        },
+        "explained": {
+          "MER_TYP_029": 1,
+          "MER_TAR_003": 1,
+          "MER_TAR_009": 1,
+          "MER_TAR_005": 1,
+          "MER_TYP_020": 1,
+          "MER_TAR_006": 1
+        },
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.101
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-opus/3",
+        "arm": "miri-skill",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_TYP_002": 6,
+          "MER_TYP_034": 2,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6,
+          "explain": 1
+        },
+        "explained": {
+          "MER_TYP_002": 1
+        },
+        "failedCycles": {
+          "type": 3
+        },
+        "onboardingShare": 0.121
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-sonnet/1",
+        "arm": "miri-skill",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_TAR_005": 2,
+          "MER_TYP_071": 1,
+          "MER_IMP_005": 3,
+          "MER_CG_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 10
+        },
+        "explained": {},
+        "failedCycles": {
+          "target": 1,
+          "compiler": 1
+        },
+        "onboardingShare": 0.097
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-sonnet/2",
+        "arm": "miri-skill",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_029": 1,
+          "MER_TAR_003": 1,
+          "MER_TYP_043": 2,
+          "MER_TAR_007": 2,
+          "MER_TYP_002": 3,
+          "MER_TAR_005": 2,
+          "MER_TYP_033": 2,
+          "MER_TAR_006": 2,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {
+          "MER_TYP_043": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 11,
+          "explain": 5
+        },
+        "explained": {
+          "MER_TYP_029": 2,
+          "MER_TAR_003": 2
+        },
+        "failedCycles": {
+          "type": 1
+        },
+        "onboardingShare": 0.074
+      },
+      {
+        "run": "08-gpu-histogram/miri-skill/claude-sonnet/3",
+        "arm": "miri-skill",
+        "compiles": 14,
+        "diagnostics": {
+          "MER_TYP_069": 3,
+          "MER_TAR_005": 1,
+          "MER_TYP_033": 9,
+          "MER_TYP_029": 1,
+          "MER_TYP_043": 1,
+          "MER_TAR_008": 1,
+          "MER_TYP_002": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 15,
+          "explain": 5
+        },
+        "explained": {
+          "MER_TAR_005": 1,
+          "MER_TYP_033": 2,
+          "MER_TYP_029": 1
+        },
+        "failedCycles": {
+          "type": 6
+        },
+        "onboardingShare": 0.048
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-haiku/1",
+        "arm": "miri-both",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2
+        },
+        "onboardingShare": 0.122
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-haiku/2",
+        "arm": "miri-both",
+        "compiles": 15,
+        "diagnostics": {
+          "MER_PAR_001": 3,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {
+          "MER_PAR_001": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2
+        },
+        "onboardingShare": 0.089
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-haiku/3",
+        "arm": "miri-both",
+        "compiles": 17,
+        "diagnostics": {
+          "MER_IMP_005": 6,
+          "MER_PAR_001": 2,
+          "MER_LEX_012": 1,
+          "MER_TYP_002": 3
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 15
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2,
+          "type": 1
+        },
+        "onboardingShare": 0.086
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-opus/1",
+        "arm": "miri-both",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_PAR_001": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8,
+          "explain": 1
+        },
+        "explained": {
+          "MER_PAR_001": 1
+        },
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.137
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-opus/2",
+        "arm": "miri-both",
+        "compiles": 5,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 10
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.156
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-opus/3",
+        "arm": "miri-both",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_069": 2,
+          "MER_TAR_006": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.139
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-sonnet/1",
+        "arm": "miri-both",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_002": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.249
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-sonnet/2",
+        "arm": "miri-both",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_TYP_002": 14
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 1
+        },
+        "onboardingShare": 0.165
+      },
+      {
+        "run": "09-gpu-particles/miri-both/claude-sonnet/3",
+        "arm": "miri-both",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_TYP_033": 5
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1,
+          "type": 2
+        },
+        "onboardingShare": 0.155
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-haiku/1",
+        "arm": "miri-grammar",
+        "compiles": 24,
+        "diagnostics": {
+          "MER_PAR_001": 3,
+          "MER_TYP_002": 3,
+          "MER_LEX_012": 2,
+          "MER_IMP_005": 2,
+          "MER_CG_008": 1,
+          "MER_TYP_065": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 4
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 3,
+          "type": 3,
+          "compiler": 1
+        },
+        "onboardingShare": 0.055
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-haiku/2",
+        "arm": "miri-grammar",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_IMP_005": 4,
+          "MER_PAR_001": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2
+        },
+        "onboardingShare": 0.115
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-haiku/3",
+        "arm": "miri-grammar",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_PAR_001": 3,
+          "MER_TYP_002": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 10
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2
+        },
+        "onboardingShare": 0.198
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-opus/1",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 8
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.167
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-opus/2",
+        "arm": "miri-grammar",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_BLD_025": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 8,
+          "test": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.2
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-opus/3",
+        "arm": "miri-grammar",
+        "compiles": 13,
+        "diagnostics": {
+          "MER_PAR_001": 3,
+          "MER_BLD_022": 2,
+          "MER_TYP_069": 2,
+          "MER_LEX_001": 1,
+          "MER_LEX_012": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 8,
+          "test": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 5,
+          "build": 1
+        },
+        "onboardingShare": 0.071
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-sonnet/1",
+        "arm": "miri-grammar",
+        "compiles": 6,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 7
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.334
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-sonnet/2",
+        "arm": "miri-grammar",
+        "compiles": 9,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_TYP_002": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 5,
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2,
+          "type": 1
+        },
+        "onboardingShare": 0.114
+      },
+      {
+        "run": "09-gpu-particles/miri-grammar/claude-sonnet/3",
+        "arm": "miri-grammar",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_BLD_022": 1,
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "skill": 4,
+          "view": 6,
+          "explain": 1
+        },
+        "explained": {},
+        "failedCycles": {
+          "build": 1,
+          "syntax": 1
+        },
+        "onboardingShare": 0.103
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-haiku/1",
+        "arm": "miri-skill",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_TYP_069": 2,
+          "MER_IMP_005": 2,
+          "MER_PAR_001": 1,
+          "MER_TYP_033": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 14
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 1,
+          "syntax": 1
+        },
+        "onboardingShare": 0.129
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-haiku/2",
+        "arm": "miri-skill",
+        "compiles": 12,
+        "diagnostics": {
+          "MER_PAR_001": 5,
+          "MER_IMP_005": 5,
+          "MER_BLD_008": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 9
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 3,
+          "build": 1
+        },
+        "onboardingShare": 0.169
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-haiku/3",
+        "arm": "miri-skill",
+        "compiles": 11,
+        "diagnostics": {
+          "MER_BLD_022": 1,
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 3
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 10,
+          "explain": 1
+        },
+        "explained": {
+          "MER_RT_003": 1
+        },
+        "failedCycles": {
+          "build": 1,
+          "syntax": 1
+        },
+        "onboardingShare": 0.135
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-opus/1",
+        "arm": "miri-skill",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 10
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.16
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-opus/2",
+        "arm": "miri-skill",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 1,
+          "MER_IMP_005": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.142
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-opus/3",
+        "arm": "miri-skill",
+        "compiles": 8,
+        "diagnostics": {
+          "MER_PAR_001": 1
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 12
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 1
+        },
+        "onboardingShare": 0.14
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-sonnet/1",
+        "arm": "miri-skill",
+        "compiles": 7,
+        "diagnostics": {
+          "MER_PAR_001": 2,
+          "MER_TYP_042": 16,
+          "MER_TYP_002": 8,
+          "MER_IMP_005": 4
+        },
+        "repairedDiagnostics": {
+          "MER_PAR_001": 1
+        },
+        "fixApplied": 0,
+        "lookups": {
+          "view": 5
+        },
+        "explained": {},
+        "failedCycles": {
+          "syntax": 2,
+          "type": 2
+        },
+        "onboardingShare": 0.15
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-sonnet/2",
+        "arm": "miri-skill",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TAR_008": 1,
+          "MER_PAR_001": 2,
+          "MER_IMP_005": 5
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 8
+        },
+        "explained": {},
+        "failedCycles": {
+          "target": 1
+        },
+        "onboardingShare": 0.11
+      },
+      {
+        "run": "09-gpu-particles/miri-skill/claude-sonnet/3",
+        "arm": "miri-skill",
+        "compiles": 10,
+        "diagnostics": {
+          "MER_TYP_069": 6,
+          "MER_TYP_042": 4,
+          "MER_IMP_005": 12,
+          "MER_PAR_001": 1,
+          "MER_TYP_033": 2
+        },
+        "repairedDiagnostics": {},
+        "fixApplied": 0,
+        "lookups": {
+          "view": 6
+        },
+        "explained": {},
+        "failedCycles": {
+          "type": 3,
+          "syntax": 1
+        },
+        "onboardingShare": 0.125
+      }
+    ]
   }
 }

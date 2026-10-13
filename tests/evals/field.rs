@@ -454,14 +454,14 @@ fn test_baseline_carries_the_third_field_test_table() {
 #[test]
 fn test_the_runner_and_the_folder_are_valid_programs() {
     let dir = field_dir();
-    for script in ["bench.py", "report.py"] {
+    for script in ["bench.py", "report.py", "usage.py"] {
         assert!(dir.join(script).is_file(), "{} is missing", script);
     }
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the harness scripts were not compiled");
         return;
     }
-    for script in ["bench.py", "report.py"] {
+    for script in ["bench.py", "report.py", "usage.py"] {
         let output = Command::new("python3")
             .arg("-m")
             .arg("py_compile")
@@ -2749,4 +2749,57 @@ fn test_a_pruned_staged_stdlib_is_staged_again() {
     let printed = with_bench(&code);
     let _ = fs::remove_dir_all(&scratch);
     assert_eq!(printed, "False\nTrue", "a pruned staged stdlib was reused");
+}
+
+/// The fold publishes, per Miri arm and per run, what the subject did on the
+/// way: the codes the compiler reported and how many carried a repair, the
+/// repairs applied, the lookups made and the failed compile cycles by cause.
+/// Pinned on the committed round r2, so the shape is checked against real
+/// transcripts.
+#[test]
+fn test_the_fold_publishes_what_each_miri_run_did() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the round was not folded");
+        return;
+    }
+    let out = std::env::temp_dir().join("miri-field-usage-summary.json");
+    let folded = Command::new("python3")
+        .arg(field_dir().join("report.py"))
+        .args(["--round", "r2", "--out"])
+        .arg(&out)
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        folded.status.success(),
+        "the fold failed:\n{}",
+        String::from_utf8_lossy(&folded.stderr)
+    );
+    let summary: serde_json::Value =
+        serde_json::from_str(&read(&out)).expect("the summary is not JSON");
+    let usage = &summary["usage"];
+    for arm in ["miri-skill", "miri-grammar", "miri-both"] {
+        let of_arm = &usage["arms"][arm];
+        assert_eq!(of_arm["runs"], 45, "{arm} folded the wrong number of runs");
+        for key in [
+            "compiles",
+            "fixApplied",
+            "repairRatio",
+            "diagnostics",
+            "repairedDiagnostics",
+            "lookups",
+            "failedCycles",
+            "onboardingShare",
+        ] {
+            assert!(!of_arm[key].is_null(), "{arm} publishes no {key}");
+        }
+    }
+    let runs = usage["runs"].as_array().expect("usage.runs is not a list");
+    assert_eq!(runs.len(), 135, "every Miri run is listed once");
+    assert!(runs.iter().all(|run| run["run"]
+        .as_str()
+        .is_some_and(|id| id.split('/').count() == 4)));
+    assert!(
+        usage["arms"]["miri-skill"]["diagnostics"]["MER_IMP_005"].as_u64() > Some(0),
+        "the most frequent r2 code is no longer counted"
+    );
 }

@@ -21,6 +21,10 @@ import tomllib
 from pathlib import Path
 
 FIELD = Path(__file__).resolve().parent
+
+# The transcript reader lives beside this script, whichever directory it is run from.
+sys.path.insert(0, str(FIELD))
+import usage  # noqa: E402
 REPO = FIELD.parent.parent
 
 BASELINES = ("python", "rust")
@@ -445,9 +449,51 @@ def verdict(detail):
     return {"held": all(entry["held"] for entry in detail) and bool(detail), "detail": detail}
 
 
-def summarize(round_name, records, probe_records):
+def run_id(path, round_directory):
+    """`job/arm/model/run` for a transcript under a round's directory."""
+    relative = path.relative_to(round_directory)
+    return "/".join(relative.parts[:-1] + (relative.name.split(".")[0],))
+
+
+def onboarding_share(record):
+    """The share of a run's input tokens its onboarding phase spent, or None."""
+    measured = (record.get("tokens") or {}).get("in") or 0
+    onboarding = ((record.get("onboarding") or {}).get("tokens") or {}).get("in") or 0
+    total = measured + onboarding
+    return round(onboarding / total, 3) if onboarding and total else None
+
+
+def usage_section(round_directory):
+    """What each Miri run did on the way, and the sum per arm: the codes the
+    compiler reported, how many came with a repair, repairs applied, lookups,
+    and the failed compile cycles by cause. Read from the transcripts."""
+    runs = []
+    for path in sorted(round_directory.rglob("*.transcript.jsonl")):
+        identity = run_id(path, round_directory)
+        arm = identity.split("/")[1]
+        if arm not in MIRI_ARMS:
+            continue
+        with open(path, encoding="utf-8") as handle:
+            run = usage.run_usage(handle)
+        record_path = path.with_name(path.name.split(".")[0] + ".json")
+        record = json.loads(record_path.read_text(encoding="utf-8")) if record_path.exists() else {}
+        run["onboardingShare"] = onboarding_share(record)
+        runs.append({"run": identity, "arm": arm, **run})
+    arms = {}
+    for arm in MIRI_ARMS:
+        of_arm = [run for run in runs if run["arm"] == arm]
+        if of_arm:
+            shares = [run["onboardingShare"] for run in of_arm if run["onboardingShare"] is not None]
+            arms[arm] = {
+                **usage.arm_usage(of_arm),
+                "onboardingShare": round(sum(shares) / len(shares), 3) if shares else None,
+            }
+    return {"arms": arms, "runs": runs}
+
+
+def summarize(round_name, records, probe_records, round_directory=None):
     cells, jobs, models = build_cells(records)
-    return {
+    summary = {
         "schemaVersion": 1,
         "round": round_name,
         "records": len(records),
@@ -470,6 +516,9 @@ def summarize(round_name, records, probe_records):
             "probeRatings": judge_probe_ratings(probe_records, recommended_surfaces()),
         },
     }
+    if round_directory is not None:
+        summary["usage"] = usage_section(round_directory)
+    return summary
 
 
 def main(argv):
@@ -486,7 +535,7 @@ def main(argv):
     runs_root = Path(arguments.runs_root) if arguments.runs_root else FIELD / "runs"
     records = load_records(arguments.round, runs_root)
     probe_records = load_probe_records(arguments.round, runs_root)
-    summary = summarize(arguments.round, records, probe_records)
+    summary = summarize(arguments.round, records, probe_records, runs_root / arguments.round)
     destination = Path(arguments.out) if arguments.out else runs_root / arguments.round / "summary.json"
     destination.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
