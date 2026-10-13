@@ -1028,13 +1028,31 @@ impl TypeChecker {
         mismatch: &str,
         context: &mut Context,
     ) -> Option<Type> {
-        let (first, rest) = elements.split_first()?;
-        let first_type = self.infer_expression(first, context);
+        // The declared element type belongs to this literal only, never to a
+        // literal nested in one of its elements.
+        let declared_optional = context.declared_optional_element.take();
+        let types: Vec<Type> = elements
+            .iter()
+            .map(|element| self.infer_expression(element, context))
+            .collect();
+        context.declared_optional_element = declared_optional.clone();
+        if let Some(lifted) = declared_optional
+            .and_then(|payload| self.declared_optional_join(&types, payload, context))
+        {
+            // An optional element (a `None` above all) is the lifted optional;
+            // a bare one keeps its own type and is stored wrapped in `Some`.
+            for (element, ty) in elements.iter().zip(&types) {
+                if matches!(ty.kind, TypeKind::Option(_)) {
+                    self.type_table.types.insert(element.id, lifted.clone());
+                }
+            }
+            return Some(lifted);
+        }
+        let (first_type, rest) = types.split_first()?;
         let mut joined = first_type.clone();
         let mut refused = false;
-        for element in rest {
-            let next_type = self.infer_expression(element, context);
-            if !self.are_compatible(&first_type, &next_type, context) {
+        for (element, next_type) in elements[1..].iter().zip(rest) {
+            if !self.are_compatible(first_type, next_type, context) {
                 self.report_error(
                     DiagnosticCode::TypCollectionElementType,
                     mismatch.to_string(),
@@ -1042,7 +1060,7 @@ impl TypeChecker {
                 );
                 refused = true;
             }
-            joined = fill_open_arguments(&joined, &next_type);
+            joined = fill_open_arguments(&joined, next_type);
         }
         if refused {
             return None;
@@ -1051,6 +1069,29 @@ impl TypeChecker {
             self.record_joined_type(element, &joined, context);
         }
         Some(joined)
+    }
+
+    /// The optional of `payload` a literal is declared to hold, when its
+    /// elements, typed `types`, mix bare values of the payload with optionals
+    /// of it (`[1, None, 3]` where `[int?; 3]` is declared): each bare value is
+    /// stored as `Some`. `None` when the elements need no lifting or one fits
+    /// neither form.
+    fn declared_optional_join(
+        &self,
+        types: &[Type],
+        payload: Type,
+        context: &Context,
+    ) -> Option<Type> {
+        let optional = make_type(TypeKind::Option(Box::new(payload.clone())));
+        let is_optional = |ty: &Type| matches!(ty.kind, TypeKind::Option(_));
+        let mixes = types.iter().any(is_optional) && !types.iter().all(is_optional);
+        let every_fits = types.iter().all(|ty| match &ty.kind {
+            TypeKind::Option(inner) => {
+                matches!(inner.kind, TypeKind::Void) || self.are_compatible(&optional, ty, context)
+            }
+            _ => self.are_compatible(&payload, ty, context),
+        });
+        (mixes && every_fits).then_some(optional)
     }
 
     pub(crate) fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {

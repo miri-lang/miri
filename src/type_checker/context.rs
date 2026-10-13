@@ -679,6 +679,10 @@ pub struct Context {
     /// scope but its values land in a device buffer, so the device's scalar
     /// widths apply to it — see [`crate::type_checker::float_literals`].
     pub in_gpu_resident_initializer: bool,
+    /// The payload of the optional element type a collection literal being
+    /// checked is declared to hold (`int` for a `[int?; 3]` binding), so a
+    /// literal mixing bare values and `None` is read as that optional.
+    pub declared_optional_element: Option<Type>,
     /// Whether we are currently inside any function.
     pub in_function: bool,
     /// Whether we are currently inside an async function.
@@ -721,6 +725,7 @@ impl Context {
             gpu_for_depth: 0,
             in_gpu_function: false,
             in_gpu_resident_initializer: false,
+            declared_optional_element: None,
             in_function: false,
             in_async_function: false,
             current_class: None,
