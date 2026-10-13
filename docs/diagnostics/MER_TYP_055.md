@@ -2,31 +2,39 @@
 
 A static method was accessed or defined in an invalid context. Static methods belong to the type itself rather than instances, and cannot use `self` or instance state. Attempting to use `self` in a static method or calling an instance method as static triggers this error.
 
+## Messages
+
+- `'self' cannot be used in static methods`
+- `Static methods cannot have a 'self' parameter`
+- `Static method '{method}' cannot be called on an instance. Use '{class}.{method}()' instead.`
+- `Static methods are not allowed in trait declarations`
+
 ## Before
 
 ```miri
-class Counter:
-  count i32
-  
-  public static fn reset() i32:
-    self.count = 0
-    0
+class Counter
+    var count int
 
-fn main() i32:
-  0
+    static fn reset()
+        self.count = 0
+
+fn main()
+    Counter.reset()
 ```
 
 ## After
 
 ```miri
-class Counter:
-  count i32
-  
-  public static fn reset() i32:
-    0
+class Counter
+    var count int
 
-fn main() i32:
-  0
+    fn reset()
+        self.count = 0
+
+fn main()
+    let c = Counter(count: 3)
+    c.reset()
+    println(f"{c.count}")
 ```
 
 ## Reference

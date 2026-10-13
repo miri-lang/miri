@@ -2,6 +2,10 @@
 
 A segmentation fault (SIGSEGV) terminated the program. This signal indicates an attempt to access memory that was not allocated or that the program does not have permission to access. Common causes include stack overflow from unbounded recursion.
 
+## Messages
+
+- `terminated by signal {number} ({name})`
+
 ## Before
 
 ```miri

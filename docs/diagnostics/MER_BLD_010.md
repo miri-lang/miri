@@ -8,15 +8,23 @@ To fix this, reformat the source to match the canonical form — `miri fmt` does
 
 The same code reports an anchor that begins or ends partway through a token. `--old "v={a}"` inside `f"v={a}"` names part of a literal, and the tokens it covers whole are a different stretch of text than the one asked for; anchor on the whole literal instead. A declaration that cannot be anchored is still a landmark: `--insert-fn ... --after` places a new declaration beside it, because an insertion beside a declaration only has to know where it ends.
 
+## Messages
+
+- `` `{name}` and its canonical form part at token {index}: canonical has {canonical}, the file has {found} at byte {offset} ``
+
+## Help
+
+- `` this declaration contains something whose canonical form differs from what the file says, such as redundant parentheses around an expression or a literal written 1.50 rather than 1.5; run `miri fmt` to rewrite it in canonical form and the anchor will hold ``
+
 ## Before
 
-Source file:
+`code.mi`:
+
 ```miri
 fn demo() int
     return ((1 + 1))
 ```
 
-Patch attempt:
 ```sh
 miri patch --replace-in-fn demo --old "1 + 1" --new "2 + 2" code.mi
 ```

@@ -6,7 +6,22 @@
 
 Two further rules keep a batch unambiguous. The text to find comes either from `--old` or from `--old-file`, not from both in one call, and the same for `--new`; mixing the two leaves no way to say which of them a given edit meant. And because there is only one standard input, at most one file argument in a call may be `-`.
 
+## Messages
+
+- `{count} {flag} against {other_count} {other_flag}; they pair up in the order they are written, so a call gives the same number of each`
+
+## Help
+
+- `name one function, one anchor and one replacement per edit; repeat the three together to batch edits`
+
 ## Before
+
+`file.mi`:
+
+```miri
+fn total(sum int) int
+    return sum + 1
+```
 
 ```sh
 miri patch --replace-in-fn total --old "sum + 1" file.mi

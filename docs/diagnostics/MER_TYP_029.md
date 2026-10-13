@@ -1,33 +1,29 @@
 ## Rule
 
-Atomic operations (like `atomic_add`, `atomic_exchange`, `atomic_compare_exchange`) require a buffer of type `Array<Atomic<u32|i32>, N>`. This error is raised when an atomic operation is called with a buffer of an incompatible type.
+Atomic operations (`atomic_add`, `atomic_sub`, `atomic_max` and the other atomic builtins) require a buffer of type `Array<Atomic<u32|i32>, N>` as their first argument. This error is raised when an atomic operation is called with a buffer of any other type. The compiler currently reports this refusal as MER_CG_008, with the message `internal compiler error: MIR lowering failed for <function>: atomic_add requires an Array<Atomic<u32|i32>, N> buffer, got <type>`; the fix is the same.
 
 ## Before
 
 ```miri
-use system.gpu
 use system.collections.array
-
-gpu fn my_kernel(data Array<f32,4>)
-    let old = data.atomic_add(0, 1.0)
+use system.gpu.atomic
 
 fn main()
-    gpu let buf = [1.0, 2.0, 3.0, 4.0]
-    my_kernel(buf).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
+    gpu var hist = Array<f32, 4>()
+    gpu forall i in 0..4
+        atomic_add(hist, i, 1.0)
 ```
 
 ## After
 
 ```miri
-use system.gpu
 use system.collections.array
-
-gpu fn my_kernel(data Array<Atomic<u32>,4>)
-    let old = data.atomic_add(0, 1)
+use system.gpu.atomic
 
 fn main()
-    gpu let buf = [1, 2, 3, 4]
-    my_kernel(buf).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
+    gpu var hist = Array<Atomic<u32>, 4>()
+    gpu forall i in 0..4
+        atomic_add(hist, i, 1 as u32)
 ```
 
 ## Reference
