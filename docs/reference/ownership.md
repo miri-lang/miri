@@ -16,7 +16,8 @@ Miri uses reference counting (via the Perceus optimization) to manage object lif
 
 - **Auto-copy types**: Types smaller than 128 bytes with only primitive fields are never moved; they are always copied
 - **Managed types**: Larger types are moved at top-level scope; inside functions, they are passed by reference
-- **Drop hook**: A class declares its hook as `fn drop(self)` (or `fn drop()`, since a class method's receiver is implicit), inherits one from its base class, or takes a default `drop` from a trait it implements; a struct spells it `fn drop(self)`
+- **Drop hook**: A class declares its hook as `fn drop(self)` (or `fn drop()`, since a class method's receiver is implicit), inherits one from its base class, or takes a default `drop` from a trait it implements. Only classes and enums have one: a struct is data only and declares no methods, so no drop hook
+- **Values and references**: Structs and every collection are values. A second binding shares the first one's block until either writes, and the write copies a block that is still shared (copy on write), so a write through one name is never seen through another. Class instances are references: every binding to one is the same object
 - **Resource types**: Classes with a drop hook must be explicitly consumed
 - **Calling drop**: `value.drop()` on a local the scope declared, or on a call result, runs the hook at that point and consumes the value; the hook does not run again when the scope ends
 - **Linear variables**: Universally unique; cannot be duplicated or dropped without use
