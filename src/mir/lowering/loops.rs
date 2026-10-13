@@ -942,6 +942,8 @@ pub fn lower_for(
         // 2. Header: Check condition
         ctx.set_current_block(header_bb);
         let end_op = lower_expression(ctx, end, None)?;
+        let end_local = crate::mir::lowering::helpers::ensure_place(ctx, end_op, *span).local;
+        let end_op = Operand::Copy(Place::new(end_local));
         let current_val = Operand::Copy(Place::new(loop_var));
 
         // Compare: i < end or i <= end
@@ -991,28 +993,17 @@ pub fn lower_for(
 
         // 4. Increment
         ctx.set_current_block(increment_bb);
-        // i = i + 1 - reuse loop_var_ty for the constant
-        let one = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: loop_var_ty,
-            literal: crate::ast::literal::Literal::Integer(
-                crate::ast::literal::IntegerLiteral::I32(1),
-            ),
-        }));
-        let current_i = Operand::Copy(Place::new(loop_var));
-
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(
-                Place::new(loop_var),
-                Rvalue::BinaryOp(BinOp::Add, Box::new(current_i), Box::new(one)),
-            ),
-            span: *span,
-        });
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: header_bb },
-            *span,
-        ));
+        emit_range_step(
+            ctx,
+            RangeStep {
+                loop_var,
+                loop_var_ty,
+                inclusive_end: (*range_type == RangeExpressionType::Inclusive).then_some(end_local),
+                header_bb,
+                exit_bb,
+            },
+            span,
+        );
 
         ctx.set_current_block(exit_bb);
         ctx.pop_scope(*span);
@@ -1023,4 +1014,70 @@ pub fn lower_for(
         ));
     }
     Ok(())
+}
+
+/// The step at the end of one pass of a range loop.
+pub(crate) struct RangeStep {
+    pub loop_var: crate::mir::Local,
+    pub loop_var_ty: Type,
+    /// The local holding the end of an inclusive range; `None` for an
+    /// exclusive one.
+    pub inclusive_end: Option<crate::mir::Local>,
+    pub header_bb: crate::mir::BasicBlock,
+    pub exit_bb: crate::mir::BasicBlock,
+}
+
+/// Advance a range loop's variable by one and go back to its header.
+///
+/// An inclusive range leaves once the variable has reached its end, before
+/// adding one: the end may be its type's maximum, and one past it does not
+/// exist. An exclusive range never steps past an end it is below, so it adds
+/// one directly.
+pub(crate) fn emit_range_step(ctx: &mut LoweringContext, step: RangeStep, span: &Span) {
+    if let Some(end) = step.inclusive_end {
+        let at_end = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(
+                Place::new(at_end),
+                Rvalue::BinaryOp(
+                    BinOp::Eq,
+                    Box::new(Operand::Copy(Place::new(step.loop_var))),
+                    Box::new(Operand::Copy(Place::new(end))),
+                ),
+            ),
+            span: *span,
+        });
+        let advance_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::SwitchInt {
+                discr: Operand::Copy(Place::new(at_end)),
+                targets: vec![(Discriminant::bool_true(), step.exit_bb)],
+                otherwise: advance_bb,
+            },
+            *span,
+        ));
+        ctx.set_current_block(advance_bb);
+    }
+    let one = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: step.loop_var_ty,
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(1)),
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(step.loop_var),
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Box::new(Operand::Copy(Place::new(step.loop_var))),
+                Box::new(one),
+            ),
+        ),
+        span: *span,
+    });
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Goto {
+            target: step.header_bb,
+        },
+        *span,
+    ));
 }

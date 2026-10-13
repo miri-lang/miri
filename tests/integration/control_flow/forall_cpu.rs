@@ -120,3 +120,19 @@ forall i in 0..3
         "101112",
     );
 }
+
+/// A CPU `forall` over an inclusive range ending at the maximum covers each
+/// value once and ends.
+#[test]
+fn test_forall_inclusive_range_ending_at_the_maximum_runs_each_value() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var seen = [0, 0, 0]
+    forall i in 9223372036854775805..=9223372036854775807
+        seen[i - 9223372036854775805] = 1
+    println(f"{seen[0]} {seen[1]} {seen[2]}")
+"#,
+        "1 1 1",
+    );
+}
