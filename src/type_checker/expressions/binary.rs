@@ -747,30 +747,12 @@ impl TypeChecker {
             } else {
                 format!("Cannot assign to immutable variable '{}'", name)
             };
-            // A constant is not repaired into a `var`: it is a different
-            // declaration form, so rewriting the keyword would not compile.
-            let (keyword_start, module_scope, is_public) = if is_constant {
-                (None, false, false)
-            } else {
-                let info = context.resolve_info(name);
-                (
-                    info.as_ref().and_then(|i| i.declaration_keyword_start),
-                    info.as_ref().map(|i| i.module_scope).unwrap_or(false),
-                    info.as_ref()
-                        .map(|i| matches!(i.visibility, MemberVisibility::Public))
-                        .unwrap_or(false),
-                )
-            };
-            match keyword_start {
-                Some(keyword_start) => self.report_error_with_repair(
+            match let_to_var_repair(name, context) {
+                Some(repair) => self.report_error_with_repair(
                     DiagnosticCode::TypImmutabilityViolation,
                     msg,
                     span,
-                    RepairRequest::LetToVar {
-                        keyword_start,
-                        module_scope,
-                        is_public,
-                    },
+                    repair,
                 ),
                 None => self.report_error(DiagnosticCode::TypImmutabilityViolation, msg, span),
             }
@@ -788,10 +770,11 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         };
         if !self.is_mutable_expression(obj, context) {
-            self.report_error(
-                DiagnosticCode::TypImmutabilityViolation,
-                "Cannot assign to field of immutable variable".to_string(),
+            self.report_immutable_write_through(
+                obj,
+                "Cannot assign to field of immutable variable",
                 span,
+                context,
             );
         }
         self.infer_member(obj, prop, member_expr.span, context)
@@ -807,13 +790,42 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         };
         if !self.is_mutable_expression(obj, context) {
-            self.report_error(
-                DiagnosticCode::TypImmutabilityViolation,
-                "Cannot assign to element of immutable variable".to_string(),
+            self.report_immutable_write_through(
+                obj,
+                "Cannot assign to element of immutable variable",
                 span,
+                context,
             );
         }
         self.infer_index(obj, index, index_expr.span, context)
+    }
+
+    /// Reports a field or element written through `target`, which is not
+    /// mutable, handing over the `var` that makes it so when the binding it
+    /// is reached through is a `let`.
+    fn report_immutable_write_through(
+        &mut self,
+        target: &Expression,
+        message: &str,
+        span: Span,
+        context: &Context,
+    ) {
+        let repair = written_through(target)
+            .filter(|name| *name != "self" && !context.is_mutable(name))
+            .and_then(|name| let_to_var_repair(name, context));
+        match repair {
+            Some(repair) => self.report_error_with_repair(
+                DiagnosticCode::TypImmutabilityViolation,
+                message.to_string(),
+                span,
+                repair,
+            ),
+            None => self.report_error(
+                DiagnosticCode::TypImmutabilityViolation,
+                message.to_string(),
+                span,
+            ),
+        }
     }
 
     fn check_division_by_zero_assignment(&mut self, op: &AssignmentOp, rhs: &Expression) {
@@ -1058,4 +1070,34 @@ pub(crate) fn is_number_literal(expr: &Expression) -> bool {
         }
         _ => false,
     }
+}
+
+/// The `let` keyword of the binding `name` resolves to, rewritten as `var`.
+///
+/// A constant is not repaired into a `var`: it is a different declaration
+/// form, so rewriting the keyword would not compile. A binding with no
+/// recorded keyword — a parameter, or a statement binding several names —
+/// has none to rewrite.
+fn let_to_var_repair(name: &str, context: &Context) -> Option<RepairRequest> {
+    if context.is_constant(name) {
+        return None;
+    }
+    let info = context.resolve_info(name)?;
+    Some(RepairRequest::LetToVar {
+        keyword_start: info.declaration_keyword_start?,
+        module_scope: info.module_scope,
+        is_public: matches!(info.visibility, MemberVisibility::Public),
+    })
+}
+
+/// The binding a field or element access is reached through: the name at the
+/// root of a chain of members and indexes.
+fn written_through(target: &Expression) -> Option<&str> {
+    if let ExpressionKind::Identifier(name, _) = &target.node {
+        return Some(name);
+    }
+    if let ExpressionKind::Member(object, _) | ExpressionKind::Index(object, _) = &target.node {
+        return written_through(object);
+    }
+    None
 }

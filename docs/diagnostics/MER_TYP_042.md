@@ -2,6 +2,8 @@
 
 An assignment was attempted to a variable or field declared as immutable. Variables declared with `let` cannot be reassigned; use `var` to create a mutable binding if reassignment is needed.
 
+Writing a field or an element through a `let` binding (`p.x = 5`, `xs[0] = 9`) is the same mistake. `miri fix` rewrites the declaration's `let` as `var` through the `let-to-var` repair whether the binding itself is reassigned or something is written through it. A parameter or a constant has no `let` to rewrite and gets no repair.
+
 ## Messages
 
 - `Cannot assign to immutable variable '{var}'`

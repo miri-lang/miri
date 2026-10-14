@@ -1661,3 +1661,39 @@ fn test_continuation_lines_move_with_their_statement() {
         "\nfn main()\n    var x = 2\n    if x > 1\n        println(\"big\")\n    else\n        println(\"small\")\n    do\n        x -= 1\n    while x > 0\n    println(\"end\")\n"
     );
 }
+
+/// Writing an element through a `let` binding is the same mistake as
+/// reassigning it, so it hands over the same `var`.
+#[test]
+fn test_an_element_written_through_a_let_binding_rebinds_it_as_var() {
+    assert_eq!(
+        repaired(
+            "let-to-var-element",
+            "use system.collections.list\n\nfn main()\n    let xs = List([1, 2, 3])\n    xs[0] = 9\n    println(f\"{xs[0]}\")\n",
+            "let-to-var",
+        ),
+        "use system.collections.list\n\nfn main()\n    var xs = List([1, 2, 3])\n    xs[0] = 9\n    println(f\"{xs[0]}\")\n"
+    );
+}
+
+#[test]
+fn test_a_field_written_through_a_let_binding_rebinds_it_as_var() {
+    assert_eq!(
+        repaired(
+            "let-to-var-field",
+            "struct Point\n    x int\n    y int\n\nfn main()\n    let p = Point(x: 1, y: 2)\n    p.x = 5\n    println(f\"{p.x}\")\n",
+            "let-to-var",
+        ),
+        "struct Point\n    x int\n    y int\n\nfn main()\n    var p = Point(x: 1, y: 2)\n    p.x = 5\n    println(f\"{p.x}\")\n"
+    );
+}
+
+/// A parameter has no `let` to rewrite, so writing through one offers none.
+#[test]
+fn test_an_element_written_through_a_parameter_offers_no_rebinding() {
+    let fixture = Fixture::new(
+        "let-to-var-parameter",
+        "use system.collections.list\n\nfn set(xs List<int>)\n    xs[0] = 9\n\nfn main()\n    set(List([1]))\n",
+    );
+    assert!(!repair_ids(&plan(fixture.path())).contains(&"let-to-var".to_string()));
+}
