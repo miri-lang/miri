@@ -99,7 +99,7 @@ When writing tests or standard library code, remember Miri's syntax:
 
 **Rule of thumb**: If a comment or error message would be confusing without knowing an internal task/phase/section number, the comment is not independent. Rewrite it to describe the implementation's actual behavior, invariants, or constraints.
 
-**Enforced**: `make audit` runs `tools/check_planning_vocabulary.py` over every tracked file and fails on a task, milestone, design, feature, benchmark-round or claim id. A real domain name that matches a pattern (a variable called `r1`, a job's own fault table) goes on that script's allow-list with its reason.
+**Enforced**: `make audit` runs `tools/check_planning_vocabulary.py` over every tracked file and fails on a task, milestone, design, feature, benchmark-round or claim id. A real domain name that matches a pattern (a short variable name in a test program, a job's own fault table) goes on that script's allow-list with its reason.
 
 ## 3.6 Principles Harness (BINDING)
 `PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (Perceus, runtime/stdlib alignment, exhaustive visitors).

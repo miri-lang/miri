@@ -8,7 +8,7 @@
 //! formatting and reporting.
 
 use crate::diagnostics::DiagnosticCode;
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, BUG_REPORT_URL};
 use std::fmt;
 
 /// Unified error type for all code generation backends.
@@ -41,6 +41,25 @@ pub enum CodegenError {
 
 impl CodegenError {
     pub fn properties(&self) -> ErrorProperties {
+        let properties = self.failure_properties();
+        match self {
+            CodegenError::NotSupported { .. } => properties,
+            CodegenError::TargetIsa(_)
+            | CodegenError::Module(_)
+            | CodegenError::DeclareFunction { .. }
+            | CodegenError::DefineFunction { .. }
+            | CodegenError::Translation { .. }
+            | CodegenError::Emit(_)
+            | CodegenError::Internal(_) => {
+                properties.with_help(format!("Please report this at {}", BUG_REPORT_URL))
+            }
+        }
+    }
+
+    /// The code and message of each failure, before the help that says what
+    /// to do about it: a backend that is not built in is the reader's to
+    /// avoid, and every other failure is the compiler's own.
+    fn failure_properties(&self) -> ErrorProperties {
         match self {
             CodegenError::TargetIsa(msg) => {
                 ErrorProperties::simple(DiagnosticCode::CgTargetIsaCreationFailed)
@@ -70,13 +89,14 @@ impl CodegenError {
                 ErrorProperties::simple(DiagnosticCode::CgObjectFileEmissionFailed)
                     .with_message(format!("Failed to emit object file: {}", msg))
             }
-            CodegenError::NotSupported { backend } => ErrorProperties::simple(
-                DiagnosticCode::CgBackendNotSupported,
-            )
-            .with_message(format!(
-                "{} backend is not yet available. Use the Cranelift backend (default) instead.",
-                backend
-            )),
+            CodegenError::NotSupported { backend } => {
+                ErrorProperties::simple(DiagnosticCode::CgBackendNotSupported)
+                    .with_message(format!(
+                        "the {} backend is not available in this build of the compiler",
+                        backend
+                    ))
+                    .with_help("omit `--cpu-backend` to build with Cranelift, the default backend")
+            }
             CodegenError::Internal(msg) => {
                 ErrorProperties::simple(DiagnosticCode::CgInternalCodegenError)
                     .with_message(format!("Internal codegen error: {}", msg))

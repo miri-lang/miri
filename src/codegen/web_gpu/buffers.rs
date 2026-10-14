@@ -385,9 +385,8 @@ fn web_element_type(
     name: &str,
     owner: &LocalDecl,
 ) -> Result<&'static str, CompilerError> {
-    let internal = |err: crate::error::CodegenError| CompilerError::Codegen(err.to_string());
-    let spelling = buffer_element_typename(&param.ty.kind).map_err(internal)?;
-    let scalar = buffer_element(&param.ty.kind).map_err(internal)?;
+    let spelling = buffer_element_typename(&param.ty.kind)?;
+    let scalar = buffer_element(&param.ty.kind)?;
     let is_browser_scalar = match scalar {
         WgslScalar::I32 | WgslScalar::U32 | WgslScalar::F32 => spelling == scalar.name(),
         WgslScalar::F16 | WgslScalar::F64 | WgslScalar::Bool => false,
