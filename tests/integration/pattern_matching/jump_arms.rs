@@ -6,9 +6,6 @@
 
 use super::utils::*;
 
-// TODO: the trailing `return -1` is unreachable. It is there because a
-// function whose last statement is a match returning from every arm is refused
-// as returning void; drop it once that is fixed, so this covers the tail form.
 #[test]
 fn test_return_after_arm_colon_returns_from_the_function() {
     assert_runs_with_output(
@@ -17,7 +14,6 @@ fn first_or(x int?, fallback int) int
     match x
         Some(v): return v
         None: return fallback
-    return -1
 
 fn main()
     println(f"{first_or(Some(4), 9)} {first_or(None, 9)}")
@@ -91,5 +87,66 @@ fn main()
     println(f"{pick(None)}")
 "#,
         "expected int, got String",
+    );
+}
+
+/// A typed function whose last statement is a match returning from every arm
+/// returns through the arms: the match leaves the function as an `if` whose
+/// both branches return does.
+#[test]
+fn test_a_match_returning_from_every_arm_ends_a_typed_function() {
+    assert_runs_with_output(
+        r#"
+fn describe(a int) String
+    match a
+        1
+            return "one"
+        _
+            return "other"
+
+fn main()
+    println(describe(1))
+    println(describe(5))
+"#,
+        "one\nother",
+    );
+}
+
+/// The same tail match over an optional, with block arms.
+#[test]
+fn test_an_option_match_returning_from_every_arm_ends_a_typed_function() {
+    assert_runs_with_output(
+        r#"
+fn doubled_or(x int?, fallback int) int
+    match x
+        Some(v)
+            return v * 2
+        None
+            return fallback
+
+fn main()
+    println(f"{doubled_or(Some(4), 0)} {doubled_or(None, 7)}")
+"#,
+        "8 7",
+    );
+}
+
+/// An arm that falls through instead of returning still leaves the function
+/// without a value, which is refused.
+#[test]
+fn test_a_tail_match_with_an_arm_that_does_not_return_is_refused() {
+    assert_compiler_error(
+        r#"
+fn describe(a int) String
+    match a
+        1
+            return "one"
+        _
+            println("other")
+
+fn main()
+    println(describe(1))
+"#,
+        "Invalid return type",
     );
 }
