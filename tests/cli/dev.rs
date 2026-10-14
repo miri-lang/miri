@@ -24,8 +24,11 @@ use tempfile::TempDir;
 /// How long a test waits for a batch before calling it lost.
 ///
 /// Generous on purpose: it is the bound that separates "never arrived" from
-/// "arrived slowly on a loaded machine", not a latency budget.
-const PATIENCE: Duration = Duration::from_secs(30);
+/// "arrived slowly on a loaded machine", not a latency budget. Thirty seconds
+/// ran out with the suite's CLI tests running 64-wide beside 24 busy
+/// processes, where a batch arrives several times slower than on an idle
+/// machine.
+const PATIENCE: Duration = Duration::from_secs(180);
 
 /// A live `miri dev` process a test can read the stream of.
 ///
