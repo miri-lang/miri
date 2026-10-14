@@ -7,7 +7,7 @@ gpu = true
 # A GPU computes in single precision, so a point on the boundary of the set can
 # escape a step away from the double-precision reference. A count may differ by
 # 2% of itself or by 6 points, whichever is larger; the mean by 2%. Measured
-# against single-precision kernels — round r2's independent ones put the tall
+# against single-precision kernels — the 2026-10-12 round's independent ones put the tall
 # strip's mean 1.1% from the reference — that absorbs the drift, and it still
 # refuses a grid sampled at pixel corners instead of centres and an escape time
 # off by one, the two mistakes the contract's formulas exist to pin.

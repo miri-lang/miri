@@ -44,10 +44,10 @@ generated or user-chosen WGSL identifier — kernel entry points included — mu
 **not** start with `__`.
 
 - Auto-generated kernel entry names (`miri_gpu_for_<id>`) are already safe.
-- User-chosen `gpu fn` names are not yet validated at the source boundary; a
-  `gpu fn __k()` fails late at shader-module compilation rather than at
-  type-check. Compile-time rejection with a rename fix-it is a tracked
-  follow-up (F33).
+- User-chosen `gpu fn` names are validated at type-check: a name beginning
+  with `__` or spelling a WGSL reserved word is refused with a rename hint
+  (`tests/integration/gpu/reserved_names.rs`), rather than failing late at
+  shader-module compilation.
 
 ### 3. `enable` directive limits
 
@@ -59,8 +59,8 @@ directives is fixed by the WebGPU spec. In particular:
   support is negotiated host-side via device `Features`, never via an `enable`
   line in the shader.
 - The only browser-relevant optional directive is `enable f16;` (paired with the
-  `Features::SHADER_F16` adapter feature). `f16` itself is a tracked follow-up
-  (F9); until it ships, the browser path emits no `enable` directives at all.
+  `Features::SHADER_F16` adapter feature). The emitter prepends it only to a
+  module that uses `f16`, and emits no other `enable` directive.
 
 ### 4. Pointer / atomic address-space limits
 
@@ -68,13 +68,12 @@ Core WGSL constrains where pointers and atomics may live:
 
 - **Atomics** (`atomic<i32>` / `atomic<u32>`) are permitted only in the
   `storage` and `workgroup` address spaces, and only over 32-bit integer types
-  (no 64-bit atomics in core WGSL). Atomics are not yet emitted by Miri; they are
-  a tracked follow-up (F11/F18).
+  (no 64-bit atomics in core WGSL). Miri emits atomics only over buffers of
+  `Atomic<i32>` or `Atomic<u32>`, and the type checker refuses any other.
 - **Pointers** are restricted to function-local use and a fixed set of address
   spaces; WGSL has no general first-class pointer values. Miri's current
-  embarrassingly-parallel map kernels do not synthesize pointer parameters, so
-  this is a forward constraint to honor as shared-memory / cooperative features
-  (F36) land — not a present-day emission.
+  kernels do not synthesize pointer parameters, so the constraint holds by
+  construction; any feature that passes memory by reference has to keep it.
 
 ## Enforcement
 

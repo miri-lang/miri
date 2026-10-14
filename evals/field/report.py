@@ -9,8 +9,8 @@ reads them, and `summary.json` is the only thing the article quotes. A verdict
 is computed here rather than written by hand, so a claim cannot be reported as
 held by the person who wanted it to hold.
 
-    report.py --round r1
-    report.py --round r1 --out summary.json
+    report.py --round 2026-10-11
+    report.py --round 2026-10-11 --out summary.json
 """
 
 import argparse
@@ -34,11 +34,11 @@ GRAMMAR = "miri-grammar"
 BOTH = "miri-both"
 
 # How far above the cheaper (or faster) baseline the skill arm may land and
-# still hold C1 or C5.
+# still hold cost-within-reach or speed-within-reach.
 BAR_FACTOR = 1.5
 
 # How far above a baseline a result still reads as parity rather than behind.
-# It was C1's threshold until C1 was tightened to a lead on 2026-09-14; it now
+# It was cost-within-reach's threshold until cost-within-reach was tightened to a lead on 2026-09-14; it now
 # labels a result and never decides a verdict, so a tie cannot pass for a win.
 PARITY_FACTOR = 1.25
 
@@ -274,7 +274,7 @@ def standing(pack, other):
 
 
 def judge_wrong_answers(cells, models):
-    """C2 — the skill arm declares a wrong answer no more often than a baseline."""
+    """fewer-wrong-answers — the skill arm declares a wrong answer no more often than a baseline."""
     detail = []
     for model in models:
         skill = sum(cells[(job, SKILL, model)]["silentWrongAnswers"] for job in GPU_JOBS if (job, SKILL, model) in cells)
@@ -289,7 +289,7 @@ def judge_wrong_answers(cells, models):
 
 
 def judge_gpu(cells, models):
-    """C3 — each GPU job is in reach where a baseline's is not, or is half the cost."""
+    """gpu-in-reach — each GPU job is in reach where a baseline's is not, or is half the cost."""
     detail = [gpu_note(cells, job, model) for model in models for job in GPU_JOBS]
     return verdict(detail)
 
@@ -310,7 +310,7 @@ def gpu_note(cells, job, model):
 
 
 def judge_skill_against_grammar(cells, models, jobs):
-    """C4 — teaching from the skill pack beats teaching from the grammar alone.
+    """pack-earns-its-place — teaching from the skill pack beats teaching from the grammar alone.
 
     The arm taught from both is reported beside it as a label: whether adding
     the grammar to the pack moved anything is worth seeing, and is not claimed.
@@ -504,11 +504,11 @@ def summarize(round_name, records, probe_records, round_directory=None):
             for (job, arm, model), values in sorted(cells.items())
         ],
         "claims": {
-            "C1": judge_within_bar(cells, models, "tokensToGreen"),
-            "C2": judge_wrong_answers(cells, models),
-            "C3": judge_gpu(cells, models),
-            "C4": judge_skill_against_grammar(cells, models, jobs),
-            "C5": judge_within_bar(cells, models, "wallClockToGreen"),
+            "cost-within-reach": judge_within_bar(cells, models, "tokensToGreen"),
+            "fewer-wrong-answers": judge_wrong_answers(cells, models),
+            "gpu-in-reach": judge_gpu(cells, models),
+            "pack-earns-its-place": judge_skill_against_grammar(cells, models, jobs),
+            "speed-within-reach": judge_within_bar(cells, models, "wallClockToGreen"),
         },
         "exitCriterion": {
             "silentWrongAnswers": judge_silent_wrong_answers(cells, models, jobs),
@@ -523,7 +523,9 @@ def summarize(round_name, records, probe_records, round_directory=None):
 
 def main(argv):
     parser = argparse.ArgumentParser(description="fold a round's records into summary.json")
-    parser.add_argument("--round", default="r1")
+    parser.add_argument(
+        "--round", required=True, help="the round, named by the date it ran (e.g. 2026-10-12)"
+    )
     parser.add_argument("--out", default=None, help="where to write; the round's summary.json by default")
     parser.add_argument(
         "--runs-root",

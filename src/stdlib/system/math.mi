@@ -98,7 +98,7 @@ public fn fbm(x float, y float) float
     return value_noise(x, y) * 0.5 + value_noise(x * 2.0, y * 2.0) * 0.25
 
 // Divergence-free curl field of an `fbm` potential, for advecting particles:
-// curl = (dP/dy, -dP/dx), returned component-wise (vector types land in DP5).
+// curl = (dP/dy, -dP/dx), returned one component per function.
 public fn curl_noise_x(x float, y float) float
     let eps = 0.01
     return (fbm(x, y + eps) - fbm(x, y - eps)) / (2.0 * eps)

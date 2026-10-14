@@ -194,23 +194,23 @@ python3 evals/field/bench.py --job 02-ledger-repair --arm rust --model claude-so
 
 # The three runs a round wants, into a named round directory.
 python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
-    --model claude-sonnet --runs 3 --round r1
+    --model claude-sonnet --runs 3 --round 2026-10-11
 
 # Score a workspace again without re-running the agent.
 python3 evals/field/bench.py --job 02-ledger-repair --arm rust \
-    --score-only "$TMPDIR/miri-field/r1/02-ledger-repair/rust/claude-sonnet/1"
+    --score-only "$TMPDIR/miri-field/2026-10-11/02-ledger-repair/rust/claude-sonnet/1"
 
 # Score a recorded run again after a defect in the scorer, rewriting its
 # record; the score it replaces is kept under `rescored.previous`.
 python3 evals/field/bench.py --job 05-gpu-heat --arm python \
-    --rescore evals/field/runs/r1/05-gpu-heat/python/claude-sonnet/1.json
+    --rescore evals/field/runs/2026-10-11/05-gpu-heat/python/claude-sonnet/1.json
 
 # Fold the round and judge the claims.
-python3 evals/field/report.py --round r1
+python3 evals/field/report.py --round 2026-10-11
 
 # After the round, one unmeasured opinion probe per arm.
 python3 evals/field/bench.py --job 02-ledger-repair --arm miri-pack \
-    --model claude-sonnet --round r1 --probe
+    --model claude-sonnet --round 2026-10-11 --probe
 ```
 
 A probe prints each rating it read. A probe whose subject left no readable
@@ -255,7 +255,7 @@ lower. That last one is joined against `skills/surfaces.toml`, which lists the
 surfaces the page recommends and which the packs themselves are gated against —
 a free-text surface name would match nothing, and a verdict that matched nothing
 would read as held by having asked no one. `report.py` also labels every
-comparison C1 and C5 make against a baseline as `beats`, `parity` or `behind`,
+comparison cost-within-reach and speed-within-reach make against a baseline as `beats`, `parity` or `behind`,
 so a round shows its distance from a lead whichever way the bar went. `baseline.md` holds the
 2026-09-09 numbers that predate this instrument, with the reasons they are not
 comparable to anything produced here. `LOG.md` carries one entry per round.
