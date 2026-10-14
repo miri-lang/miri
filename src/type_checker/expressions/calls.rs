@@ -2442,7 +2442,39 @@ impl TypeChecker {
     ) {
         let arg_span = arg_expr.map(|e| e.span).unwrap_or(span);
         self.validate_out_argument_variable(param_name, arg_expr, seen_out_vars, arg_span, context);
-        self.validate_out_parameter_type(param_name, param_type, arg_type, arg_expr, span);
+        let agrees = self.out_types_agree(param_type, arg_type, context);
+        self.validate_out_parameter_type(
+            param_name,
+            (param_type, arg_type),
+            agrees,
+            arg_expr,
+            span,
+        );
+    }
+
+    /// Whether an argument of `arg` can be bound to an `out` parameter of
+    /// `param`: exactly the same type, since the callee writes through it. Two
+    /// arrays agree when their elements do and their sizes fold to the same
+    /// number, so `Array<int, N>` with `const N = 4` agrees with `Array<int, 4>`.
+    ///
+    /// TODO: a function generic over the size (`fn fill<Size>(dst out
+    /// Array<int, Size>)`) is refused for an `out` and an ordinary parameter
+    /// alike: the size is not inferred from `Array<int, 4>`, and `fill<4>(...)`
+    /// is not accepted as an explicit argument.
+    fn out_types_agree(&self, param: &Type, arg: &Type, context: &Context) -> bool {
+        if param == arg {
+            return true;
+        }
+        let (Some((param_element, param_size)), Some((arg_element, arg_size))) = (
+            crate::ast::types::array_element_and_size(&param.kind),
+            crate::ast::types::array_element_and_size(&arg.kind),
+        ) else {
+            return false;
+        };
+        let size = |expr| Self::try_eval_const_int_with_context(expr, context);
+        param_element == arg_element
+            && size(param_size).is_some()
+            && size(param_size) == size(arg_size)
     }
 
     /// Validates that an out parameter argument is a mutable variable.
@@ -2489,24 +2521,19 @@ impl TypeChecker {
         }
     }
 
-    /// Validates the type of an out parameter.
-    ///
-    /// TODO: the comparison is structural `==`, so a parameter sized by a
-    /// constant (`dst out Array<int, N>` with `const N = 4`) refuses an
-    /// argument of `Array<int, 4>` — the size is still the name `N` on one side
-    /// and the folded `4` on the other. An ordinary parameter accepts the same
-    /// argument, because `accepts_value_at` compares them after folding.
+    /// Validates the type of an out parameter, refusing an argument whose type
+    /// does not agree with it (see [`Self::out_types_agree`]).
     fn validate_out_parameter_type(
         &mut self,
         param_name: &str,
-        param_type: &Type,
-        arg_type: &Type,
+        (param_type, arg_type): (&Type, &Type),
+        agrees: bool,
         arg_expr: Option<&Expression>,
         span: Span,
     ) {
         let exact_match = matches!(param_type.kind, TypeKind::Error)
             || matches!(arg_type.kind, TypeKind::Error)
-            || param_type == arg_type;
+            || agrees;
         if !exact_match {
             self.report_type_mismatch(
                 DiagnosticCode::TypTypeMismatch,
