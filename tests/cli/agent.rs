@@ -2435,22 +2435,25 @@ fn read_one_frame(output: &mut BufReader<ChildStdout>) -> Value {
     serde_json::from_slice(&body).expect("a response is JSON")
 }
 
+/// How long a session may take to answer before it counts as stalled.
+///
+/// The bound separates "never answered" from "answered slowly on a loaded
+/// machine", not a latency budget. Measured: a session that answers in 4–16 s
+/// on an idle machine took 26 s with the suite's CLI tests running 64-wide
+/// beside 24 busy processes, so the bound leaves several times that.
+const SESSION_PATIENCE_SECS: u64 = 180;
+
 /// Run `work` on its own thread, failing rather than hanging when it stalls.
 ///
 /// A response the protocol never sends would otherwise stop the suite instead
 /// of reporting, which is the very failure these tests are about.
-///
-/// TODO: the budget is fixed wall-clock time, and four sessions have run past
-/// it under full-suite load while passing alone. Whether they answer late or
-/// stall is not yet proven; once it is, size the budget for a loaded machine
-/// or fix the stall.
-fn within<T: Send + 'static>(seconds: u64, work: impl FnOnce() -> T + Send + 'static) -> T {
+fn within<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(work());
     });
     receiver
-        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .recv_timeout(std::time::Duration::from_secs(SESSION_PATIENCE_SECS))
         .expect("the session should have answered by now")
 }
 
@@ -2459,7 +2462,7 @@ fn test_a_cancellation_sent_as_a_request_is_answered() {
     // A `$/cancelRequest` carrying an identifier is a client mistake, but an
     // identifier a client sent and never hears about again is a client that
     // waits forever. Every other `$/`-prefixed name already answers.
-    let answered = within(60, || {
+    let answered = within(|| {
         let directory = project("cancel-as-request", &[]);
         let mut session = Session::start(directory.path());
         let answered = session.call(7, "$/cancelRequest", json!({ "id": 99 }));
@@ -2482,7 +2485,7 @@ fn test_a_cancellation_sent_as_a_request_is_answered() {
 fn test_a_cancellation_sent_as_a_request_still_withdraws_what_it_named() {
     // Answering the mistake must not cost the client the cancellation: the
     // request it named is still withdrawn.
-    let (answered, withdrawn) = within(60, || {
+    let (answered, withdrawn) = within(|| {
         let directory = project(
             "cancel-as-request-effect",
             &[("main.mi", "fn main():\n    println(\"hi\")\n")],
@@ -2808,7 +2811,7 @@ fn raw_session(wire: &[u8]) -> std::process::Output {
         input.write_all(wire).expect("the bytes are sent");
         input.flush().expect("the bytes are sent");
     }
-    within(30, move || {
+    within(move || {
         process
             .wait_with_output()
             .expect("the session should end once stdin closes")
