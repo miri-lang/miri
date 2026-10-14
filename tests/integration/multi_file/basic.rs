@@ -348,43 +348,45 @@ fn test_local_module_function_reads_its_own_constant() {
 /// rather than yielding a zero.
 #[test]
 fn test_local_module_binding_without_constant_initializer_is_refused() {
-    assert_project_compiler_error(
-        &[
-            (
-                "main.mi",
-                concat!(
-                    "use system.io\n",
-                    "use local.config.values\n",
-                    "println(f'{COUNT}')\n",
-                ),
+    let files = &[
+        (
+            "main.mi",
+            concat!(
+                "use system.io\n",
+                "use local.config.values\n",
+                "println(f'{COUNT}')\n",
             ),
-            (
-                "config/values.mi",
-                concat!("fn make() int\n", "    return 3\n", "let COUNT = make()\n",),
-            ),
-        ],
-        "'COUNT' has no value at run time",
-    );
+        ),
+        (
+            "config/values.mi",
+            concat!("fn make() int\n", "    return 3\n", "let COUNT = make()\n",),
+        ),
+    ];
+    // The refusal is the program's, so it arrives under its own code rather
+    // than as an internal error.
+    assert_project_compiler_error(files, "error[MER_MIR_003]");
+    assert_project_compiler_error(files, "'COUNT' has no value at run time");
 }
 
 /// A module-level `var` has no storage for the same reason, so reading it is
 /// refused too.
 #[test]
 fn test_local_module_mutable_binding_is_refused() {
-    assert_project_compiler_error(
-        &[
-            (
-                "main.mi",
-                concat!(
-                    "use system.io\n",
-                    "use local.config.values\n",
-                    "println(f'{COUNTER}')\n",
-                ),
+    let files = &[
+        (
+            "main.mi",
+            concat!(
+                "use system.io\n",
+                "use local.config.values\n",
+                "println(f'{COUNTER}')\n",
             ),
-            ("config/values.mi", "var COUNTER = 1\n"),
-        ],
-        "'COUNTER' has no value at run time",
-    );
+        ),
+        ("config/values.mi", "var COUNTER = 1\n"),
+    ];
+    // The refusal is the program's, so it arrives under its own code rather
+    // than as an internal error.
+    assert_project_compiler_error(files, "error[MER_MIR_003]");
+    assert_project_compiler_error(files, "'COUNTER' has no value at run time");
 }
 
 // ---------------------------------------------------------------------------
