@@ -151,6 +151,7 @@ The auto-applicable repairs are:
 - `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
 - `println-bang`: Drop the `!` from a macro-style call.
 - `qualify-variant-pattern`: Prefix a bare variant pattern with the enum that declares it.
+- `remove-unused-import`: Delete a `use` line nothing reads, or the unread names in a selection.
 - `rename-to-suggestion`: Rewrite a name as the one spelling the help offers in its place.
 - `underscore-unread-binding`: Prefix a binding nothing reads with `_` to say the value is not meant to be read.
 - `word-operator`: Rewrite `!`, `&&` or `||` as `not`, `and` or `or`.

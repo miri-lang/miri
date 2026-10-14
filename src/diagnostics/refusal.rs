@@ -54,7 +54,9 @@ pub fn repair_fix_safety(repair: &RepairRequest) -> FixSafety {
         | RepairRequest::UnderscoreUnreadBinding { .. }
         | RepairRequest::WordOperator { .. }
         | RepairRequest::IfColon { .. }
-        | RepairRequest::InterpolationQuotes { .. } => FixSafety::LocalEdit,
+        | RepairRequest::InterpolationQuotes { .. }
+        | RepairRequest::RemoveImportLine { .. }
+        | RepairRequest::DropSelectedImports { .. } => FixSafety::LocalEdit,
     }
 }
 

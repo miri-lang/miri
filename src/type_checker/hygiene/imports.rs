@@ -6,7 +6,9 @@
 use crate::ast::expression::{Expression, ExpressionKind, ImportPathKind};
 use crate::ast::statement::StatementKind;
 use crate::ast::{Program, Statement};
+use crate::diagnostics::repair::RepairRequest;
 use crate::diagnostics::DiagnosticCode;
+use crate::error::syntax::Span;
 use crate::type_checker::hygiene::names::References;
 use crate::type_checker::TypeChecker;
 
@@ -62,48 +64,61 @@ impl TypeChecker {
         }
     }
 
-    /// The first name a selective import brings in that nothing reads, and
+    /// The names a selective import brings in that nothing reads, and
     /// whether the line has anything left on it worth keeping.
     ///
     /// Each selected name is asked about on its own, because selecting four
-    /// names and using three of them leaves one line to edit and a specific
-    /// name to remove from it.
+    /// names and using three of them leaves one line to edit and specific
+    /// names to remove from it.
     fn unused_selection(
         &self,
         items: &[(Expression, Option<Box<Expression>>)],
         references: &References,
     ) -> Option<UnusedImport> {
-        let mut unread_name = None;
-        let mut any_read = false;
+        let mut unread = Vec::new();
+        let mut kept = Vec::new();
         for (name, item_alias) in items {
             let bound = match item_alias {
                 Some(item_alias) => identifier(item_alias)?,
                 None => identifier(name)?,
             };
+            let written = item_alias.as_ref().map_or(name.span, |alias| {
+                Span::new(name.span.start, alias.span.end)
+            });
             if references.contains(&bound) {
-                any_read = true;
-            } else if unread_name.is_none() {
-                unread_name = Some(bound);
+                kept.push(written);
+            } else {
+                unread.push(bound);
             }
         }
-        let unread_name = unread_name?;
-        Some(match any_read {
-            true => UnusedImport::SelectedName(unread_name),
-            false => UnusedImport::WholeLine(unread_name),
+        if kept.is_empty() {
+            return unread.into_iter().next().map(UnusedImport::WholeLine);
+        }
+        let first = items.first()?.0.span;
+        let last = items
+            .last()
+            .map(|(name, alias)| alias.as_ref().map_or(name.span.end, |alias| alias.span.end))?;
+        (!unread.is_empty()).then(|| UnusedImport::SelectedNames {
+            unread,
+            selection: Span::new(first.start, last),
+            kept,
         })
     }
 
+    /// Reports `unused`, once per name nothing reads, with the deletion its
+    /// help names wherever the import is text a reader wrote.
     fn report_unused_import(&mut self, unused: &UnusedImport, statement: &Statement) {
-        self.report_warning(
-            DiagnosticCode::ImpUnusedImport,
-            DiagnosticCode::ImpUnusedImport.title().to_string(),
-            format!(
-                "Unused import: '{}' is never used in this file",
-                unused.name()
-            ),
-            statement.span,
-            Some(unused.help()),
-        );
+        let repair = unused.repair(statement.span);
+        for name in unused.names() {
+            self.report_warning_with_repair(
+                DiagnosticCode::ImpUnusedImport,
+                DiagnosticCode::ImpUnusedImport.title().to_string(),
+                format!("Unused import: '{}' is never used in this file", name),
+                statement.span,
+                Some(unused.help(name)),
+                repair.clone(),
+            );
+        }
     }
 }
 
@@ -111,29 +126,60 @@ impl TypeChecker {
 enum UnusedImport {
     /// Nothing the line brings in is read, so the line itself is the edit.
     WholeLine(String),
-    /// One name in a selection whose other names are read. Deleting the line
-    /// would take those with it, so the edit is the name alone.
-    SelectedName(String),
+    /// Names in a selection whose other names are read. Deleting the line
+    /// would take those with it, so the edit is the selection, rewritten as
+    /// the `kept` names written between its braces from `selection`.
+    SelectedNames {
+        unread: Vec<String>,
+        selection: Span,
+        kept: Vec<Span>,
+    },
 }
 
 impl UnusedImport {
-    /// The name to report.
-    fn name(&self) -> &str {
+    /// The names to report, one diagnostic each.
+    fn names(&self) -> Vec<&str> {
         match self {
-            UnusedImport::WholeLine(name) | UnusedImport::SelectedName(name) => name,
+            UnusedImport::WholeLine(name) => vec![name.as_str()],
+            UnusedImport::SelectedNames { unread, .. } => {
+                unread.iter().map(String::as_str).collect()
+            }
         }
     }
 
-    /// What to do about it.
-    fn help(&self) -> String {
+    /// What to do about `name`.
+    fn help(&self, name: &str) -> String {
         match self {
             UnusedImport::WholeLine(_) => {
                 "nothing in this file reads what the import brings in; remove the line.".to_string()
             }
-            UnusedImport::SelectedName(name) => format!(
+            UnusedImport::SelectedNames { .. } => format!(
                 "the rest of the line is read; drop '{}' from the selection.",
                 name
             ),
+        }
+    }
+
+    /// The deletion the help names, for the `use` statement at `statement`.
+    /// An import the compiler synthesized has no text behind its spans, so it
+    /// carries the sentence alone.
+    fn repair(&self, statement: Span) -> Option<RepairRequest> {
+        match self {
+            UnusedImport::WholeLine(_) => {
+                (!statement.is_empty()).then_some(RepairRequest::RemoveImportLine {
+                    start: statement.start,
+                    end: statement.end,
+                })
+            }
+            UnusedImport::SelectedNames {
+                selection, kept, ..
+            } => (!selection.is_empty() && kept.iter().all(|span| !span.is_empty())).then(|| {
+                RepairRequest::DropSelectedImports {
+                    start: selection.start,
+                    end: selection.end,
+                    kept: kept.iter().map(|span| (span.start, span.end)).collect(),
+                }
+            }),
         }
     }
 }

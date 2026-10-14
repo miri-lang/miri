@@ -20,7 +20,7 @@ this file on every run. The harness prints it to stdout instead.
 | b | repair a broken program using check, explain and fix | yes | 5 | 2277 | 74 |
 | c | add a function and its test | yes | 4 | 702 | 199 |
 | d | extend a program with a stdlib module | yes | 3 | 1361 | 85 |
-| e | recover from a capability rejection | yes | 5 | 4105 | 118 |
+| e | recover from a capability rejection | yes | 5 | 4675 | 118 |
 | f | make a failing test pass | yes | 4 | 631 | 128 |
 | g | author a struct, a class and a match over an enum from an empty directory | yes | 3 | 588 | 1339 |
 | h | repair a cascade with one root cause | yes | 4 | 2449 | 232 |
