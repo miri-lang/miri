@@ -11,8 +11,8 @@
 
 use super::mirrors::{HandleCarriers, Mirror};
 use super::{
-    device_effect, gpu_handle, readback_destinations, statement_adoption, statement_host_reads,
-    terminator_host_reads,
+    device_effect, gpu_handle, host_overwrite, readback_destinations, statement_adoption,
+    statement_host_reads, terminator_host_reads,
 };
 use crate::error::syntax::Span;
 use crate::mir::body::DeviceHandleId;
@@ -57,6 +57,9 @@ enum BlockEvent {
     },
     /// `target` takes over `source`'s host array, and with it its lag.
     Adopt { target: Local, source: Local },
+    /// The host gives `local` a value of its own, which no readback may
+    /// overwrite with the device's older one.
+    Overwrite { local: Local },
 }
 
 /// The readbacks each block needs, keyed by block, in the order its reads run.
@@ -99,7 +102,8 @@ fn block_events(body: &Body, bb: usize, destinations: &HashSet<Local>) -> Vec<Bl
             });
         let adoption = statement_adoption(body, s)
             .map(|(target, source)| BlockEvent::Adopt { target, source });
-        reads.chain(adoption)
+        let overwrite = host_overwrite(body, s).map(|local| BlockEvent::Overwrite { local });
+        reads.chain(adoption).chain(overwrite)
     });
     let terminator_reads = block.terminator.iter().flat_map(|t| {
         terminator_host_reads(body, &t.kind)
@@ -182,6 +186,11 @@ fn apply_event(body: &Body, event: &BlockEvent, staleness: &mut Staleness) -> Op
         BlockEvent::Read { local, .. } => {
             let handle = gpu_handle(body, local)?;
             staleness.remove(&(handle.0, local))
+        }
+        BlockEvent::Overwrite { local } => {
+            let handle = gpu_handle(body, local)?;
+            staleness.remove(&(handle.0, local));
+            None
         }
         BlockEvent::Adopt { target, source } => {
             let handle = gpu_handle(body, target)?.0;

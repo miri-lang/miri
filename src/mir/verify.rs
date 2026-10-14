@@ -1518,6 +1518,9 @@ impl Fences {
         if let Some((target, source)) = residency::statement_adoption(body, statement) {
             self.adopt(body, target, source);
         }
+        if let Some(local) = residency::host_overwrite(body, statement) {
+            self.overwrite(body, local);
+        }
         let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
             &statement.kind
         else {
@@ -1532,6 +1535,14 @@ impl Fences {
             self.unguarded.remove(&handle.0);
         } else {
             self.unguarded.insert(handle.0);
+        }
+    }
+
+    /// `local` now holds a value the host gave it, which no device result is
+    /// newer than.
+    fn overwrite(&mut self, body: &Body, local: Local) {
+        if let Some(handle) = residency::gpu_handle(body, local) {
+            self.unfenced.remove(&(handle.0, local));
         }
     }
 

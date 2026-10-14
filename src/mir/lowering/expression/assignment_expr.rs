@@ -119,11 +119,10 @@ fn handle_managed_place_assign(
     // binding's device buffer: a host value, and equally another gpu binding's
     // value (`b = a`), which the readback pass reads back before the upload
     // copies its host array. Only a binding sharing the target's device buffer
-    // needs no upload.
-    // TODO: a host value assigned into a gpu *scalar* is not uploaded. Once the
-    // scalar has a device buffer (it holds a reduction's result), `s = 3` writes
-    // only the host copy, and the next readback of `s` overwrites it with the
-    // stale device value.
+    // needs no upload. A host value stored into a gpu *scalar* is not uploaded:
+    // nothing reads a scalar's device buffer but a readback, and the readback
+    // pass treats the store as making the host copy current
+    // (`residency::host_overwrite`), so no readback replaces it.
     let lhs_decl = &ctx.body.local_decls[local.0];
     let rhs_decl = &ctx.body.local_decls[rhs_place.local.0];
     let shares_the_device_buffer =

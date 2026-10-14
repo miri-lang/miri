@@ -242,6 +242,29 @@ pub(crate) fn statement_adoption(body: &Body, statement: &Statement) -> Option<(
     (source != target && gpu_handle(body, source) == Some(handle)).then_some((target, source))
 }
 
+/// The gpu-resident binding a statement overwrites whole with a host value: a
+/// constant, or a binding that has no device buffer.
+///
+/// The host array then holds the binding's value and no readback may replace
+/// it. A value read from a binding with a device buffer is not a host
+/// overwrite: a reduction hands its result over that way, and the device
+/// still holds what the host is waiting for.
+pub(crate) fn host_overwrite(body: &Body, statement: &Statement) -> Option<Local> {
+    let (StatementKind::Assign(dest, Rvalue::Use(operand))
+    | StatementKind::Reassign(dest, Rvalue::Use(operand))) = &statement.kind
+    else {
+        return None;
+    };
+    let target = dest.projection.is_empty().then_some(dest.local)?;
+    gpu_handle(body, target)?;
+    let from_host = match operand {
+        Operand::Constant(_) => true,
+        Operand::Copy(place) | Operand::Move(place) => gpu_handle(body, place.local).is_none(),
+        Operand::Function(_) => false,
+    };
+    from_host.then_some(target)
+}
+
 /// The gpu-resident bindings a terminator reads whole on the host: the value a
 /// branch switches on, and the host array an upload copies into another
 /// binding's device buffer.
