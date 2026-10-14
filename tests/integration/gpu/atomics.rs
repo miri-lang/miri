@@ -266,3 +266,117 @@ fn every_web_demo_passes_check() {
         assert!(result.success, "{}: {}", path.display(), result.output());
     }
 }
+
+/// Other languages' atomic load has no Miri spelling of its own; the refusal
+/// names the operation that does the same.
+#[test]
+fn atomic_load_is_refused_naming_its_substitute() {
+    crate::integration::utils::assert_compiler_error(
+        "
+use system.gpu
+use system.gpu.atomic
+
+fn main()
+    gpu var hist = Array<Atomic<i32>, 4>()
+    gpu forall i in 0..4
+        let v = atomic_load(hist, i)
+",
+        "`atomic_add(buf, i, 0)`",
+    );
+}
+
+#[test]
+fn atomic_store_is_refused_naming_atomic_exchange() {
+    crate::integration::utils::assert_compiler_error(
+        "
+use system.gpu
+use system.gpu.atomic
+
+fn main()
+    gpu var hist = Array<Atomic<i32>, 4>()
+    gpu forall i in 0..4
+        atomic_store(hist, i, 1 as i32)
+",
+        "`atomic_exchange(buf, i, value)`",
+    );
+}
+
+/// An atomic operation Miri does not have is refused with the list it does.
+#[test]
+fn an_unknown_atomic_operation_lists_the_ones_that_exist() {
+    crate::integration::utils::assert_compiler_error(
+        "
+use system.gpu
+use system.gpu.atomic
+
+fn main()
+    gpu var hist = Array<Atomic<i32>, 4>()
+    gpu forall i in 0..4
+        atomic_inc(hist, i)
+",
+        "`atomic_compare_exchange`",
+    );
+}
+
+/// `Atomic` without its import is one missing name: it carries the import,
+/// and the buffer built from it is not reported again under other codes.
+#[test]
+fn an_unimported_atomic_is_reported_once_with_its_import() {
+    let result = crate::utils::miri_check(
+        "
+use system.gpu
+
+fn main()
+    gpu var hist = Array<Atomic<i32>, 4>()
+    gpu forall i in 0..4
+        atomic_add(hist, i, 1 as i32)
+",
+    );
+    let output = result.output();
+    assert_eq!(
+        output.matches("error[").count(),
+        1,
+        "only the missing import should be reported:\n{output}"
+    );
+    assert!(output.contains("MER_TYP_043"), "{output}");
+    assert!(output.contains("system.gpu.atomic"), "{output}");
+}
+
+/// Declaring the readback as plain integers is refused with the readback that
+/// works: the buffer's own type, whose elements read as integers.
+#[test]
+fn a_typed_atomic_readback_names_the_untyped_one() {
+    crate::integration::utils::assert_compiler_error(
+        "
+use system.gpu
+use system.gpu.atomic
+
+fn main()
+    gpu var hist = Array<Atomic<i32>, 4>()
+    gpu forall i in 0..4
+        atomic_add(hist, i, 1 as i32)
+    let host Array<i32, 4> = hist
+",
+        "whose elements read as `i32`",
+    );
+}
+
+/// The untyped readback indexes as the integers the buffer holds.
+#[test]
+fn an_atomic_readback_indexes_as_plain_integers() {
+    let result = crate::utils::miri_check(
+        "
+use system.gpu
+use system.gpu.atomic
+
+fn main()
+    gpu var hist = Array<Atomic<i32>, 4>()
+    gpu forall i in 0..4
+        atomic_add(hist, i, 1 as i32)
+    let host = hist
+    let first i32 = host[0]
+    println(f\"{first}\")
+",
+    );
+    assert!(result.success, "{}", result.output());
+}

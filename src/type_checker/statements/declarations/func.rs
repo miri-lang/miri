@@ -495,7 +495,7 @@ impl TypeChecker {
     fn check_gpu_function_param_types(&mut self, params: &[Parameter], context: &mut Context) {
         for param in params {
             let param_type = self.resolve_type_expression(&param.typ, context);
-            if matches!(param_type.kind, TypeKind::Error) {
+            if crate::ast::types::is_unresolved(&param_type.kind) {
                 continue;
             }
             if is_gpu_signature_type(&param_type.kind) {

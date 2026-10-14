@@ -478,6 +478,9 @@ fn buffer_capture_violation(
     info: &SymbolInfo,
     elem_ty: Type,
 ) -> Option<CaptureViolation> {
+    if crate::ast::types::is_unresolved(&info.ty.kind) {
+        return None;
+    }
     if info.residency == BindingResidency::Host && is_residency_gated_buffer(&info.ty.kind) {
         return Some(CaptureViolation::HostResident {
             name: name.to_string(),

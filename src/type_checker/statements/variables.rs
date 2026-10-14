@@ -369,7 +369,7 @@ impl TypeChecker {
         if !context.in_gpu_function {
             return;
         }
-        if matches!(inferred_type.kind, TypeKind::Error) {
+        if crate::ast::types::is_unresolved(&inferred_type.kind) {
             return;
         }
         if is_gpu_compatible(&inferred_type.kind) {
@@ -399,7 +399,7 @@ impl TypeChecker {
         if decl.residency != BindingResidency::Gpu {
             return;
         }
-        if matches!(inferred_type.kind, TypeKind::Error) {
+        if crate::ast::types::is_unresolved(&inferred_type.kind) {
             return;
         }
 

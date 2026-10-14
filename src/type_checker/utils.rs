@@ -3231,7 +3231,8 @@ impl TypeChecker {
                         )
                     })
             })
-            .or_else(|| array_literal_for_a_collection_help(value, expected));
+            .or_else(|| array_literal_for_a_collection_help(value, expected))
+            .or_else(|| atomic_readback_help(found));
         // Only the conversion help names an edit determined by the two types.
         let (help, repair) = match specific {
             Some(help) => (help, None),
@@ -3533,6 +3534,19 @@ impl MatchedBy {
             Self::MapKey => "Map<String, int>()",
         }
     }
+}
+
+/// The help for an atomic buffer stored where a buffer of plain integers is
+/// declared: the readback keeps the atomic type, and its elements already
+/// read as the integers it holds.
+fn atomic_readback_help(found: &Type) -> Option<String> {
+    let element = crate::ast::types::atomic_buffer_element(&found.kind)?;
+    Some(format!(
+        "an atomic buffer reads back as `{}`, whose elements read as `{}`: drop the declared \
+         type (`let host = buffer`) and index the result",
+        crate::type_checker::diagnostics::spelled(found),
+        crate::type_checker::diagnostics::spelled(&crate::ast::factory::make_type(element.clone()))
+    ))
 }
 
 /// The help for an array literal stored where a list or set is expected:
