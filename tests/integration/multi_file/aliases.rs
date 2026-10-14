@@ -289,23 +289,24 @@ fn test_module_alias_reads_bool_and_string_constants() {
 /// is refused, as it is through a plain import.
 #[test]
 fn test_module_alias_binding_without_constant_initializer_is_refused() {
-    assert_project_compiler_error(
-        &[
-            (
-                "main.mi",
-                concat!(
-                    "use system.io\n",
-                    "use local.utils.consts as K\n",
-                    "println(f\"{K.COUNT}\")\n",
-                ),
+    let files = &[
+        (
+            "main.mi",
+            concat!(
+                "use system.io\n",
+                "use local.utils.consts as K\n",
+                "println(f\"{K.COUNT}\")\n",
             ),
-            (
-                "utils/consts.mi",
-                concat!("fn make() int\n", "    return 3\n", "let COUNT = make()\n",),
-            ),
-        ],
-        "'COUNT' has no value at run time",
-    );
+        ),
+        (
+            "utils/consts.mi",
+            concat!("fn make() int\n", "    return 3\n", "let COUNT = make()\n",),
+        ),
+    ];
+    // The refusal is the program's, so it arrives under its own code rather
+    // than as an internal error.
+    assert_project_compiler_error(files, "error[MER_MIR_003]");
+    assert_project_compiler_error(files, "'COUNT' has no value at run time");
 }
 
 /// An argument built at run time and handed to a function through a module
