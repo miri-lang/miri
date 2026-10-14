@@ -1577,3 +1577,87 @@ fn test_a_wider_float_is_cast_to_the_declared_width() {
         "fn main()\n    let d float = 1.5\n    var g f32 = 0.0\n    g = d as f32\n    println(f\"{g}\")\n"
     );
 }
+
+/// What `miri run` prints for `path`.
+fn run_stdout(path: &Path) -> String {
+    let output = miri_cmd()
+        .arg("run")
+        .arg(path)
+        .output()
+        .expect("failed to run the run command");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Statements written beside `main` move into it, in order, ahead of what it
+/// already does, and print what they were written to print.
+#[test]
+fn test_statements_beside_main_move_to_its_start() {
+    let source = "let n = 5\nprintln(\"start\")\n\nfn main()\n    println(f\"{n}\")\n";
+    let fixture = Fixture::new("move-into-main", source);
+    let ids = repair_ids(&plan(fixture.path()));
+    assert_eq!(
+        ids,
+        vec!["move-into-main", "move-into-main"],
+        "one per stray statement"
+    );
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the move should succeed");
+    assert_eq!(
+        fixture.contents(),
+        "\nfn main()\n    let n = 5\n    println(\"start\")\n    println(f\"{n}\")\n"
+    );
+    assert_eq!(run_stdout(fixture.path()), "start\n5\n");
+}
+
+/// A statement spanning several lines moves with all of them, re-indented,
+/// wherever in the file it was written.
+#[test]
+fn test_a_block_statement_after_main_moves_whole() {
+    assert_eq!(
+        repaired(
+            "move-loop-into-main",
+            "fn main()\n    println(\"in main\")\n\nfor i in 0..2\n    println(f\"{i}\")\n",
+            "move-into-main",
+        ),
+        "fn main()\n    for i in 0..2\n        println(f\"{i}\")\n    println(\"in main\")\n\n"
+    );
+}
+
+/// Moving a binding another function reads would take the name away from it,
+/// so no move is offered.
+#[test]
+fn test_no_move_is_offered_when_another_function_reads_the_name() {
+    let fixture = Fixture::new(
+        "move-refused-other-reader",
+        "let n = 5\n\nfn helper() int\n    return n\n\nfn main()\n    println(f\"{helper()}\")\n",
+    );
+    assert!(!repair_ids(&plan(fixture.path())).contains(&"move-into-main".to_string()));
+}
+
+/// `main` declaring the same name would see it declared twice.
+#[test]
+fn test_no_move_is_offered_when_main_declares_the_name() {
+    let fixture = Fixture::new(
+        "move-refused-redeclared",
+        "let n = 5\n\nfn main()\n    let n = 6\n    println(f\"{n}\")\n",
+    );
+    assert!(!repair_ids(&plan(fixture.path())).contains(&"move-into-main".to_string()));
+}
+
+/// An `else` and the `while` closing a `do` sit at the statement's own
+/// indentation and still belong to it, so they move with it.
+#[test]
+fn test_continuation_lines_move_with_their_statement() {
+    let fixture = Fixture::new(
+        "move-continuations",
+        "var x = 2\nif x > 1\n    println(\"big\")\nelse\n    println(\"small\")\ndo\n    x -= 1\nwhile x > 0\n\nfn main()\n    println(\"end\")\n",
+    );
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the move should succeed");
+    assert_eq!(run_stdout(fixture.path()), "big\nend\n");
+    assert_eq!(
+        fixture.contents(),
+        "\nfn main()\n    var x = 2\n    if x > 1\n        println(\"big\")\n    else\n        println(\"small\")\n    do\n        x -= 1\n    while x > 0\n    println(\"end\")\n"
+    );
+}

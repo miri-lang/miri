@@ -61,6 +61,8 @@ pub enum RepairId {
     RemoveUnusedImport,
     /// Convert a number to the width of the place it is stored with `as`.
     CastToSlotType,
+    /// Move statements written beside `main` into it.
+    MoveIntoMain,
 }
 
 impl RepairId {
@@ -85,6 +87,7 @@ impl RepairId {
             Self::InterpolationQuotes => "interpolation-quotes",
             Self::RemoveUnusedImport => "remove-unused-import",
             Self::CastToSlotType => "cast-to-slot-type",
+            Self::MoveIntoMain => "move-into-main",
         }
     }
 
@@ -127,6 +130,7 @@ impl RepairId {
             Self::InterpolationQuotes => &[DiagnosticCode::LexInvalidFormattedStringExpression],
             Self::RemoveUnusedImport => &[DiagnosticCode::ImpUnusedImport],
             Self::CastToSlotType => &[DiagnosticCode::TypTypeMismatch],
+            Self::MoveIntoMain => &[DiagnosticCode::TypTopLevelStatementBesideMain],
         }
     }
 
@@ -171,6 +175,9 @@ impl RepairId {
             Self::CastToSlotType => {
                 "Convert a number with `as` to the width of the place it is stored; a value outside that width's range is truncated or rounded."
             }
+            Self::MoveIntoMain => {
+                "Move statements written beside `main` into it, in order, ahead of what it already does."
+            }
         }
     }
 
@@ -195,6 +202,7 @@ impl RepairId {
             Self::InterpolationQuotes,
             Self::RemoveUnusedImport,
             Self::CastToSlotType,
+            Self::MoveIntoMain,
         ]
     }
 }
@@ -381,6 +389,17 @@ pub enum RepairRequest {
         target: String,
         parenthesize: bool,
     },
+    /// Move the top-level statements opening at `statements` into `main`,
+    /// ahead of the statement `main`'s body opens with at `body_start`.
+    ///
+    /// Each statement is recorded by where it opens; the projection reads its
+    /// extent off the source, as its first line and the more deeply indented
+    /// lines under it, because a statement's own span need not cover a block
+    /// it carries.
+    MoveIntoMain {
+        statements: Vec<usize>,
+        body_start: usize,
+    },
 }
 
 /// The word an [`RepairRequest::IfColon`] repair is anchored on.
@@ -474,6 +493,7 @@ impl RepairRequest {
                 RepairId::RemoveUnusedImport
             }
             Self::CastToSlotType { .. } => RepairId::CastToSlotType,
+            Self::MoveIntoMain { .. } => RepairId::MoveIntoMain,
         }
     }
 
@@ -574,7 +594,63 @@ impl RepairRequest {
             } => {
                 Self::project_cast_to_slot_type(path, source, (*start, *end), target, *parenthesize)
             }
+            Self::MoveIntoMain {
+                statements,
+                body_start,
+            } => Self::project_move_into_main(path, source, statements, *body_start),
         }
+    }
+
+    /// Delete each statement's lines and write them, indented as `main`'s
+    /// body is, at the start of that body.
+    fn project_move_into_main(
+        path: &str,
+        source: &str,
+        statements: &[usize],
+        body_start: usize,
+    ) -> Option<JsonRepair> {
+        let body_line = line_start(source, body_start)?;
+        let indent_len = source[body_line..]
+            .find(|c: char| c != ' ' && c != '\t')
+            .unwrap_or(0);
+        let indent = &source[body_line..body_line + indent_len];
+        if statements.is_empty() || indent.is_empty() {
+            return None;
+        }
+        let mut moved = String::new();
+        let mut edits = Vec::new();
+        for &start in statements {
+            let (from, to) = top_level_extent(source, start)?;
+            if (from..to).contains(&body_line) {
+                return None;
+            }
+            for line in source[from..to].split_inclusive('\n') {
+                if !line.trim().is_empty() {
+                    moved.push_str(indent);
+                }
+                moved.push_str(line);
+            }
+            if !moved.ends_with('\n') {
+                moved.push('\n');
+            }
+            edits.push(JsonEdit {
+                path: path.to_string(),
+                start: from,
+                end: to,
+                replacement: String::new(),
+            });
+        }
+        edits.push(JsonEdit {
+            path: path.to_string(),
+            start: body_line,
+            end: body_line,
+            replacement: moved,
+        });
+        Some(JsonRepair {
+            id: RepairId::MoveIntoMain.as_str().to_string(),
+            summary: "Move the statements beside `main` to the start of its body.".to_string(),
+            edits,
+        })
     }
 
     /// Append `as target` to the value, wrapping it in parentheses first
@@ -1235,6 +1311,59 @@ fn import_insertion_offset(source: &str) -> usize {
     }
 
     after_last_use.or(after_header).unwrap_or(0)
+}
+
+/// Where the line holding `offset` begins.
+fn line_start(source: &str, offset: usize) -> Option<usize> {
+    Some(source.get(..offset)?.rfind('\n').map_or(0, |at| at + 1))
+}
+
+/// The lines of the top-level statement opening at `start`: its own line,
+/// every more deeply indented line under it, and the lines at its own
+/// indentation that continue it — an `else` after an `if`, the `while` that
+/// closes a `do` — through the newline of the last one, leaving trailing blank
+/// lines where they are. `None` unless `start` opens a line, as a top-level
+/// statement does.
+fn top_level_extent(source: &str, start: usize) -> Option<(usize, usize)> {
+    if line_start(source, start)? != start {
+        return None;
+    }
+    let mut awaiting_do_condition = opens_with_word(&source[start..], "do");
+    let mut end = next_line(source, start);
+    let mut cursor = end;
+    while cursor < source.len() {
+        let line_end = next_line(source, cursor);
+        let line = &source[cursor..line_end];
+        let continues = if line.trim().is_empty() {
+            false
+        } else if line.starts_with([' ', '\t']) || opens_with_word(line, "else") {
+            true
+        } else if awaiting_do_condition && opens_with_word(line, "while") {
+            awaiting_do_condition = false;
+            true
+        } else {
+            break;
+        };
+        if continues {
+            end = line_end;
+        }
+        cursor = line_end;
+    }
+    Some((start, end))
+}
+
+/// Where the line after the one holding `offset` begins, or the end of
+/// `source`.
+fn next_line(source: &str, offset: usize) -> usize {
+    source[offset..]
+        .find('\n')
+        .map_or(source.len(), |at| offset + at + 1)
+}
+
+/// Whether `line` opens with the keyword `word`, as a whole word.
+fn opens_with_word(line: &str, word: &str) -> bool {
+    line.strip_prefix(word)
+        .is_some_and(|rest| rest.starts_with([' ', '\t', '\n', '\r', ':']) || rest.is_empty())
 }
 
 #[cfg(test)]

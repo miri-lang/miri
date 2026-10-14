@@ -12,8 +12,9 @@
 use crate::ast::expression::ImportPathKind;
 use crate::ast::statement::{FunctionDeclarationData, StatementKind};
 use crate::ast::{Expression, ExpressionKind, Program, Statement};
-use crate::diagnostics::DiagnosticCode;
+use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::pipeline::is_script_body_statement;
+use crate::type_checker::hygiene::names::References;
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 
@@ -31,12 +32,18 @@ impl TypeChecker {
     /// A statement beside a declared `main` is never lowered, because
     /// script-mode wrapping — the only thing that would have given it a body to
     /// live in — is skipped for a file that names its own entry point.
+    ///
+    /// Every report carries the same move of all such statements into `main`,
+    /// so one `fix --apply` moves them together and in order.
     fn report_unreachable_top_level_statements(&mut self, program: &Program) {
-        for statement in &program.body {
-            if !is_script_body_statement(statement) {
-                continue;
-            }
-            self.report_error_with_help(
+        let stray: Vec<&Statement> = program
+            .body
+            .iter()
+            .filter(|statement| is_script_body_statement(statement))
+            .collect();
+        let repair = move_into_main(program, &stray);
+        for statement in stray {
+            self.report_error_with_help_and_optional_repair(
                 DiagnosticCode::TypTopLevelStatementBesideMain,
                 "top-level statement will never run: this file declares 'main', so nothing \
                  executes it"
@@ -45,6 +52,7 @@ impl TypeChecker {
                 "move the statement into 'main', or remove the 'main' declaration so the file \
                  runs as a script."
                     .to_string(),
+                repair.clone(),
             );
         }
     }
@@ -179,6 +187,69 @@ fn top_level_statements(program: &Program) -> impl Iterator<Item = &Statement> {
             vec![statement]
         }
     })
+}
+
+/// The move of `stray` to the start of `main`'s body, when it cannot change
+/// what a name refers to: no name a stray statement binds is read anywhere
+/// else in the file, and `main` neither takes nor declares one of that name.
+/// Inside `main` such a name is read exactly as before, from the binding now
+/// made ahead of it.
+fn move_into_main(program: &Program, stray: &[&Statement]) -> Option<RepairRequest> {
+    let main = program
+        .body
+        .iter()
+        .filter_map(top_level_function)
+        .find(|declaration| declaration.name == "main")?;
+    let StatementKind::Block(body) = &main.body.as_deref()?.node else {
+        return None;
+    };
+    let body_start = body.first()?.span;
+    let statements: Vec<&Statement> = stray.iter().flat_map(|s| grouped(s)).collect();
+    if body_start.is_empty() || statements.iter().any(|s| s.span.is_empty()) {
+        return None;
+    }
+    let bound: Vec<&str> = statements.iter().flat_map(|s| bound_names(s)).collect();
+    let elsewhere: Vec<Statement> = program
+        .body
+        .iter()
+        .filter(|s| !stray.iter().any(|stray| std::ptr::eq(*stray, *s)))
+        .filter(|s| !matches!(top_level_function(s), Some(d) if d.name == "main"))
+        .cloned()
+        .collect();
+    let read_elsewhere = References::of_statements(&elsewhere);
+    let main_binds: Vec<&str> = main
+        .params
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .chain(body.iter().flat_map(bound_names))
+        .collect();
+    if bound
+        .iter()
+        .any(|name| read_elsewhere.contains(name) || main_binds.contains(name))
+    {
+        return None;
+    }
+    Some(RepairRequest::MoveIntoMain {
+        statements: statements.iter().map(|s| s.span.start).collect(),
+        body_start: body_start.start,
+    })
+}
+
+/// The statements `statement` stands for: its children when the parser
+/// grouped consecutive top-level statements under one block, else itself.
+fn grouped(statement: &Statement) -> Vec<&Statement> {
+    if let StatementKind::Block(children) = &statement.node {
+        return children.iter().collect();
+    }
+    vec![statement]
+}
+
+/// The names a `let` or `var` statement binds.
+fn bound_names(statement: &Statement) -> Vec<&str> {
+    if let StatementKind::Variable(declarations, _) = &statement.node {
+        return declarations.iter().map(|d| d.name.as_str()).collect();
+    }
+    Vec::new()
 }
 
 fn declares_main(program: &Program) -> bool {
