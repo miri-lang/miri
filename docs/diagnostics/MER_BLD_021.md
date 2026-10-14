@@ -11,23 +11,34 @@ command used to build an executable that printed nothing and exited zero —
 indistinguishable, to a caller reading the exit status, from a program that ran
 and had nothing to say.
 
+## Messages
+
+- `this file has nothing to run: it declares no 'main' and carries no top-level statements`
+
+## Help
+
+- `add a 'main' function, or check the file instead with 'miri check' if it is a module.`
+
 ## Before
 
-```sh
-# lib.mi declares helpers and no main
-miri run lib.mi
-# error[MER_BLD_021]: Nothing to Run
+```miri
+// lib.mi: helpers and no main, handed to `miri run`
+fn double(x int) int
+    return x * 2
 ```
 
 ## After
 
-```sh
-# Check the module instead — that is the question a module can answer.
-miri check lib.mi
+```miri
+// app.mi: the same helper, with an entry point that uses it
+fn double(x int) int
+    return x * 2
 
-# Or give the file an entry point and run it.
-miri run app.mi
+fn main()
+    println(f"{double(21)}")
 ```
+
+A module that is meant to stay a module is checked instead: `miri check lib.mi`.
 
 ## Reference
 

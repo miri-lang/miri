@@ -142,10 +142,13 @@ const VERIFIED: &[&str] = &[
 
 /// Codes whose `Before` example is verified through `miri run`.
 ///
-/// Each stops the running program — a trap, or a signal that kills it — which
+/// Most stop the running program — a trap, or a signal that kills it — which
 /// a static check cannot observe, so the example is compiled and run and the
-/// code must be the one the run reports.
+/// code must be the one the run reports. The rest are a warning or a note that
+/// only compiling a program to run raises, such as a file with nothing to run.
 const VERIFIED_BY_RUN: &[&str] = &[
+    "MER_BLD_021",
+    "MER_BLD_026",
     "MER_RT_001",
     "MER_RT_002",
     "MER_RT_003",
@@ -253,9 +256,7 @@ const VERIFIED_BY_FIX: &[(&str, &[&str])] = &[
 /// A code belongs here only when no source file raises it through any
 /// command. The ceiling below keeps the list from growing.
 const NOT_VERIFIABLE: &[(&str, &str)] = &[
-    ("MER_BLD_021", "`run` and `build` report it as a warning, and their JSON envelope carries errors only, printing warnings to stderr as text; no envelope a gate can read holds it"),
     ("MER_BLD_024", "raised by the agent session when a message on stdin is not a Content-Length frame, not by compiling a source file"),
-    ("MER_BLD_026", "`build` reports it as a note, and its JSON envelope carries errors only, printing notes to stderr as text; no envelope a gate can read holds it"),
     ("MER_BLD_001", "raised by `miri explain` for a code the registry does not hold, not by any source file"),
     ("MER_BLD_003", "raised by comparing two builds of one file, and no known source builds differently twice, so there is no example to run"),
     ("MER_BLD_008", "reports a file the command could not read; a source file an example writes is always readable"),
@@ -304,7 +305,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
 /// Lowering this number is the only allowed direction: a code leaves the list
 /// when an example reaches it, and the ceiling follows it down. Raising it
 /// would hide a page whose example nobody checks.
-const NOT_VERIFIABLE_CEILING: usize = 44;
+const NOT_VERIFIABLE_CEILING: usize = 42;
 
 /// Read the `Before` example out of a code's documentation.
 fn before_example(code: DiagnosticCode) -> Option<String> {

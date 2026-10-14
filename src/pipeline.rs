@@ -14,6 +14,7 @@ use crate::codegen::Backend;
 use crate::codegen::{BuildTarget, CpuBackend};
 use crate::diagnostics::codes::DiagnosticCode;
 use crate::error::compiler::CompilerError;
+use crate::error::diagnostic::Diagnostic;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
@@ -493,6 +494,29 @@ fn patch_main_return(program: &mut Program) {
                 }
                 return;
             }
+        }
+    }
+}
+
+/// The warnings and notes a command raised while compiling a program.
+pub type Notices = Vec<Diagnostic>;
+
+/// A compile's outcome with the warnings and notes it raised, returned rather
+/// than printed so a caller reporting in JSON can carry them in its envelope.
+///
+/// A failure in the frontend carries its warnings inside the error, so the
+/// notices are empty then; a failure after it keeps the frontend's notices.
+#[derive(Debug)]
+pub struct Reported<T> {
+    pub outcome: Result<T, CompilerError>,
+    pub notices: Notices,
+}
+
+impl<T> Reported<T> {
+    fn without_notices(outcome: Result<T, CompilerError>) -> Self {
+        Self {
+            outcome,
+            notices: Vec::new(),
         }
     }
 }
@@ -1469,7 +1493,21 @@ impl Pipeline {
 
     /// Run the frontend with script-mode wrapping: simple programs without function
     /// declarations are wrapped in a synthetic `main`.
+    ///
+    /// The warnings and notes the frontend raises are printed to stderr; a
+    /// caller that reports them itself uses [`Self::frontend_script_reported`].
     pub fn frontend_script(&self, source: &str) -> Result<PipelineResult, CompilerError> {
+        let (result, notices) = self.frontend_script_reported(source)?;
+        self.print_notices(source, &notices);
+        Ok(result)
+    }
+
+    /// Run the script frontend, returning the warnings and notes it raised
+    /// beside the result instead of printing them.
+    fn frontend_script_reported(
+        &self,
+        source: &str,
+    ) -> Result<(PipelineResult, Notices), CompilerError> {
         let mut ast = self.parse(source)?;
 
         let nothing_to_run = !has_executable_entry_point(&ast);
@@ -1486,32 +1524,29 @@ impl Pipeline {
             type_checker.record_warning(nothing_to_run_warning());
         }
 
-        for warning in type_checker.warnings() {
-            eprintln!(
-                "{}",
-                crate::error::format::format_diagnostic(
-                    source,
-                    warning,
-                    self.source_path.as_deref(),
-                )
-            );
-        }
-
-        // Printed rather than recorded, because it is not a warning: a test
-        // file is correct without an entry point, and the warning channel is
-        // what a caller holding the build to a no-warnings bar reads.
+        let mut notices = type_checker.warnings().to_vec();
+        // A note rather than a recorded warning: a test file is correct without
+        // an entry point, and the warning channel is what a caller holding the
+        // build to a no-warnings bar reads.
         if nothing_to_run && declares_tests {
+            notices.push(test_file_built_note());
+        }
+
+        Ok((result, notices))
+    }
+
+    /// Print `notices` to stderr as text, against this pipeline's source path.
+    pub fn print_notices(&self, source: &str, notices: &[Diagnostic]) {
+        for notice in notices {
             eprintln!(
                 "{}",
                 crate::error::format::format_diagnostic(
                     source,
-                    &test_file_built_note(),
+                    notice,
                     self.source_path.as_deref(),
                 )
             );
         }
-
-        Ok(result)
     }
 
     /// Compile and execute the source, capturing and returning output.
@@ -1523,30 +1558,71 @@ impl Pipeline {
     /// itself is `argv[0]`, as for any executable. They are an input to this one
     /// execution rather than to compilation, which is why they are a parameter
     /// instead of builder state like the source directory or the verifier flag.
+    ///
+    /// The warnings and notes compiling raised are printed to stderr; a caller
+    /// that reports them itself uses [`Self::run_reported`].
     pub fn run_and_capture(
         &self,
         source: &str,
         program_args: &[String],
     ) -> Result<RunCaptureResult, CompilerError> {
-        let temp_dir = tempfile::tempdir()
-            .map_err(|e| CompilerError::Codegen(format!("Failed to create temp dir: {}", e)))?;
-        let executable_path = temp_dir.path().join("program");
-        let trap_report_path = temp_dir.path().join("trap");
-        let gpu_report_path = temp_dir.path().join("gpu_telemetry");
+        let Reported { outcome, notices } = self.run_reported(source, program_args);
+        self.print_notices(source, &notices);
+        outcome
+    }
 
-        let build_opts = BuildOptions {
-            out_path: Some(executable_path.clone()),
+    /// Compile and execute the source as [`Self::run_and_capture`] does,
+    /// returning the warnings and notes compiling raised beside the outcome
+    /// instead of printing them.
+    pub fn run_reported(
+        &self,
+        source: &str,
+        program_args: &[String],
+    ) -> Reported<RunCaptureResult> {
+        let temp_dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                return Reported::without_notices(Err(CompilerError::Codegen(format!(
+                    "Failed to create temp dir: {}",
+                    e
+                ))))
+            }
+        };
+        let executable_path = temp_dir.path().join("program");
+        let built = self.build_reported(source, &Self::run_build_options(&executable_path));
+        let outcome = built
+            .outcome
+            .and_then(|_| Self::execute(temp_dir.path(), &executable_path, program_args));
+        Reported {
+            outcome,
+            notices: built.notices,
+        }
+    }
+
+    /// How `run` builds the program it executes.
+    fn run_build_options(executable_path: &Path) -> BuildOptions {
+        BuildOptions {
+            out_path: Some(executable_path.to_path_buf()),
             release: false,
             opt_level: 0,
             cpu_backend: CpuBackend::Cranelift,
             target: BuildTarget::Native,
             emit_native_host: false,
-        };
+        }
+    }
 
-        self.build(source, &build_opts)?;
+    /// Execute the program built at `executable_path` inside `work_dir`,
+    /// capturing what it printed and how it ended.
+    fn execute(
+        work_dir: &Path,
+        executable_path: &Path,
+        program_args: &[String],
+    ) -> Result<RunCaptureResult, CompilerError> {
+        let trap_report_path = work_dir.join("trap");
+        let gpu_report_path = work_dir.join("gpu_telemetry");
 
         // Ensure canonical paths before executing to prevent traversal or symlink attacks.
-        let canonical_temp = temp_dir.path().canonicalize().map_err(|e| {
+        let canonical_temp = work_dir.canonicalize().map_err(|e| {
             CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e))
         })?;
         let canonical_executable = executable_path.canonicalize().map_err(|e| {
@@ -1613,8 +1689,35 @@ impl Pipeline {
     }
 
     /// Compile source code to a native executable, returning the artifact path.
+    ///
+    /// The warnings and notes compiling raised are printed to stderr; a caller
+    /// that reports them itself uses [`Self::build_reported`].
     pub fn build(&self, source: &str, opts: &BuildOptions) -> Result<PathBuf, CompilerError> {
-        let mut pipeline_result = self.frontend_script(source)?;
+        let Reported { outcome, notices } = self.build_reported(source, opts);
+        self.print_notices(source, &notices);
+        outcome
+    }
+
+    /// Compile as [`Self::build`] does, returning the warnings and notes the
+    /// frontend raised beside the outcome instead of printing them. They are
+    /// kept when a later stage fails, so a refused build still reports them.
+    pub fn build_reported(&self, source: &str, opts: &BuildOptions) -> Reported<PathBuf> {
+        match self.frontend_script_reported(source) {
+            Ok((pipeline_result, notices)) => Reported {
+                outcome: self.build_checked(source, pipeline_result, opts),
+                notices,
+            },
+            Err(error) => Reported::without_notices(Err(error)),
+        }
+    }
+
+    /// Lower and emit a program the frontend accepted.
+    fn build_checked(
+        &self,
+        source: &str,
+        mut pipeline_result: PipelineResult,
+        opts: &BuildOptions,
+    ) -> Result<PathBuf, CompilerError> {
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         let mir_bodies = self.lower_to_mir(&mut pipeline_result, opts.release)?;
