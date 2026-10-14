@@ -62,7 +62,8 @@ fn main()
 
 #[test]
 fn test_until_loop() {
-    // until loop: condition inverted (exits when condition becomes true)
+    // until loop: the header tests the negated condition and enters the body
+    // on true, the shape every loop header has
     mir_snapshot_contains_test(
         r#"
 fn main()
@@ -70,7 +71,13 @@ fn main()
     until x == 10
         x = x + 1
 "#,
-        &["// x", "Eq(", "switchInt(_", "[0: bb2, otherwise: bb3]"],
+        &[
+            "// x",
+            "Eq(",
+            "Not(",
+            "switchInt(_",
+            "[1: bb2, otherwise: bb3]",
+        ],
     );
 }
 
@@ -91,14 +98,17 @@ fn main()
 
 #[test]
 fn test_forever_loop_break() {
-    // forever loop with break generates unconditional loop with break target
+    // forever loop: a header testing `true`, whose body's break exits to bb3
     mir_snapshot_contains_test(
         r#"
 fn main()
     forever
         break
 "#,
-        &["goto bb1", "goto bb2"],
+        &[
+            "switchInt(const Boolean(true)) -> [1: bb2, otherwise: bb3]",
+            "goto bb3",
+        ],
     );
 }
 
@@ -222,7 +232,7 @@ fn main()
         let x = 1
         break
 "#,
-        &["// x", "goto bb2"], // break exits to bb2
+        &["// x", "goto bb3"], // break exits to bb3
     );
 }
 

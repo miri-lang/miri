@@ -128,6 +128,28 @@ fn new_latch_block(
     latch_bb
 }
 
+/// `operand`, a boolean, negated into a temporary.
+fn negated(ctx: &mut LoweringContext, operand: Operand, span: Span) -> Operand {
+    let temp = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(temp),
+            Rvalue::UnaryOp(crate::mir::UnOp::Not, Box::new(operand)),
+        ),
+        span,
+    });
+    Operand::Copy(Place::new(temp))
+}
+
+/// The boolean constant `value`.
+fn bool_constant(value: bool, span: Span) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Boolean, span),
+        literal: crate::ast::literal::Literal::Boolean(value),
+    }))
+}
+
 pub fn lower_while(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -135,9 +157,9 @@ pub fn lower_while(
     body: &Statement,
     while_type: &WhileStatementType,
 ) -> Result<(), LoweringError> {
-    // While/Until: Header (cond) -> Body -> Header
-    // DoWhile/DoUntil: Body -> Header (cond) -> Body
-    // Forever: Body -> Body
+    // While/Until: Header (cond) -> Body -> Latch -> Header
+    // DoWhile/DoUntil: Header (true) -> Body -> Cond -> Latch -> Header
+    // Forever: Header (true) -> Body -> Latch -> Header
 
     match while_type {
         WhileStatementType::While | WhileStatementType::Until => {
@@ -152,17 +174,19 @@ pub fn lower_while(
 
             ctx.set_current_block(header_bb);
             let cond_op = lower_expression(ctx, cond, None)?;
-            let (target_val, other_target) = match while_type {
-                WhileStatementType::While => (1, exit_bb),
-                WhileStatementType::Until => (0, exit_bb),
-                _ => unreachable!(),
+            // Every loop header enters its body on `true`: an `until` tests
+            // the negated condition, the shape a structured loop (`loop { if
+            // (!test) { break; } ... }`) is built from on every backend.
+            let test = match while_type {
+                WhileStatementType::Until => negated(ctx, cond_op, cond.span),
+                _ => cond_op,
             };
 
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::SwitchInt {
-                    discr: cond_op,
-                    targets: vec![(Discriminant::from(target_val), body_bb)],
-                    otherwise: other_target,
+                    discr: test,
+                    targets: vec![(Discriminant::bool_true(), body_bb)],
+                    otherwise: exit_bb,
                 },
                 *span,
             ));
@@ -185,14 +209,28 @@ pub fn lower_while(
             ctx.set_current_block(exit_bb);
         }
         WhileStatementType::DoWhile | WhileStatementType::DoUntil => {
+            // The body runs first, under a header testing `true` like a
+            // `forever`; the condition at the end either takes the latch back
+            // to the header or leaves the loop.
+            let header_bb = ctx.new_basic_block();
             let body_bb = ctx.new_basic_block();
             let cond_bb = ctx.new_basic_block();
             let exit_bb = ctx.new_basic_block();
 
             ctx.set_terminator(Terminator::new(
-                TerminatorKind::Goto { target: body_bb },
+                TerminatorKind::Goto { target: header_bb },
                 *span,
             ));
+            ctx.set_current_block(header_bb);
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::SwitchInt {
+                    discr: bool_constant(true, *span),
+                    targets: vec![(Discriminant::bool_true(), body_bb)],
+                    otherwise: exit_bb,
+                },
+                *span,
+            ));
+            let latch_bb = new_latch_block(ctx, header_bb, *span);
 
             ctx.enter_loop(exit_bb, cond_bb);
             ctx.set_current_block(body_bb);
@@ -210,17 +248,16 @@ pub fn lower_while(
 
             ctx.set_current_block(cond_bb);
             let cond_op = lower_expression(ctx, cond, None)?;
-            let (target_val, other_target) = match while_type {
-                WhileStatementType::DoWhile => (1, exit_bb),
-                WhileStatementType::DoUntil => (0, exit_bb),
-                _ => unreachable!(),
+            let repeat = match while_type {
+                WhileStatementType::DoUntil => negated(ctx, cond_op, cond.span),
+                _ => cond_op,
             };
 
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::SwitchInt {
-                    discr: cond_op,
-                    targets: vec![(Discriminant::from(target_val), body_bb)],
-                    otherwise: other_target,
+                    discr: repeat,
+                    targets: vec![(Discriminant::bool_true(), latch_bb)],
+                    otherwise: exit_bb,
                 },
                 *span,
             ));
@@ -228,15 +265,29 @@ pub fn lower_while(
             ctx.set_current_block(exit_bb);
         }
         WhileStatementType::Forever => {
+            // A header testing `true` gives the loop the same shape as a
+            // `while`: without it the body's first block is the back-edge
+            // target, and a branch at the top of the body (`if k == i: break`)
+            // reads as the loop's own exit test.
+            let header_bb = ctx.new_basic_block();
             let body_bb = ctx.new_basic_block();
             let exit_bb = ctx.new_basic_block(); // Only reachable via break
 
             ctx.set_terminator(Terminator::new(
-                TerminatorKind::Goto { target: body_bb },
+                TerminatorKind::Goto { target: header_bb },
+                *span,
+            ));
+            ctx.set_current_block(header_bb);
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::SwitchInt {
+                    discr: bool_constant(true, *span),
+                    targets: vec![(Discriminant::bool_true(), body_bb)],
+                    otherwise: exit_bb,
+                },
                 *span,
             ));
 
-            let latch_bb = new_latch_block(ctx, body_bb, *span);
+            let latch_bb = new_latch_block(ctx, header_bb, *span);
             ctx.enter_loop(exit_bb, latch_bb);
             ctx.set_current_block(body_bb);
             lower_statement(ctx, body)?;

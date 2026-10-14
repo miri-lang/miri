@@ -697,6 +697,7 @@ impl<'a> BodyEmitter<'a> {
             checked_helpers: BTreeSet::new(),
         };
         emitter.resolve_loop_tests();
+        emitter.refuse_unresolved_loop_exits()?;
         Ok(emitter)
     }
 
@@ -730,6 +731,27 @@ impl<'a> BodyEmitter<'a> {
             }
             self.loop_info.insert(header, info);
         }
+    }
+
+    /// Refuses a loop whose exit still leads back into the loop once its test
+    /// is resolved: the branch taken for the test is then a branch inside the
+    /// body, and emitting it as the loop's exit would silently run the wrong
+    /// iterations.
+    fn refuse_unresolved_loop_exits(&self) -> Result<(), CodegenError> {
+        let mut headers: Vec<&BasicBlock> = self.loop_info.keys().collect();
+        headers.sort_by_key(|header| header.0);
+        for header in headers {
+            let exit = self.loop_info[header].exit;
+            if self.forward_reachable(exit, *header) {
+                return Err(CodegenError::Internal(format!(
+                    "WGSL backend: the exit of the loop at bb{} leads back into the loop, so its \
+                     test cannot be told from a branch in its body; the loop is refused rather \
+                     than compiled with the wrong exit",
+                    header.0
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The (true, false) targets of a block ending in a boolean `SwitchInt` on
@@ -1130,6 +1152,15 @@ impl<'a> BodyEmitter<'a> {
             if Some(cur) == stop {
                 return Ok(());
             }
+            // Arriving at the innermost loop's continue target or exit any way
+            // other than as the stop block (as the merge point of a branch
+            // nested in the body) leaves the iteration exactly as a `Goto` to
+            // it does; following the block would re-enter the loop's header.
+            if let Some(jump) = self.loop_jump_to(cur) {
+                self.write_indent()?;
+                writeln!(self.output, "{jump}").map_err(emit_err)?;
+                return Ok(());
+            }
 
             // Check if we've visited this block before (back-edge or convergence).
             if visited.contains(&cur) {
@@ -1189,26 +1220,12 @@ impl<'a> BodyEmitter<'a> {
                     return Ok(());
                 }
                 TerminatorKind::Goto { target } => {
-                    // Resolve the Goto against the loop stack.
-                    if let Some(frame) = self.loop_stack.last() {
-                        if *target == frame.exit {
-                            // Jump to loop exit => emit break.
-                            self.write_indent()?;
-                            writeln!(self.output, "break;").map_err(emit_err)?;
-                            return Ok(());
-                        }
-                        if Some(*target) == stop {
-                            // Jump to stop block (e.g., if-merge, loop continue target).
-                            return Ok(());
-                        }
-                        if *target == frame.continue_target {
-                            // Jump to continue target => emit continue.
-                            self.write_indent()?;
-                            writeln!(self.output, "continue;").map_err(emit_err)?;
-                            return Ok(());
-                        }
+                    // A jump to the stop block ends this stretch; the top of
+                    // the walk turns a jump to the innermost loop's exit or
+                    // continue target into `break` or `continue`.
+                    if Some(*target) == stop {
+                        return Ok(());
                     }
-                    // Otherwise, continue at that target.
                     cur = *target;
                 }
                 TerminatorKind::SwitchInt {
@@ -1305,6 +1322,20 @@ impl<'a> BodyEmitter<'a> {
                     )));
                 }
             }
+        }
+    }
+
+    /// The statement that leaves the current iteration of the innermost loop
+    /// when emission reaches `block`: `break;` at its exit, `continue;` at its
+    /// continue target, `None` anywhere else.
+    fn loop_jump_to(&self, block: BasicBlock) -> Option<&'static str> {
+        let frame = self.loop_stack.last()?;
+        if block == frame.exit {
+            Some("break;")
+        } else if block == frame.continue_target {
+            Some("continue;")
+        } else {
+            None
         }
     }
 
@@ -2887,6 +2918,39 @@ mod tests {
             info.continue_target,
             BasicBlock(0),
             "a while-loop's continue jumps back to the header"
+        );
+    }
+
+    /// A back-edge target whose branch is a test inside the loop body, not the
+    /// loop's exit test (a loop whose body opens with `if … break` and has no
+    /// header of its own), is refused: taking the branch's other arm as the
+    /// loop exit would run the wrong iterations.
+    #[test]
+    fn test_branch_inside_the_body_is_not_taken_for_the_loop_test() {
+        // bb0: Goto -> bb1
+        // bb1: SwitchInt(true -> bb2, otherwise -> bb3)   the body's `if … break`
+        // bb2: Goto -> bb5                                 break
+        // bb3: Goto -> bb4                                 rest of the body
+        // bb4: Goto -> bb1                                 latch
+        // bb5: Return
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        body.basic_blocks.push(goto_block(BasicBlock(1)));
+        body.basic_blocks
+            .push(loop_header_block(BasicBlock(2), BasicBlock(3)));
+        body.basic_blocks.push(goto_block(BasicBlock(5)));
+        body.basic_blocks.push(goto_block(BasicBlock(4)));
+        body.basic_blocks.push(goto_block(BasicBlock(1)));
+        body.basic_blocks.push(return_block());
+
+        let mut output = String::new();
+        let mut source_map = Vec::new();
+        let result = BodyEmitter::new(&body, &[], [256, 1, 1], &mut output, &mut source_map);
+        let Err(error) = result else {
+            panic!("a loop whose exit leads back into it must be refused");
+        };
+        assert!(
+            error.to_string().contains("leads back into the loop"),
+            "the refusal names why: {error}"
         );
     }
 
