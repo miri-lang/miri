@@ -98,6 +98,10 @@ pub fn compile_with_harness(
     }
     pipeline = pipeline.with_source_path(absolute.display().to_string());
 
+    // TODO: `build` prints the warnings and notes compiling raised to stderr,
+    // so `miri test --format json` leaves them out of its envelope. Report
+    // them through `Pipeline::build_reported`, as `run` and `build` do, and
+    // carry them in the envelope against the test file's own lines.
     pipeline.build(&combined, &options).map_err(|error| {
         // Rendered through the compiler's own formatter against the combined
         // source, so the report reads the way `miri build` reads rather than as
