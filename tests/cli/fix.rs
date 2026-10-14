@@ -1526,3 +1526,54 @@ fn test_one_apply_removes_every_unused_import_form() {
         envelope.diagnostics
     );
 }
+
+/// A number stored at a narrower width hands over the cast its help names.
+#[test]
+fn test_a_wider_integer_initializer_is_cast_to_the_declared_width() {
+    assert_eq!(
+        repaired(
+            "cast-initializer",
+            "fn main()\n    let n int = 5\n    let y i32 = n\n    println(f\"{y}\")\n",
+            "cast-to-slot-type",
+        ),
+        "fn main()\n    let n int = 5\n    let y i32 = n as i32\n    println(f\"{y}\")\n"
+    );
+}
+
+/// A compound value is parenthesised, so the cast converts all of it rather
+/// than its last operand.
+#[test]
+fn test_a_compound_value_stored_in_a_narrower_element_is_cast_whole() {
+    assert_eq!(
+        repaired(
+            "cast-element-store",
+            "use system.collections.list\n\nfn main()\n    let n int = 5\n    var xs = List<i32>()\n    xs.push(0)\n    xs[0] = n * 2\n    println(f\"{xs[0]}\")\n",
+            "cast-to-slot-type",
+        ),
+        "use system.collections.list\n\nfn main()\n    let n int = 5\n    var xs = List<i32>()\n    xs.push(0)\n    xs[0] = (n * 2) as i32\n    println(f\"{xs[0]}\")\n"
+    );
+}
+
+#[test]
+fn test_a_wider_argument_is_cast_to_the_parameter_width() {
+    assert_eq!(
+        repaired(
+            "cast-argument",
+            "fn take(x u32) u32\n    return x\n\nfn main()\n    let n int = 5\n    println(f\"{take(n)}\")\n",
+            "cast-to-slot-type",
+        ),
+        "fn take(x u32) u32\n    return x\n\nfn main()\n    let n int = 5\n    println(f\"{take(n as u32)}\")\n"
+    );
+}
+
+#[test]
+fn test_a_wider_float_is_cast_to_the_declared_width() {
+    assert_eq!(
+        repaired(
+            "cast-float",
+            "fn main()\n    let d float = 1.5\n    var g f32 = 0.0\n    g = d\n    println(f\"{g}\")\n",
+            "cast-to-slot-type",
+        ),
+        "fn main()\n    let d float = 1.5\n    var g f32 = 0.0\n    g = d as f32\n    println(f\"{g}\")\n"
+    );
+}

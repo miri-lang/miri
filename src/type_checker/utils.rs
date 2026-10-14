@@ -30,7 +30,7 @@ use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
-use crate::type_checker::type_mismatch::TypeSides;
+use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
 
 /// The element type a definition that names `Iterable` without an argument
 /// yields.
@@ -3220,7 +3220,7 @@ impl TypeChecker {
         value: &Expression,
         (expected, found): (&Type, &Type),
     ) {
-        let help = self
+        let specific = self
             .struct_held_at_a_trait_help(value, expected)
             .or_else(|| {
                 self.lambda_rewritten_at_widths(value, expected)
@@ -3231,14 +3231,25 @@ impl TypeChecker {
                         )
                     })
             })
-            .or_else(|| array_literal_for_a_collection_help(value, expected))
-            .unwrap_or_else(|| self.conversion_help(expected, found));
-        self.report_type_mismatch(
+            .or_else(|| array_literal_for_a_collection_help(value, expected));
+        // Only the conversion help names an edit determined by the two types.
+        let (help, repair) = match specific {
+            Some(help) => (help, None),
+            None => (
+                self.conversion_help(expected, found),
+                self.cast_repair(expected, found, value),
+            ),
+        };
+        self.push_type_mismatch(
             DiagnosticCode::TypTypeMismatch,
             message,
             value.span,
             TypeSides::of(expected, found),
             help,
+            MismatchExtras {
+                repair,
+                ..MismatchExtras::default()
+            },
         );
     }
 
