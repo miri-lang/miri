@@ -98,8 +98,26 @@ written as literals in the `Dim3(...)` call; a named constant is refused at buil
 (MER_CG_008).
 
 Atomic buffers are `Array<Atomic<i32>, N>` or `Array<Atomic<u32>, N>` from
-`use system.gpu.atomic`, updated in a kernel with `atomic_add`, `atomic_sub` and
-`atomic_max`; there is no `atomic_load`.
+`use system.gpu.atomic`, updated in a kernel with `atomic_add`, `atomic_sub`,
+`atomic_max`, `atomic_min`, `atomic_and`, `atomic_or`, `atomic_xor`,
+`atomic_exchange` and `atomic_compare_exchange`. Each takes the buffer, an index
+and a value, and returns the element it found. There is no `atomic_load` or
+`atomic_store`: `atomic_add(buf, i, 0 as i32)` reads atomically and
+`atomic_exchange(buf, i, v)` writes. On the host, read the buffer back with
+`let host = buf`, without a declared type; its elements read as the integers
+they hold.
+
+```miri
+use system.gpu
+use system.gpu.atomic
+use system.collections.array
+
+gpu var hist = Array<Atomic<i32>, 4>()
+gpu forall i in 0..8
+    atomic_add(hist, i % 4, 1 as i32)
+let host = hist
+println(f"{host[0]}")
+```
 
 ### Kernel Context
 

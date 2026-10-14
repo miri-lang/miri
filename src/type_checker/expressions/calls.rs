@@ -1099,7 +1099,8 @@ impl TypeChecker {
         span: Span,
     ) {
         if crate::ast::types::is_atomic_integer_buffer(&ty.kind)
-            || matches!(ty.kind, TypeKind::Error | TypeKind::Generic(..))
+            || crate::ast::types::is_unresolved(&ty.kind)
+            || matches!(ty.kind, TypeKind::Generic(..))
         {
             return;
         }

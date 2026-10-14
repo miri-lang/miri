@@ -1079,6 +1079,37 @@ pub fn array_element_and_size(kind: &TypeKind) -> Option<(&Expression, &Expressi
     }
 }
 
+/// True when `kind` is the error type or is built from one: a type the
+/// checker could not resolve, already reported where it was written. A check
+/// that rejects a type for what it holds says nothing useful about one whose
+/// element is unknown, so it stays quiet rather than report the same missing
+/// name again under another code.
+pub fn is_unresolved(kind: &TypeKind) -> bool {
+    let written = |expression: &Expression| match &expression.node {
+        ExpressionKind::Type(inner, _) => is_unresolved(&inner.kind),
+        _ => false,
+    };
+    match kind {
+        TypeKind::Error => true,
+        TypeKind::List(element) => written(element),
+        TypeKind::Array(element, _) => written(element),
+        TypeKind::Map(key, value) => written(key) || written(value),
+        TypeKind::Tuple(elements) => elements.iter().any(written),
+        TypeKind::Custom(_, Some(args)) => args.iter().any(written),
+        _ => false,
+    }
+}
+
+/// The integer type each element of an atomic buffer `kind` holds: `i32` for
+/// `Array<Atomic<i32>, N>`. A readback of the buffer indexes as that type.
+pub fn atomic_buffer_element(kind: &TypeKind) -> Option<&TypeKind> {
+    let (element, _) = array_element_and_size(kind)?;
+    let ExpressionKind::Type(element, _) = &element.node else {
+        return None;
+    };
+    atomic_inner_kind(&element.kind)
+}
+
 /// True if `kind` is `Array<Atomic<i32>, N>` or `Array<Atomic<u32>, N>`: the
 /// only buffers an atomic operation can act on, since GPU atomics hold 32-bit
 /// integers only.

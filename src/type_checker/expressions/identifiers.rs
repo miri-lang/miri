@@ -152,17 +152,9 @@ impl TypeChecker {
                 TypeKind::Meta(Box::new(ast_factory::make_type(TypeKind::Void))),
             )),
             // GPU atomic operations are placeholders; dispatch happens in try_lower_atomic_builtin.
-            "atomic_add"
-            | "atomic_sub"
-            | "atomic_max"
-            | "atomic_min"
-            | "atomic_and"
-            | "atomic_or"
-            | "atomic_xor"
-            | "atomic_exchange"
-            | "atomic_compare_exchange" => Some(ast_factory::make_type(TypeKind::Meta(Box::new(
-                ast_factory::make_type(TypeKind::Void),
-            )))),
+            name if ATOMIC_OPERATIONS.contains(&name) => Some(ast_factory::make_type(
+                TypeKind::Meta(Box::new(ast_factory::make_type(TypeKind::Void))),
+            )),
             _ => None,
         }
     }
@@ -363,6 +355,19 @@ impl TypeChecker {
                 );
                 return;
             }
+        }
+
+        // A function some module declares under such a name is imported
+        // instead, below.
+        let declared_somewhere = !Self::modules_declaring_function(name).is_empty();
+        if let Some(help) = missing_atomic_operation_help(name).filter(|_| !declared_somewhere) {
+            self.report_error_with_help(
+                DiagnosticCode::TypUndefinedName,
+                format!("Undefined variable: {}", name),
+                span,
+                help,
+            );
+            return;
         }
 
         let entity_kind = if self.type_table.global_type_definitions.contains_key(name)
@@ -579,4 +584,50 @@ impl TypeChecker {
             span,
         );
     }
+}
+
+/// The atomic operations GPU kernels can call on an `Array<Atomic<i32|u32>, N>`
+/// buffer. Each takes the buffer, an index and a value (`compare_exchange` a
+/// second value) and returns the element it found.
+const ATOMIC_OPERATIONS: &[&str] = &[
+    "atomic_add",
+    "atomic_sub",
+    "atomic_max",
+    "atomic_min",
+    "atomic_and",
+    "atomic_or",
+    "atomic_xor",
+    "atomic_exchange",
+    "atomic_compare_exchange",
+];
+
+/// What to write instead of `name`, an atomic operation Miri does not have.
+///
+/// A load and a store are what other languages spell most often; each has an
+/// exact counterpart among the operations that exist. Any other `atomic_`
+/// name gets the list.
+fn missing_atomic_operation_help(name: &str) -> Option<String> {
+    if !name.starts_with("atomic_") {
+        return None;
+    }
+    let help = match name {
+        "atomic_load" => "there is no `atomic_load`: inside a kernel, `atomic_add(buf, i, 0)` \
+             with a zero of the element type reads an element atomically, since every atomic \
+             operation returns the value it found; on the host, read the buffer back after the \
+             launch with `let host = buf`, whose elements read as plain integers"
+            .to_string(),
+        "atomic_store" => "there is no `atomic_store`: `atomic_exchange(buf, i, value)` writes \
+             `value` atomically and returns the element it replaced"
+            .to_string(),
+        _ => format!(
+            "the atomic operations are {}; each takes the buffer, an index and a value, and \
+             returns the element it found",
+            ATOMIC_OPERATIONS
+                .iter()
+                .map(|operation| format!("`{operation}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    Some(help)
 }
