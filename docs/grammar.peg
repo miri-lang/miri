@@ -1,4 +1,4 @@
-# version: 3
+# version: 4
 
 # The Miri language grammar, over the token stream the lexer produces.
 #
@@ -137,7 +137,8 @@ anonymous_function <- FN L_PAREN parameter_list? R_PAREN type_expression? (COLON
 inline_if_expression <- IF expression COLON expression (ELSE COLON expression)?
 
 literal_expression <- INT / FLOAT / BINARY / HEX / OCTAL / STRING / REGEX / TRUE / FALSE / NONE / formatted_string
-formatted_string <- FSTRING_START expression? (FSTRING_MID expression?)* FSTRING_END
+formatted_string <- FSTRING_START interpolation? (FSTRING_MID interpolation?)* FSTRING_END
+interpolation <- expression FORMAT_SPEC?
 
 type_expression <- type_union
 type_union <- type_postfix ((PIPE / AMPERSAND) type_postfix)*
@@ -199,6 +200,12 @@ fn_type_parameter <- IDENT type_expression / type_expression
 #            an f-string is split around its interpolations: f"a{x}b{y}c"
 #            lexes as FSTRING_START, the tokens of x, FSTRING_MID, the tokens of
 #            y, then FSTRING_END.
+#   FORMAT_SPEC
+#            the text after the last `:` of an interpolation that sits outside
+#            brackets and string literals, when no whitespace follows it and it
+#            does not end an inline `if ... else:`: f"{x:.2f}" lexes x, then
+#            FORMAT_SPEC ".2f". Its own grammar, [[fill]align][0][width]
+#            [.precision][type], is read by the type checker.
 #
 # Because FLOAT admits a leading dot, a tuple field access lexes as an identifier
 # followed by a FLOAT: `t.0` is IDENT FLOAT, not IDENT DOT INT. The rules above

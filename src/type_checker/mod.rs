@@ -47,6 +47,7 @@ pub(crate) mod diagnostics;
 pub mod escape_analysis;
 pub mod expressions;
 pub(crate) mod float_literals;
+mod format_specs;
 mod function_analysis;
 pub use function_analysis::{CalleeKind, DeclaredFunction, ModuleId};
 pub(crate) mod generics;

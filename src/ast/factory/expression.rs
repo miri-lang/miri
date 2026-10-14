@@ -114,7 +114,7 @@ pub fn match_expression_with_span(
 
 /// Creates a formatted string expression with a specific span.
 pub fn f_string_with_span(parts: Vec<Expression>, span: Span) -> Expression {
-    expr_with_span(ExpressionKind::FormattedString(parts), span)
+    expr_with_span(ExpressionKind::FormattedString(parts, Vec::new()), span)
 }
 
 /// Creates a type expression with a specific span.

@@ -194,7 +194,7 @@ impl SettlementAudit<'_> {
             }
             ExpressionKind::Unary(_, operand) => self.operands(&[operand]),
             ExpressionKind::Cast(value, _) => self.operands(&[value]),
-            ExpressionKind::FormattedString(parts) => {
+            ExpressionKind::FormattedString(parts, _) => {
                 parts.iter().all(|part| self.operands(&[part]))
             }
             ExpressionKind::List(elements)

@@ -83,7 +83,8 @@ impl<'source> Parser<'source> {
             Some((Token::Regex(_), _)) => self.regex_literal(),
             Some((Token::FormattedStringStart(_), _))
             | Some((Token::FormattedStringMiddle(_), _))
-            | Some((Token::FormattedStringEnd(_), _)) => {
+            | Some((Token::FormattedStringEnd(_), _))
+            | Some((Token::FormatSpec(_), _)) => {
                 // These are handled by formatted_string_expression, not here.
                 Err(self.error_unexpected_lookahead_token("a literal"))
             }

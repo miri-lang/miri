@@ -140,7 +140,7 @@ impl WriteWalker<'_> {
             | ExpressionKind::Array(items, _)
             | ExpressionKind::Tuple(items)
             | ExpressionKind::Set(items)
-            | ExpressionKind::FormattedString(items)
+            | ExpressionKind::FormattedString(items, _)
             | ExpressionKind::EnumValue(_, items) => items.iter().for_each(|e| self.expression(e)),
             ExpressionKind::Map(entries) => entries.iter().for_each(|(key, value)| {
                 self.expression(key);
@@ -216,7 +216,7 @@ fn place_root(place: &Expression) -> Option<&str> {
         | ExpressionKind::Tuple(_)
         | ExpressionKind::Set(_)
         | ExpressionKind::Match(_, _)
-        | ExpressionKind::FormattedString(_)
+        | ExpressionKind::FormattedString(..)
         | ExpressionKind::NamedArgument(_, _)
         | ExpressionKind::Super
         | ExpressionKind::Block(_, _)

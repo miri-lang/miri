@@ -361,7 +361,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
             ExpressionKind::Range(start, end, _) => {
                 self.classify_range(start, end, flow);
             }
-            ExpressionKind::FormattedString(parts) => {
+            ExpressionKind::FormattedString(parts, _) => {
                 self.classify_formatted_string(parts, flow);
             }
             ExpressionKind::Assignment(_, _, rhs) => {
@@ -624,7 +624,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.scan_lambda_expr(obj, flow);
                 self.scan_lambda_expr(idx, flow);
             }
-            ExpressionKind::FormattedString(parts) => {
+            ExpressionKind::FormattedString(parts, _) => {
                 for p in parts {
                     self.scan_lambda_expr(p, flow);
                 }
@@ -1129,7 +1129,7 @@ fn collect_callees_from_expr(
         }
         ExpressionKind::Assignment(_, _, rhs) => collect_callees_from_expr(rhs, types, known, out),
         ExpressionKind::NamedArgument(_, val) => collect_callees_from_expr(val, types, known, out),
-        ExpressionKind::FormattedString(parts) => {
+        ExpressionKind::FormattedString(parts, _) => {
             collect_callees_from_elems(parts, types, known, out);
         }
         ExpressionKind::Range(start, end_, _) => {
@@ -1670,7 +1670,7 @@ fn walk_expr_for_rule4(
         ExpressionKind::NamedArgument(_, val) => {
             walk_expr_for_rule4(val, params, summaries, direct_escapes);
         }
-        ExpressionKind::FormattedString(parts) => {
+        ExpressionKind::FormattedString(parts, _) => {
             walk_elems_for_rule4(parts, params, summaries, direct_escapes);
         }
         ExpressionKind::Range(start, end_, _) => {

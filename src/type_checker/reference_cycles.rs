@@ -157,7 +157,7 @@ impl TypeChecker {
             | ExpressionKind::Cast(_, _)
             | ExpressionKind::Match(_, _)
             | ExpressionKind::Guard(_, _)
-            | ExpressionKind::FormattedString(_)
+            | ExpressionKind::FormattedString(..)
             | ExpressionKind::Literal(_)
             | ExpressionKind::Super
             | ExpressionKind::Type(_, _)

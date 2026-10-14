@@ -240,6 +240,9 @@ pub enum Token {
     FormattedStringStart(Box<String>),
     FormattedStringMiddle(Box<String>),
     FormattedStringEnd(Box<String>),
+    /// The format spec written after `:` in an f-string interpolation,
+    /// emitted after the interpolation's own tokens.
+    FormatSpec(Box<String>),
 
     #[regex(
         r"[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?_+",
@@ -351,6 +354,7 @@ impl Token {
             | Token::Identifier | Token::Int | Token::Float | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber
             | Token::String | Token::Regex(_)
             | Token::FormattedStringStart(_) | Token::FormattedStringMiddle(_) | Token::FormattedStringEnd(_)
+            | Token::FormatSpec(_)
             | Token::Indent | Token::Dedent | Token::ExpressionStatementEnd
             | Token::Whitespace | Token::Shebang | Token::ByteOrderMark => LexAction::EmitAsIs,
             Token::InlineComment => LexAction::BufferComment,

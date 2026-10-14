@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::factory as ast;
+use crate::ast::format_spec::FormatSpec;
 use crate::ast::*;
 use crate::error::syntax::SyntaxError;
 use crate::lexer::Token;
@@ -40,8 +41,18 @@ impl<'source> Parser<'source> {
             return Ok(ast::f_string(parts));
         }
 
+        let mut specs = Vec::new();
         while self.lookahead.is_some() {
             parts.push(self.expression()?);
+            if let Some((Token::FormatSpec(_), _)) = &self.lookahead {
+                let (spec_token, span) = self.eat(
+                    |t| matches!(t, Token::FormatSpec(_)),
+                    || "format spec".to_string(),
+                )?;
+                if let Token::FormatSpec(text) = spec_token {
+                    specs.push((parts.len() - 1, FormatSpec { text: *text, span }));
+                }
+            }
 
             if matches!(&self.lookahead, Some((Token::FormattedStringMiddle(_), _))) {
                 let (mid_token, _) = self.eat(
@@ -73,6 +84,6 @@ impl<'source> Parser<'source> {
             }
         }
 
-        Ok(ast::f_string(parts))
+        Ok(ast::f_string_with_specs(parts, specs))
     }
 }

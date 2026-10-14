@@ -116,7 +116,11 @@ impl TypeChecker {
             ExpressionKind::Conditional(then_expr, cond_expr, else_expr, _) => {
                 self.infer_conditional(then_expr, cond_expr, else_expr, span, context)
             }
-            ExpressionKind::FormattedString(parts) => self.infer_formatted_string(parts, context),
+            ExpressionKind::FormattedString(parts, specs) => {
+                let ty = self.infer_formatted_string(parts, context);
+                self.check_format_specs(parts, specs);
+                ty
+            }
             ExpressionKind::Lambda(lambda) => self.infer_lambda(
                 &lambda.generics,
                 &lambda.params,

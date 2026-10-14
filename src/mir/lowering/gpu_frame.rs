@@ -686,7 +686,7 @@ fn detect_frame_usage_expr(expr: &Expression) -> bool {
         // inputs (e.g. `(frame.time * 2.0) as f32`, `f"{frame.dt}"`).
         ExpressionKind::Cast(value, _ty) => detect_frame_usage_expr(value),
         ExpressionKind::Guard(_, arg) => detect_frame_usage_expr(arg),
-        ExpressionKind::FormattedString(parts) => parts.iter().any(detect_frame_usage_expr),
+        ExpressionKind::FormattedString(parts, _) => parts.iter().any(detect_frame_usage_expr),
         ExpressionKind::NamedArgument(_, arg) => detect_frame_usage_expr(arg),
         ExpressionKind::Lambda(_)
         | ExpressionKind::TypeDeclaration(_, _, _, _)

@@ -125,7 +125,7 @@ fn expression(expr: &mut Expression) {
         ExpressionKind::List(elems)
         | ExpressionKind::Tuple(elems)
         | ExpressionKind::Set(elems)
-        | ExpressionKind::FormattedString(elems)
+        | ExpressionKind::FormattedString(elems, _)
         | ExpressionKind::Array(elems, _) => elems.iter_mut().for_each(expression),
         ExpressionKind::Map(entries) => {
             for (key, value) in entries {

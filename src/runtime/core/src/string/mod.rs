@@ -18,6 +18,7 @@ pub(crate) mod char_index;
 mod constructors;
 mod conversion;
 mod core;
+mod format_spec;
 mod inspection;
 mod operations;
 mod transformation;
@@ -77,6 +78,7 @@ unsafe fn deref_as_str<'a>(ptr: *const MiriString) -> &'a str {
 pub mod ffi {
     pub use super::constructors::*;
     pub use super::conversion::*;
+    pub use super::format_spec::*;
     pub use super::inspection::*;
     pub use super::transformation::*;
 }

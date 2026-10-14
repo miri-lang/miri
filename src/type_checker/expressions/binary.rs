@@ -1005,7 +1005,7 @@ fn collect_concat_parts(expr: &Expression, parts: &mut Vec<ConcatPart>) -> Optio
     }
     // A formatted string cannot nest inside a hole, so a chain containing one
     // has no rewrite of this shape.
-    if matches!(expr.node, ExpressionKind::FormattedString(_)) {
+    if matches!(expr.node, ExpressionKind::FormattedString(..)) {
         return None;
     }
     if expr.span.is_empty() {

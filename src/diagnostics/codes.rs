@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (81 codes: 001-081)
+    // TYP — Type checker (82 codes: 001-082)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1061,6 +1061,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "TYP",
+    "082",
+    TypInvalidFormatSpec,
+    "Invalid Format Spec",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
     // OWN — Ownership and resource management (5 codes: 001-005)
     "OWN",
     "001",

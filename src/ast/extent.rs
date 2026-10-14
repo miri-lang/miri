@@ -253,7 +253,7 @@ fn visit_expression(expression: &Expression, furthest: &mut Reach) {
         ExpressionKind::List(items)
         | ExpressionKind::Tuple(items)
         | ExpressionKind::Set(items)
-        | ExpressionKind::FormattedString(items) => visit_expressions(items, furthest),
+        | ExpressionKind::FormattedString(items, _) => visit_expressions(items, furthest),
         ExpressionKind::Array(items, size) => {
             visit_expressions(items, furthest);
             visit_expression(size, furthest);

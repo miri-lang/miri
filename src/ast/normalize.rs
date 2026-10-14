@@ -232,7 +232,7 @@ fn normalize_expr(expr: &mut Expression) {
         ExpressionKind::List(elems)
         | ExpressionKind::Tuple(elems)
         | ExpressionKind::Set(elems)
-        | ExpressionKind::FormattedString(elems) => normalize_expr_list(elems),
+        | ExpressionKind::FormattedString(elems, _) => normalize_expr_list(elems),
         ExpressionKind::Array(elems, size) => {
             normalize_expr_list(elems);
             normalize_expr(size);

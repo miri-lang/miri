@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod basic;
 pub mod errors;
+pub mod format_spec;
 pub mod functions;
 pub mod types;
 pub mod variants;

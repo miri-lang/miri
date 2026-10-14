@@ -285,6 +285,14 @@ pub mod rt {
     /// negative `i128`. Takes the value's address for the same reason as
     /// [`I128_TO_STRING`].
     pub const U128_TO_STRING: &str = "miri_rt_u128_to_string";
+    /// Compiler-internal: a float written with a fixed count of decimals, for
+    /// an f-string format spec such as `{x:.2f}`.
+    pub const FORMAT_FIXED: &str = "miri_rt_format_fixed";
+    /// Compiler-internal: an integer written in a radix, for an f-string
+    /// format spec such as `{n:x}`.
+    pub const FORMAT_RADIX: &str = "miri_rt_format_radix";
+    /// Compiler-internal: interpolated text padded to a format spec's width.
+    pub const FORMAT_PAD: &str = "miri_rt_format_pad";
 
     // 128-bit integer arithmetic
     /// Compiler-internal: 128-bit division and remainder, which the backend has
@@ -547,6 +555,9 @@ pub mod rt {
         I128_TO_F32,
         U128_TO_F32,
         U128_TO_STRING,
+        FORMAT_FIXED,
+        FORMAT_RADIX,
+        FORMAT_PAD,
         // Time
         NANOTIME,
         SLEEP_NANOS,

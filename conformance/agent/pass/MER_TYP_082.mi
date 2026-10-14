@@ -1,0 +1,5 @@
+// summary: Accepted counterpart of MER_TYP_082: the precision carries type f.
+// expect-stdout: 3.14
+fn main()
+    let x = 3.14159
+    println(f"{x:.2f}")

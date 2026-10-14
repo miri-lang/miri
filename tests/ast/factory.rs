@@ -401,7 +401,7 @@ fn expression_helpers_produce_expected_variants() {
     assert!(matches!(t.node, ExpressionKind::Tuple(_)));
 
     let f = f_string(vec![string_literal_expression("a")]);
-    assert!(matches!(f.node, ExpressionKind::FormattedString(_)));
+    assert!(matches!(f.node, ExpressionKind::FormattedString(..)));
 
     let na = named_argument("x".into(), int_literal_expression(1));
     assert!(matches!(na.node, ExpressionKind::NamedArgument(..)));

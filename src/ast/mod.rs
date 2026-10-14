@@ -10,6 +10,7 @@ pub mod exit_status;
 pub mod expression;
 pub mod extent;
 pub mod factory;
+pub mod format_spec;
 pub mod formatter;
 pub mod gpu_frame_passes;
 pub mod gpu_wire;

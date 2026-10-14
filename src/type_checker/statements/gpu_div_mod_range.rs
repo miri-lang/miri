@@ -128,7 +128,7 @@ impl TypeChecker {
             ExpressionKind::List(exprs)
             | ExpressionKind::Set(exprs)
             | ExpressionKind::Tuple(exprs)
-            | ExpressionKind::FormattedString(exprs) => {
+            | ExpressionKind::FormattedString(exprs, _) => {
                 for e in exprs {
                     self.walk_expr_for_div_mod(e);
                 }
