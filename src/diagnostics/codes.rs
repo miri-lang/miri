@@ -976,7 +976,7 @@ diagnostics!(
     "Top-Level Statement Beside Main",
     Severity::Error,
     false,
-    FixSafety::RequiresHumanReview,
+    FixSafety::LocalEdit,
     "TYP",
     "070",
     TypFunctionAlreadyDeclared,

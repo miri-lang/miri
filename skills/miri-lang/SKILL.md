@@ -149,6 +149,7 @@ The auto-applicable repairs are:
 - `interpolation-quotes`: Write the string literals inside an f-string's braces with the other quote.
 - `let-mut-to-var`: Rewrite a `let mut` binding as `var`.
 - `let-to-var`: Rebind an immutable declaration as mutable.
+- `move-into-main`: Move statements written beside `main` into it, in order, ahead of what it already does.
 - `null-to-none`: Rewrite `null`, `nil` or `nullptr` as `None`.
 - `println-bang`: Drop the `!` from a macro-style call.
 - `qualify-variant-pattern`: Prefix a bare variant pattern with the enum that declares it.

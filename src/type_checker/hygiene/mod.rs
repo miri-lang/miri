@@ -21,7 +21,7 @@
 mod bindings;
 mod declarations;
 mod imports;
-mod names;
+pub(crate) mod names;
 mod reachability;
 mod walk;
 
