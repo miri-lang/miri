@@ -1064,6 +1064,37 @@ fn atomic_inner_kind(kind: &TypeKind) -> Option<&TypeKind> {
     }
 }
 
+/// The element type and the written size of an `Array<E, N>` type, in either
+/// its normalized `Custom` form or the `Array(E, N)` form the parser builds.
+pub fn array_element_and_size(kind: &TypeKind) -> Option<(&Expression, &Expression)> {
+    match kind {
+        TypeKind::Array(element, size) => Some((element, size)),
+        TypeKind::Custom(name, Some(args))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+                && args.len() == 2 =>
+        {
+            Some((&args[0], &args[1]))
+        }
+        _ => None,
+    }
+}
+
+/// True if `kind` is `Array<Atomic<i32>, N>` or `Array<Atomic<u32>, N>`: the
+/// only buffers an atomic operation can act on, since GPU atomics hold 32-bit
+/// integers only.
+pub fn is_atomic_integer_buffer(kind: &TypeKind) -> bool {
+    let Some((element, _)) = array_element_and_size(kind) else {
+        return false;
+    };
+    let ExpressionKind::Type(element, _) = &element.node else {
+        return false;
+    };
+    matches!(
+        atomic_inner_kind(&element.kind),
+        Some(TypeKind::I32 | TypeKind::U32)
+    )
+}
+
 /// Byte width of an element that is not laid out inline: a scalar's own width,
 /// or a value word for anything the element holds by reference or has not
 /// resolved yet.

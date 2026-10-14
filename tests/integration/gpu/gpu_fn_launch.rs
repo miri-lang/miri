@@ -39,25 +39,6 @@ fn main()
     );
 }
 
-/// MIR lowering error: passing a host-resident array to a `.launch` call should fail.
-/// This is caught during lowering (when the kernel is actually dispatched), not type-checking.
-#[test]
-fn gpu_fn_launch_with_host_array_rejected() {
-    assert_build_error(
-        "
-use system.collections.array
-
-gpu fn my_kernel(a Array<f32,4>)
-    let x = 1
-
-fn main()
-    let a Array<f32,4> = [1.0, 2.0, 3.0, 4.0]
-    my_kernel(a).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
-",
-        "host-resident",
-    );
-}
-
 /// WGSL-level validation: the emitted WGSL contains the correct
 /// `@compute @workgroup_size(2, 2, 1)` and shared memory declarations.
 #[test]
@@ -235,43 +216,6 @@ fn main()
     my_kernel(a).launch(Dim3(1, 1, 1), Dim3(4, 4, 1))
 ",
         "conflicting launch workgroup shapes",
-    );
-}
-
-/// Error test: block size must be a compile-time literal.
-#[test]
-fn gpu_fn_launch_non_literal_block_rejected() {
-    assert_build_error(
-        "
-use system.collections.array
-
-gpu fn my_kernel(a Array<f32,4>)
-    let x = 1
-
-fn main()
-    gpu let a = [1.0, 2.0, 3.0, 4.0]
-    var block_size = 2
-    my_kernel(a).launch(Dim3(1, 1, 1), Dim3(block_size, 2, 1))
-",
-        "compile-time literal",
-    );
-}
-
-/// Error test: block dimensions must all be > 0.
-#[test]
-fn gpu_fn_launch_zero_block_dim_rejected() {
-    assert_build_error(
-        "
-use system.collections.array
-
-gpu fn my_kernel(a Array<f32,4>)
-    let x = 1
-
-fn main()
-    gpu let a = [1.0, 2.0, 3.0, 4.0]
-    my_kernel(a).launch(Dim3(1, 1, 1), Dim3(0, 1, 1))
-",
-        ">0",
     );
 }
 

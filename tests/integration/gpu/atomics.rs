@@ -210,24 +210,6 @@ fn main()
     );
 }
 
-/// atomic_add on non-atomic buffer is rejected during code generation.
-#[test]
-fn atomic_add_on_plain_array_rejected() {
-    use crate::integration::utils::assert_runtime_error;
-    assert_runtime_error(
-        "
-use system.gpu
-use system.gpu.atomic
-
-fn main()
-    gpu var plain_buf = Array<u32, 4>()
-    gpu forall i in 0..4
-        atomic_add(plain_buf, i, 1 as u32)
-",
-        "requires an Array<Atomic<u32|i32>, N> buffer",
-    );
-}
-
 /// atomic_add outside a GPU kernel (in host code) is rejected.
 #[test]
 fn atomic_add_in_host_fn_rejected() {

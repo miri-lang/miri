@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Codes whose `Before` example is verified through `miri check` to emit
 /// that code first.
 const VERIFIED: &[&str] = &[
-    "MER_CG_008",
     "MER_IMP_002",
     "MER_IMP_003",
     "MER_IMP_004",
@@ -81,11 +80,15 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_016",
     "MER_TYP_017",
     "MER_TYP_018",
+    "MER_TYP_019",
+    "MER_TYP_021",
+    "MER_TYP_022",
     "MER_TYP_023",
     "MER_TYP_024",
     "MER_TYP_025",
     "MER_TYP_026",
     "MER_TYP_027",
+    "MER_TYP_029",
     "MER_TYP_030",
     "MER_TYP_031",
     "MER_TYP_032",
@@ -244,15 +247,6 @@ const VERIFIED_BY_FIX: &[(&str, &[&str])] = &[
     ("MER_BLD_020", &["--apply", "--yes"]),
 ];
 
-/// Why a refusal made while lowering a function body does not reach the
-/// author under its own code: the pipeline reports every lowering failure
-/// outside the target and instantiation-limit codes as `MER_CG_008`, an
-/// internal compiler error, with the original message after
-/// "MIR lowering failed for".
-const LOWERING_REPORTS_INTERNAL_ERROR: &str =
-    "raised while lowering a function body, and the pipeline reports every lowering \
-     refusal outside the target and instantiation-limit codes as MER_CG_008";
-
 /// Codes no documented example can reach, each with the reason.
 ///
 /// A code belongs here only when no source file raises it through any
@@ -276,22 +270,23 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_CG_004", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
     ("MER_CG_005", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
     ("MER_CG_006", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_008", "documented with prose: it reports a failure of the compiler itself, and no known program reproduces one"),
     ("MER_CG_007", "`build --cpu-backend llvm` reports the refusal as MER_CG_008: the backend error reaches the report as text, which drops its own code"),
     ("MER_IMP_001", "needs two files that import each other; an example is a single file"),
     ("MER_LEX_009", "the lexer forms a regex token only when both quotes are present, so the check never fails; an unterminated regex is MER_LEX_001"),
     ("MER_LEX_010", "the lexer forms an f-string token only when both quotes are present, so the check never fails; an unterminated f-string is MER_LEX_001"),
-    ("MER_MIR_001", "every expression the type checker accepts lowers; one lowering could not handle would be reported as MER_CG_008, as every lowering refusal is"),
-    ("MER_MIR_002", "every statement the type checker accepts lowers; one lowering could not handle would be reported as MER_CG_008, as every lowering refusal is"),
-    ("MER_MIR_003", "the type checker refuses an undefined name first (MER_TYP_034), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_001", "every expression the type checker accepts lowers; one lowering could not handle is a gap in the compiler, which it reports as MER_CG_008"),
+    ("MER_MIR_002", "every statement the type checker accepts lowers; one lowering could not handle is a gap in the compiler, which it reports as MER_CG_008"),
+    ("MER_MIR_003", "the type checker refuses an undefined name first (MER_TYP_034)"),
     ("MER_MIR_004", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
-    ("MER_MIR_005", "the type checker refuses a `break` outside a loop first (MER_TAR_005), and lowering's own check would be reported as MER_CG_008"),
-    ("MER_MIR_006", "the type checker refuses a `continue` outside a loop first (MER_TYP_050), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_005", "the type checker refuses a `break` outside a loop first (MER_TAR_005)"),
+    ("MER_MIR_006", "the type checker refuses a `continue` outside a loop first (MER_TYP_050)"),
     ("MER_MIR_007", "the parser refuses an invalid assignment target first (MER_PAR_004), and lowering's own check would be reported as MER_CG_008"),
-    ("MER_MIR_008", "every operator the type checker accepts lowers; one lowering could not handle would be reported as MER_CG_008, as every lowering refusal is"),
+    ("MER_MIR_008", "every operator the type checker accepts lowers; one lowering could not handle is a gap in the compiler, which it reports as MER_CG_008"),
     ("MER_MIR_009", "raised only for a range form the type checker accepts and lowering cannot iterate, and none is known; lowering's refusal would be reported as MER_CG_008 in any case"),
-    ("MER_MIR_010", "the type checker refuses a launch with the wrong arguments first (MER_TYP_030), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_010", "the type checker refuses a launch with the wrong arguments first (MER_TYP_030)"),
     ("MER_MIR_011", "the type checker refuses an unknown type first (MER_TYP_043), and lowering's own check would be reported as MER_CG_008"),
-    ("MER_MIR_012", "the type checker refuses a missing struct field first (MER_TYP_030), and lowering's own check would be reported as MER_CG_008"),
+    ("MER_MIR_012", "the type checker refuses a missing struct field first (MER_TYP_030)"),
     ("MER_MIR_013", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_MIR_014", "documented with prose rather than source: no program reproduces a backend or internal-consistency failure"),
     ("MER_NAM_003", "the parser builds an import path from names joined by dots, so the path never holds `/`, `\\` or `..`; such a path is refused by the parser first (MER_PAR_001)"),
@@ -301,11 +296,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_PAR_008", "the lexer forms a boolean token only from `true` or `false`, so the check never fails; any other word is a name"),
     ("MER_RT_007", "a bus error needs a misaligned or unmapped access the compiler never emits, and SIGBUS has a different number on macOS and Linux, so no portable program raises it"),
     ("MER_RT_014", "documented with prose: reaching it means the type checker let through a call it should have refused, so no program it handles correctly reproduces it"),
-    ("MER_TYP_019", LOWERING_REPORTS_INTERNAL_ERROR),
-    ("MER_TYP_020", "the type checker refuses an unbounded `slice` range first (MER_TYP_041), and lowering's own check would be reported as MER_CG_008"),
-    ("MER_TYP_021", LOWERING_REPORTS_INTERNAL_ERROR),
-    ("MER_TYP_022", LOWERING_REPORTS_INTERNAL_ERROR),
-    ("MER_TYP_029", LOWERING_REPORTS_INTERNAL_ERROR),
+    ("MER_TYP_020", "the type checker refuses an unbounded `slice` range first (MER_TYP_041)"),
 ];
 
 /// The most codes `NOT_VERIFIABLE` may hold.
@@ -313,16 +304,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
 /// Lowering this number is the only allowed direction: a code leaves the list
 /// when an example reaches it, and the ceiling follows it down. Raising it
 /// would hide a page whose example nobody checks.
-const NOT_VERIFIABLE_CEILING: usize = 48;
-
-/// Codes whose example reaches the condition its page documents, while the
-/// compiler reports it as `MER_CG_008` instead.
-///
-/// Each example is checked to report `MER_CG_008` with the refusal after
-/// "MIR lowering failed for", so the excuse stays true: once the code
-/// reaches the author as itself, this fails and the code moves to `VERIFIED`.
-const REPORTED_AS_INTERNAL_ERROR: &[&str] =
-    &["MER_TYP_019", "MER_TYP_021", "MER_TYP_022", "MER_TYP_029"];
+const NOT_VERIFIABLE_CEILING: usize = 45;
 
 /// Read the `Before` example out of a code's documentation.
 fn before_example(code: DiagnosticCode) -> Option<String> {
@@ -1144,51 +1126,6 @@ fn excused_examples_still_fail_to_report_their_code() {
             reported
         );
     }
-}
-
-/// An excuse that names `MER_CG_008` has to stay true as well.
-///
-/// Each of these examples reaches the condition its page documents, and the
-/// compiler reports it as an internal error, with the refusal after "MIR
-/// lowering failed for". When the code starts reaching the author as itself,
-/// this fails, and the code belongs on the verified list.
-#[test]
-fn excused_lowering_refusals_still_surface_as_internal_errors() {
-    let internal = DiagnosticCode::CgInternalCodegenError.as_str();
-    let failures = REPORTED_AS_INTERNAL_ERROR
-        .iter()
-        .filter_map(|wire| {
-            let excused = NOT_VERIFIABLE
-                .iter()
-                .any(|(c, reason)| c == wire && *reason == LOWERING_REPORTS_INTERNAL_ERROR);
-            if !excused {
-                return Some(format!(
-                    "{} must be excused with the reason that names MER_CG_008",
-                    wire
-                ));
-            }
-            let example = match reported_example(wire, Surface::Check) {
-                Ok(found) => found,
-                Err(failure) => return Some(failure),
-            };
-            let subject = example.subject.as_ref();
-            let reported_internal = subject.and_then(|d| d.code.as_deref()) == Some(internal);
-            let carries_documented_text = subject
-                .and_then(|d| d.message.as_deref())
-                .is_some_and(|m| m.contains("MIR lowering failed for"));
-            (!reported_internal || !carries_documented_text).then(|| {
-                format!(
-                    "{}: its example no longer surfaces as {} ({:?}, {:?}); \
-                     if it now reports itself, move it to VERIFIED",
-                    wire,
-                    internal,
-                    example.codes,
-                    subject.and_then(|d| d.message.as_deref())
-                )
-            })
-        })
-        .collect();
-    assert_no_failures("lowering refusals changed how they surface", failures);
 }
 
 /// Several gates check the same documented example at the same moment, so a

@@ -1056,7 +1056,7 @@ impl TypeChecker {
         &mut self,
         func: &Expression,
         positional_args: &[(&Expression, Type)],
-        _span: Span,
+        span: Span,
     ) -> Option<Type> {
         // Extract the function name from direct identifier only (no module member access).
         let func_name = match &func.node {
@@ -1064,28 +1064,45 @@ impl TypeChecker {
             _ => None,
         }?;
 
-        // Check if this is an atomic operation.
-        match func_name {
+        // Every atomic operation returns the old buffer element, which has the
+        // type of the value argument (arg 2); `compare_exchange` takes one
+        // more argument than the rest.
+        let min_args = match func_name {
             "atomic_add" | "atomic_sub" | "atomic_max" | "atomic_min" | "atomic_and"
-            | "atomic_or" | "atomic_xor" | "atomic_exchange" => {
-                // atomic_* operations return the type of the value argument (arg 2).
-                // The return value is the old value from the buffer element.
-                if positional_args.len() >= 3 {
-                    Some(positional_args[2].1.clone())
-                } else {
-                    None
-                }
-            }
-            "atomic_compare_exchange" => {
-                // compare_exchange also returns the type of the value argument (arg 2).
-                if positional_args.len() >= 4 {
-                    Some(positional_args[2].1.clone())
-                } else {
-                    None
-                }
-            }
-            _ => None,
+            | "atomic_or" | "atomic_xor" | "atomic_exchange" => 3,
+            "atomic_compare_exchange" => 4,
+            _ => return None,
+        };
+        if positional_args.len() < min_args {
+            return None;
         }
+        self.check_atomic_buffer(func_name, &positional_args[0], span);
+        Some(positional_args[2].1.clone())
+    }
+
+    /// Refuses an atomic operation whose buffer is not `Array<Atomic<i32|u32>, N>`.
+    /// A buffer whose type is not known yet is left to the instantiation that
+    /// settles it.
+    fn check_atomic_buffer(
+        &mut self,
+        builtin: &str,
+        (buffer, ty): &(&Expression, Type),
+        span: Span,
+    ) {
+        if crate::ast::types::is_atomic_integer_buffer(&ty.kind)
+            || matches!(ty.kind, TypeKind::Error | TypeKind::Generic(..))
+        {
+            return;
+        }
+        let refusal =
+            crate::type_checker::atomic_buffers::atomic_buffer_mismatch(builtin, buffer, ty);
+        self.report_error_with_help_and_types(
+            DiagnosticCode::TypAtomicBufferTypeMismatch,
+            refusal.message,
+            span,
+            refusal.help,
+            (refusal.expected, refusal.found),
+        );
     }
 
     /// Validates `kernel.warp.shuffle_down(value, offset)` arguments at compile time.

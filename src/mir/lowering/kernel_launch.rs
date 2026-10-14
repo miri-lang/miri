@@ -126,19 +126,7 @@ fn push_buffer_arg(
         local_decl.residency,
         crate::mir::body::BindingResidency::Gpu
     ) {
-        let buffer_name = local_decl.name.as_deref().unwrap_or("argument");
-        return Err(LoweringError::coded(
-            DiagnosticCode::TypGpuFunctionHostBufferMismatch,
-            format!(
-                "cannot pass host-resident array '{}' to gpu function",
-                buffer_name
-            ),
-            span,
-            Some(format!(
-                "mark the binding as gpu-resident: 'gpu let {} = ...' or 'gpu var {} = ...'",
-                buffer_name, buffer_name
-            )),
-        ));
+        return Err(host_buffer_refusal(local_decl.name.as_deref(), span));
     }
 
     args.arg_handles.push(local_decl.device_handle);
@@ -176,6 +164,30 @@ fn is_gpu_buffer_type(kind: &TypeKind) -> bool {
     }
 }
 
+/// The refusal of a host-resident buffer passed to a `gpu fn`: the kernel
+/// reads its buffers from device memory. `name` is the binding passed, or
+/// `None` for a value built in the call itself.
+fn host_buffer_refusal(name: Option<&str>, span: Span) -> LoweringError {
+    let (message, help) = match name {
+        Some(name) => (
+            format!("a gpu fn reads its buffers from device memory, but `{name}` is host-resident"),
+            format!("declare it on the device: `gpu let {name} = ...` (or `gpu var` to write it)"),
+        ),
+        None => (
+            "a gpu fn reads its buffers from device memory, but an array built in the call \
+             is host-resident"
+                .to_string(),
+            "bind it on the device first, e.g. `gpu let buf = [...]`, and pass `buf`".to_string(),
+        ),
+    };
+    LoweringError::coded(
+        DiagnosticCode::TypGpuFunctionHostBufferMismatch,
+        message,
+        span,
+        Some(help),
+    )
+}
+
 /// Try to extract Dim3(x, y, z) as [x, y, z] from a compile-time literal.
 /// Returns None if the expression is not a Dim3 literal or is not compile-time constant.
 pub(super) fn try_extract_dim3_literal(expr: &Expression) -> Option<[u32; 3]> {
@@ -198,25 +210,120 @@ pub(super) fn try_extract_dim3_literal(expr: &Expression) -> Option<[u32; 3]> {
 }
 
 fn extract_u32_literal(expr: &Expression) -> Option<u32> {
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::literal::Literal;
+    integer_literal_value(expr).and_then(|value| u32::try_from(value).ok())
+}
+
+/// The value of an integer literal, negated ones included; `None` for any
+/// other expression, or a literal past the `i128` range.
+fn integer_literal_value(expr: &Expression) -> Option<i128> {
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::operator::UnaryOp;
 
     match &expr.node {
-        ExpressionKind::Literal(Literal::Integer(int_lit)) => {
-            use crate::ast::literal::IntegerLiteral;
-            match int_lit {
-                IntegerLiteral::I8(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::I16(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::I32(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::I64(v) if *v >= 0 => Some(*v as u32),
-                IntegerLiteral::U8(v) => Some(*v as u32),
-                IntegerLiteral::U16(v) => Some(*v as u32),
-                IntegerLiteral::U32(v) => Some(*v),
-                IntegerLiteral::U64(v) if *v <= u32::MAX as u64 => Some(*v as u32),
-                _ => None,
-            }
+        ExpressionKind::Literal(Literal::Integer(literal)) => match *literal {
+            IntegerLiteral::I8(v) => Some(v.into()),
+            IntegerLiteral::I16(v) => Some(v.into()),
+            IntegerLiteral::I32(v) => Some(v.into()),
+            IntegerLiteral::I64(v) => Some(v.into()),
+            IntegerLiteral::I128(v) => Some(v),
+            IntegerLiteral::U8(v) => Some(v.into()),
+            IntegerLiteral::U16(v) => Some(v.into()),
+            IntegerLiteral::U32(v) => Some(v.into()),
+            IntegerLiteral::U64(v) => Some(v.into()),
+            IntegerLiteral::U128(v) => i128::try_from(v).ok(),
+        },
+        ExpressionKind::Unary(UnaryOp::Negate, operand) => {
+            integer_literal_value(operand).and_then(i128::checked_neg)
         }
         _ => None,
+    }
+}
+
+// TODO: the type checker can see whether a launch block is `Dim3` of positive
+// literals and whether a buffer argument was declared `gpu let`/`gpu var`;
+// refusing these there would report them in the same batch as other type
+// errors instead of only once type checking passes.
+/// The workgroup size a launch's block argument fixes at compile time.
+///
+/// It is refused when it is not `Dim3(x, y, z)` of integer literals
+/// (MER_TYP_022) or when a dimension is below 1 (MER_TYP_019).
+fn launch_block_size(ctx: &LoweringContext, block: &Expression) -> Result<[u32; 3], LoweringError> {
+    let components = match &block.node {
+        ExpressionKind::Call(func, args)
+            if args.len() == 3
+                && matches!(&func.node, ExpressionKind::Identifier(name, _) if name == "Dim3") =>
+        {
+            args
+        }
+        _ => {
+            return Err(block_size_not_literal(
+                ctx,
+                block,
+                "a `Dim3` of integer literals",
+            ))
+        }
+    };
+    let mut size = [0u32; 3];
+    for (slot, component) in size.iter_mut().zip(components.iter()) {
+        let value = integer_literal_value(component)
+            .ok_or_else(|| block_size_not_literal(ctx, component, "an integer literal"))?;
+        *slot = u32::try_from(value)
+            .ok()
+            .filter(|dimension| *dimension > 0)
+            .ok_or_else(|| block_dimension_below_one(ctx, block))?;
+    }
+    Ok(size)
+}
+
+fn block_size_not_literal(
+    ctx: &LoweringContext,
+    found: &Expression,
+    expected: &str,
+) -> LoweringError {
+    LoweringError::coded(
+        DiagnosticCode::TypGpuLaunchBlockSizeNotLiteral,
+        format!(
+            "a launch's block size is fixed when its kernel is compiled, \
+             but {} is not {expected}",
+            shown(ctx, found)
+        ),
+        found.span,
+        Some("write the block size with integer literals, e.g. `Dim3(16, 16, 1)`".to_string()),
+    )
+}
+
+fn block_dimension_below_one(ctx: &LoweringContext, block: &Expression) -> LoweringError {
+    LoweringError::coded(
+        DiagnosticCode::TypGpuLaunchBlockDimensionsInvalid,
+        format!(
+            "each dimension of a launch's block size must be at least 1, but the block is {}",
+            shown(ctx, block)
+        ),
+        block.span,
+        Some("use 1 for a dimension the kernel does not use, e.g. `Dim3(16, 1, 1)`".to_string()),
+    )
+}
+
+/// `expr` as a message shows it: in backticks as its source writes it, rebuilt
+/// from the tree for the forms a launch block holds when the body's own source
+/// is not at hand.
+fn shown(ctx: &LoweringContext, expr: &Expression) -> String {
+    ctx.source
+        .and_then(|source| source.get(expr.span.start..expr.span.end))
+        .map(str::to_string)
+        .or_else(|| rebuilt(expr))
+        .map(|text| format!("`{text}`"))
+        .unwrap_or_else(|| "this value".to_string())
+}
+
+fn rebuilt(expr: &Expression) -> Option<String> {
+    match &expr.node {
+        ExpressionKind::Identifier(name, _) => Some(name.clone()),
+        ExpressionKind::Call(func, args) => {
+            let args: Option<Vec<String>> = args.iter().map(rebuilt).collect();
+            Some(format!("{}({})", rebuilt(func)?, args?.join(", ")))
+        }
+        _ => integer_literal_value(expr).map(|value| value.to_string()),
     }
 }
 
@@ -276,23 +383,7 @@ pub(crate) fn try_lower_kernel_launch(
         };
 
     if let Some(ref kernel_name) = kernel_name {
-        let workgroup_size = try_extract_dim3_literal(&args[1]).ok_or_else(|| {
-            LoweringError::coded(
-                DiagnosticCode::TypGpuLaunchBlockSizeNotLiteral,
-                "gpu fn launch block size must be a compile-time literal Dim3".to_string(),
-                *span,
-                Some("use a compile-time literal, e.g., block: Dim3(16, 16, 1)".to_string()),
-            )
-        })?;
-
-        if workgroup_size.contains(&0) {
-            return Err(LoweringError::coded(
-                DiagnosticCode::TypGpuLaunchBlockDimensionsInvalid,
-                "gpu fn launch block dimensions must all be >0".to_string(),
-                *span,
-                Some("each dimension must be at least 1".to_string()),
-            ));
-        }
+        let workgroup_size = launch_block_size(ctx, &args[1])?;
 
         ctx.body
             .kernel_workgroups

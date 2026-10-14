@@ -31,6 +31,7 @@ use crate::type_checker::context::MethodInfo;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
+pub(crate) mod atomic_buffers;
 pub(crate) mod attributes;
 mod binding_refinement;
 

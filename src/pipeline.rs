@@ -555,23 +555,15 @@ impl Default for Pipeline {
     }
 }
 
-/// Every function name a lowered body calls.
 /// A failure lowering the per-instantiation body `symbol`.
 ///
-/// A refusal of the program — an instantiation its arguments do not name, one
-/// it needs past a bound, or code a target cannot run as written — is reported
-/// as the diagnostic it is; anything else is a failure of the compiler's own,
-/// reported against the body.
+/// A refusal of the program is reported as the diagnostic it is; anything
+/// else is a failure of the compiler's own, reported against the body.
 fn monomorphized_lowering_failure(
     symbol: &Symbol,
     error: crate::error::lowering::LoweringError,
 ) -> CompilerError {
-    let code = error.kind.properties().code;
-    let refuses_the_program = matches!(
-        code,
-        DiagnosticCode::MirInvalidInstantiationArgument | DiagnosticCode::MirPolymorphicRecursion
-    ) || code.area() == "TAR";
-    if refuses_the_program {
+    if refuses_the_program(error.kind.properties().code) {
         return CompilerError::Lowering(error);
     }
     // Still the compiler's own failure, but reported where lowering stopped,
@@ -585,6 +577,32 @@ fn monomorphized_lowering_failure(
         )
         .in_source(source),
     )
+}
+
+/// Whether a lowering error under `code` refuses the program, rather than
+/// reporting a gap or a broken invariant in the compiler itself.
+///
+/// The program is refused for a mistake its author can fix: a type error
+/// only lowering can see (a GPU buffer, launch shape or atomic of the wrong
+/// kind), code a target cannot run as written, an instantiation its arguments
+/// do not name or one it needs past a bound, and the structural errors the
+/// type checker normally refuses first. A construct lowering does not support,
+/// a type lowering cannot find and an invalid body are the compiler's own.
+fn refuses_the_program(code: DiagnosticCode) -> bool {
+    match code.area() {
+        "TYP" | "TAR" => true,
+        "MIR" => matches!(
+            code,
+            DiagnosticCode::MirUndefinedVariable
+                | DiagnosticCode::MirBreakOutsideLoop
+                | DiagnosticCode::MirContinueOutsideLoop
+                | DiagnosticCode::MirInvalidGpuLaunchArguments
+                | DiagnosticCode::MirMissingStructField
+                | DiagnosticCode::MirPolymorphicRecursion
+                | DiagnosticCode::MirInvalidInstantiationArgument
+        ),
+        _ => false,
+    }
 }
 
 fn called_functions(bodies: &[(Symbol, mir::Body)]) -> HashSet<Symbol> {
