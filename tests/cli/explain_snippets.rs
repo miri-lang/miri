@@ -672,7 +672,7 @@ fn example_failures(wire: &str, surface: Surface) -> Vec<String> {
              Add a ## Messages section with backticked message shapes.",
             wire
         )),
-        None => failures.push(format!("{}: could not extract the first diagnostic", wire)),
+        None => failures.push(no_subject(wire, &example.codes)),
         Some(message)
             if !shapes
                 .iter()
@@ -806,6 +806,16 @@ fn verified_pages_declare_the_help_that_fires() {
     assert_no_failures("pages disagree with the help that fires", failures);
 }
 
+/// The failure for a run whose envelope held no diagnostic with a message to
+/// judge, naming what it did report so a flaky run says what happened rather
+/// than only that extraction failed.
+fn no_subject(wire: &str, reported: &[String]) -> String {
+    format!(
+        "{}: the run reported no diagnostic with a message to judge; it reported {:?}",
+        wire, reported
+    )
+}
+
 /// What is wrong with the help one gated page declares, against the help its
 /// example really reports.
 fn help_failures(wire: &str, surface: Surface) -> Vec<String> {
@@ -814,7 +824,7 @@ fn help_failures(wire: &str, surface: Surface) -> Vec<String> {
         Err(failure) => return vec![failure],
     };
     let Some(subject) = example.subject.filter(|d| d.message.is_some()) else {
-        return vec![format!("{}: could not extract the first diagnostic", wire)];
+        return vec![no_subject(wire, &example.codes)];
     };
     let declared = example.code.explanation().helps;
     let silent = NO_HELP_EMITTED.contains(&wire);
