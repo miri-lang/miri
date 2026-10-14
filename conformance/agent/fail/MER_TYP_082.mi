@@ -1,0 +1,5 @@
+// expect: MER_TYP_082
+// summary: Triggers MER_TYP_082: a format spec gives a precision without its type.
+fn main()
+    let x = 3.14159
+    println(f"{x:.2}")

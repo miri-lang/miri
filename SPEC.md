@@ -233,6 +233,33 @@ let name = "Miri"
 let f = f"Hello, {name}"
 ```
 
+An interpolation may end in a format spec after `:`, written as in Python:
+`[[fill]align][0][width][.precision][type]`.
+
+```miri
+let x = 3.14159
+let n = 255
+println(f"{x:.2f}")      // 3.14
+println(f"[{n:6}]")      // [   255]  numbers align right, everything else left
+println(f"[{'ab':*^6}]") // [**ab**]  `<`, `>` or `^`, with an optional fill before it
+println(f"{-5:04}")      // -005      `0` pads a number with zeros after its sign
+println(f"{n:x} {n:08b}") // ff 11111111
+```
+
+- **Precision** needs type `f`: `{x:.2f}` writes two digits after the point, and
+  an integer is written as a float (`{5:.1f}` is `5.0`). `{x:.2}` is refused,
+  because Python reads it as significant digits and Rust as decimals.
+- **Radix** — `d`, `x`, `X`, `b`, `o` — writes an integer of up to 64 bits, its
+  sign before the digits (`-255` is `-ff`); an unsigned value keeps its
+  magnitude. A float is converted with `as int` first.
+- **Width** pads any interpolated value, by the text it would otherwise
+  interpolate as. A width is at most 1000 and a precision at most 100.
+- The spec is the text after the interpolation's last `:` outside brackets and
+  string literals. The colons of an inline `if c: a else: b` stay part of the
+  expression, and so does a `:` followed by whitespace.
+
+A spec that cannot format its value is refused at compile time (MER_TYP_082).
+
 ---
 
 ## Structs

@@ -15,6 +15,19 @@ Records every change to `docs/grammar.peg`.
   downstream consumer. That is a human judgement; the hash only guarantees no
   grammar edit passes unnoticed.
 
+## Version 4
+
+**Content Hash**: `cbd3907ea784158d76d656bc4e7757cb`
+
+Adds format specs to f-string interpolations. `interpolation` reads an
+expression and, optionally, a `FORMAT_SPEC`: the text after the
+interpolation's last `:` outside brackets and string literals, as in
+`f"{x:.2f}"`. A consumer holding version 3 rejects programs the compiler
+accepts, so this is a breaking change for anything caching the rules.
+
+The spec's own grammar, `[[fill]align][0][width][.precision][type]`, is read by
+the type checker rather than the parser, which sees it as one terminal.
+
 ## Version 3
 
 **Content Hash**: `2aef17d2153f1e603ba5eeebc8df6dc8`

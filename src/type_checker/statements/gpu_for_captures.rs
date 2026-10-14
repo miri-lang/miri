@@ -288,7 +288,7 @@ fn visit_expr(
         | ExpressionKind::List(elems)
         | ExpressionKind::Tuple(elems)
         | ExpressionKind::Set(elems)
-        | ExpressionKind::FormattedString(elems) => {
+        | ExpressionKind::FormattedString(elems, _) => {
             visit_each(elems, bound, context, reported, violations);
         }
         ExpressionKind::Map(entries) => {

@@ -272,7 +272,7 @@ fn collect_identifiers_in_expr(
         ExpressionKind::Guard(_, inner) => {
             collect_identifiers_in_expr(inner, bound, captured);
         }
-        ExpressionKind::FormattedString(parts) => {
+        ExpressionKind::FormattedString(parts, _) => {
             for p in parts {
                 collect_identifiers_in_expr(p, bound, captured);
             }

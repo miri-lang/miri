@@ -49,7 +49,21 @@ pub fn lex_formatted_string(
             ));
         }
 
-        lex_expression_into(expression_slice, token_offset + expr_start, &mut tokens)?;
+        match format_spec_colon(expression_slice) {
+            Some(colon) => {
+                lex_expression_into(
+                    &expression_slice[..colon],
+                    token_offset + expr_start,
+                    &mut tokens,
+                )?;
+                let spec_start = token_offset + expr_start + colon + 1;
+                tokens.push((
+                    Token::FormatSpec(Box::new(expression_slice[colon + 1..].to_string())),
+                    Span::new(spec_start, token_offset + expr_end),
+                ));
+            }
+            None => lex_expression_into(expression_slice, token_offset + expr_start, &mut tokens)?,
+        }
 
         cursor = expr_end + 1;
     }
@@ -148,6 +162,40 @@ fn find_matching_close_brace(body: &str, expr_start: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// Where the `:` that opens a format spec sits in `interpolation`, if one does.
+///
+/// It is the last `:` outside brackets and string literals, so a named
+/// argument or a lambda inside a call keeps its own. Two shapes keep the colon
+/// as part of the expression: an inline `if c: a else: b`, whose last colon
+/// follows `else`, and anything followed by whitespace, which no spec holds.
+fn format_spec_colon(interpolation: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut last = None;
+    for (at, c) in interpolation.char_indices() {
+        match (quote, c) {
+            (Some(open), c) if c == open => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(' | '[' | '{') => depth += 1,
+            (None, ')' | ']' | '}') => depth = depth.saturating_sub(1),
+            (None, ':') if depth == 0 => last = Some(at),
+            (None, _) => {}
+        }
+    }
+    let colon = last?;
+    let before = interpolation[..colon].trim_end();
+    let spec = &interpolation[colon + 1..];
+    let after_else = before
+        .strip_suffix("else")
+        .is_some_and(|rest| rest.is_empty() || rest.ends_with(char::is_whitespace));
+    let expression_missing = before.is_empty();
+    if after_else || expression_missing || spec.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(colon)
 }
 
 fn push_literal_part(

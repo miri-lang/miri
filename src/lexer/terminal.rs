@@ -167,6 +167,7 @@ pub fn classify_token(token: &Token) -> TerminalClassification {
         Token::FormattedStringStart(_) => Terminal("FSTRING_START".to_string()),
         Token::FormattedStringMiddle(_) => Terminal("FSTRING_MID".to_string()),
         Token::FormattedStringEnd(_) => Terminal("FSTRING_END".to_string()),
+        Token::FormatSpec(_) => Terminal("FORMAT_SPEC".to_string()),
 
         // Synthetic indentation tokens → terminals
         Token::Indent => Terminal("INDENT".to_string()),
@@ -335,6 +336,7 @@ fn synthetic_samples() -> Vec<Token> {
         Token::FormattedStringStart(Box::new("test".to_string())),
         Token::FormattedStringMiddle(Box::new("test".to_string())),
         Token::FormattedStringEnd(Box::new("test".to_string())),
+        Token::FormatSpec(Box::new(".2f".to_string())),
         Token::InvalidNumber,
         Token::FloatOrRange,
         Token::Float,
@@ -397,7 +399,7 @@ mod tests {
         // This pins the count so a new variant fails here until it is sampled.
         assert_eq!(
             token_samples().len(),
-            128,
+            129,
             "token_samples must carry one sample of every Token variant"
         );
     }

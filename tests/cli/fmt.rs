@@ -358,3 +358,26 @@ fn test_check_prints_no_diff_for_a_canonical_file() {
         );
     });
 }
+
+/// A format spec is part of the interpolation, so formatting keeps it — on a
+/// string literal hole too, which would otherwise print as plain text.
+#[test]
+fn test_fmt_keeps_format_specs() {
+    let source = "fn main()\n    let x = 3.5\n    println(f\"{x:.2f} [{'ab':>4}] {x}\")\n";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.mi");
+    std::fs::write(&path, source).unwrap();
+    let output = crate::utils::miri_cmd()
+        .arg("fmt")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let formatted = std::fs::read_to_string(&path).unwrap();
+    assert!(formatted.contains("{x:.2f}"), "{formatted}");
+    assert!(formatted.contains(":>4}"), "{formatted}");
+}

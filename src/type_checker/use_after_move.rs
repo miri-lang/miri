@@ -467,7 +467,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 }
             }
             ExpressionKind::Guard(_, e) => self.check_expr(e, consumed),
-            ExpressionKind::FormattedString(parts)
+            ExpressionKind::FormattedString(parts, _)
             | ExpressionKind::List(parts)
             | ExpressionKind::Set(parts)
             | ExpressionKind::Tuple(parts) => self.check_each(parts, consumed),

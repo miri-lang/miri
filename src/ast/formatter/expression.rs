@@ -175,7 +175,9 @@ fn kind(sink: &mut Sink, node: &ExpressionKind, span: Span, indent: usize) {
         ExpressionKind::Match(subject, branches) => {
             super::statement::match_expression(sink, subject, branches, indent)
         }
-        ExpressionKind::FormattedString(parts) => formatted_string(sink, parts, indent),
+        ExpressionKind::FormattedString(parts, specs) => {
+            formatted_string(sink, parts, specs, indent)
+        }
         ExpressionKind::NamedArgument(name, value) => named_argument(sink, name, value, indent),
         ExpressionKind::Super => sink.emit("super"),
         ExpressionKind::Block(statements, value) => block(sink, statements, value, indent),
@@ -533,16 +535,32 @@ fn map(sink: &mut Sink, entries: &[(Expression, Expression)], indent: usize) {
 }
 
 /// An interpolated string: literal parts are text, the rest are `{...}` holes.
-fn formatted_string(sink: &mut Sink, parts: &[Expression], indent: usize) {
+fn formatted_string(
+    sink: &mut Sink,
+    parts: &[Expression],
+    specs: &[(usize, crate::ast::format_spec::FormatSpec)],
+    indent: usize,
+) {
     sink.emit("f\"");
-    for part in parts {
-        // A literal segment is the text between holes; anything else is a hole.
-        if let ExpressionKind::Literal(crate::ast::literal::Literal::String(text)) = &part.node {
+    for (index, part) in parts.iter().enumerate() {
+        let spec = specs
+            .iter()
+            .find(|(at, _)| *at == index)
+            .map(|(_, spec)| spec);
+        // A literal segment is the text between holes; anything else is a
+        // hole, and so is anything a spec formats.
+        if let (ExpressionKind::Literal(crate::ast::literal::Literal::String(text)), None) =
+            (&part.node, spec)
+        {
             sink.emit(&super::helpers::escape_string(text));
             continue;
         }
         sink.emit("{");
-        expression(sink, part, indent);
+        sink.interpolation(|sink| expression(sink, part, indent));
+        if let Some(spec) = spec {
+            sink.emit(":");
+            sink.emit(&spec.text);
+        }
         sink.emit("}");
     }
     sink.emit("\"");

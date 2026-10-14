@@ -117,6 +117,7 @@ pub fn token_to_string(token: &Token) -> Cow<'static, str> {
         Token::FormattedStringStart(_) => "start of a formatted string".into(),
         Token::FormattedStringMiddle(_) => "middle of a formatted string".into(),
         Token::FormattedStringEnd(_) => "end of a formatted string".into(),
+        Token::FormatSpec(_) => "format spec".into(),
 
         Token::Int => "int".into(),
         Token::Float | Token::FloatOrRange => "float".into(),

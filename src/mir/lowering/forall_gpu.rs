@@ -1443,7 +1443,7 @@ fn visit_expr(
         | ExpressionKind::List(elems)
         | ExpressionKind::Tuple(elems)
         | ExpressionKind::Set(elems)
-        | ExpressionKind::FormattedString(elems) => {
+        | ExpressionKind::FormattedString(elems, _) => {
             for e in elems {
                 visit_expr(e, bound, ctx, seen, ordered);
             }

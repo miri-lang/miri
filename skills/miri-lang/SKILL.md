@@ -108,9 +108,9 @@ fn main()
   and is refused (MER_TYP_069); put the script's body inside `main`.
 - **Integer widths do not convert implicitly.** An `int` value stored into an
   `i32`/`u32` slot, element or field needs `as i32`; the same holds between
-  `float` and `f32`.
-- **An f-string has no format spec.** `f"{x:.2f}"` is a parse error; round the
-  value first with `round` from `system.math`, e.g. `round(x * 100.0) / 100.0`.
+  `float` and `f32`. `miri fix --apply` writes the cast.
+- **Format specs follow Python**: `f"{x:.2f}"`, `f"{n:>8}"`, `f"{n:08x}"`. A
+  precision needs `f` (`{x:.2}` is refused); `x`/`b`/`o` take integers only.
 - **Imports are explicit.** A name from another module needs its `use` line;
   `miri fix main.mi --apply --yes` adds one that resolves in exactly one module.
 

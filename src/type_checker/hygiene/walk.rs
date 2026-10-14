@@ -273,7 +273,7 @@ impl<'a> Contents<'a> {
             ExpressionKind::List(items)
             | ExpressionKind::Tuple(items)
             | ExpressionKind::Set(items)
-            | ExpressionKind::FormattedString(items) => self.expressions(items),
+            | ExpressionKind::FormattedString(items, _) => self.expressions(items),
             ExpressionKind::Array(items, size) => {
                 self.expressions(items);
                 self.expression(size);

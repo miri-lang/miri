@@ -1008,7 +1008,7 @@ impl TypeChecker {
             ExpressionKind::Identifier(name, _) => param_names.contains(name),
 
             // UNSAFE: formatted strings contain param
-            ExpressionKind::FormattedString(parts) => parts
+            ExpressionKind::FormattedString(parts, _) => parts
                 .iter()
                 .any(|expr| self.expr_touches_param_buffer(expr, param_names, params, context)),
 

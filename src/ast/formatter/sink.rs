@@ -47,9 +47,25 @@ pub struct Sink {
     comments: bool,
     modifiers: WrittenModifiers,
     source: Option<String>,
+    /// How many f-string interpolations the text being written sits inside.
+    interpolations: usize,
 }
 
 impl Sink {
+    /// Runs `write` for the expression inside an f-string interpolation,
+    /// where a string literal is written with single quotes: the f-string is
+    /// written between double quotes, and the same quote would close it.
+    pub fn interpolation(&mut self, write: impl FnOnce(&mut Self)) {
+        self.interpolations += 1;
+        write(self);
+        self.interpolations -= 1;
+    }
+
+    /// Whether the text being written sits inside an f-string interpolation.
+    pub fn in_interpolation(&self) -> bool {
+        self.interpolations > 0
+    }
+
     /// An empty sink that renders code only.
     pub fn new() -> Self {
         Self::default()

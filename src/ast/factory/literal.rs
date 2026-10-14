@@ -4,6 +4,7 @@
 use super::expr;
 use super::primitives::literal;
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::format_spec::FormatSpec;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::lexer::RegexToken;
 
@@ -70,7 +71,13 @@ pub fn string_literal_expression(val: &str) -> Expression {
 
 /// Creates an f-string expression (interpolated string).
 pub fn f_string(parts: Vec<Expression>) -> Expression {
-    expr(ExpressionKind::FormattedString(parts))
+    f_string_with_specs(parts, Vec::new())
+}
+
+/// Creates an f-string expression whose interpolations at the given part
+/// indexes carry a format spec.
+pub fn f_string_with_specs(parts: Vec<Expression>, specs: Vec<(usize, FormatSpec)>) -> Expression {
+    expr(ExpressionKind::FormattedString(parts, specs))
 }
 
 /// Creates a boolean literal.

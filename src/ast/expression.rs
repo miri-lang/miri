@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::{FunctionProperties, Parameter};
+use crate::ast::format_spec::FormatSpec;
 use crate::ast::literal::Literal;
 use crate::ast::node::IdNode;
 use crate::ast::operator::{AssignmentOp, BinaryOp, GuardOp, UnaryOp};
@@ -167,8 +168,10 @@ pub enum ExpressionKind {
     /// A match expression.
     Match(Box<Expression>, Vec<MatchBranch>),
 
-    /// An interpolated string (f-string e.g. `"hello #{name}"`).
-    FormattedString(Vec<Expression>),
+    /// An interpolated string (f-string e.g. `f"hello {name}"`): its parts in
+    /// order, and the format spec written after `:` in an interpolation, keyed
+    /// by the index of the part it formats.
+    FormattedString(Vec<Expression>, Vec<(usize, FormatSpec)>),
 
     /// A named argument in a function call (e.g., `foo(a: 1)`).
     NamedArgument(String, Box<Expression>),

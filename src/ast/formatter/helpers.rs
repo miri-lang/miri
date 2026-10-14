@@ -96,6 +96,13 @@ pub fn literal(sink: &mut Sink, value: &Literal, span: Span) {
             Some(text) => sink.emit(&text),
             None => sink.emit(&float_text(float)),
         },
+        // Inside an interpolation the literal takes the other quote, and holds
+        // nothing to escape: the lexer refuses a backslash there.
+        Literal::String(text) if sink.in_interpolation() => {
+            sink.emit("'");
+            sink.emit(text);
+            sink.emit("'");
+        }
         Literal::String(text) => {
             sink.emit("\"");
             sink.emit(&escape_string(text));

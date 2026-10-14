@@ -1638,7 +1638,7 @@ fn is_identifier_read_in_expr(
         | ExpressionKind::EnumValue(_, _)
         | ExpressionKind::StructMember(_, _)
         | ExpressionKind::ImportPath(_, _)
-        | ExpressionKind::FormattedString(_)
+        | ExpressionKind::FormattedString(..)
         | ExpressionKind::NamedArgument(_, _)
         | ExpressionKind::Super => false,
     }
