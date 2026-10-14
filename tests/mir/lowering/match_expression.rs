@@ -304,3 +304,40 @@ fn main()
         "Expected StorageLive for pattern-bound variables (x, y) to ensure proper scope tracking"
     );
 }
+
+/// A typed function (not `main`, which is exempt from the return-type check)
+/// whose last statement is a match returning from every arm lowers with each
+/// arm storing its value in the return slot and returning.
+#[test]
+fn test_match_returning_from_every_arm_lowers_in_a_typed_function() {
+    let body = mir_lower_code(
+        r#"
+fn describe(a int) String
+    match a
+        1
+            return "one"
+        _
+            return "other"
+"#,
+    );
+    let returns = body
+        .basic_blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.terminator.as_ref().map(|t| &t.kind),
+                Some(miri::mir::TerminatorKind::Return)
+            )
+        })
+        .count();
+    assert!(returns >= 1, "every arm must reach a return:\n{body}");
+    let stores_into_return_slot = body.basic_blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(&statement.kind, StatementKind::Assign(place, _) if place.local.0 == 0)
+        })
+    });
+    assert!(
+        stores_into_return_slot,
+        "an arm must store its value in the return slot:\n{body}"
+    );
+}

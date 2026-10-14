@@ -452,7 +452,8 @@ impl TypeChecker {
         let Some(return_type) = context.return_types.last().cloned() else {
             return;
         };
-        if matches!(return_type.kind, TypeKind::Void) {
+        // A match that returns from every arm yields no value of its own.
+        if matches!(return_type.kind, TypeKind::Void) || returns::returns_from_every_arm(expr) {
             return;
         }
         // A number written as the tail value takes the return type, as it

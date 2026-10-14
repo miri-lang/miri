@@ -53,6 +53,19 @@ pub(crate) enum ReturnStatus {
     Explicit,
 }
 
+/// Whether `expr` is a `match` every arm of which returns: it leaves the
+/// function, as an `if` whose both branches return does. That every value has
+/// an arm is the exhaustiveness check's to enforce.
+pub(crate) fn returns_from_every_arm(expr: &Expression) -> bool {
+    let ExpressionKind::Match(_, branches) = &expr.node else {
+        return false;
+    };
+    !branches.is_empty()
+        && branches
+            .iter()
+            .all(|branch| check_returns(&branch.body) == ReturnStatus::Explicit)
+}
+
 pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
     match &stmt.node {
         StatementKind::Return(_) => ReturnStatus::Explicit,
@@ -61,6 +74,7 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         | StatementKind::While(_, _, WhileStatementType::Until)
         | StatementKind::While(_, _, WhileStatementType::DoWhile)
         | StatementKind::While(_, _, WhileStatementType::DoUntil) => ReturnStatus::None,
+        StatementKind::Expression(expr) if returns_from_every_arm(expr) => ReturnStatus::Explicit,
         StatementKind::Expression(_) => ReturnStatus::Implicit,
         StatementKind::Block(stmts) => {
             for (i, s) in stmts.iter().enumerate() {
