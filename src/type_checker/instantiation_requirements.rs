@@ -31,6 +31,7 @@
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::function_analysis::ModuleId;
 use super::operators::{is_ordering_op, missing_ordering_at_instantiation_message};
+use super::type_mismatch::{MismatchExtras, TypeSides};
 use super::used_methods::held_value;
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -39,6 +40,7 @@ use crate::ast::{BinaryOp, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
+use crate::type_checker::diagnostics::spelled;
 use std::collections::HashMap;
 
 /// The declaration a requirement was recorded against: the type that declares
@@ -1077,7 +1079,17 @@ impl TypeChecker {
             crate::ast::formatter::helpers::unary_operator(written.op),
             parameter
         );
-        self.report_at_site(DiagnosticCode::TypTypeMismatch, message, site, help);
+        let wanted = format!(
+            "a type `{}` applies to",
+            crate::ast::formatter::helpers::unary_operator(written.op)
+        );
+        self.report_type_mismatch_at_site(
+            DiagnosticCode::TypTypeMismatch,
+            message,
+            site,
+            TypeSides::wanting(&wanted, &operand),
+            help,
+        );
     }
 
     /// Report `site` when it pins the parameter a cast reads to a type that is
@@ -1097,13 +1109,15 @@ impl TypeChecker {
              a number",
             site.callee.1, parameter, written.target
         );
-        self.report_at_site(
+        self.report_type_mismatch_at_site(
             DiagnosticCode::TypInvalidCast,
             format!(
-                "cannot cast from non-numeric type '{}' to '{}'",
-                source, written.target
+                "cannot cast from non-numeric type `{}` to `{}`",
+                spelled(&source),
+                spelled(&written.target)
             ),
             site,
+            TypeSides::wanting("a numeric type", &source),
             help,
         );
     }
@@ -1201,7 +1215,13 @@ impl TypeChecker {
             crate::ast::formatter::helpers::binary_operator(written.op),
             parameter
         );
-        self.report_at_site(DiagnosticCode::TypTypeMismatch, message, site, help);
+        self.report_type_mismatch_at_site(
+            DiagnosticCode::TypTypeMismatch,
+            message,
+            site,
+            TypeSides::of(&left, &right),
+            help,
+        );
     }
 
     /// Whether an ordering operator is refused at these pinned operands because
@@ -1297,17 +1317,39 @@ impl TypeChecker {
         site: &PinningSite,
         help: String,
     ) {
-        let Some(reason) = &site.reached_because else {
-            self.report_error_with_help(code, message, site.span, help);
-            return;
+        let (help, notes) = self.site_help_and_notes(site, help);
+        self.report_error_with_related(code, message, site.span, Some(help), notes, None);
+    }
+
+    /// [`Self::report_at_site`] for a type error that compares two types.
+    fn report_type_mismatch_at_site(
+        &mut self,
+        code: DiagnosticCode,
+        message: String,
+        site: &PinningSite,
+        sides: TypeSides,
+        help: String,
+    ) {
+        let (help, related) = self.site_help_and_notes(site, help);
+        let extras = MismatchExtras {
+            repair: None,
+            related,
         };
-        let help = format!("{help}; {}", reason.sentence);
+        self.push_type_mismatch(code, message, site.span, sides, help, extras);
+    }
+
+    /// `help` extended with why the site was reached, and the call that
+    /// reached it when that call is in the file being reported.
+    fn site_help_and_notes(&self, site: &PinningSite, help: String) -> (String, Vec<RelatedNote>) {
+        let Some(reason) = &site.reached_because else {
+            return (help, Vec::new());
+        };
         let in_own_source = self.modules.current_source_override.is_none();
         let notes = match &reason.call {
             Some(call) if in_own_source => vec![call.clone()],
             _ => Vec::new(),
         };
-        self.report_error_with_related(code, message, site.span, Some(help), notes, None);
+        (format!("{help}; {}", reason.sentence), notes)
     }
 
     /// Report `site` when it pins `parameter` to a type carrying no ordering.

@@ -28,10 +28,6 @@ pub enum TypeErrorKind {
     UndefinedVariable {
         name: String,
     },
-    TypeMismatch {
-        expected: String,
-        found: String,
-    },
     UnknownType {
         name: String,
     },
@@ -42,11 +38,6 @@ pub enum TypeErrorKind {
     MissingVariant {
         variant: String,
         enum_name: String,
-    },
-    IncompatibleTypes {
-        op: String,
-        lhs: String,
-        rhs: String,
     },
     ImmutableAssignment {
         name: String,
@@ -122,12 +113,10 @@ impl TypeErrorKind {
     /// Returns the expected and actual values for type mismatch errors, if applicable.
     pub fn expected_actual(&self) -> (Option<String>, Option<String>) {
         match self {
-            Self::TypeMismatch { expected, found } => (Some(expected.clone()), Some(found.clone())),
             Self::MissingReturn { expected } => (Some(expected.clone()), None),
             Self::ArityMismatch { expected, found } => {
                 (Some(expected.to_string()), Some(found.to_string()))
             }
-            Self::IncompatibleTypes { lhs, rhs, .. } => (Some(lhs.clone()), Some(rhs.clone())),
             Self::UndefinedVariable { .. } => (None, None),
             Self::UnknownType { .. } => (None, None),
             Self::MissingField { .. } => (None, None),
@@ -157,11 +146,6 @@ impl TypeErrorKind {
                     .with_message(format!("Undefined variable: {}", name))
                     .with_help("Ensure the variable is defined and in scope.")
             }
-            Self::TypeMismatch { expected, found } => {
-                ErrorProperties::simple(DiagnosticCode::TypTypeMismatch)
-                    .with_message(format!("Expected type {}, but got {}", expected, found))
-                    .with_help("Ensure the types match the expected values.")
-            }
             Self::UnknownType { name } => ErrorProperties::simple(DiagnosticCode::TypUnknownType)
                 .with_message(format!("Unknown type: {}", name))
                 .with_help("Ensure the type is defined and imported correctly."),
@@ -177,11 +161,6 @@ impl TypeErrorKind {
                         variant, enum_name
                     ))
                     .with_help("Ensure the variant is defined in the enum.")
-            }
-            Self::IncompatibleTypes { lhs, rhs, .. } => {
-                ErrorProperties::simple(DiagnosticCode::TypIncompatibleTypesInOperation)
-                    .with_message(format!("Types {} and {} are incompatible", lhs, rhs))
-                    .with_help("These types cannot be used together in this operation.")
             }
             Self::ImmutableAssignment { name } => {
                 ErrorProperties::simple(DiagnosticCode::TypImmutableAssignment)

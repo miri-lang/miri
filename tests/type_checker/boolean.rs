@@ -231,7 +231,7 @@ fn test_invalid_iterable() {
 for i in true
     1
 ",
-        "Type bool is not iterable",
+        "a `for` loop iterates over a range or a collection, but this is `bool`",
     );
 }
 

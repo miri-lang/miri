@@ -17,21 +17,16 @@ The same code covers operands an operator cannot combine. `+` never converts bet
 - `Type mismatch in {context}: expected {expected}, got {actual}`
 - `Type mismatch for argument '{name}': expected {expected}, got {actual}`
 - `Type mismatch for field '{name}': expected {expected}, got {actual}`
-- `Too many positional arguments: expected {expected}, got {actual}`
-- `Member property must be an identifier`
 - `Type mismatch for variable '{name}': expected {expected}, got {actual}`
 - `Type mismatch in assignment: cannot assign {actual} to {expected}`
-- `If condition must be a boolean, got {type}`
-- `While condition must be a boolean, got {type}`
-- `Type mismatch for loop variable '{name}': expected Int, got {actual}`
-- `Type mismatch for loop variable '{name}': expected {expected}, got {actual}`
+- `{construct} condition must be a boolean, got {type}`
+- `` Type mismatch for loop variable '{name}': the loop yields `{expected}`, but it is declared `{actual}` ``
 - `Invalid return type: expected {expected}, got {actual}`
 - `Match branch types mismatch: expected {expected}, got {actual}`
-- `Conditional condition must be a boolean, got {type}`
 - `Conditional branches must have the same type: expected {expected}, got {actual}`
 - `Type mismatch for default value: expected {expected}, got {actual}`
 - `Type mismatch: guard must be boolean, got {type}`
-- `Type {type} is not iterable`
+- `` a `for` loop iterates over a range or a collection, but this is `{type}` ``
 
 ## Help
 

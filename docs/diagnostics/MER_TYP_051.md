@@ -6,6 +6,11 @@ A range (e.g., `1..5` or `Range<i32>`) was used with mismatched element types. T
 
 - `Range types mismatch: {start} and {end}`
 
+## Help
+
+- `` convert the value with `as {type}` ``
+- `` use a value of type `{expected}` here, or change the type this place declares to `{found}` ``
+
 ## Before
 
 ```miri

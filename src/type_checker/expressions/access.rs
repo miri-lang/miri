@@ -54,9 +54,11 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{inherited_trait_default, Context, TypeDefinition};
+use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::expressions::identifiers::declares_type_parameters;
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -553,10 +555,17 @@ impl TypeChecker {
                     .number_at_width(index, &key_type, index_type, context)
                     .unwrap_or_else(|| index_type.clone());
                 if !self.are_compatible(&key_type, index_type, context) {
-                    self.report_error(
+                    let help = self.conversion_help(&key_type, index_type);
+                    self.report_type_mismatch(
                         DiagnosticCode::TypCollectionElementType,
-                        "Invalid map key type".to_string(),
+                        format!(
+                            "Invalid map key type: the map is keyed by `{}`, but this key is `{}`",
+                            spelled(&key_type),
+                            spelled(index_type)
+                        ),
                         index.span,
+                        TypeSides::of(&key_type, index_type),
+                        help,
                     );
                     return make_type(TypeKind::Error);
                 }
@@ -752,7 +761,7 @@ impl TypeChecker {
             name
         } else {
             self.report_error(
-                DiagnosticCode::TypTypeMismatch,
+                DiagnosticCode::TypFieldNotFound,
                 "Member property must be an identifier".to_string(),
                 prop.span,
             );
@@ -1102,7 +1111,7 @@ impl TypeChecker {
             name.clone()
         } else {
             self.report_error(
-                DiagnosticCode::TypTypeMismatch,
+                DiagnosticCode::TypFieldNotFound,
                 "Member property must be an identifier".to_string(),
                 prop.span,
             );

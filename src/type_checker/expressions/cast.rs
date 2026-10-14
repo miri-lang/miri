@@ -6,6 +6,8 @@ use crate::ast::Expression;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
+use crate::type_checker::diagnostics::spelled;
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -27,26 +29,12 @@ impl TypeChecker {
         // because a body writes it as a type name rather than deferring it.
         let source_is_a_parameter = matches!(source_ty.kind, TypeKind::Generic(..));
         if !source_is_a_parameter && !self.casts_from(&source_ty) {
-            self.report_error(
-                DiagnosticCode::TypInvalidCast,
-                format!(
-                    "cannot cast from non-numeric type '{}' to '{}'",
-                    source_ty, target_ty
-                ),
-                span,
-            );
+            self.refuse_cast_from(&source_ty, &target_ty, span);
             return Self::error_type();
         }
 
         if !self.is_numeric_type(&target_ty.kind) {
-            self.report_error(
-                DiagnosticCode::TypInvalidCast,
-                format!(
-                    "cannot cast from '{}' to non-numeric type '{}'",
-                    source_ty, target_ty
-                ),
-                span,
-            );
+            self.refuse_cast_to(&source_ty, &target_ty, span);
             return Self::error_type();
         }
 
@@ -65,5 +53,49 @@ impl TypeChecker {
     /// would have to be kept in step with this one by hand.
     pub(crate) fn casts_from(&self, source: &Type) -> bool {
         self.is_numeric_type(&source.kind)
+    }
+
+    /// Refuses `as` from `source`, a type that holds no number.
+    fn refuse_cast_from(&mut self, source: &Type, target: &Type, span: Span) {
+        let help = if spelled(source) == crate::ast::types::STRING_TYPE_NAME {
+            "read the number out of the text with `.to_int()` or `.to_float()`, which give \
+             `None` when it holds no number"
+        } else {
+            "`as` converts between numeric types only; convert this value another way"
+        };
+        self.report_type_mismatch(
+            DiagnosticCode::TypInvalidCast,
+            format!(
+                "cannot cast from non-numeric type `{}` to `{}`",
+                spelled(source),
+                spelled(target)
+            ),
+            span,
+            TypeSides::wanting("a numeric type", source),
+            help.to_string(),
+        );
+    }
+
+    /// Refuses `as` to `target`, a type that holds no number.
+    fn refuse_cast_to(&mut self, source: &Type, target: &Type, span: Span) {
+        let help = if spelled(target) == crate::ast::types::STRING_TYPE_NAME {
+            "format the value as text with an f-string, e.g. `f\"{x}\"`"
+        } else {
+            "`as` converts to numeric types only; build the value another way"
+        };
+        self.report_type_mismatch(
+            DiagnosticCode::TypInvalidCast,
+            format!(
+                "cannot cast from `{}` to non-numeric type `{}`",
+                spelled(source),
+                spelled(target)
+            ),
+            span,
+            TypeSides {
+                expected: "a numeric type".to_string(),
+                found: spelled(target),
+            },
+            help.to_string(),
+        );
     }
 }

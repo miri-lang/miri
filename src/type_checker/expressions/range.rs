@@ -48,6 +48,8 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
+use crate::type_checker::diagnostics::spelled;
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -68,10 +70,17 @@ impl TypeChecker {
         if let Some(end_expr) = end {
             let end_type = self.infer_expression(end_expr, context);
             if !self.are_compatible(&start_type, &end_type, context) {
-                self.report_error(
+                let help = self.conversion_help(&start_type, &end_type);
+                self.report_type_mismatch(
                     DiagnosticCode::TypRangeTypeMismatch,
-                    format!("Range types mismatch: {} and {}", start_type, end_type),
+                    format!(
+                        "Range types mismatch: {} and {}",
+                        spelled(&start_type),
+                        spelled(&end_type)
+                    ),
                     span,
+                    TypeSides::of(&start_type, &end_type),
+                    help,
                 );
             }
         }

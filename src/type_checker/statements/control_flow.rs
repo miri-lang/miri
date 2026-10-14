@@ -80,11 +80,7 @@ impl TypeChecker {
     ) {
         let cond_type = self.infer_expression(cond, context);
         if !matches!(cond_type.kind, TypeKind::Boolean) {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!("If condition must be a boolean, got {}", cond_type),
-                cond.span,
-            );
+            self.refuse_non_boolean_condition("If", &cond_type, cond.span);
         }
 
         let start_state = context.snapshot_linear_state();
@@ -172,11 +168,7 @@ impl TypeChecker {
     ) {
         let cond_type = self.infer_expression(cond, context);
         if !matches!(cond_type.kind, TypeKind::Boolean) {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!("While condition must be a boolean, got {}", cond_type),
-                cond.span,
-            );
+            self.refuse_non_boolean_condition("While", &cond_type, cond.span);
         }
         context.enter_scope();
         context.enter_loop();
@@ -633,14 +625,7 @@ impl TypeChecker {
             let var_type = if let Some(type_expr) = &decl.typ {
                 let declared_type = self.resolve_type_expression(type_expr, context);
                 if !self.are_compatible(&declared_type, &int_type, context) {
-                    self.report_error(
-                        DiagnosticCode::TypTypeMismatch,
-                        format!(
-                            "Type mismatch for loop variable '{}': expected Int, got {}",
-                            decl.name, declared_type
-                        ),
-                        type_expr.span,
-                    );
+                    self.refuse_loop_variable_type(decl, &declared_type, &int_type, type_expr.span);
                 }
                 declared_type
             } else {
@@ -1065,14 +1050,7 @@ impl TypeChecker {
         let var_type = if let Some(type_expr) = &decl.typ {
             let declared_type = self.resolve_type_expression(type_expr, context);
             if !self.are_compatible(&declared_type, element_type, context) {
-                self.report_error(
-                    DiagnosticCode::TypTypeMismatch,
-                    format!(
-                        "Type mismatch for loop variable '{}': expected {}, got {}",
-                        decl.name, declared_type, element_type
-                    ),
-                    type_expr.span,
-                );
+                self.refuse_loop_variable_type(decl, &declared_type, element_type, type_expr.span);
             }
             declared_type
         } else {
@@ -1342,15 +1320,7 @@ impl TypeChecker {
         );
         self.returning_at_written_self = outer;
         if !accepted {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!(
-                    "Invalid return type: expected {}, got {}",
-                    crate::type_checker::diagnostics::spelled(&expected_return_type),
-                    crate::type_checker::diagnostics::spelled(&actual_return_type)
-                ),
-                return_span,
-            );
+            self.refuse_return_type(&expected_return_type, &actual_return_type, return_span);
         }
     }
 }

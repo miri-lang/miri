@@ -47,6 +47,9 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::context::Context;
+use crate::type_checker::diagnostics::spelled;
+use crate::type_checker::type_mismatch::TypeSides;
+use crate::type_checker::utils::MatchedBy;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -995,13 +998,7 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         };
 
-        if let TypeKind::Option(_) = first_type.kind {
-            self.report_error(
-                DiagnosticCode::TypCollectionElementType,
-                "Set elements cannot be optional".to_string(),
-                elements[0].span,
-            );
-        }
+        self.refuse_optional_member(MatchedBy::SetElement, &first_type, elements[0].span);
 
         self.record_element_matching(&first_type, elements[0].span, context);
 
@@ -1053,10 +1050,16 @@ impl TypeChecker {
         let mut refused = false;
         for (element, next_type) in elements[1..].iter().zip(rest) {
             if !self.are_compatible(first_type, next_type, context) {
-                self.report_error(
+                self.report_type_mismatch(
                     DiagnosticCode::TypCollectionElementType,
-                    mismatch.to_string(),
+                    format!(
+                        "{mismatch}: the first is `{}`, but this one is `{}`",
+                        spelled(first_type),
+                        spelled(next_type)
+                    ),
                     element.span,
+                    TypeSides::of(first_type, next_type),
+                    self.literal_element_help(first_type, next_type),
                 );
                 refused = true;
             }

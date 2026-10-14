@@ -462,15 +462,7 @@ impl TypeChecker {
             .or_else(|| self.widen_int_literals(expr, &return_type, expr_type, context))
             .unwrap_or_else(|| expr_type.clone());
         if !self.accepts_value_at(&return_type, expr_type, Some(expr), context) {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!(
-                    "Invalid return type: expected {}, got {}",
-                    crate::type_checker::diagnostics::spelled(&return_type),
-                    crate::type_checker::diagnostics::spelled(expr_type)
-                ),
-                expr.span,
-            );
+            self.refuse_return_type(&return_type, expr_type, expr.span);
         }
     }
 

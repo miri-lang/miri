@@ -52,7 +52,9 @@ use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
+use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::WrittenLiterals;
+use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
 use crate::type_checker::TypeChecker;
 
 /// True for the numeric arithmetic operators (`+`, `-`, `*`, `/`, `%`) — the
@@ -380,22 +382,22 @@ impl TypeChecker {
                     }
                     Some(BinaryOpRemedy::UnwrapOptional) | None => None,
                 };
-                match (remedy, repair) {
-                    (Some(remedy), Some(repair)) => self.report_error_with_help_and_repair(
-                        DiagnosticCode::TypTypeMismatch,
-                        msg,
-                        span,
-                        remedy.help().to_string(),
-                        repair,
-                    ),
-                    (Some(remedy), None) => self.report_error_with_help(
-                        DiagnosticCode::TypTypeMismatch,
-                        msg,
-                        span,
-                        remedy.help().to_string(),
-                    ),
-                    (None, _) => self.report_error(DiagnosticCode::TypTypeMismatch, msg, span),
-                }
+                let help = match remedy {
+                    Some(remedy) => remedy.help().to_string(),
+                    None => self.conversion_help(&left_ty, &right_ty),
+                };
+                let extras = MismatchExtras {
+                    repair,
+                    related: Vec::new(),
+                };
+                self.push_type_mismatch(
+                    DiagnosticCode::TypTypeMismatch,
+                    msg,
+                    span,
+                    TypeSides::of(&left_ty, &right_ty),
+                    help,
+                    extras,
+                );
                 ast_factory::make_type(TypeKind::Error)
             }
         }
@@ -610,13 +612,17 @@ impl TypeChecker {
         // at the target's type; a compound one stores what its operator yields.
         let stored_expr = matches!(op, AssignmentOp::Assign).then_some(rhs);
         if !self.accepts_value_at(&lhs_type, &stored_type, stored_expr, context) {
-            self.report_error(
+            let help = self.conversion_help(&lhs_type, &stored_type);
+            self.report_type_mismatch(
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type mismatch in assignment: cannot assign {} to {}",
-                    stored_type, lhs_type
+                    spelled(&stored_type),
+                    spelled(&lhs_type)
                 ),
-                span,
+                rhs.span,
+                TypeSides::of(&lhs_type, &stored_type),
+                help,
             );
         } else if !self.refine_binding_to_hold(lhs.expression(), &lhs_type, &stored_type, context) {
             self.refuse_binding_an_inference_slot(
@@ -680,7 +686,14 @@ impl TypeChecker {
                 Some(result)
             }
             Err(message) => {
-                self.report_error(DiagnosticCode::TypTypeMismatch, message, span);
+                let help = self.conversion_help(lhs_type, rhs_type);
+                self.report_type_mismatch(
+                    DiagnosticCode::TypTypeMismatch,
+                    message,
+                    span,
+                    TypeSides::of(lhs_type, rhs_type),
+                    help,
+                );
                 None
             }
         }

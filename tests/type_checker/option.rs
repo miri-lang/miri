@@ -101,7 +101,7 @@ map = None
 fn test_option_map_key() {
     type_checker_error_test(
         "var map {String?: int} = {None: 1}",
-        "Map keys cannot be optional",
+        "a Map key cannot be optional",
     );
 }
 

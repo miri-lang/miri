@@ -100,7 +100,7 @@ fn main()
     for y in obj
         println(f"{y}")
 "#,
-        "Type NonIterable is not iterable",
+        "but this is `NonIterable`",
     );
 }
 
@@ -366,7 +366,7 @@ fn main()
     for y in t
         println(f"{y}")
 "#,
-        "Type Tag is not iterable",
+        "but this is `Tag`",
     );
 }
 
@@ -397,7 +397,7 @@ fn main()
     for n in b
         println(f"{n}")
 "#,
-        "Type Both is not iterable",
+        "but this is `Both`",
     );
 }
 

@@ -30,6 +30,7 @@ use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
+use crate::type_checker::type_mismatch::TypeSides;
 
 /// The element type a definition that names `Iterable` without an argument
 /// yields.
@@ -1788,21 +1789,13 @@ impl TypeChecker {
             TypeKind::Custom(_, _) => match self.iterable_element_type(ty) {
                 Some(element_type) => element_type,
                 None => {
-                    self.report_error(
-                        DiagnosticCode::TypTypeMismatch,
-                        format!("Type {} is not iterable", ty),
-                        span,
-                    );
+                    self.refuse_not_iterable(ty, span);
                     Self::error_type()
                 }
             },
             TypeKind::Error => Self::error_type(),
             _ => {
-                self.report_error(
-                    DiagnosticCode::TypTypeMismatch,
-                    format!("Type {} is not iterable", ty),
-                    span,
-                );
+                self.refuse_not_iterable(ty, span);
                 Self::error_type()
             }
         }
@@ -2167,13 +2160,7 @@ impl TypeChecker {
 
     fn resolve_set_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
         let resolved_inner = self.resolve_type_expression(&inner, context);
-        if let TypeKind::Option(_) = resolved_inner.kind {
-            self.report_error(
-                DiagnosticCode::TypCollectionElementType,
-                "Set elements cannot be optional".to_string(),
-                inner.span,
-            );
-        }
+        self.refuse_optional_member(MatchedBy::SetElement, &resolved_inner, inner.span);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
             Some(vec![self.create_type_expression(resolved_inner)]),
@@ -2187,13 +2174,7 @@ impl TypeChecker {
         context: &Context,
     ) -> Type {
         let rk = self.resolve_type_expression(&k, context);
-        if let TypeKind::Option(_) = rk.kind {
-            self.report_error(
-                DiagnosticCode::TypCollectionElementType,
-                "Map keys cannot be optional".to_string(),
-                k.span,
-            );
-        }
+        self.refuse_optional_member(MatchedBy::MapKey, &rk, k.span);
         let rv = self.resolve_type_expression(&v, context);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
@@ -2504,13 +2485,7 @@ impl TypeChecker {
             return None;
         }
         let k = self.resolve_type_expression(&args[0], context);
-        if let TypeKind::Option(_) = k.kind {
-            self.report_error(
-                DiagnosticCode::TypCollectionElementType,
-                "Map keys cannot be optional".to_string(),
-                args[0].span,
-            );
-        }
+        self.refuse_optional_member(MatchedBy::MapKey, &k, args[0].span);
         self.refuse_unmatchable_element(MatchedBy::MapKey, &k, args[0].span, context);
         let v = self.resolve_type_expression(&args[1], context);
         Some(make_type(TypeKind::Custom(
@@ -2570,13 +2545,7 @@ impl TypeChecker {
             return None;
         }
         let t = self.resolve_type_expression(&args[0], context);
-        if let TypeKind::Option(_) = t.kind {
-            self.report_error(
-                DiagnosticCode::TypCollectionElementType,
-                "Set elements cannot be optional".to_string(),
-                args[0].span,
-            );
-        }
+        self.refuse_optional_member(MatchedBy::SetElement, &t, args[0].span);
         self.refuse_unmatchable_element(MatchedBy::SetElement, &t, args[0].span, context);
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
@@ -2632,15 +2601,24 @@ impl TypeChecker {
     ) {
         if let Err(reason) = self.check_type_structurally_comparable(ty) {
             let reason = reason.trim_start_matches("Type mismatch: ");
+            let shown = crate::type_checker::diagnostics::spelled(ty);
             let message = match role {
                 MatchedBy::SetElement => {
-                    format!("`{ty}` cannot be a Set element, which is matched by `==`: {reason}")
+                    format!("`{shown}` cannot be a Set element, which is matched by `==`: {reason}")
                 }
                 MatchedBy::MapKey => {
-                    format!("`{ty}` cannot be a Map key, which is matched by `==`: {reason}")
+                    format!("`{shown}` cannot be a Map key, which is matched by `==`: {reason}")
                 }
             };
-            self.report_error(DiagnosticCode::TypTypeMismatch, message, span);
+            self.report_type_mismatch(
+                DiagnosticCode::TypTypeMismatch,
+                message,
+                span,
+                TypeSides::wanting("a type `==` can compare", ty),
+                "use a type `==` compares, such as a number, a string, an enum, or a class \
+                 that defines `equals`"
+                    .to_string(),
+            );
             return;
         }
         let equal = crate::ast::operator::BinaryOp::Equal;
@@ -3230,54 +3208,37 @@ impl TypeChecker {
         }
     }
 
-    /// Report the type mismatch `message` at `value`, which was refused for a
-    /// location of type `expected`, with a help when `value` is an array
-    /// literal and `expected` a list or set: `[1, 2, 3]` is always an array,
-    /// and the collection it was meant to be is built from it.
+    /// Report the type mismatch `message` at `value`, a `found` refused for a
+    /// location of type `expected`. The help is the most specific one known:
+    /// a struct held at a trait, a function value at other scalar widths, an
+    /// array literal where a list or set belongs (`[1, 2, 3]` is always an
+    /// array, and the collection it was meant to be is built from it), or
+    /// else the conversion between the two types.
     pub(crate) fn report_mismatch_at(
         &mut self,
         message: String,
         value: &Expression,
-        expected: &Type,
+        (expected, found): (&Type, &Type),
     ) {
-        let wants_a_collection_of_the_literal = matches!(value.node, ExpressionKind::Array(..))
-            && matches!(
-                &expected.kind,
-                TypeKind::Custom(name, _)
-                    if matches!(
-                        BuiltinCollectionKind::from_name(name),
-                        Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
-                    )
-            );
-        if let Some(help) = self.struct_held_at_a_trait_help(value, expected) {
-            self.report_error_with_help(DiagnosticCode::TypTypeMismatch, message, value.span, help);
-            return;
-        }
-        if let Some(signature) = self.lambda_rewritten_at_widths(value, expected) {
-            self.report_error_with_help(
-                DiagnosticCode::TypTypeMismatch,
-                message,
-                value.span,
-                format!(
-                    "a function value is called at the type it is stored at, and a scalar type \
-                     agrees only with itself; write the function as `{signature}`"
-                ),
-            );
-            return;
-        }
-        if !wants_a_collection_of_the_literal {
-            self.report_error(DiagnosticCode::TypTypeMismatch, message, value.span);
-            return;
-        }
-        let collection = match &expected.kind {
-            TypeKind::Custom(name, _) => name.clone(),
-            _ => String::new(),
-        };
-        self.report_error_with_help(
+        let help = self
+            .struct_held_at_a_trait_help(value, expected)
+            .or_else(|| {
+                self.lambda_rewritten_at_widths(value, expected)
+                    .map(|signature| {
+                        format!(
+                            "a function value is called at the type it is stored at, and a scalar \
+                         type agrees only with itself; write the function as `{signature}`"
+                        )
+                    })
+            })
+            .or_else(|| array_literal_for_a_collection_help(value, expected))
+            .unwrap_or_else(|| self.conversion_help(expected, found));
+        self.report_type_mismatch(
             DiagnosticCode::TypTypeMismatch,
             message,
             value.span,
-            format!("`[...]` is an array literal; build the {collection} from it with `{collection}([...])`"),
+            TypeSides::of(expected, found),
+            help,
         );
     }
 
@@ -3376,63 +3337,6 @@ impl TypeChecker {
         let key = (message.clone(), span);
         if self.diagnostics.mark_reported(key) {
             let mut err = TypeError::coded(code, message, span, Some(help));
-            err.source_override = self.modules.current_source_override.clone();
-            self.diagnostics.push_error(err);
-        }
-    }
-
-    /// Reports a type error with structured expected and actual type information,
-    /// deduplicating identical (message, span) pairs.
-    pub(crate) fn report_error_with_types(
-        &mut self,
-        code: DiagnosticCode,
-        message: String,
-        span: Span,
-        expected: String,
-        actual: String,
-    ) {
-        if self.suppress_diagnostics {
-            return;
-        }
-        let key = (message.clone(), span);
-        if self.diagnostics.mark_reported(key) {
-            let mut err = TypeError::coded_with_types(
-                code,
-                message,
-                span,
-                None,
-                Some(expected),
-                Some(actual),
-            );
-            err.source_override = self.modules.current_source_override.clone();
-            self.diagnostics.push_error(err);
-        }
-    }
-
-    /// Reports a type error carrying the expected and the found type and a
-    /// help line saying how to fix it, deduplicating identical (message, span)
-    /// pairs.
-    pub(crate) fn report_error_with_help_and_types(
-        &mut self,
-        code: DiagnosticCode,
-        message: String,
-        span: Span,
-        help: String,
-        (expected, found): (String, String),
-    ) {
-        if self.suppress_diagnostics {
-            return;
-        }
-        let key = (message.clone(), span);
-        if self.diagnostics.mark_reported(key) {
-            let mut err = TypeError::coded_with_types(
-                code,
-                message,
-                span,
-                Some(help),
-                Some(expected),
-                Some(found),
-            );
             err.source_override = self.modules.current_source_override.clone();
             self.diagnostics.push_error(err);
         }
@@ -3595,9 +3499,47 @@ impl TypeChecker {
 
 /// What a collection matches a value by `==` as.
 #[derive(Clone, Copy)]
-enum MatchedBy {
+pub(crate) enum MatchedBy {
     /// An element of a Set.
     SetElement,
     /// A key of a Map.
     MapKey,
+}
+
+impl MatchedBy {
+    /// The collection that matches its members this way.
+    pub(crate) fn collection(&self) -> &'static str {
+        match self {
+            Self::SetElement => "a Set",
+            Self::MapKey => "a Map",
+        }
+    }
+
+    /// An empty collection of this kind, as source writes one.
+    pub(crate) fn empty_example(&self) -> &'static str {
+        match self {
+            Self::SetElement => "Set<int>()",
+            Self::MapKey => "Map<String, int>()",
+        }
+    }
+}
+
+/// The help for an array literal stored where a list or set is expected:
+/// `[1, 2, 3]` is always an array, and the collection is built from it.
+fn array_literal_for_a_collection_help(value: &Expression, expected: &Type) -> Option<String> {
+    if !matches!(value.node, ExpressionKind::Array(..)) {
+        return None;
+    }
+    let TypeKind::Custom(collection, _) = &expected.kind else {
+        return None;
+    };
+    matches!(
+        BuiltinCollectionKind::from_name(collection),
+        Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
+    )
+    .then(|| {
+        format!(
+            "`[...]` is an array literal; build the {collection} from it with `{collection}([...])`"
+        )
+    })
 }

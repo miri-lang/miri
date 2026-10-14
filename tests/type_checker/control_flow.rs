@@ -30,7 +30,10 @@ fn test_for_loop_range_mismatch() {
 
 #[test]
 fn test_for_loop_not_iterable() {
-    type_checker_error_test("for i in true: 1", "Type bool is not iterable");
+    type_checker_error_test(
+        "for i in true: 1",
+        "a `for` loop iterates over a range or a collection, but this is `bool`",
+    );
 }
 
 #[test]

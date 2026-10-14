@@ -54,6 +54,7 @@ use crate::type_checker::call_instantiation::{type_arguments_noun, GenericCall, 
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::{free_function_owner, GenericBodyId};
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
 use crate::type_checker::DeclaredFunction;
 use crate::type_checker::{CalleeKind, TypeChecker};
@@ -656,13 +657,18 @@ impl TypeChecker {
         let first_arg_type = positional_args.first().map(|(_, ty)| ty)?;
 
         if !self.is_numeric_type(&first_arg_type.kind) {
-            self.report_error(
+            self.report_type_mismatch(
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type '{}' is not numeric: {} only accepts int or float arguments",
-                    first_arg_type, func_name
+                    spelled(first_arg_type),
+                    func_name
                 ),
                 span,
+                TypeSides::wanting("a numeric type", first_arg_type),
+                format!(
+                    "pass {func_name} a number; convert text with `.to_int()` or `.to_float()`"
+                ),
             );
             return Some(make_type(TypeKind::Error));
         }
@@ -687,16 +693,19 @@ impl TypeChecker {
                 }
             };
             let Some(next) = next else {
-                self.report_error(
+                let so_far = combined.as_ref().unwrap_or(first_arg_type);
+                self.report_type_mismatch(
                     DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Type mismatch in {}: no number type holds every value of both '{}' \
                          and '{}'; convert one argument with `as`",
                         func_name,
-                        combined.as_ref().unwrap_or(first_arg_type),
-                        arg_type
+                        spelled(so_far),
+                        spelled(&arg_type)
                     ),
                     arg_expr.span,
+                    TypeSides::of(so_far, &arg_type),
+                    format!("convert this argument with `as {}`", spelled(so_far)),
                 );
                 return Some(make_type(TypeKind::Error));
             };
@@ -1096,12 +1105,15 @@ impl TypeChecker {
         }
         let refusal =
             crate::type_checker::atomic_buffers::atomic_buffer_mismatch(builtin, buffer, ty);
-        self.report_error_with_help_and_types(
+        self.report_type_mismatch(
             DiagnosticCode::TypAtomicBufferTypeMismatch,
             refusal.message,
             span,
+            TypeSides {
+                expected: refusal.expected,
+                found: refusal.found,
+            },
             refusal.help,
-            (refusal.expected, refusal.found),
         );
     }
 
@@ -2208,12 +2220,12 @@ impl TypeChecker {
             );
             match surplus_argument_range(positional_args, func_data.params.len()) {
                 Some((start, end)) => self.report_error_with_repair(
-                    DiagnosticCode::TypTypeMismatch,
+                    DiagnosticCode::TypArgumentCountMismatch,
                     message,
                     span,
                     RepairRequest::DropExtraArguments { start, end },
                 ),
-                None => self.report_error(DiagnosticCode::TypTypeMismatch, message, span),
+                None => self.report_error(DiagnosticCode::TypArgumentCountMismatch, message, span),
             }
         }
 
@@ -2289,8 +2301,17 @@ impl TypeChecker {
             spelled(&arg_type)
         );
         match arg_expr {
-            Some(value) => self.report_mismatch_at(message, value, expected),
-            None => self.report_error(DiagnosticCode::TypTypeMismatch, message, span),
+            Some(value) => self.report_mismatch_at(message, value, (expected, &arg_type)),
+            None => {
+                let help = self.conversion_help(expected, &arg_type);
+                self.report_type_mismatch(
+                    DiagnosticCode::TypTypeMismatch,
+                    message,
+                    span,
+                    TypeSides::of(expected, &arg_type),
+                    help,
+                );
+            }
         }
     }
 
@@ -2487,13 +2508,21 @@ impl TypeChecker {
             || matches!(arg_type.kind, TypeKind::Error)
             || param_type == arg_type;
         if !exact_match {
-            self.report_error(
+            self.report_type_mismatch(
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type mismatch for argument '{}': expected {}, got {}",
-                    param_name, param_type, arg_type
+                    param_name,
+                    spelled(param_type),
+                    spelled(arg_type)
                 ),
                 arg_expr.map(|e| e.span).unwrap_or(span),
+                TypeSides::of(param_type, arg_type),
+                format!(
+                    "an `out` parameter is written through, so pass a variable declared exactly \
+                     `{}`",
+                    spelled(param_type)
+                ),
             );
         }
     }
@@ -3208,13 +3237,18 @@ impl TypeChecker {
                     })
                     .unwrap_or(arg_type);
                 if !self.accepts_value_at(&concrete_field_type, &arg_type, arg_expr, context) {
-                    self.report_error(
+                    let help = self.conversion_help(&concrete_field_type, &arg_type);
+                    self.report_type_mismatch(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for field '{}': expected {}, got {}",
-                            field_name, concrete_field_type, arg_type
+                            field_name,
+                            spelled(&concrete_field_type),
+                            spelled(&arg_type)
                         ),
                         arg_expr.map(|e| e.span).unwrap_or(span),
+                        TypeSides::of(&concrete_field_type, &arg_type),
+                        help,
                     );
                 }
             }
@@ -3296,13 +3330,18 @@ impl TypeChecker {
                     })
                     .unwrap_or(arg_type);
                 if !self.accepts_value_at(&concrete_param_type, &arg_type, arg_expr, context) {
-                    self.report_error(
+                    let help = self.conversion_help(&concrete_param_type, &arg_type);
+                    self.report_type_mismatch(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for argument '{}': expected {}, got {}",
-                            param_name, concrete_param_type, arg_type
+                            param_name,
+                            spelled(&concrete_param_type),
+                            spelled(&arg_type)
                         ),
                         arg_expr.map(|e| e.span).unwrap_or(span),
+                        TypeSides::of(&concrete_param_type, &arg_type),
+                        help,
                     );
                 }
             } else {
@@ -3393,13 +3432,18 @@ impl TypeChecker {
                     })
                     .unwrap_or(arg_type);
                 if !self.accepts_value_at(&concrete_field_type, &arg_type, arg_expr, context) {
-                    self.report_error(
+                    let help = self.conversion_help(&concrete_field_type, &arg_type);
+                    self.report_type_mismatch(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for field '{}': expected {}, got {}",
-                            field_name, concrete_field_type, arg_type
+                            field_name,
+                            spelled(&concrete_field_type),
+                            spelled(&arg_type)
                         ),
                         arg_expr.map(|e| e.span).unwrap_or(span),
+                        TypeSides::of(&concrete_field_type, &arg_type),
+                        help,
                     );
                 }
             } else {
@@ -3590,7 +3634,8 @@ impl TypeChecker {
                 .unwrap_or_else(|| arg_type.clone());
             if !self.accepts_value_at(elem_type, &arg_type, Some(arg), context) {
                 let arg_type = self.settled_value_type(arg, arg_type);
-                self.report_error(
+                let help = self.conversion_help(elem_type, &arg_type);
+                self.report_type_mismatch(
                     DiagnosticCode::TypTypeMismatch,
                     format!(
                         "Type mismatch for array element: expected {}, got {}",
@@ -3598,6 +3643,8 @@ impl TypeChecker {
                         spelled(&arg_type)
                     ),
                     arg.span,
+                    TypeSides::of(elem_type, &arg_type),
+                    help,
                 );
             }
         }

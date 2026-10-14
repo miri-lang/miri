@@ -11,3 +11,4 @@ pub mod replacement_help_carries_a_repair;
 pub mod rpc;
 pub mod runtime_traps;
 pub mod schema;
+pub mod type_error_structure;

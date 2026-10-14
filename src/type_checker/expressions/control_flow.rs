@@ -51,7 +51,9 @@ use crate::error::diagnostic::RelatedNote;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use crate::type_checker::context::{Context, EnumDefinition, SymbolInfo, TypeDefinition};
+use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::pattern_coverage::{row_of, Constructor, Coverage, CoverageRow};
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 
@@ -118,13 +120,17 @@ impl TypeChecker {
 
             if let Some(first) = &first_branch_type {
                 if !self.are_compatible(first, body_type, context) {
-                    let message = format_message(&first.to_string(), &body_type.to_string());
-                    self.report_error_with_types(
+                    let message = format_message(&spelled(first), &spelled(body_type));
+                    self.report_type_mismatch(
                         DiagnosticCode::TypTypeMismatch,
                         message,
                         *arm_span,
-                        first.to_string(),
-                        body_type.to_string(),
+                        TypeSides::of(first, body_type),
+                        format!(
+                            "every branch yields the value of the whole expression, so make this \
+                             one yield a `{}` too",
+                            spelled(first)
+                        ),
                     );
                 }
                 // A branch built by a variant constructor binds only what its
@@ -532,11 +538,7 @@ impl TypeChecker {
     ) -> Type {
         let cond_type = self.infer_expression(cond_expr, context);
         if !matches!(cond_type.kind, TypeKind::Boolean | TypeKind::Error) {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!("Conditional condition must be a boolean, got {}", cond_type),
-                cond_expr.span,
-            );
+            self.refuse_non_boolean_condition("Conditional", &cond_type, cond_expr.span);
         }
 
         let then_type = self.infer_expression(then_expr, context);
