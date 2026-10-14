@@ -123,6 +123,12 @@ impl FaultWord {
         self.dispatched.store(true, Ordering::SeqCst);
     }
 
+    /// Whether a faulting kernel was submitted since the last look, so the
+    /// word may hold something no look has read.
+    pub fn has_unread_dispatch(&self) -> bool {
+        self.dispatched.load(Ordering::SeqCst)
+    }
+
     /// Copies the word into the staging buffer in `encoder`, or `None` when
     /// no faulting kernel was submitted since the last look. Submit `encoder`,
     /// then call [`StagedFault::request`] and poll the device before
@@ -276,12 +282,22 @@ impl PendingFault<'_> {
     }
 }
 
-/// Registers, once per process, the look at the fault word when the program
-/// ends, so an overflow in a launch nothing reads back is still reported.
-/// Called when the first context is created: `atexit` handlers run in reverse
-/// order of registration, so this look runs after every handler registered
-/// later in the program.
-pub(crate) fn register_exit_check() {
+/// Arranges the look at the fault word when the program ends, so an overflow
+/// in a launch nothing reads back is still reported. Called when a context is
+/// created, on the thread creating it.
+///
+/// The look is made twice over. A thread-local guard makes it while that
+/// thread's thread-locals are torn down at exit, which happens before `atexit`
+/// handlers run; wgpu keeps per-thread lock state in debug builds, and polling
+/// the device once its thread-locals are gone panics. `device` is polled
+/// before the guard is installed, so wgpu's thread-locals exist first and are
+/// torn down after the guard's look. An `atexit` handler, registered once per
+/// process, covers an exit that tears down no thread-locals of the creating
+/// thread, and touches the device only when a faulting kernel was submitted
+/// since the last look.
+pub(crate) fn register_exit_check(device: &Device) {
+    let _ = device.poll(wgpu::PollType::Poll);
+    EXIT_LOOK.with(|_| {});
     static REGISTERED: Once = Once::new();
     REGISTERED.call_once(|| {
         // SAFETY: `check_fault_at_exit` is a plain `extern "C" fn()` that
@@ -292,9 +308,35 @@ pub(crate) fn register_exit_check() {
     });
 }
 
+/// Makes the end-of-program look when the thread that created the context
+/// tears down its thread-locals.
+struct ExitLook;
+
+impl Drop for ExitLook {
+    fn drop(&mut self) {
+        look_at_exit();
+    }
+}
+
+thread_local! {
+    static EXIT_LOOK: ExitLook = const { ExitLook };
+}
+
+/// The `atexit` fallback: looks only when a faulting kernel was submitted
+/// since the last look, so an exit the guard already covered never polls the
+/// device after thread-locals are gone.
+extern "C" fn check_fault_at_exit() {
+    let unread = crate::context::get_gpu_context()
+        .map(|ctx| ctx.fault.has_unread_dispatch())
+        .unwrap_or(false);
+    if unread {
+        look_at_exit();
+    }
+}
+
 /// Looks at the live context's fault word, if a context exists; the exit
 /// never creates one.
-extern "C" fn check_fault_at_exit() {
+fn look_at_exit() {
     let Ok(ctx) = crate::context::get_gpu_context() else {
         return;
     };
