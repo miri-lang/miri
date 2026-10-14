@@ -1,6 +1,16 @@
 ## Rule
 
-GPU kernel functions accept buffer arguments, which must be GPU-resident (declared with `gpu let` or `gpu var`). Host-resident buffers or inline expressions cannot be passed to GPU kernels because the kernel executes on the device and can only access device memory. The compiler currently reports this refusal as MER_CG_008, with the message `internal compiler error: MIR lowering failed for <function>: cannot pass host-resident array '<name>' to gpu function`; the fix is the same.
+GPU kernel functions accept buffer arguments, which must be GPU-resident (declared with `gpu let` or `gpu var`). Host-resident buffers or inline expressions cannot be passed to GPU kernels because the kernel executes on the device and can only access device memory.
+
+## Messages
+
+- `` a gpu fn reads its buffers from device memory, but `{name}` is host-resident ``
+- `` a gpu fn reads its buffers from device memory, but an array built in the call is host-resident ``
+
+## Help
+
+- `` declare it on the device: `gpu let {name} = ...` (or `gpu var` to write it) ``
+- `` bind it on the device first, e.g. `gpu let buf = [...]`, and pass `buf` ``
 
 ## Before
 

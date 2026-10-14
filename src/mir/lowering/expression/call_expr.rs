@@ -4,8 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{vec_dim, Type, TypeKind};
-use crate::ast::BuiltinCollectionKind;
+use crate::ast::types::{is_atomic_integer_buffer, vec_dim, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::backend::gpu::GpuAtomicOp;
@@ -14,6 +13,7 @@ use crate::mir::{
     AggregateKind, Constant, Dimension, GpuIntrinsic, MathIntrinsic, Operand, Place, Rvalue,
     StatementKind as MirStatementKind,
 };
+use crate::type_checker::atomic_buffers::atomic_buffer_mismatch;
 
 use std::rc::Rc;
 
@@ -357,41 +357,6 @@ fn try_lower_gpu_intrinsic(
     Ok(Some(ret_op))
 }
 
-/// True if `elem_ty` is `Atomic<u32>` or `Atomic<i32>` (the only WGSL-portable
-/// atomic element types).
-fn is_u32_or_i32_atomic_element(elem_ty: &TypeKind) -> bool {
-    let TypeKind::Custom(name, Some(inner_args)) = elem_ty else {
-        return false;
-    };
-    if name != crate::ast::types::ATOMIC_TYPE_NAME || inner_args.len() != 1 {
-        return false;
-    }
-    match &inner_args[0].node {
-        ExpressionKind::Type(inner_ty, _) => {
-            matches!(&inner_ty.kind, TypeKind::U32 | TypeKind::I32)
-        }
-        _ => false,
-    }
-}
-
-/// True if `buffer_ty` is an `Array<Atomic<u32|i32>, N>` (in either the
-/// post-normalization `Custom("Array", ...)` or the pre-normalization
-/// `Array(elem, size)` form).
-fn is_atomic_u32_i32_buffer(buffer_ty: &TypeKind) -> bool {
-    let elem_node = match buffer_ty {
-        TypeKind::Custom(coll_name, Some(coll_args))
-            if BuiltinCollectionKind::from_name(coll_name)
-                == Some(BuiltinCollectionKind::Array)
-                && !coll_args.is_empty() =>
-        {
-            &coll_args[0].node
-        }
-        TypeKind::Array(elem_expr, _) => &elem_expr.node,
-        _ => return false,
-    };
-    matches!(elem_node, ExpressionKind::Type(elem_ty, _) if is_u32_or_i32_atomic_element(&elem_ty.kind))
-}
-
 /// Records that the current kernel body needs 32-bit integer atomics.
 fn mark_atomic_capability(ctx: &mut LoweringContext) {
     use crate::mir::backend::gpu::GpuCapability;
@@ -432,13 +397,16 @@ fn try_lower_atomic_builtin(
         return Ok(None);
     }
 
+    // The type checker refuses every buffer type it can see; an instantiation
+    // can still settle a generic buffer on one that holds no atomics.
     let buffer_ty = resolve_type(ctx.type_checker, &args[0]);
-    if !is_atomic_u32_i32_buffer(&buffer_ty.kind) {
+    if !is_atomic_integer_buffer(&buffer_ty.kind) {
+        let refusal = atomic_buffer_mismatch(name, &args[0], &buffer_ty);
         return Err(LoweringError::coded(
             DiagnosticCode::TypAtomicBufferTypeMismatch,
-            format!("{name} requires an Array<Atomic<u32|i32>, N> buffer, got {buffer_ty}"),
+            refusal.message,
             expr.span,
-            None,
+            Some(refusal.help),
         ));
     }
 

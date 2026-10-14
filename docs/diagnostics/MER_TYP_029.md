@@ -1,6 +1,16 @@
 ## Rule
 
-Atomic operations (`atomic_add`, `atomic_sub`, `atomic_max` and the other atomic builtins) require a buffer of type `Array<Atomic<u32|i32>, N>` as their first argument. This error is raised when an atomic operation is called with a buffer of any other type. The compiler currently reports this refusal as MER_CG_008, with the message `internal compiler error: MIR lowering failed for <function>: atomic_add requires an Array<Atomic<u32|i32>, N> buffer, got <type>`; the fix is the same.
+Atomic operations (`atomic_add`, `atomic_sub`, `atomic_max` and the other atomic builtins) require a buffer of type `Array<Atomic<u32|i32>, N>` as their first argument. This error is raised when an atomic operation is called with a buffer of any other type.
+
+## Messages
+
+- `` `{builtin}` needs a buffer of `Array<Atomic<i32>, N>` or `Array<Atomic<u32>, N>`, but {buffer} is `{type}` ``
+
+## Help
+
+- `` declare `{name}` as `{type}` (atomics hold 32-bit integers only) ``
+- `` pass a buffer declared as `{type}` (atomics hold 32-bit integers only) ``
+- `` pass a buffer declared with `gpu var buf = Array<Atomic<i32>, N>()` (atomics hold 32-bit integers only) ``
 
 ## Before
 

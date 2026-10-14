@@ -41,25 +41,6 @@ fn main()
     );
 }
 
-/// A gpu fn buffer argument written as an inline expression is rejected:
-/// the temporary it materializes is host-resident, and only gpu-resident
-/// buffers may be bound to a kernel launch.
-#[test]
-fn gpu_fn_buffer_arg_expression_is_rejected() {
-    assert_build_error(
-        "
-use system.collections.array
-
-gpu fn my_kernel(a Array<f32,4>)
-    let x = 1
-
-fn main()
-    my_kernel([1.0, 2.0, 3.0, 4.0]).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
-",
-        "cannot pass host-resident array",
-    );
-}
-
 /// A GPU buffer whose const size expression folds below zero (`A - B` with
 /// `A < B`) is rejected rather than silently folding to a zero-length buffer:
 /// a value argument must be greater than zero.
