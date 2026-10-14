@@ -1,0 +1,324 @@
+{
+  "schemaVersion": 1,
+  "round": "2026-10-12",
+  "job": "07-gpu-escape-time",
+  "arm": "miri-grammar",
+  "run": 2,
+  "model": "claude-haiku",
+  "modelId": "claude-haiku-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "0abbc3c77d4008d41649b398d3f9b731159ebcf2",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-13T02:44:40.268271+00:00",
+  "wallClockSeconds": 212.0,
+  "tokens": {
+    "in": 1767518,
+    "out": 30838,
+    "cacheRead": 1720293,
+    "cacheCreation": 47163,
+    "observed": true
+  },
+  "turns": 31,
+  "toolInvocations": 33,
+  "toolchainInvocations": 12,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 6,
+    "total": 6,
+    "failures": [],
+    "failureDetail": {},
+    "kernelEvidence": {
+      "required": [
+        "\\bgpu\\s+(fn|forall|let|var)\\b",
+        "\\b(forall|gpu\\s+fn)\\b"
+      ],
+      "missing": []
+    },
+    "notOnGpu": false
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/private/tmp/miri-field-r2b/r2/07-gpu-escape-time/miri-grammar/claude-haiku/2",
+  "onboarding": {
+    "material": [
+      "grammar"
+    ],
+    "tokens": {
+      "in": 280147,
+      "out": 2770,
+      "cacheRead": 258386,
+      "cacheCreation": 21741,
+      "observed": true
+    },
+    "turns": 10,
+    "toolInvocations": 11,
+    "toolchainInvocations": 7,
+    "wallClockSeconds": 30.6,
+    "outcome": "finished",
+    "isolation": {
+      "clean": true,
+      "initObserved": true,
+      "hookEvents": 0,
+      "repoReferences": 0,
+      "mcpServers": [],
+      "plugins": [],
+      "skills": [
+        "deep-research",
+        "design",
+        "design-sync",
+        "dataviz",
+        "update-config",
+        "verify",
+        "debug",
+        "code-review",
+        "simplify",
+        "batch",
+        "fewer-permission-prompts",
+        "doctor",
+        "loop",
+        "schedule",
+        "claude-api",
+        "workflow-authoring",
+        "run",
+        "run-skill-generator",
+        "plugin-authoring"
+      ],
+      "apiKeySource": "none"
+    },
+    "sessionId": "667b39ad-9b87-4163-a158-6cf6920f42cd"
+  },
+  "replaced": {
+    "reason": "re-run after the measured prompt names the workspace root: the r2 run wrote its program outside main.mi",
+    "record": {
+      "schemaVersion": 1,
+      "round": "2026-10-12",
+      "job": "07-gpu-escape-time",
+      "arm": "miri-grammar",
+      "run": 2,
+      "model": "claude-haiku",
+      "modelId": "claude-haiku-5-5",
+      "harness": {
+        "name": "claude",
+        "command": "claude",
+        "version": "2.1.296 (Claude Code)"
+      },
+      "compilerCommit": "e255924ade53311a1d124e9005bc90ba783f3340",
+      "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+      "packInstalled": false,
+      "caps": {
+        "turns": 60,
+        "timeSeconds": 2700
+      },
+      "startedAt": "2026-10-12T03:57:36.436838+00:00",
+      "wallClockSeconds": 166.9,
+      "tokens": {
+        "in": 1191726,
+        "out": 23501,
+        "cacheRead": 1154376,
+        "cacheCreation": 37304,
+        "observed": true
+      },
+      "turns": 23,
+      "toolInvocations": 22,
+      "toolchainInvocations": 5,
+      "outcome": "finished",
+      "hiddenTests": {
+        "passed": 0,
+        "total": 6,
+        "failures": [
+          "01-one-point",
+          "02-whole-set",
+          "03-left-lobe",
+          "04-all-escape",
+          "05-limit-one",
+          "06-tall-strip"
+        ],
+        "failureDetail": {
+          "01-one-point": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "02-whole-set": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "03-left-lobe": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "04-all-escape": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "05-limit-one": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          },
+          "06-tall-strip": {
+            "exitCode": 1,
+            "stderr": "error[MER_BLD_008]: Input Not Readable\n  = could not read main.mi: No such file or directory (os error 2)\n  = help: check that the path exists, names a file rather than a directory, and is readable\n",
+            "firstDifference": {
+              "line": 2,
+              "expected": "10 lines",
+              "actual": "1 lines"
+            }
+          }
+        },
+        "kernelEvidence": {
+          "required": [
+            "\\bgpu\\s+(fn|forall|let|var)\\b",
+            "\\b(forall|gpu\\s+fn)\\b"
+          ],
+          "missing": [
+            "\\bgpu\\s+(fn|forall|let|var)\\b",
+            "\\b(forall|gpu\\s+fn)\\b"
+          ]
+        },
+        "notOnGpu": true
+      },
+      "silentWrongAnswer": true,
+      "isolation": {
+        "clean": true,
+        "initObserved": true,
+        "hookEvents": 0,
+        "repoReferences": 0,
+        "mcpServers": [],
+        "plugins": [],
+        "skills": [
+          "deep-research",
+          "design",
+          "design-sync",
+          "dataviz",
+          "update-config",
+          "verify",
+          "debug",
+          "code-review",
+          "simplify",
+          "batch",
+          "fewer-permission-prompts",
+          "doctor",
+          "loop",
+          "schedule",
+          "claude-api",
+          "workflow-authoring",
+          "run",
+          "run-skill-generator",
+          "plugin-authoring"
+        ],
+        "apiKeySource": "none"
+      },
+      "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field-r2b/r2/07-gpu-escape-time/miri-grammar/claude-haiku/2",
+      "onboarding": {
+        "material": [
+          "grammar"
+        ],
+        "tokens": {
+          "in": 250360,
+          "out": 2531,
+          "cacheRead": 229157,
+          "cacheCreation": 21185,
+          "observed": true
+        },
+        "turns": 9,
+        "toolInvocations": 9,
+        "toolchainInvocations": 5,
+        "wallClockSeconds": 20.9,
+        "outcome": "finished",
+        "isolation": {
+          "clean": true,
+          "initObserved": true,
+          "hookEvents": 0,
+          "repoReferences": 0,
+          "mcpServers": [],
+          "plugins": [],
+          "skills": [
+            "deep-research",
+            "design",
+            "design-sync",
+            "dataviz",
+            "update-config",
+            "verify",
+            "debug",
+            "code-review",
+            "simplify",
+            "batch",
+            "fewer-permission-prompts",
+            "doctor",
+            "loop",
+            "schedule",
+            "claude-api",
+            "workflow-authoring",
+            "run",
+            "run-skill-generator",
+            "plugin-authoring"
+          ],
+          "apiKeySource": "none"
+        },
+        "sessionId": "6bdf5c7a-20a2-4e0b-8712-6d3ca566486a"
+      }
+    }
+  }
+}

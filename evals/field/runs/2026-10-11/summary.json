@@ -1,0 +1,3811 @@
+{
+  "schemaVersion": 1,
+  "round": "2026-10-11",
+  "records": 225,
+  "models": [
+    "claude-haiku",
+    "claude-opus",
+    "claude-sonnet"
+  ],
+  "jobs": [
+    "01-word-frequency",
+    "02-ledger-repair",
+    "03-tracker-extension",
+    "04-data-edges",
+    "05-gpu-heat"
+  ],
+  "cells": [
+    {
+      "job": "01-word-frequency",
+      "arm": "miri-bare",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 2,
+      "finishRate": 0.667,
+      "tokensToGreen": {
+        "median": 1559666.5,
+        "min": 1394112,
+        "max": 1725221
+      },
+      "wallClockToGreen": {
+        "median": 390.75,
+        "min": 196.3,
+        "max": 585.2
+      },
+      "invocationsToGreen": {
+        "median": 35.0,
+        "min": 33,
+        "max": 37
+      },
+      "toolchainInvocations": {
+        "median": 8,
+        "min": 7,
+        "max": 10
+      },
+      "wallClockSeconds": {
+        "median": 490.3,
+        "min": 196.3,
+        "max": 585.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 1,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "miri-bare",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 1021290,
+        "min": 45996,
+        "max": 1024957
+      },
+      "wallClockToGreen": {
+        "median": 300.5,
+        "min": 279.2,
+        "max": 367.7
+      },
+      "invocationsToGreen": {
+        "median": 27,
+        "min": 21,
+        "max": 29
+      },
+      "toolchainInvocations": {
+        "median": 7,
+        "min": 5,
+        "max": 8
+      },
+      "wallClockSeconds": {
+        "median": 300.5,
+        "min": 279.2,
+        "max": 367.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "miri-bare",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 685300,
+        "min": 443375,
+        "max": 1123115
+      },
+      "wallClockToGreen": {
+        "median": 237.6,
+        "min": 88.8,
+        "max": 551.3
+      },
+      "invocationsToGreen": {
+        "median": 22,
+        "min": 15,
+        "max": 31
+      },
+      "toolchainInvocations": {
+        "median": 6,
+        "min": 5,
+        "max": 10
+      },
+      "wallClockSeconds": {
+        "median": 237.6,
+        "min": 88.8,
+        "max": 551.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "miri-pack",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 836151,
+        "min": 807900,
+        "max": 891052
+      },
+      "wallClockToGreen": {
+        "median": 214.9,
+        "min": 161.8,
+        "max": 283.4
+      },
+      "invocationsToGreen": {
+        "median": 23,
+        "min": 22,
+        "max": 26
+      },
+      "toolchainInvocations": {
+        "median": 6,
+        "min": 3,
+        "max": 10
+      },
+      "wallClockSeconds": {
+        "median": 214.9,
+        "min": 161.8,
+        "max": 283.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "miri-pack",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 380408,
+        "min": 347784,
+        "max": 476605
+      },
+      "wallClockToGreen": {
+        "median": 59.7,
+        "min": 55.8,
+        "max": 88.2
+      },
+      "invocationsToGreen": {
+        "median": 13,
+        "min": 12,
+        "max": 15
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 1,
+        "max": 3
+      },
+      "wallClockSeconds": {
+        "median": 59.7,
+        "min": 55.8,
+        "max": 88.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "miri-pack",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 473240,
+        "min": 311124,
+        "max": 546464
+      },
+      "wallClockToGreen": {
+        "median": 67.9,
+        "min": 44.7,
+        "max": 175.6
+      },
+      "invocationsToGreen": {
+        "median": 18,
+        "min": 12,
+        "max": 18
+      },
+      "toolchainInvocations": {
+        "median": 5,
+        "min": 1,
+        "max": 9
+      },
+      "wallClockSeconds": {
+        "median": 67.9,
+        "min": 44.7,
+        "max": 175.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "python",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 147596,
+        "min": 99542,
+        "max": 194146
+      },
+      "wallClockToGreen": {
+        "median": 31.4,
+        "min": 30.4,
+        "max": 221.4
+      },
+      "invocationsToGreen": {
+        "median": 8,
+        "min": 6,
+        "max": 8
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 31.4,
+        "min": 30.4,
+        "max": 221.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "python",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 74036,
+        "min": 73961,
+        "max": 114131
+      },
+      "wallClockToGreen": {
+        "median": 33.7,
+        "min": 30.5,
+        "max": 36.1
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 5
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 33.7,
+        "min": 30.5,
+        "max": 36.1
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "python",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 52896,
+        "min": 52805,
+        "max": 52900
+      },
+      "wallClockToGreen": {
+        "median": 16.0,
+        "min": 15.6,
+        "max": 18.4
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 2
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 16.0,
+        "min": 15.6,
+        "max": 18.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "rust",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 140263,
+        "min": 119475,
+        "max": 163178
+      },
+      "wallClockToGreen": {
+        "median": 28.0,
+        "min": 24.3,
+        "max": 28.6
+      },
+      "invocationsToGreen": {
+        "median": 7,
+        "min": 6,
+        "max": 7
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 0,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 28.0,
+        "min": 24.3,
+        "max": 28.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "rust",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 53645,
+        "min": 53605,
+        "max": 53650
+      },
+      "wallClockToGreen": {
+        "median": 21.1,
+        "min": 20.9,
+        "max": 22.4
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 2
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 21.1,
+        "min": 20.9,
+        "max": 22.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "rust",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 52321,
+        "min": 52213,
+        "max": 52382
+      },
+      "wallClockToGreen": {
+        "median": 14.4,
+        "min": 13.1,
+        "max": 14.6
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 2
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 14.4,
+        "min": 13.1,
+        "max": 14.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "typescript",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 166363,
+        "min": 128179,
+        "max": 175994
+      },
+      "wallClockToGreen": {
+        "median": 29.2,
+        "min": 28.4,
+        "max": 32.8
+      },
+      "invocationsToGreen": {
+        "median": 7,
+        "min": 6,
+        "max": 7
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 29.2,
+        "min": 28.4,
+        "max": 32.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "typescript",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 76604,
+        "min": 75663,
+        "max": 118999
+      },
+      "wallClockToGreen": {
+        "median": 41.9,
+        "min": 35.1,
+        "max": 67.5
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 5
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 41.9,
+        "min": 35.1,
+        "max": 67.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "01-word-frequency",
+      "arm": "typescript",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 52280,
+        "min": 52021,
+        "max": 52287
+      },
+      "wallClockToGreen": {
+        "median": 12.7,
+        "min": 11.2,
+        "max": 12.9
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 2
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 12.7,
+        "min": 11.2,
+        "max": 12.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "miri-bare",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 483689,
+        "min": 302738,
+        "max": 847427
+      },
+      "wallClockToGreen": {
+        "median": 74.3,
+        "min": 49.6,
+        "max": 478.0
+      },
+      "invocationsToGreen": {
+        "median": 17,
+        "min": 12,
+        "max": 25
+      },
+      "toolchainInvocations": {
+        "median": 4,
+        "min": 3,
+        "max": 5
+      },
+      "wallClockSeconds": {
+        "median": 74.3,
+        "min": 49.6,
+        "max": 478.0
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "miri-bare",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 301600,
+        "min": 278358,
+        "max": 372570
+      },
+      "wallClockToGreen": {
+        "median": 78.5,
+        "min": 71.5,
+        "max": 80.9
+      },
+      "invocationsToGreen": {
+        "median": 12,
+        "min": 11,
+        "max": 14
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 3
+      },
+      "wallClockSeconds": {
+        "median": 78.5,
+        "min": 71.5,
+        "max": 80.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "miri-bare",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 234534,
+        "min": 95709,
+        "max": 262775
+      },
+      "wallClockToGreen": {
+        "median": 39.1,
+        "min": 23.4,
+        "max": 41.2
+      },
+      "invocationsToGreen": {
+        "median": 10,
+        "min": 4,
+        "max": 10
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 0,
+        "max": 6
+      },
+      "wallClockSeconds": {
+        "median": 39.1,
+        "min": 23.4,
+        "max": 41.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "miri-pack",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 504408,
+        "min": 427145,
+        "max": 631594
+      },
+      "wallClockToGreen": {
+        "median": 69.2,
+        "min": 65.4,
+        "max": 69.3
+      },
+      "invocationsToGreen": {
+        "median": 16,
+        "min": 14,
+        "max": 21
+      },
+      "toolchainInvocations": {
+        "median": 5,
+        "min": 4,
+        "max": 6
+      },
+      "wallClockSeconds": {
+        "median": 69.2,
+        "min": 65.4,
+        "max": 69.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "miri-pack",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 351577,
+        "min": 250047,
+        "max": 462255
+      },
+      "wallClockToGreen": {
+        "median": 70.6,
+        "min": 66.8,
+        "max": 82.2
+      },
+      "invocationsToGreen": {
+        "median": 12,
+        "min": 10,
+        "max": 15
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 70.6,
+        "min": 66.8,
+        "max": 82.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "miri-pack",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 194518,
+        "min": 192109,
+        "max": 217203
+      },
+      "wallClockToGreen": {
+        "median": 31.1,
+        "min": 30.3,
+        "max": 33.5
+      },
+      "invocationsToGreen": {
+        "median": 8,
+        "min": 8,
+        "max": 9
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 1,
+        "max": 3
+      },
+      "wallClockSeconds": {
+        "median": 31.1,
+        "min": 30.3,
+        "max": 33.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "python",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 126615,
+        "min": 126154,
+        "max": 147465
+      },
+      "wallClockToGreen": {
+        "median": 29.7,
+        "min": 28.0,
+        "max": 32.2
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 29.7,
+        "min": 28.0,
+        "max": 32.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "python",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 112878,
+        "min": 96566,
+        "max": 114798
+      },
+      "wallClockToGreen": {
+        "median": 32.7,
+        "min": 27.3,
+        "max": 36.4
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 4,
+        "max": 5
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 32.7,
+        "min": 27.3,
+        "max": 36.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "python",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 72685,
+        "min": 72637,
+        "max": 73024
+      },
+      "wallClockToGreen": {
+        "median": 17.4,
+        "min": 16.8,
+        "max": 18.5
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 17.4,
+        "min": 16.8,
+        "max": 18.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "rust",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 131577,
+        "min": 104207,
+        "max": 133225
+      },
+      "wallClockToGreen": {
+        "median": 31.3,
+        "min": 29.3,
+        "max": 41.6
+      },
+      "invocationsToGreen": {
+        "median": 6,
+        "min": 6,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 31.3,
+        "min": 29.3,
+        "max": 41.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "rust",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 96353,
+        "min": 95911,
+        "max": 143540
+      },
+      "wallClockToGreen": {
+        "median": 34.5,
+        "min": 31.7,
+        "max": 45.8
+      },
+      "invocationsToGreen": {
+        "median": 4,
+        "min": 4,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 34.5,
+        "min": 31.7,
+        "max": 45.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "rust",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 74395,
+        "min": 73679,
+        "max": 75963
+      },
+      "wallClockToGreen": {
+        "median": 21.9,
+        "min": 20.2,
+        "max": 22.2
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 21.9,
+        "min": 20.2,
+        "max": 22.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "typescript",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 116486,
+        "min": 103690,
+        "max": 136696
+      },
+      "wallClockToGreen": {
+        "median": 33.8,
+        "min": 26.4,
+        "max": 36.4
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 33.8,
+        "min": 26.4,
+        "max": 36.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "typescript",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 95084,
+        "min": 94530,
+        "max": 117170
+      },
+      "wallClockToGreen": {
+        "median": 29.9,
+        "min": 27.8,
+        "max": 36.9
+      },
+      "invocationsToGreen": {
+        "median": 4,
+        "min": 4,
+        "max": 5
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 29.9,
+        "min": 27.8,
+        "max": 36.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "02-ledger-repair",
+      "arm": "typescript",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 73816,
+        "min": 73715,
+        "max": 74099
+      },
+      "wallClockToGreen": {
+        "median": 19.4,
+        "min": 19.2,
+        "max": 19.4
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 19.4,
+        "min": 19.2,
+        "max": 19.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "miri-bare",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 353392,
+        "min": 351244,
+        "max": 366711
+      },
+      "wallClockToGreen": {
+        "median": 56.1,
+        "min": 53.9,
+        "max": 57.0
+      },
+      "invocationsToGreen": {
+        "median": 13,
+        "min": 11,
+        "max": 14
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 2,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 56.1,
+        "min": 53.9,
+        "max": 57.0
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "miri-bare",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 168406,
+        "min": 164393,
+        "max": 254016
+      },
+      "wallClockToGreen": {
+        "median": 47.9,
+        "min": 39.9,
+        "max": 58.1
+      },
+      "invocationsToGreen": {
+        "median": 7,
+        "min": 7,
+        "max": 11
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 0,
+        "max": 8
+      },
+      "wallClockSeconds": {
+        "median": 47.9,
+        "min": 39.9,
+        "max": 58.1
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "miri-bare",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 136739,
+        "min": 135850,
+        "max": 138279
+      },
+      "wallClockToGreen": {
+        "median": 27.1,
+        "min": 25.3,
+        "max": 34.7
+      },
+      "invocationsToGreen": {
+        "median": 6,
+        "min": 6,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 0,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 27.1,
+        "min": 25.3,
+        "max": 34.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "miri-pack",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 340624,
+        "min": 252690,
+        "max": 393699
+      },
+      "wallClockToGreen": {
+        "median": 49.3,
+        "min": 37.1,
+        "max": 51.9
+      },
+      "invocationsToGreen": {
+        "median": 12,
+        "min": 10,
+        "max": 14
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 2,
+        "max": 5
+      },
+      "wallClockSeconds": {
+        "median": 49.3,
+        "min": 37.1,
+        "max": 51.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "miri-pack",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 224123,
+        "min": 188505,
+        "max": 229129
+      },
+      "wallClockToGreen": {
+        "median": 46.1,
+        "min": 39.7,
+        "max": 46.2
+      },
+      "invocationsToGreen": {
+        "median": 9,
+        "min": 8,
+        "max": 9
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 0,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 46.1,
+        "min": 39.7,
+        "max": 46.2
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "miri-pack",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 108434,
+        "min": 107205,
+        "max": 108458
+      },
+      "wallClockToGreen": {
+        "median": 20.5,
+        "min": 18.9,
+        "max": 20.6
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 5
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 20.5,
+        "min": 18.9,
+        "max": 20.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "python",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 210606,
+        "min": 151125,
+        "max": 214445
+      },
+      "wallClockToGreen": {
+        "median": 42.3,
+        "min": 33.7,
+        "max": 42.8
+      },
+      "invocationsToGreen": {
+        "median": 9,
+        "min": 6,
+        "max": 12
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 42.3,
+        "min": 33.7,
+        "max": 42.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "python",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 95919,
+        "min": 74197,
+        "max": 136001
+      },
+      "wallClockToGreen": {
+        "median": 33.5,
+        "min": 27.6,
+        "max": 43.8
+      },
+      "invocationsToGreen": {
+        "median": 4,
+        "min": 3,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 33.5,
+        "min": 27.6,
+        "max": 43.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "python",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 72319,
+        "min": 72314,
+        "max": 89829
+      },
+      "wallClockToGreen": {
+        "median": 18.3,
+        "min": 16.8,
+        "max": 19.0
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 4
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 18.3,
+        "min": 16.8,
+        "max": 19.0
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "rust",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 189809,
+        "min": 124246,
+        "max": 250510
+      },
+      "wallClockToGreen": {
+        "median": 41.1,
+        "min": 25.6,
+        "max": 60.8
+      },
+      "invocationsToGreen": {
+        "median": 8,
+        "min": 5,
+        "max": 10
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 41.1,
+        "min": 25.6,
+        "max": 60.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "rust",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 75470,
+        "min": 74961,
+        "max": 76514
+      },
+      "wallClockToGreen": {
+        "median": 37.9,
+        "min": 33.3,
+        "max": 40.9
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 37.9,
+        "min": 33.3,
+        "max": 40.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "rust",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 91335,
+        "min": 74082,
+        "max": 91732
+      },
+      "wallClockToGreen": {
+        "median": 22.3,
+        "min": 21.6,
+        "max": 23.9
+      },
+      "invocationsToGreen": {
+        "median": 4,
+        "min": 3,
+        "max": 4
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 22.3,
+        "min": 21.6,
+        "max": 23.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "typescript",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 130811,
+        "min": 129244,
+        "max": 154288
+      },
+      "wallClockToGreen": {
+        "median": 29.2,
+        "min": 25.9,
+        "max": 40.1
+      },
+      "invocationsToGreen": {
+        "median": 6,
+        "min": 6,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 29.2,
+        "min": 25.9,
+        "max": 40.1
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "typescript",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 74674,
+        "min": 74055,
+        "max": 74722
+      },
+      "wallClockToGreen": {
+        "median": 32.5,
+        "min": 29.8,
+        "max": 34.5
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 32.5,
+        "min": 29.8,
+        "max": 34.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "03-tracker-extension",
+      "arm": "typescript",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 72726,
+        "min": 72566,
+        "max": 72775
+      },
+      "wallClockToGreen": {
+        "median": 17.7,
+        "min": 17.1,
+        "max": 18.3
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 17.7,
+        "min": 17.1,
+        "max": 18.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "miri-bare",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 789802,
+        "min": 699525,
+        "max": 845395
+      },
+      "wallClockToGreen": {
+        "median": 106.9,
+        "min": 85.0,
+        "max": 142.5
+      },
+      "invocationsToGreen": {
+        "median": 23,
+        "min": 22,
+        "max": 23
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 0,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 106.9,
+        "min": 85.0,
+        "max": 142.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "miri-bare",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 509781,
+        "min": 482705,
+        "max": 607390
+      },
+      "wallClockToGreen": {
+        "median": 86.5,
+        "min": 77.8,
+        "max": 90.6
+      },
+      "invocationsToGreen": {
+        "median": 17,
+        "min": 16,
+        "max": 19
+      },
+      "toolchainInvocations": {
+        "median": 7,
+        "min": 5,
+        "max": 9
+      },
+      "wallClockSeconds": {
+        "median": 86.5,
+        "min": 77.8,
+        "max": 90.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "miri-bare",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 499944,
+        "min": 372994,
+        "max": 518439
+      },
+      "wallClockToGreen": {
+        "median": 55.7,
+        "min": 45.3,
+        "max": 61.3
+      },
+      "invocationsToGreen": {
+        "median": 17,
+        "min": 14,
+        "max": 17
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 3,
+        "max": 9
+      },
+      "wallClockSeconds": {
+        "median": 55.7,
+        "min": 45.3,
+        "max": 61.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "miri-pack",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 615115,
+        "min": 483651,
+        "max": 699679
+      },
+      "wallClockToGreen": {
+        "median": 81.9,
+        "min": 77.2,
+        "max": 118.8
+      },
+      "invocationsToGreen": {
+        "median": 18,
+        "min": 16,
+        "max": 21
+      },
+      "toolchainInvocations": {
+        "median": 4,
+        "min": 3,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 81.9,
+        "min": 77.2,
+        "max": 118.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "miri-pack",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 448943,
+        "min": 445870,
+        "max": 1027300
+      },
+      "wallClockToGreen": {
+        "median": 84.0,
+        "min": 76.4,
+        "max": 213.6
+      },
+      "invocationsToGreen": {
+        "median": 14,
+        "min": 14,
+        "max": 28
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 2,
+        "max": 6
+      },
+      "wallClockSeconds": {
+        "median": 84.0,
+        "min": 76.4,
+        "max": 213.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "miri-pack",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 283069,
+        "min": 279905,
+        "max": 340844
+      },
+      "wallClockToGreen": {
+        "median": 38.5,
+        "min": 36.6,
+        "max": 45.7
+      },
+      "invocationsToGreen": {
+        "median": 12,
+        "min": 10,
+        "max": 13
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 1,
+        "max": 3
+      },
+      "wallClockSeconds": {
+        "median": 38.5,
+        "min": 36.6,
+        "max": 45.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "python",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 133398,
+        "min": 127883,
+        "max": 173963
+      },
+      "wallClockToGreen": {
+        "median": 38.5,
+        "min": 34.9,
+        "max": 41.7
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 7
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 38.5,
+        "min": 34.9,
+        "max": 41.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "python",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 78467,
+        "min": 77289,
+        "max": 119882
+      },
+      "wallClockToGreen": {
+        "median": 40.7,
+        "min": 37.6,
+        "max": 48.4
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 40.7,
+        "min": 37.6,
+        "max": 48.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "python",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 54173,
+        "min": 54168,
+        "max": 54294
+      },
+      "wallClockToGreen": {
+        "median": 20.4,
+        "min": 18.9,
+        "max": 21.0
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 2
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 20.4,
+        "min": 18.9,
+        "max": 21.0
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "rust",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 137933,
+        "min": 123248,
+        "max": 152465
+      },
+      "wallClockToGreen": {
+        "median": 32.8,
+        "min": 27.3,
+        "max": 38.5
+      },
+      "invocationsToGreen": {
+        "median": 7,
+        "min": 5,
+        "max": 7
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 1,
+        "max": 3
+      },
+      "wallClockSeconds": {
+        "median": 32.8,
+        "min": 27.3,
+        "max": 38.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "rust",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 56252,
+        "min": 55806,
+        "max": 77197
+      },
+      "wallClockToGreen": {
+        "median": 35.3,
+        "min": 32.5,
+        "max": 41.1
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 35.3,
+        "min": 32.5,
+        "max": 41.1
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "rust",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 54434,
+        "min": 53837,
+        "max": 72582
+      },
+      "wallClockToGreen": {
+        "median": 21.4,
+        "min": 21.2,
+        "max": 21.5
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 21.4,
+        "min": 21.2,
+        "max": 21.5
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "typescript",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 139480,
+        "min": 134449,
+        "max": 161780
+      },
+      "wallClockToGreen": {
+        "median": 41.1,
+        "min": 38.1,
+        "max": 41.3
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 41.1,
+        "min": 38.1,
+        "max": 41.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "typescript",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 103781,
+        "min": 99159,
+        "max": 147944
+      },
+      "wallClockToGreen": {
+        "median": 62.6,
+        "min": 44.8,
+        "max": 64.7
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 4,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 2,
+        "min": 1,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 62.6,
+        "min": 44.8,
+        "max": 64.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "04-data-edges",
+      "arm": "typescript",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 55264,
+        "min": 54359,
+        "max": 73581
+      },
+      "wallClockToGreen": {
+        "median": 22.7,
+        "min": 19.3,
+        "max": 24.4
+      },
+      "invocationsToGreen": {
+        "median": 2,
+        "min": 2,
+        "max": 3
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 22.7,
+        "min": 19.3,
+        "max": 24.4
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "miri-bare",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 1116101,
+        "min": 636663,
+        "max": 1404161
+      },
+      "wallClockToGreen": {
+        "median": 242.3,
+        "min": 150.4,
+        "max": 413.8
+      },
+      "invocationsToGreen": {
+        "median": 26,
+        "min": 18,
+        "max": 33
+      },
+      "toolchainInvocations": {
+        "median": 6,
+        "min": 3,
+        "max": 6
+      },
+      "wallClockSeconds": {
+        "median": 242.3,
+        "min": 150.4,
+        "max": 413.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "miri-bare",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 1030371,
+        "min": 534562,
+        "max": 1637061
+      },
+      "wallClockToGreen": {
+        "median": 281.7,
+        "min": 123.6,
+        "max": 534.0
+      },
+      "invocationsToGreen": {
+        "median": 28,
+        "min": 17,
+        "max": 36
+      },
+      "toolchainInvocations": {
+        "median": 9,
+        "min": 6,
+        "max": 10
+      },
+      "wallClockSeconds": {
+        "median": 281.7,
+        "min": 123.6,
+        "max": 534.0
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "miri-bare",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 417935,
+        "min": 390382,
+        "max": 595169
+      },
+      "wallClockToGreen": {
+        "median": 146.1,
+        "min": 55.4,
+        "max": 170.3
+      },
+      "invocationsToGreen": {
+        "median": 15,
+        "min": 14,
+        "max": 18
+      },
+      "toolchainInvocations": {
+        "median": 6,
+        "min": 4,
+        "max": 7
+      },
+      "wallClockSeconds": {
+        "median": 146.1,
+        "min": 55.4,
+        "max": 170.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "miri-pack",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 894309,
+        "min": 686664,
+        "max": 972996
+      },
+      "wallClockToGreen": {
+        "median": 230.2,
+        "min": 96.8,
+        "max": 294.8
+      },
+      "invocationsToGreen": {
+        "median": 24,
+        "min": 23,
+        "max": 25
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 0,
+        "max": 5
+      },
+      "wallClockSeconds": {
+        "median": 230.2,
+        "min": 96.8,
+        "max": 294.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "miri-pack",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 682820,
+        "min": 652221,
+        "max": 684059
+      },
+      "wallClockToGreen": {
+        "median": 99.6,
+        "min": 89.1,
+        "max": 341.3
+      },
+      "invocationsToGreen": {
+        "median": 20,
+        "min": 20,
+        "max": 20
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 0,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 99.6,
+        "min": 89.1,
+        "max": 341.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "miri-pack",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 345356,
+        "min": 316097,
+        "max": 424448
+      },
+      "wallClockToGreen": {
+        "median": 55.6,
+        "min": 46.0,
+        "max": 132.9
+      },
+      "invocationsToGreen": {
+        "median": 12,
+        "min": 11,
+        "max": 14
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 2
+      },
+      "wallClockSeconds": {
+        "median": 55.6,
+        "min": 46.0,
+        "max": 132.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "python",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 210986,
+        "min": 160471,
+        "max": 261666
+      },
+      "wallClockToGreen": {
+        "median": 69.9,
+        "min": 59.7,
+        "max": 154.7
+      },
+      "invocationsToGreen": {
+        "median": 8,
+        "min": 6,
+        "max": 10
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 3
+      },
+      "wallClockSeconds": {
+        "median": 69.9,
+        "min": 59.7,
+        "max": 154.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "python",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 121824,
+        "min": 118930,
+        "max": 141618
+      },
+      "wallClockToGreen": {
+        "median": 63.6,
+        "min": 57.4,
+        "max": 64.6
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 63.6,
+        "min": 57.4,
+        "max": 64.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "python",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 75209,
+        "min": 55672,
+        "max": 93421
+      },
+      "wallClockToGreen": {
+        "median": 31.7,
+        "min": 28.2,
+        "max": 36.6
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 2,
+        "max": 4
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 31.7,
+        "min": 28.2,
+        "max": 36.6
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "rust",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 276397,
+        "min": 276045,
+        "max": 529404
+      },
+      "wallClockToGreen": {
+        "median": 223.4,
+        "min": 184.5,
+        "max": 229.3
+      },
+      "invocationsToGreen": {
+        "median": 11,
+        "min": 10,
+        "max": 19
+      },
+      "toolchainInvocations": {
+        "median": 5,
+        "min": 4,
+        "max": 5
+      },
+      "wallClockSeconds": {
+        "median": 223.4,
+        "min": 184.5,
+        "max": 229.3
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "rust",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 129193,
+        "min": 129005,
+        "max": 171920
+      },
+      "wallClockToGreen": {
+        "median": 93.2,
+        "min": 93.1,
+        "max": 98.8
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 7
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 93.2,
+        "min": 93.1,
+        "max": 98.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "rust",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 167490,
+        "min": 99944,
+        "max": 193850
+      },
+      "wallClockToGreen": {
+        "median": 91.7,
+        "min": 85.5,
+        "max": 141.0
+      },
+      "invocationsToGreen": {
+        "median": 8,
+        "min": 4,
+        "max": 8
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 91.7,
+        "min": 85.5,
+        "max": 141.0
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "typescript",
+      "model": "claude-haiku",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 304476,
+        "min": 235108,
+        "max": 327141
+      },
+      "wallClockToGreen": {
+        "median": 59.3,
+        "min": 53.7,
+        "max": 73.7
+      },
+      "invocationsToGreen": {
+        "median": 11,
+        "min": 10,
+        "max": 15
+      },
+      "toolchainInvocations": {
+        "median": 3,
+        "min": 2,
+        "max": 4
+      },
+      "wallClockSeconds": {
+        "median": 59.3,
+        "min": 53.7,
+        "max": 73.7
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "typescript",
+      "model": "claude-opus",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 125566,
+        "min": 125529,
+        "max": 148440
+      },
+      "wallClockToGreen": {
+        "median": 62.3,
+        "min": 59.0,
+        "max": 63.9
+      },
+      "invocationsToGreen": {
+        "median": 5,
+        "min": 5,
+        "max": 6
+      },
+      "toolchainInvocations": {
+        "median": 1,
+        "min": 1,
+        "max": 1
+      },
+      "wallClockSeconds": {
+        "median": 62.3,
+        "min": 59.0,
+        "max": 63.9
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    },
+    {
+      "job": "05-gpu-heat",
+      "arm": "typescript",
+      "model": "claude-sonnet",
+      "runs": 3,
+      "green": 3,
+      "finishRate": 1.0,
+      "tokensToGreen": {
+        "median": 75926,
+        "min": 75896,
+        "max": 100393
+      },
+      "wallClockToGreen": {
+        "median": 27.3,
+        "min": 25.4,
+        "max": 35.8
+      },
+      "invocationsToGreen": {
+        "median": 3,
+        "min": 3,
+        "max": 5
+      },
+      "toolchainInvocations": {
+        "median": 0,
+        "min": 0,
+        "max": 0
+      },
+      "wallClockSeconds": {
+        "median": 27.3,
+        "min": 25.4,
+        "max": 35.8
+      },
+      "costUnobserved": 0,
+      "silentWrongAnswers": 0,
+      "capped": 0,
+      "abandoned": 0
+    }
+  ],
+  "claims": {
+    "cost-within-reach": {
+      "held": false,
+      "detail": [
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 836151 against python 147596",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 836151 against rust 140263",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 836151 against typescript 166363",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 504408 against python 126615",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 504408 against rust 131577",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 504408 against typescript 116486",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 340624 against python 210606",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 340624 against rust 189809",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 340624 against typescript 130811",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 615115 against python 133398",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 615115 against rust 137933",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 615115 against typescript 139480",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 380408 against python 74036",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 380408 against rust 53645",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 380408 against typescript 76604",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 351577 against python 112878",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 351577 against rust 96353",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 351577 against typescript 95084",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 224123 against python 95919",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 224123 against rust 75470",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 224123 against typescript 74674",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 448943 against python 78467",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 448943 against rust 56252",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 448943 against typescript 103781",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 473240 against python 52896",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 473240 against rust 52321",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 473240 against typescript 52280",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 194518 against python 72685",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 194518 against rust 74395",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 194518 against typescript 73816",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 108434 against python 72319",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 108434 against rust 91335",
+          "standing": "parity"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 108434 against typescript 72726",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 283069 against python 54173",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 283069 against rust 54434",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 283069 against typescript 55264",
+          "standing": "behind"
+        }
+      ]
+    },
+    "fewer-wrong-answers": {
+      "held": true,
+      "detail": [
+        {
+          "job": "cpu jobs",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack 0 against python 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack 0 against rust 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack 0 against typescript 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack 0 against python 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack 0 against rust 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack 0 against typescript 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack 0 against python 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack 0 against rust 0"
+        },
+        {
+          "job": "cpu jobs",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack 0 against typescript 0"
+        }
+      ]
+    },
+    "gpu-in-reach": {
+      "held": false,
+      "detail": [
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 894309 against the cheapest baseline 210986"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 682820 against the cheapest baseline 121824"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 345356 against the cheapest baseline 75209"
+        }
+      ]
+    },
+    "pack-earns-its-place": {
+      "held": false,
+      "detail": [
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "cost 836151 against 1559666.5, finish rate 1.0 against 0.667"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "cost 504408 against 483689, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "cost 340624 against 353392, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "cost 615115 against 789802, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "cost 894309 against 1116101, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "cost 380408 against 1021290, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "cost 351577 against 301600, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "cost 224123 against 168406, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "cost 448943 against 509781, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "cost 682820 against 1030371, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "cost 473240 against 685300, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "cost 194518 against 234534, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "cost 108434 against 136739, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "cost 283069 against 499944, finish rate 1.0 against 1.0"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "cost 345356 against 417935, finish rate 1.0 against 1.0"
+        }
+      ]
+    },
+    "speed-within-reach": {
+      "held": false,
+      "detail": [
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 214.9 against python 31.4",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 214.9 against rust 28.0",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 214.9 against typescript 29.2",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 69.2 against python 29.7",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 69.2 against rust 31.3",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 69.2 against typescript 33.8",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 49.3 against python 42.3",
+          "standing": "parity"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 49.3 against rust 41.1",
+          "standing": "parity"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 49.3 against typescript 29.2",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 81.9 against python 38.5",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 81.9 against rust 32.8",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": false,
+          "reason": "miri-pack 81.9 against typescript 41.1",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 59.7 against python 33.7",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 59.7 against rust 21.1",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 59.7 against typescript 41.9",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 70.6 against python 32.7",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 70.6 against rust 34.5",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 70.6 against typescript 29.9",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 46.1 against python 33.5",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 46.1 against rust 37.9",
+          "standing": "parity"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 46.1 against typescript 32.5",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 84.0 against python 40.7",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 84.0 against rust 35.3",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "miri-pack 84.0 against typescript 62.6",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 67.9 against python 16.0",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 67.9 against rust 14.4",
+          "standing": "behind"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 67.9 against typescript 12.7",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 31.1 against python 17.4",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 31.1 against rust 21.9",
+          "standing": "behind"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 31.1 against typescript 19.4",
+          "standing": "behind"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 20.5 against python 18.3",
+          "standing": "parity"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack 20.5 against rust 22.3",
+          "standing": "beats"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 20.5 against typescript 17.7",
+          "standing": "parity"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 38.5 against python 20.4",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 38.5 against rust 21.4",
+          "standing": "behind"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": false,
+          "reason": "miri-pack 38.5 against typescript 22.7",
+          "standing": "behind"
+        }
+      ]
+    }
+  },
+  "exitCriterion": {
+    "silentWrongAnswers": {
+      "held": true,
+      "detail": [
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-pack recorded 0 silent wrong answers"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "miri-bare recorded 0 silent wrong answers"
+        }
+      ]
+    },
+    "packLoop": {
+      "held": false,
+      "detail": [
+        {
+          "job": "01-word-frequency",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "invocations to green 23 against 35.0"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "invocations to green 16 against 17"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "invocations to green 12 against 13"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "invocations to green 18 against 23"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-haiku",
+          "held": true,
+          "reason": "invocations to green 24 against 26"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "invocations to green 13 against 27"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "invocations to green 12 against 12"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-opus",
+          "held": false,
+          "reason": "invocations to green 9 against 7"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "invocations to green 14 against 17"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-opus",
+          "held": true,
+          "reason": "invocations to green 20 against 28"
+        },
+        {
+          "job": "01-word-frequency",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "invocations to green 18 against 22"
+        },
+        {
+          "job": "02-ledger-repair",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "invocations to green 8 against 10"
+        },
+        {
+          "job": "03-tracker-extension",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "invocations to green 5 against 6"
+        },
+        {
+          "job": "04-data-edges",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "invocations to green 12 against 17"
+        },
+        {
+          "job": "05-gpu-heat",
+          "model": "claude-sonnet",
+          "held": true,
+          "reason": "invocations to green 12 against 15"
+        }
+      ]
+    },
+    "probeRatings": {
+      "held": true,
+      "detail": [
+        {
+          "surface": "miri check",
+          "held": true,
+          "reason": "rated 4, 4 out of 5"
+        },
+        {
+          "surface": "miri run",
+          "held": true,
+          "reason": "rated 5, 5 out of 5"
+        },
+        {
+          "surface": "miri view",
+          "held": true,
+          "reason": "rated 4, 4 out of 5"
+        },
+        {
+          "surface": "miri-lang",
+          "held": true,
+          "reason": "rated 3 out of 5"
+        }
+      ],
+      "unrecognised": [
+        "BRIEF.md",
+        "cargo clippy",
+        "cargo run",
+        "deno run / deno check",
+        "main.py",
+        "miri --help",
+        "python3 with ad-hoc test ledgers"
+      ],
+      "unrated": [
+        "miri explain",
+        "miri fix",
+        "miri patch",
+        "miri test",
+        "miri-gpu",
+        "miri-testing"
+      ]
+    }
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "round": "2026-10-12",
+  "job": "07-gpu-escape-time",
+  "arm": "python",
+  "run": 2,
+  "model": "claude-sonnet",
+  "modelId": "claude-sonnet-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "00d1878789086999bc1cc4ca2de7eeedee3730ba",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-12T02:29:01.411680+00:00",
+  "wallClockSeconds": 33.6,
+  "tokens": {
+    "in": 93921,
+    "out": 3491,
+    "cacheRead": 83338,
+    "cacheCreation": 10573,
+    "observed": true
+  },
+  "turns": 5,
+  "toolInvocations": 4,
+  "toolchainInvocations": 1,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 6,
+    "total": 6,
+    "failures": [],
+    "failureDetail": {},
+    "kernelEvidence": {
+      "required": [
+        "@compute",
+        "\\bdispatch_workgroups\\b"
+      ],
+      "missing": []
+    },
+    "notOnGpu": false
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field-r2b/r2/07-gpu-escape-time/python/claude-sonnet/2",
+  "onboarding": null,
+  "rescored": {
+    "at": "2026-10-12T03:46:12.306295+00:00",
+    "commit": "8721b823f56e93e830012e74eb19d0f721219bc4",
+    "run": [
+      "uv",
+      "run",
+      "--quiet",
+      "python",
+      "main.py"
+    ],
+    "previous": {
+      "hiddenTests": {
+        "passed": 6,
+        "total": 6,
+        "failures": [],
+        "failureDetail": {},
+        "kernelEvidence": {
+          "required": [
+            "@compute",
+            "\\bdispatch_workgroups\\b"
+          ],
+          "missing": []
+        },
+        "notOnGpu": false
+      },
+      "silentWrongAnswer": false
+    }
+  }
+}

@@ -154,6 +154,11 @@ audit:
 		| awk -F: '{print "  "$$1":"$$2}' \
 		| sort -u || true
 	@echo
+	@echo "§3.5 — internal planning vocabulary in tracked files (fails the audit):"
+	@echo "        task, milestone, design, feature, round and claim ids; see the allow-list"
+	@echo "        in tools/check_planning_vocabulary.py for the domain names it permits:"
+	@python3 tools/check_planning_vocabulary.py
+	@echo
 	@echo "§4.3 — panic(...) inside src/stdlib/**/*.mi (stdlib must not panic):"
 	@grep -rn --include='*.mi' 'panic(' src/stdlib/ 2>/dev/null \
 		| awk -F: '{print "  "$$1":"$$2}' \

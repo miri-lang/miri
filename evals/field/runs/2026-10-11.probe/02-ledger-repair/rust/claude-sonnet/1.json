@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "kind": "probe",
+  "round": "2026-10-11",
+  "job": "02-ledger-repair",
+  "arm": "rust",
+  "run": 1,
+  "model": "claude-sonnet",
+  "modelId": "claude-sonnet-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "9110e685c525b2fbb1681f2026ba5783a091050d",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "startedAt": "2026-10-11T12:16:56.063547+00:00",
+  "outcome": "finished",
+  "ratings": [
+    {
+      "surface": "BRIEF.md",
+      "score": 5,
+      "reason": "It held the whole contract, which was the only specification."
+    },
+    {
+      "surface": "cargo clippy",
+      "score": 3,
+      "reason": "Confirmed the rewrite builds cleanly with no warnings."
+    },
+    {
+      "surface": "cargo run",
+      "score": 4,
+      "reason": "Let me check the output on hand-made ledgers for the main cases."
+    }
+  ],
+  "ratingsProblem": null,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field/r1.probe/02-ledger-repair/rust/claude-sonnet/1"
+}

@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "round": "2026-10-12",
+  "job": "06-gpu-life",
+  "arm": "miri-grammar",
+  "run": 2,
+  "model": "claude-opus",
+  "modelId": "claude-opus-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "e255924ade53311a1d124e9005bc90ba783f3340",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-12T03:53:19.220497+00:00",
+  "wallClockSeconds": 62.7,
+  "tokens": {
+    "in": 516700,
+    "out": 5010,
+    "cacheRead": 488433,
+    "cacheCreation": 28239,
+    "observed": true
+  },
+  "turns": 14,
+  "toolInvocations": 13,
+  "toolchainInvocations": 4,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 6,
+    "total": 6,
+    "failures": [],
+    "failureDetail": {},
+    "kernelEvidence": {
+      "required": [
+        "\\bgpu\\s+(fn|forall|let|var)\\b",
+        "\\b(forall|gpu\\s+fn)\\b"
+      ],
+      "missing": []
+    },
+    "notOnGpu": false
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field-r2b/r2/06-gpu-life/miri-grammar/claude-opus/2",
+  "onboarding": {
+    "material": [
+      "grammar"
+    ],
+    "tokens": {
+      "in": 141209,
+      "out": 1752,
+      "cacheRead": 125795,
+      "cacheCreation": 15402,
+      "observed": true
+    },
+    "turns": 6,
+    "toolInvocations": 5,
+    "toolchainInvocations": 0,
+    "wallClockSeconds": 23.4,
+    "outcome": "finished",
+    "isolation": {
+      "clean": true,
+      "initObserved": true,
+      "hookEvents": 0,
+      "repoReferences": 0,
+      "mcpServers": [],
+      "plugins": [],
+      "skills": [
+        "deep-research",
+        "design",
+        "design-sync",
+        "dataviz",
+        "update-config",
+        "verify",
+        "debug",
+        "code-review",
+        "simplify",
+        "batch",
+        "fewer-permission-prompts",
+        "doctor",
+        "loop",
+        "schedule",
+        "claude-api",
+        "workflow-authoring",
+        "run",
+        "run-skill-generator",
+        "plugin-authoring"
+      ],
+      "apiKeySource": "none"
+    },
+    "sessionId": "cbf0a132-4942-4aca-a0e0-f248f5a10555"
+  }
+}

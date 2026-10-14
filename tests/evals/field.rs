@@ -418,16 +418,21 @@ fn test_readme_states_the_two_measurement_rules() {
 #[test]
 fn test_claims_are_pre_registered_with_their_thresholds() {
     let claims = read(&field_dir().join("CLAIMS.md"));
-    for id in ["C1", "C2", "C3", "C4"] {
+    for id in [
+        "cost-within-reach",
+        "fewer-wrong-answers",
+        "gpu-in-reach",
+        "pack-earns-its-place",
+    ] {
         assert!(claims.contains(id), "CLAIMS.md does not carry {}", id);
     }
     assert!(
         claims.contains("1.5"),
-        "CLAIMS.md drops C1's bar against the cheaper baseline"
+        "CLAIMS.md drops cost-within-reach's bar against the cheaper baseline"
     );
     assert!(
         claims.contains("miri-grammar"),
-        "CLAIMS.md drops the arm C4 compares against"
+        "CLAIMS.md drops the arm pack-earns-its-place compares against"
     );
 }
 
@@ -689,8 +694,8 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     write_synthetic_record(&scratch, job, "miri-grammar", unfinished);
     let held = fold(&scratch);
     assert!(
-        claim_held(&held, "C4"),
-        "the judge does not report C4 as held on data that satisfies it:\n{}",
+        claim_held(&held, "pack-earns-its-place"),
+        "the judge does not report pack-earns-its-place as held on data that satisfies it:\n{}",
         held
     );
 
@@ -707,8 +712,8 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     );
     let both_finish = fold(&scratch);
     assert!(
-        claim_held(&both_finish, "C4"),
-        "the judge refuses C4 when both arms finish every run and the pack is cheaper:\n{}",
+        claim_held(&both_finish, "pack-earns-its-place"),
+        "the judge refuses pack-earns-its-place when both arms finish every run and the pack is cheaper:\n{}",
         both_finish
     );
 
@@ -730,12 +735,12 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     );
     let finishes_less = fold(&scratch);
     assert!(
-        !claim_held(&finishes_less, "C4"),
-        "the judge reports C4 as held when the pack finishes less often than bare:\n{}",
+        !claim_held(&finishes_less, "pack-earns-its-place"),
+        "the judge reports pack-earns-its-place as held when the pack finishes less often than bare:\n{}",
         finishes_less
     );
 
-    // The same shape with the pack dearer than the bare arm must fail C4, or
+    // The same shape with the pack dearer than the bare arm must fail pack-earns-its-place, or
     // the verdict is a constant and the article would publish on a constant.
     let _ = fs::remove_dir_all(&scratch);
     write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(4000, 1, 1));
@@ -747,8 +752,8 @@ fn test_the_claim_judge_reads_the_data_it_is_given() {
     );
     let refused = fold(&scratch);
     assert!(
-        !claim_held(&refused, "C4"),
-        "the judge reports C4 as held on data that refutes it:\n{}",
+        !claim_held(&refused, "pack-earns-its-place"),
+        "the judge reports pack-earns-its-place as held on data that refutes it:\n{}",
         refused
     );
     let _ = fs::remove_dir_all(&scratch);
@@ -770,7 +775,7 @@ fn test_the_skill_arm_must_land_within_the_bar_of_the_better_baseline() {
         SyntheticRun::green(1100, 110, 1),
     );
     let leads = fold(&scratch);
-    for claim in ["C1", "C5"] {
+    for claim in ["cost-within-reach", "speed-within-reach"] {
         assert!(
             claim_held(&leads, claim),
             "the judge does not report {} as held when the skill arm leads:\n{}",
@@ -789,7 +794,7 @@ fn test_the_skill_arm_must_land_within_the_bar_of_the_better_baseline() {
         SyntheticRun::green(1000, 100, 1),
     );
     let inside = fold(&scratch);
-    for claim in ["C1", "C5"] {
+    for claim in ["cost-within-reach", "speed-within-reach"] {
         assert!(
             claim_held(&inside, claim),
             "the judge refuses {} inside the 1.5x bar:\n{}",
@@ -811,7 +816,7 @@ fn test_the_skill_arm_must_land_within_the_bar_of_the_better_baseline() {
         SyntheticRun::green(1000, 100, 1),
     );
     let past = fold(&scratch);
-    for claim in ["C1", "C5"] {
+    for claim in ["cost-within-reach", "speed-within-reach"] {
         assert!(
             !claim_held(&past, claim),
             "the judge reports {} as held past the 1.5x bar:\n{}",
@@ -826,7 +831,7 @@ fn test_the_skill_arm_must_land_within_the_bar_of_the_better_baseline() {
         write_synthetic_record(&scratch, job, "miri-skill", SyntheticRun::green(1, 1, 1));
     }
     let alone = fold(&scratch);
-    for claim in ["C1", "C3", "C5"] {
+    for claim in ["cost-within-reach", "gpu-in-reach", "speed-within-reach"] {
         assert!(
             !claim_held(&alone, claim),
             "the judge reports {} as held against baselines that were never run:\n{}",
@@ -2093,8 +2098,14 @@ fn test_every_measured_condition_is_one_the_record_carries_and_the_folder_judges
     let claims = read(&field_dir().join("CLAIMS.md"));
     let prompt = read(&field_dir().join("PROMPT.md"));
 
-    let claim_count = (1..=9)
-        .filter(|n| claims.contains(&format!("**C{} —", n)))
+    // A claim opens with its key in bold, `- **cost-within-reach — …`.
+    let claim_count = claims
+        .lines()
+        .filter_map(|line| line.strip_prefix("- **"))
+        .filter_map(|rest| rest.split_once(" — "))
+        .filter(|(key, _)| {
+            !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+        })
         .count();
     let stated = measured_conditions(&claims);
     assert_eq!(
@@ -2740,7 +2751,7 @@ fn test_a_miri_kernel_is_evidenced_by_a_gpu_fn_or_a_device_forall() {
 
 #[test]
 fn test_a_stream_line_that_is_not_an_event_is_skipped() {
-    // Round r2 lost two runs to a transcript line that decoded to a bare JSON
+    // The 2026-10-12 round lost two runs to a transcript line that decoded to a bare JSON
     // string: the parser took it for an event and crashed the cell.
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the parser was not run");
@@ -2801,7 +2812,7 @@ fn test_a_pruned_staged_stdlib_is_staged_again() {
 /// The fold publishes, per Miri arm and per run, what the subject did on the
 /// way: the codes the compiler reported and how many carried a repair, the
 /// repairs applied, the lookups made and the failed compile cycles by cause.
-/// Pinned on the committed round r2, so the shape is checked against real
+/// Pinned on the committed 2026-10-12 round, so the shape is checked against real
 /// transcripts.
 #[test]
 fn test_the_fold_publishes_what_each_miri_run_did() {
@@ -2812,7 +2823,7 @@ fn test_the_fold_publishes_what_each_miri_run_did() {
     let out = std::env::temp_dir().join("miri-field-usage-summary.json");
     let folded = Command::new("python3")
         .arg(field_dir().join("report.py"))
-        .args(["--round", "r2", "--out"])
+        .args(["--round", "2026-10-12", "--out"])
         .arg(&out)
         .output()
         .expect("cannot run python3");
@@ -2847,6 +2858,6 @@ fn test_the_fold_publishes_what_each_miri_run_did() {
         .is_some_and(|id| id.split('/').count() == 4)));
     assert!(
         usage["arms"]["miri-skill"]["diagnostics"]["MER_IMP_005"].as_u64() > Some(0),
-        "the most frequent r2 code is no longer counted"
+        "the most frequent code of the 2026-10-12 round is no longer counted"
     );
 }

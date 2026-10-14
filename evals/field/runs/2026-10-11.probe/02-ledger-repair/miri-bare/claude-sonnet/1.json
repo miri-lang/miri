@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "kind": "probe",
+  "round": "2026-10-11",
+  "job": "02-ledger-repair",
+  "arm": "miri-bare",
+  "run": 1,
+  "model": "claude-sonnet",
+  "modelId": "claude-sonnet-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "e2ed19af7e2d2c9e3e2febb4b792bacbc8edacce",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "startedAt": "2026-10-11T14:06:14.383032+00:00",
+  "outcome": "finished",
+  "ratings": [
+    {
+      "surface": "BRIEF.md",
+      "score": 5,
+      "reason": "It stated the full contract, which was the only specification."
+    },
+    {
+      "surface": "miri check",
+      "score": 4,
+      "reason": "Surfaced the type error quickly, though it missed the return mismatch that miri run later reported."
+    },
+    {
+      "surface": "miri run",
+      "score": 5,
+      "reason": "Needed to execute the program with `--` arguments and it caught an error that check missed."
+    },
+    {
+      "surface": "miri view",
+      "score": 4,
+      "reason": "Listing the String, List and Map methods told me which APIs existed."
+    },
+    {
+      "surface": "miri --help",
+      "score": 2,
+      "reason": "Gave a general overview but I did not need much from it."
+    }
+  ],
+  "ratingsProblem": null,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field/r1.probe/02-ledger-repair/miri-bare/claude-sonnet/1"
+}

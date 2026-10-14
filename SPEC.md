@@ -624,9 +624,9 @@ Collections and structs copy on write, so a store into one a closure also holds 
 
 The check sees the direct form only, where the stored value names the same binding as the target. A cycle closed through another name (`let u = t` then `t.on_tick = fn() int: u.count`) or through another object (`a.other = Some(b)` then `b.other = Some(a)`) is not refused, and leaks.
 
-*Note: Element-level RC (managed types inside collections) and full string ownership are deferred to a future release. See the project roadmap for details.*
+*Note: Element-level RC (managed types inside collections) and full string ownership are deferred to a future release.*
 
-*Note: GPU codegen, closures with capture-by-reference (`out` closures), and full memory safety (Perceus+) are planned for upcoming milestones.*
+*Note: closures with capture-by-reference (`out` closures) and full memory safety (Perceus+) are planned for later releases.*
 
 ---
 

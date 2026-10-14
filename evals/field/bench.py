@@ -972,7 +972,11 @@ def parse_arguments(argv):
         default=1,
         help="the first run number; a cell an interrupted round left short resumes here",
     )
-    parser.add_argument("--round", default="r1")
+    parser.add_argument(
+        "--round",
+        default=datetime.now(timezone.utc).date().isoformat(),
+        help="the round, named by the date it ran; today unless given",
+    )
     parser.add_argument(
         "--scratch",
         default=str(Path(tempfile.gettempdir()) / "miri-field"),

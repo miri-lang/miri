@@ -13,8 +13,19 @@ condition of the exit criterion, as `report.py` computed that too.
 The numbers that predate this instrument are in `baseline.md`, and they are not
 a round.
 
+Rounds are named by the date they ran, and claims by what they claim. Entries
+written before 2026-10-14 used other names, which map as follows:
 
-## r1 — 2026-10-11
+- `runs/2026-10-11` (formerly `runs/r1`)
+- `runs/2026-10-12` (formerly `runs/r2`; its 2026-10-13 re-run formerly `r2b`)
+- `cost-within-reach` (formerly `C1`)
+- `fewer-wrong-answers` (formerly `C2`)
+- `gpu-in-reach` (formerly `C3`)
+- `pack-earns-its-place` (formerly `C4`)
+- `speed-within-reach` (formerly `C5`)
+
+
+## Round 2026-10-11
 
 **Compiler and instrument.** The Miri arms ran at `e2ed19af` (release build,
 `miri 0.7.0-beta.5`, macOS aarch64); the baseline arms ran between `c751bbd8`
@@ -142,16 +153,16 @@ None of them produced a silent wrong answer in this round.
 
 ### Verdicts, as report.py computed them
 
-- **C1 (cheaper than the native languages): not held.** Behind in every CPU
+- **cost-within-reach (cheaper than the native languages): not held.** Behind in every CPU
   comparison but one, Sonnet on 03-tracker-extension against `rust`, which is at
   parity (108k against 91k).
-- **C2 (fewer wrong answers): held.** No silent wrong answer on any arm.
-- **C3 (GPU in reach): not held.** Every baseline finished; `miri-pack` cost
+- **fewer-wrong-answers (fewer wrong answers): held.** No silent wrong answer on any arm.
+- **gpu-in-reach (GPU in reach): not held.** Every baseline finished; `miri-pack` cost
   894k, 683k and 345k against cheapest baselines of 211k, 122k and 75k.
-- **C4 (the pack substitutes for pretraining): not held.** The pack was cheaper
+- **pack-earns-its-place (the pack substitutes for pretraining): not held.** The pack was cheaper
   than the bare arm in 12 of 15 cells; it was not on 02 for Haiku and Opus or on
   03 for Opus.
-- **C5 (faster than the native languages): not held.** Behind in every CPU
+- **speed-within-reach (faster than the native languages): not held.** Behind in every CPU
   comparison except five at parity: 03 on Haiku against `python` and `rust`, on
   Opus against `rust`, and on Sonnet against `python` and `typescript`.
 
@@ -171,13 +182,13 @@ None of them produced a silent wrong answer in this round.
 **The testing loop does not end, and the skill pack stays unpublished:** the
 pack-loop condition fails.
 
-**The article cannot be written:** C1, C3, C4 and C5 fail. The standings above
+**The article cannot be written:** cost-within-reach, gpu-in-reach, pack-earns-its-place and speed-within-reach fail. The standings above
 are the distance; the largest single lever the transcripts show is the O(n)
 positional access, which accounts for most of the gap on the two jobs that read
 large inputs.
 
 
-## r2 — 2026-10-12
+## Round 2026-10-12
 
 **Compiler and instrument.** Every arm ran on the release build of `8a4ac959`
 (`miri 0.7.0-beta.5`, macOS aarch64, Metal), staged from the scorer at
@@ -187,7 +198,7 @@ Claude Code 2.1.296 on a subscription login. 225 measured runs, every record
 isolated (`apiKeySource` none, no hook, no MCP server, no repository reference);
 no opinion probe was run.
 
-**What moved since r1.** A different experiment under re-registered claims
+**What moved since the 2026-10-11 round.** A different experiment under re-registered claims
 (`CLAIMS.md`, 2026-10-12): five GPU jobs, the four drawn from the website demos
 new; Miri measured after onboarding (`miri-skill`, `miri-grammar`, `miri-both`),
 the baselines cold; TypeScript dropped. Scoring now compares floats within a
@@ -195,7 +206,7 @@ job's tolerance and refuses a run whose source shows no GPU kernel. The compiler
 gained, among others: the 147-line pack, `substring` in characters, overflow
 traps on the host, and a fix for GPU `while a and b` loops that skipped the code
 after them. Only the heat job and the Python/Rust baselines are comparable with
-r1, and r1 ran a different Miri arm (`miri-pack`, cold).
+the 2026-10-11 round, which ran a different Miri arm (`miri-pack`, cold).
 
 **Getting a valid round took four instrument fixes during the round.** The smoke
 cell found the scorer taking a `gpu fn` kernel for a processor loop (fixed before
@@ -267,12 +278,12 @@ cannot meet this. They are scored as the contract reads — no program at
 `main.mi` — and the instrument is to name the workspace root in the measured
 prompt before another onboarded round.
 
-**Verdicts, as `report.py` computed them.** No claim holds. C1 (`miri-skill`
+**Verdicts, as `report.py` computed them.** No claim holds. cost-within-reach (`miri-skill`
 within 1.5× the cheaper baseline's tokens) fails 15 of 45 comparisons; where it
-reached green the skill arm cost 2.2–7.4× Python and 1.3–5.8× Rust. C2 fails one model of three. C3 fails
+reached green the skill arm cost 2.2–7.4× Python and 1.3–5.8× Rust. fewer-wrong-answers fails one model of three. gpu-in-reach fails
 everywhere: every baseline finished every GPU job, so only the half-cost branch
-applies, and the skill arm is never under half. C4 (skill against grammar) fails
-3 of 30. C5 (wall clock within 1.5×) fails 10 of 45. Exit criterion: silent wrong
+applies, and the skill arm is never under half. pack-earns-its-place (skill against grammar) fails
+3 of 30. speed-within-reach (wall clock within 1.5×) fails 10 of 45. Exit criterion: silent wrong
 answers fail (the ten above), the pack loop fails 4 of 15, and the opinion
 condition is unanswered, since no probe was run.
 
@@ -282,36 +293,36 @@ no claim in `CLAIMS.md` holds. Every standing is in `summary.json`: on cost
 the skill arm is `behind` both baselines in every cell it reached green; no
 comparison reaches `parity`.
 
-## Instrument change, 2026-10-12 (after r2)
+## Instrument change, 2026-10-12 (after the 2026-10-12 round)
 
 The measured prompt names the workspace by its absolute path and tells the
 subject to change to it first, and the onboarding text asks for the warm-up to
-be written from the workspace without changing into `warmup/`. In r2 every
+be written from the workspace without changing into `warmup/`. In the 2026-10-12 round every
 silent wrong answer on a Miri arm was a run whose resumed session started in
 the directory onboarding left it in, so the job's program landed where the
 scorer never looks. Cold arms get the same prompt, so the arms stay comparable;
-rounds before this change are not, for the onboarded arms' C2 and silent-wrong
+rounds before this change are not, for the onboarded arms' fewer-wrong-answers and silent-wrong
 numbers.
 
-## r2b — 2026-10-13: the ten spoiled Miri cells, run again
+## Re-run 2026-10-13: the ten spoiled Miri cells of the 2026-10-12 round
 
-**What was re-run and why.** The 10 Miri-arm records that r2 scored as silent
+**What was re-run and why.** The 10 Miri-arm records that the 2026-10-12 round scored as silent
 wrong answers, all caused by the onboarding working directory carrying into the
 measured session (see the instrument change above), were run again with the
 fixed prompt: 06-gpu-life/miri-both/claude-sonnet/1, 06-gpu-life/miri-grammar/claude-haiku/3, 07-gpu-escape-time/miri-both/claude-sonnet/1, 07-gpu-escape-time/miri-both/claude-sonnet/2, 07-gpu-escape-time/miri-grammar/claude-haiku/1, 07-gpu-escape-time/miri-grammar/claude-haiku/2, 08-gpu-histogram/miri-grammar/claude-haiku/1, 08-gpu-histogram/miri-grammar/claude-haiku/3, 08-gpu-histogram/miri-grammar/claude-sonnet/1, 09-gpu-particles/miri-skill/claude-haiku/3.
 Each ran through `bench.py --replace`, so its record keeps the one it replaced,
 with the reason, under `replaced`. Same jobs, arms, models and caps; a fresh
 scratch root; every run isolated (`apiKeySource` none). The compiler is newer
-than the rest of the round: release build of `0abbc3c7` against r2's
+than the rest of the round: release build of `0abbc3c7` against the round's
 `8a4ac959`, so these ten runs also carry the compiler changes between them.
 
 **Result.** 10 of 10 finished green on every hidden case; none
 answered wrong silently. Across the Miri arms, silent wrong answers went from
 10 to 0 and green runs from 125 to 135 of 135. The
-ten r2 silent wrong answers were the instrument, not the language.
+ten silent wrong answers of that round were the instrument, not the language.
 
 **Verdicts, as `report.py` recomputed them.** Claims held: none before,
-C2 after (C2 is correctness against both baselines). Exit
+fewer-wrong-answers after (fewer-wrong-answers is correctness against both baselines). Exit
 conditions held: none before, silentWrongAnswers after. The pack loop
 still fails 4 of 15 model-job pairs and the opinion condition is unanswered,
 so the testing loop does not end. No cost claim is made from this round.

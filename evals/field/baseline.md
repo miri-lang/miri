@@ -32,7 +32,7 @@ either:
    fact about the compiler, not about the agent surface wrapped around it.
 
 Netting both out, the two loops cost about the same. That is still the finding
-the milestone had to absorb: its premise was that the agent surface makes the
+the work had to absorb: its premise was that the agent surface makes the
 loop *cheaper*, and on three jobs across three models it did not.
 
 ## Why these numbers are not a baseline for the current arms

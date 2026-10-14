@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "round": "2026-10-11",
+  "job": "05-gpu-heat",
+  "arm": "typescript",
+  "run": 2,
+  "model": "claude-haiku",
+  "modelId": "claude-haiku-5-5",
+  "harness": {
+    "name": "claude",
+    "command": "claude",
+    "version": "2.1.296 (Claude Code)"
+  },
+  "compilerCommit": "fa88d752ded0c8224f9ab2b6dbc5aea71c6482db",
+  "compilerVersion": "miri 0.7.0-beta.5 (macos/aarch64)",
+  "packInstalled": false,
+  "caps": {
+    "turns": 60,
+    "timeSeconds": 2700
+  },
+  "startedAt": "2026-10-11T12:40:47.274917+00:00",
+  "wallClockSeconds": 59.3,
+  "tokens": {
+    "in": 225316,
+    "out": 9792,
+    "cacheRead": 204660,
+    "cacheCreation": 20638,
+    "observed": true
+  },
+  "turns": 9,
+  "toolInvocations": 10,
+  "toolchainInvocations": 3,
+  "outcome": "finished",
+  "hiddenTests": {
+    "passed": 5,
+    "total": 5,
+    "failures": [],
+    "failureDetail": {}
+  },
+  "silentWrongAnswer": false,
+  "isolation": {
+    "clean": true,
+    "initObserved": true,
+    "hookEvents": 0,
+    "repoReferences": 0,
+    "mcpServers": [],
+    "plugins": [],
+    "skills": [
+      "deep-research",
+      "design",
+      "design-sync",
+      "dataviz",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring"
+    ],
+    "apiKeySource": "none"
+  },
+  "workspace": "/var/folders/9t/wb1rb8796x9dx_7n376r8x300000gq/T/miri-field/r1/05-gpu-heat/typescript/claude-haiku/2"
+}
