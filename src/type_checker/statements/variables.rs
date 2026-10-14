@@ -212,6 +212,7 @@ impl TypeChecker {
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
+        self.refuse_buffer_copy_in_kernel(decl, &inferred_type, context);
         if let (true, Some(type_expr)) = (context.in_gpu_function, &decl.typ) {
             self.reject_device_wide_integer(&inferred_type.kind, type_expr.span);
         }
@@ -318,6 +319,44 @@ impl TypeChecker {
             }
             _ => None,
         }
+    }
+
+    /// Refuses a kernel-body binding initialized with a whole buffer (`var a =
+    /// g`): a buffer lives in device storage, and a kernel cannot copy one into
+    /// a local of its own. Reading its elements (`g[i]`) is what a kernel does.
+    fn refuse_buffer_copy_in_kernel(
+        &mut self,
+        decl: &VariableDeclaration,
+        inferred_type: &Type,
+        context: &Context,
+    ) {
+        if !context.in_gpu_function {
+            return;
+        }
+        let Some(ExpressionKind::Identifier(buffer, _)) =
+            decl.initializer.as_ref().map(|init| &init.node)
+        else {
+            return;
+        };
+        if crate::ast::types::array_element_and_size(&inferred_type.kind).is_none() {
+            return;
+        }
+        let span = decl
+            .initializer
+            .as_ref()
+            .map_or(decl.name_span, |init| init.span);
+        self.report_error_with_help(
+            DiagnosticCode::TarGpuResidencyViolation,
+            format!(
+                "a kernel cannot copy the buffer '{buffer}' into '{}': a buffer lives in device \
+                 storage, and a kernel reads and writes it in place",
+                decl.name
+            ),
+            span,
+            format!(
+                "use '{buffer}' itself, or copy the element you need, e.g. `let x = {buffer}[i]`"
+            ),
+        );
     }
 
     fn check_gpu_variable_type(

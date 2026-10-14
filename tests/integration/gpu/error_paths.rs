@@ -4,7 +4,7 @@
 // Negative tests for GPU lowering error paths: reduce fold arity and
 // gpu fn buffer-argument shape.
 
-use super::utils::assert_build_error;
+use super::utils::{assert_build_error, assert_compiler_error, assert_runs_with_output};
 
 /// A reduce fold function with one parameter is rejected at type checking:
 /// the fold combines an accumulator and an element, so the expected callback
@@ -127,5 +127,70 @@ fn main()
     gpu var data = [1, 2, 3, 4]
     let s = data.reduce(0, fn(a int, b int) int: b + a)
 ",
+    );
+}
+
+/// A kernel-body binding initialized with a whole buffer would copy device
+/// storage into a local, which a kernel cannot do (the shader is invalid); it is
+/// refused where it is written, with what to write instead.
+#[test]
+fn copying_a_whole_buffer_inside_a_forall_body_is_refused() {
+    assert_compiler_error(
+        "
+use system.io
+
+fn main()
+    gpu var g = [1, 2, 3, 4]
+    forall i in 0..4
+        var a = g
+        a[i] = a[i] + 1
+    let host = g
+    println(f\"{host[0]}\")
+",
+        "a kernel cannot copy the buffer 'g' into 'a'",
+    );
+}
+
+/// The same copy of a `gpu fn` buffer parameter is refused under the same code.
+#[test]
+fn copying_a_buffer_parameter_inside_a_gpu_fn_is_refused() {
+    assert_compiler_error(
+        "
+use system.collections.array
+
+gpu fn k(data out Array<int, 4>)
+    let copy = data
+    data[0] = copy[1]
+
+fn main()
+    gpu var buf = [1, 2, 3, 4]
+    k(buf).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
+",
+        "error[MER_TAR_006]",
+    );
+}
+
+/// Copying one element of the buffer into a kernel local is what a kernel
+/// does, and runs.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn copying_an_element_of_a_buffer_inside_a_forall_body_runs() {
+    super::device::require_gpu_int64();
+    assert_runs_with_output(
+        "
+use system.io
+
+fn main()
+    gpu var g = [1, 2, 3, 4]
+    forall i in 0..4
+        var a = g[i]
+        g[i] = a * 10
+    let host = g
+    println(f\"{host[0]} {host[3]}\")
+",
+        "10 40",
     );
 }
