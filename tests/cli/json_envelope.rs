@@ -742,3 +742,115 @@ fn test_every_reading_command_reports_a_directory_alike() {
         );
     }
 }
+
+const NOTHING_TO_RUN: &str = "fn helper() int\n    1\n";
+
+const ONLY_TESTS: &str = r#"use system.testing
+
+@test
+fn test_adds()
+    assert(1 + 1 == 2)
+"#;
+
+/// Run `command` over `content` asking for JSON, returning the envelope and
+/// what was written to stderr.
+fn envelope_of(command: &str, content: &str) -> (serde_json::Value, String) {
+    let file = create_test_file(content);
+    let output = miri_cmd()
+        .arg(command)
+        .arg(file.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let envelope = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout should be one JSON envelope ({e}):\n{stdout}"));
+    (
+        envelope,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// The codes and severities an envelope carries, in order.
+fn reported(envelope: &serde_json::Value) -> Vec<(String, String)> {
+    envelope["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            let field = |name: &str| d[name].as_str().unwrap_or_default().to_string();
+            (field("code"), field("severity"))
+        })
+        .collect()
+}
+
+/// A warning `run` and `build` raise reaches the envelope an agent reads, not
+/// only the stderr text it does not, and does not make the command fail.
+#[test]
+fn test_run_and_build_json_carry_a_warning_in_the_envelope() {
+    for command in ["run", "build"] {
+        let (envelope, stderr) = envelope_of(command, NOTHING_TO_RUN);
+        assert_eq!(
+            envelope["ok"], true,
+            "{command}: a warning must not flip ok"
+        );
+        assert_eq!(
+            reported(&envelope),
+            vec![("MER_BLD_021".to_string(), "warning".to_string())],
+            "{command}: the envelope must carry the warning"
+        );
+        assert!(
+            !stderr.contains("MER_BLD_021"),
+            "{command}: in JSON mode the warning belongs in the envelope, not stderr:\n{stderr}"
+        );
+    }
+}
+
+/// The note on building a test file reaches the envelope too.
+#[test]
+fn test_run_and_build_json_carry_a_note_in_the_envelope() {
+    for command in ["run", "build"] {
+        let (envelope, stderr) = envelope_of(command, ONLY_TESTS);
+        assert_eq!(envelope["ok"], true, "{command}: a note must not flip ok");
+        assert_eq!(
+            reported(&envelope),
+            vec![("MER_BLD_026".to_string(), "note".to_string())],
+            "{command}: the envelope must carry the note"
+        );
+        assert!(
+            !stderr.contains("MER_BLD_026"),
+            "{command}: in JSON mode the note belongs in the envelope, not stderr:\n{stderr}"
+        );
+    }
+}
+
+/// A type checker warning on a program that runs is carried beside the run.
+#[test]
+fn test_run_json_carries_a_checker_warning_beside_the_output() {
+    let (envelope, _) = envelope_of(
+        "run",
+        "fn main()\n    let unused = 3\n    println(\"hi\")\n",
+    );
+    assert_eq!(envelope["ok"], true);
+    assert!(
+        envelope["stdoutTail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("hi"),
+        "the program must still run: {envelope}"
+    );
+    assert_eq!(
+        reported(&envelope),
+        vec![("MER_TYP_071".to_string(), "warning".to_string())]
+    );
+}
+
+/// Without `--format json` the warning is still shown, as text on stderr.
+#[test]
+fn test_run_without_json_still_prints_the_warning() {
+    let file = create_test_file(NOTHING_TO_RUN);
+    let output = miri_cmd().arg("run").arg(file.path()).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("MER_BLD_021"), "{stderr}");
+}

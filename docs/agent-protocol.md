@@ -104,8 +104,8 @@ not serve, or omitted a parameter.
 | Command | `ok: true` when | `exitCode` | Method |
 |---|---|---|---|
 | `check` | the frontend reported no errors (warnings never make it false) | 0 / 1 | `check` |
-| `build` | the artifact was produced | 0 / 1 | *command line only* |
-| `run` | the program compiled **and** was not killed by a runtime trap | the program's own status; 1 when the compile failed | *command line only* |
+| `build` | the artifact was produced (warnings and notes, carried in `diagnostics`, never make it false) | 0 / 1 | *command line only* |
+| `run` | the program compiled **and** was not killed by a runtime trap (warnings and notes from compiling follow any trap in `diagnostics` and never make it false) | the program's own status; 1 when the compile failed | *command line only* |
 | `test` | nothing failed and no file was rejected | 0 green / 1 failure / 2 rejected file | *command line only* |
 | `fix` (no `--apply`) | the repairs were listed (**always true when the file was read**) | 0 | *command line only* |
 | `fix --apply` | every repair this run owned was written, or there was nothing to repair | 0 / 1 | `fixApply` |

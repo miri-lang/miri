@@ -24,18 +24,19 @@ mistaken for one that produced a working program.
 
 ## Before
 
-```sh
-# x_test.mi declares @test functions and nothing else
-miri build x_test.mi
-# note[MER_BLD_026]: Test File Built
+```miri
+// x_test.mi: @test functions and nothing else, handed to `miri build` or `miri run`
+use system.testing
+
+@test
+fn test_adds()
+    assert(1 + 1 == 2)
 ```
 
 ## After
 
-```sh
-# Run the tests the file declares.
-miri test x_test.mi
-```
+The file is unchanged; the command is the one that runs what it declares:
+`miri test x_test.mi`.
 
 ## Reference
 

@@ -10,7 +10,7 @@ use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillComma
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonGpuTelemetry};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::to_json;
-use miri::pipeline::{BuildOptions, Pipeline, RunCaptureResult};
+use miri::pipeline::{BuildOptions, Pipeline, Reported, RunCaptureResult};
 
 pub fn main() -> Result<()> {
     let cli = Cli::try_parse().unwrap_or_else(|error| {
@@ -208,9 +208,11 @@ fn run_file(
 
     if format == Format::Json {
         // In JSON mode, capture output and emit envelope
-        match pipeline.run_and_capture(&source, &program_args) {
+        let Reported { outcome, notices } = pipeline.run_reported(&source, &program_args);
+        let notices = json_notices(&notices, &source, &pipeline);
+        match outcome {
             Ok(result) => {
-                let exit_code = report_run(&result, start.elapsed().as_millis() as u64);
+                let exit_code = report_run(&result, notices, start.elapsed().as_millis() as u64);
                 if exit_code != 0 {
                     std::process::exit(exit_code);
                 }
@@ -218,10 +220,11 @@ fn run_file(
             }
             Err(e) => {
                 let elapsed_ms = start.elapsed().as_millis() as u64;
-                let diags = e.to_diagnostics();
-                let json_diags = diags
+                let json_diags = e
+                    .to_diagnostics()
                     .iter()
                     .map(|d| to_json(d, &source, pipeline.source_path()))
+                    .chain(notices)
                     .collect();
                 let envelope = DiagnosticsEnvelope::new(JsonCommand::Run, false, json_diags)
                     .with_exit_code(1)
@@ -281,8 +284,9 @@ fn run_file(
 /// returning 7 succeeded at being compiled and run, and a caller that wants
 /// that number reads `exitCode`. What makes it false is the program dying
 /// rather than finishing — a runtime trap, or a signal death, or a trap that
-/// produced no status of its own at all.
-fn report_run(result: &RunCaptureResult, elapsed_ms: u64) -> i32 {
+/// produced no status of its own at all. The warnings and notes compiling
+/// raised follow whatever ended the run, and never make it fail.
+fn report_run(result: &RunCaptureResult, notices: Vec<JsonDiagnostic>, elapsed_ms: u64) -> i32 {
     let (exit_code, signal, trap_code) = (result.exit_code, result.signal, result.trap_code);
     let (stdout_tail, stdout_truncated) = tail_output(&result.stdout, 8192);
     let (stderr_tail, stderr_truncated) = tail_output(&result.stderr, 8192);
@@ -314,6 +318,7 @@ fn report_run(result: &RunCaptureResult, elapsed_ms: u64) -> i32 {
     let diagnostics = signal_diagnostic
         .into_iter()
         .chain(trap_code.map(trap_diagnostic))
+        .chain(notices)
         .collect();
 
     let completed = !has_trap && !has_signal && final_exit_code != NO_EXIT_STATUS;
@@ -338,6 +343,18 @@ fn report_run(result: &RunCaptureResult, elapsed_ms: u64) -> i32 {
 
     println!("{}", miri::cli::serialize_envelope(&envelope));
     final_exit_code
+}
+
+/// The warnings and notes compiling raised, as an envelope carries them.
+fn json_notices(
+    notices: &[miri::error::diagnostic::Diagnostic],
+    source: &str,
+    pipeline: &Pipeline,
+) -> Vec<JsonDiagnostic> {
+    notices
+        .iter()
+        .map(|notice| to_json(notice, source, pipeline.source_path()))
+        .collect()
 }
 
 /// Create an error diagnostic from a code and message.
@@ -420,11 +437,16 @@ fn build_file(
     pipeline = pipeline.with_source_path(abs_path.display().to_string());
 
     let start = std::time::Instant::now();
-    match pipeline.build(&source, &build_options) {
+    let Reported { outcome, notices } = pipeline.build_reported(&source, &build_options);
+    if format != Format::Json {
+        pipeline.print_notices(&source, &notices);
+    }
+    let notices = json_notices(&notices, &source, &pipeline);
+    match outcome {
         Ok(artifact_path) => {
             let elapsed_ms = start.elapsed().as_millis() as u64;
             if format == Format::Json {
-                let envelope = DiagnosticsEnvelope::new(JsonCommand::Build, true, vec![])
+                let envelope = DiagnosticsEnvelope::new(JsonCommand::Build, true, notices)
                     .with_artifact(artifact_path.display().to_string())
                     .with_exit_code(0)
                     .with_duration_ms(elapsed_ms);
@@ -438,10 +460,11 @@ fn build_file(
         Err(e) => {
             let elapsed_ms = start.elapsed().as_millis() as u64;
             if format == Format::Json {
-                let diags = e.to_diagnostics();
-                let json_diags = diags
+                let json_diags = e
+                    .to_diagnostics()
                     .iter()
                     .map(|d| to_json(d, &source, pipeline.source_path()))
+                    .chain(notices)
                     .collect();
                 let envelope = DiagnosticsEnvelope::new(JsonCommand::Build, false, json_diags)
                     .with_exit_code(1)
