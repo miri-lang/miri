@@ -59,6 +59,8 @@ pub enum RepairId {
     InterpolationQuotes,
     /// Delete an import nothing reads.
     RemoveUnusedImport,
+    /// Convert a number to the width of the place it is stored with `as`.
+    CastToSlotType,
 }
 
 impl RepairId {
@@ -82,6 +84,7 @@ impl RepairId {
             Self::IfColon => "if-colon",
             Self::InterpolationQuotes => "interpolation-quotes",
             Self::RemoveUnusedImport => "remove-unused-import",
+            Self::CastToSlotType => "cast-to-slot-type",
         }
     }
 
@@ -123,6 +126,7 @@ impl RepairId {
             Self::IfColon => &[DiagnosticCode::ParUnexpectedToken],
             Self::InterpolationQuotes => &[DiagnosticCode::LexInvalidFormattedStringExpression],
             Self::RemoveUnusedImport => &[DiagnosticCode::ImpUnusedImport],
+            Self::CastToSlotType => &[DiagnosticCode::TypTypeMismatch],
         }
     }
 
@@ -164,6 +168,9 @@ impl RepairId {
             Self::RemoveUnusedImport => {
                 "Delete a `use` line nothing reads, or the unread names in a selection."
             }
+            Self::CastToSlotType => {
+                "Convert a number with `as` to the width of the place it is stored; a value outside that width's range is truncated or rounded."
+            }
         }
     }
 
@@ -187,6 +194,7 @@ impl RepairId {
             Self::IfColon,
             Self::InterpolationQuotes,
             Self::RemoveUnusedImport,
+            Self::CastToSlotType,
         ]
     }
 }
@@ -364,6 +372,15 @@ pub enum RepairRequest {
         end: usize,
         kept: Vec<(usize, usize)>,
     },
+    /// Convert the value at `start..end` to `target` with `as`, inside
+    /// parentheses when `parenthesize` says the value is an expression the
+    /// cast would otherwise bind to only part of.
+    CastToSlotType {
+        start: usize,
+        end: usize,
+        target: String,
+        parenthesize: bool,
+    },
 }
 
 /// The word an [`RepairRequest::IfColon`] repair is anchored on.
@@ -456,6 +473,7 @@ impl RepairRequest {
             Self::RemoveImportLine { .. } | Self::DropSelectedImports { .. } => {
                 RepairId::RemoveUnusedImport
             }
+            Self::CastToSlotType { .. } => RepairId::CastToSlotType,
         }
     }
 
@@ -548,7 +566,50 @@ impl RepairRequest {
             Self::DropSelectedImports { start, end, kept } => {
                 Self::project_drop_selected_imports(path, source, *start, *end, kept)
             }
+            Self::CastToSlotType {
+                start,
+                end,
+                target,
+                parenthesize,
+            } => {
+                Self::project_cast_to_slot_type(path, source, (*start, *end), target, *parenthesize)
+            }
         }
+    }
+
+    /// Append `as target` to the value, wrapping it in parentheses first
+    /// when asked.
+    fn project_cast_to_slot_type(
+        path: &str,
+        source: &str,
+        (start, end): (usize, usize),
+        target: &str,
+        parenthesize: bool,
+    ) -> Option<JsonRepair> {
+        if start >= end || source.get(start..end)?.trim().is_empty() {
+            return None;
+        }
+        let insert = |at: usize, text: String| JsonEdit {
+            path: path.to_string(),
+            start: at,
+            end: at,
+            replacement: text,
+        };
+        let edits = if parenthesize {
+            vec![
+                insert(start, "(".to_string()),
+                insert(end, format!(") as {target}")),
+            ]
+        } else {
+            vec![insert(end, format!(" as {target}"))]
+        };
+        Some(JsonRepair {
+            id: RepairId::CastToSlotType.as_str().to_string(),
+            summary: format!(
+                "Convert the value with `as {target}`; a value outside its range is truncated or rounded."
+            ),
+            edits,
+        })
     }
 
     /// Delete the whole line the `use` at `start..end` stands on, newline

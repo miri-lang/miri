@@ -56,7 +56,8 @@ pub fn repair_fix_safety(repair: &RepairRequest) -> FixSafety {
         | RepairRequest::IfColon { .. }
         | RepairRequest::InterpolationQuotes { .. }
         | RepairRequest::RemoveImportLine { .. }
-        | RepairRequest::DropSelectedImports { .. } => FixSafety::LocalEdit,
+        | RepairRequest::DropSelectedImports { .. }
+        | RepairRequest::CastToSlotType { .. } => FixSafety::LocalEdit,
     }
 }
 

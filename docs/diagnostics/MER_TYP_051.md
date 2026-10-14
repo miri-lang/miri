@@ -8,7 +8,7 @@ A range (e.g., `1..5` or `Range<i32>`) was used with mismatched element types. T
 
 ## Help
 
-- `` convert the value with `as {type}` ``
+- `` convert the value with `as {type}`, which truncates or rounds a value outside its range ``
 - `` use a value of type `{expected}` here, or change the type this place declares to `{found}` ``
 
 ## Before

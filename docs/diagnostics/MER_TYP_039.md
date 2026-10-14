@@ -16,7 +16,7 @@ A value passed to a collection constructor does not match the element type decla
 - `` store `{type}` and leave the absent values out of the set ``
 - `` key the map by `{type}` and leave the absent keys out ``
 - `` `None` alone has no element type; build an empty one instead, e.g. `{example}` ``
-- `` convert the value with `as {type}` ``
+- `` convert the value with `as {type}`, which truncates or rounds a value outside its range ``
 - `` use a value of type `{expected}` here, or change the type this place declares to `{found}` ``
 
 ## Before

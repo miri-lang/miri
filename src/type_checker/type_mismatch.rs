@@ -12,6 +12,7 @@
 
 use super::utils::MatchedBy;
 use super::TypeChecker;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::error::diagnostic::RelatedNote;
@@ -100,7 +101,10 @@ impl TypeChecker {
     pub(crate) fn conversion_help(&self, expected: &Type, found: &Type) -> String {
         let (expected_text, found_text) = (spelled(expected), spelled(found));
         if self.is_numeric_type(&expected.kind) && self.is_numeric_type(&found.kind) {
-            return format!("convert the value with `as {expected_text}`");
+            return format!(
+                "convert the value with `as {expected_text}`, which truncates or rounds a value \
+                 outside its range"
+            );
         }
         if let TypeKind::Option(inner) = &found.kind {
             if spelled(inner) == expected_text {
@@ -114,6 +118,24 @@ impl TypeChecker {
             "use a value of type `{expected_text}` here, or change the type this place declares \
              to `{found_text}`"
         )
+    }
+
+    /// The cast [`Self::conversion_help`] names for a number of type `found`
+    /// stored where `expected` belongs, as an edit on `value`: both must be
+    /// numeric types, and `value` must be text a reader wrote.
+    pub(crate) fn cast_repair(
+        &self,
+        expected: &Type,
+        found: &Type,
+        value: &Expression,
+    ) -> Option<RepairRequest> {
+        let numeric = self.is_numeric_type(&expected.kind) && self.is_numeric_type(&found.kind);
+        (numeric && !value.span.is_empty()).then(|| RepairRequest::CastToSlotType {
+            start: value.span.start,
+            end: value.span.end,
+            target: spelled(expected),
+            parenthesize: !binds_tighter_than_a_cast(value),
+        })
     }
 
     /// Refuses iterating over a value of type `ty`, which holds no elements.
@@ -262,5 +284,43 @@ impl TypeChecker {
             TypeSides::of(expected, found),
             help,
         );
+    }
+}
+
+/// Whether `value` reads as one operand to the `as` written after it, so the
+/// cast converts all of it without parentheses: a name, a literal, a call, a
+/// member or an index. Anything with an operator of its own is wrapped.
+fn binds_tighter_than_a_cast(value: &Expression) -> bool {
+    match &value.node {
+        ExpressionKind::Identifier(..)
+        | ExpressionKind::Call(..)
+        | ExpressionKind::Member(..)
+        | ExpressionKind::Index(..)
+        | ExpressionKind::Literal(..) => true,
+        ExpressionKind::Binary(..)
+        | ExpressionKind::Logical(..)
+        | ExpressionKind::Unary(..)
+        | ExpressionKind::Assignment(..)
+        | ExpressionKind::Conditional(..)
+        | ExpressionKind::Range(..)
+        | ExpressionKind::Guard(..)
+        | ExpressionKind::ImportPath(..)
+        | ExpressionKind::Type(..)
+        | ExpressionKind::GenericType(..)
+        | ExpressionKind::TypeDeclaration(..)
+        | ExpressionKind::EnumValue(..)
+        | ExpressionKind::StructMember(..)
+        | ExpressionKind::Lambda(..)
+        | ExpressionKind::List(..)
+        | ExpressionKind::Array(..)
+        | ExpressionKind::Map(..)
+        | ExpressionKind::Tuple(..)
+        | ExpressionKind::Set(..)
+        | ExpressionKind::Match(..)
+        | ExpressionKind::FormattedString(..)
+        | ExpressionKind::NamedArgument(..)
+        | ExpressionKind::Super
+        | ExpressionKind::Block(..)
+        | ExpressionKind::Cast(..) => false,
     }
 }

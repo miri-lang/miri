@@ -140,6 +140,7 @@ This is the one loop the compiler's documentation recommends; everything else de
 The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.
 - `arrow-return-type`: Drop the `->` before a return type.
+- `cast-to-slot-type`: Convert a number with `as` to the width of the place it is stored; a value outside that width's range is truncated or rounded.
 - `colon-annotation`: Drop the `:` before a type annotation.
 - `concat-to-formatted-string`: Rewrite a `+` chain joining text to values as one f-string.
 - `drop-extra-arguments`: Drop positional arguments a call does not declare.

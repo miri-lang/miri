@@ -613,7 +613,11 @@ impl TypeChecker {
         let stored_expr = matches!(op, AssignmentOp::Assign).then_some(rhs);
         if !self.accepts_value_at(&lhs_type, &stored_type, stored_expr, context) {
             let help = self.conversion_help(&lhs_type, &stored_type);
-            self.report_type_mismatch(
+            // A compound assignment stores what its operator yields, not the
+            // right-hand value, so only a plain one is converted by a cast.
+            let repair =
+                stored_expr.and_then(|value| self.cast_repair(&lhs_type, &stored_type, value));
+            self.push_type_mismatch(
                 DiagnosticCode::TypTypeMismatch,
                 format!(
                     "Type mismatch in assignment: cannot assign {} to {}",
@@ -623,6 +627,10 @@ impl TypeChecker {
                 rhs.span,
                 TypeSides::of(&lhs_type, &stored_type),
                 help,
+                MismatchExtras {
+                    repair,
+                    ..MismatchExtras::default()
+                },
             );
         } else if !self.refine_binding_to_hold(lhs.expression(), &lhs_type, &stored_type, context) {
             self.refuse_binding_an_inference_slot(

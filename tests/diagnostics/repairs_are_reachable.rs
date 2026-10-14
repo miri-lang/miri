@@ -139,6 +139,11 @@ const PROVOCATIONS: &[Provocation] = &[
         code: "MER_TYP_072",
         source: "fn greet(name String)\n    println(\"hi\")\n\nfn main()\n    greet(\"a\")\n",
     },    Provocation {
+        repair: RepairId::CastToSlotType,
+        code: "MER_TYP_002",
+        source: "fn main()\n    let n int = 5\n    let y i32 = n\n    println(f\"{y}\")\n",
+    },
+    Provocation {
         repair: RepairId::RemoveUnusedImport,
         code: "MER_IMP_005",
         source: "use system.math\n\nfn main()\n    println(\"done\")\n",
