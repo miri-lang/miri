@@ -115,8 +115,12 @@ fn test_build_cpu_backend_llvm() {
         .arg("llvm")
         .assert()
         .failure()
+        .stderr(predicates::str::contains("MER_CG_007"))
         .stderr(predicates::str::contains(
-            "LLVM backend is not yet available",
+            "the LLVM backend is not available in this build of the compiler",
+        ))
+        .stderr(predicates::prelude::PredicateBooleanExt::not(
+            predicates::str::contains("MER_CG_008"),
         ));
 }
 

@@ -238,6 +238,7 @@ const VERIFIED_BY_COMMAND: &[(&str, &str, &[&str])] = &[
     ),
     ("MER_BLD_025", "test", &[]),
     ("MER_TAR_010", "build", &["--target", "web-gpu"]),
+    ("MER_CG_007", "build", &["--cpu-backend", "llvm"]),
 ];
 
 /// Codes whose `Before` example is verified through `miri fix`, with the
@@ -264,14 +265,13 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
     ("MER_BLD_016", "reports a skill embedded in this build whose header cannot be read, not a property of any source file"),
     ("MER_BLD_018", "a guard against a formatter defect: no known source renders differently a second time, so there is no example to run"),
     ("MER_BLD_019", "a guard against a formatter defect: no known source makes the renderer drop a comment or a word, so there is no example to run"),
-    ("MER_CG_001", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
-    ("MER_CG_002", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
-    ("MER_CG_003", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
-    ("MER_CG_004", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
-    ("MER_CG_005", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
-    ("MER_CG_006", "documented with prose: no program provokes a backend failure on purpose, and the build reports any backend failure as MER_CG_008 because the error reaches the report as text"),
+    ("MER_CG_001", "documented with prose: no program provokes a backend failure on purpose"),
+    ("MER_CG_002", "documented with prose: no program provokes a backend failure on purpose"),
+    ("MER_CG_003", "documented with prose: no program provokes a backend failure on purpose"),
+    ("MER_CG_004", "documented with prose: no program provokes a backend failure on purpose"),
+    ("MER_CG_005", "documented with prose: no program provokes a backend failure on purpose"),
+    ("MER_CG_006", "documented with prose: no program provokes a backend failure on purpose"),
     ("MER_CG_008", "documented with prose: it reports a failure of the compiler itself, and no known program reproduces one"),
-    ("MER_CG_007", "`build --cpu-backend llvm` reports the refusal as MER_CG_008: the backend error reaches the report as text, which drops its own code"),
     ("MER_IMP_001", "needs two files that import each other; an example is a single file"),
     ("MER_LEX_009", "the lexer forms a regex token only when both quotes are present, so the check never fails; an unterminated regex is MER_LEX_001"),
     ("MER_LEX_010", "the lexer forms an f-string token only when both quotes are present, so the check never fails; an unterminated f-string is MER_LEX_001"),
@@ -304,7 +304,7 @@ const NOT_VERIFIABLE: &[(&str, &str)] = &[
 /// Lowering this number is the only allowed direction: a code leaves the list
 /// when an example reaches it, and the ceiling follows it down. Raising it
 /// would hide a page whose example nobody checks.
-const NOT_VERIFIABLE_CEILING: usize = 45;
+const NOT_VERIFIABLE_CEILING: usize = 44;
 
 /// Read the `Before` example out of a code's documentation.
 fn before_example(code: DiagnosticCode) -> Option<String> {

@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::diagnostics::DiagnosticCode;
+use crate::error::codegen::CodegenError;
 use crate::error::diagnostic::{
     Diagnostic, DiagnosticBuilder, Reportable, Severity, BUG_REPORT_URL,
 };
@@ -73,6 +74,11 @@ pub enum CompilerError {
     #[error("Codegen Error: {0}")]
     Codegen(String),
 
+    /// A backend's own failure, reported under the code it carries
+    /// (MER_CG_001–007) rather than flattened to a message.
+    #[error("Codegen Error: {0}")]
+    Backend(#[from] CodegenError),
+
     #[error("Lowering Error: {0}")]
     Lowering(LoweringError),
 
@@ -136,6 +142,7 @@ impl CompilerError {
                 msg.clone(),
                 None,
             )],
+            CompilerError::Backend(e) => vec![e.to_diagnostic()],
             CompilerError::Runtime(msg) => {
                 vec![simple_diag("Runtime Error", msg.clone(), None)]
             }

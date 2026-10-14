@@ -275,8 +275,7 @@ fn compile_kernels(
         let mut module_bodies: Vec<(&str, &Body)> = Vec::with_capacity(1 + helpers.len());
         module_bodies.extend_from_slice(&helpers);
         module_bodies.push((plan.name, plan.body));
-        let module = compile_module(&module_bodies, &options)
-            .map_err(|err| CompilerError::Codegen(err.to_string()))?;
+        let module = compile_module(&module_bodies, &options)?;
 
         artifacts.push(KernelArtifact {
             entry_point: plan.name.to_string(),

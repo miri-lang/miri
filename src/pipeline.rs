@@ -1705,8 +1705,7 @@ impl Pipeline {
                 #[cfg(feature = "cranelift")]
                 {
                     use crate::codegen::CraneliftBackend;
-                    let mut backend = CraneliftBackend::new()
-                        .map_err(|e| CompilerError::Codegen(e.to_string()))?;
+                    let mut backend = CraneliftBackend::new().map_err(CompilerError::from)?;
                     backend.set_type_facts(settled_type_facts(pipeline_result, &mir_bodies)?);
                     backend.set_device_helpers(pipeline_result.device_helpers.clone());
 
@@ -1725,7 +1724,7 @@ impl Pipeline {
 
                     let artifact = backend
                         .compile(&bodies_ref, &Default::default())
-                        .map_err(|e| CompilerError::Codegen(e.to_string()))?;
+                        .map_err(CompilerError::from)?;
 
                     (artifact.bytes, runtime_info.required_runtimes)
                 }
@@ -1755,7 +1754,7 @@ impl Pipeline {
 
                 let artifact = backend
                     .compile(&bodies_ref, &Default::default())
-                    .map_err(|e| CompilerError::Codegen(e.to_string()))?;
+                    .map_err(CompilerError::from)?;
 
                 (artifact.bytes, runtime_info.required_runtimes)
             }

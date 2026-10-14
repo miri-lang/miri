@@ -2,6 +2,14 @@
 
 The specified code generation backend is not available in this build of the Miri compiler. The Cranelift backend is always available; other backends such as LLVM may not be compiled in. Use the default Cranelift backend or specify a backend that is available.
 
+## Messages
+
+- `the {backend} backend is not available in this build of the compiler`
+
+## Help
+
+- `` omit `--cpu-backend` to build with Cranelift, the default backend ``
+
 ## Before
 
 ```miri
