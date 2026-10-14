@@ -138,6 +138,10 @@ const PROVOCATIONS: &[Provocation] = &[
         repair: RepairId::UnderscoreUnreadBinding,
         code: "MER_TYP_072",
         source: "fn greet(name String)\n    println(\"hi\")\n\nfn main()\n    greet(\"a\")\n",
+    },    Provocation {
+        repair: RepairId::RemoveUnusedImport,
+        code: "MER_IMP_005",
+        source: "use system.math\n\nfn main()\n    println(\"done\")\n",
     },
 ];
 

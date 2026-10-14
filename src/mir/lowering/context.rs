@@ -221,6 +221,12 @@ impl<'a> LoweringContext<'a> {
     /// where it is written, so a reference with no recorded declaration was
     /// never checked; guessing a module for it would link some other function
     /// of that name, so it is refused as an internal error instead.
+    ///
+    /// TODO: an intrinsic function imported under an alias
+    /// (`use system.math.{wrapping_add as wa}`, then `wa(1, 2)`) reaches here
+    /// with no recorded declaration, so `check` refuses a program the type
+    /// checker accepted. The type checker does not record the declaration a
+    /// call through the alias resolves to when the callee is an intrinsic.
     pub fn declared_callee(
         &self,
         callee: &Expression,

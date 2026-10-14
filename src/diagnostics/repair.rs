@@ -57,6 +57,8 @@ pub enum RepairId {
     IfColon,
     /// Write the string literals inside an interpolation with the other quote.
     InterpolationQuotes,
+    /// Delete an import nothing reads.
+    RemoveUnusedImport,
 }
 
 impl RepairId {
@@ -79,6 +81,7 @@ impl RepairId {
             Self::WordOperator => "word-operator",
             Self::IfColon => "if-colon",
             Self::InterpolationQuotes => "interpolation-quotes",
+            Self::RemoveUnusedImport => "remove-unused-import",
         }
     }
 
@@ -119,6 +122,7 @@ impl RepairId {
             ],
             Self::IfColon => &[DiagnosticCode::ParUnexpectedToken],
             Self::InterpolationQuotes => &[DiagnosticCode::LexInvalidFormattedStringExpression],
+            Self::RemoveUnusedImport => &[DiagnosticCode::ImpUnusedImport],
         }
     }
 
@@ -157,6 +161,9 @@ impl RepairId {
             Self::InterpolationQuotes => {
                 "Write the string literals inside an f-string's braces with the other quote."
             }
+            Self::RemoveUnusedImport => {
+                "Delete a `use` line nothing reads, or the unread names in a selection."
+            }
         }
     }
 
@@ -179,6 +186,7 @@ impl RepairId {
             Self::WordOperator,
             Self::IfColon,
             Self::InterpolationQuotes,
+            Self::RemoveUnusedImport,
         ]
     }
 }
@@ -339,6 +347,23 @@ pub enum RepairRequest {
         end: usize,
         quote: char,
     },
+    /// Delete the `use` statement at `start..end`, with the line it stands on.
+    ///
+    /// The projection confirms the range still opens with `use` and that
+    /// nothing but whitespace or a comment shares its line, so a drifted range
+    /// never deletes code.
+    RemoveImportLine { start: usize, end: usize },
+    /// Rewrite the names a selective import lists, `start..end` between its
+    /// braces, as the `kept` ones alone.
+    ///
+    /// Every unread name in one selection is reported against the same
+    /// request, so applying it once drops them all; the kept names are ranges
+    /// rather than text, so an alias travels as written.
+    DropSelectedImports {
+        start: usize,
+        end: usize,
+        kept: Vec<(usize, usize)>,
+    },
 }
 
 /// The word an [`RepairRequest::IfColon`] repair is anchored on.
@@ -428,6 +453,9 @@ impl RepairRequest {
             Self::WordOperator { .. } => RepairId::WordOperator,
             Self::IfColon { .. } => RepairId::IfColon,
             Self::InterpolationQuotes { .. } => RepairId::InterpolationQuotes,
+            Self::RemoveImportLine { .. } | Self::DropSelectedImports { .. } => {
+                RepairId::RemoveUnusedImport
+            }
         }
     }
 
@@ -514,7 +542,81 @@ impl RepairRequest {
             Self::InterpolationQuotes { start, end, quote } => {
                 Self::project_interpolation_quotes(path, source, *start, *end, *quote)
             }
+            Self::RemoveImportLine { start, end } => {
+                Self::project_remove_import_line(path, source, *start, *end)
+            }
+            Self::DropSelectedImports { start, end, kept } => {
+                Self::project_drop_selected_imports(path, source, *start, *end, kept)
+            }
         }
+    }
+
+    /// Delete the whole line the `use` at `start..end` stands on, newline
+    /// included, when the statement is the only code on it.
+    fn project_remove_import_line(
+        path: &str,
+        source: &str,
+        start: usize,
+        end: usize,
+    ) -> Option<JsonRepair> {
+        let statement = source.get(start..end)?.trim_end();
+        if !statement.starts_with("use ") {
+            return None;
+        }
+        let line_start = source.get(..start)?.rfind('\n').map_or(0, |at| at + 1);
+        let statement_end = start + statement.len();
+        let line_end = source[statement_end..]
+            .find('\n')
+            .map_or(source.len(), |at| statement_end + at + 1);
+        let before = &source[line_start..start];
+        let after = source[statement_end..line_end].trim();
+        if !before.trim().is_empty() || !(after.is_empty() || after.starts_with("//")) {
+            return None;
+        }
+        Some(JsonRepair {
+            id: RepairId::RemoveUnusedImport.as_str().to_string(),
+            summary: "Delete the import nothing reads.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start: line_start,
+                end: line_end,
+                replacement: String::new(),
+            }],
+        })
+    }
+
+    /// Rewrite a selection's names as the kept ones, joined the way the
+    /// formatter writes them.
+    fn project_drop_selected_imports(
+        path: &str,
+        source: &str,
+        start: usize,
+        end: usize,
+        kept: &[(usize, usize)],
+    ) -> Option<JsonRepair> {
+        if kept.is_empty() || !source.get(..start)?.trim_end().ends_with('{') {
+            return None;
+        }
+        let names = kept
+            .iter()
+            .map(|&(from, to)| {
+                (start <= from && to <= end)
+                    .then(|| source.get(from..to))
+                    .flatten()
+                    .filter(|name| !name.trim().is_empty())
+            })
+            .collect::<Option<Vec<_>>>()?;
+        source.get(start..end)?;
+        Some(JsonRepair {
+            id: RepairId::RemoveUnusedImport.as_str().to_string(),
+            summary: "Drop the names nothing reads from the selection.".to_string(),
+            edits: vec![JsonEdit {
+                path: path.to_string(),
+                start,
+                end,
+                replacement: names.join(", "),
+            }],
+        })
     }
 
     fn project_let_to_var(path: &str, source: &str, keyword_start: usize) -> Option<JsonRepair> {

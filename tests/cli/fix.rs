@@ -1476,3 +1476,53 @@ fn test_a_rename_lands_correctly_after_multi_byte_characters() {
         "fn main()\n    // ünïcödé\n    let n = [1, 2, 3]\n    println(f\"{n.length()}\")\n"
     );
 }
+
+/// An import nothing reads hands over the deletion its help names: the whole
+/// line when nothing on it is read.
+#[test]
+fn test_an_unused_import_line_is_removed() {
+    assert_eq!(
+        repaired(
+            "unused-import-line",
+            "use system.math\n\nfn main()\n    println(\"done\")\n",
+            "remove-unused-import",
+        ),
+        "\nfn main()\n    println(\"done\")\n"
+    );
+}
+
+/// A selection whose other names are read loses only the unread name, and
+/// keeps its braces.
+#[test]
+fn test_an_unread_name_is_dropped_from_a_selective_import() {
+    assert_eq!(
+        repaired(
+            "unused-selected-name",
+            "use system.math.{wrapping_add, wrapping_sub}\n\nfn main()\n    println(f\"{wrapping_add(1, 2)}\")\n",
+            "remove-unused-import",
+        ),
+        "use system.math.{wrapping_add}\n\nfn main()\n    println(f\"{wrapping_add(1, 2)}\")\n"
+    );
+}
+
+/// Every unread name in a selection is dropped in one run, wherever it sits,
+/// alongside a whole unused line: one `fix --apply` leaves a file `check`
+/// accepts without a warning.
+#[test]
+fn test_one_apply_removes_every_unused_import_form() {
+    let source = "use system.collections.list\nuse system.math.{wrapping_add, wrapping_sub, wrapping_mul}\n\nfn main()\n    println(f\"{wrapping_sub(5, 2)}\")\n";
+    let fixture = Fixture::new("unused-import-forms", source);
+
+    let (_, _, ok) = fix(fixture.path(), &["--apply", "--yes"]);
+    assert!(ok, "applying the import repairs should succeed");
+    assert_eq!(
+        fixture.contents(),
+        "use system.math.{wrapping_sub}\n\nfn main()\n    println(f\"{wrapping_sub(5, 2)}\")\n"
+    );
+    let envelope = plan(fixture.path());
+    assert!(
+        envelope.diagnostics.is_empty(),
+        "the repaired file should report nothing, got {:?}",
+        envelope.diagnostics
+    );
+}
