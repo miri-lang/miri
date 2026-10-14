@@ -200,11 +200,7 @@ impl TypeChecker {
         context.enter_scope();
         context.enter_loop();
 
-        // TODO: a loop that gives both of its variables the same name
-        // (`for k, k in m`) is accepted. The name type-checks as the second
-        // variable but MIR lowering resolves it to the first, so a method of the
-        // second variable's type runs on the element and the program crashes.
-        // Refuse the repeated name here with a diagnostic.
+        self.refuse_repeated_loop_variable(decls);
         self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
 
         self.check_statement(body, context);
@@ -220,6 +216,32 @@ impl TypeChecker {
 
         context.exit_loop();
         context.exit_scope();
+    }
+
+    /// Refuses a loop that gives two of its variables the same name: one name
+    /// cannot stand for both the key and the value, or the index and the
+    /// element, and nothing says which it would mean.
+    fn refuse_repeated_loop_variable(&mut self, decls: &[VariableDeclaration]) {
+        for (position, decl) in decls.iter().enumerate().skip(1) {
+            if decls[..position]
+                .iter()
+                .any(|earlier| earlier.name == decl.name)
+            {
+                self.report_error_with_help(
+                    DiagnosticCode::TypShadowingNotAllowed,
+                    format!(
+                        "Loop variable '{}' is named twice; each variable a `for` loop binds \
+                         needs its own name.",
+                        decl.name
+                    ),
+                    decl.name_span,
+                    format!(
+                        "rename one of them, e.g. `for {name}, value in ...`",
+                        name = decl.name
+                    ),
+                );
+            }
+        }
     }
 
     pub(crate) fn check_forall(
