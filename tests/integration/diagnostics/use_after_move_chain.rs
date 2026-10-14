@@ -303,9 +303,10 @@ fn print_all(items [int])
         i = i + 1
     print_first(items)
 
-let xs = List([1, 2, 3])
-print_all(xs)
-println(f"outer_len={xs.length()}")
+fn main()
+    let xs = List([1, 2, 3])
+    print_all(xs)
+    println(f"outer_len={xs.length()}")
 "#,
         "item=1\nitem=2\nitem=3\ninner_len=3\nouter_len=3",
     );
@@ -329,10 +330,11 @@ fn count_unique(items [int]) int
         i = i + 1
     return seen.length()
 
-let xs = List([1, 2, 2, 3])
-let n = count_unique(xs)
-println(f"len={xs.length()}")
-println(f"unique={n}")
+fn main()
+    let xs = List([1, 2, 2, 3])
+    let n = count_unique(xs)
+    println(f"len={xs.length()}")
+    println(f"unique={n}")
 "#,
         "len=4\nunique=3",
     );

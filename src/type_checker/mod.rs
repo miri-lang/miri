@@ -163,6 +163,10 @@ pub struct TypeChecker {
     pub entry_source: Option<std::rc::Rc<str>>,
     /// Source path of the entry-point file. See [`entry_source`].
     pub entry_source_path: Option<std::rc::Rc<str>>,
+    /// The statement declaring the synthetic `main` a script's top-level
+    /// statements were wrapped in, whose body keeps the rules of top-level
+    /// code; `None` for a program that wrote its own `main`.
+    pub(crate) script_main: Option<usize>,
     /// Initial host data for `gpu` buffers bound to compile-time constant
     /// literals, keyed by where the binding's name is written (two functions
     /// may each declare a buffer of the same name). Populated at the end of
@@ -299,6 +303,7 @@ impl TypeChecker {
             global_scope: None,
             entry_source: None,
             entry_source_path: None,
+            script_main: None,
             gpu_buffer_inits: HashMap::new(),
             generic_class_instantiations: HashMap::new(),
             negated_int_literals: HashSet::new(),
@@ -319,6 +324,12 @@ impl TypeChecker {
             type_set_allowed: false,
             type_set_exports: HashMap::new(),
         }
+    }
+
+    /// Read the body of the function statement `id` declares as the top-level
+    /// code of a script, which the pipeline wrapped in it.
+    pub fn read_as_script(&mut self, id: Option<usize>) {
+        self.script_main = id;
     }
 
     /// Creates a new type checker with a known source-file directory.
@@ -650,6 +661,7 @@ impl TypeChecker {
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
         )
+        .reading_as_script(self.script_main)
         .check_program(program);
         self.diagnostics.extend_errors(uam_errors);
         self.diagnostics.extend_warnings(uam_warnings);

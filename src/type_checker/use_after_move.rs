@@ -105,6 +105,9 @@ pub struct UseAfterMoveChecker<'a> {
     /// only these may be released early with `value.drop()`. A lambda body
     /// starts empty: what it captures belongs to the scope that declared it.
     owned_locals: HashSet<String>,
+    /// The synthetic `main` a script's top-level statements were wrapped in,
+    /// whose body is read as the top-level code it was written as.
+    script_main: Option<usize>,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
@@ -123,7 +126,16 @@ impl<'a> UseAfterMoveChecker<'a> {
             fn_bindings: HashSet::new(),
             gpu_bindings: HashSet::new(),
             owned_locals: HashSet::new(),
+            script_main: None,
         }
+    }
+
+    /// Read the body of the function declared by statement `id` as top-level
+    /// code: it is the synthetic `main` a script's statements were wrapped in,
+    /// and wrapping them changes where they run, not what they mean.
+    pub fn reading_as_script(mut self, id: Option<usize>) -> Self {
+        self.script_main = id;
+        self
     }
 
     /// Runs the analysis on a complete program and returns detected errors and warnings.
@@ -135,6 +147,11 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &stmt.node {
+            StatementKind::FunctionDeclaration(decl) if self.script_main == Some(stmt.id) => {
+                if let Some(body) = &decl.body {
+                    self.check_stmt(body, consumed);
+                }
+            }
             StatementKind::FunctionDeclaration(decl) => self.check_fn_decl(decl),
             StatementKind::Block(stmts) => self.check_block(stmts, consumed),
             StatementKind::Expression(expr) => self.check_expr(expr, consumed),

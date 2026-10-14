@@ -51,6 +51,14 @@ const ENTRY_POINT_SHAPES: &[(&str, &str)] = &[
         "bare return in a script without main",
         "println(\"a\")\nif true\n    return\nprintln(\"b\")\n",
     ),
+    (
+        "a script reading a list after passing it to a function",
+        "use system.collections.list\n\nfn process(x [int])\n    return\n\nlet x = List([1, 2, 3])\nprocess(x)\nprintln(f\"{x.length()}\")\n",
+    ),
+    (
+        "a script passing a clone and reading the original",
+        "use system.collections.list\n\nfn process(x [int])\n    return\n\nlet x = List([1, 2, 3])\nprocess(x.clone())\nprintln(f\"{x.length()}\")\n",
+    ),
 ];
 
 #[test]
