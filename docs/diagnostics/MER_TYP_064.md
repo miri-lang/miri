@@ -1,6 +1,6 @@
 ## Rule
 
-A declaration reuses a name in a way shadowing does not allow. A `let` may shadow an earlier `let` in the same scope, but a `var` may not shadow anything in its scope, a `let` may not shadow a `var` in the same scope, and no declaration may shadow a constant or declare a constant over an existing name. To change a variable's value, assign to it.
+A declaration reuses a name in a way shadowing does not allow. A `let` may shadow an earlier `let` in the same scope, but a `var` may not shadow anything in its scope, a `let` may not shadow a `var` in the same scope, and no declaration may shadow a constant or declare a constant over an existing name. The variables one `for` loop binds (`for k, v in m`) each need their own name. To change a variable's value, assign to it.
 
 ## Messages
 
@@ -8,6 +8,7 @@ A declaration reuses a name in a way shadowing does not allow. A `let` may shado
 - `Cannot shadow mutable variable '{name}' with an immutable one in the same scope.`
 - `Cannot shadow constant '{name}'.`
 - `Cannot shadow existing variable/constant '{name}' with a constant.`
+- ``Loop variable '{name}' is named twice; each variable a `for` loop binds needs its own name.``
 
 ## Before
 
