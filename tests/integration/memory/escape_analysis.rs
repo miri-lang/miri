@@ -598,10 +598,11 @@ fn sum_n(xs [int], n int) int
         return 0
     return xs.element_at(n - 1) + sum_n(xs, n - 1)
 
-let data = List([10, 20, 30])
-let total = sum_n(data, 3)
-println(f"total={total}")
-println(f"len={data.length()}")
+fn main()
+    let data = List([10, 20, 30])
+    let total = sum_n(data, 3)
+    println(f"total={total}")
+    println(f"len={data.length()}")
 "#,
         "total=60\nlen=3",
     );
@@ -627,11 +628,12 @@ fn count_from_b(xs [int], i int) int
         return 0
     return xs.element_at(i) + count_from_a(xs, i + 1)
 
-let data = List([1, 2, 3, 4])
-let a = count_from_a(data, 0)
-let b = count_from_b(data, 0)
-println(f"a={a} b={b}")
-println(f"len={data.length()}")
+fn main()
+    let data = List([1, 2, 3, 4])
+    let a = count_from_a(data, 0)
+    let b = count_from_b(data, 0)
+    println(f"a={a} b={b}")
+    println(f"len={data.length()}")
 "#,
         "a=10 b=10\nlen=4",
     );

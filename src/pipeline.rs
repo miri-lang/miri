@@ -398,9 +398,9 @@ fn stmt_uses_gpu(stmt: &Statement) -> bool {
 /// The synthetic main has return type `Int` and appends `return 0` so the process
 /// exits cleanly. Without this, the exit code leaks from whatever value the last
 /// expression leaves in the return register.
-fn wrap_script_in_main(program: &mut Program) {
+fn wrap_script_in_main(program: &mut Program) -> Option<usize> {
     if has_main_function(program) {
-        return;
+        return None;
     }
 
     let return_zero = return_statement(Some(Box::new(int_literal_expression(0))));
@@ -409,8 +409,9 @@ fn wrap_script_in_main(program: &mut Program) {
     if program.body.is_empty() {
         let body = crate::ast::factory::block(vec![return_zero]);
         let main_fn = func("main").return_type(int_ret).build(body);
+        let id = main_fn.id;
         program.body = vec![main_fn];
-        return;
+        return Some(id);
     }
 
     // Separate top-level declarations (use, class, struct, etc.) from executable statements.
@@ -420,7 +421,7 @@ fn wrap_script_in_main(program: &mut Program) {
     // First, verify we can wrap the program. If not, return early.
     for stmt in &program.body {
         if !is_top_level_stmt(stmt) && !is_wrappable_stmt(stmt) {
-            return;
+            return None;
         }
     }
 
@@ -437,8 +438,10 @@ fn wrap_script_in_main(program: &mut Program) {
     let mut body = crate::ast::factory::block(body_stmts);
     crate::ast::exit_status::bare_returns_exit_zero(&mut body);
     let main_fn = func("main").return_type(int_ret).build(body);
+    let id = main_fn.id;
     top_level.push(main_fn);
     program.body = top_level;
+    Some(id)
 }
 
 /// Ensures that a user-defined `main()` function returns `Int` with an
@@ -447,9 +450,13 @@ fn wrap_script_in_main(program: &mut Program) {
 /// A bare `return` the author wrote in that body is given the same `0`, since
 /// it would otherwise be checked against the `Int` installed here.
 /// Give the program the entry point it is compiled with.
-fn install_entry_point(program: &mut Program) {
-    wrap_script_in_main(program);
+///
+/// Returns the statement declaring the `main` a script was wrapped in, which
+/// the type checker reads as the script's top-level code.
+fn install_entry_point(program: &mut Program) -> Option<usize> {
+    let script_main = wrap_script_in_main(program);
     patch_main_return(program);
+    script_main
 }
 
 fn patch_main_return(program: &mut Program) {
@@ -1398,20 +1405,22 @@ impl Pipeline {
     /// file compiles uses [`Self::frontend_program`] instead.
     pub fn frontend(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let ast = self.parse(source)?;
-        self.check_parsed(ast)
+        self.check_parsed(ast, None)
     }
 
     /// Run the frontend with `main` given the exit status `build` and `run`
     /// compile it with.
     ///
     /// `check` and `fix` judge a file through here, so neither reads a `main`
-    /// differently from `build`.
+    /// differently from `build`. A script is checked as written, unwrapped;
+    /// `build` wraps it, and the type checker reads the wrapped body with the
+    /// rules of top-level code, so the two apply the same ownership rules.
     ///
-    /// TODO: a script is checked unwrapped, while `build` wraps it in `main`
-    /// first. The use-after-move rule that consumes a managed value passed at
-    /// the top level reads only unwrapped code, so `check` refuses a script
-    /// that `build` compiles. Wrapping here would make the two agree by
-    /// dropping that rule; the fix is for the rule to see the wrapped body.
+    /// TODO: a script is still checked unwrapped. Wrapping it here, as `build`
+    /// does, makes a module-scope `let` that a function assigns read as a local
+    /// of `main` (undefined in the function), which is what `build` reports but
+    /// changes the program the MER_BLD_002 page uses to show a refused
+    /// api-changing repair. Decide that page's example before wrapping here.
     ///
     /// The program is also lowered to MIR, as `build` lowers it, and the bodies
     /// thrown away: an instantiation that grows without bound, an argument no
@@ -1421,7 +1430,7 @@ impl Pipeline {
     pub fn frontend_program(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut ast = self.parse(source)?;
         patch_main_return(&mut ast);
-        let mut result = self.check_parsed(ast)?;
+        let mut result = self.check_parsed(ast, None)?;
         self.lower_to_mir(&mut result, false)?;
         Ok(result)
     }
@@ -1434,8 +1443,13 @@ impl Pipeline {
         Ok(ast)
     }
 
-    fn check_parsed(&self, mut ast: Program) -> Result<PipelineResult, CompilerError> {
+    fn check_parsed(
+        &self,
+        mut ast: Program,
+        script_main: Option<usize>,
+    ) -> Result<PipelineResult, CompilerError> {
         let mut type_checker = self.make_type_checker();
+        type_checker.read_as_script(script_main);
         type_checker
             .check(&mut ast)
             .map_err(|errors| CompilerError::TypeErrors {
@@ -1461,8 +1475,8 @@ impl Pipeline {
         let nothing_to_run = !has_executable_entry_point(&ast);
         let declares_tests = declares_a_test(&ast);
 
-        install_entry_point(&mut ast);
-        let mut result = self.check_parsed(ast)?;
+        let script_main = install_entry_point(&mut ast);
+        let mut result = self.check_parsed(ast, script_main)?;
         let type_checker = &mut result.type_checker;
 
         // Reported after checking, so a file that also has real errors reports
