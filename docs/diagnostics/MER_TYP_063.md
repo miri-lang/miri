@@ -4,8 +4,15 @@ A cast operation attempted to convert between incompatible types. Not all type p
 
 ## Messages
 
-- `cannot cast from non-numeric type '{source}' to '{target}'`
-- `cannot cast from '{source}' to non-numeric type '{target}'`
+- `` cannot cast from non-numeric type `{source}` to `{target}` ``
+- `` cannot cast from `{source}` to non-numeric type `{target}` ``
+
+## Help
+
+- `` read the number out of the text with `.to_int()` or `.to_float()`, which give `None` when it holds no number ``
+- `` `as` converts between numeric types only; convert this value another way ``
+- `` format the value as text with an f-string, e.g. `f"{x}"` ``
+- `` `as` converts to numeric types only; build the value another way ``
 
 ## Before
 

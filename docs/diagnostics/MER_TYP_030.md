@@ -9,6 +9,7 @@ This code covers a family of argument count mismatches. When a generic type is i
 - `{fn} expects exactly two arguments, but got {count}`
 - `Unknown argument '{arg}'`
 - `Missing argument for field '{field}'`
+- `Too many positional arguments: expected {expected}, got {actual}`
 
 ## Before
 

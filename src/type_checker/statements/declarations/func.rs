@@ -49,8 +49,10 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
+use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::statements::returns::collect_tail_expression_spans;
 use crate::type_checker::statements::{check_returns, ReturnStatus};
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::is_gpu_signature_type;
 use crate::type_checker::TypeChecker;
 
@@ -315,13 +317,17 @@ impl TypeChecker {
                     Some(default_val),
                     context,
                 ) {
-                    self.report_error(
+                    let help = self.conversion_help(&param_type, &default_val_type);
+                    self.report_type_mismatch(
                         DiagnosticCode::TypTypeMismatch,
                         format!(
                             "Type mismatch for default value: expected {}, got {}",
-                            param_type, default_val_type
+                            spelled(&param_type),
+                            spelled(&default_val_type)
                         ),
                         default_val.span,
+                        TypeSides::of(&param_type, &default_val_type),
+                        help,
                     );
                 }
             }
@@ -367,10 +373,16 @@ impl TypeChecker {
                 let guard_type = self.infer_binary(&left, &bin_op, right, guard.span, context);
 
                 if !matches!(guard_type.kind, TypeKind::Boolean) {
-                    self.report_error(
+                    self.report_type_mismatch(
                         DiagnosticCode::TypTypeMismatch,
-                        format!("Type mismatch: guard must be boolean, got {}", guard_type),
+                        format!(
+                            "Type mismatch: guard must be boolean, got {}",
+                            spelled(&guard_type)
+                        ),
                         guard.span,
+                        TypeSides::of(&make_type(TypeKind::Boolean), &guard_type),
+                        "write the guard as a comparison of the parameter, e.g. `x > 0`"
+                            .to_string(),
                     );
                 }
             }
@@ -662,15 +674,7 @@ impl TypeChecker {
             && !matches!(return_type.kind, TypeKind::Void)
             && !self.accepts_value_at(return_type, &expr_type, Some(expr), context)
         {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!(
-                    "Invalid return type: expected {}, got {}",
-                    crate::type_checker::diagnostics::spelled(return_type),
-                    crate::type_checker::diagnostics::spelled(&expr_type)
-                ),
-                expr.span,
-            );
+            self.refuse_return_type(return_type, &expr_type, expr.span);
         }
 
         if infer_main_return {

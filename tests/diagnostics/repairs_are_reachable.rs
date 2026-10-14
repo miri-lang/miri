@@ -44,7 +44,7 @@ const PROVOCATIONS: &[Provocation] = &[
     },
     Provocation {
         repair: RepairId::DropExtraArguments,
-        code: "MER_TYP_002",
+        code: "MER_TYP_030",
         source: "fn add(a int) int\n    a\n\nfn main()\n    println(f\"{add(1, 2)}\")\n",
     },
     Provocation {

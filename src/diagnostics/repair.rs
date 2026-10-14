@@ -94,7 +94,7 @@ impl RepairId {
                 DiagnosticCode::TypUndefinedName,
                 DiagnosticCode::TypTypeNotFound,
             ],
-            Self::DropExtraArguments => &[DiagnosticCode::TypTypeMismatch],
+            Self::DropExtraArguments => &[DiagnosticCode::TypArgumentCountMismatch],
             Self::ColonAnnotation => &[DiagnosticCode::ParUnexpectedToken],
             Self::ArrowReturnType => &[DiagnosticCode::ParUnexpectedToken],
             Self::LetMutToVar => &[DiagnosticCode::ParUnexpectedToken],

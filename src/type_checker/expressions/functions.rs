@@ -230,15 +230,7 @@ impl TypeChecker {
         if !is_void_expected && is_void_implicit {
             let ends_with_return = self.body_ends_with_return(body);
             if !ends_with_return {
-                self.report_error(
-                    DiagnosticCode::TypTypeMismatch,
-                    format!(
-                        "Invalid return type: expected {}, got {}",
-                        crate::type_checker::diagnostics::spelled(expected),
-                        crate::type_checker::diagnostics::spelled(implicit_return_type)
-                    ),
-                    body.span,
-                );
+                self.refuse_return_type(expected, implicit_return_type, body.span);
             }
         } else if matches!(expected.kind, TypeKind::Void) {
         } else if self.accepts_value_at(
@@ -252,15 +244,7 @@ impl TypeChecker {
             // generic call it ends on that its arguments left open.
             self.record_trait_conversion(expected, implicit_return_type, body.span, context);
         } else {
-            self.report_error(
-                DiagnosticCode::TypTypeMismatch,
-                format!(
-                    "Invalid return type: expected {}, got {}",
-                    crate::type_checker::diagnostics::spelled(expected),
-                    crate::type_checker::diagnostics::spelled(implicit_return_type)
-                ),
-                body.span,
-            );
+            self.refuse_return_type(expected, implicit_return_type, body.span);
         }
     }
 

@@ -684,7 +684,7 @@ impl TypeChecker {
                         spelled(&declared_type),
                         spelled(&inferred_type)
                     );
-                    self.report_mismatch_at(message, init, &declared_type);
+                    self.report_mismatch_at(message, init, (&declared_type, &inferred_type));
                 }
             } else {
                 // Check for warning: assigning non-optional to optional immutable variable

@@ -48,6 +48,7 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
+use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -111,7 +112,14 @@ impl TypeChecker {
                 t
             }
             Err(msg) => {
-                self.report_error(DiagnosticCode::TypTypeMismatch, msg, span);
+                let operator = crate::ast::formatter::helpers::unary_operator(*op);
+                self.report_type_mismatch(
+                    DiagnosticCode::TypTypeMismatch,
+                    msg,
+                    operand.span,
+                    TypeSides::wanting(&format!("a type `{operator}` applies to"), &expr_ty),
+                    format!("apply `{operator}` to a value of a type it is defined for"),
+                );
                 ast_factory::make_type(TypeKind::Error)
             }
         }
