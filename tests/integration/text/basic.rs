@@ -4,6 +4,30 @@
 use super::super::utils::*;
 
 #[test]
+fn test_string_index_repro() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let s = "hello"
+    println(s[0])
+"#,
+        "h",
+    );
+}
+
+#[test]
+fn test_string_slice_repro() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let s = "hello"
+    println(s[0..2])
+"#,
+        "he",
+    );
+}
+
+#[test]
 fn test_regex_compile_valid_pattern() {
     assert_runs_with_output(
         r#"
