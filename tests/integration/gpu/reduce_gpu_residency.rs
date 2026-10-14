@@ -219,3 +219,62 @@ fn main()
 ",
     );
 }
+
+/// A host value assigned into a gpu-resident scalar replaces the reduction's
+/// result: the read after it sees the new value, not one read back from the
+/// device's older buffer.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn host_write_into_a_reduced_gpu_scalar_is_not_overwritten_by_a_readback() {
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+use system.collections.array
+
+fn main()
+    gpu let data = [1, 2, 3, 4]
+    gpu var s = data.reduce(0, fn(a int, b int) int: a + b)
+    let before = s
+    s = 3
+    let after = s
+    s = before + 4
+    let total = s
+    println(f'{before} {after} {total}')
+",
+        "10 3 14",
+    );
+}
+
+/// A host value assigned into a gpu-resident array after a kernel wrote it
+/// is what the next read sees, and what the next kernel starts from.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn host_write_into_a_gpu_array_after_a_kernel_is_kept() {
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+use system.collections.array
+
+fn main()
+    gpu var a = [1, 2, 3, 4]
+    forall i in 0..4
+        a[i] = a[i] * 10
+    let first = a
+    a = [5, 6, 7, 8]
+    let second = a
+    forall i in 0..4
+        a[i] = a[i] + 1
+    let third = a
+    println(f'{first[0]} {second[0]} {third[3]}')
+",
+        "10 5 9",
+    );
+}
