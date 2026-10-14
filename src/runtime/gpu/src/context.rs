@@ -313,7 +313,7 @@ pub(crate) fn init_gpu_context() -> Result<Arc<GpuContext>, GpuError> {
     }
     let ctx = Arc::new(GpuContext::new()?);
     *slot = Some(ctx.clone());
-    register_exit_check();
+    register_exit_check(&ctx.device);
     Ok(ctx)
 }
 
