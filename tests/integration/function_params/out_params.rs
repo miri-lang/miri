@@ -188,3 +188,70 @@ fn main()
         "7.0",
     );
 }
+
+/// An `out` parameter whose array size is a constant takes an array of that
+/// size, as an ordinary parameter of the same declared type does.
+#[test]
+fn test_out_param_sized_by_a_constant_takes_an_array_of_that_size() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+const N = 4
+
+fn fill(src Array<int, N>, dst out Array<int, N>)
+    dst[0] = src[0]
+
+fn main()
+    var a = Array<int, N>()
+    var b = Array<int, 4>()
+    a[0] = 7
+    fill(a, b)
+    println(f"{b[0]}")
+"#,
+        "7",
+    );
+}
+
+/// The literal-size form, passed an array declared through the constant.
+#[test]
+fn test_out_param_with_a_literal_size_takes_an_array_sized_by_an_equal_constant() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+const N = 3
+
+fn mark(dst out Array<int, 3>)
+    dst[2] = 9
+
+fn main()
+    var b = Array<int, N>()
+    mark(b)
+    println(f"{b[2]}")
+"#,
+        "9",
+    );
+}
+
+/// An array of a different size is still refused: the callee writes through
+/// the parameter at the size it declares.
+#[test]
+fn test_out_param_sized_by_a_constant_refuses_another_size() {
+    assert_compiler_error(
+        r#"
+use system.collections.array
+
+const N = 4
+
+fn fill(dst out Array<int, N>)
+    dst[0] = 1
+
+fn main()
+    var b = Array<int, 5>()
+    fill(b)
+    println(f"{b[0]}")
+"#,
+        "Type mismatch for argument 'dst'",
+    );
+}
