@@ -1414,12 +1414,6 @@ fn lower_direct_call(
 
     apply_generic_mangling(ctx, callee, call_expr_id, &mut func_op)?;
 
-    let is_generic_call = ctx
-        .type_checker
-        .call_generic_mappings
-        .contains_key(&call_expr_id);
-    let param_types = resolve_param_types(ctx, func.id, is_generic_call);
-
     let arg_watermark = ctx.body.local_decls.len();
     let mut arg_ops = lower_call_arguments(ctx, func.id, call_expr_id, args, *span)?;
 
@@ -1445,7 +1439,11 @@ fn lower_direct_call(
 
     let is_indirect_call = !matches!(func_op, Operand::Function(_));
     let func_op_for_drop = func_op.clone();
-    let out_args = build_out_args(&param_types, &arg_ops);
+    // Which parameters are `out` is declared, not instantiated, so a generic
+    // call reads it off the declaration too: the instance's body takes those
+    // parameters by address, and a call that passed them by value would hand
+    // it a value to write through.
+    let out_args = build_out_args(&resolve_param_types(ctx, func.id, false), &arg_ops);
 
     emit_call_terminator(
         ctx,
