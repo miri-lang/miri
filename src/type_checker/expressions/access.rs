@@ -2056,6 +2056,9 @@ impl TypeChecker {
             );
             return make_type(TypeKind::Error);
         };
+        if !self.enum_method_is_visible(method_info, name, prop_name, span, context) {
+            return make_type(TypeKind::Error);
+        }
 
         let type_args = self.extract_type_args_from_type(obj_type);
         let generic_mapping = self.build_enum_method_generic_mapping(enum_def, &type_args);
@@ -2069,6 +2072,40 @@ impl TypeChecker {
             params,
             return_type: return_type_expr,
         })))
+    }
+
+    /// Whether the code being checked may call `prop_name` on enum `name`,
+    /// reporting the refusal when it may not.
+    ///
+    /// The rule is a class method's: a `private` method is reachable only from
+    /// the enum's own methods, whose bodies are checked inside the enum's scope.
+    fn enum_method_is_visible(
+        &mut self,
+        method_info: &crate::type_checker::context::MethodInfo,
+        name: &str,
+        prop_name: &str,
+        span: Span,
+        context: &Context,
+    ) -> bool {
+        if self.check_member_visibility(
+            &method_info.visibility,
+            name,
+            context.current_class.as_deref(),
+            Some(name),
+        ) {
+            return true;
+        }
+        self.report_error(
+            DiagnosticCode::TypNameNotVisible,
+            format!(
+                "Method '{}' of enum '{}' is {:?} and cannot be accessed from here",
+                prop_name,
+                crate::type_checker::diagnostics::shown_type_name(name),
+                method_info.visibility
+            ),
+            span,
+        );
+        false
     }
 
     /// Extracts type arguments from a custom type.

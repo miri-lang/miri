@@ -139,3 +139,100 @@ fn main()
         "must be used",
     );
 }
+
+#[test]
+fn test_enum_private_method_is_refused_outside_the_enum() {
+    assert_compiler_error(
+        r#"
+enum Shape
+    Empty
+
+    private fn hidden() int
+        2
+
+fn main()
+    let s = Shape.Empty
+    println(f"{s.hidden()}")
+"#,
+        "Method 'hidden' of enum 'Shape' is Private and cannot be accessed from here",
+    );
+}
+
+#[test]
+fn test_enum_private_method_is_refused_from_another_module() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.shapes\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let s = Shape.Empty\n",
+                    "    println(f\"{s.hidden()}\")\n",
+                ),
+            ),
+            (
+                "shapes.mi",
+                concat!(
+                    "public enum Shape\n",
+                    "    Empty\n",
+                    "\n",
+                    "    private fn hidden() int\n",
+                    "        2\n",
+                ),
+            ),
+        ],
+        "is Private and cannot be accessed",
+    );
+}
+
+#[test]
+fn test_enum_private_method_is_callable_from_its_own_methods() {
+    assert_runs_with_output(
+        r#"
+enum Shape
+    Empty
+
+    private fn hidden() int
+        2
+
+    fn doubled() int
+        self.hidden() * 2
+
+fn main()
+    let s = Shape.Empty
+    println(f"{s.doubled()}")
+"#,
+        "4",
+    );
+}
+
+#[test]
+fn test_enum_method_without_a_keyword_is_public_across_modules() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.shapes\n",
+                    "\n",
+                    "fn main()\n",
+                    "    let s = Shape.Empty\n",
+                    "    println(f\"{s.plain()}\")\n",
+                ),
+            ),
+            (
+                "shapes.mi",
+                concat!(
+                    "public enum Shape\n",
+                    "    Empty\n",
+                    "\n",
+                    "    fn plain() int\n",
+                    "        1\n",
+                ),
+            ),
+        ],
+        "1",
+    );
+}
