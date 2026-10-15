@@ -130,6 +130,11 @@ const PROVOCATIONS: &[Provocation] = &[
         source: "fn main()\n    let count = 1\n    println(f\"{cout}\")\n",
     },
     Provocation {
+        repair: RepairId::RenameToSuggestion,
+        code: "MER_IMP_003",
+        source: "use system.math.{sqrtt}\n\nfn main()\n    println(\"x\")\n",
+    },
+    Provocation {
         repair: RepairId::UnderscoreUnreadBinding,
         code: "MER_TYP_071",
         source: "fn main()\n    let total = 42\n",

@@ -733,7 +733,6 @@ fn verified_examples_emit_the_code_they_document() {
 /// here keeps that gap countable and stops it growing silently.
 const NO_HELP_EMITTED: &[&str] = &[
     "MER_IMP_002",
-    "MER_IMP_003",
     "MER_OWN_003",
     "MER_OWN_004",
     "MER_PAR_001",
