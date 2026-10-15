@@ -22,3 +22,6 @@ __pycache__
 # Per-machine scheduler state: rewritten with a new session id and pid on
 # every run, so tracking it puts a spurious diff in every working tree.
 .claude/scheduled_tasks.lock
+# Live benchmark records: each round writes megabytes of transcripts that are
+# output of a run, not source. They stay on the machine that ran them.
+/evals/field/runs/

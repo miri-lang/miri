@@ -3,6 +3,9 @@ name = "miri"
 version = "0.7.0-beta.5"
 description = "A modern, GPU-first, statically-typed programming language"
 repository = "https://github.com/miri-lang/miri"
+# The live-model benchmark is a hand-run instrument, not part of the compiler or
+# its test suite; its jobs and harness stay out of the published package.
+exclude = ["evals/field/"]
 edition = "2021"
 # Every `tests/*.rs` would otherwise become its own test binary. `pipeline.rs`,
 # `utils.rs` and `runtime_fns.rs` are modules of `tests/mod.rs`, so auto-discovery

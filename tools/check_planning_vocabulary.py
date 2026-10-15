@@ -44,7 +44,6 @@ ALLOWED = [
     ("tests/integration/*", "benchmark round", "`r1`/`r2` are local variable names in test programs"),
     ("src/type_checker/compatibility.rs", "benchmark round", "`r1`/`r2` name two return types being compared"),
     ("evals/field/jobs/*/FAULTS.md", "feature id", "F1–F6 number the job's own seeded faults"),
-    ("evals/field/runs/*", "*", "recorded transcripts and records are data captured from a run, kept as they were written"),
     ("AGENTS.md", "milestone", "the agent instructions describe how the external plan is organised"),
     ("AGENTS.md", "milestone id", "the agent instructions describe how the external plan is organised"),
     (".claude/*", "milestone", "agent skills describe how the external plan is organised"),

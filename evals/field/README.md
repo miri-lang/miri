@@ -35,6 +35,9 @@ runs/<round>/...           the records and transcripts
 runs/<round>.probe/...     the opinion probe's ratings, never folded into a claim
 ```
 
+`runs/` is ignored by git: a round's records stay on the machine that ran it.
+What a round established goes into `LOG.md` and `CLAIMS.md`, which are tracked.
+
 ## The arms
 
 | Arm | What the subject has |
