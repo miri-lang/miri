@@ -138,10 +138,8 @@ const TASKS: &[Task] = &[
     },
     Task {
         id: "k",
-        description: "read the warnings a green test run left behind",
-        blocked_by: Some(
-            "`miri test` renders warnings to stderr as text and omits them from the envelope",
-        ),
+        description: "read and repair the warnings a green test run left behind",
+        blocked_by: None,
     },
 ];
 

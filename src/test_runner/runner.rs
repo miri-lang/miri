@@ -13,7 +13,7 @@ use std::process::Command;
 use crate::codegen::{BuildTarget, CpuBackend};
 use crate::diagnostics::json::JsonDiagnostic;
 use crate::error::diagnostic::to_json;
-use crate::pipeline::{BuildOptions, Pipeline};
+use crate::pipeline::{BuildOptions, Pipeline, Reported};
 use crate::test_runner::{harness, Outcome, TestMarker, TestResult};
 
 /// How one test process ended.
@@ -48,6 +48,17 @@ pub struct CompileFailure {
 pub struct Artifact {
     _directory: tempfile::TempDir,
     executable: PathBuf,
+    /// The warnings and notes compiling the file raised, against its own lines.
+    pub notices: Vec<CompileNotice>,
+}
+
+/// A warning or note compiling a test file raised.
+#[derive(Debug, Clone)]
+pub struct CompileNotice {
+    /// The compiler's report of it, ready to print.
+    pub rendered: String,
+    /// The same notice as data, carrying its `help` and `repair`.
+    pub diagnostic: JsonDiagnostic,
 }
 
 impl Artifact {
@@ -98,11 +109,23 @@ pub fn compile_with_harness(
     }
     pipeline = pipeline.with_source_path(absolute.display().to_string());
 
-    // TODO: `build` prints the warnings and notes compiling raised to stderr,
-    // so `miri test --format json` leaves them out of its envelope. Report
-    // them through `Pipeline::build_reported`, as `run` and `build` do, and
-    // carry them in the envelope against the test file's own lines.
-    pipeline.build(&combined, &options).map_err(|error| {
+    let Reported { outcome, notices } = pipeline.build_reported(&combined, &options);
+    // The harness is appended after the file, so a notice raised inside it is
+    // about generated code, not about anything the author wrote.
+    let notices = notices
+        .iter()
+        .filter(|notice| {
+            notice
+                .span
+                .as_ref()
+                .is_none_or(|span| span.start < source.len())
+        })
+        .map(|notice| CompileNotice {
+            rendered: crate::error::format::format_diagnostic(&combined, notice, Some(display)),
+            diagnostic: to_json(notice, &combined, pipeline.source_path()),
+        })
+        .collect();
+    outcome.map_err(|error| {
         // Rendered through the compiler's own formatter against the combined
         // source, so the report reads the way `miri build` reads rather than as
         // a debug dump of the error value — and kept as data beside it, so a
@@ -127,6 +150,7 @@ pub fn compile_with_harness(
     Ok(Artifact {
         _directory: directory,
         executable,
+        notices,
     })
 }
 

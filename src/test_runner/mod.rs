@@ -125,6 +125,11 @@ pub struct TestSummary {
     pub rejected_files: Vec<RejectedFile>,
     /// What discovery read, whether or not any of it held a test.
     pub census: Census,
+    /// The warnings and notes compiling the test files raised. The envelope
+    /// carries them in `diagnostics`, so the summary's own serialization does
+    /// not repeat them.
+    #[serde(skip)]
+    pub notices: Vec<runner::CompileNotice>,
 }
 
 impl TestSummary {
@@ -152,6 +157,7 @@ impl TestSummary {
             results,
             rejected_files: rejected,
             census,
+            notices: Vec::new(),
         }
     }
 
@@ -223,6 +229,7 @@ pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSum
         files_declaring_tests: discovered.files.len(),
     };
     let mut results = Vec::new();
+    let mut notices = Vec::new();
     let mut rejected = discovered.rejected;
 
     for file in discovered.files {
@@ -232,19 +239,24 @@ pub fn run_tests(target: &Path, filter: Option<&str>) -> std::io::Result<TestSum
             continue;
         }
         match run_file(&file, &display, &selected) {
-            FileOutcome::Ran(file_results) => results.extend(file_results),
+            FileOutcome::Ran(file_results, file_notices) => {
+                results.extend(file_results);
+                notices.extend(file_notices);
+            }
             FileOutcome::NotRun(refusal) => rejected.push(refusal),
         }
     }
 
-    let summary = TestSummary::from_results(results, rejected, census);
+    let mut summary = TestSummary::from_results(results, rejected, census);
+    summary.notices = notices;
     Ok(summary)
 }
 
 /// What asking one file for its tests produced.
 enum FileOutcome {
-    /// The file compiled, and these are its tests' verdicts.
-    Ran(Vec<TestResult>),
+    /// The file compiled, and these are its tests' verdicts, with the
+    /// warnings and notes compiling it raised.
+    Ran(Vec<TestResult>, Vec<runner::CompileNotice>),
     /// The file did not compile, so none of its tests was built.
     NotRun(RejectedFile),
 }
@@ -281,6 +293,7 @@ fn run_file(file: &discovery::TestFile, display: &str, selected: &[&TestMarker])
                 .iter()
                 .map(|test| ignored_result(test, display))
                 .collect(),
+            Vec::new(),
         );
     }
 
@@ -292,12 +305,8 @@ fn run_file(file: &discovery::TestFile, display: &str, selected: &[&TestMarker])
     // Create a temporary directory for sidecar files (or None if creation fails)
     let temp_dir = TempDir::new().ok();
 
-    FileOutcome::Ran(run_selected_tests(
-        selected,
-        display,
-        artifact.executable(),
-        temp_dir.as_ref(),
-    ))
+    let results = run_selected_tests(selected, display, artifact.executable(), temp_dir.as_ref());
+    FileOutcome::Ran(results, artifact.notices.clone())
 }
 
 /// Run selected tests with or without sidecar support.

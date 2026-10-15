@@ -854,3 +854,34 @@ fn test_run_without_json_still_prints_the_warning() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("MER_BLD_021"), "{stderr}");
 }
+
+/// A warning compiling a test file reaches the `test` envelope too, against
+/// the file's own line, and the run stays green.
+#[test]
+fn test_test_json_carries_a_compile_warning_in_the_envelope() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("w_test.mi");
+    std::fs::write(
+        &path,
+        "use system.testing\n\n@test\nfn test_adds()\n    let unused = 3\n    assert(1 + 1 == 2)\n",
+    )
+    .unwrap();
+    let output = miri_cmd()
+        .arg("test")
+        .arg(&path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+    let envelope: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert_eq!(envelope["ok"], true, "{envelope}");
+    let diagnostics = envelope["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{envelope}");
+    assert_eq!(diagnostics[0]["code"], "MER_TYP_071");
+    assert_eq!(diagnostics[0]["line"], 5);
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("MER_TYP_071"),
+        "in JSON mode the warning belongs in the envelope"
+    );
+}
