@@ -2117,11 +2117,23 @@ impl TypeChecker {
             self.report_error(DiagnosticCode::TypGenericArgumentCount, message, span);
             return None;
         }
+        // An argument that folds to an integer — `fill<4>(b)`, or a `const` —
+        // is a value for a value-generic parameter, as `Array<int, 4>` writes
+        // one; anything else is a type.
         Some(
             parameters
                 .into_iter()
                 .zip(written)
-                .map(|(name, argument)| (name, self.resolve_type_expression(argument, context)))
+                .map(|(name, argument)| {
+                    let bound = if Self::try_eval_const_int_with_context(argument, context)
+                        .is_some()
+                    {
+                        crate::type_checker::generics::value_generic_marker_type(argument.clone())
+                    } else {
+                        self.resolve_type_expression(argument, context)
+                    };
+                    (name, bound)
+                })
                 .collect(),
         )
     }
@@ -2279,6 +2291,56 @@ impl TypeChecker {
             };
             let parameter_type = self.substitute_type(&written, &marked);
             self.infer_generic_types(&parameter_type, argument, generic_map);
+            self.bind_value_generics(&written, argument, &marked, generic_map);
+        }
+    }
+
+    /// Bind each value-generic parameter in `marked` that `parameter` writes
+    /// as a collection's or class's argument — the `Size` of
+    /// `Array<int, Size>` — to the value `argument` holds in the same slot:
+    /// the `4` of `Array<int, 4>`, as the `3` of `Array<T, 3>` binds a
+    /// class's. A slot holding a type binds nothing here.
+    ///
+    /// TODO: the body of such a function cannot yet read the parameter as a
+    /// value (`for i in 0..Size` reports `Size` undefined): value generics are
+    /// substituted into class method bodies, not function bodies.
+    fn bind_value_generics(
+        &self,
+        parameter: &Type,
+        argument: &Type,
+        marked: &HashMap<String, Type>,
+        generic_map: &mut HashMap<String, Type>,
+    ) {
+        let (Some(written), Some(passed)) = (
+            generic_slots(&parameter.kind),
+            generic_slots(&argument.kind),
+        ) else {
+            return;
+        };
+        if written.len() != passed.len() {
+            return;
+        }
+        for (slot, value) in written.iter().zip(passed.iter()) {
+            let named = match &slot.node {
+                ExpressionKind::Identifier(name, None) => Some(name),
+                _ => None,
+            };
+            if let Some(name) = named.filter(|name| marked.contains_key(name.as_str())) {
+                let is_value = self.extract_type_from_expression(value).is_err();
+                if is_value && !generic_map.contains_key(name) {
+                    generic_map.insert(
+                        name.clone(),
+                        crate::type_checker::generics::value_generic_marker_type((*value).clone()),
+                    );
+                }
+                continue;
+            }
+            if let (Ok(inner), Ok(inner_arg)) = (
+                self.extract_type_from_expression(slot),
+                self.extract_type_from_expression(value),
+            ) {
+                self.bind_value_generics(&inner, &inner_arg, marked, generic_map);
+            }
         }
     }
 
@@ -2458,11 +2520,6 @@ impl TypeChecker {
     /// `param`: exactly the same type, since the callee writes through it. Two
     /// arrays agree when their elements do and their sizes fold to the same
     /// number, so `Array<int, N>` with `const N = 4` agrees with `Array<int, 4>`.
-    ///
-    /// TODO: a function generic over the size (`fn fill<Size>(dst out
-    /// Array<int, Size>)`) is refused for an `out` and an ordinary parameter
-    /// alike: the size is not inferred from `Array<int, 4>`, and `fill<4>(...)`
-    /// is not accepted as an explicit argument.
     fn out_types_agree(&self, param: &Type, arg: &Type, context: &Context) -> bool {
         if param == arg {
             return true;
@@ -3861,4 +3918,16 @@ fn arguments_by_parameter<'a>(
             Some((param, value, ty))
         })
         .collect()
+}
+
+/// The argument slots of an array or a class type, in order: an array's
+/// element and size, or a class's type arguments.
+fn generic_slots(kind: &TypeKind) -> Option<Vec<&Expression>> {
+    if let Some((element, size)) = crate::ast::types::array_element_and_size(kind) {
+        return Some(vec![element, size]);
+    }
+    match kind {
+        TypeKind::Custom(_, Some(args)) => Some(args.iter().collect()),
+        _ => None,
+    }
 }
