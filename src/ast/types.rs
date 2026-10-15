@@ -1230,12 +1230,15 @@ pub fn common_numeric_type(left: &TypeKind, right: &TypeKind) -> Option<TypeKind
     } else {
         &[TypeKind::I16, TypeKind::I32, TypeKind::I64, TypeKind::I128]
     };
-    [left.clone(), right.clone()]
+    // Perf: Iterate over references `[left, right]` and `ladder` rather than cloning them
+    // on every binary operator type check, cloning only the winning candidate at the end.
+    [left, right]
         .into_iter()
-        .chain(ladder.iter().cloned())
+        .chain(ladder.iter())
         .find(|candidate| {
             holds_every_value_of(candidate, left) && holds_every_value_of(candidate, right)
         })
+        .cloned()
 }
 
 /// std430 inline byte stride between consecutive vector elements stored inline
