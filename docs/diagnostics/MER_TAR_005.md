@@ -17,6 +17,7 @@ A parallel construct (such as `forall`) contains an invalid pattern. This code c
 - `'gpu forall' range {dim} start must be Int, got {type}`
 - `'gpu forall' range {dim} end must be Int, got {type}`
 - `'gpu forall' requires at least one gpu-resident buffer; none found (annotate data with 'gpu let')`
+- `'{keyword}' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level`
 - `gpu frame requires exactly 1 loop variable`
 - `'gpu frame' requires a bounded numeric range like 'a..b' or 'a..=b'`
 - `'gpu frame' requires Int-literal range start`
