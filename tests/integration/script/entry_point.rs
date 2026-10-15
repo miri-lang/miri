@@ -308,3 +308,27 @@ fn test_reads_the_const()
         output
     );
 }
+
+/// A script's top-level bindings are locals of the `main` it is wrapped in,
+/// so a function the script declares cannot reach them. `check` reads the
+/// script wrapped, as `build` does, so the two report the same thing.
+#[test]
+fn test_check_and_build_agree_that_a_function_cannot_reach_a_script_binding() {
+    let code = "let counter = 0\n\nfn bump()\n    counter = counter + 1\n\nbump()\nprintln(f\"{counter}\")\n";
+    let checked = crate::utils::miri_check(code).output();
+    let built = crate::utils::miri_build(code).output();
+    for output in [&checked, &built] {
+        assert!(
+            output.contains("MER_TYP_034") && output.contains("counter"),
+            "both commands must refuse the function's read of `counter`:\n{output}"
+        );
+    }
+}
+
+/// A file of declarations alone is a module, checked as written: nothing in
+/// it runs, so it is not wrapped.
+#[test]
+fn test_a_module_file_is_checked_unwrapped() {
+    let result = crate::utils::miri_check("fn helper() int\n    return 1\n");
+    assert!(result.success, "{}", result.output());
+}
