@@ -69,7 +69,14 @@ impl TypeChecker {
         expr_id: usize,
         context: &mut Context,
     ) -> Type {
-        if let Some(ty) = self.try_builtin_identifier(name) {
+        // A built-in dispatched by name (`length`, `dot`, `atomic_add`, …) is
+        // only a placeholder for a call shape; a function or binding the
+        // program declares under that name is the one it means.
+        let builtin = self.try_builtin_identifier(name).filter(|ty| {
+            !matches!(ty.kind, TypeKind::Meta(_))
+                || self.resolve_value_name(name, context).is_none()
+        });
+        if let Some(ty) = builtin {
             // A built-in that is a function is a variant constructor: `Some`,
             // `Ok`, `Err`.
             if matches!(ty.kind, TypeKind::Function(_)) {

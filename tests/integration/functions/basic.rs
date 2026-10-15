@@ -95,3 +95,13 @@ fn main()
         "42",
     );
 }
+
+/// A function the program declares is the one its name calls, even when the
+/// name is one the compiler also dispatches as a built-in (`length`, `dot`).
+#[test]
+fn test_a_function_named_like_a_builtin_is_the_one_called() {
+    assert_runs_with_output(
+        "fn length(n int) int\n    n * 2\n\nfn dot(a int, b int) int\n    a + b\n\nfn main()\n    println(f\"{length(2)} {dot(1, 2)}\")\n",
+        "4 3",
+    );
+}
