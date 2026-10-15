@@ -119,10 +119,11 @@ inc(n)
     );
 }
 
+/// A new string assigned to an `out` parameter never reached the caller —
+/// this program printed `hello` and leaked the new string — so it is refused.
 #[test]
-fn test_out_param_string_mutation() {
-    // Callee appends to a string via an `out` parameter.
-    assert_type_checks(
+fn test_out_param_string_replacement_is_refused() {
+    assert_compiler_error(
         r#"
 
 fn append_excl(s out String)
@@ -131,6 +132,7 @@ fn append_excl(s out String)
 var msg = "hello"
 append_excl(msg)
 "#,
+        "cannot be given a new value",
     );
 }
 
@@ -263,5 +265,26 @@ fn test_a_generic_out_parameter_is_written_through() {
     assert_runs_with_output(
         "fn bump<T>(dst out T, v T)\n    dst = v\n\nfn main()\n    var x = 1\n    bump(x, 6)\n    var f f32 = 0.5\n    bump(f, 2.5)\n    println(f\"{x} {f}\")\n",
         "6 2.5",
+    );
+}
+
+/// A string reaches an `out` parameter as the caller's own reference, so a new
+/// one assigned there would never reach the caller: it is refused rather than
+/// silently lost.
+#[test]
+fn test_replacing_a_managed_out_parameter_is_refused() {
+    assert_compiler_error(
+        "fn bump(dst out String, v String)\n    dst = v\n\nfn main()\n    var s = \"a\" + \"b\"\n    bump(s, \"c\" + \"d\")\n    println(s)\n",
+        "error[MER_TYP_066]",
+    );
+}
+
+/// Changing a managed `out` parameter in place is visible to the caller and
+/// stays allowed.
+#[test]
+fn test_a_managed_out_parameter_is_changed_in_place() {
+    assert_runs_with_output(
+        "use system.collections.list\n\nfn add(dst out List<int>, v int)\n    dst.push(v)\n\nfn main()\n    var xs = List<int>()\n    add(xs, 4)\n    println(f\"{xs.length()}\")\n",
+        "1",
     );
 }

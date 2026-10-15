@@ -740,6 +740,7 @@ impl TypeChecker {
             );
             return ast_factory::make_type(TypeKind::Error);
         };
+        self.refuse_replacing_a_managed_out_parameter(name, span, context);
         if name != "self" && context.resolve_info(name).is_some() && !context.is_mutable(name) {
             let is_constant = context.is_constant(name);
             let msg = if is_constant {
@@ -798,6 +799,38 @@ impl TypeChecker {
             );
         }
         self.infer_index(obj, index, index_expr.span, context)
+    }
+
+    /// Refuses assigning a whole new value to an `out` parameter whose type the
+    /// call does not write back: a string, a collection or a class reaches
+    /// the callee as the reference the caller holds, so a new value assigned
+    /// to the parameter would stay in the callee and never reach the caller.
+    /// Changing the value in place is visible to the caller and stays allowed.
+    fn refuse_replacing_a_managed_out_parameter(
+        &mut self,
+        name: &str,
+        span: Span,
+        context: &Context,
+    ) {
+        let Some(info) = context.resolve_info(name) else {
+            return;
+        };
+        let written_back = crate::ast::types::is_written_back_out_type(&info.ty.kind);
+        let undecided = matches!(info.ty.kind, TypeKind::Generic(..) | TypeKind::Error);
+        if !info.is_out_parameter || written_back || undecided {
+            return;
+        }
+        let ty = spelled(&info.ty);
+        self.report_error_with_help(
+            DiagnosticCode::TypOutParameterMisuse,
+            format!(
+                "an `out` parameter of type '{ty}' cannot be given a new value: '{name}' reaches the function as the caller's own {ty}, so a new one assigned here would not reach the caller"
+            ),
+            span,
+            format!(
+                "change '{name}' in place, or return the new {ty} instead of taking it as `out`"
+            ),
+        );
     }
 
     /// Reports a field or element written through `target`, which is not

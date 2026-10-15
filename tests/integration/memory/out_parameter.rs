@@ -113,7 +113,7 @@ inc(n)
 
 // ─────────────────────────────────────────────────────
 // managed-type out param: variable must not be consumed
-// after the call — the callee wrote a new value to it
+// after the call — the callee was handed it to change
 // ─────────────────────────────────────────────────────
 
 #[test]
@@ -121,11 +121,11 @@ fn test_out_param_managed_type_not_consumed_after_call() {
     assert_type_checks(
         r#"
 
-fn append_excl(s out String)
-    s = f"{s}!"
+fn show(s out String)
+    println(s)
 
 var msg = "hello"
-append_excl(msg)
+show(msg)
 let result = msg
 "#,
     );
@@ -147,7 +147,7 @@ class Conn
         return
 
 fn reset(c out Conn)
-    c = Conn(handle: 99)
+    c.handle = 99
 
 var c = Conn(handle: 1)
 reset(c)
