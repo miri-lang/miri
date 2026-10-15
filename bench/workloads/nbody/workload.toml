@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The nbody workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads the parameter from the file
+# named by its first argument.
+
+name = "nbody"
+# The compiler mechanisms the workload stresses.
+tags = ["float", "struct-field", "array-index", "loop"]
+parameter = "The number of 0.01 steps to simulate."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+[sizes.s]
+parameter = 1500000
+checksum = "-169075163 -169057152"
+
+[sizes.m]
+parameter = 15000000
+checksum = "-169075163 -169056787"
+
+[sizes.l]
+parameter = 90000000
+checksum = "-169075163 -169068410"

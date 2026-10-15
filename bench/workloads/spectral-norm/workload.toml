@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The spectral-norm workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads the parameter from the file
+# named by its first argument.
+
+name = "spectral-norm"
+# The compiler mechanisms the workload stresses.
+tags = ["float", "call", "array-index", "loop"]
+parameter = "The number of rows of the matrix."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+[sizes.s]
+parameter = 1000
+checksum = "1274224148"
+
+[sizes.m]
+parameter = 3100
+checksum = "1274224152"
+
+[sizes.l]
+parameter = 7600
+checksum = "1274224152"

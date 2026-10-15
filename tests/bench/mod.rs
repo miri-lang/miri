@@ -4,3 +4,4 @@
 //! Gates over the CPU benchmark suite under `bench/`.
 
 mod charter;
+mod identity;

@@ -1,0 +1,162 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=7115c1846a9018ca40ed3d7316453f112b3cb9473efeb376bc63103d5dfa3dac
+
+// nbody: the Jovian planets orbiting the sun, advanced by a simple symplectic
+// integrator. Stresses float arithmetic, struct field reads and writes in a
+// list, and square roots.
+
+use system.io
+use system.fs
+use system.os
+use system.math
+use system.time
+use system.process
+use system.collections.list
+
+struct Body
+    x float
+    y float
+    z float
+    vx float
+    vy float
+    vz float
+    mass float
+
+fn solar_mass() float: 4.0 * 3.141592653589793 * 3.141592653589793
+
+fn days_per_year() float: 365.24
+
+fn planet(x float, y float, z float, vx float, vy float, vz float, mass float) Body
+    let d = days_per_year()
+    Body(x: x, y: y, z: z, vx: vx * d, vy: vy * d, vz: vz * d, mass: mass * solar_mass())
+
+fn solar_system() [Body]
+    List([
+        Body(x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: solar_mass()),
+        planet(4.84143144246472090e+00, -1.16032004402742839e+00, -1.03622044471123109e-01, 1.66007664274403694e-03, 7.69901118419740425e-03, -6.90460016972063023e-05, 9.54791938424326609e-04),
+        planet(8.34336671824457987e+00, 4.12479856412430479e+00, -4.03523417114321381e-01, -2.76742510726862411e-03, 4.99852801234917238e-03, 2.30417297573763929e-05, 2.85885980666130812e-04),
+        planet(1.28943695621391310e+01, -1.51111514016986312e+01, -2.23307578892655734e-01, 2.96460137564761618e-03, 2.37847173959480950e-03, -2.96589568540237556e-05, 4.36624404335156298e-05),
+        planet(1.53796971148509165e+01, -2.59193146099879641e+01, 1.79258772950371181e-01, 2.68067772490389322e-03, 1.62824170038242295e-03, -9.51592254519715870e-05, 5.15138902046611451e-05)
+    ])
+
+fn offset_momentum(start [Body]) [Body]
+    var bodies = start
+    var px = 0.0
+    var py = 0.0
+    var pz = 0.0
+    for b in bodies
+        px = px + b.vx * b.mass
+        py = py + b.vy * b.mass
+        pz = pz + b.vz * b.mass
+    bodies[0].vx = -px / solar_mass()
+    bodies[0].vy = -py / solar_mass()
+    bodies[0].vz = -pz / solar_mass()
+    bodies
+
+fn energy(bodies [Body]) float
+    var e = 0.0
+    let n = bodies.length()
+    var i = 0
+    while i < n
+        let b = bodies[i]
+        e = e + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+        var j = i + 1
+        while j < n
+            let o = bodies[j]
+            let dx = b.x - o.x
+            let dy = b.y - o.y
+            let dz = b.z - o.z
+            e = e - b.mass * o.mass / sqrt(dx * dx + dy * dy + dz * dz)
+            j += 1
+        i += 1
+    e
+
+fn advance(start [Body], dt float) [Body]
+    var bodies = start
+    let n = bodies.length()
+    var i = 0
+    while i < n
+        var j = i + 1
+        while j < n
+            let dx = bodies[i].x - bodies[j].x
+            let dy = bodies[i].y - bodies[j].y
+            let dz = bodies[i].z - bodies[j].z
+            let d2 = dx * dx + dy * dy + dz * dz
+            let mag = dt / (d2 * sqrt(d2))
+            let mi = bodies[i].mass * mag
+            let mj = bodies[j].mass * mag
+            bodies[i].vx = bodies[i].vx - dx * mj
+            bodies[i].vy = bodies[i].vy - dy * mj
+            bodies[i].vz = bodies[i].vz - dz * mj
+            bodies[j].vx = bodies[j].vx + dx * mi
+            bodies[j].vy = bodies[j].vy + dy * mi
+            bodies[j].vz = bodies[j].vz + dz * mi
+            j += 1
+        i += 1
+    i = 0
+    while i < n
+        bodies[i].x = bodies[i].x + dt * bodies[i].vx
+        bodies[i].y = bodies[i].y + dt * bodies[i].vy
+        bodies[i].z = bodies[i].z + dt * bodies[i].vz
+        i += 1
+    bodies
+
+/// Simulate `steps` steps of 0.01 and report the energy before and after, in
+/// billionths, truncated toward zero.
+fn kernel(steps int) String
+    var bodies = offset_momentum(solar_system())
+    let before = energy(bodies)
+    var s = 0
+    while s < steps
+        bodies = advance(bodies, 0.01)
+        s += 1
+    let after = energy(bodies)
+    f"{(before * 1000000000.0) as int} {(after * 1000000000.0) as int}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_parameter(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(n int) String
+    let clock = Clock()
+    let expected = kernel(n)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(n) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(n)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let n = read_parameter(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(n))
+else
+    println(kernel(n))

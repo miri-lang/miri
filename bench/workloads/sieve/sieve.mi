@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=8a9fec70e6b45265f1bfe199f47d478a39a48e4019fb93003162a0c1a963c497
+
+// sieve: the sieve of Eratosthenes up to n. Stresses a list of booleans,
+// strided writes and a data-dependent branch.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+/// How many primes there are up to `n`, and their sum modulo 1000000007.
+fn kernel(n int) String
+    var composite = List<bool>()
+    var i = 0
+    while i <= n
+        composite.push(false)
+        i += 1
+    var count = 0
+    var sum = 0
+    var p = 2
+    while p <= n
+        if not composite[p]
+            count += 1
+            sum = (sum + p) % 1000000007
+            var m = p * p
+            while m <= n
+                composite[m] = true
+                m += p
+        p += 1
+    f"{count} {sum}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_parameter(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(n int) String
+    let clock = Clock()
+    let expected = kernel(n)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(n) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(n)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let n = read_parameter(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(n))
+else
+    println(kernel(n))

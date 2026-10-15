@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=a51264a07afbf6d0ba1941c517fbf6bac0431a57fa9c4bdbd620452a3c9e39ae
+
+// mandelbrot: the Mandelbrot set on an n by n grid, 50 iterations a point,
+// packed eight pixels to a byte as a PBM bitmap would be. Stresses float
+// arithmetic, nested loops and early exits. The checksum folds the packed
+// bytes into one number.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+
+/// Whether the point (cr, ci) stays bounded for 50 iterations.
+fn stays_bounded(cr float, ci float) bool
+    var zr = 0.0
+    var zi = 0.0
+    var k = 0
+    while k < 50
+        let tr = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = tr
+        if zr * zr + zi * zi > 4.0
+            return false
+        k += 1
+    true
+
+/// The bitmap's bytes folded row by row into one number, and the count of
+/// points in the set.
+fn kernel(n int) String
+    var hash = 0
+    var inside = 0
+    var y = 0
+    while y < n
+        let ci = 2.0 * (y as float) / (n as float) - 1.0
+        var byte = 0
+        var bits = 0
+        var x = 0
+        while x < n
+            let cr = 2.0 * (x as float) / (n as float) - 1.5
+            byte = byte * 2
+            if stays_bounded(cr, ci)
+                byte += 1
+                inside += 1
+            bits += 1
+            if bits == 8
+                hash = (hash * 31 + byte) % 1000000007
+                byte = 0
+                bits = 0
+            x += 1
+        if bits > 0
+            while bits < 8
+                byte = byte * 2
+                bits += 1
+            hash = (hash * 31 + byte) % 1000000007
+        y += 1
+    f"{hash} {inside}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_parameter(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(n int) String
+    let clock = Clock()
+    let expected = kernel(n)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(n) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(n)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let n = read_parameter(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(n))
+else
+    println(kernel(n))

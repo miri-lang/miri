@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The matmul workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads the parameter from the file
+# named by its first argument.
+
+name = "matmul"
+# The compiler mechanisms the workload stresses.
+tags = ["float", "array-index", "loop"]
+parameter = "The side of the square matrices."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+[sizes.s]
+parameter = 310
+checksum = "692640750"
+
+[sizes.m]
+parameter = 670
+checksum = "6992739750"
+
+[sizes.l]
+parameter = 1230
+checksum = "43265157750"
