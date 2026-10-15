@@ -153,31 +153,11 @@ pub enum ElementShape<'a> {
     Other,
 }
 
-/// Returns true when a type requires pointer-passing for `out` semantics.
-///
-/// Managed heap types (List, String, custom classes, etc.) are already pointers;
-/// their mutations are visible to callers without extra indirection.
-/// Primitive scalars (int, bool, floats) are passed by value and need a pointer
-/// so that callee modifications propagate back.
+/// Returns true when a type requires pointer-passing for `out` semantics:
+/// the scalars the `out` ABI copies back through a stack slot (see
+/// [`crate::ast::types::is_written_back_out_type`]).
 pub fn needs_out_pointer(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::U8
-            | TypeKind::I16
-            | TypeKind::U16
-            | TypeKind::I32
-            | TypeKind::U32
-            | TypeKind::I64
-            | TypeKind::U64
-            | TypeKind::I128
-            | TypeKind::U128
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::Float
-            | TypeKind::Boolean
-    )
+    crate::ast::types::is_written_back_out_type(kind)
 }
 
 impl<'a> FunctionTranslator<'a> {
