@@ -759,6 +759,15 @@ fn build_test_envelope(
         .flat_map(|rf| rf.diagnostics.iter().cloned())
         .collect();
 
+    // The warnings and notes compiling the test files raised follow the errors
+    // of the files that would not compile, and never make the run red.
+    diagnostics.extend(
+        summary
+            .notices
+            .iter()
+            .map(|notice| notice.diagnostic.clone()),
+    );
+
     // A run that discovered nothing is refused under a code, and the refusal
     // reaches a consumer where every other one does.
     if let Some(diagnostic) = summary.empty_run_diagnostic() {
@@ -830,6 +839,9 @@ fn run_tests(
         let output = miri::cli::serialize_envelope(&envelope);
         println!("{}", output);
     } else {
+        for notice in &summary.notices {
+            eprintln!("{}", notice.rendered);
+        }
         print!("{}", miri::test_runner::report::format_pretty(&summary));
     }
 
