@@ -192,7 +192,7 @@ struct Sentence {
 const SENTENCES: &[Sentence] = &[
     Sentence {
         shape: "Did you mean '{}'?",
-        sites: 6,
+        sites: 7,
         unrepaired_because: "",
     },
     Sentence {

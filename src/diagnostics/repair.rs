@@ -113,6 +113,7 @@ impl RepairId {
             Self::ConcatToFormattedString => &[DiagnosticCode::TypTypeMismatch],
             Self::QualifyVariantPattern => &[DiagnosticCode::TypEnumVariant],
             Self::RenameToSuggestion => &[
+                DiagnosticCode::ImpNameNotFoundInModule,
                 DiagnosticCode::TypFieldNotFound,
                 DiagnosticCode::TypEnumVariant,
                 DiagnosticCode::TypTypeNotFound,

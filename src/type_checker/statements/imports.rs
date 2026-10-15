@@ -102,6 +102,11 @@ impl TypeChecker {
             // being lost: the names it binds are bound on every import.
             self.register_item_aliases(&path_str, &import_kind);
             self.register_module_alias(&path_str, alias);
+            // The selection is checked against the module however it came to
+            // be loaded — by the prelude, an implicit import, or an earlier
+            // `use` — as it is on a first load.
+            let selected = Self::selected_import_names(&import_kind);
+            self.validate_reimported_selection(&selected, &path_str);
             return;
         }
 
@@ -941,13 +946,67 @@ impl TypeChecker {
                     .is_some_and(|names| names.contains(sel_name.as_str()));
 
                 if !in_scope && !in_types && !in_aliases {
-                    self.report_error(
-                        DiagnosticCode::ImpNameNotFoundInModule,
-                        format!("Name '{}' not found in module '{}'", sel_name, module_name),
-                        *sel_span,
-                    );
+                    self.report_name_not_in_module(sel_name, module_name, *sel_span);
                 }
             }
+        }
+    }
+
+    /// Refuses each name a selective import of an already-loaded `module`
+    /// selects that the module does not declare.
+    ///
+    /// The program's scope cannot answer this for a module loaded earlier:
+    /// two modules may declare the same name, and the scope holds one of
+    /// them. The module's own record of what it declares can. A module not
+    /// recorded under this path — the same file reached through another one —
+    /// has nothing to check against, and is left to resolve as before.
+    fn validate_reimported_selection(
+        &mut self,
+        selected: &Option<HashMap<String, Span>>,
+        module: &str,
+    ) {
+        let Some(selected) = selected else {
+            return;
+        };
+        let declared = self.modules.module_declared_names.get(module);
+        let symbols = self.modules.module_symbols.get(module);
+        if declared.is_none() && symbols.is_none() {
+            return;
+        }
+        let mut missing: Vec<(String, Span)> = selected
+            .iter()
+            .filter(|(name, _)| {
+                !declared.is_some_and(|names| names.contains(name.as_str()))
+                    && !symbols.is_some_and(|names| names.contains_key(name.as_str()))
+                    && !self.modules.keeps_private(module, name)
+            })
+            .map(|(name, span)| (name.clone(), *span))
+            .collect();
+        missing.sort_by_key(|(_, span)| span.start);
+        for (name, span) in missing {
+            self.report_name_not_in_module(&name, module, span);
+        }
+    }
+
+    /// Reports `name` as not declared by `module`, naming the one the module
+    /// does declare when a single name is close to it.
+    fn report_name_not_in_module(&mut self, name: &str, module: &str, span: Span) {
+        let message = format!("Name '{}' not found in module '{}'", name, module);
+        let declared: Vec<&str> = self
+            .modules
+            .module_declared_names
+            .get(module)
+            .map(|names| names.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        match crate::error::format::find_best_match(name, &declared) {
+            Some(suggestion) => self.report_error_with_help_and_optional_repair(
+                DiagnosticCode::ImpNameNotFoundInModule,
+                message,
+                span,
+                format!("Did you mean '{}'?", suggestion),
+                crate::diagnostics::RepairRequest::rename(span.start, span.end, name, &suggestion),
+            ),
+            None => self.report_error(DiagnosticCode::ImpNameNotFoundInModule, message, span),
         }
     }
 
