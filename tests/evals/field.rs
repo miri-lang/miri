@@ -2812,52 +2812,87 @@ fn test_a_pruned_staged_stdlib_is_staged_again() {
 /// The fold publishes, per Miri arm and per run, what the subject did on the
 /// way: the codes the compiler reported and how many carried a repair, the
 /// repairs applied, the lookups made and the failed compile cycles by cause.
-/// Pinned on the committed 2026-10-12 round, so the shape is checked against real
-/// transcripts.
+/// Run records stay on the machine that ran them, so the shape is pinned on a
+/// synthetic round whose transcripts follow the harness's stream format.
 #[test]
 fn test_the_fold_publishes_what_each_miri_run_did() {
     if !available("python3") {
         println!("skipping: python3 is not on PATH, so the round was not folded");
         return;
     }
-    let out = std::env::temp_dir().join("miri-field-usage-summary.json");
-    let folded = Command::new("python3")
-        .arg(field_dir().join("report.py"))
-        .args(["--round", "2026-10-12", "--out"])
-        .arg(&out)
-        .output()
-        .expect("cannot run python3");
-    assert!(
-        folded.status.success(),
-        "the fold failed:\n{}",
-        String::from_utf8_lossy(&folded.stderr)
-    );
-    let summary: serde_json::Value =
-        serde_json::from_str(&read(&out)).expect("the summary is not JSON");
-    let usage = &summary["usage"];
-    for arm in ["miri-skill", "miri-grammar", "miri-both"] {
-        let of_arm = &usage["arms"][arm];
-        assert_eq!(of_arm["runs"], 45, "{arm} folded the wrong number of runs");
-        for key in [
-            "compiles",
-            "fixApplied",
-            "repairRatio",
-            "diagnostics",
-            "repairedDiagnostics",
-            "lookups",
-            "failedCycles",
-            "onboardingShare",
-        ] {
-            assert!(!of_arm[key].is_null(), "{arm} publishes no {key}");
-        }
+    let root = std::env::temp_dir().join("miri-field-usage-fold");
+    let _ = fs::remove_dir_all(&root);
+    let miri_arms = ["miri-skill", "miri-grammar", "miri-both"];
+    for arm in miri_arms.iter().chain(&["python"]) {
+        write_synthetic_record(&root, GPU_JOBS[0], arm, SyntheticRun::green(100, 10, 4));
+        let transcript = root
+            .join("synthetic")
+            .join(GPU_JOBS[0])
+            .join(arm)
+            .join("claude-sonnet")
+            .join("1.transcript.jsonl");
+        fs::write(&transcript, synthetic_miri_transcript()).expect("cannot write a transcript");
     }
+    let summary: serde_json::Value =
+        serde_json::from_str(&fold(&root)).expect("the summary is not JSON");
+    let _ = fs::remove_dir_all(&root);
+    let usage = &summary["usage"];
+    for arm in miri_arms {
+        let of_arm = &usage["arms"][arm];
+        assert_eq!(of_arm["runs"], 1, "{arm} folded the wrong number of runs");
+        assert_eq!(of_arm["compiles"], 2, "{arm} miscounted its compiles");
+        assert_eq!(of_arm["fixApplied"], 1, "{arm} lost its applied repair");
+        assert_eq!(of_arm["diagnostics"]["MER_IMP_005"], 1, "{arm} lost a code");
+        assert_eq!(of_arm["repairedDiagnostics"]["MER_IMP_005"], 1);
+        assert_eq!(of_arm["repairRatio"], 1.0, "{arm} miscounted its repairs");
+        assert_eq!(of_arm["lookups"]["explain"], 1, "{arm} lost its lookup");
+        assert_eq!(of_arm["failedCycles"]["import"], 1, "{arm} lost the cause");
+        assert!(
+            of_arm.get("onboardingShare").is_some(),
+            "{arm} publishes no onboardingShare"
+        );
+    }
+    assert!(
+        usage["arms"]["python"].is_null(),
+        "a baseline arm was folded as Miri"
+    );
     let runs = usage["runs"].as_array().expect("usage.runs is not a list");
-    assert_eq!(runs.len(), 135, "every Miri run is listed once");
+    assert_eq!(runs.len(), 3, "every Miri run is listed once");
     assert!(runs.iter().all(|run| run["run"]
         .as_str()
         .is_some_and(|id| id.split('/').count() == 4)));
-    assert!(
-        usage["arms"]["miri-skill"]["diagnostics"]["MER_IMP_005"].as_u64() > Some(0),
-        "the most frequent code of the 2026-10-12 round is no longer counted"
-    );
+}
+
+/// A Miri run's transcript in the harness's stream format: a check that fails
+/// with a repairable import error, the repair applied, a lookup, a clean check.
+fn synthetic_miri_transcript() -> String {
+    // Written out rather than built with `json!`, which sorts keys: the compiler
+    // prints `severity` before `code`, and the fold reads them in that order.
+    let envelope =
+        r#"{"diagnostics":[{"severity":"error","code":"MER_IMP_005","repair":{"edits":[]}}]}"#;
+    let calls = [
+        ("miri check main.mi --format json", envelope),
+        ("miri fix main.mi --apply", "applied 1 repair"),
+        (
+            "miri explain MER_IMP_005",
+            "an import names a module that is not there",
+        ),
+        ("miri check main.mi", "ok"),
+    ];
+    calls
+        .iter()
+        .enumerate()
+        .flat_map(|(index, (command, result))| {
+            let id = format!("call-{index}");
+            [
+                serde_json::json!({"type": "assistant", "message": {"content": [{
+                    "type": "tool_use", "id": id, "name": "Bash", "input": {"command": command}
+                }]}}),
+                serde_json::json!({"type": "user", "message": {"content": [{
+                    "type": "tool_result", "tool_use_id": id, "content": result
+                }]}}),
+            ]
+        })
+        .map(|event| event.to_string() + "\n")
+        .collect()
 }
