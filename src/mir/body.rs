@@ -561,3 +561,19 @@ impl fmt::Display for Body {
         Ok(())
     }
 }
+
+/// The `out` parameters of `body` whose value goes back to the caller through
+/// a slot the caller passes the address of: every `out` parameter of a host
+/// body, whatever its type. A kernel's `out` parameters are its written device
+/// buffers, bound by the launch rather than passed by a call, so it has none.
+pub fn written_back_out_params(body: &Body) -> HashSet<Local> {
+    if matches!(body.backend_metadata, Some(BackendMetadata::Gpu(_))) {
+        return HashSet::new();
+    }
+    body.out_params
+        .iter()
+        .enumerate()
+        .filter(|(_, is_out)| **is_out)
+        .map(|(index, _)| Local(index + 1))
+        .collect()
+}

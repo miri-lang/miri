@@ -50,13 +50,14 @@ fn scalar_out_local_returns_local_for_scalar_out_arg() {
         local: Local(0),
         projection: Vec::new(),
     });
-    let got = FunctionTranslator::scalar_out_local_for_arg(&[true], 0, &arg, &type_ctx);
+    let got = FunctionTranslator::out_local_for_arg(&[true], 0, &arg);
     assert_eq!(got, Some(Local(0)));
 }
 
 #[test]
-fn scalar_out_local_skips_managed_args() {
-    // Managed types (e.g. String) do not need an out pointer — they're already pointers.
+fn out_local_passes_a_managed_arg_through_its_slot_too() {
+    // A managed `out` argument goes through a slot as a scalar does, so a new
+    // value the callee assigns reaches the caller.
     let locals_ty = local_types_for(&[TypeKind::String]);
     let refs: Vec<&Type> = locals_ty.iter().collect();
     let type_ctx = type_ctx_with(&refs);
@@ -64,8 +65,8 @@ fn scalar_out_local_skips_managed_args() {
         local: Local(0),
         projection: Vec::new(),
     });
-    let got = FunctionTranslator::scalar_out_local_for_arg(&[true], 0, &arg, &type_ctx);
-    assert!(got.is_none());
+    let got = FunctionTranslator::out_local_for_arg(&[true], 0, &arg);
+    assert_eq!(got, Some(Local(0)));
 }
 
 #[test]
@@ -77,7 +78,7 @@ fn scalar_out_local_returns_none_when_flag_unset() {
         local: Local(0),
         projection: Vec::new(),
     });
-    let got = FunctionTranslator::scalar_out_local_for_arg(&[false], 0, &arg, &type_ctx);
+    let got = FunctionTranslator::out_local_for_arg(&[false], 0, &arg);
     assert!(got.is_none());
 }
 
@@ -90,6 +91,6 @@ fn scalar_out_local_skips_projected_places() {
         local: Local(0),
         projection: vec![miri::mir::PlaceElem::Field(0)],
     });
-    let got = FunctionTranslator::scalar_out_local_for_arg(&[true], 0, &arg, &type_ctx);
+    let got = FunctionTranslator::out_local_for_arg(&[true], 0, &arg);
     assert!(got.is_none());
 }

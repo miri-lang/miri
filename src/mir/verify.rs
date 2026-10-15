@@ -357,12 +357,17 @@ fn reachable_block_indices(body: &Body) -> Vec<usize> {
 ///
 /// Only the parameter's own value is the caller's. A DecRef through a projection
 /// of it — releasing the value a store into `self.field` replaced — releases
-/// what the object owns, and is legal.
+/// what the object owns, and is legal. So is releasing an `out` parameter's
+/// value before a new one is assigned to it: the caller handed that reference
+/// over, and takes the new value back through its slot.
 fn flag_decref_on_params(
     body: &Body,
     managed_params: &HashSet<Local>,
     violations: &mut Vec<VerificationViolation>,
 ) {
+    let written_back = crate::mir::body::written_back_out_params(body);
+    let managed_params: HashSet<Local> =
+        managed_params.difference(&written_back).copied().collect();
     let mut seen: Vec<Local> = Vec::new();
     for block in &body.basic_blocks {
         for stmt in &block.statements {

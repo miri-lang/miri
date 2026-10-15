@@ -1443,7 +1443,7 @@ fn lower_direct_call(
     // call reads it off the declaration too: the instance's body takes those
     // parameters by address, and a call that passed them by value would hand
     // it a value to write through.
-    let out_args = build_out_args(&resolve_param_types(ctx, func.id, false), &arg_ops);
+    let out_args = build_out_args(&resolve_param_types(ctx, callee.id, false), &arg_ops);
 
     emit_call_terminator(
         ctx,

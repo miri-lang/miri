@@ -153,13 +153,6 @@ pub enum ElementShape<'a> {
     Other,
 }
 
-/// Returns true when a type requires pointer-passing for `out` semantics:
-/// the scalars the `out` ABI copies back through a stack slot (see
-/// [`crate::ast::types::is_written_back_out_type`]).
-pub fn needs_out_pointer(kind: &TypeKind) -> bool {
-    crate::ast::types::is_written_back_out_type(kind)
-}
-
 impl<'a> FunctionTranslator<'a> {
     /// Create a new function translator.
     ///
@@ -270,15 +263,10 @@ impl<'a> FunctionTranslator<'a> {
         };
         builder.switch_to_block(entry_block);
         let params_vec: Vec<Value> = builder.block_params(entry_block).to_vec();
+        let written_back = crate::mir::body::written_back_out_params(body);
         for (i, param_val) in params_vec.into_iter().enumerate() {
             let local = Local(i + 1);
-            let is_scalar_out = i < body.out_params.len()
-                && body.out_params[i]
-                && body
-                    .local_decls
-                    .get(local.0)
-                    .is_some_and(|d| needs_out_pointer(&d.ty.kind));
-            if is_scalar_out {
+            if written_back.contains(&local) {
                 let ptr_var = builder.declare_var(ptr_type);
                 builder.def_var(ptr_var, param_val);
                 out_param_ptr_vars.insert(local, ptr_var);
@@ -392,9 +380,9 @@ impl<'a> FunctionTranslator<'a> {
         for i in 1..=body.arg_count {
             if i < body.local_decls.len() {
                 let param_ty = &body.local_decls[i].ty;
-                // Scalar out params are passed as pointers (copy-in/copy-out ABI).
-                let cl_type = if body.out_params.get(i - 1).copied().unwrap_or(false)
-                    && needs_out_pointer(&param_ty.kind)
+                // Out params are passed as the address of the caller's slot
+                // (copy-in/copy-out ABI).
+                let cl_type = if crate::mir::body::written_back_out_params(body).contains(&Local(i))
                 {
                     self.ptr_type
                 } else {

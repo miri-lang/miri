@@ -344,7 +344,6 @@ impl TypeChecker {
                 info.residency = r;
             }
             info.is_parameter = true;
-            info.is_out_parameter = param.is_out;
             context.define(param.name.clone(), info);
 
             self.check_parameter_guard(param, &param_type, context);

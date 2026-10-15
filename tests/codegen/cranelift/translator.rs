@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::types::{BuiltinCollectionKind, TypeKind};
-use miri::codegen::cranelift::translator::{needs_out_pointer, ElementShape};
+use miri::codegen::cranelift::translator::ElementShape;
 use miri::codegen::cranelift::FunctionTranslator;
 
 use miri::ast::expression::{Expression, ExpressionKind};
@@ -21,40 +21,15 @@ fn expr_ty(kind: TypeKind) -> Expression {
     }
 }
 
+/// Every `out` parameter of a host body goes back through the caller's
+/// slot, scalar or managed alike.
 #[test]
-fn needs_out_pointer_yes_for_scalars() {
-    for k in [
-        TypeKind::Int,
-        TypeKind::I8,
-        TypeKind::U8,
-        TypeKind::I16,
-        TypeKind::U16,
-        TypeKind::I32,
-        TypeKind::U32,
-        TypeKind::I64,
-        TypeKind::U64,
-        TypeKind::I128,
-        TypeKind::U128,
-        TypeKind::F32,
-        TypeKind::F64,
-        TypeKind::Float,
-        TypeKind::Boolean,
-    ] {
-        assert!(needs_out_pointer(&k), "{:?} should need an out pointer", k);
-    }
-}
-
-#[test]
-fn needs_out_pointer_no_for_managed() {
-    assert!(!needs_out_pointer(&TypeKind::String));
-    assert!(!needs_out_pointer(&TypeKind::List(Box::new(expr_ty(
-        TypeKind::Int
-    )))));
-    assert!(!needs_out_pointer(&TypeKind::Custom(
-        "MyClass".to_string(),
-        None
-    )));
-    assert!(!needs_out_pointer(&TypeKind::Void));
+fn every_out_param_of_a_host_body_is_written_back() {
+    let mut body = miri::mir::Body::new(2, Span::default(), miri::mir::ExecutionModel::Cpu);
+    body.out_params = vec![true, false];
+    let written_back = miri::mir::body::written_back_out_params(&body);
+    assert!(written_back.contains(&miri::mir::Local(1)));
+    assert!(!written_back.contains(&miri::mir::Local(2)));
 }
 
 #[test]

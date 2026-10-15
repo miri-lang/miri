@@ -22,7 +22,6 @@ mod vtable;
 use crate::ast::types::{BuiltinCollectionKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
-use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::type_facts::TypeDefinition;
@@ -437,8 +436,8 @@ impl CraneliftBackend {
             for i in 1..=body.arg_count {
                 if i < body.local_decls.len() {
                     let param_ty = &body.local_decls[i].ty;
-                    let cl_type = if body.out_params.get(i - 1).copied().unwrap_or(false)
-                        && needs_out_pointer(&param_ty.kind)
+                    let cl_type = if crate::mir::body::written_back_out_params(body)
+                        .contains(&crate::mir::Local(i))
                     {
                         ptr_type
                     } else {

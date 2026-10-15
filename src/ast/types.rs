@@ -1079,36 +1079,6 @@ pub fn array_element_and_size(kind: &TypeKind) -> Option<(&Expression, &Expressi
     }
 }
 
-/// Whether an `out` parameter of this type is written back to the caller's
-/// binding when the call returns.
-///
-/// Primitive scalars (integers, floats, `bool`) are passed by value, so the
-/// `out` ABI passes the address of a stack slot and copies the callee's value
-/// back after the call. A managed value (a string, a collection, a class) is
-/// passed as the reference it already is: what the callee changes inside it
-/// is visible to the caller, but a whole new value assigned to the parameter
-/// is not written back.
-pub fn is_written_back_out_type(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::U8
-            | TypeKind::I16
-            | TypeKind::U16
-            | TypeKind::I32
-            | TypeKind::U32
-            | TypeKind::I64
-            | TypeKind::U64
-            | TypeKind::I128
-            | TypeKind::U128
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::Float
-            | TypeKind::Boolean
-    )
-}
-
 /// True when `kind` is the error type or is built from one: a type the
 /// checker could not resolve, already reported where it was written. A check
 /// that rejects a type for what it holds says nothing useful about one whose
