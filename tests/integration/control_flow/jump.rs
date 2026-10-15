@@ -295,3 +295,35 @@ fn main()
         "1 -1",
     );
 }
+
+/// `break` and `continue` outside any loop are the same mistake, reported
+/// under the loop-control code rather than a GPU one.
+#[test]
+fn test_break_outside_a_loop_reports_the_loop_control_code() {
+    crate::integration::utils::assert_compiler_error(
+        "fn main()\n    let n = 3\n    if n > 2\n        break\n    println(f\"{n}\")\n",
+        "error[MER_TYP_050]",
+    );
+}
+
+#[test]
+fn test_continue_outside_a_loop_reports_the_loop_control_code() {
+    crate::integration::utils::assert_compiler_error(
+        "fn main()\n    let n = 3\n    if n > 2\n        continue\n    println(f\"{n}\")\n",
+        "error[MER_TYP_050]",
+    );
+}
+
+/// Inside a `gpu forall` body both are a GPU restriction: the dispatch is not
+/// a loop.
+#[test]
+fn test_break_and_continue_in_a_gpu_forall_report_the_gpu_code() {
+    for keyword in ["break", "continue"] {
+        crate::integration::utils::assert_compiler_error(
+            &format!(
+                "use system.gpu\nuse system.collections.array\n\nfn main()\n    gpu var out = Array<int, 4>()\n    gpu forall i in 0..4\n        out[i] = i\n        {keyword}\n"
+            ),
+            "error[MER_TAR_005]",
+        );
+    }
+}

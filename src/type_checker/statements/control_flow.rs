@@ -1241,29 +1241,39 @@ impl TypeChecker {
     }
 
     pub(crate) fn check_break(&mut self, context: &Context, span: Span) {
-        if context.loop_depth == 0 {
-            let msg = if context.gpu_for_depth > 0 {
-                "'break' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
-            } else {
-                "Break statement outside of loop"
-            };
-            self.report_error(
-                DiagnosticCode::TarGpuParallelConstruct,
-                msg.to_string(),
-                span,
-            );
-        }
+        self.check_loop_control("break", "Break statement outside of loop", context, span);
     }
 
     pub(crate) fn check_continue(&mut self, context: &Context, span: Span) {
-        if context.loop_depth == 0 {
-            let msg = if context.gpu_for_depth > 0 {
-                "'continue' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
-            } else {
-                "Continue statement outside of loop"
-            };
-            self.report_error(DiagnosticCode::TypLoopControlFlow, msg.to_string(), span);
+        self.check_loop_control(
+            "continue",
+            "Continue statement outside of loop",
+            context,
+            span,
+        );
+    }
+
+    /// Refuses `keyword` (`break` or `continue`) where no loop encloses it.
+    /// Inside a `gpu forall` body that is a GPU restriction, since the
+    /// dispatch is not a loop; anywhere else it is a misplaced statement,
+    /// reported as `outside`.
+    fn check_loop_control(&mut self, keyword: &str, outside: &str, context: &Context, span: Span) {
+        if context.loop_depth != 0 {
+            return;
         }
+        if context.gpu_for_depth > 0 {
+            self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
+                format!("'{keyword}' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"),
+                span,
+            );
+            return;
+        }
+        self.report_error(
+            DiagnosticCode::TypLoopControlFlow,
+            outside.to_string(),
+            span,
+        );
     }
 
     pub(crate) fn check_return(

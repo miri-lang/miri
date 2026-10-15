@@ -1,11 +1,11 @@
 ## Rule
 
-A `continue` statement was used outside a loop, or inside a `gpu forall` body, where the dispatch is not an iterative loop. `continue` skips to the next iteration of the loop around it, so it has meaning only inside a `while` or `for` body. A `break` in the same position is reported as MER_TAR_005.
+A `break` or `continue` statement was used outside a loop. `break` leaves the loop around it and `continue` skips to its next iteration, so each has meaning only inside a `while`, `for` or other loop body. Inside a `gpu forall` body, where the dispatch is not an iterative loop, both are reported as the GPU restriction MER_TAR_005 instead.
 
 ## Messages
 
+- `Break statement outside of loop`
 - `Continue statement outside of loop`
-- `'continue' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level`
 
 ## Before
 
