@@ -35,19 +35,20 @@ println(f"{host[0]} {host[1]} {host[2]} {host[3]}") // 6.0 8.0 10.0 12.0
 
 ## Current State (v0.7.0-beta.5)
 
-The last feature release was the **Extended Standard Library**. Miri now ships a standard library broad enough for practical programs — file I/O, platform access, time, regex, JSON, extra collections — plus a native test runner and a pair of memory-diagnostic tools that keep the whole suite provably leak- and corruption-free.
+This release is the **Agent Contract**. Every diagnostic now carries a stable code, every subcommand can answer in a versioned JSON envelope, and a tool — CI, an editor, or a code-generation agent — can locate a problem, read its explanation, and apply the compiler's own repair without scraping human-readable text.
 
-**New in v0.6.0-beta.4:**
-- **`system.fs`, `system.os`, `system.time`** — capability-class access to the outside world: an `Fs` handle for files and directories, `Env`/`Args` for the environment and argv, `platform()`, `exit()`, and `Clock`/`Instant`/`Duration` for time. A function without the capability parameter cannot touch that part of the world.
-- **`system.text` regex** — `Regex.compile(...)` returning `Result`, plus compile-time-validated regex literals (`re"^\d+$"i`); `String` gains `split`, `join`, `to_int`, `to_float`. Match arms now support string, float, and regex predicates.
-- **`system.json`** — a recursive `Json` enum with a pure-Miri parser, position-carrying parse errors, serialization, and `T?` accessors. No compiler special-casing.
-- **`system.collections`** — `Queue<T>` and `Stack<T>` by composition, with the full derived `Iterable`/`Queryable`/`Foldable` surface for free.
-- **Attributes + `miri test`** — a closed attribute registry (`@non_exhaustive`, `@must_use`, `@test`, `@ignore(reason)`, `@xfail(reason)`; unknown attributes are compile errors, never no-ops) and a native test runner: `miri test` discovers `@test` functions, runs each in an isolated subprocess, and reports cargo-style — with `@xfail` pinning known bugs without greenwashing.
-- **Assertions & formatting for real types** — f-strings render `Option`, `Result`, and any user enum (`f"{Some(15)}"` → `Some(15)`); `assert_eq`/`assert_ne` compare and diff enums, `Option`/`Result`, structs, and classes defining `equals` (`expected Point(x=3, y=4), got Point(x=1, y=2)`). Structural `==` was fixed along the way: enum payloads and managed fields now compare by value, not pointer.
-- **Memory diagnostics** — `MIRI_HEAP_GUARD=1` (ASan-style shadow heap catching use-after-free, double-free, and attributed leaks; the full suite runs green under it nightly), a path-sensitive reference-count verifier running as a hard error on every PR, and `MIRI_ALLOC_COUNT=1` for exact allocation counts. Burning the guard's findings down to zero fixed dozens of real reference-counting defects.
-- **No panics, no sentinels** — nothing in the stdlib panics; `index_of` returns `int?` instead of `-1`, `pop`/`remove_at` return `T?` instead of trapping. Static class members (`Duration.from_millis(500)`) shipped as the language feature this required.
+**New in v0.7.0-beta.5:**
+- **Stable diagnostic codes** — every error and warning has a `MER_*` code from one registry (duplicate codes fail the build), and each code has a page under `docs/diagnostics/`. `miri explain CODE` prints it; `miri explain --list --format json` lists the registry.
+- **JSON everywhere** — `check`, `build`, `run`, `test`, `fix`, `view` and `patch` accept `--format json` and emit a `schemaVersion: 1` envelope, documented in `docs/diagnostics-schema.json`. Warnings never flip `ok`. `miri dev --format json` streams JSONL as the file changes.
+- **Repairs the compiler can apply** — a diagnostic that knows its fix carries the edit in the envelope, and `miri fix FILE --apply --yes` applies it: removing an unused import, turning a `let` into a `var` when it is written through, casting a number to the width of the place it is stored, moving statements written beside `main` into it, and more. Risky repairs need `--allow-risky`.
+- **Scoped reads and checked edits** — `miri view` reads one function (`--fn`), an outline, or the public surface of a type (`--type NAME --public`) without loading the whole file. `miri patch` applies anchored edits (`--replace-in-fn`, `--replace-fn`, `--insert-fn`, `--expect-sha`) and re-checks the file in the same step.
+- **`miri agent`** — the same surface over JSON-RPC on stdin/stdout, with cancellation, for harnesses that keep the compiler running.
+- **Skill packs** — `miri-lang`, `miri-gpu` and `miri-testing` ship inside the compiler (`miri skill install --agent claude`); every code block in them is compiled in CI, and the [Miri for agents](https://miri-lang.org/docs/agents/) guide on the website is generated from this repository behind a drift gate.
+- **Reproducible and specified** — `miri determinism check` proves byte-identical builds and runs in CI; the grammar is published as `docs/grammar.peg` with a round-trip gate; `miri fmt` rewrites a file to its canonical form.
+- **Stricter, safer semantics** *(breaking)* — integer overflow, `MIN / -1` and `MIN % -1` stop the program instead of wrapping, on the CPU and inside GPU kernels; `substring` counts characters and a range outside the text is an error; mixed number types combine by value and a store never narrows; structs hold data only (no traits, no drop hook — use a class); a type that writes its own `equals` must write a matching `hash`. `check` now lowers the program as `build` does, so the two refuse the same programs.
+- **Hundreds of fixes** — generic instantiation, element ABI, key identity, drop and release paths, and operator dispatch were each rebuilt around one authority and pinned by a conformance matrix, which removed the silent wrong answers and double releases that agents hit in real programs.
 
-Building on prior betas: the GPU preview (WGSL backend, `gpu` residency, `forall`, kernels, vectors, eight browser demos), full Perceus memory safety, `Result<T, E>` with enforced `must_use`, a backend-agnostic `system.math`, the four-trait collection pipeline, and `system.testing`.
+Building on prior betas: the Extended Standard Library (`system.fs`, `system.os`, `system.time`, regex, `system.json`, `Queue`/`Stack`, `miri test`, the heap guard), the GPU preview (WGSL backend, `gpu` residency, `forall`, kernels, vectors, eight browser demos), full Perceus memory safety, `Result<T, E>` with enforced `must_use`, a backend-agnostic `system.math`, the four-trait collection pipeline, and `system.testing`.
 
 **Why WGSL first — and what's next.** WGSL/WebGPU is the *first* GPU backend, not the only planned one. It shipped first because it's portable and runs everywhere — including the browser, so the demos above need zero install — and it let us prove the whole language→GPU path (residency, `forall`, kernels, codegen, host runtime) end-to-end against a single target before multiplying backends. The GPU representation in MIR is being made backend-neutral so additional backends — a native SPIR-V / Vulkan path and others — can plug in behind the exact same `forall` / `gpu fn` surface, with no changes to your source.
 
@@ -151,7 +152,7 @@ The compiler bundles skills that match its version, so you never use outdated do
 miri skill install --agent claude
 
 # Via the skills package manager
-npx skills add <github-org>/miri
+npx skills add miri-lang/miri
 
 # Manual copy from the repository
 cp skills/miri-{lang,gpu,testing}/SKILL.md ~/.claude/skills/
