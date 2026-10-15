@@ -395,6 +395,15 @@ impl TypeChecker {
             .unwrap_or(CalleeKind::Program)
     }
 
+    /// The name the intrinsic the identifier expression `expr_id` resolved to
+    /// was declared under, which an alias it was imported by does not change.
+    pub fn intrinsic_name(&self, expr_id: usize) -> Option<&str> {
+        self.fn_analysis
+            .intrinsic_names
+            .get(&expr_id)
+            .map(String::as_str)
+    }
+
     /// The function the identifier expression `expr_id` resolved to where it
     /// was written, when that is a function this compilation lowers.
     pub fn declared_callee(&self, expr_id: usize) -> Option<&DeclaredFunction> {
@@ -439,9 +448,16 @@ impl TypeChecker {
                         .insert(expr_id, DeclaredFunction::resolved(written, info));
                 }
             }
-            kind @ (CalleeKind::Runtime
-            | CalleeKind::Intrinsic
-            | CalleeKind::VariantConstructor) => {
+            CalleeKind::Intrinsic => {
+                let declared = info.original_name.as_deref().unwrap_or(written);
+                self.fn_analysis
+                    .intrinsic_names
+                    .insert(expr_id, declared.to_string());
+                self.fn_analysis
+                    .callee_kinds
+                    .insert(expr_id, CalleeKind::Intrinsic);
+            }
+            kind @ (CalleeKind::Runtime | CalleeKind::VariantConstructor) => {
                 self.fn_analysis.callee_kinds.insert(expr_id, kind);
             }
         }
