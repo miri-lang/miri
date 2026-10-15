@@ -1583,3 +1583,44 @@ fn test_a_primitive_type_is_said_to_have_no_members_to_list() {
         "the report should say the type is built in rather than guess a name, got:\n{stderr}"
     );
 }
+
+#[test]
+fn test_type_option_says_how_an_optional_value_is_read() {
+    // `T?` is built into the language rather than declared in a module, so no
+    // type table holds it; the answer has to come from the view itself.
+    let (stdout, stderr, ok) = view(&["--type", "Option", "--public"]);
+
+    assert!(
+        ok,
+        "Option resolves although no module declares it, got:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("T?") && stdout.contains("Some(T)") && stdout.contains("None"),
+        "the listing names the `T?` spelling and both variants with their payload, \
+         got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("no methods") && stdout.contains("if let Some(") && stdout.contains("??"),
+        "an optional value has no methods, so the listing names the forms that read \
+         it, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn test_type_result_shows_each_variant_payload_and_its_methods() {
+    let (stdout, stderr, ok) = view(&["--type", "Result", "--public"]);
+
+    assert!(ok, "Result resolves from the prelude, got:\n{stderr}");
+    assert!(
+        stdout.contains("enum Result<T, E>"),
+        "the header names the type parameters the payloads are written in, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Result.Ok(T)") && stdout.contains("Result.Err(E)"),
+        "each variant carries the payload a pattern binds, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fn unwrap_or(fallback T) T") && stdout.contains("fn is_ok() bool"),
+        "the methods an enum declares are callable and are listed, got:\n{stdout}"
+    );
+}
