@@ -44,11 +44,14 @@ fn run_command(cli: Cli) -> Result<()> {
         Some(command) => match command {
             Commands::Run {
                 path,
+                release,
+                opt_level,
                 format,
                 program_args,
             } => run_file(
                 path,
                 program_args,
+                (release, BuildOptions::resolve_opt_level(release, opt_level)),
                 format,
                 cli.verbose,
                 cli.verify_mir,
@@ -67,7 +70,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 BuildOptions {
                     out_path: out,
                     release,
-                    opt_level,
+                    opt_level: BuildOptions::resolve_opt_level(release, opt_level),
                     cpu_backend,
                     target,
                     // The CLI emits the native host binary alongside a web-gpu
@@ -162,7 +165,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     BuildOptions {
                         out_path: None,
                         release,
-                        opt_level,
+                        opt_level: BuildOptions::resolve_opt_level(release, opt_level),
                         cpu_backend,
                         target,
                         emit_native_host: true,
@@ -184,6 +187,7 @@ fn run_command(cli: Cli) -> Result<()> {
 fn run_file(
     path: PathBuf,
     program_args: Vec<String>,
+    (release, opt_level): (bool, u8),
     format: Format,
     _verbose: u8,
     verify_mir: bool,
@@ -195,7 +199,9 @@ fn run_file(
         std::process::exit(1);
     };
 
-    let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
+    let mut pipeline = Pipeline::new()
+        .with_verify_mir(verify_mir)
+        .with_run_optimization(release, opt_level);
     // Canonicalize first so that a bare filename like "main.mi" resolves to an
     // absolute path whose parent is the working directory, not an empty path.
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());

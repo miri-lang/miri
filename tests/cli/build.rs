@@ -283,3 +283,137 @@ fn test_build_executable_exit_code_matches_main_return() {
         .expect("process exited by signal unexpectedly");
     assert_eq!(code, 42, "expected main() return value 42 as exit code");
 }
+
+/// A loop of integer comparisons and branches whose cost is all in the code
+/// the backend emits: no allocation, no runtime calls inside the loop, one
+/// line of output. Unoptimized code materializes every comparison as a byte
+/// and tests it again; optimized code branches on the comparison itself, which
+/// is where the speed tier wins most on a loop like this one.
+const TIGHT_LOOP: &str = r#"use system.io
+
+fn classify(n int) int
+    var counts = 0
+    var i = 0
+    while i < n
+        let v = i & 255
+        if v < 16
+            counts += 1
+        else if v < 64
+            counts += 2
+        else if v < 128
+            counts += 3
+        else if v < 200
+            counts += 5
+        else
+            counts += 7
+        i += 1
+    counts
+
+println(f"{classify(100000000)}")
+"#;
+
+/// What `classify(100000000)` prints, whatever the optimization level.
+const TIGHT_LOOP_OUTPUT: &str = "412500000\n";
+
+/// Build `source` with the extra `flags` and return the executable's path.
+fn build_with_flags(
+    source: &NamedTempFile,
+    out_dir: &std::path::Path,
+    flags: &[&str],
+) -> std::path::PathBuf {
+    let out_path = out_dir.join(format!("exe_{}", flags.join("_").replace('-', "")));
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out_path)
+        .args(flags)
+        .assert()
+        .success();
+    out_path
+}
+
+/// Run the executable at `path`, check what it printed, and return how long it
+/// took.
+fn timed_run(path: &std::path::Path) -> std::time::Duration {
+    let start = std::time::Instant::now();
+    let output = Command::new(path).output().expect("built binary runs");
+    let elapsed = start.elapsed();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), TIGHT_LOOP_OUTPUT);
+    elapsed
+}
+
+/// The fastest of a few runs: the suite runs in parallel, so a slow sample
+/// measures the machine's load rather than the code.
+fn best_run(path: &std::path::Path) -> std::time::Duration {
+    (0..5).map(|_| timed_run(path)).min().unwrap()
+}
+
+/// Optimization level 3 reaches the backend: the code it emits is not the
+/// code level 0 emits, and both compute the same answer.
+#[test]
+fn test_opt_level_3_emits_different_code_than_opt_level_0() {
+    let source = create_test_file(TIGHT_LOOP);
+    let out_dir = tempfile::tempdir().unwrap();
+    let unoptimized = build_with_flags(&source, out_dir.path(), &["--opt-level", "0"]);
+    let optimized = build_with_flags(&source, out_dir.path(), &["--opt-level", "3"]);
+
+    let unoptimized_object = std::fs::read(unoptimized.with_extension("o")).unwrap();
+    let optimized_object = std::fs::read(optimized.with_extension("o")).unwrap();
+    assert!(
+        unoptimized_object != optimized_object,
+        "opt-level 3 emitted the same object code as opt-level 0"
+    );
+    timed_run(&unoptimized);
+    timed_run(&optimized);
+}
+
+/// `--release` alone optimizes as `--opt-level 3` does, and an explicit
+/// `--opt-level` beside it wins.
+#[test]
+fn test_release_implies_opt_level_3_unless_a_level_is_given() {
+    let source = create_test_file(TIGHT_LOOP);
+    let out_dir = tempfile::tempdir().unwrap();
+    let object = |flags: &[&str]| {
+        std::fs::read(build_with_flags(&source, out_dir.path(), flags).with_extension("o")).unwrap()
+    };
+
+    let release = object(&["--release"]);
+    assert!(
+        release == object(&["--release", "--opt-level", "3"]),
+        "--release did not optimize as --opt-level 3"
+    );
+    assert!(
+        release != object(&["--release", "--opt-level", "0"]),
+        "--opt-level 0 beside --release was ignored"
+    );
+}
+
+/// The optimized build of a tight arithmetic loop is measurably faster than
+/// the unoptimized one. The bound is a generous ratio rather than a time: this
+/// runs beside the rest of the suite on a loaded machine.
+#[test]
+fn test_opt_level_3_runs_a_tight_loop_faster_than_opt_level_0() {
+    let source = create_test_file(TIGHT_LOOP);
+    let out_dir = tempfile::tempdir().unwrap();
+    let unoptimized = best_run(&build_with_flags(
+        &source,
+        out_dir.path(),
+        &["--opt-level", "0"],
+    ));
+    let optimized = best_run(&build_with_flags(
+        &source,
+        out_dir.path(),
+        &["--opt-level", "3"],
+    ));
+
+    assert!(
+        optimized.as_secs_f64() < unoptimized.as_secs_f64() * 0.8,
+        "opt-level 3 took {optimized:?}, opt-level 0 took {unoptimized:?}"
+    );
+}

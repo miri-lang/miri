@@ -436,3 +436,12 @@ fn main()
         );
     }
 }
+
+/// An explicit level wins; `release` alone means 3; neither means 0.
+#[test]
+fn test_resolve_opt_level_prefers_the_explicit_level() {
+    assert_eq!(BuildOptions::resolve_opt_level(false, None), 0);
+    assert_eq!(BuildOptions::resolve_opt_level(true, None), 3);
+    assert_eq!(BuildOptions::resolve_opt_level(true, Some(0)), 0);
+    assert_eq!(BuildOptions::resolve_opt_level(false, Some(2)), 2);
+}

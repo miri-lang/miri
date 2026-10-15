@@ -211,6 +211,14 @@ fn test_opt_level_default() {
     assert_eq!(level, OptLevel::None);
 }
 
+#[test]
+fn test_opt_level_0_does_not_optimize_and_1_to_3_optimize_for_speed() {
+    assert_eq!(OptLevel::for_level(0), OptLevel::None);
+    for level in 1..=3 {
+        assert_eq!(OptLevel::for_level(level), OptLevel::Speed);
+    }
+}
+
 // ── Compile with empty bodies ──────────────────────────────────────────
 
 #[test]

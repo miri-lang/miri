@@ -258,3 +258,23 @@ fn test_run_through_a_symlinked_binary_finds_the_runtime() {
         .success()
         .stdout(predicates::str::contains("linked"));
 }
+
+/// `miri run` takes the build's optimization flags, and the program it runs
+/// computes the same answer at every level.
+#[test]
+fn test_run_accepts_release_and_opt_level() {
+    let file = create_test_file("use system.io\n\nprintln(f\"{6 * 7}\")\n");
+    for flags in [
+        &["--release"][..],
+        &["--opt-level", "2"],
+        &["--release", "--opt-level", "0"],
+    ] {
+        miri_cmd()
+            .arg("run")
+            .arg(file.path())
+            .args(flags)
+            .assert()
+            .success()
+            .stdout("42\n");
+    }
+}

@@ -133,6 +133,8 @@ make lint         # Check formatting + clippy
 make format       # Auto-format all code
 ```
 
+The compiler emits unoptimized code unless asked otherwise. `miri build --release` and `miri run --release` optimize (they mean `--opt-level 3`); `--opt-level 0`–`3` picks a level explicitly and wins over `--release`. Level 0 does not optimize, and 1–3 run the backend's speed optimizations. Time a program only from an optimized build.
+
 ## Writing Miri with an AI Agent
 
 Miri ships with a skill pack for code-generation agents — Claude Code, Cursor, and other integrations. Each skill is a compile-checked teaching guide that prevents hallucination through anti-hallucination blocks:

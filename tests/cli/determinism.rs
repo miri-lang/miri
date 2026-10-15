@@ -58,6 +58,27 @@ fn test_determinism_check_with_multiple_strings() {
         .stdout(predicates::str::contains("Determinism check passed"));
 }
 
+/// Optimized builds are as reproducible as unoptimized ones, at every level.
+#[test]
+fn test_determinism_check_passes_at_every_opt_level() {
+    let file = create_test_file(MULTI_LITERAL);
+    for flags in [
+        &["--release"][..],
+        &["--opt-level", "1"],
+        &["--opt-level", "2"],
+        &["--opt-level", "3"],
+    ] {
+        miri_cmd()
+            .arg("determinism")
+            .arg("check")
+            .arg(file.path())
+            .args(flags)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("Determinism check passed"));
+    }
+}
+
 #[test]
 fn test_determinism_check_json_format_pass() {
     let file = create_test_file(HELLO_WORLD);

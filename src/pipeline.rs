@@ -553,9 +553,12 @@ pub struct GpuProgram {
 pub struct BuildOptions {
     /// Output path for the compiled artifact. If `None`, a temp directory is used.
     pub out_path: Option<PathBuf>,
-    /// Whether to build in release mode (enables optimizations).
+    /// Whether to build in release mode: MIR records no local names. The
+    /// optimization level is set apart, in `opt_level`; see
+    /// [`BuildOptions::resolve_opt_level`] for how a caller derives it.
     pub release: bool,
-    /// Optimization level (0-3).
+    /// Optimization level (0-3): 0 emits unoptimized code, 1-3 optimize for
+    /// speed.
     pub opt_level: u8,
     /// Which CPU backend to use for code generation.
     pub cpu_backend: CpuBackend,
@@ -568,6 +571,14 @@ pub struct BuildOptions {
     pub emit_native_host: bool,
 }
 
+impl BuildOptions {
+    /// The optimization level a build runs at: an explicit level wins,
+    /// `release` alone means 3, and neither means 0.
+    pub fn resolve_opt_level(release: bool, requested: Option<u8>) -> u8 {
+        requested.unwrap_or(if release { 3 } else { 0 })
+    }
+}
+
 /// Orchestrates the full compilation pipeline from source to executable.
 pub struct Pipeline {
     /// Directory of the entry-point source file.  When set, the type checker
@@ -578,6 +589,10 @@ pub struct Pipeline {
     source_path: Option<String>,
     /// Whether to run the MIR verification pass after RC insertion.
     verify_mir: bool,
+    /// Whether `run` builds the program it executes in release mode.
+    run_release: bool,
+    /// The optimization level `run` builds the program it executes at.
+    run_opt_level: u8,
 }
 
 impl Default for Pipeline {
@@ -1386,6 +1401,8 @@ impl Pipeline {
             source_dir: None,
             source_path: None,
             verify_mir: false,
+            run_release: false,
+            run_opt_level: 0,
         }
     }
 
@@ -1406,6 +1423,14 @@ impl Pipeline {
     /// Configure whether to run the MIR verification pass after RC insertion.
     pub fn with_verify_mir(mut self, verify: bool) -> Self {
         self.verify_mir = verify;
+        self
+    }
+
+    /// Configure how `run` builds the program it executes: in release mode or
+    /// not, and at which optimization level.
+    pub fn with_run_optimization(mut self, release: bool, opt_level: u8) -> Self {
+        self.run_release = release;
+        self.run_opt_level = opt_level;
         self
     }
 
@@ -1590,7 +1615,7 @@ impl Pipeline {
             }
         };
         let executable_path = temp_dir.path().join("program");
-        let built = self.build_reported(source, &Self::run_build_options(&executable_path));
+        let built = self.build_reported(source, &self.run_build_options(&executable_path));
         let outcome = built
             .outcome
             .and_then(|_| Self::execute(temp_dir.path(), &executable_path, program_args));
@@ -1601,11 +1626,11 @@ impl Pipeline {
     }
 
     /// How `run` builds the program it executes.
-    fn run_build_options(executable_path: &Path) -> BuildOptions {
+    fn run_build_options(&self, executable_path: &Path) -> BuildOptions {
         BuildOptions {
             out_path: Some(executable_path.to_path_buf()),
-            release: false,
-            opt_level: 0,
+            release: self.run_release,
+            opt_level: self.run_opt_level,
             cpu_backend: CpuBackend::Cranelift,
             target: BuildTarget::Native,
             emit_native_host: false,
@@ -1768,8 +1793,12 @@ impl Pipeline {
         opts: &BuildOptions,
         out_override: Option<PathBuf>,
     ) -> Result<PathBuf, CompilerError> {
-        let (object_bytes, required_runtimes) =
-            Self::compile_object(pipeline_result, mir_bodies, opts.cpu_backend)?;
+        let (object_bytes, required_runtimes) = Self::compile_object(
+            pipeline_result,
+            mir_bodies,
+            opts.cpu_backend,
+            opts.opt_level,
+        )?;
 
         let (work_dir, out_path) = if let Some(out) = out_override {
             let work_dir = out
@@ -1803,12 +1832,13 @@ impl Pipeline {
     }
 
     /// Compile the lowered bodies to native object bytes with the chosen CPU
-    /// backend, returning the object code and the runtime libraries it must be
-    /// linked against.
+    /// backend at `opt_level`, returning the object code and the runtime
+    /// libraries it must be linked against.
     fn compile_object(
         pipeline_result: &PipelineResult,
         mut mir_bodies: Vec<(String, mir::Body)>,
         cpu_backend: CpuBackend,
+        opt_level: u8,
     ) -> Result<(Vec<u8>, BTreeSet<RuntimeKind>), CompilerError> {
         // Spell the element ABI at the hand-off: reference counting,
         // verification and every MIR reader before this point see an element
@@ -1820,39 +1850,7 @@ impl Pipeline {
         }
         let (object_bytes, required_runtimes) = match cpu_backend {
             CpuBackend::Cranelift => {
-                #[cfg(feature = "cranelift")]
-                {
-                    use crate::codegen::CraneliftBackend;
-                    let mut backend = CraneliftBackend::new().map_err(CompilerError::from)?;
-                    backend.set_type_facts(settled_type_facts(pipeline_result, &mir_bodies)?);
-                    backend.set_device_helpers(pipeline_result.device_helpers.clone());
-
-                    let ptr_ty = backend.pointer_type();
-                    let runtime_info = collect_runtime_info(
-                        &pipeline_result.ast,
-                        &pipeline_result.type_checker.imported_statements,
-                        Some(ptr_ty),
-                    );
-                    backend.set_runtime_imports(runtime_info.imports);
-
-                    let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
-                        .iter()
-                        .map(|(name, body)| (name.as_str(), body))
-                        .collect();
-
-                    let artifact = backend
-                        .compile(&bodies_ref, &Default::default())
-                        .map_err(CompilerError::from)?;
-
-                    (artifact.bytes, runtime_info.required_runtimes)
-                }
-                #[cfg(not(feature = "cranelift"))]
-                {
-                    return Err(CompilerError::Codegen(
-                        "Cranelift backend not enabled. Recompile with --features cranelift"
-                            .to_string(),
-                    ));
-                }
+                Self::compile_with_cranelift(pipeline_result, &mir_bodies, opt_level)?
             }
             CpuBackend::Llvm => {
                 use crate::codegen::LlvmBackend;
@@ -1879,6 +1877,51 @@ impl Pipeline {
         };
 
         Ok((object_bytes, required_runtimes))
+    }
+
+    /// Compile the element-ABI-spelled bodies with Cranelift at `opt_level`,
+    /// returning the object code and the runtime libraries it must be linked
+    /// against.
+    fn compile_with_cranelift(
+        pipeline_result: &PipelineResult,
+        mir_bodies: &[(String, mir::Body)],
+        opt_level: u8,
+    ) -> Result<(Vec<u8>, BTreeSet<RuntimeKind>), CompilerError> {
+        #[cfg(feature = "cranelift")]
+        {
+            use crate::codegen::cranelift::{CraneliftOptions, OptLevel};
+            use crate::codegen::CraneliftBackend;
+            let mut backend = CraneliftBackend::new().map_err(CompilerError::from)?;
+            backend.set_type_facts(settled_type_facts(pipeline_result, mir_bodies)?);
+            backend.set_device_helpers(pipeline_result.device_helpers.clone());
+
+            let runtime_info = collect_runtime_info(
+                &pipeline_result.ast,
+                &pipeline_result.type_checker.imported_statements,
+                Some(backend.pointer_type()),
+            );
+            backend.set_runtime_imports(runtime_info.imports);
+
+            let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
+                .iter()
+                .map(|(name, body)| (name.as_str(), body))
+                .collect();
+            let options = CraneliftOptions {
+                opt_level: OptLevel::for_level(opt_level),
+                ..Default::default()
+            };
+            let artifact = backend
+                .compile(&bodies_ref, &options)
+                .map_err(CompilerError::from)?;
+            Ok((artifact.bytes, runtime_info.required_runtimes))
+        }
+        #[cfg(not(feature = "cranelift"))]
+        {
+            let _ = (pipeline_result, mir_bodies, opt_level);
+            Err(CompilerError::Codegen(
+                "Cranelift backend not enabled. Recompile with --features cranelift".to_string(),
+            ))
+        }
     }
 
     /// Every recorded instantiation that gets a per-instantiation body, scalar

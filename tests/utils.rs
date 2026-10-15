@@ -29,6 +29,21 @@ fn needs_gpu_serialization(command: &str, input: &str) -> bool {
 pub const BINARY_NAME: &str = pkg_name!();
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The optimization flags a `run` or `build` the suite issues carries.
+///
+/// `MIRI_OPT_LEVEL=<0-3>` in the test process's environment builds every
+/// program the suite runs or builds at that level, so the whole corpus can
+/// prove optimized code keeps every reference-counting and runtime invariant.
+/// Unset, programs build at the compiler's default level.
+fn forced_opt_level_args(command: &str) -> Vec<String> {
+    match std::env::var("MIRI_OPT_LEVEL") {
+        Ok(level) if command == "run" || command == "build" => {
+            vec!["--opt-level".to_string(), level]
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub fn miri_cmd() -> Command {
     Command::new(assert_cmd::cargo_bin!("miri"))
 }
@@ -85,7 +100,8 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
             .env_remove("MIRI_CC")
             .env_remove("CC")
             .arg(command)
-            .arg(&path);
+            .arg(&path)
+            .args(forced_opt_level_args(command));
 
         if !program_args.is_empty() {
             cmd.arg("--");
@@ -155,7 +171,8 @@ pub fn miri_run_with_env(input: &str, env_var: &str, env_value: &str) -> Compile
         .env_remove("MIRI_CC")
         .env_remove("CC")
         .arg("run")
-        .arg(&path);
+        .arg(&path)
+        .args(forced_opt_level_args("run"));
 
     let output = cmd.output().unwrap();
 
@@ -192,7 +209,8 @@ pub fn miri_run_with_env_multiple(input: &str, env_vars: &[(&str, &str)]) -> Com
     cmd.env_remove("MIRI_CC")
         .env_remove("CC")
         .arg("run")
-        .arg(&path);
+        .arg(&path)
+        .args(forced_opt_level_args("run"));
 
     let output = cmd.output().unwrap();
 
@@ -259,6 +277,7 @@ fn miri_project(files: &[(&str, &str)], command: &str) -> CompilerResult {
         .current_dir(temp_dir.path())
         .arg(command)
         .arg(entry_file)
+        .args(forced_opt_level_args(command))
         .output()
         .unwrap();
 
@@ -360,6 +379,7 @@ fn miri_project_with_command_and_cwd(
             } else {
                 cmd.arg(entry_file_rel);
             }
+            cmd.args(forced_opt_level_args(command));
         }
     }
 

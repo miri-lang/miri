@@ -101,6 +101,21 @@ pub enum OptLevel {
     SpeedAndSize,
 }
 
+impl OptLevel {
+    /// The Cranelift tier a numeric optimization level selects: 0 does not
+    /// optimize, and 1 through 3 all optimize for speed. Cranelift has a
+    /// single speed tier, so the numbers above 1 are kept for the command
+    /// line's sake and pick the same code. `SpeedAndSize` trades speed for
+    /// size, which no numeric level asks for.
+    pub fn for_level(level: u8) -> Self {
+        if level == 0 {
+            Self::None
+        } else {
+            Self::Speed
+        }
+    }
+}
+
 impl Default for CraneliftOptions {
     fn default() -> Self {
         Self {

@@ -119,6 +119,16 @@ pub enum Commands {
         #[arg(required = true)]
         path: PathBuf,
 
+        /// Build in release mode: optimized code, as `--opt-level 3`. Use it
+        /// for anything you time
+        #[arg(long)]
+        release: bool,
+
+        /// Optimization level (0-3): 0 does not optimize, 1-3 optimize for
+        /// speed. Defaults to 3 with `--release` and 0 without
+        #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: Option<u8>,
+
         /// Output format (pretty or JSON)
         #[arg(long, value_enum, default_value_t = Format::Pretty)]
         format: Format,
@@ -138,13 +148,15 @@ pub enum Commands {
         #[arg(short, long)]
         out: Option<PathBuf>,
 
-        /// Build in release mode
+        /// Build in release mode: optimized code, as `--opt-level 3`. Use it
+        /// for anything you time
         #[arg(long)]
         release: bool,
 
-        /// Optimization level (0-3)
-        #[arg(long, value_name = "LEVEL", default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
-        opt_level: u8,
+        /// Optimization level (0-3): 0 does not optimize, 1-3 optimize for
+        /// speed. Defaults to 3 with `--release` and 0 without
+        #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: Option<u8>,
 
         /// CPU backend to use for code generation
         #[arg(long, value_enum, default_value_t = CpuBackend::Cranelift)]
@@ -508,13 +520,15 @@ pub enum DeterminismCommand {
         #[arg(required = true)]
         path: PathBuf,
 
-        /// Build in release mode
+        /// Build in release mode: optimized code, as `--opt-level 3`. Use it
+        /// for anything you time
         #[arg(long)]
         release: bool,
 
-        /// Optimization level (0-3)
-        #[arg(long, value_name = "LEVEL", default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=3))]
-        opt_level: u8,
+        /// Optimization level (0-3): 0 does not optimize, 1-3 optimize for
+        /// speed. Defaults to 3 with `--release` and 0 without
+        #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(0..=3))]
+        opt_level: Option<u8>,
 
         /// CPU backend to use for code generation
         #[arg(long, value_enum, default_value_t = CpuBackend::Cranelift)]
