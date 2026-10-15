@@ -176,6 +176,7 @@ impl TypeChecker {
         if !context.in_gpu_function {
             self.reject_gpu_resident_call_args(func, args, context);
         }
+        self.check_launch_call(func, args, context);
 
         let callable = matches!(func_type.kind, TypeKind::Function(_) | TypeKind::Meta(_));
 
