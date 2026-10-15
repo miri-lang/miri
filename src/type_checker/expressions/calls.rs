@@ -2300,10 +2300,6 @@ impl TypeChecker {
     /// `Array<int, Size>` — to the value `argument` holds in the same slot:
     /// the `4` of `Array<int, 4>`, as the `3` of `Array<T, 3>` binds a
     /// class's. A slot holding a type binds nothing here.
-    ///
-    /// TODO: the body of such a function cannot yet read the parameter as a
-    /// value (`for i in 0..Size` reports `Size` undefined): value generics are
-    /// substituted into class method bodies, not function bodies.
     fn bind_value_generics(
         &self,
         parameter: &Type,

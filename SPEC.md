@@ -1106,3 +1106,13 @@ class Buf<T, Size>
 let b = Buf<String, 2>("ab")    // ok
 let z = Buf<String, 0>("ab")    // MER_TYP_077
 ```
+
+Inside the class or function that declares it, a value parameter reads as an `int`: each instance reads the value it was instantiated at. A function binds its value parameters as it binds type parameters — from the sizes of the arguments it is passed, or from integers written as type arguments (`fill<4>(b)`). A type parameter has no value, and reading one is refused.
+
+```miri
+fn total<Size>(a Array<int, Size>) int
+    var sum = 0
+    for i in 0..Size
+        sum += a[i]
+    return sum
+```

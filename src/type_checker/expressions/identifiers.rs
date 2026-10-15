@@ -105,6 +105,17 @@ impl TypeChecker {
             return ty;
         }
 
+        // A generic parameter read as a value is a value-generic parameter —
+        // the `Size` of `Array<T, Size>` — which each instance fixes to an
+        // integer. A type parameter read this way has no value, which the
+        // instance's lowering reports, since only it knows which was bound.
+        if matches!(
+            context.resolve_type_definition(name),
+            Some(crate::type_checker::context::TypeDefinition::Generic(_))
+        ) {
+            return ast_factory::make_type(TypeKind::Int);
+        }
+
         if let Some(ty) = self.try_class_member_suggestion(name, span, context) {
             return ty;
         }

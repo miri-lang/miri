@@ -34,6 +34,9 @@ pub(crate) fn lower_identifier_expr(
         }
         return lower_local_identifier(ctx, local, expr, dest);
     }
+    if let Some(bound) = ctx.generic_subs.get(name.as_str()).cloned() {
+        return lower_value_generic(ctx, name, &bound, expr, dest);
+    }
     if let Some(value) = super::function_reference::try_lower_function_reference(
         ctx,
         expr,
@@ -291,4 +294,41 @@ fn module_binding_without_value(name: &str, expr: &Expression) -> LoweringError 
         },
         expr.span,
     )
+}
+
+/// Lower a generic parameter read as a value to the integer the instance
+/// being lowered binds it to. A parameter bound to a type has no value.
+fn lower_value_generic(
+    ctx: &mut LoweringContext,
+    name: &str,
+    bound: &crate::ast::types::Type,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let value = crate::type_checker::generics::extract_value_generic(bound)
+        .and_then(crate::type_checker::TypeChecker::try_eval_const_int)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| {
+            LoweringError::coded(
+                crate::diagnostics::DiagnosticCode::TypUndefinedName,
+                format!(
+                    "`{name}` is a type parameter, bound here to a type, so it has no value to read"
+                ),
+                expr.span,
+                Some(format!(
+                    "read a value of type `{name}` instead, or declare `{name}` where a size is written, e.g. `Array<T, {name}>`"
+                )),
+            )
+        })?;
+    let constant = crate::mir::lowering::constructors::int_constant(value, &expr.span);
+    match dest {
+        Some(place) => {
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(place.clone(), Rvalue::Use(constant)),
+                span: expr.span,
+            });
+            Ok(Operand::Copy(place))
+        }
+        None => Ok(constant),
+    }
 }

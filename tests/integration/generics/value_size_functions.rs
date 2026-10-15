@@ -55,3 +55,31 @@ fn test_two_arguments_of_different_sizes_are_refused() {
         "expected Array<int, 4>, got Array<int, 2>",
     );
 }
+
+/// The size a function was instantiated at reads as an `int` in its body.
+#[test]
+fn test_the_size_reads_as_a_value_in_the_body() {
+    assert_runs_with_output(
+        "use system.collections.array\n\nfn total<Size>(a Array<int, Size>) int\n    var sum = 0\n    for i in 0..Size\n        sum += a[i]\n    return sum\n\nfn main()\n    var b = Array<int, 3>()\n    b[0] = 1\n    b[1] = 2\n    b[2] = 3\n    var c = Array<int, 2>()\n    c[0] = 10\n    c[1] = 20\n    println(f\"{total(b)} {total(c)}\")\n",
+        "6 30",
+    );
+}
+
+/// A class's value parameter reads as a value in its methods, each instance
+/// its own.
+#[test]
+fn test_a_class_size_reads_as_a_value_in_its_methods() {
+    assert_runs_with_output(
+        "use system.collections.array\n\nclass Buf<T, Size>\n    data Array<T, Size>\n\n    fn count() int\n        return Size\n\nfn main()\n    let b = Buf<int, 3>(data: Array<int, 3>())\n    let c = Buf<int, 5>(data: Array<int, 5>())\n    println(f\"{b.count()} {c.count()}\")\n",
+        "3 5",
+    );
+}
+
+/// A type parameter has no value to read.
+#[test]
+fn test_a_type_parameter_read_as_a_value_is_refused() {
+    assert_compiler_error(
+        "fn show<T>(x T) int\n    return T\n\nfn main()\n    println(f\"{show(1)}\")\n",
+        "type parameter",
+    );
+}
