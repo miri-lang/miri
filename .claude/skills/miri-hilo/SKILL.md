@@ -36,9 +36,9 @@ State the resolved scope in one line before measuring.
 🚫 **Never do**
 - Edit source, tests or docs. This skill is read-only. Scratchpad probes are the only files it writes.
 - Run `git` write commands, open PRs, or commit.
-- Log Notion tasks unless the user asks; when asked, follow AGENTS.md §0.1 (one task per follow-up, in the owning milestone or the Backlog milestone, with repro, key files and acceptance).
+- Log tasks unless the user asks; when asked, follow AGENTS.md §0.1 (one task per follow-up, with repro, key files and acceptance).
 - Present a mechanical-sweep output (`make audit` counts, "there are unwraps") as the lowlight. Those are symptoms; the lowlight is the design decision that produces them.
-- Pick a lowlight that a recalled memory or an open Notion task already states in the same words without adding new evidence or a different root cause.
+- Pick a lowlight that a recalled memory or an open task already states in the same words without adding new evidence or a different root cause.
 - Run more than one `cargo` process at a time (memory: `resource_limits_no_parallel_cargo`).
 
 ## Process

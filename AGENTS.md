@@ -11,22 +11,15 @@ Miri is designed for **Agentic Engineering**: a future where humans define inten
 
 ---
 
-## 0.1 Planning lives in Notion (BINDING)
+## 0.1 Planning lives outside this repository (BINDING)
 
-**The roadmap is in Notion, not in this repository.** It was migrated out of `notes/plan/TODO.md` on 13 September 2026 and that file is gone. Nothing in this repo plans work: `README.md` reports status, `SPEC.md` defines the language, `PRINCIPLES.md` binds the standards, this file says how to work, and `notes/plan/DONE.md` keeps the history of closed milestones.
-
-Use the `claude_ai_Notion` MCP tools. The shape:
-
-- **PROJECTS → `Miri Lang`** — the project page carries the reasoning above the plan (sequencing, the GPU pull-forward, the name decision).
-- **MILESTONES** — one page per milestone, related to that project, carrying its version, outcome, sequencing notes and Definition of Done. `Order` is the **execution** order; the version labels are not sorted by it.
-- **TASKS** — one page per deliverable, related to the project *and* to exactly one milestone. The page body is the task: the problem, the key files, the acceptance criteria, and — once it lands — what was delivered and how it differed from the sketch.
-- **View `Miri Lang by Milestone`** on the TASKS database is the board to read.
+**The roadmap is kept in the maintainer's task tracker, not in this repository.** Nothing here plans work: `README.md` reports status, `SPEC.md` defines the language, `PRINCIPLES.md` binds the standards, and this file says how to work. Where the tracker lives and how to reach it is part of the maintainer's local setup, not of this file.
 
 Three rules, and they are not optional:
 
-1. **Find the task before you start.** Work is done against a task page. If there is no task for what you are about to do, create one first — with a milestone — rather than working out of band.
-2. **Mark it `Done` in Notion in the same pass that lands the code.** Not in a commit message, not in a file. Append what actually shipped to the task page, including every place the delivered work differs from what the task asked for; that record is the reason these pages are worth reading.
-3. **A follow-up is a new task, never a paragraph under a finished one.** Anything discovered out of scope becomes its own task — in the owning milestone if it belongs to one, otherwise in **`22 · Backlog — Audit Follow-ups & Known Bugs`** — with the repro and the key files, plus a TODO comment at the code location (§5.8). A follow-up buried in the prose of a closed task is invisible to every view and is not tracked.
+1. **Find the task before you start.** Work is done against a task. If there is no task for what you are about to do, create one first rather than working out of band.
+2. **Mark it done in the tracker in the same pass that lands the code.** Not in a commit message, not in a file. Record what actually shipped on the task, including every place the delivered work differs from what the task asked for.
+3. **A follow-up is a new task, never a paragraph under a finished one.** Anything discovered out of scope becomes its own task, with the repro and the key files, plus a TODO comment at the code location (§5.8).
 
 ---
 
@@ -50,7 +43,7 @@ Navigating a compiler is complex. Use this map to locate modules:
 ### Design Principles
 - **Memory Management**: Miri uses the **Perceus** reference counting optimization. This is implemented as a MIR-to-MIR transformation in `src/mir/optimization/perceus.rs`.
 - **Sources of Truth**: Always refer to `SPEC.md` for language syntax and `README.md` for project status.
-  **The plan is not in this repository** — it lives in Notion (see §0.1). There is no roadmap, plan or TODO file here; do not create one.
+  **The plan is not in this repository** (see §0.1). There is no roadmap, plan or TODO file here; do not create one.
 
 ### 1.1 Navigate via the knowledge graph FIRST (do not read file-by-file)
 This repo has a persistent `code-review-graph` knowledge graph (embeddings enabled — semantic search is active). It is faster, cheaper in tokens, and gives structural context (callers, dependents, tests, blast radius) that a file scan cannot. **Use the graph before Grep/Glob/Read:**
@@ -60,7 +53,7 @@ This repo has a persistent `code-review-graph` knowledge graph (embeddings enabl
 - `query_graph` pattern=`tests_for` to check coverage; `callers_of` / `callees_of` / `imports_of` to trace relationships.
 - `get_review_context` for token-efficient snippets when reviewing a diff; `detect_changes` for risk-scored change analysis.
 
-Fall back to Grep/Glob/Read only for what the graph doesn't cover. The graph auto-updates on file changes via a `PostToolUse` hook. **Serena** (LSP-backed symbol navigation/editing) is also available as an MCP server for precise rename/reference work.
+Fall back to Grep/Glob/Read only for what the graph doesn't cover. The graph auto-updates on file changes via a `PostToolUse` hook.
 
 **rtk** (Rust Token Killer) transparently rewrites dev shell commands (`git`, `cargo`, `grep`, `ls`, …) to save 60–90% of tokens via a hook — just run commands normally; no special invocation needed.
 
@@ -242,7 +235,7 @@ To work efficiently and hit fewer roadblocks:
 5. **Blast Radius First**: Before flipping a default (e.g. fail-open → fail-closed) or removing a load-bearing import, enumerate every dependent test, fixture, and call site, then update them in the same pass — not iteratively as breakage surfaces.
 6. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
 7. **Temporary Files**: Use `/tmp/` for scripts or backups.
-8. **Out-of-scope discoveries**: When you discover a gap or missing feature not part of the current scope, **create a task for it in Notion** (§0.1) — with the repro, the key files and acceptance criteria — and leave a TODO comment at the relevant code location pointing at what is missing and why. Never record a discovery only as prose under the task you were doing, and never commit one without context.
+8. **Out-of-scope discoveries**: When you discover a gap or missing feature not part of the current scope, **create a task for it** (§0.1) — with the repro, the key files and acceptance criteria — and leave a TODO comment at the relevant code location pointing at what is missing and why. Never record a discovery only as prose under the task you were doing, and never commit one without context.
 9. Reply in unified diff form. No file rewrites unless asked. No trailing summary.
 10. **Land the work: commit to `main` and push.** This is the last step of every task, done without being asked — a task whose changes sit in the working tree is not finished. The order is fixed: gate green first, then stage **exactly the files you touched, named explicitly** (never `git add -A` or `git add .` — an unrelated file swept into the commit is its own defect), then commit, then push. Report the pushed SHA and range.
     - **Commit message**: this repo's style is an emoji plus a conventional prefix on the subject (`🐛 fix:`, `📋 docs:`), and a body that explains *why* the change is right rather than restating the diff. Close with the `Claude-Session:` trailer when the session provides one.
