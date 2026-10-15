@@ -170,3 +170,65 @@ fn main()
     );
     assert_mentions(&output, &["host-resident", "gpu let"]);
 }
+
+/// A launch mistake is reported by the type checker, in the same batch as an
+/// ordinary type error elsewhere in the program, not only once that is fixed.
+#[test]
+fn a_launch_block_mistake_is_reported_beside_a_type_error() {
+    let output = miri_check(
+        "
+use system.gpu
+
+gpu fn my_kernel()
+    let x = 1
+
+fn main()
+    let wrong int = \"text\"
+    var block_size = 16
+    my_kernel().launch(Dim3(1, 1, 1), Dim3(block_size, 16, 1))
+",
+    )
+    .output();
+    assert_mentions(&output, &["MER_TYP_002", "MER_TYP_022"]);
+}
+
+#[test]
+fn a_host_buffer_mistake_is_reported_beside_a_type_error() {
+    let output = miri_check(
+        "
+use system.collections.array
+
+gpu fn my_kernel(a Array<f32,4>)
+    let x = 1
+
+fn main()
+    let wrong int = \"text\"
+    let a Array<f32,4> = [1.0, 2.0, 3.0, 4.0]
+    my_kernel(a).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
+",
+    )
+    .output();
+    assert_mentions(
+        &output,
+        &["MER_TYP_002", "MER_TYP_021", "`a` is host-resident"],
+    );
+}
+
+/// A device buffer passed to a `gpu fn` is accepted.
+#[test]
+fn a_device_buffer_passed_to_a_gpu_fn_is_accepted() {
+    let result = miri_check(
+        "
+use system.gpu
+use system.collections.array
+
+gpu fn my_kernel(a Array<f32,4>)
+    let x = 1
+
+fn main()
+    gpu let a Array<f32,4> = [1.0, 2.0, 3.0, 4.0]
+    my_kernel(a).launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
+",
+    );
+    assert!(result.success, "{}", result.output());
+}

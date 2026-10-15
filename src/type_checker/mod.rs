@@ -56,6 +56,7 @@ mod gpu_integer_width;
 pub(crate) mod hygiene;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
+pub(crate) mod launch_rules;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
