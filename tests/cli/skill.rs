@@ -291,6 +291,44 @@ fn test_installing_over_an_edited_file_is_refused_until_forced() {
     );
 }
 
+/// A pack an older build installed and nobody edited is replaced by a plain
+/// re-install: updating the compiler and re-running `miri skill install` must
+/// not need `--force`, which would also discard real edits to other packs.
+#[test]
+fn test_reinstalling_over_an_unedited_older_install_updates_it() {
+    use sha2::{Digest, Sha256};
+
+    let workspace = workspace("older");
+    let root = workspace.path().to_string_lossy().into_owned();
+    let args = [
+        "install",
+        "miri-lang",
+        "--agent",
+        "claude",
+        "--target",
+        &root,
+    ];
+    assert!(run(&args).2, "the first install succeeds");
+
+    let path = claude_path(workspace.path(), "miri-lang");
+    let installed = std::fs::read_to_string(&path).expect("the skill was written");
+    let recorded = field_of(&installed, "bodySha256").expect("the install records its body's hash");
+    let older_body = "# An older pack\n";
+    let header = &installed[..installed.len() - body_of(&installed).len()];
+    let older = format!("{header}{older_body}")
+        .replace(&recorded, &format!("{:x}", Sha256::digest(older_body)))
+        .replace(&compiler_version(), "0.0.1");
+    std::fs::write(&path, &older).expect("the older install is written");
+
+    let (stdout, stderr, ok) = run(&args);
+    assert!(ok, "an unedited older install is updated: {}", stderr);
+    assert!(stdout.contains("wrote"), "stdout was: {}", stdout);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the file was replaced"),
+        installed
+    );
+}
+
 #[test]
 fn test_a_refusal_still_reports_the_skills_that_were_written() {
     let workspace = workspace("partial");

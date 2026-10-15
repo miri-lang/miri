@@ -17,7 +17,7 @@ use self::parser::{PegExpr, PegGrammar, PegMatcher};
 
 /// Number of corpus files the accept gate must exercise. Pinned so a file that
 /// disappears from the walk fails the gate instead of quietly reducing coverage.
-const ACCEPT_CORPUS_SIZE: usize = 87;
+const ACCEPT_CORPUS_SIZE: usize = 88;
 
 /// Number of fixtures the reject gate must exercise, pinned for the same reason.
 const REJECT_CORPUS_SIZE: usize = 22;
@@ -28,6 +28,10 @@ fn exclusion_table() -> HashMap<String, String> {
     m.insert(
         "tests/e2e/err_03_indentation.mi".to_string(),
         "lexer rejects (IndentationMismatch) before parser runs".to_string(),
+    );
+    m.insert(
+        "examples/agents/tally.mi".to_string(),
+        "written with `&&` on purpose: the agent guide shows the compiler repairing it".to_string(),
     );
     m
 }

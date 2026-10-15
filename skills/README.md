@@ -17,38 +17,41 @@ The `miri test` framework, test attributes, assertion semantics, and restriction
 
 ## Install from the Compiler
 
-### In Claude Code
-
-The installed compiler carries the skills that match it:
+Put the compiler on `PATH` once, from a clone of this repository:
 
 ```bash
-# Inside a Claude Code project
-cd /path/to/project
-miri skill install --agent claude
+make install        # builds the release compiler and links it into ~/.local/bin
 ```
 
-This writes skills to `.claude/skills/<name>/SKILL.md` so they're immediately available in your session.
-
-### For Other Agents
-
-- **Cursor/Codex/OpenCode/Windsurf/Gemini CLI:** `miri skill install --agent agents` (writes to `.agents/skills/<name>/SKILL.md`, the vendor-neutral path)
-- **Generic/Project-Local:** `miri skill install --agent generic` (writes to `skills/<name>/SKILL.md`)
-
-### Manual Install via `npx skills add`
+Then, in each project an agent works on:
 
 ```bash
-npx skills add <github-org>/miri --skill miri-lang
+miri skill install                  # Claude Code: .claude/skills/<name>/SKILL.md
+miri skill install --agent agents   # Cursor, Codex, OpenCode, Windsurf, Gemini CLI: .agents/skills/
+miri skill install --agent generic  # anything else: skills/<name>/SKILL.md
 ```
 
-This requires the `skills` package manager. The same `SKILL.md` from the compiler is used in all installs.
+The installed compiler carries the skills that match it, and stamps each file
+with its version and the SHA-256 of the body it wrote.
+
+### Updating
+
+After `git pull && make install`, run `miri skill install` again. A pack nobody
+edited since it was installed is replaced; one that was edited is refused
+(`MER_BLD_014`) and left alone, and `--force` replaces it anyway.
 
 ### Manual Copy
 
-Skills live in this repository at `skills/<name>/SKILL.md`. Copy them directly:
+Skills live in this repository at `skills/<name>/SKILL.md`:
 
 ```bash
-cp skills/miri-lang/SKILL.md ~/.claude/skills/miri-lang/SKILL.md
+mkdir -p .claude/skills/miri-lang
+curl -o .claude/skills/miri-lang/SKILL.md \
+  https://raw.githubusercontent.com/miri-lang/miri/main/skills/miri-lang/SKILL.md
 ```
+
+A copied file carries no version stamp, so `miri skill install` will not
+replace it without `--force`.
 
 ## Using Skills in Your Agent
 
@@ -110,13 +113,13 @@ make skills-check
 ## Miri vs the Website
 
 - **This repository** (`skills/`) — the source of truth, embedded in the compiler binary.
-- **The website** (`../miri-lang.org`, a sibling checkout) — publicly rendered copy via `gen_agent_skills.py`.
+- **The website** (`../miri-lang.org`, a sibling checkout) — the "Miri for agents" guide renders these packs, vendored by `tools/gen_agent_docs.py`. The `agent_docs` tests fail when the vendored copy differs.
 
 After editing a skill here, regenerate the website:
 
 ```bash
 cd ../miri-lang.org
-python3 tools/gen_agent_skills.py
+python3 tools/gen_agent_docs.py
 ```
 
 ## Future Skills

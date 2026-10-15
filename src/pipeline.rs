@@ -4104,7 +4104,8 @@ fn resolve_linker() -> Result<PathBuf, CompilerError> {
 /// Searches in order:
 /// 1. `MIRI_RUNTIME_DIR` environment variable
 /// 2. `src/runtime/<name>/target/release` relative to the compiler binary's
-///    ancestor directories (walks up from the binary location).
+///    ancestor directories (walks up from the binary location, with symlinks
+///    resolved).
 fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> {
     // Check environment variable first
     if let Ok(dir) = std::env::var("MIRI_RUNTIME_DIR") {
@@ -4114,8 +4115,10 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
         }
     }
 
-    // Walk up from the compiler binary to find the project root
-    if let Ok(exe) = std::env::current_exe() {
+    // Walk up from the compiler binary to find the project root. The binary is
+    // often reached through a symlink on `PATH`, so the walk starts from the
+    // file the link points at; the link's own directory holds no runtime.
+    if let Ok(exe) = std::env::current_exe().map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe)) {
         let mut search = exe.as_path();
         while let Some(parent) = search.parent() {
             let release_candidate = parent

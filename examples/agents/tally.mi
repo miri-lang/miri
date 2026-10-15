@@ -1,0 +1,11 @@
+// Sums the scores between 5 and 10. Written with two mistakes for the compiler to repair.
+
+use system.collections.list
+
+fn main()
+    let total = 0
+    let scores = List([7, 9, 4])
+    for s in scores
+        if s > 5 && s < 10
+            total = total + s
+    println(f"total {total}")

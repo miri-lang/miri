@@ -101,20 +101,19 @@ impl<'source> Parser<'source> {
     }
 
     /// The error for `&&` or `||`, reached at the second of its two symbols:
-    /// the first already parsed as the bitwise operator it spells alone.
+    /// the first already parsed as the bitwise operator it spells alone. When
+    /// the two are adjacent the error covers both, the span its repair edits.
     fn symbol_operator_error(&self, span: Span, operator: SymbolOperator) -> SyntaxError {
-        let error = SyntaxError::new(
-            SyntaxErrorKind::UnsupportedCStyleOperator {
-                found: operator.spelling().to_string(),
-                suggestion: operator.word().to_string(),
-            },
-            span,
-        );
+        let kind = SyntaxErrorKind::UnsupportedCStyleOperator {
+            found: operator.spelling().to_string(),
+            suggestion: operator.word().to_string(),
+        };
         let start = span.start.saturating_sub(1);
         if self.source.get(start..span.end) == Some(operator.spelling()) {
-            error.with_foreign_form(ForeignForm::SymbolOperator { start, operator })
+            SyntaxError::new(kind, Span::new(start, span.end))
+                .with_foreign_form(ForeignForm::SymbolOperator { start, operator })
         } else {
-            error
+            SyntaxError::new(kind, span)
         }
     }
 

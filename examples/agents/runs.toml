@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# Every command the website's "Miri for agents" guide shows, with the exit
+# status it must end with.
+#
+# Each session copies its `files` from this directory into a fresh, empty
+# directory and runs its steps there, in order, so a step sees what the steps
+# before it wrote. The website generator (`tools/gen_agent_docs.py` in the
+# sibling `miri-lang.org` checkout) records what each step printed; the
+# `agent_docs` tests in this repository replay the same steps against the
+# compiler under test and refuse a step whose exit status, or whose recorded
+# output, no longer matches.
+#
+# Two things in the output are normalised on both sides: the session
+# directory's absolute path is dropped (so `/tmp/x1/tally.mi` reads
+# `tally.mi`), and a `durationMs` value is not compared.
+
+[[session]]
+id = "setup"
+files = []
+
+[[session.step]]
+args = ["skill", "install"]
+exit = 0
+
+[[session.step]]
+args = ["skill", "install", "--agent", "agents"]
+exit = 0
+
+[[session.step]]
+args = ["skill", "list"]
+exit = 0
+
+[[session]]
+id = "loop"
+files = ["tally.mi"]
+
+[[session.step]]
+args = ["check", "tally.mi", "--format", "json"]
+exit = 1
+
+[[session.step]]
+args = ["fix", "tally.mi", "--apply", "--yes"]
+exit = 0
+
+[[session.step]]
+args = ["check", "tally.mi", "--format", "json"]
+exit = 1
+
+[[session.step]]
+args = ["fix", "tally.mi", "--apply", "--yes"]
+exit = 0
+
+[[session.step]]
+args = ["check", "tally.mi", "--format", "json"]
+exit = 0
+
+[[session.step]]
+args = ["run", "tally.mi"]
+exit = 0
+
+[[session]]
+id = "check-pretty"
+files = ["tally.mi"]
+
+[[session.step]]
+args = ["check", "tally.mi"]
+exit = 1
+
+[[session]]
+id = "fix-preview"
+files = ["tally.mi"]
+
+[[session.step]]
+args = ["fix", "tally.mi"]
+exit = 0
+
+[[session]]
+id = "explain"
+files = []
+
+[[session.step]]
+args = ["explain", "MER_PAR_020"]
+exit = 0
+
+[[session]]
+id = "view"
+files = ["scores.mi"]
+
+[[session.step]]
+args = ["view", "--type", "String", "--public"]
+exit = 0
+
+[[session.step]]
+args = ["view", "system.fs", "--outline", "--public"]
+exit = 0
+
+[[session.step]]
+args = ["view", "scores.mi", "--fn", "total_of_passing"]
+exit = 0
+
+[[session]]
+id = "test"
+files = ["scores.mi"]
+
+[[session.step]]
+args = ["test", "scores.mi"]
+exit = 1
+
+[[session.step]]
+args = ["test", "scores.mi", "--format", "json"]
+exit = 1
+
+[[session]]
+id = "patch"
+files = ["scores.mi"]
+
+[[session.step]]
+args = ["patch", "scores.mi", "--replace-in-fn", "total_of_passing", "--old", "s >= 5", "--new", "s > 5"]
+exit = 0
+
+[[session.step]]
+args = ["patch", "scores.mi", "--replace-in-fn", "total_of_passing", "--old", "total + s", "--new", "total + s +"]
+exit = 1

@@ -171,10 +171,13 @@ pub fn find(name: &str) -> Result<Skill, Box<Diagnostic>> {
     read(embedded_name, source)
 }
 
-/// Re-emit a skill's header with `version` recorded in it.
+/// Re-emit a skill's header with `version` and the body's SHA-256 recorded
+/// in it.
 ///
-/// The header is rebuilt a line at a time so the version lands next to the
-/// fields it belongs with; the body is appended untouched.
+/// The header is rebuilt a line at a time so the stamp lands next to the
+/// fields it belongs with; the body is appended untouched. The hash is what
+/// lets a later install tell a file nobody edited — safe to update — from
+/// one somebody did.
 fn stamp_version(source: &str, version: &str) -> Option<String> {
     let (header, body) = split_header(source)?;
 
@@ -185,14 +188,21 @@ fn stamp_version(source: &str, version: &str) -> Option<String> {
     } else {
         "\n"
     };
-    let stamp = format!("compilerVersion: {}{}", version, ending);
+    let stamp = format!(
+        "compilerVersion: {}{}bodySha256: {}{}",
+        version,
+        ending,
+        body_sha256(body),
+        ending
+    );
     let delimiter = format!("---{}", ending);
 
     let mut out = String::with_capacity(source.len() + stamp.len());
     out.push_str(&delimiter);
     let mut stamped = false;
     for line in header.split_inclusive('\n') {
-        if line.trim_end().starts_with("compilerVersion:") {
+        let field = line.trim_end();
+        if field.starts_with("compilerVersion:") || field.starts_with("bodySha256:") {
             continue;
         }
         out.push_str(line);
@@ -207,6 +217,21 @@ fn stamp_version(source: &str, version: &str) -> Option<String> {
     out.push_str(&delimiter);
     out.push_str(body);
     Some(out)
+}
+
+/// The hex SHA-256 of a skill body, as its installed header records it.
+fn body_sha256(body: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(body.as_bytes()))
+}
+
+/// Whether `text` is a skill as some build installed it, unedited since: its
+/// body still hashes to the value its header recorded. A file with no
+/// recorded hash cannot be told apart from an edited one.
+fn is_unedited_install(text: &str) -> bool {
+    split_header(text).is_some_and(|(header, body)| {
+        header_field(header, "bodySha256") == Some(body_sha256(body).as_str())
+    })
 }
 
 /// Where a skill goes for the agent that will read it.
@@ -307,7 +332,8 @@ enum Written {
     Unchanged,
 }
 
-/// Write one skill, refusing to discard an edited file.
+/// Write one skill, refusing to discard an edited file. A file an earlier
+/// build installed and nobody edited is replaced.
 fn install_one(
     skill: &Skill,
     root: &Path,
@@ -325,7 +351,7 @@ fn install_one(
         if existing == text {
             return Ok((path, Written::Unchanged));
         }
-        if !force {
+        if !force && !is_unedited_install(&existing) {
             return Err(locally_modified(&path));
         }
     }
@@ -517,6 +543,17 @@ mod tests {
         assert_eq!(stamped.matches("compilerVersion:").count(), 1);
         assert!(stamped.contains("compilerVersion: new\n"));
         assert!(stamped.ends_with("---\nbody\n"));
+    }
+
+    #[test]
+    fn restamping_records_the_body_hash_once_and_reads_as_unedited() {
+        let source = "---\nname: n\ndescription: d\n---\nbody\n";
+        let once = stamp_version(source, "1").expect("it stamps");
+        let twice = stamp_version(&once, "2").expect("it stamps again");
+        assert_eq!(twice.matches("bodySha256:").count(), 1);
+        assert!(is_unedited_install(&twice));
+        assert!(!is_unedited_install(&format!("{twice}edit\n")));
+        assert!(!is_unedited_install(source));
     }
 
     #[test]
