@@ -5,7 +5,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
-    needs_out_pointer, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
+    CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::error::CodegenError;
@@ -840,8 +840,8 @@ impl<'a> FunctionTranslator<'a> {
 
         for (i, arg) in args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
-            let scalar_out_local = Self::scalar_out_local_for_arg(out_args, i, arg, type_ctx);
-            let val = if let Some(local) = scalar_out_local {
+            let out_local = Self::out_local_for_arg(out_args, i, arg);
+            let val = if let Some(local) = out_local {
                 let addr = Self::box_value_in_stack_slot(builder, val, ptr_type);
                 out_arg_slots.push((addr, local));
                 addr
@@ -881,25 +881,16 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// If arg `i` is flagged as `out` and points to a scalar that needs a
-    /// caller-provided stack slot, return the caller-side `Local` to write
-    /// back to after the call; otherwise `None`.
-    pub fn scalar_out_local_for_arg(
-        out_args: &[bool],
-        i: usize,
-        arg: &Operand,
-        type_ctx: &TypeCtx,
-    ) -> Option<Local> {
+    /// If arg `i` is flagged as `out` and names a local, return that local:
+    /// the caller passes the address of a slot holding its value and reads the
+    /// slot back after the call. A scalar the callee changed is copied back,
+    /// and a managed value it replaced takes the place of the one it released.
+    pub fn out_local_for_arg(out_args: &[bool], i: usize, arg: &Operand) -> Option<Local> {
         if !out_args.get(i).copied().unwrap_or(false) {
             return None;
         }
         match arg {
-            Operand::Copy(p) | Operand::Move(p)
-                if p.projection.is_empty()
-                    && needs_out_pointer(&type_ctx.local_types[p.local.0].kind) =>
-            {
-                Some(p.local)
-            }
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Some(p.local),
             Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
                 None
             }

@@ -119,11 +119,11 @@ inc(n)
     );
 }
 
-/// A new string assigned to an `out` parameter never reached the caller —
-/// this program printed `hello` and leaked the new string — so it is refused.
+/// A new string assigned to an `out` parameter reaches the caller, and the
+/// one it replaced is released (the leak check would report either mistake).
 #[test]
-fn test_out_param_string_replacement_is_refused() {
-    assert_compiler_error(
+fn test_out_param_string_replacement_reaches_the_caller() {
+    assert_runs_with_output(
         r#"
 
 fn append_excl(s out String)
@@ -131,8 +131,9 @@ fn append_excl(s out String)
 
 var msg = "hello"
 append_excl(msg)
+println(msg)
 "#,
-        "cannot be given a new value",
+        "hello!",
     );
 }
 
@@ -268,14 +269,23 @@ fn test_a_generic_out_parameter_is_written_through() {
     );
 }
 
-/// A string reaches an `out` parameter as the caller's own reference, so a new
-/// one assigned there would never reach the caller: it is refused rather than
-/// silently lost.
+/// A managed `out` parameter given a new value — once, twice, or not at all —
+/// leaves the caller holding the last one, with nothing leaked or freed twice.
 #[test]
-fn test_replacing_a_managed_out_parameter_is_refused() {
-    assert_compiler_error(
-        "fn bump(dst out String, v String)\n    dst = v\n\nfn main()\n    var s = \"a\" + \"b\"\n    bump(s, \"c\" + \"d\")\n    println(s)\n",
-        "error[MER_TYP_066]",
+fn test_managed_out_parameters_write_back_their_new_value() {
+    assert_runs_with_output(
+        "use system.collections.list\n\nfn fresh(dst out List<int>)\n    dst = List([7, 8])\n\nfn twice(dst out String)\n    dst = \"x\" + \"1\"\n    dst = \"y\" + \"2\"\n\nfn untouched(dst out String)\n    println(dst)\n\nfn main()\n    var xs = List([1])\n    fresh(xs)\n    xs.push(9)\n    var s = \"a\" + \"b\"\n    twice(s)\n    var u = \"same\" + \"!\"\n    untouched(u)\n    println(f\"{xs.length()} {xs[0]} {s} {u}\")\n",
+        "same!\n3 7 y2 same!",
+    );
+}
+
+/// A class instance, a method's `out` parameter, a call through a trait, and
+/// a generic `out T` at a string all write back the same way.
+#[test]
+fn test_managed_out_parameters_write_back_through_every_call_form() {
+    assert_runs_with_output(
+        "trait Labeler\n    fn label(dst out String, n int)\n\nclass Tag implements Labeler\n    fn label(dst out String, n int)\n        dst = f\"t{n}\"\n\nclass Conn\n    handle int\n\nfn reset(c out Conn)\n    c = Conn(handle: 99)\n\nfn bump<T>(dst out T, v T)\n    dst = v\n\nfn forward(l Labeler, dst out String)\n    l.label(dst, 5)\n\nfn main()\n    let t Labeler = Tag()\n    var s = \"x\" + \"y\"\n    t.label(s, 4)\n    var w = \"q\" + \"r\"\n    forward(t, w)\n    var c = Conn(handle: 1)\n    reset(c)\n    var g = \"a\" + \"b\"\n    bump(g, \"c\" + \"d\")\n    println(f\"{s} {w} {c.handle} {g}\")\n",
+        "t4 t5 99 cd",
     );
 }
 

@@ -49,6 +49,11 @@ struct PerceusContext<'a> {
 struct BorrowedLocals {
     arg_count: usize,
     read_only_captures: std::collections::HashSet<crate::mir::Local>,
+    /// The `out` parameters of a host body, whose value goes back to the
+    /// caller through a slot. A new value assigned to one takes the place of
+    /// the caller's, so the old one is released; the parameter is otherwise
+    /// borrowed, and never released at the body's end.
+    written_back: std::collections::HashSet<crate::mir::Local>,
 }
 
 impl BorrowedLocals {
@@ -62,6 +67,7 @@ impl BorrowedLocals {
                 .copied()
                 .filter(|local| !written.contains(local))
                 .collect(),
+            written_back: crate::mir::body::written_back_out_params(body),
         }
     }
 
@@ -438,8 +444,9 @@ impl Perceus {
     /// owned by the object the local points at, and overwriting it releases the
     /// value it replaces like any other store.
     fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
-        let overwrites_borrowed_value =
-            lhs.projection.is_empty() && ctx.borrowed.contains(lhs.local);
+        let overwrites_borrowed_value = lhs.projection.is_empty()
+            && ctx.borrowed.contains(lhs.local)
+            && !ctx.borrowed.written_back.contains(&lhs.local);
         lhs.local.0 != 0 && !overwrites_borrowed_value && is_place_managed(lhs, ctx)
     }
 }
