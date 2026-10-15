@@ -139,6 +139,10 @@ pub(crate) struct FunctionAnalysis {
     /// Every identifier expression, by id, that resolved in its scope to a
     /// [`CalleeKind::Program`] function, with the declaration it resolved to.
     pub(crate) declared_callees: HashMap<usize, DeclaredFunction>,
+    /// The name each identifier expression that resolved to an `intrinsic`
+    /// declaration was declared under, by id. It differs from the written
+    /// name when the intrinsic was imported under an alias.
+    pub(crate) intrinsic_names: HashMap<usize, String>,
     /// The module of every top-level function declaration, by statement id,
     /// that a module the program imports declares.
     pub(crate) declaring_modules: HashMap<usize, ModuleId>,
@@ -153,6 +157,7 @@ impl FunctionAnalysis {
             fn_residencies: HashMap::new(),
             callee_kinds: HashMap::new(),
             declared_callees: HashMap::new(),
+            intrinsic_names: HashMap::new(),
             declaring_modules: HashMap::new(),
         }
     }

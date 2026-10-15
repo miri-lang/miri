@@ -302,7 +302,9 @@ pub(crate) fn math_intrinsic_callee(
         return None;
     };
     (ctx.callee_kind(callee) == CalleeKind::Intrinsic)
-        .then(|| MathIntrinsic::from_name(name))
+        .then(|| {
+            MathIntrinsic::from_name(ctx.type_checker.intrinsic_name(callee.id).unwrap_or(name))
+        })
         .flatten()
 }
 

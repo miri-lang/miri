@@ -60,3 +60,22 @@ fn main()
         "42.0 4.0",
     );
 }
+
+/// An intrinsic imported under an alias is the same intrinsic: the alias
+/// renames what the program calls it, not what it does.
+#[test]
+fn test_an_intrinsic_imported_under_an_alias_runs() {
+    assert_runs_with_output(
+        "use system.math.{wrapping_add as wa}\n\nfn main()\n    println(f\"{wa(1, 2)}\")\n",
+        "3",
+    );
+}
+
+/// An ordinary function imported under an alias still runs beside it.
+#[test]
+fn test_an_ordinary_function_imported_under_an_alias_runs() {
+    assert_runs_with_output(
+        "use system.math.{sigmoid as sg, wrapping_mul as wm}\n\nfn main()\n    println(f\"{sg(0.0)} {wm(3, 4)}\")\n",
+        "0.5 12",
+    );
+}
