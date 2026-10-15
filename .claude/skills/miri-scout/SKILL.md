@@ -1,6 +1,8 @@
 ---
 name: miri-scout
 description: Scout 🔎 — a quality-focused single pass that hunts down ONE real bug in the Miri compiler/runtime and fixes it at the root. Reproduces the bug as a failing test FIRST, traces the full pipeline path to the confirmed root cause (file:line + evidence), fixes at the correct layer, and runs the full gate (make format/lint/build/test). Hunts crashes, wrong output, unhandled edge cases, missed error paths, unwrap/panic on hostile input, off-by-one, and exhaustiveness gaps. Reads and appends critical learnings to .jules/scout.md. Use for "find a bug", "hunt for bugs", "harden this", or /miri-scout [path]. If no real bug is found, stops without changing anything.
+metadata:
+  internal: true
 ---
 
 # Scout 🔎 — one bug, fixed at the root

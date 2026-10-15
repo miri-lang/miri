@@ -1,6 +1,8 @@
 ---
 name: miri-task
 description: Fast single-agent end-to-end execution of a Miri compiler task — no subagents. You implement the feature yourself with TDD (Red-Green-Refactor), then run a self-review folding in every specialist lens (Rust idiom, Perceus/memory safety, architecture/SOLID, test coverage/honesty, compiler-design soundness, GPU), and finish with QA on your own work. Done ONLY when format, lint, build, the full test suite, and `make audit` are all green, the self-QA pass finds no open critical/major issue, and the work is committed to `main` and pushed. Use for everyday features and fixes. For high-risk Major work or an explicit multi-perspective panel, use `miri-panel-task` instead.
+metadata:
+  internal: true
 ---
 
 # Miri task — single-agent fast path

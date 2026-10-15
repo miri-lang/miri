@@ -1,6 +1,8 @@
 ---
 name: miri-sentinel
 description: Sentinel 🛡️ — a security-focused single pass that finds and fixes ONE security issue (or lands ONE hardening enhancement) in the Miri compiler/runtime. Threat model is a compiler eating untrusted .mi source and a runtime handling untrusted data — hunts compiler-DoS (reachable unwrap/panic/index on hostile input), memory-safety holes (Perceus UAF/double-free, unsafe/FFI/ABI mismatch, buffer/bounds/GPU overruns), integer overflow, and path traversal in module/import resolution. Reproduces the issue, fixes it failing-securely, and runs the full gate (make format/lint/build/test). Reads and appends critical learnings to .jules/sentinel.md. Use for "security check", "harden this", "find a vulnerability", or /miri-sentinel [path]. Prioritizes ruthlessly — critical first. If nothing qualifies, lands one enhancement or stops.
+metadata:
+  internal: true
 ---
 
 # Sentinel 🛡️ — one security issue, fixed securely

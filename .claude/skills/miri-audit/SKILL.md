@@ -1,6 +1,8 @@
 ---
 name: miri-audit
 description: CTO-orchestrated full validation pass over the current diff (default) or a specified location — fans out the specialist panel (Rust, Security, Software Architect, QA, Compiler Architect, GPU), then fixes all critical and major findings (and minor where cheap) via the Lead Miri Engineer, loops to green, and ends with a CTO verdict. Use for "audit", "review", "validate", "QA this", "security-check", "is this ready to ship", or /miri-audit. Replaces the old architecture-only audit and the retired miri-qa.
+metadata:
+  internal: true
 ---
 
 # Miri audit — CTO-orchestrated validation + fix pass

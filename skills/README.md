@@ -53,6 +53,27 @@ curl -o .claude/skills/miri-lang/SKILL.md \
 A copied file carries no version stamp, so `miri skill install` will not
 replace it without `--force`.
 
+### With `npx skills`
+
+The [skills CLI](https://github.com/vercel-labs/skills) installs a pack straight
+from this repository, with no Rust toolchain:
+
+```bash
+npx skills add miri-lang/miri --skill miri-lang
+```
+
+It writes `.agents/skills/miri-lang/SKILL.md`, links it into
+`.claude/skills/` for Claude Code, and records the source in
+`skills-lock.json`. The pack comes from `main`, not from the compiler you run,
+and carries no version stamp, so it can describe a newer language than your
+`miri` accepts and `miri skill install` treats it like a manual copy. The agent
+still needs `miri` on `PATH` for its verification loop, which is why the
+website's guide installs packs with `miri skill install`.
+
+The contributor workflows under `.claude/skills/` set `metadata.internal: true`
+so the CLI does not offer them; `cargo test --test mod skills` fails when one
+does not.
+
 ## Using Skills in Your Agent
 
 Once installed, skills are available in your agent's system prompt or as separate context. Agents activate them by name:

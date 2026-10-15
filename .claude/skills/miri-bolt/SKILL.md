@@ -1,6 +1,8 @@
 ---
 name: miri-bolt
 description: Bolt ⚡ — a performance-obsessed single pass that lands ONE small, measured, low-risk optimization in the Miri compiler/runtime. Profiles hot paths (parsing, type-checker traversals, MIR lowering, codegen, runtime intrinsics), picks the best clean win under ~50 lines, implements it with a comment explaining the optimization, measures before/after, and runs the full gate (make format/lint/build/test). Reads and appends critical learnings to .jules/bolt.md. Use for "make it faster", "find a perf win", "optimize this", or /miri-bolt [path]. If no clear win exists, stops without changing anything.
+metadata:
+  internal: true
 ---
 
 # Bolt ⚡ — one measured performance win

@@ -1,6 +1,8 @@
 ---
 name: miri-hilo
 description: HiLo 🔭 — a principal-compiler-engineer audit that names exactly ONE highlight (the best-architected thing in scope, with evidence) and ONE lowlight (the most important architectural debt, with evidence and a target architecture). Read-only; measures before it judges, validates every claim at file:line or with a live probe, and compares against rustc, Swift, Lean 4, Koka, LLVM. Use for "what am I proud of / what must change", "highlight and lowlight", "audit the architecture", or /miri-hilo [path | topic]. No path or topic → the whole project.
+metadata:
+  internal: true
 ---
 
 # HiLo 🔭 — one highlight, one lowlight, both proven

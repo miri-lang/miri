@@ -486,6 +486,41 @@ fn test_skills() {
     }
 }
 
+/// The frontmatter of a `SKILL.md`, between its opening and closing `---`.
+fn frontmatter(content: &str) -> &str {
+    content
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---").map(|(head, _)| head))
+        .unwrap_or("")
+}
+
+/// `npx skills add miri-lang/miri` offers every `SKILL.md` in the repository,
+/// so a contributor workflow under `.claude/skills/` would be installed next to
+/// the published packs. The skills CLI hides a skill whose frontmatter sets
+/// `metadata.internal: true`; every contributor skill must set it.
+#[test]
+fn test_contributor_skills_are_hidden_from_skills_cli() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".claude")
+        .join("skills");
+    let mut visible: Vec<String> = fs::read_dir(&root)
+        .expect("read .claude/skills")
+        .filter_map(|entry| Some(entry.ok()?.path().join("SKILL.md")))
+        .filter(|path| path.exists())
+        .filter(|path| {
+            let content = fs::read_to_string(path).unwrap_or_default();
+            !frontmatter(&content).contains("\nmetadata:\n  internal: true")
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    visible.sort();
+    assert!(
+        visible.is_empty(),
+        "contributor skills the skills CLI would offer (add `metadata:` / `  internal: true` to the frontmatter):\n{}",
+        visible.join("\n")
+    );
+}
+
 #[test]
 fn test_directive_parsing_valid() {
     // Valid: miri with must-pass

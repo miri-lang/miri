@@ -1,6 +1,8 @@
 ---
 name: miri-panel-task
 description: Full multi-agent panel execution of a Miri compiler task — CTO-orchestrated, spawns the architect + specialist subagent panel (Rust, Security, Software Architect, QA, Compiler Architect, GPU) and the Lead Miri Engineer. Use this ONLY when the full panel is explicitly wanted (high-risk Major-tier work, deep multi-perspective review, or when the user asks for "the panel"). For everyday features prefer the lighter single-agent `miri-task`. Classifies the risk tier (Trivial/Standard/Major per PRINCIPLES.md §8) and scales review to the tier. Loops until the CTO declares done with no open critical/major issues.
+metadata:
+  internal: true
 ---
 
 # Miri panel task — CTO-orchestrated implementation (full panel)
