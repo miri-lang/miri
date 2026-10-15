@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The machine-readable twin of CHARTER.md. Every script in bench/ reads its
+# parameters from here; CHARTER.md says what each one means and why it has the
+# value it has. `tests/bench/charter.rs` fails when the two disagree on any
+# number or any build line, so neither can be changed alone.
+
+charter_version = 1
+
+[tiers]
+subject = ["miri"]
+headline = ["c", "cpp", "rust", "go", "python", "typescript"]
+diagnostic = ["swift", "koka"]
+optional = ["pypy"]
+
+# `{src}` is the port's source file, `{out}` the executable the build writes.
+# A language with no `build` runs from source. A language with no
+# `native_build` has no native variant and shows `n/a` in that dimension.
+[languages.miri]
+checklist_comment = "//"
+build = "miri build --release --opt-level 3 -o {out} {src}"
+run = "{out}"
+
+[languages.c]
+checklist_comment = "//"
+build = "clang -std=c17 -O3 -o {out} {src} -lm"
+native_build = "clang -std=c17 -O3 -march=native -o {out} {src} -lm"
+run = "{out}"
+
+[languages.cpp]
+checklist_comment = "//"
+build = "clang++ -std=c++20 -O3 -o {out} {src}"
+native_build = "clang++ -std=c++20 -O3 -march=native -o {out} {src}"
+run = "{out}"
+
+[languages.rust]
+checklist_comment = "//"
+build = "rustc --edition 2021 -C opt-level=3 -o {out} {src}"
+native_build = "rustc --edition 2021 -C opt-level=3 -C target-cpu=native -o {out} {src}"
+run = "{out}"
+
+[languages.go]
+checklist_comment = "//"
+build = "go build -o {out} {src}"
+native_build = "GOAMD64=v3 go build -o {out} {src}"
+run = "{out}"
+
+[languages.python]
+checklist_comment = "#"
+run = "python3 {src}"
+
+[languages.typescript]
+checklist_comment = "//"
+run = "deno run --allow-read {src}"
+
+[languages.swift]
+checklist_comment = "//"
+build = "swiftc -O -o {out} {src}"
+run = "{out}"
+
+[languages.koka]
+checklist_comment = "//"
+build = "koka -O2 -o {out} {src}"
+run = "{out}"
+
+[languages.pypy]
+checklist_comment = "#"
+run = "pypy3 {src}"
+
+[runs]
+process_warmup_runs = 2
+hot_warmup_iterations = 5
+hot_timed_iterations = 5
+
+[runs.measured]
+s = 21
+m = 11
+l = 7
+
+[sizes]
+calibration_tolerance = 0.3
+
+[sizes.target_c_wall_ms]
+s = 50
+m = 500
+l = 3000
+
+[statistics]
+noisy_cv = 0.05
+noisy_max_reruns = 2
+p_high = 0.9
+
+[verdict]
+min_threshold = 0.05
+cv_multiplier = 3
+
+[timeout]
+c_median_factor = 300
+floor_s = 10
+retries = 1
+
+[diagnosis]
+time_vs_c = 1.5
+net_rss_vs_rust = 1.5
