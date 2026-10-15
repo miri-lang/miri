@@ -885,3 +885,24 @@ fn test_test_json_carries_a_compile_warning_in_the_envelope() {
         "in JSON mode the warning belongs in the envelope"
     );
 }
+
+/// A two-symbol operator is located as both symbols, matching the edit its
+/// repair replaces: `&&` starts at its first `&` and is two characters long.
+#[test]
+fn test_a_symbol_operator_is_located_at_both_of_its_symbols() {
+    let file = create_test_file("fn main()\n    let both = true && false\n");
+    let output = miri_cmd()
+        .arg("check")
+        .arg(file.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+    let envelope: DiagnosticsEnvelope = serde_json::from_slice(&output.stdout).unwrap();
+    let diagnostic = &envelope.diagnostics[0];
+    assert_eq!(diagnostic.code.as_deref(), Some("MER_PAR_020"));
+    assert_eq!(
+        (diagnostic.line, diagnostic.column, diagnostic.length),
+        (Some(2), Some(21), Some(2))
+    );
+}

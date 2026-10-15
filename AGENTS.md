@@ -212,6 +212,26 @@ Keep `WEB_DEMOS` in that test and `DEMOS` in `tools/gen_displayed_demos.py` in l
 
 ---
 
+## 4.3 Agent Guide Sync: `skills/`, `examples/agents/` ↔ the website (MANDATORY)
+The website's **Miri for agents** guide (`../miri-lang.org/docs/agents/`) quotes this repository and never paraphrases it: the skill packs, the example programs in `examples/agents/`, `miri explain --list --format json`, `docs/diagnostics-schema.json`, and the output of every command listed in `examples/agents/runs.toml`. The website vendors them into `_data/`, and the copies must never drift.
+
+**Whenever you change a skill pack, an example or `runs.toml` under `examples/agents/`, the diagnostics schema, the code registry, or the output of any command `runs.toml` lists, regenerate the website copy in the same pass:**
+
+```bash
+cd ../miri-lang.org
+python3 tools/gen_agent_docs.py   # rebuilds the release compiler, then vendors everything
+```
+
+`tests/cli/agent_docs.rs` is the gate. It always replays every `runs.toml` step and checks its exit status, and it checks that every command the guide runs is a surface `skills/surfaces.toml` lists (or `miri skill`). With the sibling checkout present it also compares the vendored copies with a fresh render. That last comparison skips with a log line when `../miri-lang.org` is absent, so run it explicitly after touching any of the above:
+
+```bash
+cargo test --test mod agent_docs
+```
+
+To show a new command on the guide, add a step to `runs.toml` rather than pasting output into the page.
+
+---
+
 ## 5. Workflow Best Practices for AI Agents
 To work efficiently and hit fewer roadblocks:
 

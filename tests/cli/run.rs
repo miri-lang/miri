@@ -235,3 +235,26 @@ fn test_run_arguments_after_the_separator_reach_the_program() {
         .success()
         .stdout(predicates::str::contains("2"));
 }
+
+/// A `miri` reached through a symlink — the usual way to put a binary built in
+/// a clone on `PATH` — finds the runtime and the stdlib that sit beside the
+/// binary it points at, not beside the link.
+#[cfg(unix)]
+#[test]
+fn test_run_through_a_symlinked_binary_finds_the_runtime() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let link = bin_dir.path().join("miri");
+    std::os::unix::fs::symlink(assert_cmd::cargo_bin!("miri"), &link).unwrap();
+    let file = create_test_file("use system.io\n\nfn main()\n    println(\"linked\")\n");
+
+    use assert_cmd::assert::OutputAssertExt;
+    std::process::Command::new(&link)
+        .arg("run")
+        .arg(file.path())
+        .current_dir(bin_dir.path())
+        .env_remove("MIRI_RUNTIME_DIR")
+        .env_remove("MIRI_STDLIB_PATH")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("linked"));
+}

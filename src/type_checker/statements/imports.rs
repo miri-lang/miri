@@ -1523,8 +1523,11 @@ fn stdlib_search_roots(env_override: Option<PathBuf>, exe_dir: Option<&Path>) ->
 /// roots from those. Used by multiple modules to keep the lookup logic consistent.
 pub fn stdlib_roots() -> Vec<PathBuf> {
     let env_override = std::env::var_os("MIRI_STDLIB_PATH").map(PathBuf::from);
+    // A binary reached through a symlink keeps its stdlib beside the file the
+    // link points at, not beside the link.
     let exe_dir = std::env::current_exe()
         .ok()
+        .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     stdlib_search_roots(env_override, exe_dir.as_deref())
 }

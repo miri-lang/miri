@@ -1233,6 +1233,9 @@ pub fn members(
 }
 
 /// Report a type the program does not have in scope, naming the nearest it has.
+// TODO: the built-in optional type is not in the type table this lookup reads,
+// so `miri view --type Option` lands here although every program can use it;
+// `--type Result` lists its variants without the payload each carries.
 fn type_not_found(
     type_name: &str,
     definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,

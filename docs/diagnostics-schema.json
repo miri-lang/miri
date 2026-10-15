@@ -283,7 +283,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Stable identifier for the repair shape: 'let-to-var', 'add-import', or 'drop-extra-arguments'."
+          "description": "Stable identifier for the repair shape, such as 'let-to-var' or 'add-import'. `miri explain --list --format json` names the repairs each code can offer."
         },
         "summary": {
           "type": "string",

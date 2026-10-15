@@ -1,0 +1,16 @@
+// A function and two tests for it; the second test expects the wrong total.
+
+use system.collections.list
+use system.testing.{assert_eq}
+
+fn total_of_passing(scores [int]) int
+    var total = 0
+    for s in scores
+        if s >= 5: total = total + s
+    total
+
+@test fn counts_scores_from_five_up()
+    assert_eq(total_of_passing(List([7, 5, 4])), 12)
+
+@test fn empty_list_totals_zero()
+    assert_eq(total_of_passing(List<int>()), 1)

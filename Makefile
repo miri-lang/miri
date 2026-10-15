@@ -1,4 +1,4 @@
-.PHONY: build release test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check
+.PHONY: build release install test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -34,6 +34,17 @@ build: runtimes
 
 release: runtimes
 	cargo build --release
+
+# Put the release compiler on PATH as a symlink into this clone. The compiler
+# finds its runtime libraries and its stdlib beside the file the link points
+# at, so the clone must stay where it is; `git pull && make install` updates
+# it in place. Override the directory with `make install BINDIR=/usr/local/bin`.
+BINDIR ?= $(HOME)/.local/bin
+install: release
+	@mkdir -p "$(BINDIR)"
+	ln -sf "$(CURDIR)/target/release/miri" "$(BINDIR)/miri"
+	@echo "Installed: $(BINDIR)/miri -> $(CURDIR)/target/release/miri"
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "Add $(BINDIR) to your PATH: export PATH=\"$(BINDIR):\$$PATH\"";; esac
 
 test: runtimes
 	cargo test -- --test-threads=$(TEST_THREADS)
