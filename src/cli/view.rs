@@ -1004,7 +1004,7 @@ fn member_header(
     use crate::type_checker::context::TypeDefinition;
     match definition {
         TypeDefinition::Class(class) => {
-            let mut header = format!("class {}", type_name);
+            let mut header = format!("class {}{}", type_name, type_parameters(&class.generics));
             if let Some(base) = &class.base_class {
                 header.push_str(&format!(" extends {}", base));
             }
@@ -1013,10 +1013,26 @@ fn member_header(
             }
             header
         }
-        TypeDefinition::Struct(_) => format!("struct {}", type_name),
-        TypeDefinition::Enum(_) => format!("enum {}", type_name),
+        TypeDefinition::Struct(structure) => {
+            format!(
+                "struct {}{}",
+                type_name,
+                type_parameters(&structure.generics)
+            )
+        }
+        TypeDefinition::Enum(enumeration) => {
+            format!(
+                "enum {}{}",
+                type_name,
+                type_parameters(&enumeration.generics)
+            )
+        }
         TypeDefinition::Trait(trait_definition) => {
-            let mut header = format!("trait {}", type_name);
+            let mut header = format!(
+                "trait {}{}",
+                type_name,
+                type_parameters(&trait_definition.generics)
+            );
             if !trait_definition.parent_traits.is_empty() {
                 header.push_str(&format!(
                     " extends {}",
@@ -1028,6 +1044,27 @@ fn member_header(
         TypeDefinition::Generic(_) => format!("type parameter {}", type_name),
         TypeDefinition::Alias(_) => format!("type {}", type_name),
     }
+}
+
+/// The type parameters a declaration introduces, as its header writes them.
+///
+/// A member's signature is written in these names, so a listing without them
+/// leaves a reader to guess what `T` in `fn unwrap_or(fallback T) T` stands for.
+fn type_parameters(
+    generics: &Option<Vec<crate::type_checker::context::GenericDefinition>>,
+) -> String {
+    let Some(generics) = generics.as_deref().filter(|generics| !generics.is_empty()) else {
+        return String::new();
+    };
+    let names = generics
+        .iter()
+        .map(|generic| match &generic.constraint {
+            Some(bound) => format!("{} is {}", generic.name, type_text(bound)),
+            None => generic.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("<{}>", names)
 }
 
 /// Append the members `definition` contributes, then those it inherits.
@@ -1055,14 +1092,7 @@ fn collect_members(
                     out.push_str(&field_line(name, &field.ty, queried, owner));
                 }
             }
-            for (name, method) in &class.methods {
-                if public_only && !matches!(method.visibility, MemberVisibility::Public) {
-                    continue;
-                }
-                if seen.insert(name.clone()) {
-                    out.push_str(&method_line(name, method, queried, owner));
-                }
-            }
+            push_methods(&class.methods, queried, owner, public_only, seen, out);
             // Inherited members come after the type's own, and a trait's
             // defaults after both: that is the order a call resolves in.
             for source in class
@@ -1087,14 +1117,14 @@ fn collect_members(
             }
         }
         TypeDefinition::Trait(trait_definition) => {
-            for (name, method) in &trait_definition.methods {
-                if public_only && !matches!(method.visibility, MemberVisibility::Public) {
-                    continue;
-                }
-                if seen.insert(name.clone()) {
-                    out.push_str(&method_line(name, method, queried, owner));
-                }
-            }
+            push_methods(
+                &trait_definition.methods,
+                queried,
+                owner,
+                public_only,
+                seen,
+                out,
+            );
             for parent in &trait_definition.parent_traits {
                 if let Some(next) = definitions.get(parent) {
                     collect_members(queried, parent, next, definitions, public_only, seen, out);
@@ -1102,14 +1132,43 @@ fn collect_members(
             }
         }
         TypeDefinition::Enum(enumeration) => {
-            for variant in enumeration.variants.keys() {
+            for (variant, payload) in &enumeration.variants {
                 if seen.insert(variant.clone()) {
-                    out.push_str(&format!("    {}.{}\n", owner, variant));
+                    out.push_str(&variant_line(owner, variant, payload));
                 }
             }
+            push_methods(&enumeration.methods, queried, owner, public_only, seen, out);
         }
         TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {}
     }
+}
+
+/// Append each method a caller may reach that no nearer declaration overrode.
+fn push_methods(
+    methods: &std::collections::BTreeMap<String, crate::type_checker::context::MethodInfo>,
+    queried: &str,
+    owner: &str,
+    public_only: bool,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut String,
+) {
+    for (name, method) in methods {
+        if public_only && !matches!(method.visibility, MemberVisibility::Public) {
+            continue;
+        }
+        if seen.insert(name.clone()) {
+            out.push_str(&method_line(name, method, queried, owner));
+        }
+    }
+}
+
+/// One variant, spelled the way a pattern names it, with the payload it binds.
+fn variant_line(owner: &str, variant: &str, payload: &[crate::ast::types::Type]) -> String {
+    if payload.is_empty() {
+        return format!("    {}.{}\n", owner, variant);
+    }
+    let payload = payload.iter().map(type_text).collect::<Vec<_>>().join(", ");
+    format!("    {}.{}({})\n", owner, variant, payload)
 }
 
 /// One field, as a reader would write its type.
@@ -1210,16 +1269,18 @@ pub fn members(
     };
 
     let definitions = &result.type_checker.type_table.global_type_definitions;
-    let Some(definition) = definitions.get(type_name) else {
-        return failure(
-            &shape,
-            vec![*type_not_found(type_name, definitions)],
-            source,
-            source_path,
-        );
+    let text = match definitions.get(type_name) {
+        Some(definition) => render_members(type_name, definition, definitions, public_only),
+        None if type_name == crate::ast::types::OPTION_TYPE_NAME => option_members(),
+        None => {
+            return failure(
+                &shape,
+                vec![*type_not_found(type_name, definitions)],
+                source,
+                source_path,
+            )
+        }
     };
-
-    let text = render_members(type_name, definition, definitions, public_only);
     success(
         &shape,
         LocatedRender {
@@ -1232,10 +1293,23 @@ pub fn members(
     )
 }
 
+/// The listing for the built-in optional type.
+///
+/// `T?` is part of the language rather than a declaration in some module, so no
+/// type table holds it, yet it is among the types a reader most often asks
+/// about. It carries no methods: its value is reached only through the forms the
+/// type checker accepts as a check, which this listing names instead.
+fn option_members() -> String {
+    format!(
+        "built-in {}<T>, written T?\n    \
+         Some(T)\n    \
+         None\n    \
+         // no methods: read the value with `if let Some(v) = x`, a `match`, or `x ?? fallback`\n",
+        crate::ast::types::OPTION_TYPE_NAME
+    )
+}
+
 /// Report a type the program does not have in scope, naming the nearest it has.
-// TODO: the built-in optional type is not in the type table this lookup reads,
-// so `miri view --type Option` lands here although every program can use it;
-// `--type Result` lists its variants without the payload each carries.
 fn type_not_found(
     type_name: &str,
     definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
