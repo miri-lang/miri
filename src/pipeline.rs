@@ -1435,16 +1435,12 @@ impl Pipeline {
     /// Run the frontend with `main` given the exit status `build` and `run`
     /// compile it with.
     ///
-    /// `check` and `fix` judge a file through here, so neither reads a `main`
-    /// differently from `build`. A script is checked as written, unwrapped;
-    /// `build` wraps it, and the type checker reads the wrapped body with the
-    /// rules of top-level code, so the two apply the same ownership rules.
-    ///
-    /// TODO: a script is still checked unwrapped. Wrapping it here, as `build`
-    /// does, makes a module-scope `let` that a function assigns read as a local
-    /// of `main` (undefined in the function), which is what `build` reports but
-    /// changes the program the MER_BLD_002 page uses to show a refused
-    /// api-changing repair. Decide that page's example before wrapping here.
+    /// `check` and `fix` judge a file through here, so neither reads a program
+    /// differently from `build`: a script is wrapped in a synthetic `main` as
+    /// `build` wraps it, and its top-level bindings are that `main`'s locals,
+    /// which a function the script declares cannot reach. A file of
+    /// declarations alone is a module and is left unwrapped, so what it
+    /// imports stays what it exposes.
     ///
     /// The program is also lowered to MIR, as `build` lowers it, and the bodies
     /// thrown away: an instantiation that grows without bound, an argument no
@@ -1453,8 +1449,13 @@ impl Pipeline {
     /// a program `build` refuses.
     pub fn frontend_program(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut ast = self.parse(source)?;
-        patch_main_return(&mut ast);
-        let mut result = self.check_parsed(ast, None)?;
+        let script_main = if has_executable_entry_point(&ast) {
+            install_entry_point(&mut ast)
+        } else {
+            patch_main_return(&mut ast);
+            None
+        };
+        let mut result = self.check_parsed(ast, script_main)?;
         self.lower_to_mir(&mut result, false)?;
         Ok(result)
     }

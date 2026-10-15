@@ -2,7 +2,7 @@
 
 Repairs are classified by safety level to protect you from unintended changes. The `miri fix --apply` command automatically applies only repairs that are safe to apply unconditionally: format-only, behavior-preserving, or local-edit. Repairs classified as api-changing, target-changing, or requires-human-review are refused unless you explicitly approve them with the `--allow-risky` flag.
 
-An api-changing repair modifies a public API surface that other functions and modules observe — changing a module-scope binding from immutable to mutable affects callers. A target-changing repair alters where or how the program runs (GPU residency, target capability, scalar width). A requires-human-review repair is ambiguous or carries sufficient risk that a human should inspect the edit before it applies.
+An api-changing repair modifies a surface other functions and modules observe — renaming a parameter changes the names callers pass arguments by, and making a public module-scope binding mutable changes what its importers may do with it. A target-changing repair alters where or how the program runs (GPU residency, target capability, scalar width). A requires-human-review repair is ambiguous or carries sufficient risk that a human should inspect the edit before it applies.
 
 ## Messages
 
@@ -17,20 +17,18 @@ An api-changing repair modifies a public API surface that other functions and mo
 `main.mi`:
 
 ```miri
-let counter = 0
+fn greet(name String)
+    println("hi")
 
-fn bump()
-    counter = counter + 1
-
-bump()
-println(f"{counter}")
+fn main()
+    greet("a")
 ```
 
 ```sh
 miri fix --apply --yes main.mi
 ```
 
-The repair would make the module-scope `counter` mutable, which changes a surface other code observes, so it is refused.
+The repair for the unread parameter would rename `name` to `_name`. A caller can pass that argument by name (`greet(name: "a")`), so the rename changes the function's signature and is refused.
 
 ## After
 
