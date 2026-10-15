@@ -255,3 +255,13 @@ fn main()
         "Type mismatch for argument 'dst'",
     );
 }
+
+/// A generic `out` parameter is written through as a non-generic one is,
+/// whatever type the call instantiates it at.
+#[test]
+fn test_a_generic_out_parameter_is_written_through() {
+    assert_runs_with_output(
+        "fn bump<T>(dst out T, v T)\n    dst = v\n\nfn main()\n    var x = 1\n    bump(x, 6)\n    var f f32 = 0.5\n    bump(f, 2.5)\n    println(f\"{x} {f}\")\n",
+        "6 2.5",
+    );
+}

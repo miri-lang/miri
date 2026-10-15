@@ -2582,6 +2582,12 @@ impl TypeChecker {
 
     /// Validates the type of an out parameter, refusing an argument whose type
     /// does not agree with it (see [`Self::out_types_agree`]).
+    ///
+    /// TODO: an `out` parameter of a managed type (`dst out String`) is
+    /// accepted here, but the call ABI copies only scalars back through the
+    /// stack slot: the caller's binding keeps its old value and the stored one
+    /// leaks. Either write managed values back with their reference counts,
+    /// or refuse the parameter here.
     fn validate_out_parameter_type(
         &mut self,
         param_name: &str,
