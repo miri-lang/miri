@@ -14,6 +14,7 @@
 //! so each rule those layers own is answered by its one implementation.
 
 mod drop_instantiations;
+mod drop_reach;
 
 use crate::ast::expression::Expression;
 use crate::ast::types::Type;
@@ -26,6 +27,7 @@ pub use crate::type_checker::context::{
     ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo, StructDefinition,
     TypeDefinition,
 };
+pub use drop_reach::DropHookReach;
 
 /// Why the instantiations a drop thunk is emitted for could not be closed.
 #[derive(Debug, Clone, PartialEq)]

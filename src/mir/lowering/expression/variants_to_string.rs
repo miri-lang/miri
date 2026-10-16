@@ -416,7 +416,7 @@ pub(super) fn emit_enum_to_string(
         TerminatorKind::Call {
             func: panic_func_op,
             args: vec![panic_msg_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
             target: Some(join_block),

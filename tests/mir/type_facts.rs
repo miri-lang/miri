@@ -223,3 +223,140 @@ fn an_unbound_argument_spelled_as_a_bare_name_names_the_same_drop_function() {
 
     assert!(facts.is_drop_instantiation("Duo", &[string(), parameter("B")]));
 }
+
+mod drop_hook_reach {
+    //! Whether releasing a value may run a drop hook anywhere inside it.
+
+    use super::{generic_class, instance, parameter, string, ty};
+    use miri::ast::factory::type_expr_non_null;
+    use miri::ast::types::{Type, TypeKind};
+    use miri::ast::MemberVisibility;
+    use miri::mir::type_facts::{
+        DropHookReach, EnumDefinition, MethodInfo, StructDefinition, TypeDefinition,
+    };
+    use miri::type_checker::context::TraitDefinition;
+    use std::collections::{BTreeMap, HashMap};
+
+    fn named(name: &str) -> Type {
+        ty(TypeKind::Custom(name.to_string(), None))
+    }
+
+    fn drop_hook() -> MethodInfo {
+        MethodInfo {
+            params: Vec::new(),
+            is_out_flags: Vec::new(),
+            return_type: ty(TypeKind::Void),
+            visibility: MemberVisibility::Public,
+            is_constructor: false,
+            is_abstract: false,
+            is_static: false,
+            attributes: Vec::new(),
+        }
+    }
+
+    /// A plain class `name` holding one `field`, extending `base`, with a
+    /// drop hook when `has_hook`.
+    fn class(name: &str, field: Type, base: Option<&str>, has_hook: bool) -> TypeDefinition {
+        let TypeDefinition::Class(mut def) = generic_class(name, field) else {
+            panic!("`generic_class` builds a class");
+        };
+        def.generics = None;
+        def.base_class = base.map(str::to_string);
+        if has_hook {
+            def.methods.insert("drop".to_string(), drop_hook());
+        }
+        TypeDefinition::Class(def)
+    }
+
+    /// `Res` runs a hook; `Box<T>` holds a `T`; `Child` runs a hook and
+    /// extends `Base`, which runs none; `Node` holds itself; `Pair` stores a
+    /// `Res` field and `Wrap` a `Res` payload; `Shape` is a trait.
+    fn definitions() -> HashMap<String, TypeDefinition> {
+        let int = ty(TypeKind::Int);
+        let optional_node = ty(TypeKind::Option(Box::new(named("Node"))));
+        let trait_def = TraitDefinition {
+            name: "Shape".to_string(),
+            generics: None,
+            parent_traits: Vec::new(),
+            parent_trait_args: BTreeMap::new(),
+            methods: BTreeMap::new(),
+            module: String::new(),
+        };
+        let pair = StructDefinition {
+            fields: vec![("res".to_string(), named("Res"), MemberVisibility::Public)],
+            generics: None,
+            module: String::new(),
+        };
+        let wrap = EnumDefinition {
+            variants: BTreeMap::from([("Held".to_string(), vec![named("Res")])]),
+            generics: None,
+            methods: BTreeMap::new(),
+            module: String::new(),
+            must_use: false,
+            non_exhaustive: false,
+        };
+        HashMap::from([
+            ("Res".to_string(), class("Res", int.clone(), None, true)),
+            ("Box".to_string(), generic_class("Box", parameter("T"))),
+            ("Base".to_string(), class("Base", int.clone(), None, false)),
+            ("Child".to_string(), class("Child", int, Some("Base"), true)),
+            (
+                "Node".to_string(),
+                class("Node", optional_node, None, false),
+            ),
+            ("Pair".to_string(), TypeDefinition::Struct(pair)),
+            ("Wrap".to_string(), TypeDefinition::Enum(wrap)),
+            ("Shape".to_string(), TypeDefinition::Trait(trait_def)),
+        ])
+    }
+
+    #[test]
+    fn a_value_holding_a_hooked_value_anywhere_may_run_its_hook() {
+        let definitions = definitions();
+        let reach = DropHookReach::new(&definitions);
+        let tuple = ty(TypeKind::Tuple(vec![
+            type_expr_non_null(ty(TypeKind::Int)),
+            type_expr_non_null(named("Res")),
+        ]));
+        for held in [
+            named("Res"),
+            ty(TypeKind::Option(Box::new(named("Res")))),
+            tuple,
+            instance("Box", vec![named("Res")]),
+            named("Pair"),
+            named("Wrap"),
+        ] {
+            assert!(reach.may_run_drop_hook(&held), "{held:?} reaches `Res`");
+        }
+    }
+
+    #[test]
+    fn a_value_whose_dynamic_type_is_unknown_may_run_a_hook() {
+        let definitions = definitions();
+        let reach = DropHookReach::new(&definitions);
+        assert!(
+            reach.may_run_drop_hook(&named("Base")),
+            "a `Base` may be a `Child`"
+        );
+        assert!(reach.may_run_drop_hook(&named("Shape")), "a trait value");
+        assert!(reach.may_run_drop_hook(&parameter("T")), "a type parameter");
+        assert!(
+            reach.may_run_drop_hook(&named("Undeclared")),
+            "an unknown name"
+        );
+    }
+
+    #[test]
+    fn a_value_holding_nothing_hooked_runs_no_hook() {
+        let definitions = definitions();
+        let reach = DropHookReach::new(&definitions);
+        for held in [
+            string(),
+            instance("Box", vec![string()]),
+            named("Node"),
+            ty(TypeKind::Option(Box::new(string()))),
+        ] {
+            assert!(!reach.may_run_drop_hook(&held), "{held:?} reaches no hook");
+        }
+    }
+}

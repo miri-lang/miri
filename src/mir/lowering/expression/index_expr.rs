@@ -136,7 +136,7 @@ fn lower_string_index_read(
                 TerminatorKind::Call {
                     func,
                     args: vec![obj_operand.clone()],
-                    out_args: Vec::new(),
+                    arg_modes: Vec::new(),
                     arg_handles: Vec::new(),
                     destination: Place::new(temp),
                     target: Some(bb),
@@ -153,7 +153,7 @@ fn lower_string_index_read(
             TerminatorKind::Call {
                 func: func_op,
                 args: vec![obj_operand, start_op, end_op],
-                out_args: Vec::new(),
+                arg_modes: Vec::new(),
                 arg_handles: Vec::new(),
                 destination: destination.clone(),
                 target: Some(target_bb),
@@ -183,7 +183,7 @@ fn lower_string_index_read(
             TerminatorKind::Call {
                 func: func_op,
                 args: vec![obj_operand, index_op],
-                out_args: Vec::new(),
+                arg_modes: Vec::new(),
                 arg_handles: Vec::new(),
                 destination: destination.clone(),
                 target: Some(target_bb),
@@ -341,7 +341,7 @@ fn lower_map_index_read(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, key_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: destination.clone(),
             target: Some(target_bb),

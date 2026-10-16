@@ -557,7 +557,7 @@ fn emit_runtime_call(
         TerminatorKind::Call {
             func,
             args: vec![Operand::Copy(place.clone())],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(destination),
             target: Some(target),

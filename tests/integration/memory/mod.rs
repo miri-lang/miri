@@ -26,6 +26,7 @@ pub mod nested_calls;
 pub mod null_coalesce;
 pub mod option_coercion;
 pub mod out_parameter;
+pub mod owned_parameters;
 pub mod rc_elision;
 pub mod rc_stats;
 pub mod reassignment;

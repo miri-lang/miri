@@ -600,7 +600,7 @@ fn emit_loop_length(
         TerminatorKind::Call {
             func: func_op,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(len_temp),
             target: Some(after_len_bb),
@@ -675,7 +675,7 @@ fn emit_element_at_call(
                 }
                 args
             },
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(loop_var),
             target: Some(after_elem_bb),
@@ -710,7 +710,7 @@ fn emit_secondary_loop_var(
                     }
                     args
                 },
-                out_args: Vec::new(),
+                arg_modes: Vec::new(),
                 arg_handles: Vec::new(),
                 destination: Place::new(idx_local),
                 target: Some(after_val_bb),

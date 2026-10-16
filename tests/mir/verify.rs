@@ -20,11 +20,11 @@ use miri::mir::body::{BindingResidency, DeviceHandleId};
 use miri::mir::symbol::{ClosureKind, GpuKernelKind, Symbol};
 use miri::mir::verify::{
     verify_body, verify_callees, verify_collection_element_ownership,
-    verify_cross_residency_readback, VerificationViolation,
+    verify_cross_residency_readback, verify_owned_argument_modes, VerificationViolation,
 };
 use miri::mir::{
-    AggregateKind, Body, Constant, Discriminant, ExecutionModel, GpuLaunchArgs, Local, LocalDecl,
-    Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    AggregateKind, ArgMode, Body, Constant, Discriminant, ExecutionModel, GpuLaunchArgs, Local,
+    LocalDecl, Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::type_checker::ModuleId;
 use std::collections::HashSet;
@@ -127,7 +127,7 @@ fn call_returning_void(arg: usize, destination: usize, target: usize) -> Termina
     terminator(TerminatorKind::Call {
         func: callee(void_ty()),
         args: vec![Operand::Copy(place(arg))],
-        out_args: Vec::new(),
+        arg_modes: Vec::new(),
         arg_handles: Vec::new(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
@@ -139,7 +139,7 @@ fn call_returning_string(destination: usize, target: usize) -> Terminator {
     terminator(TerminatorKind::Call {
         func: callee(string_ty()),
         args: Vec::new(),
-        out_args: Vec::new(),
+        arg_modes: Vec::new(),
         arg_handles: Vec::new(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
@@ -151,7 +151,7 @@ fn runtime_call(name: &str, args: Vec<Operand>, destination: usize, target: usiz
     terminator(TerminatorKind::Call {
         func: Operand::runtime(name, span()),
         args,
-        out_args: Vec::new(),
+        arg_modes: Vec::new(),
         arg_handles: Vec::new(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
@@ -1473,7 +1473,7 @@ fn specialized_call_on_binding(handle: u64, target: usize) -> Terminator {
     terminator(TerminatorKind::Call {
         func: callee(void_ty()),
         args: vec![Operand::Copy(place(1))],
-        out_args: Vec::new(),
+        arg_modes: Vec::new(),
         arg_handles: vec![Some(DeviceHandleId(handle))],
         destination: place(3),
         target: Some(BasicBlock(target)),
@@ -1757,7 +1757,7 @@ fn collection_call_body(receiver: Type, symbol: &str) -> Body {
                         span(),
                     ),
                     args: vec![Operand::Copy(place(1))],
-                    out_args: Vec::new(),
+                    arg_modes: Vec::new(),
                     arg_handles: Vec::new(),
                     destination: place(2),
                     target: Some(BasicBlock(1)),
@@ -2331,7 +2331,7 @@ fn body_calling(func: Operand) -> Body {
             terminator(TerminatorKind::Call {
                 func,
                 args: Vec::new(),
-                out_args: Vec::new(),
+                arg_modes: Vec::new(),
                 arg_handles: Vec::new(),
                 destination: place(2),
                 target: Some(BasicBlock(1)),
@@ -2425,4 +2425,165 @@ fn a_launch_naming_its_kernel_by_its_symbol_is_accepted() {
     ));
     let violations = verify_callees(&body);
     assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+/// `fn callee(text String)` taking its parameter over: locals 0 the return slot,
+/// 1 the owned parameter, 2 the local it is moved into.
+fn owned_param_body(statements: Vec<Statement>) -> Body {
+    let mut body = body_of(
+        &[void_ty(), string_ty(), string_ty()],
+        1,
+        vec![block(statements, ret())],
+    );
+    body.owned_params = vec![true];
+    body
+}
+
+fn move_into(dest: usize, source: usize) -> Statement {
+    stmt(StatementKind::Assign(
+        place(dest),
+        Rvalue::Use(Operand::Move(place(source))),
+    ))
+}
+
+#[test]
+fn owned_param_never_released_leaks_at_the_return() {
+    let violations = verify_body(&owned_param_body(Vec::new()));
+    assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
+    assert_eq!(violations[0].local, Local(1));
+    assert!(
+        violations[0].message.contains("still owns 1 reference"),
+        "got: {}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn owned_param_moved_into_a_released_local_is_clean() {
+    assert_clean(
+        &owned_param_body(vec![
+            storage_live(2),
+            move_into(2, 1),
+            decref(2),
+            storage_dead(2),
+            storage_dead(1),
+        ]),
+        "an owned parameter released through the local it moved into",
+    );
+}
+
+#[test]
+fn releasing_an_owned_param_directly_is_not_flagged_as_a_caller_release() {
+    assert_clean(
+        &owned_param_body(vec![decref(1), storage_dead(1)]),
+        "an owned parameter released in place",
+    );
+}
+
+/// A caller handing its temp `_1` to `callee` in the mode `mode`, then letting
+/// the temp die without releasing it.
+fn caller_passing_temp(mode: ArgMode) -> Body {
+    temp_body(vec![
+        block(
+            vec![storage_live(1), assign_fresh(1)],
+            terminator(TerminatorKind::Call {
+                func: callee(void_ty()),
+                args: vec![Operand::Copy(place(1))],
+                arg_modes: vec![mode],
+                arg_handles: Vec::new(),
+                destination: place(2),
+                target: Some(BasicBlock(1)),
+            }),
+        ),
+        block(vec![storage_dead(1)], ret()),
+    ])
+}
+
+#[test]
+fn an_owned_argument_is_consumed_by_the_call() {
+    assert_clean(
+        &caller_passing_temp(ArgMode::Owned),
+        "a temp handed over at a call",
+    );
+    let lent = verify_body(&caller_passing_temp(ArgMode::Borrowed));
+    assert_eq!(
+        lent.len(),
+        1,
+        "a lent temp the caller never releases leaks: {}",
+        messages(&lent)
+    );
+}
+
+fn callee_symbol() -> Symbol {
+    Symbol::declared_function(&ModuleId::Program, "callee")
+}
+
+#[test]
+fn a_call_whose_mode_disagrees_with_its_callee_is_reported() {
+    let program = |mode: ArgMode| {
+        vec![
+            (callee_symbol(), owned_param_body(Vec::new())),
+            (Symbol::entry(), caller_passing_temp(mode)),
+        ]
+    };
+    assert!(
+        verify_owned_argument_modes(&program(ArgMode::Owned)).is_empty(),
+        "a call passing owned what its callee takes over agrees with it"
+    );
+    let missed = verify_owned_argument_modes(&program(ArgMode::Borrowed));
+    assert_eq!(missed.len(), 1, "a call lending what its callee releases");
+    assert_eq!(missed[0].0, Symbol::entry());
+
+    let mut borrowing_callee = program(ArgMode::Owned);
+    borrowing_callee[0].1.owned_params = Vec::new();
+    assert_eq!(
+        verify_owned_argument_modes(&borrowing_callee).len(),
+        1,
+        "a call handing over what its callee only borrows"
+    );
+}
+
+/// A callee taking its parameter over, called owned by the entry point.
+fn owned_call_program() -> Vec<(Symbol, Body)> {
+    vec![
+        (callee_symbol(), owned_param_body(Vec::new())),
+        (Symbol::entry(), caller_passing_temp(ArgMode::Owned)),
+    ]
+}
+
+#[test]
+fn a_function_taking_a_parameter_over_named_as_a_value_is_reported() {
+    let mut program = owned_call_program();
+    let (_, caller) = &mut program[1];
+    caller.basic_blocks[0]
+        .statements
+        .push(stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Use(Operand::function(callee_symbol(), span())),
+        )));
+    let found = verify_owned_argument_modes(&program);
+    assert_eq!(
+        found.len(),
+        1,
+        "a call through the value lends the argument"
+    );
+    assert_eq!(found[0].0, Symbol::entry());
+}
+
+#[test]
+fn a_function_taking_a_parameter_over_called_from_a_gpu_body_is_reported() {
+    let mut program = owned_call_program();
+    program[1].1.execution_model = ExecutionModel::GpuDevice;
+    let found = verify_owned_argument_modes(&program);
+    assert_eq!(found.len(), 1, "a GPU body funds no reference");
+    assert_eq!(found[0].0, Symbol::entry());
+}
+
+#[test]
+fn a_function_taking_a_parameter_over_lowered_twice_is_reported() {
+    let mut program = owned_call_program();
+    program.push((callee_symbol(), owned_param_body(Vec::new())));
+    let found = verify_owned_argument_modes(&program);
+    assert_eq!(found.len(), 1, "two bodies under one symbol");
+    assert_eq!(found[0].0, callee_symbol());
 }

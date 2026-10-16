@@ -292,7 +292,7 @@ fn return_adapted_method_call(
         TerminatorKind::Call {
             func: func_op,
             args: call_args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(method_temp),
             target: Some(after_call_bb),
@@ -368,7 +368,7 @@ fn return_method_call(
         TerminatorKind::Call {
             func: func_op,
             args: call_args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
@@ -463,7 +463,7 @@ fn lower_in_operator(
         TerminatorKind::Call {
             func: contains_fn,
             args: vec![rhs_op.clone(), lhs_op], // (collection, element)
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
@@ -758,7 +758,7 @@ fn emit_unchecked_operator_trap(
         TerminatorKind::Call {
             func: Operand::runtime(crate::runtime_fns::rt::METHOD_NOT_CHECKED_PANIC, span),
             args: Vec::new(),
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
             target: Some(after),

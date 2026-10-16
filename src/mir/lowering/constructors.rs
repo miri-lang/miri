@@ -449,7 +449,7 @@ fn lower_class_with_init(
         crate::mir::TerminatorKind::Call {
             func: func_op,
             args: call_args.clone(),
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_dest),
             target: Some(target_bb),
@@ -817,7 +817,7 @@ fn emit_runtime_call(
         TerminatorKind::Call {
             func: func_op,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
@@ -1091,7 +1091,7 @@ pub(crate) fn lower_array_constructor(
         TerminatorKind::Call {
             func: func_op,
             args: vec![size_op, elem_size_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: destination.clone(),
             target: Some(target_bb),

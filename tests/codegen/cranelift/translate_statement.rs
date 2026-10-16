@@ -4,7 +4,7 @@
 use miri::ast::types::TypeKind;
 use miri::codegen::cranelift::translator::TypeCtx;
 use miri::codegen::cranelift::FunctionTranslator;
-use miri::mir::{Local, Operand};
+use miri::mir::{ArgMode, Local, Operand};
 
 use miri::ast::types::Type;
 use miri::error::syntax::Span;
@@ -50,7 +50,7 @@ fn scalar_out_local_returns_local_for_scalar_out_arg() {
         local: Local(0),
         projection: Vec::new(),
     });
-    let got = FunctionTranslator::out_local_for_arg(&[true], 0, &arg);
+    let got = FunctionTranslator::out_local_for_arg(&[ArgMode::Out], 0, &arg);
     assert_eq!(got, Some(Local(0)));
 }
 
@@ -65,7 +65,7 @@ fn out_local_passes_a_managed_arg_through_its_slot_too() {
         local: Local(0),
         projection: Vec::new(),
     });
-    let got = FunctionTranslator::out_local_for_arg(&[true], 0, &arg);
+    let got = FunctionTranslator::out_local_for_arg(&[ArgMode::Out], 0, &arg);
     assert_eq!(got, Some(Local(0)));
 }
 
@@ -78,7 +78,7 @@ fn scalar_out_local_returns_none_when_flag_unset() {
         local: Local(0),
         projection: Vec::new(),
     });
-    let got = FunctionTranslator::out_local_for_arg(&[false], 0, &arg);
+    let got = FunctionTranslator::out_local_for_arg(&[ArgMode::Borrowed], 0, &arg);
     assert!(got.is_none());
 }
 
@@ -91,6 +91,6 @@ fn scalar_out_local_skips_projected_places() {
         local: Local(0),
         projection: vec![miri::mir::PlaceElem::Field(0)],
     });
-    let got = FunctionTranslator::out_local_for_arg(&[true], 0, &arg);
+    let got = FunctionTranslator::out_local_for_arg(&[ArgMode::Out], 0, &arg);
     assert!(got.is_none());
 }

@@ -226,14 +226,14 @@ pub(super) fn emit_virtual_method_call(
         call_args.push(Operand::Copy(Place::new(alloc_local)));
     }
 
-    let out_args =
-        super::dispatch::build_method_out_args(method_info, user_args.len(), call_args.len());
+    let arg_modes =
+        super::dispatch::build_method_arg_modes(method_info, user_args.len(), call_args.len());
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::VirtualCall {
             vtable_slot,
             args: call_args.clone(),
-            out_args,
+            arg_modes,
             destination: destination.clone(),
             target: Some(target_bb),
         },
@@ -277,14 +277,14 @@ pub(super) fn emit_static_method_call(
 
     let func_op = Operand::function(symbol, span);
 
-    let out_args =
-        super::dispatch::build_method_out_args(method_info, user_args.len(), call_args.len());
+    let arg_modes =
+        super::dispatch::build_method_arg_modes(method_info, user_args.len(), call_args.len());
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
             args: call_args.clone(),
-            out_args,
+            arg_modes,
             arg_handles: Vec::new(),
             destination: destination.clone(),
             target: Some(target_bb),
@@ -1081,7 +1081,7 @@ pub(super) fn emit_cow_check(
         TerminatorKind::Call {
             func: cow_fn,
             args: vec![Operand::Move(Place::new(self_local))],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(cow_result),
             target: Some(cow_target),

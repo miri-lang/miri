@@ -605,7 +605,7 @@ pub(crate) fn emit_map_set_call(
         crate::mir::TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, key_op, val_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(dummy_dest),
             target: Some(target_bb),
@@ -864,7 +864,7 @@ pub(crate) fn emit_map_get_checked_call(
         crate::mir::TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, key_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(temp),
             target: Some(target_bb),
@@ -1024,7 +1024,7 @@ fn emit_gpu_upload(
         TerminatorKind::Call {
             func: func_op,
             args: vec![handle_operand, array_operand],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(_result_temp),
             target: Some(target_bb),

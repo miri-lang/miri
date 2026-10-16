@@ -389,7 +389,7 @@ fn call_into_int(
         TerminatorKind::Call {
             func,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(next_bb),

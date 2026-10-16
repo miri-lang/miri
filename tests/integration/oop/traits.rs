@@ -754,7 +754,7 @@ fn main()
 #[test]
 fn test_class_method_out_param_writeback_static_dispatch() {
     // Static dispatch: same ABI path through the concrete class symbol. Locks in that
-    // the out_args flag flows through class-method dispatch, not just virtual.
+    // the out argument mode flows through class-method dispatch, not just virtual.
     assert_runs_with_output(
         r#"
 

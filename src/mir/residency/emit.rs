@@ -184,7 +184,7 @@ fn append_call(
         TerminatorKind::Call {
             func,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination,
             target: Some(next),

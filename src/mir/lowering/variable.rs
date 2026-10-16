@@ -108,7 +108,7 @@ fn emit_void_runtime_call(
         TerminatorKind::Call {
             func,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(dest_local),
             target: Some(after_bb),

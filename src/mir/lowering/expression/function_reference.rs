@@ -28,7 +28,7 @@ use crate::mir::lambda::{CapturedVar, LambdaInfo};
 use crate::mir::rvalue::AggregateKind;
 use crate::mir::symbol::{ClosureKind, Symbol};
 use crate::mir::{
-    Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
+    ArgMode, Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 
@@ -237,7 +237,10 @@ fn build_forwarding_thunk(
         TerminatorKind::Call {
             func: Operand::function(symbol.clone(), span),
             args,
-            out_args: params.iter().map(|param| param.is_out).collect(),
+            arg_modes: params
+                .iter()
+                .map(|param| ArgMode::from_out_flag(param.is_out))
+                .collect(),
             arg_handles: Vec::new(),
             destination: Place::new(RETURN_LOCAL),
             target: Some(after_call),

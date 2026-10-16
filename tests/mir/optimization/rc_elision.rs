@@ -506,3 +506,214 @@ fn test_elision_fires_without_decref_in_range() {
         "only the Assign should remain after elision"
     );
 }
+
+mod owned_transfers {
+    //! A retain funding an argument the callee takes over, cancelled against
+    //! the caller's release of the same local right after the call.
+
+    use miri::ast::literal::Literal;
+    use miri::ast::types::{Type, TypeKind};
+    use miri::error::syntax::Span;
+    use miri::mir::block::{BasicBlock, BasicBlockData};
+    use miri::mir::optimization::elide_rc;
+    use miri::mir::symbol::Symbol;
+    use miri::mir::{
+        ArgMode, Body, Constant, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
+        Statement, StatementKind, Terminator, TerminatorKind,
+    };
+    use miri::type_checker::ModuleId;
+
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn place(local: usize) -> Place {
+        Place::new(Local(local))
+    }
+
+    fn stmt(kind: StatementKind) -> Statement {
+        Statement { kind, span: span() }
+    }
+
+    fn incref(local: usize) -> Statement {
+        stmt(StatementKind::IncRef(place(local)))
+    }
+
+    fn decref(local: usize) -> Statement {
+        stmt(StatementKind::DecRef(place(local)))
+    }
+
+    fn storage_dead(local: usize) -> Statement {
+        stmt(StatementKind::StorageDead(place(local)))
+    }
+
+    fn fresh_string() -> Rvalue {
+        Rvalue::Use(Operand::Constant(Box::new(Constant {
+            ty: Type::new(TypeKind::String, span()),
+            literal: Literal::String("x".to_string()),
+            span: span(),
+        })))
+    }
+
+    fn terminated(statements: Vec<Statement>, kind: TerminatorKind) -> BasicBlockData {
+        BasicBlockData {
+            statements,
+            terminator: Some(Terminator { kind, span: span() }),
+            is_cleanup: false,
+        }
+    }
+
+    /// `_2 = callee(args)` with `modes`, continuing at bb1.
+    fn call(args: Vec<Operand>, modes: Vec<ArgMode>) -> TerminatorKind {
+        TerminatorKind::Call {
+            func: Operand::function(
+                Symbol::declared_function(&ModuleId::Program, "callee"),
+                span(),
+            ),
+            args,
+            arg_modes: modes,
+            arg_handles: Vec::new(),
+            destination: place(2),
+            target: Some(BasicBlock(1)),
+        }
+    }
+
+    /// Locals: 0 the return slot, 1 the argument `L` of type `argument`, 2 the
+    /// call's unmanaged result, 3 a second string.
+    fn caller(argument: Type, blocks: Vec<BasicBlockData>) -> Body {
+        let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+        let void = Type::new(TypeKind::Void, span());
+        let string = Type::new(TypeKind::String, span());
+        for ty in [void.clone(), argument, void, string] {
+            body.new_local(LocalDecl::new(ty, span()));
+        }
+        body.basic_blocks = blocks;
+        body
+    }
+
+    fn string_ty() -> Type {
+        Type::new(TypeKind::String, span())
+    }
+
+    /// `L` built, funded and handed over at the call, then released and dead.
+    fn handing_over(after_call: Vec<Statement>) -> Vec<BasicBlockData> {
+        vec![
+            terminated(
+                vec![
+                    stmt(StatementKind::Assign(place(1), fresh_string())),
+                    incref(1),
+                ],
+                call(vec![Operand::Copy(place(1))], vec![ArgMode::Owned]),
+            ),
+            terminated(after_call, TerminatorKind::Return),
+        ]
+    }
+
+    fn rc_ops_on_l(body: &Body) -> usize {
+        body.basic_blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(&statement.kind,
+                    StatementKind::IncRef(p) | StatementKind::DecRef(p) if p.local == Local(1))
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_dying_owned_argument_hands_its_own_reference_over() {
+        let mut dying = caller(string_ty(), handing_over(vec![decref(1), storage_dead(1)]));
+        elide_rc(&mut dying);
+        assert_eq!(rc_ops_on_l(&dying), 0, "{dying}");
+
+        let mut rebound = caller(
+            string_ty(),
+            handing_over(vec![
+                decref(1),
+                stmt(StatementKind::Reassign(place(1), fresh_string())),
+            ]),
+        );
+        elide_rc(&mut rebound);
+        assert_eq!(rc_ops_on_l(&rebound), 0, "{rebound}");
+    }
+
+    #[test]
+    fn an_argument_passed_twice_keeps_its_retain() {
+        let mut blocks = handing_over(vec![decref(1), storage_dead(1)]);
+        blocks[0].terminator = Some(Terminator {
+            kind: call(
+                vec![Operand::Copy(place(1)), Operand::Copy(place(1))],
+                vec![ArgMode::Owned, ArgMode::Borrowed],
+            ),
+            span: span(),
+        });
+        let mut body = caller(string_ty(), blocks);
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_l(&body), 2, "{body}");
+    }
+
+    #[test]
+    fn a_continuation_reached_from_elsewhere_keeps_the_retain() {
+        let mut blocks = handing_over(vec![decref(1), storage_dead(1)]);
+        blocks.push(terminated(
+            Vec::new(),
+            TerminatorKind::Goto {
+                target: BasicBlock(1),
+            },
+        ));
+        let mut body = caller(string_ty(), blocks);
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_l(&body), 2, "{body}");
+    }
+
+    #[test]
+    fn an_argument_read_after_the_call_keeps_the_retain() {
+        let read = stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(place(1))),
+        ));
+        let mut body = caller(
+            string_ty(),
+            handing_over(vec![read, decref(1), storage_dead(1)]),
+        );
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_l(&body), 2, "{body}");
+    }
+
+    /// The entry block is entered by the edge into the body as well as by the
+    /// call, so a release found there may run with no call before it.
+    #[test]
+    fn a_call_continuing_at_the_entry_block_keeps_the_retain() {
+        let mut call_to_entry = call(vec![Operand::Copy(place(1))], vec![ArgMode::Owned]);
+        if let TerminatorKind::Call { target, .. } = &mut call_to_entry {
+            *target = Some(BasicBlock(0));
+        }
+        let blocks = vec![
+            terminated(
+                vec![decref(1), storage_dead(1)],
+                TerminatorKind::Goto {
+                    target: BasicBlock(1),
+                },
+            ),
+            terminated(
+                vec![
+                    stmt(StatementKind::Assign(place(1), fresh_string())),
+                    incref(1),
+                ],
+                call_to_entry,
+            ),
+        ];
+        let mut body = caller(string_ty(), blocks);
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_l(&body), 2, "{body}");
+    }
+
+    #[test]
+    fn an_argument_with_a_drop_hook_keeps_the_retain() {
+        let resource = Type::new(TypeKind::Custom("Res".to_string(), None), span());
+        let mut body = caller(resource, handing_over(vec![decref(1), storage_dead(1)]));
+        body.has_drop_types.insert("Res".to_string());
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_l(&body), 2, "{body}");
+    }
+}

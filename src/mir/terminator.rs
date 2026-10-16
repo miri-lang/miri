@@ -198,7 +198,7 @@ impl fmt::Display for Terminator {
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,
-                out_args: _,
+                arg_modes: _,
                 destination,
                 target,
             } => {
@@ -384,6 +384,39 @@ impl GpuLaunchArgs {
     }
 }
 
+/// How a call passes one argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArgMode {
+    /// The callee reads the caller's reference and never releases it; the
+    /// caller keeps ownership of the value across the call.
+    Borrowed,
+    /// The callee's parameter is declared `out`: the caller passes the address
+    /// of a slot holding its value and reads the slot back after the call.
+    Out,
+    /// The callee takes over one reference the caller funds and is responsible
+    /// for releasing it. Marked by `crate::mir::optimization::owned_params` on
+    /// every call to a function that takes the parameter over.
+    Owned,
+}
+
+impl ArgMode {
+    /// The mode of an argument whose parameter is or is not declared `out`.
+    pub fn from_out_flag(is_out: bool) -> Self {
+        if is_out {
+            ArgMode::Out
+        } else {
+            ArgMode::Borrowed
+        }
+    }
+}
+
+/// The mode of the argument at `position`, given a call's `arg_modes`.
+/// A position past the end of `modes` (including every position of an empty
+/// list) is [`ArgMode::Borrowed`].
+pub fn arg_mode(modes: &[ArgMode], position: usize) -> ArgMode {
+    modes.get(position).copied().unwrap_or(ArgMode::Borrowed)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TerminatorKind {
     /// Jump to the target block.
@@ -409,9 +442,10 @@ pub enum TerminatorKind {
     Call {
         func: Operand,
         args: Vec<Operand>,
-        /// Which arguments are `out` parameters. `out_args[i]` is true when
-        /// the callee's i-th parameter is declared `out`. Empty means none.
-        out_args: Vec<bool>,
+        /// How each argument is passed, in `args` order. Empty means every
+        /// argument is [`ArgMode::Borrowed`]; read a position through
+        /// [`arg_mode`], which answers `Borrowed` past the end.
+        arg_modes: Vec<ArgMode>,
         /// Persistent device-buffer handle for each argument, in `args` order:
         /// `Some(id)` when a gpu-resident buffer is threaded into a residency-
         /// specialized callee, `None` otherwise. Empty means an ordinary host
@@ -485,9 +519,10 @@ pub enum TerminatorKind {
         vtable_slot: usize,
         /// Arguments: args[0] is the receiver, rest are method arguments.
         args: Vec<Operand>,
-        /// Which arguments are `out` parameters. `out_args[i]` is true when
-        /// the callee's i-th parameter is declared `out`. Empty means none.
-        out_args: Vec<bool>,
+        /// How each argument is passed, in `args` order. Empty means every
+        /// argument is [`ArgMode::Borrowed`]; read a position through
+        /// [`arg_mode`], which answers `Borrowed` past the end.
+        arg_modes: Vec<ArgMode>,
         destination: Place,
         target: Option<BasicBlock>,
     },

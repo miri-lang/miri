@@ -179,7 +179,7 @@ fn lower_zero_arg_method_as_property(
         TerminatorKind::Call {
             func: func_op,
             args: call_args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),

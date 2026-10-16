@@ -43,11 +43,23 @@
 //! ```
 //!
 //! The caller's RC for `_1` is unchanged; the object is freed by the caller.
+//!
+//! # Owned arguments
+//!
+//! A call passing an argument [`ArgMode::Owned`] is preceded by the retain that
+//! funds it. When the local passed dies right after the call — its first
+//! mention in the continuation is the release Perceus emitted for it, followed
+//! by the end of its storage or a rebinding — the two cancel: the callee takes
+//! over the caller's own reference instead of a second one, and a callee that
+//! writes the value finds it unshared. See [`cancel_owned_transfers`].
 
+use crate::mir::block::BasicBlock;
 use crate::mir::optimization::OptimizationPass;
-use crate::mir::place::Local;
-use crate::mir::statement::StatementKind;
+use crate::mir::place::{Local, PlaceContext};
+use crate::mir::statement::{Statement, StatementKind};
+use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::types::MirType;
+use crate::mir::visitor::Visitor;
 use crate::mir::{Body, Operand, Place};
 use std::collections::HashSet;
 
@@ -68,7 +80,7 @@ impl OptimizationPass for RcElision {
                 any_changed = true;
             }
         }
-        any_changed
+        cancel_owned_transfers(body) || any_changed
     }
 
     fn name(&self) -> &'static str {
@@ -158,6 +170,190 @@ pub fn elide_block(
         .collect();
 
     true
+}
+
+/// Cancel each retain funding an owned argument against the caller's release
+/// of the same local right after the call, so the callee takes over the
+/// caller's own reference.
+///
+/// The pair `IncRef(L)` … `call f(L)` → `DecRef(L)` is cancelled when:
+///
+/// 1. `L` is a whole local the body owns and releases — managed, not a
+///    parameter or a capture, holding no device buffer — whose type has no drop
+///    hook;
+/// 2. the call passes `L` once, at an [`ArgMode::Owned`] position, and names it
+///    nowhere else: in another argument the callee would read a value the
+///    owned side may already have freed or written;
+/// 3. the retain is the last mention of `L` before the call;
+/// 4. the call's continuation is reached from the call alone — never the
+///    entry block, which the edge into the body also reaches — and its first
+///    mention of `L` is `DecRef(L)`, followed — with no mention of `L` between —
+///    by `StorageDead(L)` or a rebinding of `L` that does not read it.
+///
+/// Between the call and that end `L` holds a reference the callee may have
+/// released, and nothing reads it.
+///
+/// Returns true if any pair was cancelled.
+pub fn cancel_owned_transfers(body: &mut Body) -> bool {
+    if !passes_an_owned_argument(body) {
+        return false;
+    }
+    let predecessors = body.predecessor_counts();
+    let mut cancelled: Vec<(usize, usize)> = (0..body.basic_blocks.len())
+        .flat_map(|block| owned_transfers_from(body, block, &predecessors))
+        .collect();
+    cancelled.sort_unstable();
+    cancelled.dedup();
+    for (block, position) in cancelled.iter().rev() {
+        body.basic_blocks[*block].statements.remove(*position);
+    }
+    !cancelled.is_empty()
+}
+
+/// The (block, statement) positions of every retain and release the call
+/// ending `block` lets cancel.
+fn owned_transfers_from(body: &Body, block: usize, predecessors: &[usize]) -> Vec<(usize, usize)> {
+    let data = &body.basic_blocks[block];
+    let Some(TerminatorKind::Call {
+        args,
+        arg_modes,
+        destination,
+        target: Some(target),
+        ..
+    }) = data.terminator.as_ref().map(|terminator| &terminator.kind)
+    else {
+        return Vec::new();
+    };
+    if target.0 == block || predecessors[target.0] != 1 {
+        return Vec::new();
+    }
+    let mut retains = Vec::new();
+    let mut releases = Vec::new();
+    for (position, arg) in args.iter().enumerate() {
+        if arg_mode(arg_modes, position) != ArgMode::Owned {
+            continue;
+        }
+        let Some(local) = arg.bare_local() else {
+            continue;
+        };
+        let is_passed_once = args
+            .iter()
+            .filter(|other| mentions(local, |mention| mention.visit_operand(other, BasicBlock(0))))
+            .count()
+            == 1;
+        let receives_the_result = mentions(local, |mention| {
+            mention.visit_place(destination, PlaceContext::MutatingUse, BasicBlock(0))
+        });
+        if !is_passed_once || receives_the_result || !is_released_by_body(body, local) {
+            continue;
+        }
+        let continuation = &body.basic_blocks[target.0].statements;
+        if let (Some(retain), Some(release)) = (
+            funding_retain(&data.statements, local),
+            dying_release(continuation, local),
+        ) {
+            retains.push((block, retain));
+            releases.push((target.0, release));
+        }
+    }
+    retains.into_iter().chain(releases).collect()
+}
+
+/// Whether any call in `body` passes an argument [`ArgMode::Owned`].
+fn passes_an_owned_argument(body: &Body) -> bool {
+    body.basic_blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .any(|terminator| match &terminator.kind {
+            TerminatorKind::Call { arg_modes, .. } => arg_modes.contains(&ArgMode::Owned),
+            TerminatorKind::VirtualCall { .. }
+            | TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => false,
+        })
+}
+
+/// Whether `local` is one the body owns and Perceus releases, whose last
+/// release runs no drop hook.
+fn is_released_by_body(body: &Body, local: Local) -> bool {
+    let decl = &body.local_decls[local.0];
+    local.0 > body.arg_count
+        && !body.env_capture_locals.contains(&local)
+        && decl.device_handle.is_none()
+        && decl
+            .mir_ty
+            .is_managed(&body.unmanaged_type_names, &body.type_params)
+        && !type_has_destructor(local, &body.local_decls, &body.has_drop_types)
+}
+
+/// The position of `IncRef(local)` when it is the block's last mention of
+/// `local`.
+fn funding_retain(statements: &[Statement], local: Local) -> Option<usize> {
+    let last = statements
+        .iter()
+        .rposition(|statement| statement_mentions(statement, local))?;
+    matches!(&statements[last].kind, StatementKind::IncRef(p) if *p == Place::new(local))
+        .then_some(last)
+}
+
+/// The position of `DecRef(local)` when it is the block's first mention of
+/// `local` and is followed, with no mention between, by the end of the local's
+/// storage or a rebinding of it that does not read it.
+fn dying_release(statements: &[Statement], local: Local) -> Option<usize> {
+    let whole = Place::new(local);
+    let mut mentioning = statements
+        .iter()
+        .enumerate()
+        .filter(|(_, statement)| statement_mentions(statement, local));
+    let (release, first) = mentioning.next()?;
+    if !matches!(&first.kind, StatementKind::DecRef(p) if *p == whole) {
+        return None;
+    }
+    let (_, next) = mentioning.next()?;
+    let ends_value = match &next.kind {
+        StatementKind::StorageDead(p) => *p == whole,
+        StatementKind::Reassign(p, rvalue) => {
+            *p == whole && !mentions(local, |mention| mention.visit_rvalue(rvalue, BasicBlock(0)))
+        }
+        StatementKind::Assign(..)
+        | StatementKind::StorageLive(_)
+        | StatementKind::IncRef(_)
+        | StatementKind::DecRef(_)
+        | StatementKind::Dealloc(_)
+        | StatementKind::Nop => false,
+    };
+    ends_value.then_some(release)
+}
+
+/// Finds whether a MIR fragment names a local, as the place it reads or writes
+/// or as an index into another.
+struct LocalMention {
+    local: Local,
+    found: bool,
+}
+
+impl Visitor for LocalMention {
+    fn visit_local(&mut self, local: Local, _context: PlaceContext, _location: BasicBlock) {
+        self.found |= local == self.local;
+    }
+}
+
+/// Whether whatever `visit` walks mentions `local`.
+fn mentions(local: Local, visit: impl FnOnce(&mut LocalMention)) -> bool {
+    let mut mention = LocalMention {
+        local,
+        found: false,
+    };
+    visit(&mut mention);
+    mention.found
+}
+
+fn statement_mentions(statement: &Statement, local: Local) -> bool {
+    mentions(local, |mention| {
+        mention.visit_statement(BasicBlock(0), statement)
+    })
 }
 
 /// Extract the source place if the rvalue is `Use(Copy(place))`.

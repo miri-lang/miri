@@ -21,6 +21,11 @@
 //! | [`CopyPropagation`] | Eliminates redundant copy operations |
 //! | [`DeadCodeElimination`] | Removes unused assignments and unreachable code |
 //!
+//! [`owned_params::decide_owned_parameters`] runs over the whole program before
+//! Perceus and decides which parameters each function takes over from its
+//! callers; [`elide_rc`] later cancels the retain funding such an argument
+//! against the caller's release of it.
+//!
 //! # Usage
 //!
 //! ```no_run
@@ -36,6 +41,7 @@
 pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
+pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
 pub mod simplify_cfg;
@@ -172,7 +178,9 @@ fn runs_on_a_gpu(body: &Body) -> bool {
 ///
 /// Must be called after [`insert_rc`]. Runs the RC elision pass which removes
 /// balanced `(IncRef(src), DecRef(dest))` pairs where `dest = Copy(src)` flows
-/// linearly with no aliasing hazards.
+/// linearly with no aliasing hazards, and cancels the retain funding an owned
+/// argument against the caller's release of a local dying at the call
+/// ([`rc_elision::cancel_owned_transfers`]).
 ///
 /// This pass is idempotent: running it twice produces the same result.
 ///

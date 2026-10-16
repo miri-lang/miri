@@ -26,11 +26,11 @@
 
 use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
-use crate::ast::types::{element_layout, vec_dim, ElementLayout, Type, TypeKind};
+use crate::ast::types::{element_layout, ElementLayout, Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::{
-    AggregateKind, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType, Operand, Place,
-    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    AggregateKind, ArgMode, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType,
+    Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 
 /// Rewrite every element argument in `body` into its address and byte count,
@@ -83,14 +83,14 @@ fn element_call(body: &Body, block: usize) -> Option<(&'static [usize], Vec<Oper
 
 /// Install `expanded` as the arguments of the call ending `block`, widening its
 /// per-argument metadata to match: each element position gained one argument
-/// after it, which is neither an `out` parameter nor a device handle.
+/// after it, which is passed borrowed and carries no device handle.
 fn replace_call_args(body: &mut Body, block: usize, expanded: Vec<Operand>, positions: &[usize]) {
     let Some(terminator) = body.basic_blocks[block].terminator.as_mut() else {
         return;
     };
     let TerminatorKind::Call {
         args,
-        out_args,
+        arg_modes,
         arg_handles,
         ..
     } = &mut terminator.kind
@@ -98,8 +98,8 @@ fn replace_call_args(body: &mut Body, block: usize, expanded: Vec<Operand>, posi
         return;
     };
     for &position in positions.iter().rev() {
-        if position < out_args.len() {
-            out_args.insert(position + 1, false);
+        if position < arg_modes.len() {
+            arg_modes.insert(position + 1, ArgMode::Borrowed);
         }
         if position < arg_handles.len() {
             arg_handles.insert(position + 1, None);
@@ -176,7 +176,7 @@ fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> 
 /// projection reaches, or `None` for an inline vector, whose components that
 /// type does not record.
 fn projected_layout(reached: &MirType) -> Option<ElementLayout> {
-    if matches!(reached, MirType::Custom(name) if vec_dim(name).is_some()) {
+    if reached.is_inline_vector() {
         return None;
     }
     Some(element_layout(
@@ -322,7 +322,7 @@ fn destination_kind(body: &Body, destination: &Place) -> Result<TypeKind, String
                 "the collection element result {destination} reaches a type this pass cannot size"
             )
         })?;
-    if matches!(&reached, MirType::Custom(name) if vec_dim(name).is_some()) {
+    if reached.is_inline_vector() {
         return Err(format!(
             "the collection element result {destination} is an inline vector stored through a \
              projection, whose component width is not known here"
@@ -428,15 +428,17 @@ fn append_result_storage(
     payload: Operand,
 ) {
     let Some(Terminator {
-        kind: TerminatorKind::Call { args, out_args, .. },
+        kind: TerminatorKind::Call {
+            args, arg_modes, ..
+        },
         ..
     }) = body.basic_blocks[block].terminator.as_mut()
     else {
         return;
     };
     if is_out {
-        out_args.resize(args.len(), false);
-        out_args.extend([true, false]);
+        arg_modes.resize(args.len(), ArgMode::Borrowed);
+        arg_modes.extend([ArgMode::Out, ArgMode::Borrowed]);
     }
     args.push(Operand::Copy(storage));
     args.push(payload);

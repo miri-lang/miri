@@ -195,7 +195,7 @@ impl Closure<'_> {
     fn close(&mut self) -> Result<(), DropInstantiationRefusal> {
         while let Some((name, args)) = self.pending.pop() {
             let arg_exprs: Vec<Expression> = args.into_iter().map(type_expr_non_null).collect();
-            for member in stored_member_types(self.definitions, &name, &arg_exprs) {
+            for member in stored_member_types(self.definitions, &name, Some(&arg_exprs)) {
                 self.walk(&member, 0)?;
             }
         }
@@ -263,18 +263,19 @@ fn declared_member_types(definitions: &HashMap<String, TypeDefinition>, name: &s
 }
 
 /// The type every field or payload of `name` stores at `args` — what that
-/// instantiation's drop thunk releases.
-fn stored_member_types(
+/// instantiation's drop thunk releases. An instance carrying no arguments
+/// stores each member as declared.
+pub(super) fn stored_member_types(
     definitions: &HashMap<String, TypeDefinition>,
     name: &str,
-    args: &[Expression],
+    args: Option<&[Expression]>,
 ) -> Vec<Type> {
     match definitions.get(name) {
         Some(TypeDefinition::Enum(def)) => def
             .variants
             .values()
             .flatten()
-            .map(|declared| member_type_at(def.generics.as_deref(), Some(args), declared))
+            .map(|declared| member_type_at(def.generics.as_deref(), args, declared))
             .collect(),
         Some(
             TypeDefinition::Struct(_)
@@ -283,6 +284,6 @@ fn stored_member_types(
             | TypeDefinition::Alias(_)
             | TypeDefinition::Trait(_),
         )
-        | None => field_types(definitions, name, Some(args)).unwrap_or_default(),
+        | None => field_types(definitions, name, args).unwrap_or_default(),
     }
 }

@@ -326,7 +326,7 @@ fn a_call_through_a_constant_callee_is_an_internal_error() {
                 literal: Literal::Identifier("miri.foo".to_string()),
             })),
             args: Vec::new(),
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(Local(1)),
             target: Some(miri::mir::BasicBlock(1)),

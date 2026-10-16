@@ -116,7 +116,7 @@ fn emit_string_equality(
         TerminatorKind::Call {
             func: Operand::runtime(rt::STRING_EQUALS, span),
             args: vec![lhs, rhs],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(next_bb),
@@ -455,7 +455,7 @@ fn emit_equals_method_call(
         TerminatorKind::Call {
             func: Operand::function(symbol, span),
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(next_bb),
@@ -895,7 +895,7 @@ pub(super) fn emit_corrupt_discriminant_panic(
         TerminatorKind::Call {
             func: Operand::runtime(rt::PANIC, span),
             args: vec![Operand::Copy(Place::new(message_temp))],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
             target: Some(final_bb),

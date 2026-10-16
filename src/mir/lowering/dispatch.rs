@@ -10,7 +10,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+    ArgMode, Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator,
+    TerminatorKind,
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
@@ -271,14 +272,14 @@ fn lower_static_method_impl(
         *span,
     );
 
-    // Build out_args from method_info with no receiver offset (static methods have no self).
-    let out_args = build_method_out_args_with_offset(method_info, args.len(), arg_ops.len(), 0);
+    // Build arg_modes from method_info with no receiver offset (static methods have no self).
+    let arg_modes = build_method_arg_modes_with_offset(method_info, args.len(), arg_ops.len(), 0);
 
     emit_call_terminator(
         ctx,
         func_op,
         arg_ops.clone(),
-        out_args,
+        arg_modes,
         Vec::new(), // arg_handles
         destination.clone(),
         *span,
@@ -439,31 +440,32 @@ pub(super) fn is_collection_type(name: &str) -> bool {
     )
 }
 
-/// Build the `out_args` flag list for a method call's argument vector.
-pub(super) fn build_method_out_args(
+/// Build the per-argument [`ArgMode`] list for a method call's argument vector.
+pub(super) fn build_method_arg_modes(
     method_info: &MethodInfo,
     user_arg_count: usize,
     total_call_args: usize,
-) -> Vec<bool> {
-    build_method_out_args_with_offset(method_info, user_arg_count, total_call_args, 1)
+) -> Vec<ArgMode> {
+    build_method_arg_modes_with_offset(method_info, user_arg_count, total_call_args, 1)
 }
 
-/// Build out-parameter flags for a method call, accounting for receiver offset.
+/// Build the per-argument [`ArgMode`] list for a method call, accounting for
+/// receiver offset.
 /// For instance methods, `receiver_offset` is 1 (self is at slot 0).
 /// For static methods, `receiver_offset` is 0 (no self).
-pub(super) fn build_method_out_args_with_offset(
+pub(super) fn build_method_arg_modes_with_offset(
     method_info: &MethodInfo,
     user_arg_count: usize,
     total_call_args: usize,
     receiver_offset: usize,
-) -> Vec<bool> {
-    let mut flags = vec![false; total_call_args];
+) -> Vec<ArgMode> {
+    let mut modes = vec![ArgMode::Borrowed; total_call_args];
     for i in 0..user_arg_count {
         if method_info.is_param_out(i) {
-            flags[receiver_offset + i] = true;
+            modes[receiver_offset + i] = ArgMode::Out;
         }
     }
-    flags
+    modes
 }
 
 /// Release the argument temporaries a method call created.
@@ -710,7 +712,7 @@ pub(crate) fn emit_list_push(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, item_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(dummy_dest),
             target: Some(target_bb),
@@ -977,7 +979,7 @@ pub(crate) fn emit_map_set(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, key_op, value_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(dummy_dest),
             target: Some(target_bb),
@@ -1038,7 +1040,7 @@ pub(crate) fn emit_set_add(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, elem_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: destination.clone(),
             target: Some(target_bb),
@@ -1074,7 +1076,7 @@ fn lower_list_insert(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, index_op, item_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result_temp),
             target: Some(target_bb),
@@ -1293,7 +1295,7 @@ fn lower_gpu_slice(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, start_op, end_op],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination,
             target: Some(target_bb),
@@ -1443,13 +1445,13 @@ fn lower_direct_call(
     // call reads it off the declaration too: the instance's body takes those
     // parameters by address, and a call that passed them by value would hand
     // it a value to write through.
-    let out_args = build_out_args(&resolve_param_types(ctx, callee.id, false), &arg_ops);
+    let arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id, false), &arg_ops);
 
     emit_call_terminator(
         ctx,
         func_op,
         arg_ops.clone(),
-        out_args,
+        arg_modes,
         arg_handles,
         destination.clone(),
         *span,
@@ -1475,7 +1477,7 @@ fn emit_call_terminator(
     ctx: &mut LoweringContext,
     func_op: Operand,
     args: Vec<Operand>,
-    out_args: Vec<bool>,
+    arg_modes: Vec<ArgMode>,
     arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>>,
     destination: Place,
     span: Span,
@@ -1492,7 +1494,7 @@ fn emit_call_terminator(
         TerminatorKind::Call {
             func: func_op,
             args,
-            out_args,
+            arg_modes,
             arg_handles,
             destination,
             target: Some(target_bb),
@@ -1502,16 +1504,14 @@ fn emit_call_terminator(
     ctx.set_current_block(target_bb);
 }
 
-/// Build the per-arg `out` flag list for a direct call.
-fn build_out_args(
+/// Build the per-argument [`ArgMode`] list for a direct call.
+fn build_arg_modes(
     param_types: &Option<Vec<crate::ast::common::Parameter>>,
     arg_ops: &[Operand],
-) -> Vec<bool> {
+) -> Vec<ArgMode> {
     match param_types {
-        Some(params) => arg_ops
-            .iter()
-            .enumerate()
-            .map(|(i, _)| params.get(i).is_some_and(|p| p.is_out))
+        Some(params) => (0..arg_ops.len())
+            .map(|i| ArgMode::from_out_flag(params.get(i).is_some_and(|p| p.is_out)))
             .collect(),
         None => Vec::new(),
     }

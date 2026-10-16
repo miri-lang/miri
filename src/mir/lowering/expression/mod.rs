@@ -309,7 +309,7 @@ fn emit_runtime_to_string(
         TerminatorKind::Call {
             func: func_op,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(target_bb),
@@ -354,7 +354,7 @@ pub(super) fn emit_string_concat(
         TerminatorKind::Call {
             func: func_op,
             args: call_args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(target_bb),

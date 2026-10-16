@@ -181,6 +181,19 @@ impl MirType {
         }
     }
 
+    /// Whether this is a vector type. A vector is stored inline wherever a
+    /// collection lays its elements out at their std430 stride, so it is the
+    /// one managed type whose element position holds bytes rather than a
+    /// pointer.
+    ///
+    /// The name alone decides it, which is sound only because every vector
+    /// that reaches MIR has a component with an inline layout: the type checker
+    /// refuses the rest where they are written (`validate_vector_component`),
+    /// so a vector codegen would have stored as a pointer never gets this far.
+    pub fn is_inline_vector(&self) -> bool {
+        matches!(self, MirType::Custom(name) if crate::ast::types::vec_dim(name.as_str()).is_some())
+    }
+
     /// Returns `true` if this type requires reference-count management.
     ///
     /// Mirrors the logic of [`crate::mir::rc::is_managed_type`] but operates on

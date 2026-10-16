@@ -404,7 +404,7 @@ fn lower_assert_panics(
                 line_op.clone(),
                 column_op.clone(),
             ],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
             target: Some(next_bb),
@@ -522,7 +522,7 @@ fn emit_call_no_return(
         TerminatorKind::Call {
             func: func_op,
             args,
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
             target: Some(after_bb),
@@ -738,7 +738,7 @@ fn emit_string_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b: Op
         TerminatorKind::Call {
             func: Operand::runtime(rt::STRING_EQUALS, span),
             args: vec![a, b],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(result),
             target: Some(next),

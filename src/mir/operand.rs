@@ -5,7 +5,7 @@ use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::Body;
-use crate::mir::place::{Place, PlaceElem};
+use crate::mir::place::{Local, Place, PlaceElem};
 use crate::mir::symbol::Symbol;
 use crate::mir::types::MirType;
 use std::fmt;
@@ -59,6 +59,19 @@ impl Operand {
         match self {
             Operand::Function(function) => Some(&function.symbol),
             Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) => None,
+        }
+    }
+
+    /// The whole local this operand reads, whether spelled as a copy or a
+    /// move; `None` for a projected place, a constant and a function.
+    pub fn bare_local(&self) -> Option<Local> {
+        match self {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                Some(place.local)
+            }
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+                None
+            }
         }
     }
 

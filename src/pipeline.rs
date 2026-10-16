@@ -2625,18 +2625,22 @@ impl Pipeline {
         // each to the corresponding GPU kernel body's backend metadata.
         Self::stamp_kernel_workgroups(&mut lowered)?;
 
+        // Read back every gpu-resident binding a host read needs fresh, in every
+        // build. Runs before RC insertion, which accounts for the host arrays the
+        // readbacks detach.
+        for (_symbol, body) in &mut lowered {
+            mir::residency::insert_readbacks(body);
+        }
+
+        let verify_mode = self.verify_mode();
+        let argument_mode_violations =
+            Self::decide_owned_parameters(result, &mut lowered, verify_mode.is_some());
+
         let mut bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
             .map(|(symbol, body)| (gpu_names.emitted_name(&symbol, &body), body))
             .collect();
         result.device_helpers = gpu_names.into_helpers();
-
-        // Read back every gpu-resident binding a host read needs fresh, in every
-        // build. Runs before RC insertion, which accounts for the host arrays the
-        // readbacks detach.
-        for (_name, body) in &mut bodies {
-            mir::residency::insert_readbacks(body);
-        }
 
         // Insert Perceus RC operations on all function bodies, exactly once,
         // on the bodies as lowering and the GPU passes above left them. No MIR
@@ -2652,20 +2656,49 @@ impl Pipeline {
             mir::optimization::elide_rc(body);
         }
 
-        // Optional MIR verification pass: check RC invariants and cross-residency
-        // readback fencing after Perceus.
-        // Enabled by setting the MIRI_VERIFY_MIR environment variable.
-        // Set MIRI_VERIFY_MIR=warn for warnings only; any other non-empty value is hard error.
-        let verify_mode = self
-            .verify_mir
-            .then(|| "error".to_string())
-            .or_else(|| std::env::var("MIRI_VERIFY_MIR").ok());
-
+        // Check RC invariants and cross-residency readback fencing after
+        // Perceus, and that every call passes an owned argument exactly where
+        // its callee takes one over.
         if let Some(mode) = verify_mode {
-            Self::report_mir_violations(result, &bodies, &mode)?;
+            Self::report_mir_violations(result, &bodies, argument_mode_violations, &mode)?;
         }
 
         Ok(bodies)
+    }
+
+    /// How optional MIR verification runs: enabled by `--verify-mir` or by
+    /// setting the MIRI_VERIFY_MIR environment variable. MIRI_VERIFY_MIR=warn
+    /// only warns; any other non-empty value, or the flag, is a hard error.
+    /// `None` when verification is off.
+    fn verify_mode(&self) -> Option<String> {
+        self.verify_mir
+            .then(|| "error".to_string())
+            .or_else(|| std::env::var("MIRI_VERIFY_MIR").ok())
+    }
+
+    /// Decide which parameters each function takes over from its callers, and
+    /// mark the calls passing them, before Perceus funds those arguments.
+    ///
+    /// When `is_verifying`, also check across the program that every call
+    /// passes an owned argument exactly where its callee takes one over; the
+    /// findings are returned to join the per-body checks run after Perceus.
+    fn decide_owned_parameters(
+        result: &PipelineResult,
+        lowered: &mut [(Symbol, mir::Body)],
+        is_verifying: bool,
+    ) -> Vec<(Symbol, mir::verify::VerificationViolation)> {
+        let type_definitions = result.type_checker.type_definitions();
+        let synthesized = mir::lowering::dispatch_symbols::synthesized_references(type_definitions);
+        mir::optimization::owned_params::decide_owned_parameters(
+            lowered,
+            &synthesized,
+            &mir::type_facts::DropHookReach::new(type_definitions),
+        );
+        if is_verifying {
+            mir::verify::verify_owned_argument_modes(lowered)
+        } else {
+            Vec::new()
+        }
     }
 
     /// Emit the generic-class methods and trait defaults the lowered bodies
@@ -2919,15 +2952,26 @@ impl Pipeline {
 
     /// Run every verification pass over every body and turn what they find
     /// into one report — printed under `warn`, fatal otherwise.
+    ///
+    /// `program_violations` are the findings of checks run across bodies, each
+    /// already naming the function it was found in.
     fn report_mir_violations(
         result: &PipelineResult,
         bodies: &[(String, mir::Body)],
+        program_violations: Vec<(Symbol, mir::verify::VerificationViolation)>,
         mode: &str,
     ) -> Result<(), CompilerError> {
         let shared_collection_methods = Self::shared_collection_methods(result);
         let intrinsic_backed = Self::collection_methods_backed_by_intrinsics(result);
-        let mut all_violations = Vec::new();
-        let mut functions_with_violations = 0;
+        let mut functions_with_violations = program_violations
+            .iter()
+            .map(|(symbol, _)| symbol)
+            .collect::<HashSet<_>>()
+            .len();
+        let mut all_violations: Vec<String> = program_violations
+            .into_iter()
+            .map(|(symbol, v)| format!("  fn {}: {}", symbol, v))
+            .collect();
         for (name, body) in bodies {
             let mut violations = mir::verify::verify_body(body);
             violations.extend(mir::verify::verify_collection_element_ownership(

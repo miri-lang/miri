@@ -11,8 +11,8 @@ use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    AggregateKind, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement,
-    StatementKind, Terminator, TerminatorKind,
+    arg_mode, AggregateKind, ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue,
+    Statement, StatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
@@ -549,7 +549,7 @@ impl<'a> FunctionTranslator<'a> {
             TerminatorKind::Call {
                 func,
                 args,
-                out_args,
+                arg_modes,
                 arg_handles: _,
                 destination,
                 target,
@@ -558,7 +558,7 @@ impl<'a> FunctionTranslator<'a> {
                 ctx,
                 func,
                 args,
-                out_args,
+                arg_modes,
                 destination,
                 target.as_ref(),
                 body,
@@ -613,7 +613,7 @@ impl<'a> FunctionTranslator<'a> {
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,
-                out_args,
+                arg_modes,
                 destination,
                 target,
             } => Self::translate_virtual_call(
@@ -621,7 +621,7 @@ impl<'a> FunctionTranslator<'a> {
                 ctx,
                 *vtable_slot,
                 args,
-                out_args,
+                arg_modes,
                 destination,
                 target.as_ref(),
                 body,
@@ -721,7 +721,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         func: &Operand,
         args: &[Operand],
-        out_args: &[bool],
+        arg_modes: &[ArgMode],
         destination: &Place,
         target: Option<&BasicBlock>,
         body: &Body,
@@ -738,7 +738,7 @@ impl<'a> FunctionTranslator<'a> {
             ctx,
             func_name.as_deref(),
             args,
-            out_args,
+            arg_modes,
             locals,
             type_ctx,
         )?;
@@ -828,7 +828,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         func_name: Option<&str>,
         args: &[Operand],
-        out_args: &[bool],
+        arg_modes: &[ArgMode],
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<PreparedCallArgs, CodegenError> {
@@ -841,7 +841,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for (i, arg) in args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
-            let out_local = Self::out_local_for_arg(out_args, i, arg);
+            let out_local = Self::out_local_for_arg(arg_modes, i, arg);
             let val = if let Some(local) = out_local {
                 let addr = Self::box_value_in_stack_slot(builder, val, ptr_type);
                 out_arg_slots.push((addr, local));
@@ -882,20 +882,16 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// If arg `i` is flagged as `out` and names a local, return that local:
+    /// If arg `i` is passed as [`ArgMode::Out`] and names a local, return that local:
     /// the caller passes the address of a slot holding its value and reads the
     /// slot back after the call. A scalar the callee changed is copied back,
     /// and a managed value it replaced takes the place of the one it released.
-    pub fn out_local_for_arg(out_args: &[bool], i: usize, arg: &Operand) -> Option<Local> {
-        if !out_args.get(i).copied().unwrap_or(false) {
-            return None;
+    pub fn out_local_for_arg(arg_modes: &[ArgMode], i: usize, arg: &Operand) -> Option<Local> {
+        match arg_mode(arg_modes, i) {
+            ArgMode::Out => {}
+            ArgMode::Borrowed | ArgMode::Owned => return None,
         }
-        match arg {
-            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Some(p.local),
-            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
-                None
-            }
-        }
+        arg.bare_local()
     }
 
     /// Allocate a stack slot sized to `val`'s Cranelift type, store `val`
@@ -1332,7 +1328,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         vtable_slot: usize,
         args: &[Operand],
-        out_args: &[bool],
+        arg_modes: &[ArgMode],
         destination: &Place,
         target: Option<&BasicBlock>,
         body: &Body,
@@ -1347,7 +1343,7 @@ impl<'a> FunctionTranslator<'a> {
         );
 
         let (arg_values, mut sig, out_arg_slots) =
-            Self::prepare_call_args(builder, ctx, None, args, out_args, locals, type_ctx)?;
+            Self::prepare_call_args(builder, ctx, None, args, arg_modes, locals, type_ctx)?;
         let dest_ty = &body.local_decls[destination.local.0].ty;
         if dest_ty.kind != TypeKind::Void {
             sig.returns

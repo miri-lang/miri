@@ -56,5 +56,7 @@ pub use operand::{Constant, FunctionConstant, Operand};
 pub use place::{Local, Place, PlaceElem};
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};
-pub use terminator::{Discriminant, GpuLaunchArgs, GpuLaunchArgsError, Terminator, TerminatorKind};
+pub use terminator::{
+    arg_mode, ArgMode, Discriminant, GpuLaunchArgs, GpuLaunchArgsError, Terminator, TerminatorKind,
+};
 pub use types::MirType;

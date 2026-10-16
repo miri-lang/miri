@@ -67,27 +67,44 @@ fn type_depth(ty: &Type, budget: usize) -> usize {
 /// Whether `ty` names a type parameter no substitution has bound, anywhere
 /// inside it: a type still open is not yet an instantiation at all.
 pub fn mentions_open_parameter(ty: &Type, type_defs: &HashMap<String, TypeDefinition>) -> bool {
-    mentions_open_parameter_within(ty, type_defs, MAX_TOKEN_DEPTH)
+    let is_open =
+        |name: &str| matches!(type_defs.get(name), None | Some(TypeDefinition::Generic(_)));
+    mentions_type_parameter(ty, &is_open, false)
 }
 
-fn mentions_open_parameter_within(
+/// Whether `ty` names a type parameter anywhere inside it: a
+/// [`TypeKind::Generic`], or a bare name `is_parameter` accepts.
+///
+/// The walk looks no deeper than the symbol mangler names a type. A type
+/// nested past that answers `past_depth` for what lies below it, so a caller
+/// that must not miss a parameter passes `true`.
+pub fn mentions_type_parameter(
     ty: &Type,
-    type_defs: &HashMap<String, TypeDefinition>,
+    is_parameter: &dyn Fn(&str) -> bool,
+    past_depth: bool,
+) -> bool {
+    mentions_type_parameter_within(ty, is_parameter, past_depth, MAX_TOKEN_DEPTH)
+}
+
+fn mentions_type_parameter_within(
+    ty: &Type,
+    is_parameter: &dyn Fn(&str) -> bool,
+    past_depth: bool,
     budget: usize,
 ) -> bool {
-    let is_open = if let TypeKind::Custom(name, None) = &ty.kind {
-        matches!(type_defs.get(name), None | Some(TypeDefinition::Generic(_)))
+    let names_one_here = if let TypeKind::Custom(name, None) = &ty.kind {
+        is_parameter(name)
     } else {
         matches!(ty.kind, TypeKind::Generic(..))
     };
     let Some(rest) = budget.checked_sub(1) else {
-        return is_open;
+        return names_one_here || past_depth;
     };
-    is_open
+    names_one_here
         || constructor_parts(ty)
             .1
             .iter()
-            .any(|part| mentions_open_parameter_within(part, type_defs, rest))
+            .any(|part| mentions_type_parameter_within(part, is_parameter, past_depth, rest))
 }
 
 /// `ty` as its outermost constructor and the types it is built from, in

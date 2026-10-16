@@ -1486,7 +1486,7 @@ fn emit_guard_fail_branch(
         TerminatorKind::Call {
             func: Operand::runtime(crate::runtime_fns::rt::GUARD_FAILED_PANIC, span),
             args: vec![Operand::Copy(Place::new(message))],
-            out_args: Vec::new(),
+            arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             destination: Place::new(void_temp),
             target: Some(unreachable_bb),

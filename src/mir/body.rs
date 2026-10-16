@@ -94,6 +94,12 @@ pub struct Body {
     /// Populated by MIR lowering from `Parameter::is_out`.
     /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
     pub out_params: Vec<bool>,
+    /// Which parameters (indexed 1..=arg_count) the body takes over from its
+    /// callers. `owned_params[i-1] == true` means parameter `_i` is passed
+    /// [`crate::mir::ArgMode::Owned`] by every call: the caller funds one
+    /// reference for it and this body releases it. Empty means every parameter
+    /// is borrowed. Decided by `crate::mir::optimization::owned_params`.
+    pub owned_params: Vec<bool>,
     /// Which parameters (indexed 1..=arg_count) the body actually writes.
     /// `param_written[i-1] == true` means parameter `_i` is written by this body.
     /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
@@ -210,6 +216,7 @@ impl Body {
             bound_params: HashSet::new(),
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
+            owned_params: Vec::new(),
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
@@ -226,6 +233,40 @@ impl Body {
         let local = Local(self.local_decls.len());
         self.local_decls.push(decl);
         local
+    }
+
+    /// How many control-flow edges enter each block. The entry block counts
+    /// one more, for the edge into the body, so a block entered from one edge
+    /// alone has a count of exactly 1 and the entry block reaches that count
+    /// only when nothing branches back to it.
+    pub fn predecessor_counts(&self) -> Vec<usize> {
+        let mut counts = vec![0; self.basic_blocks.len()];
+        if let Some(entry) = counts.first_mut() {
+            *entry = 1;
+        }
+        for terminator in self
+            .basic_blocks
+            .iter()
+            .filter_map(|b| b.terminator.as_ref())
+        {
+            for successor in terminator.successors() {
+                if let Some(count) = counts.get_mut(successor.0) {
+                    *count += 1;
+                }
+            }
+        }
+        counts
+    }
+
+    /// Whether `local` is a parameter this body takes over from its callers
+    /// (see [`Body::owned_params`]).
+    pub fn is_owned_param(&self, local: Local) -> bool {
+        local
+            .0
+            .checked_sub(1)
+            .and_then(|index| self.owned_params.get(index))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Returns true if this function runs on a GPU.

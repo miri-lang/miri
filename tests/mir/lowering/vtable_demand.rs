@@ -163,7 +163,7 @@ impl BodySketch {
                 TerminatorKind::VirtualCall {
                     vtable_slot: slot,
                     args: vec![Operand::Copy(Place::new(receiver_local))],
-                    out_args: Vec::new(),
+                    arg_modes: Vec::new(),
                     destination: Place::new(destination),
                     target: None,
                 },

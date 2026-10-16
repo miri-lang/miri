@@ -13,6 +13,7 @@ use crate::mir::block::BasicBlockData;
 use crate::mir::lowering::{field_type_in_instance, type_argument};
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::statement::{Statement, StatementKind};
+use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::types::MirType;
 use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 
@@ -39,9 +40,12 @@ struct PerceusContext<'a> {
     borrowed: &'a BorrowedLocals,
 }
 
-/// The locals a body reads but does not own, so never releases: its parameters,
-/// which the caller owns, and the closure captures it only reads, which the
-/// closure's environment owns and its destructor releases.
+/// The locals a body reads but does not own, so never releases: its borrowed
+/// parameters, which the caller owns, and the closure captures it only reads,
+/// which the closure's environment owns and its destructor releases.
+///
+/// A parameter the body takes over (`Body::owned_params`) is not borrowed: its
+/// binding moves the caller's reference out into a local the body releases.
 ///
 /// A capture the body assigns is not borrowed. Its value is replaced by one the
 /// body owns, so it takes its own reference on entry and is then released like
@@ -54,6 +58,8 @@ struct BorrowedLocals {
     /// the caller's, so the old one is released; the parameter is otherwise
     /// borrowed, and never released at the body's end.
     written_back: std::collections::HashSet<crate::mir::Local>,
+    /// The parameters the body takes over, in parameter order.
+    owned_params: Vec<bool>,
 }
 
 impl BorrowedLocals {
@@ -61,6 +67,7 @@ impl BorrowedLocals {
         let written = body.written_locals();
         BorrowedLocals {
             arg_count: body.arg_count,
+            owned_params: body.owned_params.clone(),
             read_only_captures: body
                 .env_capture_locals
                 .iter()
@@ -72,7 +79,9 @@ impl BorrowedLocals {
     }
 
     fn contains(&self, local: crate::mir::Local) -> bool {
-        (1..=self.arg_count).contains(&local.0) || self.read_only_captures.contains(&local)
+        let is_borrowed_param = (1..=self.arg_count).contains(&local.0)
+            && !self.owned_params.get(local.0 - 1).copied().unwrap_or(false);
+        is_borrowed_param || self.read_only_captures.contains(&local)
     }
 }
 
@@ -141,7 +150,9 @@ impl Perceus {
     ///
     /// Excludes borrowed locals — parameters and closure captures — and
     /// "Auto-copy" types (which are small enough to be copied byte-for-byte
-    /// without reference counting).
+    /// without reference counting). An owned parameter is excluded too: its one
+    /// reference leaves through the move that binds it, and the local it moves
+    /// into is the one released.
     fn identify_managed_locals(
         &self,
         body: &Body,
@@ -153,6 +164,7 @@ impl Perceus {
             .filter(|(i, decl)| {
                 *i != 0
                     && !borrowed.contains(crate::mir::Local(*i))
+                    && !body.is_owned_param(crate::mir::Local(*i))
                     && decl
                         .mir_ty
                         .is_managed(&body.unmanaged_type_names, &body.type_params)
@@ -204,6 +216,9 @@ impl Perceus {
                 changed = true;
             }
             new_stmts.push(stmt);
+        }
+        if fund_owned_arguments(block, &mut new_stmts) {
+            changed = true;
         }
 
         block.statements = new_stmts;
@@ -451,6 +466,44 @@ impl Perceus {
     }
 }
 
+/// Retain, at the end of the block, each argument its terminating call passes
+/// [`ArgMode::Owned`]: the callee releases the reference it is handed, so the
+/// caller pays for one.
+///
+/// A constant argument needs nothing: every constant that reaches a managed
+/// parameter is inert to reference counting. A string literal is immortal, so
+/// the callee's release of it does nothing; `None` is the null optional, which
+/// a release skips; and a regex literal never reaches MIR as a constant —
+/// lowering turns it into the call that builds the pattern.
+///
+/// The retain is unconditional on the argument's place: the callee's parameter
+/// is a managed type, which is what made it ownable, so the value is a counted
+/// reference even where the walk over a projection cannot resolve its type.
+fn fund_owned_arguments(block: &BasicBlockData, new_stmts: &mut Vec<Statement>) -> bool {
+    let Some(terminator) = &block.terminator else {
+        return false;
+    };
+    let TerminatorKind::Call {
+        args, arg_modes, ..
+    } = &terminator.kind
+    else {
+        return false;
+    };
+    let before = new_stmts.len();
+    for (position, arg) in args.iter().enumerate() {
+        if arg_mode(arg_modes, position) != ArgMode::Owned {
+            continue;
+        }
+        if let Operand::Copy(place) | Operand::Move(place) = arg {
+            new_stmts.push(Statement {
+                kind: StatementKind::IncRef(place.clone()),
+                span: terminator.span,
+            });
+        }
+    }
+    new_stmts.len() > before
+}
+
 /// Extract the source place from a Copy or Ref rvalue (aliasing operations).
 ///
 /// Move operands are excluded because they transfer ownership rather than
@@ -530,7 +583,7 @@ fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
                 // indexing yields an interior address rather than a pointer to
                 // an allocation of its own. Retaining or releasing it would
                 // reach into the buffer's bytes.
-                if is_inline_vector(&element) {
+                if element.is_inline_vector() {
                     return false;
                 }
                 let element_declared = declared.as_ref().and_then(indexed_element_type);
@@ -635,19 +688,7 @@ fn writes_inline_element(ctx: &PerceusContext, dest: &Place) -> bool {
 /// Whether `ty` is a collection that lays its elements out inline.
 fn holds_inline_elements(ty: &MirType) -> bool {
     match ty {
-        MirType::Array(elem) | MirType::List(elem) => is_inline_vector(elem),
+        MirType::Array(elem) | MirType::List(elem) => elem.is_inline_vector(),
         _ => false,
     }
-}
-
-/// Whether `ty` is a vector type. A vector is stored inline wherever a
-/// collection lays its elements out at their std430 stride, so it is the one
-/// managed type whose element position holds bytes rather than a pointer.
-///
-/// The name alone decides it, which is sound only because every vector that
-/// reaches here has a component with an inline layout: the type checker refuses
-/// the rest where they are written (`validate_vector_component`), so a vector
-/// codegen would have stored as a pointer never gets this far.
-fn is_inline_vector(ty: &MirType) -> bool {
-    matches!(ty, MirType::Custom(name) if crate::ast::types::vec_dim(name.as_str()).is_some())
 }

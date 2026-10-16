@@ -196,7 +196,7 @@ pub(super) fn emit_regex_predicate_test(
                 Operand::Copy(Place::new(handle_local)),
                 Operand::Copy(Place::new(subject_local)),
             ],
-            out_args: vec![],
+            arg_modes: vec![],
             arg_handles: vec![],
             destination: Place::new(result_temp),
             target: Some(continuation_bb),

@@ -32,7 +32,8 @@
 //! | `Assign(x, rv)` / `Reassign(x, rv)` with an owning rvalue | `d(x) += 1` |
 //! | a bare-local `Move(p)` inside a `Use` or a `Cast` | `d(p) -= 1`; double-release if `p` owns none |
 //! | call destination | `d(dest) += 1`, unless the callee hands back a borrow |
-//! | an argument the callee takes ownership of | `d(p) -= 1` |
+//! | an argument the callee takes ownership of — a runtime intrinsic's taken position, or one passed `ArgMode::Owned` | `d(p) -= 1` |
+//! | entry to a body | each parameter it takes over (`Body::owned_params`) owns 1; every other parameter is the caller's and untracked |
 //! | a call that never returns | the path stops; nothing is carried into its successor |
 //! | `Return` | every tracked local must own nothing |
 //!
@@ -98,7 +99,9 @@ use crate::mir::statement::StatementKind;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Discriminant;
 use crate::mir::terminator::TerminatorKind;
-use crate::mir::{Body, ExecutionModel, Local, Statement};
+use crate::mir::terminator::{arg_mode, ArgMode};
+use crate::mir::visitor::Visitor;
+use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
 use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -263,6 +266,187 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     violations
 }
 
+/// Every call whose argument modes disagree with the parameters its callee
+/// takes over, paired with the function making it.
+///
+/// A parameter's mode is a contract between a body and every call to it: an
+/// argument passed [`ArgMode::Owned`] to a parameter the callee only borrows
+/// leaks the reference the caller funded, and one lent to a parameter the
+/// callee owns is released by both. Neither side's body shows the mismatch on
+/// its own, so this is checked across the whole program. A call with no static
+/// callee, through a closure or a vtable, reaches no owned parameter — which is
+/// why a function taking a parameter over must also be lowered into one body,
+/// named nowhere but as the callee of a call, and called by no GPU body (see
+/// [`owner_violations`]).
+pub fn verify_owned_argument_modes(
+    program: &[(Symbol, Body)],
+) -> Vec<(Symbol, VerificationViolation)> {
+    let owned: HashMap<&Symbol, &[bool]> = program
+        .iter()
+        .map(|(symbol, body)| (symbol, body.owned_params.as_slice()))
+        .collect();
+    let mut violations: Vec<(Symbol, VerificationViolation)> = program
+        .iter()
+        .flat_map(|(symbol, body)| {
+            body.basic_blocks
+                .iter()
+                .filter_map(|block| block.terminator.as_ref())
+                .filter_map(|terminator| argument_mode_violation(body, &terminator.kind, &owned))
+                .map(move |violation| (symbol.clone(), violation))
+        })
+        .collect();
+    violations.extend(owner_violations(program));
+    violations
+}
+
+/// Every place `program` reaches a function taking a parameter over other than
+/// through a host call whose modes [`argument_mode_violation`] checks: a second
+/// body lowered under its symbol, a mention that is not a call's callee, and a
+/// call from a GPU body, which funds no reference.
+fn owner_violations(program: &[(Symbol, Body)]) -> Vec<(Symbol, VerificationViolation)> {
+    let owners: HashSet<&Symbol> = program
+        .iter()
+        .filter(|(_, body)| body.owned_params.contains(&true))
+        .map(|(symbol, _)| symbol)
+        .collect();
+    if owners.is_empty() {
+        return Vec::new();
+    }
+    let mut lowered: HashMap<&Symbol, usize> = HashMap::new();
+    let mut violations = Vec::new();
+    for (symbol, body) in program {
+        if owners.contains(symbol) {
+            let count = lowered.entry(symbol).or_default();
+            *count += 1;
+            if *count == 2 {
+                let message = "is lowered into more than one body, yet takes a parameter over";
+                violations.push((symbol.clone(), body_violation(body, message.to_string())));
+            }
+        }
+        violations.extend(
+            mention_violations(body, &owners)
+                .into_iter()
+                .map(|violation| (symbol.clone(), violation)),
+        );
+    }
+    violations
+}
+
+/// The violations `body` raises by reaching an owner other than through a host
+/// call to it.
+fn mention_violations(body: &Body, owners: &HashSet<&Symbol>) -> Vec<VerificationViolation> {
+    let mut mentions = OwnerMentions {
+        owners,
+        counts: HashMap::new(),
+    };
+    mentions.visit_body(body);
+    let mut violations = Vec::new();
+    for (owner, named) in mentions.counts {
+        let called = direct_calls_to(body, &owner);
+        let callee = owner.link_name();
+        if named > called {
+            let message = format!("names {callee}, which takes a parameter over, as a value");
+            violations.push(body_violation(body, message));
+        }
+        if called > 0 && body.is_gpu() {
+            let message = format!("is a GPU body calling {callee}, which takes a parameter over");
+            violations.push(body_violation(body, message));
+        }
+    }
+    violations
+}
+
+/// How many calls in `body` name `callee` as the function they call.
+fn direct_calls_to(body: &Body, callee: &Symbol) -> usize {
+    body.basic_blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .filter(|terminator| match &terminator.kind {
+            TerminatorKind::Call { func, .. } => func.called_symbol() == Some(callee),
+            TerminatorKind::VirtualCall { .. }
+            | TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => false,
+        })
+        .count()
+}
+
+/// A violation of `body` as a whole, reported against its return slot.
+fn body_violation(body: &Body, message: String) -> VerificationViolation {
+    VerificationViolation {
+        local: Local(0),
+        local_name: local_display_name(body, Local(0)),
+        message,
+    }
+}
+
+/// Counts every operand naming one of `owners`.
+struct OwnerMentions<'o> {
+    owners: &'o HashSet<&'o Symbol>,
+    counts: HashMap<Symbol, usize>,
+}
+
+impl Visitor for OwnerMentions<'_> {
+    fn visit_function(&mut self, function: &FunctionConstant, _location: BasicBlock) {
+        if self.owners.contains(&function.symbol) {
+            *self.counts.entry(function.symbol.clone()).or_default() += 1;
+        }
+    }
+}
+
+/// The violation a call raises when an argument's mode disagrees with whether
+/// its callee takes that parameter over.
+fn argument_mode_violation(
+    body: &Body,
+    kind: &TerminatorKind,
+    owned: &HashMap<&Symbol, &[bool]>,
+) -> Option<VerificationViolation> {
+    let (callee, args, modes, destination) = match kind {
+        TerminatorKind::Call {
+            func,
+            args,
+            arg_modes,
+            destination,
+            ..
+        } => (func.called_symbol(), args, arg_modes, destination),
+        TerminatorKind::VirtualCall {
+            args,
+            arg_modes,
+            destination,
+            ..
+        } => (None, args, arg_modes, destination),
+        TerminatorKind::GpuLaunch { .. }
+        | TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable => return None,
+    };
+    let owned_params = callee.and_then(|symbol| owned.get(symbol)).copied();
+    let takes_over = |position: usize| {
+        owned_params
+            .and_then(|params| params.get(position))
+            .copied()
+            .unwrap_or(false)
+    };
+    let position = (0..args.len())
+        .find(|&position| (arg_mode(modes, position) == ArgMode::Owned) != takes_over(position))?;
+    let (passed, expected) = if takes_over(position) {
+        ("lends", "takes it over")
+    } else {
+        ("hands over", "only borrows it")
+    };
+    let callee = callee.map_or_else(|| "a dynamic callee".to_string(), Symbol::link_name);
+    Some(VerificationViolation {
+        local: destination.local,
+        local_name: local_display_name(body, destination.local),
+        message: format!(
+            "the call to {callee} {passed} argument {position}, but the callee {expected}"
+        ),
+    })
+}
+
 /// Every call and launch whose target names no function: a call's callee is
 /// the symbol of the function it calls or a place holding the closure it calls
 /// through, and a launch names its kernel's symbol. A constant in either place
@@ -312,14 +496,16 @@ fn callee_violation(body: &Body, kind: &TerminatorKind) -> Option<VerificationVi
 }
 
 /// Locals whose ownership this function is responsible for: managed, not the
-/// return slot, not a parameter, and not an environment capture — a closure's
-/// captures are released by its destructor, not by the body that reads them.
+/// return slot, not a borrowed parameter, and not an environment capture — a
+/// closure's captures are released by its destructor, not by the body that
+/// reads them. A parameter the body takes over is tracked like a local of its
+/// own, holding the one reference its caller funded.
 fn collect_tracked_locals(body: &Body, env_captures: &HashSet<Local>) -> Vec<Local> {
     body.local_decls
         .iter()
         .enumerate()
         .filter(|(index, decl)| {
-            *index > body.arg_count
+            (*index > body.arg_count || body.is_owned_param(Local(*index)))
                 && !env_captures.contains(&Local(*index))
                 && decl
                     .mir_ty
@@ -366,8 +552,11 @@ fn flag_decref_on_params(
     violations: &mut Vec<VerificationViolation>,
 ) {
     let written_back = crate::mir::body::written_back_out_params(body);
-    let managed_params: HashSet<Local> =
-        managed_params.difference(&written_back).copied().collect();
+    let managed_params: HashSet<Local> = managed_params
+        .difference(&written_back)
+        .copied()
+        .filter(|local| !body.is_owned_param(*local))
+        .collect();
     let mut seen: Vec<Local> = Vec::new();
     for block in &body.basic_blocks {
         for stmt in &block.statements {
@@ -419,7 +608,7 @@ fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpo
     let mut worklist: VecDeque<usize> = VecDeque::new();
 
     if is_reachable.first().copied().unwrap_or(false) {
-        entries.insert(0, PathState::new());
+        entries.insert(0, entry_state(body, tracked));
         worklist.push_back(0);
         queued[0] = true;
     }
@@ -452,6 +641,16 @@ fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpo
         }
     }
     Fixpoint { entries, exits }
+}
+
+/// What the body owns on entry: the one reference each parameter it takes over
+/// was handed.
+fn entry_state(body: &Body, tracked: &[Local]) -> PathState {
+    tracked
+        .iter()
+        .filter(|local| body.is_owned_param(**local))
+        .map(|local| (*local, Delta::Owned(1)))
+        .collect()
 }
 
 /// A per-block flag, set for each block in `blocks`.
@@ -915,23 +1114,32 @@ fn apply_terminator(
     state: &mut PathState,
     violations: &mut Vec<VerificationViolation>,
 ) {
-    let (func, args, destination) = match kind {
+    let (func, args, modes, destination) = match kind {
         TerminatorKind::Call {
             func,
             args,
+            arg_modes,
             destination,
             ..
-        } => (Some(func), args.as_slice(), destination),
+        } => (
+            Some(func),
+            args.as_slice(),
+            arg_modes.as_slice(),
+            destination,
+        ),
         // A virtual call resolves its callee through a vtable at runtime, so
         // nothing static is known about what it takes ownership of.
         TerminatorKind::VirtualCall {
-            args, destination, ..
-        } => (None, args.as_slice(), destination),
+            args,
+            arg_modes,
+            destination,
+            ..
+        } => (None, args.as_slice(), arg_modes.as_slice(), destination),
         TerminatorKind::GpuLaunch {
             launch_args,
             destination,
             ..
-        } => (None, launch_args.args(), destination),
+        } => (None, launch_args.args(), &[][..], destination),
         TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
         | TerminatorKind::Return
@@ -939,6 +1147,9 @@ fn apply_terminator(
     };
 
     release_taken_args(body, func, args, tracked, state, violations);
+    for local in owned_bare_args(args, modes) {
+        release(body, &Place::new(local), tracked, state, violations);
+    }
 
     let result = &body.local_decls[destination.local.0].ty.kind;
     let borrows = func
@@ -968,7 +1179,7 @@ fn release_taken_args(
         return;
     };
     for position in taken_argument_positions(name) {
-        let Some(local) = args.get(*position).and_then(bare_local_read) else {
+        let Some(local) = args.get(*position).and_then(Operand::bare_local) else {
             continue;
         };
         // An element the container lays out inline is copied as bytes; the
@@ -978,6 +1189,18 @@ fn release_taken_args(
         }
         release(body, &Place::new(local), tracked, state, violations);
     }
+}
+
+/// The bare locals a call passes [`ArgMode::Owned`]: the callee takes over the
+/// reference each holds, so the caller no longer owns it.
+fn owned_bare_args<'a>(
+    args: &'a [Operand],
+    modes: &'a [ArgMode],
+) -> impl Iterator<Item = Local> + 'a {
+    args.iter()
+        .enumerate()
+        .filter(|(position, _)| arg_mode(modes, *position) == ArgMode::Owned)
+        .filter_map(|(_, arg)| arg.bare_local())
 }
 
 /// Whether an rvalue reads `place` without taking over a reference to it, so that
@@ -1048,7 +1271,7 @@ fn bare_local_moved(operand: &Operand) -> Option<Local> {
 /// owner's later release as one release too many.
 fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
     match rvalue {
-        Rvalue::Cast(operand, _) => bare_local_read(operand).into_iter().collect(),
+        Rvalue::Cast(operand, _) => operand.bare_local().into_iter().collect(),
         Rvalue::Use(_)
         | Rvalue::Ref(_)
         | Rvalue::Aggregate(_, _)
@@ -1059,16 +1282,6 @@ fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
         | Rvalue::MathIntrinsic(_, _)
         | Rvalue::AtomicOp { .. }
         | Rvalue::Phi(_) => moved_bare_locals(rvalue),
-    }
-}
-
-/// The bare local an operand reads, whether it is spelled as a copy or a move.
-fn bare_local_read(operand: &Operand) -> Option<Local> {
-    match operand {
-        Operand::Move(place) | Operand::Copy(place) if place.projection.is_empty() => {
-            Some(place.local)
-        }
-        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => None,
     }
 }
 
@@ -1153,7 +1366,7 @@ pub fn verify_collection_element_ownership(
         if !shared_collection_methods.contains(symbol) || intrinsic_backed.contains(symbol) {
             continue;
         }
-        let Some(receiver) = args.first().and_then(bare_local_read) else {
+        let Some(receiver) = args.first().and_then(Operand::bare_local) else {
             continue;
         };
         let decl = &body.local_decls[receiver.0];
@@ -1202,7 +1415,7 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
         let Some(symbol) = func.called_runtime_name() else {
             continue;
         };
-        let Some(receiver) = args.first().and_then(bare_local_read) else {
+        let Some(receiver) = args.first().and_then(Operand::bare_local) else {
             continue;
         };
         let receiver_ty = &body.local_decls[receiver.0].ty;
@@ -1295,7 +1508,7 @@ fn concrete_operand_type(operand: &Operand, body: &Body) -> Option<crate::ast::t
         Operand::Constant(constant) => pinned_type(&constant.ty, body),
         Operand::Function(function) => pinned_type(&function.ty, body),
         Operand::Copy(_) | Operand::Move(_) => {
-            let local = bare_local_read(operand)?;
+            let local = operand.bare_local()?;
             pinned_type(&body.local_decls[local.0].ty, body)
         }
     }

@@ -481,6 +481,14 @@ impl Symbol {
         }
     }
 
+    /// Whether this symbol names a top-level function the program declares —
+    /// at its type arguments, when it has any — and not a method, a closure,
+    /// the entry point, a compiler-synthesized body or a copy specialized for
+    /// the gpu-resident buffers a call passes.
+    pub fn is_plain_function(&self) -> bool {
+        matches!(self.kind, SymbolKind::Function { .. }) && self.residency.is_empty()
+    }
+
     /// Whether the runtime library, not this compilation, provides the body.
     pub fn is_runtime(&self) -> bool {
         matches!(self.kind, SymbolKind::Runtime(_))

@@ -193,7 +193,7 @@ fn keep_flags_on_edges(
                 .extend(updates.iter().cloned());
         }
     }
-    let predecessors = predecessor_counts(body);
+    let predecessors = body.predecessor_counts();
     for ((from, to), statements) in edges {
         insert_on_edge(body, from, to, statements, predecessors[to]);
     }
@@ -230,25 +230,6 @@ fn flag_updates(
                 .map(|&flag| flag_assignment(flag, value, span))
         })
         .collect()
-}
-
-/// How many edges enter each block. The entry block counts one more, for the
-/// edge into the body.
-fn predecessor_counts(body: &Body) -> Vec<usize> {
-    let mut counts = vec![0; body.basic_blocks.len()];
-    if let Some(entry) = counts.first_mut() {
-        *entry = 1;
-    }
-    for terminator in body
-        .basic_blocks
-        .iter()
-        .filter_map(|b| b.terminator.as_ref())
-    {
-        for successor in terminator.successors() {
-            counts[successor.0] += 1;
-        }
-    }
-    counts
 }
 
 /// Run `statements` on the edge from block `from` to block `to`: at the start
@@ -295,7 +276,7 @@ fn initialize_flags(body: &mut Body, flags: &Flags, carriers: &HandleCarriers) {
         .iter()
         .map(|(handle, &flag)| flag_assignment(flag, lagging.contains(handle), span))
         .collect();
-    if predecessor_counts(body).first().copied().unwrap_or(0) > 1 {
+    if body.predecessor_counts().first().copied().unwrap_or(0) > 1 {
         move_entry_block_contents(body);
     }
     body.basic_blocks[0].statements.splice(0..0, assignments);
