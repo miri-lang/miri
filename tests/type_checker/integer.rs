@@ -561,3 +561,87 @@ fn test_integer_unary_increment_decrement_non_numeric() {
         "Unary operator requires numeric type, got String",
     );
 }
+
+#[test]
+fn test_unary_logical_not_on_non_boolean() {
+    type_checker_error_test("let x = not 123", "Logical NOT requires boolean, got int");
+    type_checker_error_test(
+        "let x = not \"hello\"",
+        "Logical NOT requires boolean, got String",
+    );
+}
+
+#[test]
+fn test_unary_negation_plus_on_non_numeric() {
+    type_checker_error_test(
+        "let x = -\"hello\"",
+        "Unary operator requires numeric type, got String",
+    );
+    type_checker_error_test(
+        "let x = +true",
+        "Unary operator requires numeric type, got bool",
+    );
+}
+
+#[test]
+fn test_unary_double_negation_warning_and_typing() {
+    type_checker_vars_type_test(
+        "
+let x = -(-10)
+let y i16 = -(-5)
+",
+        vec![("x", type_int()), ("y", type_i16())],
+    );
+}
+
+#[test]
+fn test_unary_decrement_warning_and_typing() {
+    type_checker_vars_type_test(
+        "
+var x = 10
+let y = --x
+",
+        vec![("x", type_int()), ("y", type_int())],
+    );
+}
+
+#[test]
+fn test_unary_bitwise_not_on_all_integer_types() {
+    type_checker_vars_type_test(
+        "
+let a u8 = 1
+let b u16 = 2
+let c u32 = 3
+let d u64 = 4
+let e u128 = 5
+let f i8 = 6
+let g i16 = 7
+let h i32 = 8
+let i i64 = 9
+let j i128 = 10
+
+let ta = ~a
+let tb = ~b
+let tc = ~c
+let td = ~d
+let te = ~e
+let tf = ~f
+let tg = ~g
+let th = ~h
+let ti = ~i
+let tj = ~j
+",
+        vec![
+            ("ta", type_u8()),
+            ("tb", type_u16()),
+            ("tc", type_u32()),
+            ("td", type_u64()),
+            ("te", type_u128()),
+            ("tf", type_i8()),
+            ("tg", type_i16()),
+            ("th", type_i32()),
+            ("ti", type_i64()),
+            ("tj", type_i128()),
+        ],
+    );
+}
