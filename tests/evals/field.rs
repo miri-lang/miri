@@ -2896,3 +2896,163 @@ fn synthetic_miri_transcript() -> String {
         .map(|event| event.to_string() + "\n")
         .collect()
 }
+
+/// An arm file kept outside the repository, defining one private arm that
+/// runs like the Python baseline.
+#[cfg(unix)]
+fn write_private_arm_file(root: &Path) -> PathBuf {
+    let path = root.join("private-arms.toml");
+    fs::write(
+        &path,
+        "[[arm]]\nid = \"private-python\"\nlanguage = \"Python\"\ntoolchain = \"`uv` and `pytest`\"\n\
+         entry_point = \"main.py\"\nrun = [\"uv\", \"run\", \"--quiet\", \"python\", \"main.py\"]\n\
+         install_pack = false\nnotes = \"A private arm.\"\n",
+    )
+    .expect("cannot write the private arm file");
+    path
+}
+
+/// Run `bench.py` as a probe of the private arm, with its records under
+/// `records_root`.
+#[cfg(unix)]
+fn run_private_probe(root: &Path, arm_file: &Path, records_root: &Path) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        root.join("bin").display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new("python3")
+        .arg(field_dir().join("bench.py"))
+        .args([
+            "--job",
+            PROBE_JOB,
+            "--arm",
+            "private-python",
+            "--model",
+            "claude-sonnet",
+        ])
+        .args(["--round", "synthetic-private", "--probe", "--arms-file"])
+        .arg(arm_file)
+        .arg("--records-root")
+        .arg(records_root)
+        .arg("--scratch")
+        .arg(root.join("scratch"))
+        .env("PATH", path)
+        .output()
+        .expect("cannot run python3")
+}
+
+/// An arm defined in a file outside the repository runs, its records say they
+/// are private, and the instrument refuses to write them anywhere the
+/// repository tracks or the public rounds live.
+#[cfg(unix)]
+#[test]
+fn test_a_private_arm_runs_from_its_own_file_and_its_records_stay_out_of_the_tree() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so the private arm was not run");
+        return;
+    }
+    let root = std::env::temp_dir().join("miri-field-private-arm");
+    let _ = fs::remove_dir_all(&root);
+    install_fake_harness(
+        &root.join("bin"),
+        Some(r#"{"ratings": [{"surface": "pytest", "score": 3, "reason": "fine"}]}"#),
+    );
+    let arm_file = write_private_arm_file(&root);
+
+    let inside = field_dir().join("runs");
+    let refused = run_private_probe(&root, &arm_file, &inside);
+    assert!(
+        !refused.status.success(),
+        "a private arm wrote into the public runs directory"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("private"),
+        "the refusal does not say why:\n{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !inside.join("synthetic-private.probe").exists(),
+        "the refused run still left records in the public runs directory"
+    );
+
+    let outside = root.join("private-runs");
+    let ran = run_private_probe(&root, &arm_file, &outside);
+    assert!(
+        ran.status.success(),
+        "the private arm failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let record = outside
+        .join("synthetic-private.probe")
+        .join(PROBE_JOB)
+        .join("private-python")
+        .join("claude-sonnet")
+        .join("1.json");
+    assert!(
+        read(&record).contains("\"private\": true"),
+        "the private arm's record does not say it is private:\n{}",
+        read(&record)
+    );
+}
+
+/// The folder leaves a private arm's records out of the summary, and shows
+/// them in a section of their own only when asked to.
+#[test]
+fn test_the_folder_keeps_private_records_out_of_the_summary_unless_asked() {
+    let root = std::env::temp_dir().join("miri-field-private-fold");
+    let _ = fs::remove_dir_all(&root);
+    write_synthetic_record(&root, PROBE_JOB, "python", SyntheticRun::green(10, 1, 1));
+    write_synthetic_record(
+        &root,
+        PROBE_JOB,
+        "private-python",
+        SyntheticRun::green(20, 1, 1),
+    );
+    let private_record = root
+        .join("synthetic")
+        .join(PROBE_JOB)
+        .join("private-python")
+        .join("claude-sonnet")
+        .join("1.json");
+    let marked = read(&private_record).replacen('{', "{\"private\":true,", 1);
+    fs::write(&private_record, marked).expect("cannot mark the record private");
+
+    let summary = fold(&root);
+    assert!(
+        !summary.contains("private-python"),
+        "a private record reached the summary:\n{summary}"
+    );
+    assert!(
+        summary.contains("\"records\": 1"),
+        "the summary counts the private record:\n{summary}"
+    );
+
+    let output = Command::new("python3")
+        .arg(field_dir().join("report.py"))
+        .args(["--round", "synthetic", "--include-private", "--runs-root"])
+        .arg(&root)
+        .arg("--out")
+        .arg(root.join("private-summary.json"))
+        .output()
+        .expect("cannot run python3");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let with_private = read(&root.join("private-summary.json"));
+    let section = with_private
+        .find("\"private\"")
+        .map(|at| &with_private[at..])
+        .unwrap_or("");
+    assert!(
+        section.contains("private-python"),
+        "--include-private does not show the private arm in its own section:\n{with_private}"
+    );
+    let claims = &with_private[..with_private.find("\"private\"").unwrap_or(0)];
+    assert!(
+        !claims.contains("private-python"),
+        "a private record entered the public cells or claims:\n{with_private}"
+    );
+}

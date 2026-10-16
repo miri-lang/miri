@@ -240,6 +240,19 @@ on its way up. Each record carries what the harness reported loading under
 hook that ran, an MCP server, a plugin the harness does not ship — since such
 a run measured the operator's setup as well as the language.
 
+### Private arms
+
+An arm that must not be published — a comparison kept for internal use —
+lives in a TOML file outside the repository and is added with
+`--arms-file PATH` (repeatable), in the same `[[arm]]` shape as `arms.toml`.
+Its id may not repeat one already defined. Such an arm is private: every record
+it writes carries `"private": true`, and `bench.py` refuses to write its records
+under this directory's `runs/` or anywhere else in the repository that git
+would track, so `--records-root` must point outside the tree or at an ignored
+directory. `report.py` leaves private records out of the cells and the claims;
+`--include-private` adds them in a `private` section of their own, which never
+enters a claim.
+
 ## The claims
 
 `PROMPT.md` holds the text a round is launched from. A round is started by

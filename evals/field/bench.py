@@ -108,11 +108,43 @@ def load_toml(path):
         return tomllib.load(handle)
 
 
-def arm_named(arm_id):
-    for arm in load_toml(FIELD / "arms.toml")["arm"]:
+def load_arms(arm_files=()):
+    """The public arms of `arms.toml`, then the arms of each extra file, which
+    are private: defined outside the repository, recorded only outside it, and
+    left out of a round's summary. An id defined twice is refused."""
+    arms = [dict(arm, private=False) for arm in load_toml(FIELD / "arms.toml")["arm"]]
+    for path in arm_files:
+        for arm in load_toml(path).get("arm", []):
+            if any(known["id"] == arm["id"] for known in arms):
+                raise SystemExit(f"arm {arm['id']} in {path} is already defined")
+            arms.append(dict(arm, private=True))
+    return arms
+
+
+def arm_named(arm_id, arm_files=()):
+    for arm in load_arms(arm_files):
         if arm["id"] == arm_id:
             return arm
-    raise SystemExit(f"no arm named {arm_id} in arms.toml")
+    raise SystemExit(f"no arm named {arm_id} in arms.toml or the arm files given")
+
+
+def refuse_public_records_root(records_root):
+    """A private arm's records never land where the public rounds live, nor
+    anywhere in the repository that git would track."""
+    root = Path(records_root).resolve()
+    public = (FIELD / "runs").resolve()
+    if root == public or public in root.parents:
+        raise SystemExit(f"a private arm's records may not go under {public}; pass a --records-root outside it")
+    repo = REPO.resolve()
+    if root == repo or repo in root.parents:
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", str(root)], cwd=repo, capture_output=True
+        ).returncode == 0
+        if not ignored:
+            raise SystemExit(
+                f"a private arm's records may not go under {root}, which git would track; "
+                "pass a --records-root that is ignored or outside the repository"
+            )
 
 
 def model_named(key):
@@ -945,6 +977,8 @@ def records_directory(arguments, arm_id, model_key):
 
 
 def write_record(arguments, arm, model, record, transcript, index, onboarding_transcript=None):
+    if arm.get("private"):
+        record = {"private": True, **record}
     directory = records_directory(arguments, arm["id"], model["key"])
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{index}.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
@@ -986,6 +1020,13 @@ def parse_arguments(argv):
         "--records-root",
         default=str(FIELD / "runs"),
         help="where the rounds live; this directory's runs/ by default",
+    )
+    parser.add_argument(
+        "--arms-file",
+        action="append",
+        default=[],
+        help="a TOML file of further [[arm]] tables, kept outside the repository; "
+        "its arms are private and their records must go outside the tracked tree",
     )
     parser.add_argument("--dry-run", action="store_true", help="prepare and report, launch nothing")
     parser.add_argument(
@@ -1126,7 +1167,9 @@ def rescore(record_path, arguments, arm):
 
 def main(argv):
     arguments = parse_arguments(argv)
-    arm = arm_named(arguments.arm)
+    arm = arm_named(arguments.arm, arguments.arms_file)
+    if arm["private"]:
+        refuse_public_records_root(arguments.records_root)
     job = job_named(arguments.job)
     refuse_silent_overwrite(arguments)
     global STAGED_TOOLCHAIN

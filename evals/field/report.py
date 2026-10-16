@@ -521,6 +521,27 @@ def summarize(round_name, records, probe_records, round_directory=None):
     return summary
 
 
+def split_private(records):
+    """The records of the public arms, and those of the private arms an
+    `--arms-file` defined. A private record never enters the cells or the
+    claims."""
+    public = [record for record in records if not record.get("private")]
+    private = [record for record in records if record.get("private")]
+    return public, private
+
+
+def private_section(records):
+    """The private arms' cells, apart from the round's: shown only on request."""
+    cells, _, _ = build_cells(records)
+    return {
+        "records": len(records),
+        "cells": [
+            {"job": job, "arm": arm, "model": model, **values}
+            for (job, arm, model), values in sorted(cells.items())
+        ],
+    }
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description="fold a round's records into summary.json")
     parser.add_argument(
@@ -532,12 +553,19 @@ def main(argv):
         default=None,
         help="where the rounds live; this directory's runs/ by default",
     )
+    parser.add_argument(
+        "--include-private",
+        action="store_true",
+        help="add the private arms' cells, in a section of their own; they never enter a claim",
+    )
     arguments = parser.parse_args(argv)
 
     runs_root = Path(arguments.runs_root) if arguments.runs_root else FIELD / "runs"
-    records = load_records(arguments.round, runs_root)
-    probe_records = load_probe_records(arguments.round, runs_root)
+    records, private_records = split_private(load_records(arguments.round, runs_root))
+    probe_records, _ = split_private(load_probe_records(arguments.round, runs_root))
     summary = summarize(arguments.round, records, probe_records, runs_root / arguments.round)
+    if arguments.include_private:
+        summary["private"] = private_section(private_records)
     destination = Path(arguments.out) if arguments.out else runs_root / arguments.round / "summary.json"
     destination.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
