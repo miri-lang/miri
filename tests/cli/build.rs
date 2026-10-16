@@ -349,12 +349,6 @@ fn timed_run(path: &std::path::Path) -> std::time::Duration {
     elapsed
 }
 
-/// The fastest of a few runs: the suite runs in parallel, so a slow sample
-/// measures the machine's load rather than the code.
-fn best_run(path: &std::path::Path) -> std::time::Duration {
-    (0..5).map(|_| timed_run(path)).min().unwrap()
-}
-
 /// Optimization level 3 reaches the backend: the code it emits is not the
 /// code level 0 emits, and both compute the same answer.
 #[test]
@@ -397,36 +391,34 @@ fn test_release_implies_opt_level_3_unless_a_level_is_given() {
 
 /// The optimized build of a tight loop is measurably faster than the
 /// unoptimized one. The bound is a generous ratio rather than a time: this runs
-/// beside the rest of the suite on a loaded machine.
+/// beside the rest of the suite on a loaded machine, so the two builds are run
+/// in turn and each keeps its fastest run, which load affects alike.
 ///
 /// The loop's gain comes from branching on a comparison instead of
 /// materializing it as a byte and testing it again, which Cranelift does only
 /// when optimizing on AArch64: there the optimized build takes about 0.64 of
 /// the unoptimized one's time. Its x86-64 lowering branches on the comparison
-/// even unoptimized (measured: 674 ms against 683 ms), so there the test only
-/// asserts that optimizing does not make the program slower.
+/// even unoptimized (measured: 674 ms against 683 ms), so there the two builds
+/// take the same time and a shared runner's load alone decides which is
+/// faster; the different object code is what the test above proves there.
 #[test]
+#[cfg_attr(
+    not(target_arch = "aarch64"),
+    ignore = "the optimizer does not speed this loop up outside AArch64"
+)]
 fn test_opt_level_3_runs_a_tight_loop_faster_than_opt_level_0() {
     let source = create_test_file(TIGHT_LOOP);
     let out_dir = tempfile::tempdir().unwrap();
-    let unoptimized = best_run(&build_with_flags(
-        &source,
-        out_dir.path(),
-        &["--opt-level", "0"],
-    ));
-    let optimized = best_run(&build_with_flags(
-        &source,
-        out_dir.path(),
-        &["--opt-level", "3"],
-    ));
-
-    let bound = if cfg!(target_arch = "aarch64") {
-        0.8
-    } else {
-        1.1
-    };
+    let unoptimized_exe = build_with_flags(&source, out_dir.path(), &["--opt-level", "0"]);
+    let optimized_exe = build_with_flags(&source, out_dir.path(), &["--opt-level", "3"]);
+    let mut unoptimized = std::time::Duration::MAX;
+    let mut optimized = std::time::Duration::MAX;
+    for _ in 0..7 {
+        unoptimized = unoptimized.min(timed_run(&unoptimized_exe));
+        optimized = optimized.min(timed_run(&optimized_exe));
+    }
     assert!(
-        optimized.as_secs_f64() < unoptimized.as_secs_f64() * bound,
+        optimized.as_secs_f64() < unoptimized.as_secs_f64() * 0.8,
         "opt-level 3 took {optimized:?}, opt-level 0 took {unoptimized:?}"
     );
 }
