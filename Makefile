@@ -1,4 +1,4 @@
-.PHONY: build release install test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full
+.PHONY: build release install test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full bench-regress
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -110,6 +110,15 @@ bench-smoke:
 
 bench-full:
 	python3 bench/run.py --full --diagnose
+
+# The nightly's comparison for a working-tree change: a smoke run judged
+# against the nights on the bench-history branch.
+bench-regress:
+	rm -rf target/bench-history && mkdir -p target/bench-history
+	git fetch --depth=1 origin bench-history && git archive FETCH_HEAD nights | tar -x -C target/bench-history || true
+	mkdir -p target/bench-history/nights
+	python3 bench/run.py --smoke --allow-dirty --only nbody,spectral-norm,mandelbrot,fannkuch-redux,sieve,matmul,binary-trees,wordfreq
+	python3 bench/regress.py "$$(ls -td bench/results/*/ | head -n1)summary.json" target/bench-history/nights
 
 audit:
 	@echo "─── Miri principle audit (mechanical sweep) ───"

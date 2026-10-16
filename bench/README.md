@@ -134,3 +134,22 @@ goes into its profile.
 can rebuild the environment (`docker build -f bench/Dockerfile -t miri-bench
 bench/`). It is a reproducibility artifact; a publication run happens on bare
 metal and records that it did.
+
+## Every night, and every week
+
+`.github/workflows/bench-nightly.yml` runs the core compute workloads,
+binary-trees and wordfreq at size S on a hosted runner every night, for Miri,
+C and Rust. Its absolute times are noise and are never published.
+`bench/regress.py` compares each Miri cell's ratio to C (time) and to Rust
+(net memory) with the median of the last seven nights. A cell past the
+charter's verdict threshold is suspect, and suspect two nights running is a
+regression: the job opens an issue for it and closes the issue when the cell
+recovers. Each night's `summary.json`, `env.json` and verdicts are kept on
+the `bench-history` branch, never on `main`. `make bench-regress` judges a
+working-tree change against those nights before it is pushed.
+
+`.github/workflows/bench-weekly.yml` runs the full suite on the publication
+machine every week, diagnoses its losses and proposes the run as a pull
+request; a person commits publication results after looking at the noise
+flags. It stays idle until a self-hosted runner labelled `publication` exists
+and the repository variable `BENCH_PUBLICATION_RUNNER` is `true`.

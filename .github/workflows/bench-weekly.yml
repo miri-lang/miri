@@ -1,0 +1,62 @@
+name: Benchmark weekly
+
+# The full suite on the publication machine (bench/machine/publication.toml):
+# every workload, language and size at the charter's run counts, its losses
+# diagnosed. The run directory is uploaded and proposed as a pull request
+# adding it under bench/results/, because publication results are committed by
+# a person after a look at the noise flags, never by a bot.
+#
+# It runs only on a self-hosted runner labelled `publication`, and only once
+# the repository variable BENCH_PUBLICATION_RUNNER is `true`, so it stays idle
+# until that machine exists instead of failing every week.
+on:
+  schedule:
+    - cron: "0 3 * * 0" # Sunday 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bench:
+    if: vars.BENCH_PUBLICATION_RUNNER == 'true'
+    runs-on: [self-hosted, publication]
+    timeout-minutes: 240
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Check the machine
+        run: bench/machine/check.sh
+
+      - name: Run the full suite and diagnose its losses
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          python3 bench/run.py --full --profile publication --diagnose
+          echo "BENCH_RUN=$(ls -td bench/results/*/ | head -n1)" >> "$GITHUB_ENV"
+          echo "Benchmark wall time: $(( $(date +%s) - start )) s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-publication-run
+          path: ${{ env.BENCH_RUN }}
+
+      - name: Propose the run as a pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="bench/publication-$(date -u +%Y-%m-%d)"
+          git switch -c "$branch"
+          git add -f "$BENCH_RUN"
+          git -c user.name="miri-bench-bot" -c user.email="miri-bench-bot@users.noreply.github.com" \
+            commit -q -m "bench: publication run $(basename "$BENCH_RUN")"
+          git push origin "$branch"
+          gh pr create --title "bench: publication run $(basename "$BENCH_RUN")" --body-file "$BENCH_RUN/summary.md"

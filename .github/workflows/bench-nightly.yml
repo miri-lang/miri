@@ -1,0 +1,125 @@
+name: Benchmark nightly
+
+# The benchmark suite at size S on a hosted runner, every night. Absolute times
+# on a shared runner vary by tens of percent, so nothing here is published:
+# bench/regress.py compares each Miri cell's ratio to C and to Rust, taken in
+# this same run, with the median of the last seven nights. A cell past the
+# charter's threshold two nights running opens an issue, and closes it when it
+# recovers. Each night's summary is kept on the `bench-history` branch, never
+# on `main`.
+on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: bench-nightly
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install LLVM/Clang 21 (apt.llvm.org)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release ca-certificates
+          wget -O- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y clang-21 llvm-21 llvm-21-dev libclang-21-dev libpolly-21-dev
+          # The charter's build lines name `clang` and `clang++`.
+          sudo ln -sf /usr/bin/clang-21 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-21 /usr/local/bin/clang++
+
+      - name: Fetch the history of earlier nights
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A worktree shares this checkout's credentials, so the last step can
+          # push from it. The first night creates the branch.
+          if git fetch --depth=1 origin bench-history:bench-history; then
+            git worktree add history bench-history
+          else
+            git worktree add --orphan -b bench-history history
+          fi
+
+      - name: Run the suite at size S
+        shell: bash
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          python3 bench/run.py --smoke --profile ci-smoke \
+            --only nbody,spectral-norm,mandelbrot,fannkuch-redux,sieve,matmul,binary-trees,wordfreq
+          echo "BENCH_RUN=$(ls -td bench/results/*/ | head -n1)" >> "$GITHUB_ENV"
+          echo "Benchmark wall time: $(( $(date +%s) - start )) s" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare with the last seven nights
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p history/nights
+          python3 bench/regress.py "$BENCH_RUN/summary.json" history/nights --out "$BENCH_RUN/regress.json"
+          cat "$BENCH_RUN/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or close regression issues
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create perf-regression --force --description "A benchmark cell regressed two nights running" >/dev/null
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "bench")
+          import regress
+          verdicts = json.load(open(os.path.join(os.environ["BENCH_RUN"], "regress.json")))
+          sha = os.environ["GITHUB_SHA"]
+          def gh(*words):
+              return subprocess.run(["gh", *words], capture_output=True, text=True, check=False).stdout
+          open_issues = json.loads(gh("issue", "list", "--label", "perf-regression", "--state", "open", "--json", "number,title") or "[]")
+          for regression in verdicts["regressed"]:
+              prefix = f"perf: {regression['cell'].split('/')[0]} {regression['measure']} regressed"
+              if not any(issue["title"].startswith(prefix) for issue in open_issues):
+                  body = "Flagged two nights running by `bench/regress.py`.\n\n```json\n" + json.dumps(regression, indent=1) + "\n```\n"
+                  gh("issue", "create", "--label", "perf-regression", "--title", regress.issue_title(regression, sha), "--body", body)
+          for recovered in verdicts["recovered"]:
+              prefix = f"perf: {recovered['cell'].split('/')[0]} {recovered['measure']} regressed"
+              for issue in open_issues:
+                  if issue["title"].startswith(prefix):
+                      gh("issue", "close", str(issue["number"]), "--comment", f"Recovered on {sha[:10]}.")
+          PY
+
+      - name: Append tonight to the history branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          night="history/nights/$(date -u +%Y-%m-%d)-${GITHUB_SHA::10}"
+          mkdir -p "$night"
+          cp "$BENCH_RUN/summary.json" "$BENCH_RUN/env.json" "$BENCH_RUN/regress.json" "$night/"
+          cd history
+          git add nights
+          git -c user.name="miri-bench-bot" -c user.email="miri-bench-bot@users.noreply.github.com" \
+            commit -q -m "bench: night of ${GITHUB_SHA::10}"
+          git push origin bench-history
