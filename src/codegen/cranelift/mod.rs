@@ -626,13 +626,63 @@ impl CraneliftBackend {
             .define_function(func_id, ctx)
             .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
         if let Some(listing) = listing {
-            listing.push_str(&format!("; {name}\n{}\n", ctx.func.display()));
+            listing.push_str(&format!(
+                "; {name}\n{}{}\n",
+                ctx.func.display(),
+                Self::listing_references(&ctx.func, module.declarations())
+            ));
         }
 
         // Clear context for next function
         ctx.clear();
 
         Ok(())
+    }
+
+    /// One comment line per function and symbol `func` refers to, naming it: the
+    /// CLIF text identifies an external function or global only by its index in
+    /// the module, which a reader of the listing cannot resolve.
+    fn listing_references(
+        func: &cranelift_codegen::ir::Function,
+        declarations: &cranelift_module::ModuleDeclarations,
+    ) -> String {
+        use cranelift_codegen::ir::{ExternalName, GlobalValueData};
+        let declared_name = |external: &ExternalName| -> Option<String> {
+            let ExternalName::User(user) = external else {
+                return None;
+            };
+            let name = &func.params.user_named_funcs()[*user];
+            match name.namespace {
+                0 => {
+                    let id = cranelift_module::FuncId::from_u32(name.index);
+                    Some(
+                        declarations
+                            .get_function_decl(id)
+                            .linkage_name(id)
+                            .into_owned(),
+                    )
+                }
+                1 => {
+                    let id = cranelift_module::DataId::from_u32(name.index);
+                    Some(declarations.get_data_decl(id).linkage_name(id).into_owned())
+                }
+                _ => None,
+            }
+        };
+        let mut out = String::new();
+        for (func_ref, data) in func.dfg.ext_funcs.iter() {
+            if let Some(name) = declared_name(&data.name) {
+                out.push_str(&format!("; {func_ref} = {name}\n"));
+            }
+        }
+        for (global, data) in func.global_values.iter() {
+            if let GlobalValueData::Symbol { name: external, .. } = data {
+                if let Some(name) = declared_name(external) {
+                    out.push_str(&format!("; {global} = {name}\n"));
+                }
+            }
+        }
+        out
     }
 
     /// Generates `miri.TypeName.$drop(ptr)` functions for every managed concrete type.

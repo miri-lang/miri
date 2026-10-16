@@ -42,3 +42,10 @@ its own behalf, such as releasing a map's keys or a collection's elements, is
 not counted. So on a program whose values compiled code releases, the counts
 reconcile under the leak check, with `drop_free` equal to `rc + inline` (as on
 binary-trees). A program that keeps values in collections shows fewer.
+
+The same byte decides who answers `miri_rt_rc_is_shared`, which a write into a
+field of a list element or a struct asks before it writes. With every
+observer off, compiled code reads the count word itself and compares it with
+1; with the heap guard or a counter on, it calls the runtime, so the guard
+still checks that the block is live. The runtime settles the byte at load
+time, so the inline answer applies from the first write.

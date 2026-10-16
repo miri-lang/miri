@@ -424,13 +424,13 @@ fn emit_unshare(
 /// current block, only when it is. Returns the block both paths join at; the
 /// caller ends the shared path with a jump there.
 ///
-/// TODO: the question is an out-of-line runtime call on every such write. Code
-/// generation could read the count inline — the word before the payload,
-/// compared with 1 — leaving the call only for heap-guard runs. The question
-/// is also asked again on every later write to the same place, though once a
-/// write has made the place unique nothing before the next write can share it
-/// again unless the place is copied or handed to a call; a uniqueness fact
-/// carried between writes would let those checks go.
+/// Code generation answers the question inline from the count word, and calls
+/// the runtime only while the heap is being tracked.
+///
+/// TODO: the question is asked again on every later write to the same place,
+/// though once a write has made the place unique nothing before the next write
+/// can share it again unless the place is copied or handed to a call; a
+/// uniqueness fact carried between writes would let those checks go.
 fn branch_when_shared(ctx: &mut LoweringContext, place: &Place, span: Span) -> BasicBlock {
     let copy_bb = ctx.new_basic_block();
     let join_bb = ctx.new_basic_block();

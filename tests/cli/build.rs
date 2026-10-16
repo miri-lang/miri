@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::utils::miri_cmd;
+use std::collections::HashMap;
 use std::io::Write;
 use std::process::Command;
 use tempfile::NamedTempFile;
@@ -482,4 +483,120 @@ fn test_build_without_emit_writes_no_listing() {
         .success();
     assert!(!out_dir.path().join("main.mir").exists());
     assert!(!out_dir.path().join("main.clif").exists());
+}
+
+const FIELD_WRITE: &str = r#"
+use system.io
+use system.collections.list
+
+struct Body
+    x float
+    vx float
+
+fn write(start [Body], i int, v float) [Body]
+    var bodies = start
+    bodies[i].x = v
+    bodies
+
+fn main()
+    let b = List([Body(x: 1.0, vx: 2.0)])
+    let c = write(b, 0, 3.0)
+    println(f"{b[0].x} {c[0].x}")
+"#;
+
+/// The blocks of one function in a CLIF listing, as (label, text) pairs, and
+/// the name the listing gives each `fnN`/`gvN` reference.
+fn clif_function<'a>(
+    listing: &'a str,
+    name: &str,
+) -> (Vec<(&'a str, String)>, HashMap<&'a str, &'a str>) {
+    let header = format!("; {name}\n");
+    let start = listing
+        .find(&header)
+        .expect("the function is in the listing")
+        + header.len();
+    let mut blocks: Vec<(&str, String)> = Vec::new();
+    let mut names = HashMap::new();
+    for line in listing[start..].lines() {
+        let trimmed = line.trim();
+        if let Some(reference) = line.strip_prefix("; ") {
+            match reference.split_once(" = ") {
+                Some((handle, target)) => names.insert(handle, target),
+                None => break,
+            };
+        } else if line.starts_with("block") {
+            let label = line.split(['(', ':']).next().unwrap_or(line);
+            blocks.push((label, String::new()));
+        } else if let Some((_, body)) = blocks.last_mut() {
+            body.push_str(trimmed);
+            body.push('\n');
+        }
+    }
+    (blocks, names)
+}
+
+/// A write into a list element asks whether the list is shared by reading its
+/// count inline; the runtime is called for it only on the path taken when the
+/// heap guard or another tracking mode is on, so a hot loop of field writes
+/// makes no call for the question.
+#[test]
+fn test_the_sharing_check_calls_the_runtime_only_when_tracking() {
+    let source = create_test_file(FIELD_WRITE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("write");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--release", "--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("write.clif")).unwrap();
+    let (blocks, names) = clif_function(&listing, "miri.write");
+    let handle_of = |target: &str| {
+        names
+            .iter()
+            .filter(|(_, name)| **name == target)
+            .map(|(handle, _)| *handle)
+            .collect::<Vec<_>>()
+    };
+    let checks = handle_of("miri_rt_rc_is_shared");
+    let tracking = handle_of("miri_rt_tracking_state");
+    let calling: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| checks.iter().any(|f| body.contains(&format!("call {f}("))))
+        .map(|(label, _)| *label)
+        .collect();
+    assert!(
+        !checks.is_empty(),
+        "the write still has a sharing check:\n{listing}"
+    );
+    for label in calling {
+        let entered_from: Vec<&String> = blocks
+            .iter()
+            .filter(|(_, body)| {
+                body.lines().any(|l| {
+                    (l.starts_with("brif") || l.starts_with("jump"))
+                        && l.split([' ', ',', '(']).any(|word| word == label)
+                })
+            })
+            .map(|(_, body)| body)
+            .collect();
+        assert!(
+            !entered_from.is_empty()
+                && entered_from.iter().all(|body| {
+                    tracking
+                        .iter()
+                        .any(|gv| body.contains(&format!("symbol_value.i64 {gv}")))
+                }),
+            "{label} calls the runtime for the sharing check outside a tracking branch:\n{listing}"
+        );
+    }
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "1.0 3.0",
+        "value semantics"
+    );
 }

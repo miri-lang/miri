@@ -987,6 +987,10 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), CodegenError> {
+        if callee.runtime_name() == Some(rt::RC_IS_SHARED) {
+            let shared = Self::emit_inline_is_shared(builder, ctx, callee, &arg_values, sig)?;
+            return Self::define_call_destination(builder, locals, destination, shared);
+        }
         let func_name = callee.link_name();
         let func_id = ctx
             .module
@@ -1015,6 +1019,105 @@ impl<'a> FunctionTranslator<'a> {
             Self::apply_list_new_init(builder, ctx, maybe_result, dest_ty, type_ctx, ptr_type)?;
         }
         Ok(())
+    }
+
+    /// Answers `miri_rt_rc_is_shared(ptr)` without the call while nothing is
+    /// tracking the heap: a null pointer is not shared, and otherwise the count
+    /// in the word before the payload is compared with 1, so an immortal
+    /// value's negative count reads as shared, as in the runtime. With the
+    /// heap guard or another tracking mode on, the runtime answers, so the
+    /// guard still checks that the block is live.
+    fn emit_inline_is_shared(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        arg_values: &[cranelift_codegen::ir::Value],
+        sig: Signature,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        let [ptr] = arg_values else {
+            return Err(CodegenError::Internal(format!(
+                "{} takes one pointer, got {} arguments",
+                rt::RC_IS_SHARED,
+                arg_values.len()
+            )));
+        };
+        let answer_type = sig
+            .returns
+            .first()
+            .map(|param| param.value_type)
+            .ok_or_else(|| {
+                CodegenError::Internal(format!("{} returns nothing", rt::RC_IS_SHARED))
+            })?;
+
+        let check_block = builder.create_block();
+        let count_block = builder.create_block();
+        let runtime_block = builder.create_block();
+        let join_block = builder.create_block();
+        builder.append_block_param(join_block, answer_type);
+
+        let not_shared = builder.ins().iconst(answer_type, 0);
+        builder
+            .ins()
+            .brif(*ptr, check_block, &[], join_block, &[not_shared.into()]);
+
+        builder.switch_to_block(check_block);
+        let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
+        builder
+            .ins()
+            .brif(tracking_off, count_block, &[], runtime_block, &[]);
+
+        builder.switch_to_block(count_block);
+        let shared = Self::emit_count_is_shared(builder, *ptr, answer_type);
+        builder.ins().jump(join_block, &[shared.into()]);
+
+        builder.switch_to_block(runtime_block);
+        let answer = Self::call_is_shared_runtime(builder, ctx, callee, *ptr, &sig)?;
+        builder.ins().jump(join_block, &[answer.into()]);
+
+        builder.seal_block(check_block);
+        builder.seal_block(count_block);
+        builder.seal_block(runtime_block);
+        builder.seal_block(join_block);
+        builder.switch_to_block(join_block);
+        Ok(builder.block_params(join_block)[0])
+    }
+
+    /// Whether the count in the word before the payload at `ptr` is other than
+    /// 1, as a value of `answer_type`.
+    fn emit_count_is_shared(
+        builder: &mut FunctionBuilder,
+        ptr: cranelift_codegen::ir::Value,
+        answer_type: cranelift_codegen::ir::Type,
+    ) -> cranelift_codegen::ir::Value {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        let header = ptr_type.bytes() as i32;
+        let count = builder
+            .ins()
+            .load(ptr_type, MemFlags::trusted(), ptr, -header);
+        let shared = builder.ins().icmp_imm(IntCC::NotEqual, count, 1);
+        if answer_type == cranelift_codegen::ir::types::I8 {
+            shared
+        } else {
+            builder.ins().uextend(answer_type, shared)
+        }
+    }
+
+    /// Calls the runtime's `miri_rt_rc_is_shared(ptr)` and returns its answer.
+    fn call_is_shared_runtime(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        ptr: cranelift_codegen::ir::Value,
+        sig: &Signature,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        let func_name = callee.link_name();
+        let func_id = ctx
+            .module
+            .declare_function(&func_name, Linkage::Import, sig)
+            .map_err(|e| CodegenError::declare_function(func_name, e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, &[ptr]);
+        Ok(builder.inst_results(call)[0])
     }
 
     /// Indirect call through a closure pointer. Loads fn_ptr from

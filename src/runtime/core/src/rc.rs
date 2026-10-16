@@ -155,6 +155,10 @@ pub unsafe fn incref(ptr: *mut u8) {
 /// immediately before it.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_rc_is_shared(ptr: *const u8) -> bool {
+    // Compiled code answers this inline once the tracking state is off, and
+    // calls here otherwise; settling the state keeps a platform whose
+    // load-time hook did not run from calling here for good.
+    crate::guard::resolve_tracking_state();
     if ptr.is_null() {
         return false;
     }

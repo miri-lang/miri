@@ -1969,6 +1969,27 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         body: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<(), CodegenError>,
     ) -> Result<(), CodegenError> {
+        let is_off = Self::emit_tracking_is_off(builder, ctx)?;
+        let track_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_off, merge_block, &[], track_block, &[]);
+
+        builder.switch_to_block(track_block);
+        body(builder, ctx)?;
+        builder.ins().jump(merge_block, &[]);
+
+        builder.switch_to_block(merge_block);
+        Ok(())
+    }
+
+    /// Loads the runtime's tracking-state byte and answers whether it reads
+    /// "off": no heap guard, leak check or counter is observing the program.
+    pub(crate) fn emit_tracking_is_off(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+    ) -> Result<Value, CodegenError> {
         use cranelift_module::Module;
 
         let state_id = ctx
@@ -1983,24 +2004,11 @@ impl<'a> FunctionTranslator<'a> {
         let state = builder
             .ins()
             .load(cl_types::I8, MemFlags::new(), state_addr, 0);
-        let is_off = builder.ins().icmp_imm(
+        Ok(builder.ins().icmp_imm(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             state,
             rt::TRACKING_STATE_OFF,
-        );
-
-        let track_block = builder.create_block();
-        let merge_block = builder.create_block();
-        builder
-            .ins()
-            .brif(is_off, merge_block, &[], track_block, &[]);
-
-        builder.switch_to_block(track_block);
-        body(builder, ctx)?;
-        builder.ins().jump(merge_block, &[]);
-
-        builder.switch_to_block(merge_block);
-        Ok(())
+        ))
     }
 
     /// Calls `miri_rt_class_alloc_track(ptr)` to register an inline `malloc`
