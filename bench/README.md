@@ -11,6 +11,8 @@ machine-readable twin [`charter.toml`](charter.toml).
 | `c/table.h` | The structures the C ports share, which C's standard library lacks. |
 | `hello/` | A hello-world per language, for the runtime floor (`floor_rss_bytes`, `startup_ns`). |
 | `run.py` | The runner. |
+| `summarize.py` | Statistics, ratios and verdicts, from the runner's records. |
+| `schema/summary.v1.json` | The schema of `summary.json`, which charts and the website read and nothing else. |
 | `results/` | What the runner writes. Ignored by git: a run is output, not source. |
 
 ## Running it
@@ -56,3 +58,30 @@ measurements has one record saying why: `mismatch`, `build-failed`,
 when the port is blocked. Miri's `alloc-count` records carry `allocations`.
 A results directory is never overwritten; a second run on the same day gets a
 new one.
+
+## Summarizing and comparing
+
+```bash
+python3 bench/summarize.py bench/results/<run>/      # writes summary.json and summary.md there
+python3 bench/summarize.py compare <A>/summary.json <B>/summary.json
+python3 bench/summarize.py history bench/results/    # each cell's ratio to C, run by run
+```
+
+`summarize.py` applies the charter's statistics to each cell's last attempt:
+median, minimum, the upper quantile by nearest rank, the median absolute
+deviation and the coefficient of variation of every metric, and a `noisy`
+flag past the charter's threshold. A noisy cell is published flagged, never
+dropped. It adds each cell's ratio to C (time and peak memory), to Rust (peak
+and net memory, net being the peak above the runtime floor, or `≤ floor`), and
+to Miri. It marks the Miri cells past the charter's diagnosis thresholds, and
+takes the geometric mean of each language's time ratio to C, overall and per
+feature tag, with how many workloads it covers. A cell that was not measured
+(`mismatch`, `timeout`, `unsupported` …) keeps its status and never enters a
+ratio. It refuses records made under a charter other than the one on disk,
+and a run that mixes machine profiles or charter versions.
+
+`compare` gives a verdict per cell, `faster`, `same` or `slower`, by the
+charter's rule: the change in ratio to C must exceed the larger of 5 % and
+three times the ratio's coefficient of variation. It refuses two runs from
+different machine profiles or charter versions. `summary.md` is generated
+from `summary.json`; neither is edited by hand.

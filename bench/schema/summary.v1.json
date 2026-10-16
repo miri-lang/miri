@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "summary.v1.json",
+  "title": "Benchmark summary, schema version 1",
+  "description": "What bench/summarize.py writes and the charts and website read. Every ratio and verdict is computed by bench/summarize.py under bench/CHARTER.md section 6.",
+  "type": "object",
+  "required": ["schema_version", "charter_version", "charter_hash", "run_id", "machine_profile", "provenance", "cells", "aggregates"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "charter_version": {"type": "integer"},
+    "charter_hash": {"type": "string"},
+    "run_id": {"type": "string"},
+    "machine_profile": {"enum": ["dev", "ci-smoke", "publication"]},
+    "provenance": {"type": "object"},
+    "cells": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["workload", "language", "variant", "size", "mode", "status"],
+        "properties": {
+          "workload": {"type": "string"},
+          "language": {"type": "string"},
+          "variant": {"enum": ["default", "native"]},
+          "size": {"enum": ["s", "m", "l"]},
+          "mode": {"enum": ["cold", "hot"]},
+          "status": {"enum": ["ok", "noisy", "timeout", "mismatch", "build-failed", "toolchain-missing", "unsupported"]},
+          "attempts": {"type": "integer"},
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "process_wall_ns": {"$ref": "#/$defs/statistics"},
+              "user_ns": {"$ref": "#/$defs/statistics"},
+              "sys_ns": {"$ref": "#/$defs/statistics"},
+              "max_rss_bytes": {"$ref": "#/$defs/statistics"},
+              "hot_ns": {"$ref": "#/$defs/statistics"},
+              "net_rss_bytes": {
+                "type": "object",
+                "required": ["value", "at_or_below_floor"],
+                "properties": {"value": {"type": ["number", "null"]}, "at_or_below_floor": {"type": "boolean"}}
+              }
+            }
+          },
+          "vs_c": {"type": "object"},
+          "vs_miri": {"type": "object"},
+          "vs_rust": {"type": "object"},
+          "diagnose": {"type": "boolean"}
+        }
+      }
+    },
+    "aggregates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["language", "variant", "size", "mode", "tag", "geomean_vs_c", "coverage"],
+        "properties": {
+          "language": {"type": "string"},
+          "variant": {"type": "string"},
+          "size": {"type": "string"},
+          "mode": {"type": "string"},
+          "tag": {"type": "string"},
+          "geomean_vs_c": {"type": "number"},
+          "coverage": {"type": "integer"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "statistics": {
+      "type": "object",
+      "required": ["n", "median", "min", "p_high", "mad", "cv"],
+      "properties": {
+        "n": {"type": "integer"},
+        "median": {"type": "number"},
+        "min": {"type": "number"},
+        "p_high": {"type": "number"},
+        "mad": {"type": "number"},
+        "cv": {"type": "number"}
+      }
+    }
+  }
+}
