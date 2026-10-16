@@ -73,7 +73,8 @@ def style():
         {
             "svg.hashsalt": "miri-bench",
             "svg.fonttype": "none",
-            "font.family": "DejaVu Sans",
+            "font.family": "sans-serif",
+            "font.sans-serif": ["DejaVu Sans"],
             "font.size": 9,
             "axes.facecolor": SURFACE,
             "figure.facecolor": SURFACE,
@@ -188,7 +189,7 @@ def time_chart(summary, out_dir, size):
     grouped_bars(axes[1], summary, size, "hot", ("vs_c", "time"), f"Hot time, after warm-up, × C (size {size.upper()})")
     fig.legend(handles=legend_handles(present_languages(summary)), loc="upper right", fontsize=8, frameon=False)
     footer(fig, summary)
-    fig.tight_layout(rect=(0, 0.03, 0.85, 1))
+    fig.tight_layout(rect=(0, 0.03, 0.76, 1))
     save(fig, out_dir, "time-vs-c")
 
 
@@ -198,7 +199,7 @@ def memory_chart(summary, out_dir, size):
     grouped_bars(axes[1], summary, size, "cold", ("vs_rust", "net_rss"), f"Memory above the runtime floor, × Rust (size {size.upper()})")
     fig.legend(handles=legend_handles(present_languages(summary)), loc="upper right", fontsize=8, frameon=False)
     footer(fig, summary)
-    fig.tight_layout(rect=(0, 0.03, 0.85, 1))
+    fig.tight_layout(rect=(0, 0.03, 0.76, 1))
     save(fig, out_dir, "memory-vs-c")
 
 

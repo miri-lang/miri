@@ -11,7 +11,8 @@ Writes, under the website checkout:
 
 - `_data/bench/<miri-version>.json` and `_data/bench/latest.json`: a strict
   subset of the run's `summary.json` (medians, ratios, aggregates and
-  provenance), nothing computed here;
+  provenance), nothing computed here, plus the Miri cells to diagnose with
+  the mechanism and task each `DIAGNOSIS.md` names;
 - `assets/bench/<miri-version>/*.svg`: the charts `bench/plot.py` draws from
   that summary, with the history chart drawn over every committed publication
   run.
@@ -72,7 +73,32 @@ def site_cell(cell):
     return out
 
 
-def site_data(summary):
+def lost_cells(summary, diagnosis_dir):
+    """Every Miri cell past the diagnosis thresholds, with the mechanism its
+    DIAGNOSIS.md names and the public issue it links. A task reference that is
+    not a public URL stays in the repository: the site links only issues."""
+    import plot
+
+    lost = []
+    for cell in summary["cells"]:
+        if cell["language"] != "miri" or not cell.get("diagnose"):
+            continue
+        mechanism, task = plot.hypothesis(diagnosis_dir, cell["workload"], cell["size"])
+        lost.append(
+            {
+                "workload": cell["workload"],
+                "size": cell["size"],
+                "mode": cell["mode"],
+                "time_vs_c": plot.ratio_of(cell, ("vs_c", "time")),
+                "net_rss_vs_rust": plot.ratio_of(cell, ("vs_rust", "net_rss")),
+                "mechanism": mechanism,
+                "task": task if task.startswith("https://") else "",
+            }
+        )
+    return lost
+
+
+def site_data(summary, run_dir):
     """The website's copy of a summary: what the page shows and nothing else."""
     if summary["machine_profile"] != "publication":
         raise SystemExit(f"only a publication run is exported; this one ran on '{summary['machine_profile']}'")
@@ -86,6 +112,8 @@ def site_data(summary):
         "provenance": summary["provenance"],
         "cells": [site_cell(c) for c in summary["cells"]],
         "aggregates": summary["aggregates"],
+        "results_path": f"bench/results/{Path(run_dir).name}",
+        "lost": lost_cells(summary, Path(run_dir) / "diagnosis"),
     }
 
 
@@ -100,7 +128,7 @@ def export(run_dir, site, runs):
     import plot
 
     summary = json.loads((Path(run_dir) / "summary.json").read_text())
-    data = site_data(summary)
+    data = site_data(summary, run_dir)
     version = data["miri_version"]
     text = json.dumps(data, indent=1, sort_keys=True) + "\n"
     data_dir = Path(site) / "_data" / "bench"

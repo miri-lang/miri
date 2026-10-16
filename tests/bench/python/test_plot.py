@@ -109,12 +109,24 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(data["miri_version"], "9.9.9")
         self.assertNotIn("p_high", json.dumps(data))
         self.assertTrue((self.site / "assets" / "bench" / "9.9.9" / "time-vs-c.svg").is_file())
+        lost = {(c["workload"], c["mode"]): c for c in data["lost"]}
+        self.assertAlmostEqual(lost[("w", "cold")]["time_vs_c"], 1.5)
+        self.assertEqual(lost[("w", "cold")]["mechanism"], "not yet diagnosed")
+
+    def test_only_a_public_issue_link_reaches_the_site(self):
+        for task, shown in (("https://github.com/miri-lang/miri/issues/1", "https://github.com/miri-lang/miri/issues/1"), ("an internal reference", "")):
+            bundle = self.run / "diagnosis" / "w-s"
+            bundle.mkdir(parents=True, exist_ok=True)
+            (bundle / "DIAGNOSIS.md").write_text(f"Hypothesis: struct values on the heap\nTask: {task}\n")
+            lost = self.export_site.site_data(fixture(), self.run)["lost"]
+            row = next(c for c in lost if c["workload"] == "w" and c["mode"] == "cold")
+            self.assertEqual((row["mechanism"], row["task"]), ("struct values on the heap", shown))
 
     def test_a_dev_run_is_never_exported(self):
         summary = fixture()
         summary["machine_profile"] = "dev"
         with self.assertRaises(SystemExit):
-            self.export_site.site_data(summary)
+            self.export_site.site_data(summary, self.run)
 
 
 if __name__ == "__main__":
