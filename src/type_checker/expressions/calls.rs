@@ -45,7 +45,7 @@
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::math_intrinsic::MathIntrinsic;
-use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{vec_type_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
@@ -1041,13 +1041,14 @@ impl TypeChecker {
 
         // Check if the first argument is a vector type (Vec2, Vec3, Vec4).
         // Vector builtins dispatch on the first argument's type, not by name alone.
+        // Only the compiler's own vector, written with its component, has the
+        // builtins: a program's own `Vec3` keeps its own functions.
         let first_arg_type = positional_args.first().map(|(_, ty)| ty)?;
-        let (vec_name, vec_args) = match &first_arg_type.kind {
-            TypeKind::Custom(name, args) => (name.as_str(), args.as_ref()),
+        let vec_dimension = vec_type_dim(&first_arg_type.kind)?;
+        let vec_args = match &first_arg_type.kind {
+            TypeKind::Custom(_, args) => args.as_ref(),
             _ => return None,
         };
-
-        let vec_dimension = vec_dim(vec_name)?;
 
         match func_name {
             "dot" => self.infer_vec_dot(positional_args, first_arg_type, vec_args, span),

@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{is_atomic_integer_buffer, vec_dim, Type, TypeKind};
+use crate::ast::types::{is_atomic_integer_buffer, vec_type_dim, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::backend::gpu::GpuAtomicOp;
@@ -474,8 +474,10 @@ fn try_lower_vector_builtin(
         return Ok(None);
     }
 
+    // Only the compiler's own vector, written with its component, reaches a
+    // builtin: a program's own `Vec3` and its own `normalize` are ordinary code.
     let first_arg_ty = resolve_type(ctx.type_checker, &args[0]);
-    if !matches!(&first_arg_ty.kind, TypeKind::Custom(name, _) if vec_dim(name).is_some()) {
+    if vec_type_dim(&first_arg_ty.kind).is_none() {
         return Ok(None);
     }
 
