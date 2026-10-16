@@ -1,0 +1,134 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=788f8bc113408a741e44ae17bb980f43ebb05d8f2efb30f2709c010124a57b05
+
+// enum-vm: a twelve-instruction register machine, its program a list of enum
+// values with payloads, interpreted until it halts. Stresses matching on
+// enum payloads, the shape of every interpreter.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+enum Instr
+    Const(int, int)
+    Mov(int, int)
+    Add(int, int, int)
+    Sub(int, int, int)
+    Mul(int, int, int)
+    Mod(int, int, int)
+    And(int, int, int)
+    AddImm(int, int)
+    JumpIfLess(int, int, int)
+    JumpIfEqual(int, int, int)
+    Jump(int)
+    Halt
+
+fn program(n int) [Instr]
+    List([
+        Instr.Const(0, 0),
+        Instr.Const(1, 0),
+        Instr.Const(2, n),
+        Instr.Const(5, 97),
+        Instr.Const(6, 63),
+        Instr.Const(4, 1000000007),
+        Instr.Const(8, 0),
+        Instr.Const(9, 3),
+        Instr.JumpIfLess(0, 2, 10),
+        Instr.Halt,
+        Instr.Mul(3, 0, 0),
+        Instr.Mod(3, 3, 5),
+        Instr.And(3, 3, 6),
+        Instr.Add(1, 1, 3),
+        Instr.And(7, 0, 6),
+        Instr.JumpIfEqual(7, 8, 18),
+        Instr.Sub(10, 2, 0),
+        Instr.Jump(19),
+        Instr.Mov(10, 9),
+        Instr.Mod(10, 10, 9),
+        Instr.Add(1, 1, 10),
+        Instr.Mod(1, 1, 4),
+        Instr.AddImm(0, 1),
+        Instr.Jump(8)
+    ])
+
+/// Run the program until it halts; the accumulator register and the number
+/// of instructions executed.
+fn kernel(n int) String
+    let code = program(n)
+    var regs = List<int>()
+    var r = 0
+    while r < 16
+        regs.push(0)
+        r += 1
+    var pc = 0
+    var steps = 0
+    var running = true
+    while running
+        var next = pc + 1
+        match code[pc]
+            Instr.Const(d, v): regs[d] = v
+            Instr.Mov(d, a): regs[d] = regs[a]
+            Instr.Add(d, a, b): regs[d] = regs[a] + regs[b]
+            Instr.Sub(d, a, b): regs[d] = regs[a] - regs[b]
+            Instr.Mul(d, a, b): regs[d] = regs[a] * regs[b]
+            Instr.Mod(d, a, b): regs[d] = regs[a] % regs[b]
+            Instr.And(d, a, b): regs[d] = regs[a] & regs[b]
+            Instr.AddImm(d, v): regs[d] = regs[d] + v
+            Instr.JumpIfLess(a, b, target): next = if regs[a] < regs[b]: target else: next
+            Instr.JumpIfEqual(a, b, target): next = if regs[a] == regs[b]: target else: next
+            Instr.Jump(target): next = target
+            Instr.Halt: running = false
+        pc = next
+        steps += 1
+    f"{regs[1]} {steps}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

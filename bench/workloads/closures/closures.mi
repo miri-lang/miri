@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=74a788c74dc5175f46f5fad069b23ce42c592bdcbabfbed9a0d3eb5e4961dd27
+
+// closures: map, filter and fold pipelines over a list of numbers, each stage
+// a lambda capturing a local of the round. Stresses closure creation and
+// calls, and the lists each stage builds.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+/// For each multiplier from 1 to 8, scale every number, keep those above a
+/// threshold that depends on the multiplier, and sum them: three lambdas per
+/// round, each capturing a local.
+fn kernel(n int) String
+    var xs = List<int>()
+    var i = 0
+    while i < n
+        xs.push(i)
+        i += 1
+    var total = 0
+    var k = 1
+    while k <= 8
+        let scale = k * 7
+        let threshold = 100 * k
+        let scaled = xs.map(fn(x int) int: (x * scale) % 1000)
+        let kept = scaled.filter(fn(x int) bool: x > threshold)
+        total = (total + kept.reduce(0, fn(a int, b int) int: (a + b) % 1000000007)) % 1000000007
+        k += 1
+    f"{total}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

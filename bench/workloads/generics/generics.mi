@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=25ab3d14c063de98be610bc135724b8d5e9427a456653c6cce18831d8c882390
+
+// generics: one generic stack used at three element types, a scalar, a float
+// and a generic pair, filled and emptied. Stresses monomorphized generic code
+// and generic structs.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+class Stack<T>
+    var items [T]
+
+    fn init()
+        self.items = List<T>()
+
+    fn push(item T)
+        self.items.push(item)
+
+    fn pop() T?
+        self.items.pop()
+
+    fn size() int: self.items.length()
+
+struct Pair<A, B>
+    first A
+    second B
+
+/// Push n values onto a stack of each of three element types, then pop them
+/// all, folding what comes off into one number per stack.
+fn kernel(n int) String
+    var ints = Stack<int>()
+    var floats = Stack<float>()
+    var pairs = Stack<Pair<int, float>>()
+    var i = 0
+    while i < n
+        ints.push(i % 1000)
+        floats.push((i % 100) as float * 0.5)
+        pairs.push(Pair(first: i % 10, second: (i % 4) as float))
+        i += 1
+    var a = 0
+    while ints.size() > 0
+        a = (a * 31 + (ints.pop() ?? 0)) % 1000000007
+    var b = 0.0
+    while floats.size() > 0
+        b = b + (floats.pop() ?? 0.0)
+    var c = 0
+    while pairs.size() > 0
+        match pairs.pop()
+            Some(p): c = (c * 7 + p.first + (p.second as int)) % 1000000007
+            None: c = c
+    f"{a} {b as int} {c}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

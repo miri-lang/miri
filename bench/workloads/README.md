@@ -11,7 +11,8 @@ run lines, and what is measured are in [`../CHARTER.md`](../CHARTER.md).
 | `workload.toml` | The parameter at each size (S, M, L), the checksum every port must print for it, and the mechanisms the workload stresses (`tags`). |
 
 Beside the directories, `generate.py` writes the input of the workloads whose
-manifest says `generated = true` (wordfreq, k-nucleotide, json-roundtrip):
+manifest says `generated = true` (wordfreq, k-nucleotide, json-roundtrip,
+csv-aggregate):
 `python3 generate.py <workload> <parameter> <path>`. Its bytes depend only on
 the workload and the parameter, and each size records the input's SHA-256.
 The C ports share the structures C's standard library lacks, a growable buffer

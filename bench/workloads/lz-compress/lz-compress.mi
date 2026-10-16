@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=0e8637610fdcc9aabb4f229cd7193b9bea9b1a8a97e193003c8b210baf2cd274
+
+// lz-compress: a greedy LZ77 compressor over a generated buffer of bytes,
+// searching a 255-byte window at every position. Stresses a list of u8,
+// sub-word element reads and tight integer loops.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+/// A buffer of `n` bytes that repeats itself the way text does: a generated
+/// byte most of the time, and now and then a copy of a stretch seen before.
+fn input(n int) [u8]
+    var data = List<u8>()
+    var state = 11
+    while data.length() < n
+        state = (state * 48271) % 2147483647
+        if data.length() > 64 and state % 4 == 0
+            let back = 1 + (state / 4) % 60
+            let length = 3 + (state / 256) % 20
+            var k = 0
+            while k < length and data.length() < n
+                data.push(data[data.length() - back])
+                k += 1
+        else
+            data.push((97 + state % 16) as u8)
+    data
+
+/// Greedy LZ77 over a 255-byte window: at each position, the longest earlier
+/// match of at least three bytes, else a literal. The number of literals and
+/// of matches, and the tokens folded into one number.
+fn kernel(n int) String
+    let data = input(n)
+    let size = data.length()
+    var literals = 0
+    var matches = 0
+    var hash = 0
+    var pos = 0
+    while pos < size
+        var best_length = 0
+        var best_distance = 0
+        var start = if pos > 255: pos - 255 else: 0
+        while start < pos
+            var length = 0
+            while pos + length < size and length < 255 and data[start + length] == data[pos + length]
+                length += 1
+            if length > best_length
+                best_length = length
+                best_distance = pos - start
+            start += 1
+        if best_length >= 3
+            matches += 1
+            hash = (hash * 31 + best_distance * 256 + best_length) % 1000000007
+            pos += best_length
+        else
+            literals += 1
+            hash = (hash * 31 + (data[pos] as int)) % 1000000007
+            pos += 1
+    f"{literals} {matches} {hash}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

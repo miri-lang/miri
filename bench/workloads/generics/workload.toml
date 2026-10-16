@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The generics workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads its input from the file named
+# by its first argument, which holds the parameter.
+
+name = "generics"
+# The compiler mechanisms the workload stresses.
+tags = ["generic", "list", "alloc"]
+parameter = "How many values go onto each stack."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+# Every port holds three stacks of this many values at once, so L is capped at
+# 25 million to stay within a workstation's memory.
+
+[sizes.s]
+parameter = 1600000
+checksum = "451175042 39600000 933571918"
+
+[sizes.m]
+parameter = 16000000
+checksum = "267882272 396000000 198074950"
+
+[sizes.l]
+parameter = 25000000
+checksum = "566349453 618750000 169889594"

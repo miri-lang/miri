@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The lz-compress workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads its input from the file named
+# by its first argument, which holds the parameter.
+
+name = "lz-compress"
+# The compiler mechanisms the workload stresses.
+tags = ["u8", "array-index", "int", "loop"]
+parameter = "How many bytes are generated and compressed."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+[sizes.s]
+parameter = 250000
+checksum = "40588 18331 235518976"
+
+[sizes.m]
+parameter = 2500000
+checksum = "407755 183044 500456907"
+
+[sizes.l]
+parameter = 15000000
+checksum = "2452786 1095858 355206530"

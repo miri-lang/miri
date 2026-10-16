@@ -490,6 +490,41 @@ fn test_bench_identity_k_nucleotide() {
     check_workload("k-nucleotide");
 }
 
+#[test]
+fn test_bench_identity_closures() {
+    check_workload("closures");
+}
+
+#[test]
+fn test_bench_identity_csv_aggregate() {
+    check_workload("csv-aggregate");
+}
+
+#[test]
+fn test_bench_identity_dispatch() {
+    check_workload("dispatch");
+}
+
+#[test]
+fn test_bench_identity_enum_vm() {
+    check_workload("enum-vm");
+}
+
+#[test]
+fn test_bench_identity_generics() {
+    check_workload("generics");
+}
+
+#[test]
+fn test_bench_identity_lz_compress() {
+    check_workload("lz-compress");
+}
+
+#[test]
+fn test_bench_identity_ray_tracer() {
+    check_workload("ray-tracer");
+}
+
 /// The structures every C port shares are reviewed like a port.
 #[test]
 fn test_bench_identity_shared_c_code_is_reviewed() {
@@ -501,13 +536,20 @@ fn test_bench_identity_shared_c_code_is_reviewed() {
 fn test_bench_identity_covers_every_workload() {
     let checked = [
         "binary-trees",
+        "closures",
+        "csv-aggregate",
+        "dispatch",
+        "enum-vm",
         "fannkuch-redux",
+        "generics",
         "json-roundtrip",
         "k-nucleotide",
         "list-sort",
+        "lz-compress",
         "mandelbrot",
         "matmul",
         "nbody",
+        "ray-tracer",
         "sieve",
         "spectral-norm",
         "string-builder",

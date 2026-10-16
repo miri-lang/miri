@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=9c2cbf06b86f3648d099644d3478f92c34316ab97ac5ad5802544c4f61b9272d
+
+// dispatch: a thousand shapes of four kinds in one list behind a trait, their
+// areas summed over and over through it. Stresses dynamic dispatch through a
+// vtable and class instances in a list.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+trait Shape
+    fn area() float
+
+class Circle implements Shape
+    var radius float
+
+    fn init(radius float)
+        self.radius = radius
+
+    public fn area() float: 3.0 * self.radius * self.radius
+
+class Square implements Shape
+    var side float
+
+    fn init(side float)
+        self.side = side
+
+    public fn area() float: self.side * self.side
+
+class Rectangle implements Shape
+    var width float
+    var height float
+
+    fn init(width float, height float)
+        self.width = width
+        self.height = height
+
+    public fn area() float: self.width * self.height
+
+class Triangle implements Shape
+    var base float
+    var height float
+
+    fn init(base float, height float)
+        self.base = base
+        self.height = height
+
+    public fn area() float: self.base * self.height * 0.5
+
+fn shape(i int) Shape
+    let a = (i % 7 + 1) as float
+    let b = (i % 5 + 1) as float
+    match i % 4
+        0: return Circle(a)
+        1: return Square(a)
+        2: return Rectangle(a, b)
+        _: return Triangle(a, b)
+
+/// A thousand shapes of four kinds behind one trait, their areas summed `n`
+/// times over through the trait.
+fn kernel(n int) String
+    var shapes = List<Shape>()
+    var i = 0
+    while i < 1000
+        shapes.push(shape(i))
+        i += 1
+    var total = 0.0
+    var round = 0
+    while round < n
+        for s in shapes
+            total = total + s.area()
+        round += 1
+    f"{total as int}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

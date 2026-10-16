@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The dispatch workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads its input from the file named
+# by its first argument, which holds the parameter.
+
+name = "dispatch"
+# The compiler mechanisms the workload stresses.
+tags = ["dispatch", "struct-method", "float", "loop"]
+parameter = "How many times the shapes' areas are summed."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+[sizes.s]
+parameter = 3000
+checksum = "73294500"
+
+[sizes.m]
+parameter = 30000
+checksum = "732945000"
+
+[sizes.l]
+parameter = 180000
+checksum = "4397670000"

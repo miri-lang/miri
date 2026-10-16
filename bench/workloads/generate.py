@@ -79,7 +79,19 @@ def json_records(records):
     return "[\n" + ",\n".join(parts) + "\n]\n"
 
 
-GENERATORS = {"wordfreq": wordfreq, "k-nucleotide": k_nucleotide, "json-roundtrip": json_records}
+def csv_rows(rows):
+    """A header and `rows` records of a key from 50, a whole quantity and an
+    amount with two decimals."""
+    rng = Minstd(4)
+    lines = ["region,quantity,amount"]
+    for _ in range(rows):
+        key = rng.below(50)
+        cents = rng.below(100000)
+        lines.append(f"region-{key:02d},{rng.below(1000)},{cents // 100}.{cents % 100:02d}")
+    return "\n".join(lines) + "\n"
+
+
+GENERATORS = {"wordfreq": wordfreq, "k-nucleotide": k_nucleotide, "json-roundtrip": json_records, "csv-aggregate": csv_rows}
 
 
 def main():
