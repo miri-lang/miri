@@ -13,6 +13,8 @@ machine-readable twin [`charter.toml`](charter.toml).
 | `run.py` | The runner. |
 | `summarize.py` | Statistics, ratios and verdicts, from the runner's records. |
 | `schema/summary.v1.json` | The schema of `summary.json`, which charts and the website read and nothing else. |
+| `diagnose.py` | The evidence for every cell Miri loses. |
+| `diagnosis/CATALOG.md` | Every mechanism a loss has been traced to, and where its work stands. |
 | `results/` | What the runner writes. Ignored by git: a run is output, not source. |
 
 ## Running it
@@ -85,3 +87,24 @@ charter's rule: the change in ratio to C must exceed the larger of 5 % and
 three times the ratio's coefficient of variation. It refuses two runs from
 different machine profiles or charter versions. `summary.md` is generated
 from `summary.json`; neither is edited by hand.
+
+## Diagnosing a loss
+
+```bash
+python3 bench/diagnose.py bench/results/<run>/                 # every cell summary.json marks
+python3 bench/diagnose.py bench/results/<run>/ --cell nbody/s  # one workload and size
+python3 bench/run.py --full --diagnose                          # what `make bench-full` runs
+```
+
+Every Miri cell past the charter's diagnosis thresholds gets a bundle under
+`<run>/diagnosis/<workload>-<size>/`, comparing Miri with C and Rust:
+hardware counters (`perf stat` on Linux, and the reason they are unavailable
+elsewhere); a sampled profile of a hot run, from the operating system's own
+`sample` on macOS, folded into stacks, drawn as a flamegraph and ranked into
+its top self-time symbols; the Miri port's MIR and CLIF from
+`miri build --emit mir --emit clif`, with the CLIF and machine code of its
+hottest functions; and the runtime's allocation counts. `DIAGNOSIS.md` lays
+the evidence side by side and leaves the hypothesis and the task empty. The
+tool gathers evidence; the engineer names the mechanism, files the work, and
+records it in [`diagnosis/CATALOG.md`](diagnosis/CATALOG.md), which the next
+diagnosis reads first.

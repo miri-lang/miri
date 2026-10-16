@@ -797,7 +797,20 @@ def run(args):
     if keep_dir is None:
         shutil.rmtree(work, ignore_errors=True)
     print(f"wrote {len(ctx.records)} records to {out.relative_to(REPO)}")
+    finish(out, args, miri)
     return out
+
+
+def finish(out, args, miri):
+    """Summarize the run and, when asked, gather the evidence for every cell
+    Miri lost. Imported here because both stages build on this module."""
+    import diagnose
+    import summarize
+
+    summarize.write_summary(out)
+    if args.diagnose:
+        cells = diagnose.diagnose(out, miri=str(miri))
+        print(f"diagnosed {len(cells)} lost cells under {(out / 'diagnosis').relative_to(REPO)}")
 
 
 def parse_args(argv=None):
@@ -813,6 +826,7 @@ def parse_args(argv=None):
     parser.add_argument("--variant", default="default", choices=["default", "native"])
     parser.add_argument("--keep", action="store_true", help="keep binaries and inputs under target/bench/")
     parser.add_argument("--allow-dirty", action="store_true", help="run from a tree with uncommitted changes")
+    parser.add_argument("--diagnose", action="store_true", help="gather the evidence for every cell Miri loses")
     parser.add_argument("--miri", help="the compiler to measure (default: this tree's, rebuilt with `make release`)")
     args = parser.parse_args(argv)
     if args.smoke and args.runs is None:

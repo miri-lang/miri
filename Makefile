@@ -109,7 +109,7 @@ bench-smoke:
 	python3 bench/run.py --smoke
 
 bench-full:
-	python3 bench/run.py --full
+	python3 bench/run.py --full --diagnose
 
 audit:
 	@echo "─── Miri principle audit (mechanical sweep) ───"
