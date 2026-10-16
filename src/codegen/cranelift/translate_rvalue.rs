@@ -2345,9 +2345,10 @@ impl<'a> FunctionTranslator<'a> {
     /// wrapping. Signedness picks the overflow test; a 128-bit product has no
     /// checked instruction and is computed by the runtime, which traps itself.
     ///
-    /// TODO: the overflow flag is widened and tested (`cset`, `uxtb`, `cbnz`
-    /// on aarch64) where a branch on the flag would do, which makes each check
-    /// four instructions in hot index arithmetic.
+    /// TODO: the branch is on the overflow flag, but Cranelift's aarch64
+    /// lowering materializes that flag (`cset`, `uxtb`, `cbnz`) instead of
+    /// branching on it (`b.vs`), so each check is four instructions in hot
+    /// index arithmetic. The fix belongs in Cranelift's lowering rules.
     #[allow(clippy::too_many_arguments)]
     fn emit_checked_int_op(
         builder: &mut FunctionBuilder,
@@ -2389,9 +2390,7 @@ impl<'a> FunctionTranslator<'a> {
     /// quotient is one past the maximum, and the remainder is computed by the
     /// same division. The check runs before `sdiv`/`srem`, which would otherwise
     /// fault in hardware. A 128-bit operand is divided by the runtime instead.
-    ///
-    /// TODO: a divisor that is a literal constant other than 0 and -1 still
-    /// gets both checks, as constant-false branches; they could be left out.
+    /// A constant divisor other than 0 and -1 cannot overflow and gets no check.
     fn emit_checked_signed_div_or_rem(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -2400,6 +2399,12 @@ impl<'a> FunctionTranslator<'a> {
         rhs: Value,
     ) -> Result<Value, CodegenError> {
         let ty = builder.func.dfg.value_type(lhs);
+        if Self::is_constant_divisor(builder, rhs, ty) {
+            return Ok(match op {
+                BinOp::Rem => builder.ins().srem(lhs, rhs),
+                _ => builder.ins().sdiv(lhs, rhs),
+            });
+        }
         let min = match ty {
             cl_types::I8 => i8::MIN as i128,
             cl_types::I16 => i16::MIN as i128,
@@ -2421,6 +2426,31 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Rem => builder.ins().srem(lhs, rhs),
             _ => builder.ins().sdiv(lhs, rhs),
         })
+    }
+
+    /// Whether `divisor` is an integer constant of type `ty` that is neither 0
+    /// nor -1: a division by it can neither divide by zero nor overflow, so
+    /// it needs no check for either. A 128-bit constant is not an `iconst` and
+    /// keeps its checks.
+    fn is_constant_divisor(builder: &FunctionBuilder, divisor: Value, ty: cl_types::Type) -> bool {
+        use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef};
+        let ValueDef::Result(inst, _) = builder.func.dfg.value_def(divisor) else {
+            return false;
+        };
+        let InstructionData::UnaryImm {
+            opcode: Opcode::Iconst,
+            imm,
+        } = builder.func.dfg.insts[inst]
+        else {
+            return false;
+        };
+        let width = ty.bits();
+        if width == 0 || width > 64 {
+            return false;
+        }
+        let mask = u64::MAX >> (64 - width);
+        let bits = (imm.bits() as u64) & mask;
+        bits != 0 && bits != mask
     }
 
     /// Branch to the integer-overflow trap when `overflowed` is set; otherwise
@@ -2529,7 +2559,9 @@ impl<'a> FunctionTranslator<'a> {
             }
             BinOp::Div if is_float => builder.ins().fdiv(lhs, rhs),
             BinOp::Div => {
-                Self::emit_div_by_zero_check(builder, ctx, rhs, ty)?;
+                if !Self::is_constant_divisor(builder, rhs, ty) {
+                    Self::emit_div_by_zero_check(builder, ctx, rhs, ty)?;
+                }
                 if ty == cl_types::I128 {
                     let name = if is_unsigned {
                         rt::U128_DIV
@@ -2552,7 +2584,9 @@ impl<'a> FunctionTranslator<'a> {
             }
             BinOp::Rem if is_float => return Self::emit_float_rem(builder, ctx, ty, lhs, rhs),
             BinOp::Rem => {
-                Self::emit_rem_by_zero_check(builder, ctx, rhs, ty)?;
+                if !Self::is_constant_divisor(builder, rhs, ty) {
+                    Self::emit_rem_by_zero_check(builder, ctx, rhs, ty)?;
+                }
                 if ty == cl_types::I128 {
                     let name = if is_unsigned {
                         rt::U128_REM

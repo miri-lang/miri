@@ -592,3 +592,67 @@ fn test_the_sharing_check_calls_the_runtime_only_when_tracking() {
         "value semantics"
     );
 }
+
+const CONSTANT_DIVISOR: &str = r#"
+use system.io
+
+fn half(x int) int
+    x / 2
+
+fn tail(x int) int
+    x % 10
+
+fn ratio(x int, y int) int
+    x / y
+
+fn main()
+    println(f"{half(-7)} {tail(-7)} {ratio(9, 2)}")
+"#;
+
+/// The panics a function's CLIF listing references, by name.
+fn referenced_panics(listing: &str, function: &str) -> Vec<String> {
+    let (_, names) = clif_function(listing, function);
+    let mut panics: Vec<String> = names
+        .values()
+        .filter(|name| name.ends_with("_panic"))
+        .map(|name| name.to_string())
+        .collect();
+    panics.sort();
+    panics
+}
+
+/// Dividing by a constant other than 0 and -1 can neither divide by zero nor
+/// overflow, so no check for either is emitted; a divisor read at run time
+/// keeps both, and the results are unchanged.
+#[test]
+fn test_a_constant_divisor_emits_no_division_checks() {
+    let source = create_test_file(CONSTANT_DIVISOR);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("divide");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--release", "--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("divide.clif")).unwrap();
+    assert_eq!(
+        referenced_panics(&listing, "miri.half"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        referenced_panics(&listing, "miri.tail"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        referenced_panics(&listing, "miri.ratio"),
+        vec![
+            "miri_rt_div_by_zero_panic".to_string(),
+            "miri_rt_integer_overflow_panic".to_string()
+        ]
+    );
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "-3 -7 4");
+}

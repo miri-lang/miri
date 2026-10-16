@@ -154,6 +154,27 @@ fn test_min_divided_or_reduced_by_minus_one_stops_the_program() {
 }
 
 #[test]
+fn test_min_divided_or_reduced_by_a_literal_minus_one_stops_the_program() {
+    // A constant divisor other than 0 and -1 is compiled without the check;
+    // -1 written as a literal must keep it, at every width.
+    for (ty, min) in [
+        ("i8", "-128"),
+        ("i16", "-32768"),
+        ("i32", "-2147483648"),
+        ("int", "-9223372036854775807 - 1"),
+    ] {
+        for op in ["/", "%"] {
+            assert_runtime_error(
+                &format!(
+                    "fn main()\n    var x {ty} = {min}\n    x = x {op} -1\n    println(\"unreachable\")\n"
+                ),
+                "integer overflow: the result does not fit its type",
+            );
+        }
+    }
+}
+
+#[test]
 fn test_division_next_to_the_minimum_computes_its_value() {
     assert_runs_with_output(
         "fn main()\n    var x i32 = -2147483648\n    var d i32 = -2\n    var one i32 = 1\n    println(f\"{x / d} {x % d} {x / one} {(x + 1) / -1}\")\n",
