@@ -2344,6 +2344,10 @@ impl<'a> FunctionTranslator<'a> {
     /// integer-overflow trap when its result does not fit `ty`, rather than
     /// wrapping. Signedness picks the overflow test; a 128-bit product has no
     /// checked instruction and is computed by the runtime, which traps itself.
+    ///
+    /// TODO: the overflow flag is widened and tested (`cset`, `uxtb`, `cbnz`
+    /// on aarch64) where a branch on the flag would do, which makes each check
+    /// four instructions in hot index arithmetic.
     #[allow(clippy::too_many_arguments)]
     fn emit_checked_int_op(
         builder: &mut FunctionBuilder,
@@ -2385,6 +2389,9 @@ impl<'a> FunctionTranslator<'a> {
     /// quotient is one past the maximum, and the remainder is computed by the
     /// same division. The check runs before `sdiv`/`srem`, which would otherwise
     /// fault in hardware. A 128-bit operand is divided by the runtime instead.
+    ///
+    /// TODO: a divisor that is a literal constant other than 0 and -1 still
+    /// gets both checks, as constant-false branches; they could be left out.
     fn emit_checked_signed_div_or_rem(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,

@@ -426,7 +426,11 @@ fn emit_unshare(
 ///
 /// TODO: the question is an out-of-line runtime call on every such write. Code
 /// generation could read the count inline — the word before the payload,
-/// compared with 1 — leaving the call only for heap-guard runs.
+/// compared with 1 — leaving the call only for heap-guard runs. The question
+/// is also asked again on every later write to the same place, though once a
+/// write has made the place unique nothing before the next write can share it
+/// again unless the place is copied or handed to a call; a uniqueness fact
+/// carried between writes would let those checks go.
 fn branch_when_shared(ctx: &mut LoweringContext, place: &Place, span: Span) -> BasicBlock {
     let copy_bb = ctx.new_basic_block();
     let join_bb = ctx.new_basic_block();
@@ -522,6 +526,13 @@ fn field_copy_operand(
     Ok(rebuilt.unwrap_or(Operand::Copy(field_place)))
 }
 
+/// The runtime copy a shared collection is replaced with before a write.
+///
+/// TODO: a collection passed to a function whose caller never uses it again
+/// (`xs = step(xs)`) arrives here shared, because the callee's `var x = param`
+/// takes a reference of its own, so the first write copies the whole
+/// collection and then every element it writes. Passing a dying argument
+/// owned would let the write find it unique.
 fn collection_clone_fn(kind: BuiltinCollectionKind) -> &'static str {
     match kind {
         BuiltinCollectionKind::List => rt::LIST_CLONE,
