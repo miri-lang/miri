@@ -74,7 +74,7 @@ def fake_environment():
 
 
 def context(work_dir, runs=1):
-    args = argparse.Namespace(runs=runs, variant="default", sizes="s", smoke=False, langs=None)
+    args = argparse.Namespace(runs=runs, variant="default", sizes="s", smoke=False, langs=None, profile="dev")
     return run.Context(args, run.load_charter(), "c" * 64, "test", Path(work_dir), Path("miri"))
 
 
@@ -159,6 +159,30 @@ class ReviewTest(unittest.TestCase):
             for language in ("miri", "c", "cpp", "rust", "go", "python", "typescript"):
                 comment = charter["languages"][language]["checklist_comment"]
                 self.assertIsNone(run.review_problem(workload.port(language), comment), workload.port(language))
+
+
+class ProfileTest(unittest.TestCase):
+    def test_every_profile_names_itself_and_only_publication_publishes(self):
+        for name in ("dev", "ci-smoke", "publication"):
+            profile = run.load_profile(name)
+            self.assertEqual(profile["name"], name)
+            self.assertEqual(profile["publishable"], name == "publication")
+
+    def test_a_profile_without_a_pinned_core_pins_nothing(self):
+        self.assertEqual(run.pin_words(run.load_profile("dev")), [])
+
+    def test_this_machine_is_refused_for_publication_unless_it_is_prepared(self):
+        problems = run.publication_problems(run.load_profile("publication"))
+        if run.platform.system() != "Linux":
+            self.assertIn("a publication run needs Linux", problems)
+
+    def test_inputs_go_to_the_profiles_directory_when_it_exists(self):
+        with tempfile.TemporaryDirectory() as root:
+            ctx = context(root)
+            ctx.profile = {"input_dir": root}
+            self.assertEqual(run.inputs_dir(ctx).parent, Path(root))
+            ctx.profile = {"input_dir": "/no/such/directory"}
+            self.assertEqual(run.inputs_dir(ctx).parent, Path(root))
 
 
 class StatisticsTest(unittest.TestCase):

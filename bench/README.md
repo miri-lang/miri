@@ -10,6 +10,8 @@ machine-readable twin [`charter.toml`](charter.toml).
 | `workloads/` | One directory per workload: a port per language and its manifest. See [`workloads/README.md`](workloads/README.md). |
 | `c/table.h` | The structures the C ports share, which C's standard library lacks. |
 | `hello/` | A hello-world per language, for the runtime floor (`floor_rss_bytes`, `startup_ns`). |
+| `machine/` | The machine profiles, and the scripts that prepare and check a machine and measure its noise. |
+| `toolchains.toml`, `Dockerfile` | The pinned toolchain versions, and an image that installs exactly those. |
 | `run.py` | The runner. |
 | `summarize.py` | Statistics, ratios and verdicts, from the runner's records. |
 | `schema/summary.v1.json` | The schema of `summary.json`, which charts and the website read and nothing else. |
@@ -108,3 +110,27 @@ the evidence side by side and leaves the hypothesis and the task empty. The
 tool gathers evidence; the engineer names the mechanism, files the work, and
 records it in [`diagnosis/CATALOG.md`](diagnosis/CATALOG.md), which the next
 diagnosis reads first.
+
+## Machines
+
+A run names its machine profile with `--profile`, read from
+`machine/<profile>.toml`. Only `publication` may produce a published number:
+a dedicated Linux x86-64 box, prepared with `sudo machine/setup-linux.sh`
+(the performance governor, turbo off, the pinned core's hyper-thread sibling
+offline). On it the runner pins every process tree to the profile's core with
+`taskset`, writes inputs to a memory-backed directory, and checks the
+machine's state before every cell, stopping the run rather than publishing
+from a machine that drifted. `machine/check.sh` makes the same checks by hand,
+and refuses publication outright on macOS. `dev` is a workstation, for
+diagnosis only, and `ci-smoke` a shared CI runner, read through ratios to C
+alone.
+
+`python3 bench/machine/noise.py` runs the C reference of one workload many
+times and reports the coefficient of variation of its wall time: a
+publication box must measure under the charter's `noisy_cv`, and the result
+goes into its profile.
+
+`Dockerfile` installs exactly the versions `toolchains.toml` pins, so a reader
+can rebuild the environment (`docker build -f bench/Dockerfile -t miri-bench
+bench/`). It is a reproducibility artifact; a publication run happens on bare
+metal and records that it did.

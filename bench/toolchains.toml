@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The exact toolchains a publication run uses, installed by bench/Dockerfile
+# and recorded in every record's toolchain_versions. Changing one is a charter
+# change (bench/CHARTER.md section 10): it changes what is measured.
+
+[c]
+compiler = "clang"
+version = "21"            # the 21 series from apt.llvm.org; every record carries the exact version
+[cpp]
+compiler = "clang++"
+version = "21"
+[rust]
+version = "1.96.0"        # rust-toolchain.toml
+[go]
+version = "1.25.5"
+[python]
+implementation = "CPython"
+version = "3.13"          # the official image's 3.13 series; default build, GIL on, PYTHON_JIT unset
+[typescript]
+runtime = "deno"
+version = "2.9.7"
+[swift]
+version = "optional"
+[koka]
+version = "optional"

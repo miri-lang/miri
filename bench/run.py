@@ -148,6 +148,43 @@ def load_workloads(only):
     return workloads
 
 
+# Machine profiles: bench/machine/<profile>.toml.
+
+
+def load_profile(name):
+    with open(BENCH / "machine" / f"{name}.toml", "rb") as f:
+        return tomllib.load(f)
+
+
+def pin_words(profile):
+    """The prefix that pins a process tree to the profile's core, on Linux."""
+    core = profile.get("pinned_core", -1)
+    if core < 0 or platform.system() != "Linux" or shutil.which("taskset") is None:
+        return []
+    return ["taskset", "-c", str(core)]
+
+
+def publication_problems(profile):
+    """What keeps this machine from the state a publication profile states,
+    checked before every cell (bench/CHARTER.md section 8)."""
+    core = profile.get("pinned_core", -1)
+    governor = read_text(f"/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
+    _, turbo = frequency_state()
+    siblings = read_text(f"/sys/devices/system/cpu/cpu{core}/topology/thread_siblings_list")
+    problems = []
+    if platform.system() != "Linux":
+        problems.append("a publication run needs Linux")
+    if governor != profile.get("governor"):
+        problems.append(f"core {core}'s governor is {governor}, not {profile.get('governor')}")
+    if turbo is not False:
+        problems.append(f"turbo is {turbo}, not off")
+    if profile.get("smt_sibling_offline") and siblings != str(core):
+        problems.append(f"core {core} still shares its core with {siblings}")
+    if not pin_words(profile):
+        problems.append("the process tree cannot be pinned (taskset is missing)")
+    return problems
+
+
 # Commands: executed directly, never through a shell, in a scrubbed environment.
 
 
@@ -281,6 +318,7 @@ class Context:
     work_dir: Path
     miri: Path
     records: list = field(default_factory=list)
+    profile: dict = field(default_factory=dict)
 
     def programs(self):
         return {"miri": self.miri}
@@ -399,6 +437,8 @@ def environment(ctx, languages):
         "charter_hash": ctx.charter_hash,
         "run_id": ctx.run_id,
         "machine_profile": ctx.args.profile,
+        "publishable": bool(ctx.profile.get("publishable")),
+        "pinned_core": ctx.profile.get("pinned_core", -1) if pin_words(ctx.profile) else None,
         "cpu_model": cpu_model(),
         "os": f"{platform.system()} {platform.release()}",
         "kernel": platform.version(),
@@ -456,9 +496,16 @@ def generator_input(workload, parameter, path):
     )
 
 
+def inputs_dir(ctx):
+    """Where this run's inputs go: the profile's memory-backed directory when
+    it has one, so the page cache never depends on run order."""
+    root = Path(ctx.profile["input_dir"]) if ctx.profile.get("input_dir") else ctx.work_dir
+    return (root if root.is_dir() else ctx.work_dir) / f"miri-bench-inputs-{ctx.run_id}"
+
+
 def input_file(ctx, workload, size):
     """The input file a port reads at `size`, written once per run."""
-    path = ctx.work_dir / "inputs" / f"{workload.name}.{size}.input"
+    path = inputs_dir(ctx) / f"{workload.name}.{size}.input"
     if path.is_file():
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -545,8 +592,10 @@ class Cell:
     mode: str
     input_path: Path
 
+    pin: list = field(default_factory=list)
+
     def words(self):
-        return [*self.built.run_words, str(self.input_path), *(["hot"] if self.mode == "hot" else [])]
+        return [*self.pin, *self.built.run_words, str(self.input_path), *(["hot"] if self.mode == "hot" else [])]
 
 
 def verify(ctx, cell, timeout_s):
@@ -721,7 +770,7 @@ def run_workload_size(ctx, env, workload, ready, size, floors):
     verified = {}
     # C goes first: its time sets every other port's cap.
     for language in sorted(ready, key=lambda lang: lang != "c"):
-        cell = Cell(workload, ready[language], variant, size, "cold", input_path)
+        cell = Cell(workload, ready[language], variant, size, "cold", input_path, pin_words(ctx.profile))
         status, result = verify(ctx, cell, time_cap(ctx, c_wall) if language != "c" else C_VERIFY_CAP_S)
         if language == "c" and status == "ok":
             c_wall = result.process_wall_ns
@@ -731,11 +780,19 @@ def run_workload_size(ctx, env, workload, ready, size, floors):
             ctx.records.append(status_record(ctx, env, workload, language, variant, size, status))
     cap = time_cap(ctx, c_wall)
     if "miri" in verified:
-        record_allocations(ctx, env, Cell(workload, verified["miri"], variant, size, "cold", input_path), cap)
+        record_allocations(ctx, env, Cell(workload, verified["miri"], variant, size, "cold", input_path, pin_words(ctx.profile)), cap)
     for mode in modes:
-        cells = [Cell(workload, built, variant, size, mode, input_path) for built in verified.values()]
+        cells = [Cell(workload, built, variant, size, mode, input_path, pin_words(ctx.profile)) for built in verified.values()]
         if cells:
+            refuse_if_unfit(ctx)
             measure_cells(ctx, env, cells, cap, floors)
+
+
+def refuse_if_unfit(ctx):
+    """Before every cell of a publication run, the machine must still be in its
+    profile's state; a run that drifts out of it stops rather than publish."""
+    if ctx.args.profile == "publication" and (problems := publication_problems(ctx.profile)):
+        raise SystemExit("stopping the publication run:\n  " + "\n  ".join(problems))
 
 
 def results_directory(profile):
@@ -757,9 +814,7 @@ def preflight(ctx):
     if tree_is_dirty() and not ctx.args.allow_dirty:
         problems.append("the working tree has uncommitted changes (pass --allow-dirty to run anyway)")
     if ctx.args.profile == "publication":
-        governor, turbo = frequency_state()
-        if governor != "performance" or turbo is not False:
-            problems.append(f"the publication profile needs the performance governor and turbo off (found {governor}, turbo {turbo})")
+        problems.extend(publication_problems(ctx.profile))
     return problems
 
 
@@ -781,7 +836,7 @@ def run(args):
     miri, compiler_problem = built_compiler(args)
     if compiler_problem is not None:
         raise SystemExit(f"refusing to run: {compiler_problem}")
-    ctx = Context(args, charter, charter_hash(), run_id, work, miri)
+    ctx = Context(args, charter, charter_hash(), run_id, work, miri, profile=load_profile(args.profile))
     if problems := preflight(ctx):
         raise SystemExit("refusing to run:\n  " + "\n  ".join(problems))
     if not opt_level_reaches_codegen(ctx):
@@ -794,6 +849,7 @@ def run(args):
         for size in selected_sizes(ctx):
             run_workload_size(ctx, env, workload, ready, size, floors)
     out = write_results(ctx, env)
+    shutil.rmtree(inputs_dir(ctx), ignore_errors=True)
     if keep_dir is None:
         shutil.rmtree(work, ignore_errors=True)
     print(f"wrote {len(ctx.records)} records to {out.relative_to(REPO)}")

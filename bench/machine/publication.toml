@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The one machine whose numbers may be published (bench/CHARTER.md section 8):
+# a dedicated Linux x86-64 box, bare metal, nothing else running. Prepare it
+# once with setup-linux.sh; check.sh and the runner verify this state before
+# every cell and refuse the label if anything differs.
+
+name = "publication"
+publishable = true
+os = "linux"
+arch = "x86_64"
+# The core every benchmark process tree is pinned to. Its hyper-thread sibling
+# is taken offline by setup-linux.sh.
+pinned_core = 2
+governor = "performance"
+turbo = false
+smt_sibling_offline = true
+# Inputs are written here so the page cache never depends on run order.
+input_dir = "/dev/shm"
+# Set from bench/machine/noise.py on this box: the C reference's coefficient
+# of variation over 50 runs must be under the charter's noisy_cv.
+measured_noise_cv = "not yet measured: the box is not provisioned"
+# The exact machine, filled in when it is provisioned.
+model = "not yet provisioned"

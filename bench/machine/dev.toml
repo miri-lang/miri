@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# A developer's workstation: for diagnosis and for checking a change before a
+# publication run, never for a published number. Nothing is pinned or
+# enforced; check.sh records the power and thermal state beside the run.
+
+name = "dev"
+publishable = false
+os = "any"
+pinned_core = -1

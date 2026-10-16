@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# A shared hosted CI runner (ubuntu-24.04), size S only. Its absolute times
+# vary by tens of percent between runs, so it is read only through ratios to
+# C taken in the same run, under the charter's verdict rule.
+
+name = "ci-smoke"
+publishable = false
+os = "linux"
+pinned_core = -1
+input_dir = "/dev/shm"
