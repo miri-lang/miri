@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The wordfreq workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads its input from the file named
+# by its first argument: the text `../generate.py` writes for the parameter.
+
+name = "wordfreq"
+# The compiler mechanisms the workload stresses.
+tags = ["string", "map", "sort", "alloc"]
+parameter = "How many words the generated text holds."
+generated = true
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+# L is set by the size of its input: 50 million words is a 400 MB file, so it
+# runs under its time target (about 1.2 s in C on the dev profile).
+
+[sizes.s]
+parameter = 2000000
+checksum = "4982 uclhhnttfb=4204,frvxhojxat=3277,ppweqxd=3049,qruizgtj=2883,jtc=2787,kkhh=2772,nrqhzz=2726,ibgldiju=2623,bfetwrwvw=2571,iugxhkgtuo=2488"
+input_sha256 = "5b29f23d2345d36ce3ef348b54e55a0307241ded1688bf271f514fc9c60e9d6a"
+
+[sizes.m]
+parameter = 16000000
+checksum = "4991 uclhhnttfb=34145,frvxhojxat=25917,ppweqxd=24424,qruizgtj=23179,kkhh=22443,jtc=21657,ibgldiju=21288,nrqhzz=20941,jstzask=20444,bfetwrwvw=20372"
+input_sha256 = "802b8f102981778f6c66d651e17e9041414966e32b94fb934df7aaeeb407f376"
+
+[sizes.l]
+parameter = 50000000
+checksum = "4992 uclhhnttfb=106639,frvxhojxat=81017,ppweqxd=75937,qruizgtj=72721,kkhh=70032,jtc=68010,ibgldiju=66508,nrqhzz=65162,jstzask=64215,bfetwrwvw=63527"
+input_sha256 = "6ae986ee50dbc97cc4909cf537ba4274ca61ee20674cc70c7682020163c5d5d0"

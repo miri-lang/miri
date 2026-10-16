@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The json-roundtrip workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads its input from the file named
+# by its first argument: the text `../generate.py` writes for the parameter.
+
+name = "json-roundtrip"
+# The compiler mechanisms the workload stresses.
+tags = ["json", "string", "map", "list", "alloc"]
+parameter = "How many records the generated document holds."
+generated = true
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+# Every language holds the whole document as a tree of values, several times
+# the size of its text: C peaks near 640 MB at M. L is capped at 500000 records
+# (about 900 MB in C) to stay within a workstation's memory, and so runs well
+# under its time target.
+
+
+# The heap guard checks every allocation the Miri port makes, and that
+# multiplies its run time; at size S this port would run for minutes under it.
+# The identity gate therefore runs it under the guard at this smaller
+# parameter, and at the sizes above with the leak check alone.
+[guard]
+parameter = 3500
+checksum = "55908 223633207 545413"
+input_sha256 = "b3dfe3173db31e90911048622850a62af3e13057794959c6194b0679f2c4aa77"
+
+[sizes.s]
+parameter = 35000
+checksum = "559717 2758808467 5491708"
+input_sha256 = "06df0c173aaa46bb4fadecccefb905c3694036e8a5fc757788e4378bf93d2bd6"
+
+[sizes.m]
+parameter = 350000
+checksum = "5601288 82668370153 55307198"
+input_sha256 = "0f7f3c334a248ad25a3b056634609d29fb36043420267d6c5d8dbda244d900b3"
+
+[sizes.l]
+parameter = 500000
+checksum = "8002139 155631904195 79059990"
+input_sha256 = "049602ac85779ce8077bab21406e4adfda2c0a6e393d1f7adea22ee299564ee7"

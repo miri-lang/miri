@@ -119,13 +119,14 @@ fn command_for(line: &str, src: &Path, out: &Path) -> Option<Command> {
     Some(command)
 }
 
-/// The environment a Miri port is built and run under in this gate.
-fn with_miri_checks(command: &mut Command) {
+/// The environment a Miri port is built and run under in this gate: the MIR
+/// verifier and the leak check always, the heap guard when `heap_guard`.
+fn with_miri_checks(command: &mut Command, heap_guard: bool) {
     command
         .env("MIRI_STDLIB_PATH", repo_root().join("src").join("stdlib"))
         .env("MIRI_VERIFY_MIR", "1")
         .env("MIRI_LEAK_CHECK", "1")
-        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_HEAP_GUARD", if heap_guard { "1" } else { "0" })
         .env_remove("MIRI_CC")
         .env_remove("CC");
 }
@@ -146,7 +147,7 @@ fn build_port(
     let mut build = command_for(&build_line, src, &out)?;
     build.current_dir(work_dir);
     if language == "miri" {
-        with_miri_checks(&mut build);
+        with_miri_checks(&mut build, false);
     }
     let output = build
         .output()
@@ -166,34 +167,26 @@ fn build_port(
 fn run_command(
     charter: &toml::Table,
     language: &str,
-    src: &Path,
-    out: &Path,
-    input: &Path,
+    (src, out): (&Path, &Path),
+    case: &Case,
 ) -> Option<Command> {
     let run_line = charter_line(charter, language, "run").expect("every language has a run line");
     let mut run = command_for(&run_line, src, out)?;
-    run.arg(input);
+    run.arg(&case.input);
     if language == "miri" {
-        with_miri_checks(&mut run);
+        with_miri_checks(&mut run, case.heap_guard);
     }
     Some(run)
 }
 
-/// Run one built port at `size` and assert it prints the manifest's checksum.
+/// Run one built port on `case` and assert it prints the case's checksum.
 fn assert_port_output(
     charter: &toml::Table,
-    manifest: &toml::Table,
     (workload, language): (&str, &str),
     (src, out): (&Path, &Path),
-    size: &str,
+    case: &Case,
 ) -> bool {
-    let entry = &manifest["sizes"][size];
-    let input = out.with_extension(format!("{size}.txt"));
-    let parameter = entry["parameter"]
-        .as_integer()
-        .expect("parameter is an integer");
-    fs::write(&input, format!("{parameter}\n")).expect("write input");
-    let Some(mut run) = run_command(charter, language, src, out, &input) else {
+    let Some(mut run) = run_command(charter, language, (src, out), case) else {
         return false;
     };
     let output = run
@@ -201,17 +194,15 @@ fn assert_port_output(
         .unwrap_or_else(|e| panic!("run the {language} port of {workload}: {e}"));
     assert!(
         output.status.success(),
-        "the {language} port of {workload} failed at size {size}:\n{}",
+        "the {language} port of {workload} failed at {}:\n{}",
+        case.label,
         String::from_utf8_lossy(&output.stderr)
-    );
-    let expected = format!(
-        "{}\n",
-        entry["checksum"].as_str().expect("checksum is text")
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        expected,
-        "the {language} port of {workload} printed a different checksum at size {size}"
+        format!("{}\n", case.checksum),
+        "the {language} port of {workload} printed a different checksum at {}",
+        case.label
     );
     true
 }
@@ -227,24 +218,126 @@ fn toolchain_of(charter: &toml::Table, language: &str) -> String {
         .to_string()
 }
 
+/// One run every port makes: an input file and the checksum it must print.
+struct Case {
+    label: String,
+    input: PathBuf,
+    checksum: String,
+    /// Whether the Miri port runs under the heap guard for this case.
+    heap_guard: bool,
+}
+
+/// The file a port reads for `entry` (a size, or the manifest's `[guard]`):
+/// the parameter itself, or for a workload whose manifest says
+/// `generated = true`, the text `bench/workloads/generate.py` writes for it,
+/// checked against the SHA-256 the entry records. `None` when the generator's
+/// interpreter is not installed.
+fn prepare_input(
+    (workload, manifest): (&str, &toml::Table),
+    (label, entry): (&str, &toml::Value),
+    work_dir: &Path,
+) -> Option<PathBuf> {
+    let parameter = entry["parameter"]
+        .as_integer()
+        .expect("parameter is an integer");
+    let input = work_dir.join(format!("{label}.input"));
+    if !manifest
+        .get("generated")
+        .and_then(|g| g.as_bool())
+        .unwrap_or(false)
+    {
+        fs::write(&input, format!("{parameter}\n")).expect("write input");
+        return Some(input);
+    }
+    let generator = repo_root()
+        .join("bench")
+        .join("workloads")
+        .join("generate.py");
+    let status = Command::new(find_program("python3")?)
+        .arg(&generator)
+        .arg(workload)
+        .arg(parameter.to_string())
+        .arg(&input)
+        .status()
+        .unwrap_or_else(|e| panic!("run {}: {e}", generator.display()));
+    assert!(
+        status.success(),
+        "the generator failed for {workload} at {label}"
+    );
+    let bytes = fs::read(&input).expect("read the generated input");
+    assert_eq!(
+        hex_sha256(&bytes),
+        entry["input_sha256"]
+            .as_str()
+            .expect("a generated input records its SHA-256"),
+        "the generator wrote different input for {workload} at {label}"
+    );
+    Some(input)
+}
+
+/// The runs this pass makes: every size under test, and the `[guard]` run
+/// when the manifest has one. Without one, the Miri port runs under the heap
+/// guard at every size; with one, only there.
+fn cases(workload: &str, manifest: &toml::Table, work_dir: &Path) -> Option<Vec<Case>> {
+    let guard = manifest.get("guard");
+    let mut entries: Vec<(String, &toml::Value, bool)> = sizes_under_test()
+        .into_iter()
+        .map(|size| {
+            let entry = &manifest["sizes"][size.as_str()];
+            (format!("size {size}"), entry, guard.is_none())
+        })
+        .collect();
+    if let Some(guard) = guard {
+        entries.push(("the heap-guard parameter".to_string(), guard, true));
+    }
+    entries
+        .into_iter()
+        .map(|(label, entry, heap_guard)| {
+            let file_label = label.replace(' ', "-");
+            let input = prepare_input((workload, manifest), (&file_label, entry), work_dir)?;
+            let checksum = entry["checksum"]
+                .as_str()
+                .expect("checksum is text")
+                .to_string();
+            Some(Case {
+                label,
+                input,
+                checksum,
+                heap_guard,
+            })
+        })
+        .collect()
+}
+
+/// Why the manifest says `language`'s port cannot run yet, if it does.
+fn blocked_reason(manifest: &toml::Table, language: &str) -> Option<String> {
+    manifest
+        .get("blocked")
+        .and_then(|blocked| blocked.get(language))
+        .and_then(|reason| reason.as_str())
+        .map(str::to_string)
+}
+
 /// Build and run every port of `workload` at every size under test, and
 /// assert each prints exactly the manifest's checksum.
 fn assert_identity(workload: &str) {
     let charter = charter();
     let manifest = manifest(workload);
     let work_dir = tempfile::tempdir().expect("scratch directory");
+    let Some(cases) = cases(workload, &manifest, work_dir.path()) else {
+        eprintln!("bench identity: skipping {workload}: `python3`, which writes its input, is not installed");
+        return;
+    };
     for (language, extension) in PORT_EXTENSIONS {
+        if let Some(reason) = blocked_reason(&manifest, language) {
+            eprintln!("bench identity: skipping the {language} port of {workload}: {reason}");
+            continue;
+        }
         let src = port_path(workload, extension);
         let ran = build_port(&charter, language, &src, work_dir.path()).is_some_and(|out| {
-            sizes_under_test().iter().all(|size| {
-                assert_port_output(
-                    &charter,
-                    &manifest,
-                    (workload, language),
-                    (&src, &out),
-                    size,
-                )
-            })
+            cases
+                .iter()
+                .all(|case| assert_port_output(&charter, (workload, language), (&src, &out), case))
         });
         if !ran {
             eprintln!(
@@ -264,32 +357,45 @@ fn checklist_review(text: &str, comment: &str) -> Option<(String, String)> {
         .split_inclusive('\n')
         .filter(|candidate| candidate.trim_end_matches('\n') != line)
         .collect();
-    let digest = Sha256::digest(without.as_bytes());
-    let hex = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    Some((line[marker.len()..].to_string(), hex))
+    Some((
+        line[marker.len()..].to_string(),
+        hex_sha256(without.as_bytes()),
+    ))
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The file at `src` carries a review line, in `comment`'s syntax, bound to
+/// its exact text.
+fn assert_reviewed(src: &Path, comment: &str) {
+    let text =
+        fs::read_to_string(src).unwrap_or_else(|e| panic!("{} is missing: {e}", src.display()));
+    let (review, hash) = checklist_review(&text, comment)
+        .unwrap_or_else(|| panic!("{} has no port-checklist line", src.display()));
+    assert!(
+        review.starts_with("reviewed ") && review.contains(" by "),
+        "{}: the port-checklist line names no date and reviewer: {review}",
+        src.display()
+    );
+    assert!(
+        review.ends_with(&format!("sha256={hash}")),
+        "{}: the port-checklist line does not match the file; its text hashes to {hash}",
+        src.display()
+    );
 }
 
 /// Every port carries a review line bound to its exact text.
 fn assert_ports_reviewed(workload: &str) {
     let charter = charter();
     for (language, extension) in PORT_EXTENSIONS {
-        let src = port_path(workload, extension);
-        let text = fs::read_to_string(&src)
-            .unwrap_or_else(|e| panic!("the {language} port of {workload} is missing: {e}"));
         let comment = charter_line(&charter, language, "checklist_comment")
             .expect("every language names its comment marker");
-        let (review, hash) = checklist_review(&text, &comment)
-            .unwrap_or_else(|| panic!("{} has no port-checklist line", src.display()));
-        assert!(
-            review.starts_with("reviewed ") && review.contains(" by "),
-            "{}: the port-checklist line names no date and reviewer: {review}",
-            src.display()
-        );
-        assert!(
-            review.ends_with(&format!("sha256={hash}")),
-            "{}: the port-checklist line does not match the file; its text hashes to {hash}",
-            src.display()
-        );
+        assert_reviewed(&port_path(workload, extension), &comment);
     }
 }
 
@@ -354,16 +460,58 @@ fn test_bench_identity_matmul() {
     check_workload("matmul");
 }
 
+#[test]
+fn test_bench_identity_binary_trees() {
+    check_workload("binary-trees");
+}
+
+#[test]
+fn test_bench_identity_list_sort() {
+    check_workload("list-sort");
+}
+
+#[test]
+fn test_bench_identity_wordfreq() {
+    check_workload("wordfreq");
+}
+
+#[test]
+fn test_bench_identity_string_builder() {
+    check_workload("string-builder");
+}
+
+#[test]
+fn test_bench_identity_json_roundtrip() {
+    check_workload("json-roundtrip");
+}
+
+#[test]
+fn test_bench_identity_k_nucleotide() {
+    check_workload("k-nucleotide");
+}
+
+/// The structures every C port shares are reviewed like a port.
+#[test]
+fn test_bench_identity_shared_c_code_is_reviewed() {
+    assert_reviewed(&repo_root().join("bench").join("c").join("table.h"), "//");
+}
+
 /// Every workload directory is one the gate checks.
 #[test]
 fn test_bench_identity_covers_every_workload() {
     let checked = [
+        "binary-trees",
         "fannkuch-redux",
+        "json-roundtrip",
+        "k-nucleotide",
+        "list-sort",
         "mandelbrot",
         "matmul",
         "nbody",
         "sieve",
         "spectral-norm",
+        "string-builder",
+        "wordfreq",
     ];
     let mut present: Vec<String> = fs::read_dir(repo_root().join("bench").join("workloads"))
         .expect("bench/workloads exists")

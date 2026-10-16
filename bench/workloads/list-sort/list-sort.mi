@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=a80e6dffddff74fdca99712d16b020baa145ec0284ebe188f499a3358ddd89f3
+
+// list-sort: generate numbers with the Park-Miller generator, sort them, then
+// sort the same draws as records by key and, among equal keys, by descending
+// id. Stresses list growth, the native sort and a comparator-driven sort.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+
+struct Record
+    key int
+    id int
+
+/// The next state of the Park-Miller "minimal standard" generator.
+fn next_state(state int) int: (state * 48271) % 2147483647
+
+/// Sort `n` generated numbers, then the same numbers as records ordered by
+/// key and, among equal keys, by descending id; fold both orders into one
+/// number each.
+fn kernel(n int) String
+    var numbers = List<int>()
+    var records = List<Record>()
+    var state = 7
+    var i = 0
+    while i < n
+        state = next_state(state)
+        numbers.push(state % 1000000)
+        records.push(Record(key: state % 1000, id: i))
+        i += 1
+    numbers.sort()
+    let by_key = records.sorted_by(fn(a Record, b Record) int: if a.key != b.key: a.key - b.key else: b.id - a.id)
+    var number_hash = 0
+    var record_hash = 0
+    i = 0
+    while i < n
+        number_hash = (number_hash * 31 + numbers[i]) % 1000000007
+        record_hash = (record_hash * 31 + by_key[i].id) % 1000000007
+        i += 1
+    f"{number_hash} {record_hash}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

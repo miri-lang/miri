@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=11dc0b3c4d654057517ea2920015d131ff2f8e8234437aab76b573c3550a89ea
+
+// k-nucleotide: count every substring of length 1, 2, 3, 4, 6, 12 and 18 of a
+// generated DNA sequence in a map, and report the counts. Stresses short
+// string keys, substring allocation and map growth.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+use system.collections.map
+
+/// How often each substring of length `k` occurs in `sequence`.
+fn frequencies(sequence String, k int) {String: int}
+    var counts = Map<String, int>()
+    let last = sequence.length() - k
+    var i = 0
+    while i <= last
+        let key = sequence.substring(i, i + k)
+        counts[key] = (counts.get(key) ?? 0) + 1
+        i += 1
+    counts
+
+/// Every substring of length `k` with its count, in alphabetical order.
+fn listing(sequence String, k int) String
+    let counts = frequencies(sequence, k)
+    var keys = List<String>()
+    var i = 0
+    while i < counts.length()
+        keys.push(counts.element_at(i))
+        i += 1
+    keys.sort()
+    var parts = List<String>()
+    for key in keys
+        parts.push(f"{key}={counts.get(key) ?? 0}")
+    " ".join(parts)
+
+/// The counts of every base and every pair of bases, and of the motif's
+/// prefixes of length 3, 4, 6, 12 and 18.
+fn kernel(text String) String
+    let sequence = text.trim()
+    var parts = List<String>()
+    parts.push(listing(sequence, 1))
+    parts.push(listing(sequence, 2))
+    let motif = "GGTATTTTAATTTATAGT"
+    for length in [3, 4, 6, 12, 18]
+        let prefix = motif.substring(0, length)
+        let count = frequencies(sequence, length).get(prefix) ?? 0
+        parts.push(f"{prefix}={count}")
+    " ".join(parts)
+
+/// The whole file at `path`; a missing file ends the program with status 2,
+/// as in every other port.
+fn read_input(path String) String
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text): return text
+        Result.Err(_)
+            exit(2)
+            return ""
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input String) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

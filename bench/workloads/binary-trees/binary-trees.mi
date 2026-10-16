@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=c74be32967f78e1a630e028f1d80e4f7d89008c2b626c1197c0d8af1d33f05dd
+
+// binary-trees: allocate a complete binary tree of each depth many times over,
+// walk it to count its nodes, and drop it, while one long-lived tree stays
+// alive throughout. Stresses allocation, release and reference counting.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+
+class Node
+    var left Node?
+    var right Node?
+
+    fn init(left Node?, right Node?)
+        self.left = left
+        self.right = right
+
+fn bottom_up(depth int) Node
+    if depth == 0
+        return Node(None, None)
+    Node(bottom_up(depth - 1), bottom_up(depth - 1))
+
+fn check(node Node) int
+    match node.left
+        Some(l)
+            match node.right
+                Some(r): return 1 + check(l) + check(r)
+                None: return 1
+        None: return 1
+
+fn power_of_two(exponent int) int
+    var result = 1
+    var i = 0
+    while i < exponent
+        result = result * 2
+        i += 1
+    result
+
+fn kernel(max_depth int) String
+    let stretch = check(bottom_up(max_depth + 1))
+    let long_lived = bottom_up(max_depth)
+    var total = 0
+    var depth = 4
+    while depth <= max_depth
+        let iterations = power_of_two(max_depth - depth + 4)
+        var i = 0
+        while i < iterations
+            total += check(bottom_up(depth))
+            i += 1
+        depth += 2
+    f"{stretch} {total} {check(long_lived)}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

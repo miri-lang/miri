@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=e3de6900ca15cdcab8eb7cf0ee1e6a6d13056d219103e649eabc12f38b51c304
+
+// wordfreq: count every word of a generated text in a map and report the ten
+// most frequent. Stresses string splitting, string-keyed map growth and
+// sorting by a comparator.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.collections.list
+use system.collections.map
+
+struct Entry
+    word String
+    count int
+
+/// How many distinct words the text holds, and the ten most frequent, most
+/// frequent first and alphabetical among equals.
+fn kernel(text String) String
+    var counts = Map<String, int>()
+    for line in text.split("\n")
+        for word in line.split(" ")
+            if word != ""
+                counts[word] = (counts.get(word) ?? 0) + 1
+    var entries = List<Entry>()
+    var i = 0
+    while i < counts.length()
+        entries.push(Entry(word: counts.element_at(i), count: counts.value_at(i)))
+        i += 1
+    let ranked = entries.sorted_by(fn(a Entry, b Entry) int: if a.count != b.count: b.count - a.count else: a.word.compare(b.word))
+    var top = List<String>()
+    i = 0
+    while i < 10 and i < ranked.length()
+        top.push(f"{ranked[i].word}={ranked[i].count}")
+        i += 1
+    let listed = ",".join(top)
+    f"{counts.length()} {listed}"
+
+/// The whole file at `path`; a missing file ends the program with status 2,
+/// as in every other port.
+fn read_input(path String) String
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text): return text
+        Result.Err(_)
+            exit(2)
+            return ""
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input String) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# The binary-trees workload's manifest: its parameter at each size and the checksum
+# every port must print for it. Each port reads its input from the file named
+# by its first argument, which holds the parameter.
+
+name = "binary-trees"
+# The compiler mechanisms the workload stresses.
+tags = ["alloc", "rc"]
+parameter = "The depth of the largest tree."
+
+# The parameters were set from the portable C build on the dev profile, not by
+# a calibration run on the publication profile, so they are provisional.
+provisional = true
+
+# A complete tree of depth 20 already takes about 5 s in C while holding only
+# about 65 MB, so this workload cannot meet both the L time target and a peak
+# above 100 MB; L follows the time target.
+
+[sizes.s]
+parameter = 14
+checksum = "65535 3123888 32767"
+
+[sizes.m]
+parameter = 17
+checksum = "524287 29185376 262143"
+
+[sizes.l]
+parameter = 19
+checksum = "2097151 133518688 1048575"

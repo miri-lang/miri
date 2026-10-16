@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=3d68b6a737ab3cbd6d302c5597d1a4bf48fc6e4ea3b09730add6194f1b24851f
+
+// json-roundtrip: parse a generated JSON document, count its values and sum
+// its numbers, and write it back as compact JSON. Stresses a parser and
+// writer written in the language's own standard library, recursion over a
+// tree of values, and string building.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+use system.json
+
+/// How many values `value` holds, itself included, and the sum of its whole
+/// numbers.
+fn walk(value Json) (int, int)
+    match value
+        Json.Object(members)
+            var nodes = 1
+            var sum = 0
+            var i = 0
+            while i < members.length()
+                let inner = walk(members.value_at(i))
+                nodes += inner[0]
+                sum += inner[1]
+                i += 1
+            (nodes, sum)
+        Json.Array(items)
+            var nodes = 1
+            var sum = 0
+            for item in items
+                let inner = walk(item)
+                nodes += inner[0]
+                sum += inner[1]
+            (nodes, sum)
+        Json.Number(digits): (1, digits.to_int() ?? 0)
+        Json.Text(_): (1, 0)
+        Json.Bool(_): (1, 0)
+        Json.Null: (1, 0)
+
+/// Parse the document, count its values and sum its numbers, and write it
+/// back as compact JSON; the length of that text is the third number.
+fn kernel(text String) String
+    match Json.parse(text)
+        Result.Ok(document)
+            let totals = walk(document)
+            let written = document.to_string()
+            f"{totals[0]} {totals[1]} {written.length()}"
+        Result.Err(_): "invalid"
+
+/// The whole file at `path`; a missing file ends the program with status 2,
+/// as in every other port.
+fn read_input(path String) String
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text): return text
+        Result.Err(_)
+            exit(2)
+            return ""
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input String) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))

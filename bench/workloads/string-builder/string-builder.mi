@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=5d290f5ed8ddcb8c7b6cc3620ca1b1003356fc29814e6613993cfb1e6fddb6c3
+
+// string-builder: build one long string by appending a formatted piece per
+// step, then hash its bytes. Stresses string growth and formatting.
+
+use system.io
+use system.fs
+use system.os
+use system.time
+use system.process
+
+fn kernel(n int) String
+    var text = ""
+    var i = 0
+    while i < n
+        text = text + f"{i}:{(i * i) % 1000};"
+        i += 1
+    var hash = 0
+    var k = 0
+    let size = text.length()
+    while k < size
+        hash = (hash * 31 + (text.code_at(k) ?? 0)) % 1000000007
+        k += 1
+    f"{size} {hash}"
+
+/// The integer in the file at `path`; a missing file or anything else in it
+/// ends the program with status 2, as in every other port.
+fn read_input(path String) int
+    let fs = Fs()
+    match fs.read_file(path)
+        Result.Ok(text)
+            match text.trim().to_int()
+                Some(n): return n
+                None
+                    exit(2)
+                    return 0
+        Result.Err(_)
+            exit(2)
+            return 0
+
+/// Run the kernel untimed and then timed, report each timed iteration on
+/// stderr, and refuse to print a checksum any iteration disagrees with.
+fn run_hot(input int) String
+    let clock = Clock()
+    let expected = kernel(input)
+    var agree = true
+    var i = 1
+    while i < 5
+        if kernel(input) != expected
+            agree = false
+        i += 1
+    i = 0
+    while i < 5
+        let start = clock.now()
+        let checksum = kernel(input)
+        let elapsed = start.elapsed(clock).as_nanos()
+        eprintln(f"hot_ns={elapsed}")
+        if checksum != expected
+            agree = false
+        i += 1
+    if not agree
+        eprintln("checksum differs between iterations")
+        exit(1)
+    expected
+
+let args = Args()
+let input = read_input(args.element_at(0))
+if args.length() > 1 and args.element_at(1) == "hot"
+    println(run_hot(input))
+else
+    println(kernel(input))
