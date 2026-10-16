@@ -75,26 +75,24 @@ impl ElementOrder {
         self.compare_fn = compare_fn;
     }
 
-    /// True when the element stored at `left` sorts strictly after the one at
-    /// `right`, which is what an insertion sort asks to decide whether to shift.
-    unsafe fn sorts_after(&self, left: *const u8, right: *const u8, elem_size: usize) -> bool {
+    /// How the element stored at `left` orders against the one at `right`.
+    unsafe fn compare(&self, left: *const u8, right: *const u8, elem_size: usize) -> Ordering {
         if self.compare_fn != 0 {
-            return self.sorts_after_through_callback(left, right);
+            return self.compare_through_callback(left, right);
         }
-        let ordering = match self.kind {
+        match self.kind {
             BY_UNSIGNED_VALUE => compare_unsigned(left, right, elem_size),
             BY_FLOAT_VALUE => compare_floats(left, right, elem_size),
             _ => compare_signed(left, right, elem_size),
-        };
-        ordering == Ordering::Greater
+        }
     }
 
     /// Asks the element type's `compare` about the two values the slots hold.
-    unsafe fn sorts_after_through_callback(&self, left: *const u8, right: *const u8) -> bool {
+    unsafe fn compare_through_callback(&self, left: *const u8, right: *const u8) -> Ordering {
         let compare: ElementCompareFn = std::mem::transmute(self.compare_fn);
         let left_value = (left as *const *const u8).read_unaligned();
         let right_value = (right as *const *const u8).read_unaligned();
-        compare(left_value, right_value) > 0
+        compare(left_value, right_value).cmp(&0)
     }
 }
 
@@ -186,9 +184,11 @@ unsafe fn compare_floats(left: *const u8, right: *const u8, elem_size: usize) ->
 /// Sorts `len` elements of `elem_size` bytes each, in place, ascending by
 /// `order`.
 ///
-/// Insertion sort: stable, so elements that compare equal keep the order they
-/// were given in, and quick on the short collections a compiled program sorts
-/// most often.
+/// The positions are sorted with the standard library's stable sort, which
+/// makes O(n log n) comparisons and keeps elements that compare equal in the
+/// order they were given in; the element bytes are then moved into place once,
+/// through a buffer. An element is moved, never dropped or cloned, so whatever
+/// a managed element owns stays owned by exactly one slot.
 ///
 /// # Safety
 ///
@@ -203,22 +203,17 @@ pub(crate) unsafe fn sort_elements(
     if data.is_null() || len < 2 || elem_size == 0 {
         return;
     }
-    let mut key = vec![0u8; elem_size];
-
-    for i in 1..len {
-        std::ptr::copy_nonoverlapping(data.add(i * elem_size), key.as_mut_ptr(), elem_size);
-
-        let mut j = i;
-        while j > 0 {
-            let previous = data.add((j - 1) * elem_size);
-            if !order.sorts_after(previous, key.as_ptr(), elem_size) {
-                break;
-            }
-            std::ptr::copy_nonoverlapping(previous, data.add(j * elem_size), elem_size);
-            j -= 1;
-        }
-        std::ptr::copy_nonoverlapping(key.as_ptr(), data.add(j * elem_size), elem_size);
+    let Some(total) = len.checked_mul(elem_size) else {
+        return;
+    };
+    let element = |i: usize| data.add(i * elem_size) as *const u8;
+    let mut positions: Vec<usize> = (0..len).collect();
+    positions.sort_by(|&a, &b| unsafe { order.compare(element(a), element(b), elem_size) });
+    let mut sorted: Vec<u8> = Vec::with_capacity(total);
+    for &position in &positions {
+        sorted.extend_from_slice(std::slice::from_raw_parts(element(position), elem_size));
     }
+    std::ptr::copy_nonoverlapping(sorted.as_ptr(), data, total);
 }
 
 #[cfg(test)]
@@ -291,6 +286,38 @@ mod tests {
         }
         assert_eq!(unsafe { *slots[0] }, 7);
         assert_eq!(unsafe { *slots[1] }, 9);
+    }
+
+    static COMPARISONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// Orders two `i64` values and counts how often it is asked.
+    unsafe extern "C" fn counting_compare(a: *const u8, b: *const u8) -> isize {
+        COMPARISONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (a, b) = ((a as *const i64).read(), (b as *const i64).read());
+        a.cmp(&b) as isize
+    }
+
+    #[test]
+    fn sorting_takes_n_log_n_comparisons_not_n_squared() {
+        let n = 1000usize;
+        let values: Vec<i64> = (0..n as i64).map(|i| (i * 7919) % n as i64).collect();
+        let mut slots: Vec<*const i64> = values.iter().map(|v| v as *const i64).collect();
+        COMPARISONS.store(0, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            sort_elements(
+                slots.as_mut_ptr() as *mut u8,
+                n,
+                std::mem::size_of::<*const i64>(),
+                ordered_through(counting_compare),
+            );
+        }
+        let sorted: Vec<i64> = slots.iter().map(|&p| unsafe { *p }).collect();
+        assert_eq!(sorted, (0..n as i64).collect::<Vec<_>>());
+        let calls = COMPARISONS.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            calls <= 2 * n * 10,
+            "{calls} comparisons to sort {n} elements"
+        );
     }
 
     #[test]
