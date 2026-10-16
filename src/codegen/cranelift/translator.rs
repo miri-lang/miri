@@ -2051,6 +2051,29 @@ impl<'a> FunctionTranslator<'a> {
         })
     }
 
+    /// Calls the runtime hook `name`, which takes nothing and returns nothing,
+    /// while the runtime asks to observe: the `MIRI_RC_STATS` counters.
+    pub(crate) fn emit_rc_stats_hook(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &'static str,
+    ) -> Result<(), CodegenError> {
+        Self::emit_tracked(builder, ctx, |builder, ctx| {
+            Self::call_cached_func(
+                builder,
+                ctx.module,
+                &mut ctx.cached_funcs,
+                CallSite {
+                    name,
+                    param_types: &[],
+                    return_types: &[],
+                    args: &[],
+                },
+            )?;
+            Ok(())
+        })
+    }
+
     /// Calls `miri_rt_class_free_track(ptr)` so the heap guard witnesses an
     /// inline `free` before compiled code performs it.
     pub(crate) fn call_rt_class_free_track(

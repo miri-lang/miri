@@ -488,6 +488,7 @@ pub mod ffi {
         if copy.is_null() {
             return ptr;
         }
+        crate::rc_stats::count_cow_copy();
         if rc > 1 {
             *rc_ptr -= 1;
         }

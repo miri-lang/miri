@@ -279,6 +279,7 @@ def reap(child, deadline_ns):
 
 HOT_LINE = re.compile(r"^hot_ns=(\d+)$")
 ALLOC_LINE = re.compile(r"^MIRI_ALLOC_COUNT: (\d+) allocation")
+COUNTER_FIELD = re.compile(r"(\w+)=(\d+)")
 
 
 def allocation_count(stderr):
@@ -287,6 +288,24 @@ def allocation_count(stderr):
         if match := ALLOC_LINE.match(line.strip()):
             return int(match.group(1))
     return None
+
+
+def runtime_counters(stderr):
+    """The allocation breakdown and the reference-counting counts the Miri
+    runtime printed at exit, as record fields."""
+    fields = {}
+    for line in stderr.splitlines():
+        line = line.strip()
+        if line.startswith("MIRI_ALLOC_COUNT:"):
+            names = {"rc": "alloc_rc", "inline": "alloc_inline", "buffers": "alloc_buffer", "raw": "alloc_raw"}
+        elif line.startswith("MIRI_RC_STATS:"):
+            names = {"dup": "rc_dup", "drop": "rc_drop", "drop_free": "rc_drop_free", "cow_copy": "cow_copy", "realloc": "realloc"}
+        else:
+            continue
+        for name, value in COUNTER_FIELD.findall(line):
+            if name in names:
+                fields[names[name]] = int(value)
+    return fields
 
 
 def hot_samples(stderr):
@@ -608,10 +627,10 @@ def verify(ctx, cell, timeout_s):
 
 
 def record_allocations(ctx, env, cell, cap_s):
-    """One untimed run of the Miri port with the runtime's allocation counter
-    on, recorded as its own `alloc-count` record: the counter costs time, so
-    it never runs in a measured run."""
-    env_with_counter = child_environment(ctx.work_dir, {"MIRI_ALLOC_COUNT": "1"})
+    """One untimed run of the Miri port with the runtime's allocation and
+    reference-counting counters on, recorded as its own `alloc-count` record:
+    the counters cost time, so they never run in a measured run."""
+    env_with_counter = child_environment(ctx.work_dir, {"MIRI_ALLOC_COUNT": "1", "MIRI_RC_STATS": "1"})
     result = measure(cell.words(), env_with_counter, ctx.work_dir, cap_s)
     record = base_record(ctx, env, cell.workload, "miri", cell.variant, cell.size, "alloc-count")
     record.update(
@@ -619,6 +638,7 @@ def record_allocations(ctx, env, cell, cap_s):
         attempt=None,
         allocations=allocation_count(result.stderr),
         status="timeout" if result.timed_out else "ok",
+        **runtime_counters(result.stderr),
     )
     ctx.records.append(record)
 

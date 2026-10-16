@@ -267,10 +267,9 @@ def disassembly(binary, symbols):
 
 
 def runtime_counts(port, input_path, ctx):
-    env = run.child_environment(ctx.work_dir, {"MIRI_ALLOC_COUNT": "1"})
+    env = run.child_environment(ctx.work_dir, {"MIRI_ALLOC_COUNT": "1", "MIRI_RC_STATS": "1"})
     done = subprocess.run([*port.run_words, str(input_path)], env=env, capture_output=True, text=True, check=False)
-    line = next((l for l in done.stderr.splitlines() if l.startswith("MIRI_ALLOC_COUNT:")), None)
-    return {"allocation_count": run.allocation_count(done.stderr), "line": line}
+    return {"allocation_count": run.allocation_count(done.stderr), **run.runtime_counters(done.stderr)}
 
 
 # The bundle.

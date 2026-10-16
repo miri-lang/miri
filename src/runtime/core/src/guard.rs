@@ -518,7 +518,8 @@ pub fn resolve_tracking_state() {
     }
     let wanted = is_guard_enabled()
         || crate::handler_config::is_leak_check_enabled()
-        || crate::handler_config::is_alloc_count_enabled();
+        || crate::handler_config::is_alloc_count_enabled()
+        || crate::rc_stats::is_enabled();
     let state = if wanted { TRACKING_ON } else { TRACKING_OFF };
     miri_rt_tracking_state.store(state, Ordering::Relaxed);
 }

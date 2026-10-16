@@ -112,6 +112,7 @@ pub mod ffi {
         let new_ptr = alloc::realloc(ptr, layout, new_size);
         if !new_ptr.is_null() {
             crate::alloc_count::increment_raw_count();
+            crate::rc_stats::count_realloc();
         }
         new_ptr
     }

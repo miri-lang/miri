@@ -152,6 +152,7 @@ impl MiriSet {
     }
 
     unsafe fn grow(&mut self) {
+        crate::rc_stats::count_realloc();
         let old_states = self.states;
         let old_data = self.data;
         let old_capacity = self.capacity;
@@ -646,6 +647,7 @@ pub mod ffi {
             return ptr;
         }
         let new_ptr = miri_rt_set_clone(ptr);
+        crate::rc_stats::count_cow_copy();
         if new_ptr.is_null() {
             return ptr;
         }

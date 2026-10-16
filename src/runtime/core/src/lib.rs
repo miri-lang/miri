@@ -39,6 +39,7 @@ pub mod map;
 pub mod os;
 pub mod process;
 pub mod rc;
+pub mod rc_stats;
 pub mod regex;
 pub mod set;
 pub(crate) mod slot_cursor;

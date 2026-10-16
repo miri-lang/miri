@@ -153,6 +153,7 @@ impl MiriList {
                     // guard must witness that free here; growing a list is not a
                     // double free even though the same address may come back.
                     crate::guard::guard_free_raw(self.data);
+                    crate::rc_stats::count_realloc();
                     realloc(self.data, old_layout, new_size)
                 },
                 Err(_) => std::process::abort(), // Abort safely rather than risking memory corruption
@@ -937,6 +938,7 @@ pub mod ffi {
             return ptr;
         }
         let new_ptr = miri_rt_list_clone(ptr);
+        crate::rc_stats::count_cow_copy();
         if new_ptr.is_null() {
             return ptr;
         }

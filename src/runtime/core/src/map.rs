@@ -242,6 +242,7 @@ impl MiriMap {
 
     /// Grows the table and rehashes all entries.
     unsafe fn grow(&mut self) {
+        crate::rc_stats::count_realloc();
         // Security Invariant: Guard against capacity multiplication overflow
         let new_capacity = if self.capacity == 0 {
             INITIAL_CAPACITY
@@ -969,6 +970,7 @@ pub mod ffi {
             return ptr;
         }
         let new_ptr = miri_rt_map_clone(ptr);
+        crate::rc_stats::count_cow_copy();
         if new_ptr.is_null() {
             return ptr;
         }

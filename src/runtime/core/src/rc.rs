@@ -302,6 +302,7 @@ pub unsafe extern "C" fn miri_rt_class_free_track(ptr: *mut u8) {
 #[no_mangle]
 pub extern "C" fn miri_rt_release_check(ptr: *mut u8) {
     crate::guard::resolve_tracking_state();
+    crate::rc_stats::count_drop();
     crate::guard::guard_check_release(ptr);
 }
 

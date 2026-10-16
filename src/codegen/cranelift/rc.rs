@@ -1946,6 +1946,7 @@ impl<'a> FunctionTranslator<'a> {
             .brif(is_zero, free_block, &[], merge_block, &[]);
 
         builder.switch_to_block(free_block);
+        Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_FREE)?;
         Self::emit_type_drop(builder, ctx, kind, ptr, header_ptr, type_ctx)?;
         builder.ins().jump(merge_block, &[]);
 
@@ -2354,6 +2355,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(free_block);
         builder.seal_block(free_block);
+        Self::emit_rc_stats_hook(&mut builder, &mut module_ctx, rt::RC_STATS_FREE)?;
         let static_release =
             |builder: &mut FunctionBuilder, module_ctx: &mut ModuleCtx| match drop_thunk {
                 Some(thunk) => Self::call_type_drop(builder, module_ctx.module, thunk, sig, ptr),

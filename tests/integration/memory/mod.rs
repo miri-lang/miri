@@ -27,6 +27,7 @@ pub mod null_coalesce;
 pub mod option_coercion;
 pub mod out_parameter;
 pub mod rc_elision;
+pub mod rc_stats;
 pub mod reassignment;
 pub mod reference_cycles;
 pub mod release_by_runtime_class;

@@ -50,6 +50,12 @@ pub mod rt {
     /// Compiler-internal: lets the heap guard see an inline release before it
     /// reads the released block, not in stdlib. Paired with [`CLASS_FREE_TRACK`].
     pub const RELEASE_CHECK: &str = "miri_rt_release_check";
+    /// Compiler-internal: counts an increment compiled code made, for
+    /// `MIRI_RC_STATS`, not in stdlib. Called only while the tracking state is on.
+    pub const RC_STATS_DUP: &str = "miri_rt_rc_stats_dup";
+    /// Compiler-internal: counts a decrement that reached zero, for
+    /// `MIRI_RC_STATS`, not in stdlib. Called only while the tracking state is on.
+    pub const RC_STATS_FREE: &str = "miri_rt_rc_stats_free";
     /// Compiler-internal: runtime byte telling compiled code whether either
     /// tracking hook above is worth calling. A data symbol, not a function —
     /// codegen loads it and branches, so an unobserved allocation pays a load
@@ -377,6 +383,8 @@ pub mod rt {
         CLASS_ALLOC_TRACK,
         CLASS_FREE_TRACK,
         RELEASE_CHECK,
+        RC_STATS_DUP,
+        RC_STATS_FREE,
         TRACKING_STATE,
         RC_IS_SHARED,
         // Array

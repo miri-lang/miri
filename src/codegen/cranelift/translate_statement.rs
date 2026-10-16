@@ -167,6 +167,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(then_block);
         let new_rc = builder.ins().iadd_imm(rc, 1);
         builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+        Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_DUP)?;
         builder.ins().jump(merge_block, &[]);
 
         builder.seal_block(rc_block);

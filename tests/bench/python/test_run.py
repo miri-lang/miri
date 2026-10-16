@@ -120,6 +120,26 @@ class StderrTest(unittest.TestCase):
         self.assertEqual(run.allocation_count(stderr), 42)
         self.assertIsNone(run.allocation_count("nothing here\n"))
 
+    def test_the_runtime_counters_become_record_fields(self):
+        stderr = (
+            "MIRI_ALLOC_COUNT: 42 allocation(s) (rc=8 inline=4 buffers=23 raw=7)\n"
+            "MIRI_RC_STATS: dup=10 drop=18 drop_free=12 cow_copy=1 realloc=5\n"
+        )
+        self.assertEqual(
+            run.runtime_counters(stderr),
+            {
+                "alloc_rc": 8,
+                "alloc_inline": 4,
+                "alloc_buffer": 23,
+                "alloc_raw": 7,
+                "rc_dup": 10,
+                "rc_drop": 18,
+                "rc_drop_free": 12,
+                "cow_copy": 1,
+                "realloc": 5,
+            },
+        )
+
 
 class OrderTest(unittest.TestCase):
     def test_languages_interleave_within_every_round(self):
