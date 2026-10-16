@@ -1,4 +1,4 @@
-.PHONY: build release install test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check
+.PHONY: build release install test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -103,6 +103,14 @@ gpu-browser-check:
 # `make audit` — mechanical sweep against PRINCIPLES.md.
 # Advisory (never fails the build). Use the `miri-audit` skill for graded
 # scoring + proposed diffs. This target just surfaces the raw signals.
+# The CPU benchmark suite (bench/CHARTER.md). The runner rebuilds the release
+# compiler first and writes its records under bench/results/, which git ignores.
+bench-smoke:
+	python3 bench/run.py --smoke
+
+bench-full:
+	python3 bench/run.py --full
+
 audit:
 	@echo "─── Miri principle audit (mechanical sweep) ───"
 	@echo "Advisory only. For graded scoring use the miri-audit skill."

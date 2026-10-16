@@ -25,3 +25,7 @@ __pycache__
 # Live benchmark records: each round writes megabytes of transcripts that are
 # output of a run, not source. They stay on the machine that ran them.
 /evals/field/runs/
+# Benchmark results: every run of bench/run.py writes a directory here. A run
+# is output, not source, and a dev run is never published; a publication run's
+# directory is added deliberately, by name, once its records are reviewed.
+/bench/results/
