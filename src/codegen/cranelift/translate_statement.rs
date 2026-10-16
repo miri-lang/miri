@@ -1419,21 +1419,11 @@ impl<'a> FunctionTranslator<'a> {
         place: &Place,
         type_ctx: &TypeCtx,
     ) -> Result<TypeKind, CodegenError> {
-        let mut current = type_ctx.local_types[place.local.0].kind.clone();
-
+        let mut walk = ProjectedKind::new(place, type_ctx);
         for proj in &place.projection {
-            match proj {
-                PlaceElem::Field(idx) => {
-                    current = Self::projected_field_kind(&current, *idx, place, type_ctx)?;
-                }
-                PlaceElem::Index(_) => {
-                    current = Self::extract_collection_elem_type_kind(&current);
-                }
-                PlaceElem::Deref => break,
-            }
+            walk.step(proj, type_ctx)?;
         }
-
-        Ok(current)
+        Ok(walk.kind)
     }
 
     /// The kind of field `idx` of a value of kind `container`.
@@ -1562,5 +1552,49 @@ impl<'a> FunctionTranslator<'a> {
         Self::resolve_collection_elem_type_kind_impl(collection_kind)
             .cloned()
             .unwrap_or(TypeKind::Error)
+    }
+}
+
+/// The kind [`FunctionTranslator::resolve_projected_type_kind`] gives each
+/// prefix of a place, advanced one projection at a time. A walk over a place's
+/// projections that needs the type at every depth steps this along with it,
+/// rather than re-resolving each prefix from the root.
+pub(crate) struct ProjectedKind<'p> {
+    place: &'p Place,
+    pub(crate) kind: TypeKind,
+    /// A `Deref` ends the resolution: what lies behind it keeps the kind of
+    /// the pointer's own place.
+    stopped: bool,
+}
+
+impl<'p> ProjectedKind<'p> {
+    pub(crate) fn new(place: &'p Place, type_ctx: &TypeCtx) -> Self {
+        ProjectedKind {
+            place,
+            kind: type_ctx.local_types[place.local.0].kind.clone(),
+            stopped: false,
+        }
+    }
+
+    /// Applies one more projection of the place and returns the kind reached.
+    pub(crate) fn step(
+        &mut self,
+        proj: &PlaceElem,
+        type_ctx: &TypeCtx,
+    ) -> Result<&TypeKind, CodegenError> {
+        if !self.stopped {
+            match proj {
+                PlaceElem::Field(idx) => {
+                    self.kind = FunctionTranslator::projected_field_kind(
+                        &self.kind, *idx, self.place, type_ctx,
+                    )?;
+                }
+                PlaceElem::Index(_) => {
+                    self.kind = FunctionTranslator::extract_collection_elem_type_kind(&self.kind);
+                }
+                PlaceElem::Deref => self.stopped = true,
+            }
+        }
+        Ok(&self.kind)
     }
 }

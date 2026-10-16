@@ -1831,15 +1831,24 @@ impl<'a> FunctionTranslator<'a> {
             )
             .link_name();
             let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
-            let sig = Signature {
-                params: vec![AbiParam::new(ptr_type)],
-                returns: vec![],
-                call_conv: builder.func.signature.call_conv,
+            let func_id = match ctx.thunk_funcs.get(&decref_name) {
+                Some(func_id) => *func_id,
+                None => {
+                    let sig = Signature {
+                        params: vec![AbiParam::new(ptr_type)],
+                        returns: vec![],
+                        call_conv: builder.func.signature.call_conv,
+                    };
+                    let func_id = ctx
+                        .module
+                        .declare_function(&decref_name, Linkage::Import, &sig)
+                        .map_err(|e| {
+                            CodegenError::declare_function(decref_name.clone(), e.to_string())
+                        })?;
+                    ctx.thunk_funcs.insert(decref_name, func_id);
+                    func_id
+                }
             };
-            let func_id = ctx
-                .module
-                .declare_function(&decref_name, Linkage::Import, &sig)
-                .map_err(|e| CodegenError::declare_function(decref_name.clone(), e.to_string()))?;
             let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
             builder.ins().call(local_func, &[old_val]);
             return Ok(());

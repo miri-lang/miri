@@ -6,6 +6,7 @@
 //! This module translates MIR (Mid-level IR) functions into Cranelift IR,
 //! which can then be compiled to machine code.
 
+use super::translate_statement::ProjectedKind;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout;
@@ -71,6 +72,10 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) module: &'a mut ObjectModule,
     pub(crate) string_literals: &'a mut BTreeMap<String, usize>,
     pub(crate) cached_funcs: HashMap<&'static str, cranelift_module::FuncId>,
+    /// The per-type thunks (`miri.T.$decref` and the like) already declared in
+    /// this module, by link name: a function writing into a collection of a
+    /// class asks for the same thunk at every write.
+    pub(crate) thunk_funcs: HashMap<String, cranelift_module::FuncId>,
     pub(crate) kernel_registry:
         &'a HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
 }
@@ -126,6 +131,7 @@ pub(crate) fn empty_module_ctx<'a>(
         module,
         string_literals,
         cached_funcs: HashMap::new(),
+        thunk_funcs: HashMap::new(),
         kernel_registry,
     }
 }
@@ -426,7 +432,9 @@ impl<'a> FunctionTranslator<'a> {
         // element's vector type so a following `Field` loads the scalar from it.
         let mut inline_elem: Option<TypeKind> = None;
 
-        for (depth, proj) in place.projection.iter().enumerate() {
+        let mut walk = ProjectedKind::new(place, type_ctx);
+        for proj in &place.projection {
+            let reached = walk.step(proj, type_ctx)?;
             match proj {
                 PlaceElem::Deref => {
                     value = builder.ins().load(ptr_type, MemFlags::new(), value, 0);
@@ -446,8 +454,7 @@ impl<'a> FunctionTranslator<'a> {
                             type_ctx,
                         ),
                     };
-                    current_type =
-                        Self::type_after_projection(place, depth, &current_type, type_ctx)?;
+                    current_type = Self::type_after_projection(reached, &current_type);
                 }
                 PlaceElem::Index(local) => {
                     let idx_var = locals.get(local).ok_or_else(|| {
@@ -698,10 +705,9 @@ impl<'a> FunctionTranslator<'a> {
         let mut addr = base_addr;
         let mut current_type: Type = type_ctx.local_types[place.local.0].clone();
 
-        for (depth, proj) in place.projection[..place.projection.len() - 1]
-            .iter()
-            .enumerate()
-        {
+        let mut walk = ProjectedKind::new(place, type_ctx);
+        for proj in &place.projection[..place.projection.len() - 1] {
+            let reached = walk.step(proj, type_ctx)?;
             match proj {
                 PlaceElem::Deref => {
                     addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
@@ -710,8 +716,7 @@ impl<'a> FunctionTranslator<'a> {
                     let (offset, _) =
                         layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type);
                     addr = builder.ins().iadd_imm(addr, offset as i64);
-                    current_type =
-                        Self::type_after_projection(place, depth, &current_type, type_ctx)?;
+                    current_type = Self::type_after_projection(reached, &current_type);
                     // A field that owns its own allocation stores a *pointer* to
                     // it, so reaching what lives inside that field means loading
                     // the pointer rather than adding another offset to the
@@ -746,27 +751,17 @@ impl<'a> FunctionTranslator<'a> {
         Ok((addr, current_type))
     }
 
-    /// The type reached after applying `place`'s projections up to and
-    /// including `depth`, or `fallback` when it cannot be resolved.
+    /// The type a projection walk reached, as `kind`, or `fallback` when the
+    /// walk could not resolve it.
     ///
     /// Walking the prefix through the one resolver that knows how a field type
     /// is read out of a struct, a class, or a generic instantiation keeps the
     /// store path from growing a second, divergent copy of those rules.
-    fn type_after_projection(
-        place: &Place,
-        depth: usize,
-        fallback: &Type,
-        type_ctx: &TypeCtx,
-    ) -> Result<Type, CodegenError> {
-        let prefix = Place {
-            local: place.local,
-            projection: place.projection[..=depth].to_vec(),
-        };
-        let kind = Self::resolve_projected_type_kind(&prefix, type_ctx)?;
+    fn type_after_projection(kind: &TypeKind, fallback: &Type) -> Type {
         if matches!(kind, TypeKind::Error) {
-            return Ok(fallback.clone());
+            return fallback.clone();
         }
-        Ok(Type::new(kind, fallback.span))
+        Type::new(kind.clone(), fallback.span)
     }
 
     /// Apply the final projection on `place` as a store of `value`.
