@@ -3,11 +3,13 @@
 
 pub mod analysis;
 pub mod backend;
+pub mod body;
 pub mod class;
 pub mod lowering;
 pub mod operand;
 pub mod optimization;
 pub mod optimizations;
+pub mod place;
 pub mod rc;
 pub mod residency;
 pub mod ssa;

@@ -425,12 +425,11 @@ fn emit_unshare(
 /// caller ends the shared path with a jump there.
 ///
 /// Code generation answers the question inline from the count word, and calls
-/// the runtime only while the heap is being tracked.
-///
-/// TODO: the question is asked again on every later write to the same place,
-/// though once a write has made the place unique nothing before the next write
-/// can share it again unless the place is copied or handed to a call; a
-/// uniqueness fact carried between writes would let those checks go.
+/// the runtime only while the heap is being tracked. Every write asks again;
+/// `optimization::unshare_elision` later removes each check an earlier answer
+/// or a freshly built value has already settled, so the shape emitted here —
+/// the call, then a block doing nothing but branching on its answer — is what
+/// that pass recognizes.
 fn branch_when_shared(ctx: &mut LoweringContext, place: &Place, span: Span) -> BasicBlock {
     let copy_bb = ctx.new_basic_block();
     let join_bb = ctx.new_basic_block();
@@ -528,11 +527,12 @@ fn field_copy_operand(
 
 /// The runtime copy a shared collection is replaced with before a write.
 ///
-/// TODO: a collection passed to a function whose caller never uses it again
-/// (`xs = step(xs)`) arrives here shared, because the callee's `var x = param`
-/// takes a reference of its own, so the first write copies the whole
-/// collection and then every element it writes. Passing a dying argument
-/// owned would let the write find it unique.
+/// TODO: a collection passed to a callee that does not take the parameter
+/// over (`optimization::owned_params` declines methods, closures and every
+/// function it cannot prove has one body and plain callers) arrives here
+/// shared even when the caller never uses it again (`xs = step(xs)`), because
+/// the callee's `var x = param` takes a reference of its own, so the first
+/// write copies the whole collection and then every element it writes.
 fn collection_clone_fn(kind: BuiltinCollectionKind) -> &'static str {
     match kind {
         BuiltinCollectionKind::List => rt::LIST_CLONE,

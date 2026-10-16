@@ -74,6 +74,59 @@ impl Terminator {
         Self { kind, span }
     }
 
+    /// Every place this terminator stores a value into: the destination of a
+    /// call, a virtual call or a kernel launch, and each `out` argument of a
+    /// call.
+    pub fn written_places(&self) -> impl Iterator<Item = &Place> {
+        let (destination, args, modes): (Option<&Place>, &[Operand], &[ArgMode]) = match &self.kind
+        {
+            TerminatorKind::Call {
+                destination,
+                args,
+                arg_modes,
+                func: _,
+                arg_handles: _,
+                target: _,
+            }
+            | TerminatorKind::VirtualCall {
+                destination,
+                args,
+                arg_modes,
+                vtable_slot: _,
+                target: _,
+            } => (Some(destination), args, arg_modes),
+            TerminatorKind::GpuLaunch {
+                destination,
+                kernel: _,
+                grid: _,
+                block: _,
+                launch_args: _,
+                scalar_args: _,
+                uniform_bound_x: _,
+                uniform_bound_y: _,
+                uniform_bound_z: _,
+                uniform_start_x: _,
+                uniform_start_y: _,
+                uniform_start_z: _,
+                target: _,
+            } => (Some(destination), &[], &[]),
+            TerminatorKind::Goto { target: _ }
+            | TerminatorKind::SwitchInt {
+                discr: _,
+                targets: _,
+                otherwise: _,
+            }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => (None, &[], &[]),
+        };
+        let out_args = args
+            .iter()
+            .enumerate()
+            .filter(move |(position, _)| arg_mode(modes, *position) == ArgMode::Out)
+            .filter_map(|(_, arg)| arg.place());
+        destination.into_iter().chain(out_args)
+    }
+
     pub fn successors(&self) -> Vec<BasicBlock> {
         match &self.kind {
             TerminatorKind::Goto { target } => vec![*target],

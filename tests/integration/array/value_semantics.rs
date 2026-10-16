@@ -74,3 +74,44 @@ fn main()
         "1 5",
     );
 }
+
+/// Guards the retain rule of unshare check elision: binding the array between
+/// the writes retains it, so the second write asks again and copies the buffer
+/// `b` still holds.
+#[test]
+fn test_array_bound_between_two_writes_sees_only_the_first_write() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+fn main()
+    var a = [1, 2, 3]
+    var i = 0
+    a[i] = 5
+    let b = a
+    a[i] = 6
+    println(f"{a[0]} {b[0]}")
+"#,
+        "6 5",
+    );
+}
+
+/// Guards the retain rule of unshare check elision through a capture: the
+/// closure takes the array with a retain, so the second write copies the
+/// buffer the closure reads.
+#[test]
+fn test_array_captured_between_two_writes_sees_only_the_first_write() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+
+fn main()
+    var a = [1, 2]
+    a[0] = 3
+    let f = fn() int: a[0]
+    a[0] = 4
+    println(f"{f()} {a[0]}")
+"#,
+        "3 4",
+    );
+}

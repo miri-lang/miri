@@ -2656,6 +2656,12 @@ impl Pipeline {
             mir::optimization::elide_rc(body);
         }
 
+        // Drop the uniqueness checks an earlier write through the same path
+        // already answered. Runs on the bodies with every retain explicit.
+        for (_name, body) in &mut bodies {
+            mir::optimization::elide_unshare_checks(body);
+        }
+
         // Check RC invariants and cross-residency readback fencing after
         // Perceus, and that every call passes an owned argument exactly where
         // its callee takes one over.

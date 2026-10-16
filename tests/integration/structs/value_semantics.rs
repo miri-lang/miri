@@ -386,3 +386,124 @@ fn main()
         "7 30 2 3 1 9",
     );
 }
+
+/// Guards the retain rule of unshare check elision: binding the list between
+/// the writes retains it, which forgets every place under it, so the second
+/// write asks again and copies the list `snapshot` still holds.
+#[test]
+fn test_list_bound_between_two_element_writes_sees_only_the_first_write() {
+    assert_heap_guard_output(
+        &with_box(
+            r#"
+use system.collections.list
+
+fn main()
+    var l = List([Box(count: 1, name: "a"), Box(count: 2, name: "b")])
+    var i = 0
+    l[i].count = 10
+    let snapshot = l
+    l[i].count = 20
+    println(f"{snapshot[0].count} {l[0].count}")
+"#,
+        ),
+        "10 20",
+    );
+}
+
+/// Guards the any-index rule of unshare check elision: reading `l[j]` reaches
+/// every element, so `l[i]` is forgotten although `i` and `j` are different
+/// locals, and the second write copies the element `s` holds.
+#[test]
+fn test_element_bound_through_another_index_between_writes_sees_only_the_first_write() {
+    assert_heap_guard_output(
+        &with_box(
+            r#"
+use system.collections.list
+
+fn main()
+    var l = List([Box(count: 1, name: "a")])
+    var i = 0
+    var j = 0
+    l[i].count = 5
+    let s = l[j]
+    l[i].count = 6
+    println(f"{s.count} {l[0].count}")
+"#,
+        ),
+        "5 6",
+    );
+}
+
+/// Guards the index-write rule of unshare check elision: assigning `i` forgets
+/// every place indexed by it, so `l[i]` after `i = 1` is asked about afresh and
+/// the element `second` shares is copied before the write.
+#[test]
+fn test_index_changed_between_writes_copies_the_newly_reached_element() {
+    assert_heap_guard_output(
+        &with_box(
+            r#"
+use system.collections.list
+
+fn main()
+    var l = List([Box(count: 1, name: "a"), Box(count: 2, name: "b")])
+    let second = l[1]
+    var i = 0
+    l[i].count = 10
+    i = 1
+    l[i].count = 20
+    println(f"{second.count} {l[0].count} {l[1].count}")
+"#,
+        ),
+        "2 10 20",
+    );
+}
+
+/// Guards the retain rule of unshare check elision through a capture: the
+/// closure takes the list with a retain, so the second write asks again and
+/// copies the list the closure reads.
+#[test]
+fn test_list_captured_between_two_element_writes_sees_only_the_first_write() {
+    assert_heap_guard_output(
+        &with_box(
+            r#"
+use system.collections.list
+
+fn main()
+    var l = List([Box(count: 1, name: "a")])
+    var i = 0
+    l[i].count = 3
+    let f = fn() int: l[0].count
+    l[i].count = 4
+    println(f"{f()} {l[0].count}")
+"#,
+        ),
+        "3 4",
+    );
+}
+
+/// A path through a class instance never yields a fact for unshare check
+/// elision; `test_a_path_through_a_class_field_keeps_every_check` pins that
+/// every check stays. This pins the values: the first write copies the list
+/// `other` shares, and the second changes only the copy.
+#[test]
+fn test_class_field_path_written_twice_leaves_a_bound_list_alone() {
+    assert_heap_guard_output(
+        &with_box(
+            r#"
+use system.collections.list
+
+class Holder
+    var items [Box]
+
+fn main()
+    var h = Holder(items: List([Box(count: 1, name: "a")]))
+    let other = h.items
+    var i = 0
+    h.items[i].count = 7
+    h.items[i].count += 1
+    println(f"{other[0].count} {h.items[0].count}")
+"#,
+        ),
+        "1 8",
+    );
+}

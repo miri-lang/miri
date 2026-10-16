@@ -62,9 +62,42 @@ struct BorrowedLocals {
     owned_params: Vec<bool>,
 }
 
+/// The locals `body` assigns, or makes a direct call's destination: the
+/// writes that decide whether a capture is read-only. Narrower than
+/// [`Body::written_locals`], which also counts `out` arguments and the
+/// destinations of virtual calls and kernel launches.
+///
+/// TODO: a capture written only through an `out` argument still counts as
+/// read-only here, so the value the callee stores into it is released twice —
+/// the heap guard reports a double free for a closure that passes a captured
+/// list to an `out` parameter and reads it back. Deciding read-only captures
+/// from `Body::written_locals` releases it once.
+fn assigned_or_call_written_locals(body: &Body) -> std::collections::HashSet<crate::mir::Local> {
+    let call_destinations = body
+        .basic_blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .filter_map(|terminator| match &terminator.kind {
+            TerminatorKind::Call { destination, .. } => Some(destination),
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable
+            | TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::VirtualCall { .. } => None,
+        });
+    body.basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(Statement::written_place)
+        .chain(call_destinations)
+        .map(|place| place.local)
+        .collect()
+}
+
 impl BorrowedLocals {
     fn of(body: &Body) -> Self {
-        let written = body.written_locals();
+        let written = assigned_or_call_written_locals(body);
         BorrowedLocals {
             arg_count: body.arg_count,
             owned_params: body.owned_params.clone(),
@@ -398,19 +431,13 @@ impl Perceus {
             return false;
         }
         let mut changed = false;
-        for op in operands {
-            let place = match op {
-                Operand::Copy(p) | Operand::Move(p) => Some(p),
-                _ => None,
-            };
-            if let Some(place) = place {
-                if is_place_managed(place, ctx) {
-                    new_stmts.push(Statement {
-                        kind: StatementKind::IncRef(place.clone()),
-                        span,
-                    });
-                    changed = true;
-                }
+        for place in operands.iter().filter_map(Operand::place) {
+            if is_place_managed(place, ctx) {
+                new_stmts.push(Statement {
+                    kind: StatementKind::IncRef(place.clone()),
+                    span,
+                });
+                changed = true;
             }
         }
         changed

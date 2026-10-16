@@ -5,8 +5,10 @@ use crate::ast::types::Type;
 use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::BasicBlockData;
-use crate::mir::place::Local;
+use crate::mir::place::{Local, Place};
+use crate::mir::statement::Statement;
 use crate::mir::symbol::Symbol;
+use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
 use crate::type_checker::DeclaredFunction;
 use std::collections::{HashMap, HashSet};
@@ -347,27 +349,21 @@ impl Body {
             .collect()
     }
 
-    /// Every local the body stores into: the destination of an assignment or
-    /// of a call.
-    pub fn written_locals(&self) -> HashSet<Local> {
-        use crate::mir::{StatementKind, TerminatorKind};
+    /// Every place the body stores a value into, in block order: each
+    /// statement's ([`Statement::written_place`]) and each terminator's
+    /// ([`Terminator::written_places`]).
+    pub fn written_places(&self) -> impl Iterator<Item = &Place> {
+        self.basic_blocks.iter().flat_map(|block| {
+            let statements = block.statements.iter().filter_map(Statement::written_place);
+            let terminator = block.terminator.iter().flat_map(Terminator::written_places);
+            statements.chain(terminator)
+        })
+    }
 
-        let mut written = HashSet::new();
-        for block in &self.basic_blocks {
-            for stmt in &block.statements {
-                if let StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) =
-                    &stmt.kind
-                {
-                    written.insert(place.local);
-                }
-            }
-            if let Some(TerminatorKind::Call { destination, .. }) =
-                block.terminator.as_ref().map(|term| &term.kind)
-            {
-                written.insert(destination.local);
-            }
-        }
-        written
+    /// Every local the body stores into, as the root of a place
+    /// [`Body::written_places`] names.
+    pub fn written_locals(&self) -> HashSet<Local> {
+        self.written_places().map(|place| place.local).collect()
     }
 }
 

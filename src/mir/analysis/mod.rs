@@ -8,7 +8,9 @@
 //! - **Dominators**: Compute dominator trees and dominance frontiers for SSA construction
 //!   and loop detection. A block `A` dominates block `B` if every path from the entry
 //!   to `B` must pass through `A`.
+//! - **Traversal**: The reverse postorder a forward dataflow visits blocks in.
 //!
 //! These analyses are foundational for optimization passes and SSA transformation.
 
 pub mod dominators;
+pub mod traversal;

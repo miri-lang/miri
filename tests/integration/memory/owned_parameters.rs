@@ -451,7 +451,7 @@ fn checksum(bodies [Body]) float
 const NBODY_CHECKSUM: &str = "-0.8649227495579224";
 
 /// `steps` n-body steps, each result replacing the list it was computed from.
-fn nbody_owned(steps: usize) -> String {
+pub(crate) fn nbody_owned(steps: usize) -> String {
     format!(
         "{NBODY_SYSTEM}\n{}\nfn main()\n    var bodies = initial_bodies()\n    for s in 0..{steps}:\n        bodies = advance(bodies, 0.001)\n    println(f\"checksum {{checksum(bodies)}}\")\n",
         NBODY_STEP.replace("NAME", "advance"),

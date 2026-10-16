@@ -620,6 +620,19 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
     }
 }
 
+/// Whether `name` hands back a value nothing else holds: a block it has just
+/// allocated, whose count is 1, so asking whether it is shared answers no.
+///
+/// Only the collection clones qualify. A copy-on-write entry point returns its
+/// receiver unchanged when that receiver is immortal, which still reads as
+/// shared, so it is not listed.
+pub fn returns_unshared(name: &str) -> bool {
+    matches!(
+        name,
+        rt::LIST_CLONE | rt::MAP_CLONE | rt::SET_CLONE | rt::ARRAY_CLONE
+    )
+}
+
 /// Argument positions of `name`, as a Miri call spells them, that carry an
 /// element the container stores or looks up.
 ///

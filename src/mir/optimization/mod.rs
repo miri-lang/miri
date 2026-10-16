@@ -24,7 +24,10 @@
 //! [`owned_params::decide_owned_parameters`] runs over the whole program before
 //! Perceus and decides which parameters each function takes over from its
 //! callers; [`elide_rc`] later cancels the retain funding such an argument
-//! against the caller's release of it.
+//! against the caller's release of it. [`elide_unshare_checks`] runs after
+//! it, on every host body at every optimization level, and removes a
+//! uniqueness check an earlier check or a freshly built value has already
+//! answered.
 //!
 //! # Usage
 //!
@@ -45,6 +48,7 @@ pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
 pub mod simplify_cfg;
+pub mod unshare_elision;
 
 use crate::mir::{Body, ExecutionModel};
 use constant_propagation::ConstantPropagation;
@@ -54,6 +58,7 @@ use perceus::Perceus;
 use rc_elision::RcElision;
 pub use rc_elision::{count_all_rc_ops, count_rc_ops};
 use simplify_cfg::SimplifyCfg;
+use unshare_elision::UnshareElision;
 
 /// Defines an optimization pass for MIR transformations.
 ///
@@ -192,4 +197,21 @@ pub fn elide_rc(body: &mut Body) {
         return;
     }
     RcElision.run(body);
+}
+
+/// Remove each uniqueness check a write path repeats after an earlier check or
+/// a fresh value has already settled that nothing else holds the place.
+///
+/// Must be called after [`elide_rc`], on bodies whose reference counting is
+/// explicit, so every retain that could share a place again is visible.
+/// A body that runs on a GPU is left alone; it never checks.
+///
+/// # Arguments
+///
+/// * `body` - The MIR function body already annotated with RC operations
+pub fn elide_unshare_checks(body: &mut Body) {
+    if runs_on_a_gpu(body) {
+        return;
+    }
+    UnshareElision.run(body);
 }

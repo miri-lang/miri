@@ -28,6 +28,38 @@ impl Place {
             projection: Vec::new(),
         }
     }
+
+    /// Every local this place indexes by, outermost first.
+    pub fn index_locals(&self) -> impl Iterator<Item = Local> + '_ {
+        self.projection.iter().filter_map(|elem| match elem {
+            PlaceElem::Index(local) => Some(*local),
+            PlaceElem::Deref | PlaceElem::Field(_) => None,
+        })
+    }
+
+    /// Whether a read or write of `self` may reach the value at `other`: both
+    /// start at one local and `self`'s projection is a prefix of `other`'s in
+    /// which an index matches any index — two index locals may hold one value —
+    /// and a dereference matches anything.
+    pub fn covers(&self, other: &Place) -> bool {
+        self.local == other.local
+            && self.projection.len() <= other.projection.len()
+            && self
+                .projection
+                .iter()
+                .zip(&other.projection)
+                .all(|pair| match pair {
+                    (PlaceElem::Field(a), PlaceElem::Field(b)) => a == b,
+                    (PlaceElem::Index(_), PlaceElem::Index(_))
+                    | (
+                        PlaceElem::Deref,
+                        PlaceElem::Deref | PlaceElem::Field(_) | PlaceElem::Index(_),
+                    )
+                    | (PlaceElem::Field(_) | PlaceElem::Index(_), PlaceElem::Deref) => true,
+                    (PlaceElem::Field(_), PlaceElem::Index(_))
+                    | (PlaceElem::Index(_), PlaceElem::Field(_)) => false,
+                })
+    }
 }
 
 impl fmt::Display for Place {

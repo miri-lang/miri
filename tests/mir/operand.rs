@@ -104,3 +104,19 @@ fn test_ty_projected_custom_struct_field() {
     let operand = Operand::Copy(place);
     assert_eq!(operand.ty_projected(&body), Some(MirType::I32));
 }
+
+#[test]
+fn test_place_names_what_a_copy_or_a_move_reads_and_nothing_else() {
+    let element = Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Index(Local(2))],
+    };
+    assert_eq!(Operand::Copy(element.clone()).place(), Some(&element));
+    assert_eq!(Operand::Move(element.clone()).place(), Some(&element));
+    assert_eq!(Operand::runtime("callee", Span::default()).place(), None);
+    assert_eq!(Operand::Copy(element).bare_local(), None);
+    assert_eq!(
+        Operand::Move(Place::new(Local(3))).bare_local(),
+        Some(Local(3))
+    );
+}

@@ -65,13 +65,17 @@ impl Operand {
     /// The whole local this operand reads, whether spelled as a copy or a
     /// move; `None` for a projected place, a constant and a function.
     pub fn bare_local(&self) -> Option<Local> {
+        self.place()
+            .filter(|place| place.projection.is_empty())
+            .map(|place| place.local)
+    }
+
+    /// The place this operand reads, whether spelled as a copy or a move;
+    /// `None` for a constant and a function.
+    pub fn place(&self) -> Option<&Place> {
         match self {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-                Some(place.local)
-            }
-            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
-                None
-            }
+            Operand::Copy(place) | Operand::Move(place) => Some(place),
+            Operand::Constant(_) | Operand::Function(_) => None,
         }
     }
 

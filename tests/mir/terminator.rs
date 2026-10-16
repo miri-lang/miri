@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use miri::error::syntax::Span;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::operand::Operand;
 use miri::mir::place::{Local, Place};
 use miri::mir::terminator::{validate_call_arg_handles, GpuLaunchArgs};
+use miri::mir::{ArgMode, BasicBlock, Terminator, TerminatorKind};
 
 fn dummy_operand() -> Operand {
     Operand::Copy(Place::new(Local(0)))
@@ -114,4 +116,76 @@ fn call_arg_handles_rejects_long() {
         .expect_err("mismatched arg_handles must be rejected");
     assert_eq!(err.expected, 1);
     assert_eq!(err.got, 3);
+}
+
+fn call(args: Vec<Operand>, arg_modes: Vec<ArgMode>) -> TerminatorKind {
+    TerminatorKind::Call {
+        func: Operand::runtime("callee", Span::default()),
+        args,
+        arg_modes,
+        arg_handles: Vec::new(),
+        destination: Place::new(Local(9)),
+        target: Some(BasicBlock(1)),
+    }
+}
+
+fn written(kind: TerminatorKind) -> Vec<Place> {
+    Terminator::new(kind, Span::default())
+        .written_places()
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn written_places_names_a_call_destination_and_its_out_arguments() {
+    let out = Place::new(Local(2));
+    let kind = call(
+        vec![
+            Operand::Copy(Place::new(Local(1))),
+            Operand::Copy(out.clone()),
+        ],
+        vec![ArgMode::Borrowed, ArgMode::Out],
+    );
+    assert_eq!(written(kind), vec![Place::new(Local(9)), out]);
+}
+
+#[test]
+fn written_places_names_virtual_call_and_launch_destinations() {
+    let virtual_call = TerminatorKind::VirtualCall {
+        vtable_slot: 0,
+        args: vec![Operand::Copy(Place::new(Local(1)))],
+        arg_modes: vec![ArgMode::Out],
+        destination: Place::new(Local(4)),
+        target: None,
+    };
+    assert_eq!(
+        written(virtual_call),
+        vec![Place::new(Local(4)), Place::new(Local(1))]
+    );
+    let launch = TerminatorKind::GpuLaunch {
+        kernel: dummy_operand(),
+        grid: dummy_operand(),
+        block: dummy_operand(),
+        launch_args: GpuLaunchArgs::new(Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            .expect("no captures"),
+        scalar_args: Vec::new(),
+        uniform_bound_x: None,
+        uniform_bound_y: None,
+        uniform_bound_z: None,
+        uniform_start_x: None,
+        uniform_start_y: None,
+        uniform_start_z: None,
+        destination: Place::new(Local(5)),
+        target: None,
+    };
+    assert_eq!(written(launch), vec![Place::new(Local(5))]);
+}
+
+#[test]
+fn written_places_of_a_jump_or_a_return_is_empty() {
+    assert!(written(TerminatorKind::Return).is_empty());
+    assert!(written(TerminatorKind::Goto {
+        target: BasicBlock(0)
+    })
+    .is_empty());
 }

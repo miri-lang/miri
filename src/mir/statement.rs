@@ -13,6 +13,22 @@ pub struct Statement {
     pub span: Span,
 }
 
+impl Statement {
+    /// The place this statement stores a value into: an assignment's
+    /// destination; `None` for any other statement.
+    pub fn written_place(&self) -> Option<&Place> {
+        match &self.kind {
+            StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => Some(place),
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::IncRef(_)
+            | StatementKind::DecRef(_)
+            | StatementKind::Dealloc(_)
+            | StatementKind::Nop => None,
+        }
+    }
+}
+
 impl fmt::Display for Statement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
