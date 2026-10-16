@@ -38,6 +38,64 @@ fn test_sorted_by_descending()
     assert_eq(desc.get(0), 5)
     assert_eq(desc.get(4), 1)
 
+class ComparisonCounter
+    var calls int
+
+    fn init()
+        self.calls = 0
+
+    fn tick()
+        self.calls += 1
+
+fn test_sorted_by_compares_at_most_n_log_n_times()
+    let counter = ComparisonCounter()
+    var xs = List<int>()
+    var i = 0
+    while i < 1024
+        xs.push((i * 7919) % 1024)
+        i += 1
+    let ascending = fn(a int, b int) int
+        counter.tick()
+        return a - b
+    let sorted = xs.sorted_by(ascending)
+    assert_eq(sorted.length(), 1024)
+    i = 0
+    while i < 1024
+        assert_eq(sorted.get(i), i)
+        i += 1
+    assert(counter.calls <= 1024 * 10, "sorted_by compares at most n log2 n times")
+
+struct Keyed
+    key int
+    order int
+
+fn test_sorted_by_keeps_equal_elements_in_order()
+    var xs = List<Keyed>()
+    var i = 0
+    while i < 40
+        xs.push(Keyed(key: i % 3, order: i))
+        i += 1
+    let by_key = xs.sorted_by(fn(a Keyed, b Keyed) int: a.key - b.key)
+    i = 1
+    while i < 40
+        let before = by_key.get(i - 1)
+        let after = by_key.get(i)
+        assert(before.key < after.key or (before.key == after.key and before.order < after.order), "equal keys keep their input order")
+        i += 1
+
+fn test_sorted_by_handles_empty_and_single_lists()
+    assert(List<int>().sorted_by(fn(a int, b int) int: a - b).is_empty())
+    let one = List([7]).sorted_by(fn(a int, b int) int: a - b)
+    assert_eq(one.length(), 1)
+    assert_eq(one.get(0), 7)
+
+fn test_sorted_by_leaves_the_receiver_alone()
+    let xs = List([3, 1, 2])
+    let sorted = xs.sorted_by(fn(a int, b int) int: a - b)
+    assert_eq(sorted.get(0), 1)
+    assert_eq(xs.get(0), 3)
+    assert_eq(xs.get(1), 1)
+
 fn test_unique_preserves_first_seen_order()
     let uniq = List([1, 2, 2, 3, 1, 4]).unique()
     assert_eq(uniq.length(), 4)
@@ -77,6 +135,10 @@ fn main()
     test_skip()
     test_skip_saturates_beyond_bounds()
     test_sorted_by_descending()
+    test_sorted_by_compares_at_most_n_log_n_times()
+    test_sorted_by_keeps_equal_elements_in_order()
+    test_sorted_by_handles_empty_and_single_lists()
+    test_sorted_by_leaves_the_receiver_alone()
     test_unique_preserves_first_seen_order()
     test_reversed_does_not_mutate_receiver()
     test_zip_truncates_to_shorter()
