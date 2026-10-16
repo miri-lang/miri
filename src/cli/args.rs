@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::cli::version::version_ref;
 pub use crate::codegen::{BuildTarget, CpuBackend};
+pub use crate::pipeline::Listing;
 
 /// Output format for commands (pretty-printed or JSON).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -167,6 +168,11 @@ pub enum Commands {
         /// dispatches `gpu fn` kernels through WebGPU/WGSL.
         #[arg(long, value_enum, default_value_t = BuildTarget::Native)]
         target: BuildTarget,
+
+        /// Also write an intermediate form beside the executable, as
+        /// `<out>.mir` or `<out>.clif`; repeat for both
+        #[arg(long, value_enum, value_name = "FORM")]
+        emit: Vec<Listing>,
 
         /// Output format (pretty or JSON)
         #[arg(long, value_enum, default_value_t = Format::Pretty)]

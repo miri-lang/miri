@@ -287,6 +287,7 @@ fn options_for_run(directory: &Path, basename: &str, opts: &BuildOptions) -> Bui
         cpu_backend: opts.cpu_backend,
         target: opts.target,
         emit_native_host: opts.emit_native_host,
+        emit: opts.emit.clone(),
     }
 }
 

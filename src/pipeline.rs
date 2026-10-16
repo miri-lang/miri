@@ -569,6 +569,56 @@ pub struct BuildOptions {
     /// the `native` target (which always produces the executable). Off by
     /// default so bundle-only callers do not require a linker.
     pub emit_native_host: bool,
+    /// The intermediate forms the native build also writes beside its
+    /// executable, each as `<executable>.<form>`.
+    pub emit: Vec<Listing>,
+}
+
+/// An intermediate form a build can write beside its executable, for a person
+/// or a tool reading what the compiler made of a program.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listing {
+    /// The MIR of every function, after every MIR pass, reference counting
+    /// included.
+    Mir,
+    /// The Cranelift IR of every function, as Cranelift left it after
+    /// optimizing.
+    Clif,
+}
+
+impl Listing {
+    /// The extension the listing's file takes after the executable's name.
+    fn extension(self) -> &'static str {
+        match self {
+            Listing::Mir => "mir",
+            Listing::Clif => "clif",
+        }
+    }
+}
+
+/// The object code a CPU backend produced for a program.
+struct ObjectCode {
+    bytes: Vec<u8>,
+    required_runtimes: BTreeSet<RuntimeKind>,
+    /// The backend's IR listing, when the build asked for one.
+    clif: Option<String>,
+}
+
+/// The MIR of every body, as `Listing::Mir` writes it.
+fn mir_listing(bodies: &[(String, mir::Body)]) -> String {
+    bodies
+        .iter()
+        .map(|(name, body)| format!("fn {name}\n{body}\n"))
+        .collect()
+}
+
+/// Write `text` beside the executable at `out_path` as `<out_path>.<extension>`.
+fn write_listing(out_path: &Path, listing: Listing, text: &str) -> Result<(), CompilerError> {
+    let mut path = out_path.as_os_str().to_owned();
+    path.push(".");
+    path.push(listing.extension());
+    fs::write(PathBuf::from(path), text)?;
+    Ok(())
 }
 
 impl BuildOptions {
@@ -1634,6 +1684,7 @@ impl Pipeline {
             cpu_backend: CpuBackend::Cranelift,
             target: BuildTarget::Native,
             emit_native_host: false,
+            emit: Vec::new(),
         }
     }
 
@@ -1793,53 +1844,59 @@ impl Pipeline {
         opts: &BuildOptions,
         out_override: Option<PathBuf>,
     ) -> Result<PathBuf, CompilerError> {
-        let (object_bytes, required_runtimes) = Self::compile_object(
-            pipeline_result,
-            mir_bodies,
-            opts.cpu_backend,
-            opts.opt_level,
-        )?;
-
-        let (work_dir, out_path) = if let Some(out) = out_override {
-            let work_dir = out
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
-            (work_dir, out)
-        } else {
-            let unique_dir = tempfile::Builder::new()
-                .prefix("miri_build_")
-                .tempdir()
-                .map_err(|e| {
-                    CompilerError::Codegen(format!("Failed to create build directory: {}", e))
-                })?;
-            #[allow(deprecated)]
-            let unique_dir = unique_dir.into_path();
-            let out = unique_dir.join("a.out");
-            (unique_dir, out)
-        };
-
+        let mir_text = opts
+            .emit
+            .contains(&Listing::Mir)
+            .then(|| mir_listing(&mir_bodies));
+        let object = Self::compile_object(pipeline_result, mir_bodies, opts)?;
+        let (work_dir, out_path) = Self::output_paths(out_override)?;
         fs::create_dir_all(&work_dir)?;
 
         // Derive a unique object path from the output path so that parallel
         // builds targeting different output files don't overwrite each other's
         // intermediate `.o` file.
         let object_path = out_path.with_extension("o");
-        fs::write(&object_path, &object_bytes)?;
-        self.link_executable(&object_path, &out_path, &required_runtimes)?;
-
+        fs::write(&object_path, &object.bytes)?;
+        self.link_executable(&object_path, &out_path, &object.required_runtimes)?;
+        if let Some(text) = mir_text {
+            write_listing(&out_path, Listing::Mir, &text)?;
+        }
+        if let Some(text) = object.clif {
+            write_listing(&out_path, Listing::Clif, &text)?;
+        }
         Ok(out_path)
     }
 
-    /// Compile the lowered bodies to native object bytes with the chosen CPU
-    /// backend at `opt_level`, returning the object code and the runtime
-    /// libraries it must be linked against.
+    /// The directory the build works in and the executable's path: `out`
+    /// when given, otherwise a unique temporary `a.out`.
+    fn output_paths(out: Option<PathBuf>) -> Result<(PathBuf, PathBuf), CompilerError> {
+        if let Some(out) = out {
+            let work_dir = out
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
+            return Ok((work_dir, out));
+        }
+        let unique_dir = tempfile::Builder::new()
+            .prefix("miri_build_")
+            .tempdir()
+            .map_err(|e| {
+                CompilerError::Codegen(format!("Failed to create build directory: {}", e))
+            })?;
+        #[allow(deprecated)]
+        let unique_dir = unique_dir.into_path();
+        let out = unique_dir.join("a.out");
+        Ok((unique_dir, out))
+    }
+
+    /// Compile the lowered bodies to native object code with the CPU backend
+    /// and optimization level `opts` name, along with the runtime libraries it
+    /// must be linked against.
     fn compile_object(
         pipeline_result: &PipelineResult,
         mut mir_bodies: Vec<(String, mir::Body)>,
-        cpu_backend: CpuBackend,
-        opt_level: u8,
-    ) -> Result<(Vec<u8>, BTreeSet<RuntimeKind>), CompilerError> {
+        opts: &BuildOptions,
+    ) -> Result<ObjectCode, CompilerError> {
         // Spell the element ABI at the hand-off: reference counting,
         // verification and every MIR reader before this point see an element
         // argument as the value it is, and every CPU backend takes it as an
@@ -1848,9 +1905,9 @@ impl Pipeline {
             mir::element_abi::pass_elements_by_address(body)
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
         }
-        let (object_bytes, required_runtimes) = match cpu_backend {
+        match opts.cpu_backend {
             CpuBackend::Cranelift => {
-                Self::compile_with_cranelift(pipeline_result, &mir_bodies, opt_level)?
+                Self::compile_with_cranelift(pipeline_result, &mir_bodies, opts)
             }
             CpuBackend::Llvm => {
                 use crate::codegen::LlvmBackend;
@@ -1872,21 +1929,23 @@ impl Pipeline {
                     .compile(&bodies_ref, &Default::default())
                     .map_err(CompilerError::from)?;
 
-                (artifact.bytes, runtime_info.required_runtimes)
+                Ok(ObjectCode {
+                    bytes: artifact.bytes,
+                    required_runtimes: runtime_info.required_runtimes,
+                    clif: None,
+                })
             }
-        };
-
-        Ok((object_bytes, required_runtimes))
+        }
     }
 
-    /// Compile the element-ABI-spelled bodies with Cranelift at `opt_level`,
-    /// returning the object code and the runtime libraries it must be linked
-    /// against.
+    /// Compile the element-ABI-spelled bodies with Cranelift at the level
+    /// `opts` names, returning the object code, the runtime libraries it must
+    /// be linked against and, when `opts` asks for it, the CLIF listing.
     fn compile_with_cranelift(
         pipeline_result: &PipelineResult,
         mir_bodies: &[(String, mir::Body)],
-        opt_level: u8,
-    ) -> Result<(Vec<u8>, BTreeSet<RuntimeKind>), CompilerError> {
+        opts: &BuildOptions,
+    ) -> Result<ObjectCode, CompilerError> {
         #[cfg(feature = "cranelift")]
         {
             use crate::codegen::cranelift::{CraneliftOptions, OptLevel};
@@ -1907,17 +1966,22 @@ impl Pipeline {
                 .map(|(name, body)| (name.as_str(), body))
                 .collect();
             let options = CraneliftOptions {
-                opt_level: OptLevel::for_level(opt_level),
+                opt_level: OptLevel::for_level(opts.opt_level),
+                ir_listing: opts.emit.contains(&Listing::Clif),
                 ..Default::default()
             };
             let artifact = backend
                 .compile(&bodies_ref, &options)
                 .map_err(CompilerError::from)?;
-            Ok((artifact.bytes, runtime_info.required_runtimes))
+            Ok(ObjectCode {
+                bytes: artifact.bytes,
+                required_runtimes: runtime_info.required_runtimes,
+                clif: artifact.ir_listing,
+            })
         }
         #[cfg(not(feature = "cranelift"))]
         {
-            let _ = (pipeline_result, mir_bodies, opt_level);
+            let _ = (pipeline_result, mir_bodies, opts);
             Err(CompilerError::Codegen(
                 "Cranelift backend not enabled. Recompile with --features cranelift".to_string(),
             ))

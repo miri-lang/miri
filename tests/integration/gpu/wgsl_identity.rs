@@ -111,6 +111,7 @@ fn canonical_manifest(source: &str) -> serde_json::Value {
         opt_level: 0,
         cpu_backend: Default::default(),
         emit_native_host: false,
+        emit: Vec::new(),
     };
     Pipeline::new()
         .build(source, &opts)

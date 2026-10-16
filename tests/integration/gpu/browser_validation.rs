@@ -50,6 +50,7 @@ fn build_demo_manifest(demo_path: &str) -> serde_json::Value {
         cpu_backend: Default::default(),
         // Bundle-only: this gate validates emitted WGSL, not a native link.
         emit_native_host: false,
+        emit: Vec::new(),
     };
 
     let _index_html_path = pipeline

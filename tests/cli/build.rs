@@ -417,3 +417,57 @@ fn test_opt_level_3_runs_a_tight_loop_faster_than_opt_level_0() {
         "opt-level 3 took {optimized:?}, opt-level 0 took {unoptimized:?}"
     );
 }
+
+/// `--emit mir` writes the program's MIR, as reference counting left it,
+/// beside the executable; `--emit clif` writes the backend's IR of every
+/// function. Neither changes the executable.
+#[test]
+fn test_build_emits_mir_and_clif_beside_the_executable() {
+    let source = create_test_file(TIGHT_LOOP);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("loop");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--emit", "mir", "--emit", "clif"])
+        .assert()
+        .success();
+
+    let mir = std::fs::read_to_string(out_dir.path().join("loop.mir")).unwrap();
+    assert!(
+        mir.contains("classify"),
+        "the MIR names the program's function:\n{mir}"
+    );
+    let clif = std::fs::read_to_string(out_dir.path().join("loop.clif")).unwrap();
+    assert!(
+        clif.contains("function") && clif.contains("classify"),
+        "the CLIF holds the function:\n{clif}"
+    );
+    timed_run(&out);
+
+    let plain = build_with_flags(&source, out_dir.path(), &[]);
+    assert!(
+        std::fs::read(out.with_extension("o")).unwrap()
+            == std::fs::read(plain.with_extension("o")).unwrap(),
+        "--emit changed the object code"
+    );
+}
+
+/// Without `--emit`, nothing but the build's own files is written.
+#[test]
+fn test_build_without_emit_writes_no_listing() {
+    let source = create_test_file(SIMPLE_MAIN);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("main");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .assert()
+        .success();
+    assert!(!out_dir.path().join("main.mir").exists());
+    assert!(!out_dir.path().join("main.clif").exists());
+}

@@ -89,6 +89,7 @@ fn build_bundle(source: &str) -> PathBuf {
         cpu_backend: Default::default(),
         // Bundle-only: this smoke validates the emitted JS, not a native link.
         emit_native_host: false,
+        emit: Vec::new(),
     };
     pipeline.build(source, &opts).expect("build should succeed");
     dir

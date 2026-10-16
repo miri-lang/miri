@@ -64,6 +64,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 opt_level,
                 cpu_backend,
                 target,
+                emit,
                 format,
             } => build_file(
                 path,
@@ -76,6 +77,7 @@ fn run_command(cli: Cli) -> Result<()> {
                     // The CLI emits the native host binary alongside a web-gpu
                     // bundle; the flag is a no-op for the native target.
                     emit_native_host: true,
+                    emit,
                 },
                 format,
                 cli.verify_mir,
@@ -169,6 +171,7 @@ fn run_command(cli: Cli) -> Result<()> {
                         cpu_backend,
                         target,
                         emit_native_host: true,
+                        emit: Vec::new(),
                     },
                     format,
                     cli.verify_mir,

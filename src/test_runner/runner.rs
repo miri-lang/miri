@@ -97,6 +97,7 @@ pub fn compile_with_harness(
         cpu_backend: CpuBackend::Cranelift,
         target: BuildTarget::Native,
         emit_native_host: false,
+        emit: Vec::new(),
     };
 
     let absolute = file_path

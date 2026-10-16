@@ -248,6 +248,7 @@ fn test_compile_with_all_opt_levels() {
         let options = CraneliftOptions {
             opt_level: opt,
             pic: true,
+            ir_listing: false,
         };
         let artifact = backend
             .compile(&[], &options)
@@ -267,6 +268,7 @@ fn test_compile_with_pic_disabled() {
     let options = CraneliftOptions {
         opt_level: OptLevel::None,
         pic: false,
+        ir_listing: false,
     };
     let artifact = backend
         .compile(&[], &options)

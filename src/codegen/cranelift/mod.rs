@@ -87,6 +87,9 @@ pub struct CraneliftOptions {
     pub opt_level: OptLevel,
     /// Whether to generate position-independent code.
     pub pic: bool,
+    /// Whether to return the CLIF of every compiled function, as Cranelift
+    /// left it after optimizing, in the artifact's `ir_listing`.
+    pub ir_listing: bool,
 }
 
 /// Optimization levels for Cranelift.
@@ -121,6 +124,7 @@ impl Default for CraneliftOptions {
         Self {
             opt_level: OptLevel::None,
             pic: true,
+            ir_listing: false,
         }
     }
 }
@@ -272,6 +276,7 @@ impl Backend for CraneliftBackend {
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
         let mut string_literals = BTreeMap::new();
+        let mut listing = options.ir_listing.then(String::new);
         for (name, body) in &cpu_bodies {
             self.compile_function(
                 &mut module,
@@ -281,6 +286,7 @@ impl Backend for CraneliftBackend {
                 &isa,
                 &mut string_literals,
                 &kernel_registry,
+                listing.as_mut(),
             )?;
         }
 
@@ -306,6 +312,7 @@ impl Backend for CraneliftBackend {
         Ok(CompiledArtifact {
             bytes: object,
             format: ArtifactFormat::ObjectFile,
+            ir_listing: listing,
         })
     }
 
@@ -584,6 +591,7 @@ impl CraneliftBackend {
     /// * `body` - The MIR Body to translate.
     /// * `isa` - The TargetIsa for code generation.
     /// * `string_literals` - A map to collect and deduplicate string literals found in the function.
+    /// * `listing` - When given, receives the function's CLIF after Cranelift optimized it.
     #[allow(clippy::too_many_arguments)]
     fn compile_function(
         &self,
@@ -594,6 +602,7 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         string_literals: &mut BTreeMap<String, usize>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
+        listing: Option<&mut String>,
     ) -> Result<(), CodegenError> {
         // Create function translator
         let mut translator = FunctionTranslator::new(isa, body, &self.facts);
@@ -616,6 +625,9 @@ impl CraneliftBackend {
         module
             .define_function(func_id, ctx)
             .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
+        if let Some(listing) = listing {
+            listing.push_str(&format!("; {name}\n{}\n", ctx.func.display()));
+        }
 
         // Clear context for next function
         ctx.clear();

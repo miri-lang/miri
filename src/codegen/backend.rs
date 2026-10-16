@@ -50,12 +50,19 @@ pub struct CompiledArtifact {
     pub bytes: Vec<u8>,
     /// The format of the artifact.
     pub format: ArtifactFormat,
+    /// The backend's own IR of every function it compiled, when its options
+    /// asked for a listing.
+    pub ir_listing: Option<String>,
 }
 
 impl CompiledArtifact {
     /// Create a new compiled artifact.
     pub fn new(bytes: Vec<u8>, format: ArtifactFormat) -> Self {
-        Self { bytes, format }
+        Self {
+            bytes,
+            format,
+            ir_listing: None,
+        }
     }
 
     /// Create an object file artifact.
