@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=72a96422911de4e16bf3d999c7095c138d6bdb8934eace559b844b75aee912bc
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=3ac5b8b12c89dd708dc88d89c9f46d04dc329b9b03b8e3eb403bf379e0ae369f
 
 // json-roundtrip: parse, walk and rewrite a JSON document (see json-roundtrip.mi).
 //
@@ -27,7 +27,9 @@ namespace {
 
 struct Json {
     enum class Kind { Object, Array, Text, Number, Bool, Null } kind = Kind::Null;
-    std::vector<std::pair<std::string_view, Json>> members;
+    // An object's keys and values side by side, an array's items in `items`:
+    // a vector of a pair holding a Json would need Json complete here.
+    std::vector<std::string_view> keys;
     std::vector<Json> items;
     std::string_view text;
     std::int64_t number = 0;
@@ -135,7 +137,8 @@ class Parser {
             if (!item) {
                 return std::nullopt;
             }
-            json.members.emplace_back(key, std::move(*item));
+            json.keys.push_back(key);
+            json.items.push_back(std::move(*item));
         } while (consume(','));
         return consume('}') ? std::optional<Json>(std::move(json)) : std::nullopt;
     }
@@ -165,14 +168,14 @@ void write(const Json &value, std::string &out) {
     switch (value.kind) {
     case Json::Kind::Object:
         out += '{';
-        for (std::size_t i = 0; i < value.members.size(); i++) {
+        for (std::size_t i = 0; i < value.items.size(); i++) {
             if (i > 0) {
                 out += ',';
             }
             out += '"';
-            out += value.members[i].first;
+            out += value.keys[i];
             out += "\":";
-            write(value.members[i].second, out);
+            write(value.items[i], out);
         }
         out += '}';
         break;
@@ -207,12 +210,6 @@ std::pair<std::int64_t, std::int64_t> walk(const Json &value) {
     std::pair<std::int64_t, std::int64_t> totals{1, 0};
     switch (value.kind) {
     case Json::Kind::Object:
-        for (const auto &member : value.members) {
-            const auto inner = walk(member.second);
-            totals.first += inner.first;
-            totals.second += inner.second;
-        }
-        break;
     case Json::Kind::Array:
         for (const auto &item : value.items) {
             const auto inner = walk(item);
