@@ -204,30 +204,38 @@ def needs_diagnosis(key, cell, charter):
 
 
 def aggregates(cells, manifests):
-    """Geometric means of each language's time ratio to C, over every workload
-    with a ratio, overall and per feature tag, with the workloads counted."""
-    groups = defaultdict(list)
+    """Geometric means of each language's time ratio to C, and of its peak
+    memory ratio to C, over every workload with a ratio, overall and per
+    feature tag, with the workloads each covers."""
+    groups = defaultdict(lambda: {"time": [], "memory": []})
     for key, cell in cells.items():
-        value = ((cell.get("vs_c") or {}).get("time") or {}).get("value")
-        if value is None or value <= 0:
-            continue
         workload, language, variant, size, mode = key
-        groups[(language, variant, size, mode, "all")].append(value)
-        for tag in manifests.get(workload, {}).get("tags", []):
-            groups[(language, variant, size, mode, tag)].append(value)
+        vs_c = cell.get("vs_c") or {}
+        time = (vs_c.get("time") or {}).get("value")
+        memory = (vs_c.get("max_rss") or {}).get("value")
+        for tag in ["all", *manifests.get(workload, {}).get("tags", [])]:
+            group = groups[(language, variant, size, mode, tag)]
+            if time and time > 0:
+                group["time"].append(time)
+            if memory and memory > 0:
+                group["memory"].append(memory)
     out = []
-    for (language, variant, size, mode, tag), values in sorted(groups.items()):
-        out.append(
-            {
-                "language": language,
-                "variant": variant,
-                "size": size,
-                "mode": mode,
-                "tag": tag,
-                "geomean_vs_c": geometric_mean(values),
-                "coverage": len(values),
-            }
-        )
+    for (language, variant, size, mode, tag), group in sorted(groups.items()):
+        if not group["time"]:
+            continue
+        row = {
+            "language": language,
+            "variant": variant,
+            "size": size,
+            "mode": mode,
+            "tag": tag,
+            "geomean_vs_c": geometric_mean(group["time"]),
+            "coverage": len(group["time"]),
+        }
+        if group["memory"]:
+            row["geomean_max_rss_vs_c"] = geometric_mean(group["memory"])
+            row["memory_coverage"] = len(group["memory"])
+        out.append(row)
     return out
 
 

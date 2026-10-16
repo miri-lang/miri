@@ -59,7 +59,9 @@
           "mode": {"type": "string"},
           "tag": {"type": "string"},
           "geomean_vs_c": {"type": "number"},
-          "coverage": {"type": "integer"}
+          "coverage": {"type": "integer"},
+          "geomean_max_rss_vs_c": {"type": "number"},
+          "memory_coverage": {"type": "integer"}
         }
       }
     }

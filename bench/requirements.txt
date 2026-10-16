@@ -1,0 +1,3 @@
+# Only bench/plot.py and bench/export_site.py need these; the runner, the
+# statistics stage and the regression check are standard library only.
+matplotlib==3.10.6

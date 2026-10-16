@@ -111,6 +111,33 @@ tool gathers evidence; the engineer names the mechanism, files the work, and
 records it in [`diagnosis/CATALOG.md`](diagnosis/CATALOG.md), which the next
 diagnosis reads first.
 
+## Charts and the website
+
+```bash
+pip install -r bench/requirements.txt                      # matplotlib, pinned
+python3 bench/plot.py bench/results/<run>/summary.json out/ [--history bench/results/]
+python3 bench/export_site.py                               # newest committed publication run
+python3 bench/export_site.py --check                       # what the site-identity test runs
+```
+
+`plot.py` draws from `summary.json` alone and computes no ratio of its own:
+time and hot time against C, peak memory against C and net memory against
+Rust, each language's time against its memory, and Miri's ratio to C run by
+run. Each chart is SVG and PNG, carries the profile, CPU, Miri version and
+charter version in its footer, labels a cell it has no measurement for
+instead of drawing it as zero, and hatches a noisy one. `where-miri-lost.md`
+is the table of Miri cells past the diagnosis thresholds, with the mechanism
+each `DIAGNOSIS.md` names. The SVG is deterministic.
+
+`export_site.py` copies a publication run to the website checkout at
+`../miri-lang.org`: `_data/bench/<miri-version>.json` and `latest.json` (the
+medians, ratios, aggregates and provenance of `summary.json`) and the SVGs
+under `assets/bench/<miri-version>/`. A dev run is never exported. A
+publication run is committed under `bench/results/` by name, and the site is
+regenerated from it in the same pass; `tests/bench/site_identity.rs` fails
+when the site's copy differs from a fresh export, and skips with a log line
+when the sibling checkout or matplotlib is absent.
+
 ## Machines
 
 A run names its machine profile with `--profile`, read from

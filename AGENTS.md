@@ -225,6 +225,17 @@ To show a new command on the guide, add a step to `runs.toml` rather than pastin
 
 ---
 
+## 4.4 Benchmark Results Sync: `bench/results/` ↔ the website (MANDATORY)
+The website's benchmark page shows `../miri-lang.org/_data/bench/` and the charts under `assets/bench/<version>/`, exported from the newest publication run committed under `bench/results/`. No number on it is typed by hand. **Whenever you commit a publication run, or change `bench/plot.py`, `bench/export_site.py` or the summary they read, regenerate the website copy in the same pass:**
+
+```bash
+python3 bench/export_site.py   # needs bench/requirements.txt
+```
+
+`tests/bench/site_identity.rs` is the gate: it fails when the site's copy differs from a fresh export, and skips with a log line when the sibling checkout or matplotlib is absent. Run it explicitly with `cargo test --test mod site_identity`.
+
+---
+
 ## 5. Workflow Best Practices for AI Agents
 To work efficiently and hit fewer roadblocks:
 
