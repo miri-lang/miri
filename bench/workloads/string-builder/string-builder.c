@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=f45b83d56bc10fd4dd90cfed44b5c2d3e617be25c3d3d91a601bb1d43df3ef94
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=b98f969659aa30391c26a73612ef0a32dfad66aff075e470f4b2fc8e2b23755a
 
 // string-builder: build a long string by appending (see string-builder.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

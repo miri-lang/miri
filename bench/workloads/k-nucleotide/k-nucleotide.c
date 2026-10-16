@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=85188f6536d3277b83108e178da94c4a1d592f1802a1b14caf32c9c746ac4f84
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=f9156beac7cd16ee86299aecea7867af1851036359023d9a75eca7fbb05fdc3e
 
 // k-nucleotide: count the substrings of a DNA sequence (see k-nucleotide.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

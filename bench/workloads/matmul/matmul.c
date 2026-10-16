@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=7306b0a385013b8e15bbc96a5eb018b2a02312ff48a7e3dce9ce041b1baadf7e
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=ee894f803ad6283f37d7eb6b6cfa4f1f0de2e96e474bfc8aae1268f472195335
 
 // matmul: the naive triple-loop matrix product (see matmul.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

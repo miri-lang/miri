@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=a93770cffdd93cb34ab72d5c2577af2f0dc0ce8e099d3ee1739c8329d86fed3b
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=ae13a2670247e8d7ad11c44d19e6bc0be252a12fb8f8b61d688cf3fdd33a8519
 
 // json-roundtrip: parse, walk and rewrite a JSON document (see json-roundtrip.mi).
 //
 // C has no JSON parser, so this port carries a small recursive-descent parser
 // and writer for the JSON the generator emits: objects, arrays, ASCII strings
 // without escapes, integers, booleans and null.
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

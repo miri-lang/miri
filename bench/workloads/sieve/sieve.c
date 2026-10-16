@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=a54ae810c8b46e2af2973d44cf2b904594898cb7ea4ce587e16da9151ea8e971
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=d79d83cbd1ad88348e3a6e6c37342a00d95463b08c5f099cdf4e8a4dae321286
 
 // sieve: the sieve of Eratosthenes (see sieve.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

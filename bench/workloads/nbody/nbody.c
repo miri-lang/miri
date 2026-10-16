@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=85691f16fe66c33061cdc6fc77cb1fdefcf4dfb8181fbc0a56fb6493824208fe
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=bfe75fea80dc0ede5679f369e63d7478c1eae27c25a25c47ae6cc2810be9e5a1
 
 // nbody: the Jovian planets orbiting the sun (see nbody.mi).
 
 // The other ports never fuse a multiply and an add into one rounding, so
 // neither may this one: every language computes the same bits.
 #pragma STDC FP_CONTRACT OFF
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

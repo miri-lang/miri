@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=8acd3fb93a17b8ada921083e37c3d97e8d3cd1ad86bd343072a4e6e54f22fd98
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=a9c8e9babbba7ba28d0ba2b5c92c1a64e24826fa3339049595ca14b964f6c1a4
 
 // wordfreq: count the words of a text (see wordfreq.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

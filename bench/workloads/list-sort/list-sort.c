@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=72ebed75a72e432018e312f098da67e9f451e8ed1eb731936fdf50c8f59e55e7
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=60891a6bc8ef5343f990d6b7433c1a128449d31eaf67c7dc0cabe97caadeccdf
 
 // list-sort: sort generated numbers, then records by key (see list-sort.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

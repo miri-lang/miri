@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=0e13ea1c6c486726308ab193e21aaf657509181177512bd959d94747662e64c8
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=a91b645476a3c58bb4c3e804d20470a0fbb8228082e8666a33da280e413862b5
 
 // fannkuch-redux: pancake flips over every permutation (see fannkuch-redux.mi).
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=abd817e1a115418709c6b92212c57f4a92a758027ce3b3d1bf394d2905900626
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=16c4c71cc313112177b83ce5b2f7c3fdf7782318813745141e59904f1dac8eb0
 
 // spectral-norm: power iteration on an infinite matrix (see spectral-norm.mi).
 
 // The other ports never fuse a multiply and an add into one rounding, so
 // neither may this one: every language computes the same bits.
 #pragma STDC FP_CONTRACT OFF
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>

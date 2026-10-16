@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=5ae60db49bf7ac4bb66b36471252ddb0fc2c49108c0d70c4735ce49e537e8886
+// port-checklist: reviewed 2026-10-16 by review-agent sha256=43067493e64e49c27ca150e083f51d47bea9bf29d4c63cb01a234b055de9e8ac
 
 // mandelbrot: the Mandelbrot set packed as a bitmap (see mandelbrot.mi).
 
 // The other ports never fuse a multiply and an add into one rounding, so
 // neither may this one: every language computes the same bits.
 #pragma STDC FP_CONTRACT OFF
+
+// clock_gettime is POSIX: strict C17 headers declare it only when asked.
+#define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
 #include <stdio.h>
