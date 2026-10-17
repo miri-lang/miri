@@ -50,4 +50,5 @@ pub mod tuple;
 pub mod type_alias;
 pub mod user_defined_types;
 pub mod utils;
+pub mod value_class;
 pub mod visibility;

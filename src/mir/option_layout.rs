@@ -25,44 +25,11 @@ use crate::mir::instantiation::{apply_generic_sub, instantiation_argument};
 use crate::mir::rc::is_field_managed;
 use crate::type_checker::context::TypeDefinition;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::collections::HashMap;
 
-/// What the layout of a type is decided against: the program's type table and
-/// the type parameters the body being laid out leaves open.
-///
-/// Inside a generic body a bare name that is one of its parameters means that
-/// parameter, even where the program defines a type of the same name, so a
-/// standard-library body over `V` is not laid out as the program's own `V`.
-#[derive(Debug, Clone, Copy)]
-pub struct LayoutScope<'d> {
-    pub definitions: &'d HashMap<String, TypeDefinition>,
-    pub type_params: &'d HashSet<String>,
-}
+pub use crate::type_checker::value_class::LayoutScope;
 
-impl<'d> LayoutScope<'d> {
-    /// The scope of a body that leaves `type_params` open.
-    pub fn new(
-        definitions: &'d HashMap<String, TypeDefinition>,
-        type_params: &'d HashSet<String>,
-    ) -> Self {
-        Self {
-            definitions,
-            type_params,
-        }
-    }
-
-    /// The scope of code with no type parameter open.
-    pub fn program(definitions: &'d HashMap<String, TypeDefinition>) -> Self {
-        static NO_PARAMETERS: OnceLock<HashSet<String>> = OnceLock::new();
-        Self::new(definitions, NO_PARAMETERS.get_or_init(HashSet::new))
-    }
-
-    /// Whether the bare name `name` is one of the open type parameters.
-    pub fn is_parameter(&self, name: &str) -> bool {
-        self.type_params.contains(name)
-    }
-
+impl LayoutScope<'_> {
     /// The alias `kind` resolves to, unless `kind` names an open parameter.
     fn resolve_alias(&self, kind: &TypeKind) -> Option<Type> {
         match kind {

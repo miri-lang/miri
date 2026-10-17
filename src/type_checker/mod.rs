@@ -21,6 +21,7 @@
 //! - [`generics`] - Generic type inference and substitution
 //! - [`operators`] - Binary and unary operator type validation
 //! - [`utils`] - Type predicates, visibility, and error reporting
+//! - [`value_class`] - Which values are scalars, bitwise values, words or managed
 
 use crate::ast::factory::make_type;
 use crate::ast::types::Type;
@@ -72,6 +73,7 @@ mod type_table;
 pub mod use_after_move;
 mod used_methods;
 pub mod utils;
+pub mod value_class;
 
 use context::{Context, SymbolInfo, TypeDefinition};
 use diagnostics::DiagnosticCollector;
