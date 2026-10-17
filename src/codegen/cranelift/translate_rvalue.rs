@@ -2876,8 +2876,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
 
         for i in 0..element_exprs.len() {
-            let (offset, cl_ty) =
-                field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type)?;
+            let (offset, cl_ty) = field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
@@ -2910,8 +2909,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
 
         for i in 0..def.fields.len() {
-            let (offset, cl_ty) =
-                field_layout(struct_type, i, type_ctx.facts.definitions(), ptr_type)?;
+            let (offset, cl_ty) = field_layout(struct_type, i, type_ctx.layout_scope(), ptr_type)?;
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);

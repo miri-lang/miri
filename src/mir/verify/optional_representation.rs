@@ -22,7 +22,7 @@ use super::{local_display_name, VerificationViolation};
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
-use crate::mir::option_layout::{is_nullable_pointer_optional, OptionalLayers};
+use crate::mir::option_layout::{is_nullable_pointer_optional, LayoutScope, OptionalLayers};
 use crate::mir::place::PlaceElem;
 use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
@@ -108,6 +108,12 @@ struct Layouts<'a> {
 }
 
 impl<'a> Layouts<'a> {
+    /// What this body's optionals are laid out against: the type table and the
+    /// parameters the body leaves open.
+    fn scope(&self) -> LayoutScope<'a> {
+        LayoutScope::new(self.definitions, &self.body.type_params)
+    }
+
     /// The violations one statement raises.
     fn statement_violations(&self, kind: &StatementKind) -> Vec<VerificationViolation> {
         match kind {
@@ -225,7 +231,7 @@ impl<'a> Layouts<'a> {
             projection: prefix.to_vec(),
         };
         let holder_ty = self.place_type(&holder)?;
-        if !is_nullable_pointer_optional(&holder_ty.kind, self.definitions) {
+        if !is_nullable_pointer_optional(&holder_ty.kind, self.scope()) {
             return None;
         }
         Some(VerificationViolation {
@@ -268,6 +274,7 @@ impl<'a> Layouts<'a> {
             .take(callee.arg_count)
             .filter_map(|(position, arg)| {
                 let parameter = &callee.local_decls.get(position + 1)?.ty;
+                let parameter = (parameter, self.scope_of(callee));
                 self.argument_violation(destination, &name, position, arg, parameter)
             })
             .collect();
@@ -282,10 +289,13 @@ impl<'a> Layouts<'a> {
         callee: &str,
         position: usize,
         arg: &Operand,
-        parameter: &Type,
+        (parameter, callee_scope): (&Type, LayoutScope<'_>),
     ) -> Option<VerificationViolation> {
         let source = self.operand_type(arg)?;
-        let (source_layout, target_layout) = self.disagreement(source, parameter)?;
+        let (source_layout, target_layout) = layouts_disagree(
+            OptionalLayers::of(&source.kind, self.scope()),
+            OptionalLayers::of(&parameter.kind, callee_scope),
+        )?;
         Some(VerificationViolation {
             local: destination.local,
             local_name: local_display_name(self.body, destination.local),
@@ -306,7 +316,10 @@ impl<'a> Layouts<'a> {
     ) -> Option<VerificationViolation> {
         let returned = &callee_body.local_decls.first()?.ty;
         let target = self.place_type(destination)?;
-        let (source_layout, target_layout) = self.disagreement(returned, target)?;
+        let (source_layout, target_layout) = layouts_disagree(
+            OptionalLayers::of(&returned.kind, self.scope_of(callee_body)),
+            OptionalLayers::of(&target.kind, self.scope()),
+        )?;
         Some(VerificationViolation {
             local: destination.local,
             local_name: local_display_name(self.body, destination.local),
@@ -318,27 +331,20 @@ impl<'a> Layouts<'a> {
         })
     }
 
-    /// The layouts of `source` and `target`, described, when both are
-    /// optionals laid out differently.
-    ///
-    /// An optional whose innermost value is `void` is the type an absent value
-    /// is spelled at before it meets a slot; it holds nothing, so it agrees
-    /// with every layout.
+    /// [`layouts_disagree`] for two types of this body.
     fn disagreement(&self, source: &Type, target: &Type) -> Option<(String, String)> {
-        let source = OptionalLayers::of(&source.kind, self.definitions);
-        let target = OptionalLayers::of(&target.kind, self.definitions);
-        let is_absent_placeholder =
-            |layers: &OptionalLayers<'_>| matches!(*layers.value, TypeKind::Void | TypeKind::Error);
-        if !is_optional(&source)
-            || !is_optional(&target)
-            || is_absent_placeholder(&source)
-            || is_absent_placeholder(&target)
-            || (source.boxed, source.innermost_nullable_pointer)
-                == (target.boxed, target.innermost_nullable_pointer)
-        {
-            return None;
-        }
-        Some((describe(&source), describe(&target)))
+        layouts_disagree(
+            OptionalLayers::of(&source.kind, self.scope()),
+            OptionalLayers::of(&target.kind, self.scope()),
+        )
+    }
+
+    /// What `callee`'s own types are laid out against.
+    fn scope_of<'b>(&self, callee: &'b Body) -> LayoutScope<'b>
+    where
+        'a: 'b,
+    {
+        LayoutScope::new(self.definitions, &callee.type_params)
     }
 
     /// The type `operand` reads, unless it is the absent value, which is null
@@ -494,4 +500,28 @@ fn written_type(expression: &Expression) -> Option<&Type> {
         return None;
     };
     Some(ty)
+}
+
+/// The layouts of `source` and `target`, described, when both are optionals
+/// laid out differently.
+///
+/// An optional whose innermost value is `void` is the type an absent value is
+/// spelled at before it meets a slot; it holds nothing, so it agrees with every
+/// layout.
+fn layouts_disagree(
+    source: OptionalLayers<'_>,
+    target: OptionalLayers<'_>,
+) -> Option<(String, String)> {
+    let is_absent_placeholder =
+        |layers: &OptionalLayers<'_>| matches!(*layers.value, TypeKind::Void | TypeKind::Error);
+    if !is_optional(&source)
+        || !is_optional(&target)
+        || is_absent_placeholder(&source)
+        || is_absent_placeholder(&target)
+        || (source.boxed, source.innermost_nullable_pointer)
+            == (target.boxed, target.innermost_nullable_pointer)
+    {
+        return None;
+    }
+    Some((describe(&source), describe(&target)))
 }

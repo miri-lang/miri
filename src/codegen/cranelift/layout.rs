@@ -11,7 +11,7 @@ use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
 use crate::error::CodegenError;
 use crate::mir::instantiation::{field_types, member_type_at};
-use crate::mir::option_layout::{is_nullable_pointer_optional, resolve_alias};
+use crate::mir::option_layout::{is_nullable_pointer_optional, resolve_alias, LayoutScope};
 use crate::mir::type_facts::{EnumDefinition, StructDefinition, TypeDefinition};
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
@@ -80,14 +80,17 @@ fn type_from_expression(
 pub fn field_layout(
     local_type: &TypeKind,
     field_idx: usize,
-    type_definitions: &HashMap<String, TypeDefinition>,
+    scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> Result<(i32, CraneliftType), CodegenError> {
     let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
         TypeKind::Tuple(element_exprs) => Ok(tuple_field_layout(element_exprs, field_idx, ptr_ty)),
-        TypeKind::Option(_) => {
-            boxed_optional_field_layout(local_type, field_idx, type_definitions, ptr_ty)
+        TypeKind::Option(_) => boxed_optional_field_layout(local_type, field_idx, scope, ptr_ty),
+        // An open type parameter names no definition, however the program
+        // spells its own types.
+        TypeKind::Custom(name, None) if scope.is_parameter(name) => {
+            Ok(((field_idx as i32) * ptr_size, ptr_ty))
         }
         TypeKind::Custom(name, type_args) => {
             // Only substitute type arguments for compiler-known vector types (Vec2, Vec3, Vec4).
@@ -112,13 +115,7 @@ pub fn field_layout(
                     }
                 }
             }
-            custom_field_layout(
-                name,
-                type_args.as_deref(),
-                field_idx,
-                type_definitions,
-                ptr_ty,
-            )
+            custom_field_layout(name, type_args.as_deref(), field_idx, scope, ptr_ty)
         }
         TypeKind::Int
         | TypeKind::I8
@@ -160,10 +157,10 @@ pub fn field_layout(
 fn boxed_optional_field_layout(
     kind: &TypeKind,
     field_idx: usize,
-    type_definitions: &HashMap<String, TypeDefinition>,
+    scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> Result<(i32, CraneliftType), CodegenError> {
-    if is_nullable_pointer_optional(kind, type_definitions) {
+    if is_nullable_pointer_optional(kind, scope) {
         return Err(CodegenError::Internal(format!(
             "field {field_idx} of `{kind:?}` has no offset: the optional is its payload's own \
              pointer, with no box to hold the payload"
@@ -204,9 +201,10 @@ fn custom_field_layout(
     name: &str,
     type_args: Option<&[Expression]>,
     field_idx: usize,
-    type_definitions: &HashMap<String, TypeDefinition>,
+    scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> Result<(i32, CraneliftType), CodegenError> {
+    let type_definitions = scope.definitions;
     let ptr_size = ptr_ty.bytes() as i32;
     let Some(def) = type_definitions.get(name) else {
         // Type not found — assume pointer-sized fields
@@ -220,7 +218,7 @@ fn custom_field_layout(
         TypeDefinition::Alias(_) => {
             let written = TypeKind::Custom(name.to_string(), type_args.map(<[_]>::to_vec));
             return match resolve_alias(&written, type_definitions) {
-                Some(target) => field_layout(&target.kind, field_idx, type_definitions, ptr_ty),
+                Some(target) => field_layout(&target.kind, field_idx, scope, ptr_ty),
                 None => Ok(((field_idx as i32) * ptr_size, ptr_ty)),
             };
         }

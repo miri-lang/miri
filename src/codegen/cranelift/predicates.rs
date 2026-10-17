@@ -204,7 +204,7 @@ impl<'a> FunctionTranslator<'a> {
         kind: &TypeKind,
         type_ctx: &TypeCtx,
     ) -> Result<bool, CodegenError> {
-        let layers = OptionalLayers::of(kind, type_ctx.facts.definitions());
+        let layers = OptionalLayers::of(kind, type_ctx.layout_scope());
         if layers.boxed == 0 && !layers.innermost_nullable_pointer {
             return Ok(false);
         }

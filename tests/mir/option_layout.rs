@@ -11,7 +11,8 @@ use miri::ast::types::{
 };
 use miri::error::syntax::Span;
 use miri::mir::option_layout::{
-    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, OptionalLayers,
+    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, LayoutScope,
+    OptionalLayers,
 };
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, StructDefinition,
@@ -254,7 +255,7 @@ fn test_option_layout_pointer_payloads_are_nullable() {
     let defs = definitions();
     for (name, kind) in nullable_pointer_payloads() {
         assert!(
-            payload_is_nullable_pointer(&kind, &defs),
+            payload_is_nullable_pointer(&kind, LayoutScope::program(&defs)),
             "{name} is a pointer an optional may spell absent as null"
         );
     }
@@ -265,7 +266,7 @@ fn test_option_layout_value_payloads_are_not_nullable() {
     let defs = definitions();
     for (name, kind) in value_payloads() {
         assert!(
-            !payload_is_nullable_pointer(&kind, &defs),
+            !payload_is_nullable_pointer(&kind, LayoutScope::program(&defs)),
             "{name} must stay boxed inside an optional"
         );
     }
@@ -275,7 +276,7 @@ fn test_option_layout_value_payloads_are_not_nullable() {
 fn test_option_layout_non_optional_has_no_layers() {
     let defs = definitions();
     let kind = custom("Node");
-    let layers = OptionalLayers::of(&kind, &defs);
+    let layers = OptionalLayers::of(&kind, LayoutScope::program(&defs));
     assert_eq!(layers.boxed, 0);
     assert!(!layers.innermost_nullable_pointer);
     assert_eq!(*layers.value, kind);
@@ -283,7 +284,7 @@ fn test_option_layout_non_optional_has_no_layers() {
 
 fn assert_layers(kind: TypeKind, boxed: usize, nullable: bool, value: &TypeKind) {
     let defs = definitions();
-    let layers = OptionalLayers::of(&kind, &defs);
+    let layers = OptionalLayers::of(&kind, LayoutScope::program(&defs));
     assert_eq!(layers.boxed, boxed, "boxed layers of {kind:?}");
     assert_eq!(
         layers.innermost_nullable_pointer, nullable,
@@ -318,8 +319,14 @@ fn test_option_layout_alias_naming_an_optional_adds_its_layers() {
     assert_layers(custom("MaybeNode"), 0, true, &node);
     assert_layers(optional(custom("MaybeNode")), 1, true, &node);
     assert_eq!(
-        OptionalLayers::of(&optional(custom("MaybeNode")), &definitions()),
-        OptionalLayers::of(&optional(optional(node.clone())), &definitions()),
+        OptionalLayers::of(
+            &optional(custom("MaybeNode")),
+            LayoutScope::program(&definitions())
+        ),
+        OptionalLayers::of(
+            &optional(optional(node.clone())),
+            LayoutScope::program(&definitions())
+        ),
         "an optional of an alias naming `Node?` is laid out as `Node??`"
     );
 }
@@ -359,22 +366,28 @@ fn test_option_layout_nullable_pointer_optional_sees_through_aliases() {
     let defs = definitions();
     assert!(is_nullable_pointer_optional(
         &optional(custom("Node")),
-        &defs
+        LayoutScope::program(&defs)
     ));
-    assert!(is_nullable_pointer_optional(&custom("MaybeNode"), &defs));
+    assert!(is_nullable_pointer_optional(
+        &custom("MaybeNode"),
+        LayoutScope::program(&defs)
+    ));
     assert!(is_nullable_pointer_optional(
         &custom_of("Opt", vec![custom("Node")]),
-        &defs
+        LayoutScope::program(&defs)
     ));
     assert!(is_nullable_pointer_optional(
         &optional(custom_of("Id", vec![custom("Node")])),
-        &defs
+        LayoutScope::program(&defs)
     ));
     assert!(!is_nullable_pointer_optional(
         &optional(custom("MaybeNode")),
-        &defs
+        LayoutScope::program(&defs)
     ));
-    assert!(!is_nullable_pointer_optional(&custom("Node"), &defs));
+    assert!(!is_nullable_pointer_optional(
+        &custom("Node"),
+        LayoutScope::program(&defs)
+    ));
 }
 
 #[test]
@@ -422,4 +435,23 @@ fn test_non_alias_kinds_do_not_resolve() {
     let defs = definitions();
     assert_eq!(resolve_alias(&custom("Node"), &defs), None);
     assert_eq!(resolve_alias(&TypeKind::String, &defs), None);
+}
+
+/// Inside a body that leaves `Node` open as a type parameter, the bare name
+/// means the parameter, though the program defines a class of that name: its
+/// optional is boxed like every other parameter's.
+#[test]
+fn test_option_layout_an_open_parameter_shadows_a_type_of_the_same_name() {
+    let defs = definitions();
+    let open: std::collections::HashSet<String> = ["Node".to_string()].into_iter().collect();
+    let in_body = LayoutScope::new(&defs, &open);
+    assert!(!payload_is_nullable_pointer(&custom("Node"), in_body));
+    assert!(!is_nullable_pointer_optional(
+        &optional(custom("Node")),
+        in_body
+    ));
+    assert!(is_nullable_pointer_optional(
+        &optional(custom("Node")),
+        LayoutScope::program(&defs)
+    ));
 }

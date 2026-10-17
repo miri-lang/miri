@@ -113,6 +113,14 @@ pub struct TypeCtx<'a> {
     pub bound_params: &'a HashSet<String>,
 }
 
+impl TypeCtx<'_> {
+    /// What the optionals of the code being translated are laid out against:
+    /// the program's type table and the parameters this code leaves open.
+    pub fn layout_scope(&self) -> crate::mir::option_layout::LayoutScope<'_> {
+        crate::mir::option_layout::LayoutScope::new(self.facts.definitions(), self.open_params)
+    }
+}
+
 /// One Cranelift runtime call site: which symbol to declare-and-call, its
 /// parameter / return types, and the argument values to pass.
 pub(crate) struct CallSite<'a> {
@@ -541,12 +549,8 @@ impl<'a> FunctionTranslator<'a> {
         idx: usize,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
-        let (offset, field_ty) = layout::field_layout(
-            vec_kind,
-            idx,
-            type_ctx.facts.definitions(),
-            type_ctx.ptr_type,
-        )?;
+        let (offset, field_ty) =
+            layout::field_layout(vec_kind, idx, type_ctx.layout_scope(), type_ctx.ptr_type)?;
         Ok(builder.ins().load(field_ty, MemFlags::new(), value, offset))
     }
 
@@ -572,12 +576,8 @@ impl<'a> FunctionTranslator<'a> {
                 .ins()
                 .load(ptr_type, MemFlags::new(), value, offset as i32));
         }
-        let (offset, mut field_ty) = layout::field_layout(
-            &owner_type.kind,
-            idx,
-            type_ctx.facts.definitions(),
-            ptr_type,
-        )?;
+        let (offset, mut field_ty) =
+            layout::field_layout(&owner_type.kind, idx, type_ctx.layout_scope(), ptr_type)?;
         if let Some(expected) = expected_ty {
             if Self::field_width_comes_from_expected_ty(&owner_type.kind, type_ctx) {
                 field_ty =
@@ -745,7 +745,6 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(Value, Type), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let type_definitions = type_ctx.facts.definitions();
         let mut addr = base_addr;
         let mut current_type: Type = type_ctx.local_types[place.local.0].clone();
 
@@ -763,8 +762,12 @@ impl<'a> FunctionTranslator<'a> {
                     current_type = Self::type_after_projection(reached, &current_type);
                 }
                 PlaceElem::Field(idx) => {
-                    let (offset, _) =
-                        layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type)?;
+                    let (offset, _) = layout::field_layout(
+                        &current_type.kind,
+                        *idx,
+                        type_ctx.layout_scope(),
+                        ptr_type,
+                    )?;
                     addr = builder.ins().iadd_imm(addr, offset as i64);
                     current_type = Self::type_after_projection(reached, &current_type);
                     // A field that owns its own allocation stores a *pointer* to
@@ -873,7 +876,7 @@ impl<'a> FunctionTranslator<'a> {
                 let (offset, field_ty) = layout::field_layout(
                     &current_type.kind,
                     *idx,
-                    type_ctx.facts.definitions(),
+                    type_ctx.layout_scope(),
                     type_ctx.ptr_type,
                 )?;
                 // Storing into an inline vector component: narrow/extend the

@@ -500,7 +500,7 @@ impl<'a> FunctionTranslator<'a> {
         if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
-        let layers = OptionalLayers::of(elem_kind, type_ctx.facts.definitions());
+        let layers = OptionalLayers::of(elem_kind, type_ctx.layout_scope());
         let value_kind = &*layers.value;
         let Some(rule) = Self::value_identity_rule(builder, ctx, value_kind, type_ctx)? else {
             return Ok(());
@@ -1000,7 +1000,7 @@ impl<'a> FunctionTranslator<'a> {
             })
             .map(|(i, field_kind)| {
                 let (offset, _) =
-                    layout::field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type)?;
+                    layout::field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
                 Ok((offset, field_kind.clone()))
             })
             .collect::<Result<Vec<(i32, TypeKind)>, CodegenError>>()?;
@@ -1607,12 +1607,8 @@ impl<'a> FunctionTranslator<'a> {
             inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
         let custom_kind = TypeKind::Custom(type_name.to_string(), arg_exprs);
         for (field_idx, field_kind) in managed_fields {
-            let (offset, _cl_ty) = layout::field_layout(
-                &custom_kind,
-                *field_idx,
-                type_ctx.facts.definitions(),
-                ptr_type,
-            )?;
+            let (offset, _cl_ty) =
+                layout::field_layout(&custom_kind, *field_idx, type_ctx.layout_scope(), ptr_type)?;
             let field_ptr = builder
                 .ins()
                 .load(ptr_type, MemFlags::new(), payload_ptr, offset);

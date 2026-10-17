@@ -25,7 +25,52 @@ use crate::mir::instantiation::{apply_generic_sub, instantiation_argument};
 use crate::mir::rc::is_field_managed;
 use crate::type_checker::context::TypeDefinition;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
+
+/// What the layout of a type is decided against: the program's type table and
+/// the type parameters the body being laid out leaves open.
+///
+/// Inside a generic body a bare name that is one of its parameters means that
+/// parameter, even where the program defines a type of the same name, so a
+/// standard-library body over `V` is not laid out as the program's own `V`.
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutScope<'d> {
+    pub definitions: &'d HashMap<String, TypeDefinition>,
+    pub type_params: &'d HashSet<String>,
+}
+
+impl<'d> LayoutScope<'d> {
+    /// The scope of a body that leaves `type_params` open.
+    pub fn new(
+        definitions: &'d HashMap<String, TypeDefinition>,
+        type_params: &'d HashSet<String>,
+    ) -> Self {
+        Self {
+            definitions,
+            type_params,
+        }
+    }
+
+    /// The scope of code with no type parameter open.
+    pub fn program(definitions: &'d HashMap<String, TypeDefinition>) -> Self {
+        static NO_PARAMETERS: OnceLock<HashSet<String>> = OnceLock::new();
+        Self::new(definitions, NO_PARAMETERS.get_or_init(HashSet::new))
+    }
+
+    /// Whether the bare name `name` is one of the open type parameters.
+    pub fn is_parameter(&self, name: &str) -> bool {
+        self.type_params.contains(name)
+    }
+
+    /// The alias `kind` resolves to, unless `kind` names an open parameter.
+    fn resolve_alias(&self, kind: &TypeKind) -> Option<Type> {
+        match kind {
+            TypeKind::Custom(name, None) if self.is_parameter(name) => None,
+            _ => resolve_alias(kind, self.definitions),
+        }
+    }
+}
 
 /// How a possibly nested optional type is laid out.
 ///
@@ -50,10 +95,9 @@ impl<'t> OptionalLayers<'t> {
     ///
     /// An alias is peeled like the type it names, so an alias naming an
     /// optional adds that optional's layers.
-    pub fn of(kind: &'t TypeKind, definitions: &HashMap<String, TypeDefinition>) -> Self {
-        let (layers, value) = peel_optionals(kind, definitions);
-        let innermost_nullable_pointer =
-            layers > 0 && payload_is_nullable_pointer(&value, definitions);
+    pub fn of(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Self {
+        let (layers, value) = peel_optionals(kind, scope);
+        let innermost_nullable_pointer = layers > 0 && payload_is_nullable_pointer(&value, scope);
         Self {
             boxed: layers - usize::from(innermost_nullable_pointer),
             innermost_nullable_pointer,
@@ -68,18 +112,15 @@ impl<'t> OptionalLayers<'t> {
 /// Each alias expansion is followed by an optional to peel; aliases that only
 /// reach each other through optionals form an infinite type, which the bound
 /// on expansions stops at the alias reached.
-fn peel_optionals<'t>(
-    kind: &'t TypeKind,
-    definitions: &HashMap<String, TypeDefinition>,
-) -> (usize, Cow<'t, TypeKind>) {
+fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> (usize, Cow<'t, TypeKind>) {
     let mut layers = 0;
     let mut value = Cow::Borrowed(kind);
-    let mut expansions_left = definitions.len();
+    let mut expansions_left = scope.definitions.len();
     loop {
         value = match value {
             Cow::Borrowed(TypeKind::Option(inner)) => Cow::Borrowed(&inner.kind),
             Cow::Owned(TypeKind::Option(inner)) => Cow::Owned(inner.kind),
-            other => match resolve_alias(&other, definitions) {
+            other => match scope.resolve_alias(&other) {
                 Some(target) if expansions_left > 0 => {
                     expansions_left -= 1;
                     value = Cow::Owned(target.kind);
@@ -95,11 +136,8 @@ fn peel_optionals<'t>(
 /// Whether a value of `kind` is an optional held as its payload's own pointer,
 /// null when absent, rather than as a box: an optional, or an alias naming
 /// one, whose only layer is a nullable pointer.
-pub fn is_nullable_pointer_optional(
-    kind: &TypeKind,
-    definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
-    let layers = OptionalLayers::of(kind, definitions);
+pub fn is_nullable_pointer_optional(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    let layers = OptionalLayers::of(kind, scope);
     layers.boxed == 0 && layers.innermost_nullable_pointer
 }
 
@@ -153,14 +191,12 @@ fn alias_target(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) 
 /// alias naming an optional is an optional. False for every value held by value —
 /// scalars, aliases to them, inline vectors and atomics — for an optional
 /// (whose own absence must stay distinct from the outer one), for names that
-/// denote no allocation (generic parameters, placeholders, a collection named
+/// denote no allocation (generic parameters, a bare name the scope leaves open as a
+/// parameter, placeholders, a collection named
 /// without arguments inside its own body), and for kinds no optional payload
 /// is a reference-counted pointer of.
 ///
-pub fn payload_is_nullable_pointer(
-    kind: &TypeKind,
-    definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
+pub fn payload_is_nullable_pointer(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
     match kind {
         TypeKind::String
         | TypeKind::List(_)
@@ -169,9 +205,12 @@ pub fn payload_is_nullable_pointer(
         | TypeKind::Set(_)
         | TypeKind::Tuple(_)
         | TypeKind::Function(_) => true,
-        TypeKind::Custom(name, args) => match resolve_alias(kind, definitions) {
-            Some(target) => payload_is_nullable_pointer(&target.kind, definitions),
-            None => is_field_managed(kind) && names_allocation(name, args.as_deref(), definitions),
+        TypeKind::Custom(name, None) if scope.is_parameter(name) => false,
+        TypeKind::Custom(name, args) => match resolve_alias(kind, scope.definitions) {
+            Some(target) => payload_is_nullable_pointer(&target.kind, scope),
+            None => {
+                is_field_managed(kind) && names_allocation(name, args.as_deref(), scope.definitions)
+            }
         },
         TypeKind::Int
         | TypeKind::I8

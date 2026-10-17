@@ -16,5 +16,6 @@ pub mod nullable_pointer_flows;
 pub mod optional_arguments;
 pub mod optional_elements;
 pub mod optional_fields;
+pub mod parameter_named_types;
 pub mod rc_managed;
 pub mod widened_payloads;
