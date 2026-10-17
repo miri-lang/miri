@@ -120,8 +120,10 @@ pub fn lower_struct_constructor(
 ///
 /// Both sides are compared in canonical form: `Option<int>` and `int?` are one
 /// type, and coercing between the two spellings would box the value twice. A
-/// value short of an optional layer is boxed into a temp, and the box retains
-/// the payload it reads; the temp the argument was built in, when this
+/// value short of an optional layer is wrapped as `Some` into a temp, which
+/// retains the payload it reads — as a box holding it, or as the payload's own
+/// pointer when the optional is laid out that way; the temp the argument was
+/// built in, when this
 /// constructor created it, is then released, or it keeps a reference nothing
 /// ever gives back.
 fn coerce_to_field(

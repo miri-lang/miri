@@ -34,6 +34,16 @@
 //! A `None` is the absence of a value, equal only to a `None` found at the same
 //! layer: `None` is not `Some(None)`, whichever way each layer is laid out.
 //!
+//! The kind word packs all of it: bits 0..8 hold the rule, bits 8..16 how many
+//! boxed layers wrap the element, bit 16 whether one nullable pointer layer
+//! sits inside them, and the bits from 17 up the width of the value the
+//! innermost box holds. Resolving an element opens each boxed layer in turn,
+//! stopping at a null box address as a `None` at that depth; then, when bit 16
+//! is set, tests the word it reached for null, a `None` one layer below the
+//! boxes; and otherwise hands the value it reached to the rule. With no boxed
+//! depth the value is read at the slot's own size, a nullable pointer layer
+//! included, since its word is the slot itself.
+//!
 //! Hashing follows the same rule, since two elements that compare equal have
 //! to land in the same probe chain.
 

@@ -6,7 +6,8 @@
 //! Activated by the `MIRI_ALLOC_COUNT=1` environment variable.
 //! Maintains counters for each allocation category:
 //! - RC: structures with reference counting (strings, lists, maps, sets, user classes)
-//! - Inline: inline aggregates (tuples, Options, enum payloads, closures)
+//! - Inline: inline aggregates (tuples, boxed `Some` layers, enum payloads,
+//!   closures); a `Some` held as its payload's own pointer allocates nothing
 //! - Buffers: collection element storage (list/map/set/array buffers)
 //! - Raw: raw allocations (string data, etc.)
 //!
@@ -18,7 +19,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Global counter for RC-tracked struct allocations (strings, lists, maps, sets, classes).
 static RC_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Global counter for inline aggregate allocations (tuples, Options, enums, closures).
+/// Global counter for inline aggregate allocations (tuples, boxed `Some` layers,
+/// enums, closures).
 static INLINE_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Global counter for collection buffer allocations (element storage).

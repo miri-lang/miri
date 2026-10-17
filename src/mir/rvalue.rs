@@ -39,7 +39,10 @@ pub enum AggregateKind {
     /// substitution, so a `Some` written into a field or element is described
     /// by its own type rather than by the local the place is rooted at.
     /// [`crate::mir::option_layout`] decides from it how each layer is laid
-    /// out; today every layer is a heap box holding the payload.
+    /// out: an innermost layer around a reference-counted pointer is that
+    /// pointer itself, null for `None`, so building it allocates nothing and
+    /// the optional aliases its operand; every other layer is a heap box
+    /// holding the payload.
     Option(Type),
     /// A closure allocation. The `Symbol` names the body the closure calls.
     /// The `Type` is the lambda's function type (used to build fn_ptr signature in codegen).

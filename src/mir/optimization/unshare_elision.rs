@@ -358,6 +358,10 @@ fn fresh_source(rvalue: &Rvalue) -> FreshSource<'_> {
     }
 }
 
+/// Whether an aggregate is a struct, the one aggregate taken as a value only its
+/// destination holds. An optional is not: a `Some` around a reference-counted
+/// pointer is that pointer itself, so it aliases its operand rather than being
+/// a fresh allocation.
 fn is_struct(kind: &AggregateKind) -> bool {
     match kind {
         AggregateKind::Struct(_) => true,

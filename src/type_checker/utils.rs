@@ -284,7 +284,7 @@ fn is_perceus_managed_inner(
     visited: &mut std::collections::HashSet<String>,
 ) -> bool {
     match kind {
-        // Collections, Options, Tuples, and Strings use heap allocation and need RC.
+        // An Option is managed exactly when its payload is.
         TypeKind::Option(elem_ty) => {
             is_perceus_managed_inner(&elem_ty.kind, type_definitions, visited)
         }

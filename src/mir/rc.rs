@@ -35,7 +35,9 @@ pub fn is_managed_type(
     type_params: &HashSet<String>,
 ) -> bool {
     match kind {
-        // Collections, Options, Tuples, and Strings use heap allocation and need RC.
+        // Collections, Tuples, and Strings use heap allocation and need RC. An
+        // Option is either the address of its `Some` box or, around a
+        // reference-counted pointer, that pointer itself; both are counted.
         TypeKind::Option(_) | TypeKind::Tuple(_) => true,
         // Canonical collection variants are normalized to Custom before RC analysis.
         // Keep them here as a safety net for any residual code paths.

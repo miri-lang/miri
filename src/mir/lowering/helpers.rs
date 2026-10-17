@@ -562,7 +562,9 @@ pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
     from == to || mir_types_structurally_match(&from, &to)
 }
 
-/// Whether coercing `op_ty` into `target_ty` builds a `Some` box around the value.
+/// Whether coercing `op_ty` into `target_ty` builds a `Some` around the value: a
+/// box, or, for an optional laid out as its reference-counted payload's own
+/// pointer, that pointer with no box.
 ///
 /// A bare `T` stored as a `T?` is wrapped, and so is an optional one layer short
 /// of its target: an `int?` stored as an `Option<int?>` becomes `Some(inner)`.
@@ -667,17 +669,18 @@ fn intermediate_optional_layers(op_ty: &Type, target_ty: &Type) -> Vec<Type> {
     layers
 }
 
-/// Build every `Some` box `operand` needs beyond the one an Rvalue can hold, and
-/// return the operand and type for that final box.
+/// Build every `Some` layer `operand` needs beyond the one an Rvalue can hold,
+/// and return the operand and type for that final layer.
 ///
 /// One `Rvalue` holds one `Aggregate(Option, ..)`, so a target two or more
 /// layers deeper than its source — an `int` stored as an `Option<int?>`, or a
 /// `String?` as an `Option<Option<String?>>` — would otherwise be boxed once and
 /// the consumer would read the payload as the address of an optional.
 ///
-/// Each intermediate box lives in a temp the enclosing scope owns, because the
+/// Each intermediate layer lives in a temp the enclosing scope owns, because the
 /// next box up retains it and that retain has to be answered on every exit path,
-/// not just the one that falls out of the block.
+/// not just the one that falls out of the block. Every layer but the innermost
+/// is a box; the innermost, around a reference-counted pointer, is that pointer.
 fn fill_optional_layers(
     ctx: &mut LoweringContext,
     operand: Operand,
@@ -720,11 +723,12 @@ pub fn coerce_rvalue_in(
 
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
 /// If `target_ty` is one optional layer deeper than `op_ty` (`T` into `T?`, or
-/// `T?` into `T??`), it allocates an Option box. Otherwise, it emits a standard
-/// type Cast.
+/// `T?` into `T??`), it builds a `Some` aggregate, which codegen lays out as a
+/// box or, around a reference-counted pointer, as the pointer itself.
+/// Otherwise, it emits a standard type Cast.
 ///
-/// Builds the one box an Rvalue can hold; a target that needs more than one is
-/// reached through [`coerce_rvalue_in`].
+/// Builds the one layer an Rvalue can hold; a target that needs more than one
+/// is reached through [`coerce_rvalue_in`].
 pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue {
     if coercion_wraps_in_some(op_ty, target_ty) {
         crate::mir::Rvalue::Aggregate(

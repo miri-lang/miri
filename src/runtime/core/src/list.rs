@@ -447,8 +447,10 @@ pub mod ffi {
     /// Creates a new list from a MiriArray whose elements are RC-managed pointers.
     ///
     /// Same as `miri_rt_list_new_from_raw` but IncRefs each non-null element pointer
-    /// after copying. This is necessary when elements are heap-allocated (Option,
-    /// List, Array, Map, Set, Tuple, Custom) because the caller's array will
+    /// after copying. This is necessary when elements are reference-counted
+    /// pointers (an optional — the address of its `Some` box, or a managed
+    /// payload's own pointer — or a List, Array, Map, Set, Tuple or Custom
+    /// value) because the caller's array will
     /// release its element references via the element-drop loop when freed. Without
     /// this IncRef the list would hold dangling pointers.
     #[no_mangle]
