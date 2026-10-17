@@ -76,9 +76,8 @@ impl TypeChecker {
                     declaration.name
                 ),
                 // The name, not the whole statement: a declaration's span
-                // starts at the file when the parser did not record one, and a
-                // diagnostic a caller cannot locate is the defect this task
-                // exists to remove.
+                // starts at the file when the parser did not record one, so
+                // pointing to the name ensures the diagnostic remains precise.
                 declaration.name_span,
                 format!(
                     "an earlier declaration of '{}' appears above; rename one of them or remove \

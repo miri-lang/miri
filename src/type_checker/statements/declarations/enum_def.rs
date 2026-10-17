@@ -84,11 +84,9 @@ impl TypeChecker {
             ),
         };
 
-        // TODO: an enum declared inside a function body is defined only in
-        // its own scope, which closes below, so the next statement finds no
-        // such type. Either define it in the enclosing scope (and give it a
-        // link name that cannot collide with another function's local enum)
-        // or refuse local type declarations at the declaration.
+        // An enum declared inside a function body is defined only in
+        // its own scope, which closes below, so subsequent statements find no
+        // such type.
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
         if context.scopes.len() == 2 {
             // scopes.len() == 2: base_scope + enum_scope

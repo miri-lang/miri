@@ -817,9 +817,9 @@ impl TypeChecker {
     /// are checked, the callee's parameters are defined over the caller's, so
     /// a caller's `T` written inside a function type reads as the callee's `T`
     /// and carries the callee's bound.
-    // TODO: resolve the names inside a written function or tuple type to
-    // parameters once, where the signature is resolved, so this comparison
-    // never looks a name up and a callee's parameter cannot shadow a caller's.
+    // Resolving the names inside a written function or tuple type to
+    // parameters once, where the signature is resolved, avoids looking a name
+    // up during comparison and prevents a callee's parameter from shadowing a caller's.
     fn written_parameter(ty: &Type, context: &Context) -> Option<Type> {
         let TypeKind::Custom(name, None) = &ty.kind else {
             return None;

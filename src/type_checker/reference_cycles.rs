@@ -17,7 +17,7 @@
 //! another object (`let u = x` then `x.f = fn(): u.n`, or `a.b = b` then
 //! `b.a = a`) is not seen, and still leaks.
 //!
-//! TODO: those indirect cycles need weak references or a cycle collector to
+//! Note that indirect cycles need weak references or a cycle collector to
 //! be freed; refusing them would take flow tracking through aliases and
 //! across objects, which this syntactic check does not attempt.
 

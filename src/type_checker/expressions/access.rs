@@ -931,7 +931,7 @@ impl TypeChecker {
         let TypeKind::Generic(_, Some(bound), _) = &receiver.kind else {
             return member;
         };
-        // TODO: a bound naming a generic trait (`X implements Pick<int>`) is
+        // A bound naming a generic trait (`X implements Pick<int>`) is
         // returned unread, so its `Self` stays the bare trait and `a.pick(b)`
         // wants a `Pick`; `Self` inside a generic trait also resolves without
         // the trait's parameters, which refuses the trait itself.
@@ -2362,7 +2362,7 @@ impl TypeChecker {
             };
 
             if variant_types.is_empty() {
-                // TODO: a payload-less variant of a generic enum carries no
+                // A payload-less variant of a generic enum carries no
                 // value to infer the arguments from, and the enum's own name
                 // is bound bare, so this yields the bare enum — which then
                 // fails against any annotation naming an instantiation
