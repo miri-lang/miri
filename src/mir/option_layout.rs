@@ -13,11 +13,18 @@
 //! (possibly nested) optional are boxed, and [`payload_is_nullable_pointer`]
 //! the one place that decides which payloads are such pointers. Every site that
 //! builds, reads or releases an optional asks these, so they agree.
+//!
+//! Both decide through [`resolve_alias`]: an alias is laid out as the type it
+//! names at the arguments it is written with, so `Id<Node>` (`type Id<T> is
+//! T`) is a `Node`, `Opt<Node>` (`type Opt<T> is T?`) is a `Node?`, and an
+//! optional of an alias naming `Node?` is a `Node??`.
 
 use crate::ast::expression::Expression;
-use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::mir::instantiation::{apply_generic_sub, instantiation_argument};
 use crate::mir::rc::is_field_managed;
 use crate::type_checker::context::TypeDefinition;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// How a possibly nested optional type is laid out.
@@ -26,31 +33,27 @@ use std::collections::HashMap;
 /// `Node` pointer and the outer layer is boxed: `boxed` is 1,
 /// `innermost_nullable_pointer` is true and `value` is `Node`. For `int??`
 /// both layers are boxed. A type that is not optional has no layers.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OptionalLayers<'t> {
     /// The number of optional layers that hold their payload in a box.
     pub boxed: usize,
     /// Whether the innermost optional layer is the payload pointer itself,
     /// null when absent.
     pub innermost_nullable_pointer: bool,
-    /// The innermost non-optional kind.
-    pub value: &'t TypeKind,
+    /// The innermost non-optional kind, with every alias on the way resolved:
+    /// borrowed from the type asked about unless an alias had to be expanded.
+    pub value: Cow<'t, TypeKind>,
 }
 
 impl<'t> OptionalLayers<'t> {
     /// The layout of `kind`, where `definitions` is the program's type table.
     ///
-    /// Only `TypeKind::Option` layers are peeled: an alias to an optional is
-    /// the innermost value, laid out by its own layers when it is held.
+    /// An alias is peeled like the type it names, so an alias naming an
+    /// optional adds that optional's layers.
     pub fn of(kind: &'t TypeKind, definitions: &HashMap<String, TypeDefinition>) -> Self {
-        let mut layers = 0;
-        let mut value = kind;
-        while let TypeKind::Option(inner) = value {
-            layers += 1;
-            value = &inner.kind;
-        }
+        let (layers, value) = peel_optionals(kind, definitions);
         let innermost_nullable_pointer =
-            layers > 0 && payload_is_nullable_pointer(value, definitions);
+            layers > 0 && payload_is_nullable_pointer(&value, definitions);
         Self {
             boxed: layers - usize::from(innermost_nullable_pointer),
             innermost_nullable_pointer,
@@ -59,20 +62,101 @@ impl<'t> OptionalLayers<'t> {
     }
 }
 
+/// How many optionals wrap `kind`, seen through aliases, and the value they
+/// wrap. The value is borrowed from `kind` unless an alias had to be expanded.
+///
+/// Each alias expansion is followed by an optional to peel; aliases that only
+/// reach each other through optionals form an infinite type, which the bound
+/// on expansions stops at the alias reached.
+fn peel_optionals<'t>(
+    kind: &'t TypeKind,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> (usize, Cow<'t, TypeKind>) {
+    let mut layers = 0;
+    let mut value = Cow::Borrowed(kind);
+    let mut expansions_left = definitions.len();
+    loop {
+        value = match value {
+            Cow::Borrowed(TypeKind::Option(inner)) => Cow::Borrowed(&inner.kind),
+            Cow::Owned(TypeKind::Option(inner)) => Cow::Owned(inner.kind),
+            other => match resolve_alias(&other, definitions) {
+                Some(target) if expansions_left > 0 => {
+                    expansions_left -= 1;
+                    value = Cow::Owned(target.kind);
+                    continue;
+                }
+                Some(_) | None => return (layers, other),
+            },
+        };
+        layers += 1;
+    }
+}
+
+/// Whether a value of `kind` is an optional held as its payload's own pointer,
+/// null when absent, rather than as a box: an optional, or an alias naming
+/// one, whose only layer is a nullable pointer.
+pub fn is_nullable_pointer_optional(
+    kind: &TypeKind,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> bool {
+    let layers = OptionalLayers::of(kind, definitions);
+    layers.boxed == 0 && layers.innermost_nullable_pointer
+}
+
+/// The type the alias `kind` names stands for, with the alias's parameters
+/// replaced by the arguments `kind` is written with, followed through chained
+/// aliases. `None` when `kind` names no alias, or when the chain is a cycle.
+///
+/// This is the one reading of an alias: lowering spells a declared type by it,
+/// and the optional layout and the release path decide by it, so the type an
+/// alias stands for cannot be laid out one way and released another.
+pub fn resolve_alias(
+    kind: &TypeKind,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> Option<Type> {
+    let mut resolved = alias_target(kind, definitions)?;
+    for _ in 0..definitions.len() {
+        match alias_target(&resolved.kind, definitions) {
+            Some(next) => resolved = next,
+            None => return Some(resolved),
+        }
+    }
+    None
+}
+
+/// One step of [`resolve_alias`]: the template of the alias `kind` names, at
+/// the arguments `kind` is written with. A parameter left without an argument
+/// stays as written.
+fn alias_target(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) -> Option<Type> {
+    let TypeKind::Custom(name, args) = kind else {
+        return None;
+    };
+    let Some(TypeDefinition::Alias(alias)) = definitions.get(name) else {
+        return None;
+    };
+    let substitution: HashMap<String, Type> = alias
+        .generics
+        .iter()
+        .flatten()
+        .zip(args.iter().flatten())
+        .filter_map(|(parameter, arg)| Some((parameter.name.clone(), instantiation_argument(arg)?)))
+        .collect();
+    Some(apply_generic_sub(&alias.template, &substitution))
+}
+
 /// Whether an optional holding a `kind` payload can be that payload's pointer,
 /// null when absent.
 ///
 /// True for a string, a built-in collection at its type arguments, a tuple, a
 /// function value, and a name the type table defines as a class, struct, enum
-/// or trait (through any aliases). False for every value held by value —
+/// or trait. An alias is judged as the type it names at its arguments, so an
+/// alias naming an optional is an optional. False for every value held by value —
 /// scalars, aliases to them, inline vectors and atomics — for an optional
 /// (whose own absence must stay distinct from the outer one), for names that
 /// denote no allocation (generic parameters, placeholders, a collection named
 /// without arguments inside its own body), and for kinds no optional payload
 /// is a reference-counted pointer of.
 ///
-/// A generic alias is judged by its template as written, so one that reaches
-/// a pointer only through its arguments answers false and stays boxed.
 pub fn payload_is_nullable_pointer(
     kind: &TypeKind,
     definitions: &HashMap<String, TypeDefinition>,
@@ -85,9 +169,10 @@ pub fn payload_is_nullable_pointer(
         | TypeKind::Set(_)
         | TypeKind::Tuple(_)
         | TypeKind::Function(_) => true,
-        TypeKind::Custom(name, args) => {
-            is_field_managed(kind) && names_allocation(name, args.as_deref(), definitions)
-        }
+        TypeKind::Custom(name, args) => match resolve_alias(kind, definitions) {
+            Some(target) => payload_is_nullable_pointer(&target.kind, definitions),
+            None => is_field_managed(kind) && names_allocation(name, args.as_deref(), definitions),
+        },
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -122,7 +207,8 @@ pub fn payload_is_nullable_pointer(
 ///
 /// A built-in collection does only at its type arguments: named bare, it is
 /// the unresolved self-reference inside the collection's own body. Any other
-/// name is decided by its definition, an alias by the type it spells.
+/// name is decided by its definition. An alias is resolved before it gets
+/// here; one that does not resolve is a cycle, which names nothing.
 fn names_allocation(
     name: &str,
     args: Option<&[Expression]>,
@@ -138,9 +224,6 @@ fn names_allocation(
             | TypeDefinition::Enum(_)
             | TypeDefinition::Trait(_),
         ) => true,
-        Some(TypeDefinition::Alias(alias)) => {
-            payload_is_nullable_pointer(&alias.template.kind, definitions)
-        }
-        Some(TypeDefinition::Generic(_)) | None => false,
+        Some(TypeDefinition::Alias(_) | TypeDefinition::Generic(_)) | None => false,
     }
 }

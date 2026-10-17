@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
@@ -313,6 +314,7 @@ impl<'a> FunctionTranslator<'a> {
         } else {
             Self::resolve_projected_type_kind(place, type_ctx)?
         };
+        Self::check_optional_flow(rvalue, &dest_kind_to_cast, type_ctx)?;
 
         // Pass the destination type when translating Rvalue::Use and Rvalue::Aggregate
         // so field loads and aggregate payloads can resolve to the correct width for
@@ -355,6 +357,72 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Refuses an assignment that moves an optional's word into an optional laid
+    /// out apart from it: a `Some` built, a value used or a value cast, where
+    /// one side is its payload's own pointer and the other a box.
+    ///
+    /// The bits move unchanged, so the destination would open a box that is
+    /// not there, or hand on a box as the payload. The MIR verifier refuses
+    /// the same flow; this keeps the backend from compiling it when MIR
+    /// reaches it unverified. The absent value, and an optional spelled at
+    /// `void` before it met a slot, are null under every layout.
+    fn check_optional_flow(
+        rvalue: &Rvalue,
+        dest_kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        if !matches!(dest_kind, TypeKind::Option(_)) {
+            return Ok(());
+        }
+        let source_kind = match rvalue {
+            Rvalue::Aggregate(AggregateKind::Option(built), _) => built.kind.clone(),
+            Rvalue::Use(operand) => Self::operand_projected_kind(operand, type_ctx)?,
+            Rvalue::Cast(operand, _) => Self::operand_projected_kind(operand, type_ctx)?,
+            Rvalue::Aggregate(..)
+            | Rvalue::Ref(_)
+            | Rvalue::BinaryOp(..)
+            | Rvalue::UnaryOp(..)
+            | Rvalue::Len(_)
+            | Rvalue::GpuIntrinsic(_)
+            | Rvalue::MathIntrinsic(..)
+            | Rvalue::AtomicOp { .. }
+            | Rvalue::Phi(_) => return Ok(()),
+        };
+        if !matches!(source_kind, TypeKind::Option(_))
+            || Self::is_absent_value(rvalue)
+            || Self::is_absent_placeholder(&source_kind)
+            || Self::is_absent_placeholder(dest_kind)
+        {
+            return Ok(());
+        }
+        let source_is_pointer = Self::nullable_pointer_layout(&source_kind, type_ctx)?;
+        if source_is_pointer == Self::nullable_pointer_layout(dest_kind, type_ctx)? {
+            return Ok(());
+        }
+        Err(CodegenError::Internal(format!(
+            "an assignment moves `{source_kind:?}` into `{dest_kind:?}`, which are laid out \
+             apart (one is its payload's own pointer, the other a box)"
+        )))
+    }
+
+    /// Whether `kind` is `void?`, the type an absent value is spelled at before
+    /// it meets a slot: it holds nothing, so it agrees with every layout.
+    fn is_absent_placeholder(kind: &TypeKind) -> bool {
+        matches!(kind, TypeKind::Option(payload) if payload.kind == TypeKind::Void)
+    }
+
+    /// Whether `rvalue` writes the absent value, null under every layout.
+    fn is_absent_value(rvalue: &Rvalue) -> bool {
+        let operand = if let Rvalue::Use(operand) = rvalue {
+            operand
+        } else if let Rvalue::Cast(operand, _) = rvalue {
+            operand.as_ref()
+        } else {
+            return false;
+        };
+        matches!(operand, Operand::Constant(constant) if matches!(constant.literal, Literal::None))
     }
 
     /// Copies an inline vector element into an allocation of its own when it is
@@ -1659,9 +1727,12 @@ impl<'a> FunctionTranslator<'a> {
     /// declaration), and a tuple from the element type it spells. A following
     /// projection is laid out by this answer: read as the tuple instead, a
     /// struct field of a tuple element (`p.0.n`) would load at the tuple's own
-    /// field offset. The rest — an optional's or a result's payload — have no
-    /// declared field to read, and resolve to `Error`: their reader loads at
-    /// the width of the binding it fills.
+    /// field offset. An optional's one field is its payload, so a release or a
+    /// following projection through it sees the payload's own type — the
+    /// difference between opening a box and reading a nullable pointer as
+    /// itself. The rest — a result's payload — have no declared field to read,
+    /// and resolve to `Error`: their reader loads at the width of the binding
+    /// it fills.
     ///
     /// A closure local missing from the capture table, or a capture index past
     /// the ones recorded, is a lowering invariant broken and is reported.
@@ -1695,6 +1766,7 @@ impl<'a> FunctionTranslator<'a> {
                     Some(ty.kind.clone())
                 })
                 .unwrap_or(TypeKind::Error)),
+            TypeKind::Option(payload) => Ok(payload.kind.clone()),
             TypeKind::Int
             | TypeKind::I8
             | TypeKind::I16
@@ -1723,7 +1795,6 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Generic(_, _, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
-            | TypeKind::Option(_)
             | TypeKind::Void
             | TypeKind::Error
             | TypeKind::Linear(_) => Ok(TypeKind::Error),

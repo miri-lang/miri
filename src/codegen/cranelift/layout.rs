@@ -9,7 +9,9 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
+use crate::error::CodegenError;
 use crate::mir::instantiation::{field_types, member_type_at};
+use crate::mir::option_layout::{is_nullable_pointer_optional, resolve_alias};
 use crate::mir::type_facts::{EnumDefinition, StructDefinition, TypeDefinition};
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
@@ -71,15 +73,22 @@ fn type_from_expression(
 }
 
 /// Compute byte offset and Cranelift type for a field within an aggregate.
+///
+/// An optional held as its payload's own pointer is refused: it has no box,
+/// its word is the payload, and no offset into the payload reaches it — an
+/// answer of 0 would read the payload's own first word as the payload.
 pub fn field_layout(
     local_type: &TypeKind,
     field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
-) -> (i32, CraneliftType) {
+) -> Result<(i32, CraneliftType), CodegenError> {
     let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
-        TypeKind::Tuple(element_exprs) => tuple_field_layout(element_exprs, field_idx, ptr_ty),
+        TypeKind::Tuple(element_exprs) => Ok(tuple_field_layout(element_exprs, field_idx, ptr_ty)),
+        TypeKind::Option(_) => {
+            boxed_optional_field_layout(local_type, field_idx, type_definitions, ptr_ty)
+        }
         TypeKind::Custom(name, type_args) => {
             // Only substitute type arguments for compiler-known vector types (Vec2, Vec3, Vec4).
             // Other generic types (e.g. List<T>, List<Tuple<...>>) have field layout defined
@@ -98,7 +107,7 @@ pub fn field_layout(
                             );
                             let elem_cl_ty = translate_type_kind(&elem_type.kind, ptr_ty);
                             let field_offset = (field_idx as i32) * elem_cl_ty.bytes() as i32;
-                            return (field_offset, elem_cl_ty);
+                            return Ok((field_offset, elem_cl_ty));
                         }
                     }
                 }
@@ -140,11 +149,27 @@ pub fn field_layout(
         | TypeKind::Generic(_, _, _)
         | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
-        | TypeKind::Option(_)
         | TypeKind::Void
         | TypeKind::Error
-        | TypeKind::Linear(_) => ((field_idx as i32) * ptr_size, ptr_ty),
+        | TypeKind::Linear(_) => Ok(((field_idx as i32) * ptr_size, ptr_ty)),
     }
+}
+
+/// Field `field_idx` of the optional `kind` held in a box: a word of the box.
+/// One held as its payload's own pointer has no box and is refused.
+fn boxed_optional_field_layout(
+    kind: &TypeKind,
+    field_idx: usize,
+    type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
+) -> Result<(i32, CraneliftType), CodegenError> {
+    if is_nullable_pointer_optional(kind, type_definitions) {
+        return Err(CodegenError::Internal(format!(
+            "field {field_idx} of `{kind:?}` has no offset: the optional is its payload's own \
+             pointer, with no box to hold the payload"
+        )));
+    }
+    Ok(((field_idx as i32) * ptr_ty.bytes() as i32, ptr_ty))
 }
 
 fn tuple_field_layout(
@@ -181,30 +206,31 @@ fn custom_field_layout(
     field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
-) -> (i32, CraneliftType) {
+) -> Result<(i32, CraneliftType), CodegenError> {
     let ptr_size = ptr_ty.bytes() as i32;
     let Some(def) = type_definitions.get(name) else {
         // Type not found — assume pointer-sized fields
-        return ((field_idx as i32) * ptr_size, ptr_ty);
+        return Ok(((field_idx as i32) * ptr_size, ptr_ty));
     };
-    match def {
+    Ok(match def {
         TypeDefinition::Struct(struct_def) => {
             struct_field_layout(name, struct_def, type_args, field_idx, ptr_ty)
         }
         TypeDefinition::Enum(enum_def) => enum_field_layout(enum_def, type_args, field_idx, ptr_ty),
-        TypeDefinition::Alias(alias_def) => field_layout(
-            &alias_def.template.kind,
-            field_idx,
-            type_definitions,
-            ptr_ty,
-        ),
+        TypeDefinition::Alias(_) => {
+            let written = TypeKind::Custom(name.to_string(), type_args.map(<[_]>::to_vec));
+            return match resolve_alias(&written, type_definitions) {
+                Some(target) => field_layout(&target.kind, field_idx, type_definitions, ptr_ty),
+                None => Ok(((field_idx as i32) * ptr_size, ptr_ty)),
+            };
+        }
         TypeDefinition::Class(_) => {
             class_field_layout(name, type_args, field_idx, type_definitions, ptr_ty)
         }
         TypeDefinition::Generic(_) | TypeDefinition::Trait(_) => {
             ((field_idx as i32) * ptr_size, ptr_ty)
         }
-    }
+    })
 }
 
 /// The Cranelift type a struct field occupies at the instantiation

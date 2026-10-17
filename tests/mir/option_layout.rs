@@ -10,7 +10,9 @@ use miri::ast::types::{
     VEC3_TYPE_NAME, VEC4_TYPE_NAME,
 };
 use miri::error::syntax::Span;
-use miri::mir::option_layout::{payload_is_nullable_pointer, OptionalLayers};
+use miri::mir::option_layout::{
+    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, OptionalLayers,
+};
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, StructDefinition,
     TraitDefinition, TypeDefinition,
@@ -97,6 +99,18 @@ fn alias_to(kind: TypeKind) -> TypeDefinition {
     })
 }
 
+/// `type <name><T> is <template>`, the template naming `T` as a bare name.
+fn generic_alias_to(template: TypeKind) -> TypeDefinition {
+    TypeDefinition::Alias(AliasDefinition {
+        template: ty(template),
+        generics: Some(vec![GenericDefinition {
+            name: "T".to_string(),
+            constraint: None,
+            kind: TypeDeclarationKind::None,
+        }]),
+    })
+}
+
 fn generic_definition(name: &str) -> TypeDefinition {
     TypeDefinition::Generic(GenericDefinition {
         name: name.to_string(),
@@ -119,6 +133,8 @@ fn definitions() -> HashMap<String, TypeDefinition> {
         ("Distance", alias_to(custom("Meters"))),
         ("Graph", alias_to(custom("Node"))),
         ("MaybeNode", alias_to(optional(custom("Node")))),
+        ("Id", generic_alias_to(custom("T"))),
+        ("Opt", generic_alias_to(optional(custom("T")))),
         ("U", generic_definition("U")),
         ("List", class("List")),
         ("Map", class("Map")),
@@ -262,7 +278,7 @@ fn test_option_layout_non_optional_has_no_layers() {
     let layers = OptionalLayers::of(&kind, &defs);
     assert_eq!(layers.boxed, 0);
     assert!(!layers.innermost_nullable_pointer);
-    assert_eq!(layers.value, &kind);
+    assert_eq!(*layers.value, kind);
 }
 
 fn assert_layers(kind: TypeKind, boxed: usize, nullable: bool, value: &TypeKind) {
@@ -273,7 +289,7 @@ fn assert_layers(kind: TypeKind, boxed: usize, nullable: bool, value: &TypeKind)
         layers.innermost_nullable_pointer, nullable,
         "innermost nullable pointer of {kind:?}"
     );
-    assert_eq!(layers.value, value, "innermost value of {kind:?}");
+    assert_eq!(&*layers.value, value, "innermost value of {kind:?}");
 }
 
 #[test]
@@ -291,8 +307,119 @@ fn test_option_layout_pointer_payload_layers() {
 fn test_option_layout_value_payload_layers() {
     assert_layers(optional(TypeKind::Int), 1, false, &TypeKind::Int);
     assert_layers(optional(optional(TypeKind::Int)), 2, false, &TypeKind::Int);
-    let meters = custom("Meters");
-    assert_layers(optional(meters.clone()), 1, false, &meters);
+    assert_layers(optional(custom("Meters")), 1, false, &TypeKind::Int);
     let vector = custom_of(VEC3_TYPE_NAME, vec![TypeKind::F32]);
     assert_layers(optional(vector.clone()), 1, false, &vector);
+}
+
+#[test]
+fn test_option_layout_alias_naming_an_optional_adds_its_layers() {
+    let node = custom("Node");
+    assert_layers(custom("MaybeNode"), 0, true, &node);
+    assert_layers(optional(custom("MaybeNode")), 1, true, &node);
+    assert_eq!(
+        OptionalLayers::of(&optional(custom("MaybeNode")), &definitions()),
+        OptionalLayers::of(&optional(optional(node.clone())), &definitions()),
+        "an optional of an alias naming `Node?` is laid out as `Node??`"
+    );
+}
+
+#[test]
+fn test_option_layout_generic_alias_is_judged_at_its_arguments() {
+    let node = custom("Node");
+    assert_layers(
+        optional(custom_of("Id", vec![node.clone()])),
+        0,
+        true,
+        &node,
+    );
+    assert_layers(
+        optional(custom_of("Id", vec![TypeKind::Int])),
+        1,
+        false,
+        &TypeKind::Int,
+    );
+    assert_layers(custom_of("Opt", vec![node.clone()]), 0, true, &node);
+    assert_layers(
+        optional(custom_of("Opt", vec![node.clone()])),
+        1,
+        true,
+        &node,
+    );
+    assert_layers(
+        custom_of("Opt", vec![TypeKind::Int]),
+        1,
+        false,
+        &TypeKind::Int,
+    );
+}
+
+#[test]
+fn test_option_layout_nullable_pointer_optional_sees_through_aliases() {
+    let defs = definitions();
+    assert!(is_nullable_pointer_optional(
+        &optional(custom("Node")),
+        &defs
+    ));
+    assert!(is_nullable_pointer_optional(&custom("MaybeNode"), &defs));
+    assert!(is_nullable_pointer_optional(
+        &custom_of("Opt", vec![custom("Node")]),
+        &defs
+    ));
+    assert!(is_nullable_pointer_optional(
+        &optional(custom_of("Id", vec![custom("Node")])),
+        &defs
+    ));
+    assert!(!is_nullable_pointer_optional(
+        &optional(custom("MaybeNode")),
+        &defs
+    ));
+    assert!(!is_nullable_pointer_optional(&custom("Node"), &defs));
+}
+
+#[test]
+fn test_alias_resolves_to_its_underlying_kind() {
+    let table = HashMap::from([("Name".to_string(), alias_to(TypeKind::String))]);
+    assert_eq!(
+        resolve_alias(&custom("Name"), &table).map(|target| target.kind),
+        Some(TypeKind::String)
+    );
+}
+
+#[test]
+fn test_chained_alias_resolves_to_the_final_kind() {
+    assert_eq!(
+        resolve_alias(&custom("Distance"), &definitions()).map(|target| target.kind),
+        Some(TypeKind::Int),
+        "the drop path must see through every hop of an alias chain"
+    );
+}
+
+#[test]
+fn test_generic_alias_resolves_at_its_arguments() {
+    let defs = definitions();
+    assert_eq!(
+        resolve_alias(&custom_of("Id", vec![custom("Node")]), &defs).map(|target| target.kind),
+        Some(custom("Node"))
+    );
+    assert_eq!(
+        resolve_alias(&custom_of("Opt", vec![custom("Node")]), &defs).map(|target| target.kind),
+        Some(optional(custom("Node")))
+    );
+}
+
+#[test]
+fn test_alias_cycle_does_not_resolve() {
+    let table = HashMap::from([
+        ("A".to_string(), alias_to(custom("B"))),
+        ("B".to_string(), alias_to(custom("A"))),
+    ]);
+    assert_eq!(resolve_alias(&custom("A"), &table), None);
+}
+
+#[test]
+fn test_non_alias_kinds_do_not_resolve() {
+    let defs = definitions();
+    assert_eq!(resolve_alias(&custom("Node"), &defs), None);
+    assert_eq!(resolve_alias(&TypeKind::String, &defs), None);
 }

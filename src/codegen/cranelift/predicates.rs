@@ -8,7 +8,9 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
-use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator};
+use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator, TypeCtx};
+use crate::error::CodegenError;
+use crate::mir::option_layout::OptionalLayers;
 use crate::mir::type_facts::TypeDefinition;
 
 use std::collections::HashMap;
@@ -146,8 +148,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The bit, just above the depth, that says the innermost optional is a
     /// nullable pointer rather than a box. Mirrors the runtime's
-    /// `element_identity`; no layout the backend builds sets it yet, so the
-    /// element kind leaves it clear and only skips over it.
+    /// `element_identity`.
     const INNERMOST_NULLABLE_BITS: u32 = 1;
 
     /// How many optionals the element kind can say an element is wrapped in.
@@ -161,36 +162,88 @@ impl<'a> FunctionTranslator<'a> {
     const MAX_OPTIONAL_VALUE_SIZE: u32 = 16;
 
     /// The element kind registering `rule` for the value reached by opening
-    /// `depth` optionals, each box holding `value_size` bytes.
+    /// the `layers` of an optional element, the last box holding `value_size`
+    /// bytes.
     ///
-    /// `None` when the word cannot say it: no optional to open, a depth past
-    /// what the field holds, or a value of an unstatable width. Declining
+    /// `None` when the word cannot say it: no optional to open, a boxed depth
+    /// past what the field holds, or a value of an unstatable width. Declining
     /// leaves the container matching such an element by its bytes, which is
     /// what it did before an optional could be described at all — a truncated
     /// depth would instead open the wrong number of boxes and read a pointer
     /// as a value.
-    pub(crate) fn optional_element_kind(rule: i64, depth: usize, value_size: u32) -> Option<i64> {
-        if depth == 0 || depth > Self::MAX_OPTIONAL_DEPTH {
+    pub fn optional_element_kind(
+        rule: i64,
+        layers: &OptionalLayers<'_>,
+        value_size: u32,
+    ) -> Option<i64> {
+        let has_layer = layers.boxed > 0 || layers.innermost_nullable_pointer;
+        if !has_layer || layers.boxed > Self::MAX_OPTIONAL_DEPTH {
             return None;
         }
         if value_size == 0 || value_size > Self::MAX_OPTIONAL_VALUE_SIZE {
             return None;
         }
-        let size_shift =
-            Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS + Self::INNERMOST_NULLABLE_BITS;
+        let nullable_shift = Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS;
+        let size_shift = nullable_shift + Self::INNERMOST_NULLABLE_BITS;
+        let nullable = i64::from(layers.innermost_nullable_pointer) << nullable_shift;
         let size = i64::from(value_size) << size_shift;
-        Some(rule | (depth as i64) << Self::ELEMENT_RULE_BITS | size)
+        Some(rule | (layers.boxed as i64) << Self::ELEMENT_RULE_BITS | nullable | size)
     }
 
-    /// How many optionals wrap `kind`, and the type they wrap.
-    pub(crate) fn peel_optionals(kind: &TypeKind) -> (usize, &TypeKind) {
-        let mut depth = 0;
-        let mut inner = kind;
-        while let TypeKind::Option(payload) = inner {
-            depth += 1;
-            inner = &payload.kind;
+    /// Whether a value of `kind` is an optional held as its payload's own
+    /// pointer, null when absent, rather than as a box. The layout authority
+    /// decides; every codegen site that builds, reads, moves or releases an
+    /// optional asks through here.
+    ///
+    /// An optional whose payload the backend cannot lay out is reported rather
+    /// than boxed by default, since a guess hands a box to a reader expecting
+    /// the bare pointer or the reverse: one at the error type, whose type was
+    /// never settled, and one at a type parameter the code being translated
+    /// does not leave open, which missed its substitution.
+    pub(crate) fn nullable_pointer_layout(
+        kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<bool, CodegenError> {
+        let layers = OptionalLayers::of(kind, type_ctx.facts.definitions());
+        if layers.boxed == 0 && !layers.innermost_nullable_pointer {
+            return Ok(false);
         }
-        (depth, inner)
+        if let Some(reason) = Self::undecidable_payload(&layers.value, type_ctx) {
+            return Err(CodegenError::Internal(format!(
+                "the optional `{kind:?}` holds {reason}, so whether it is a box or its \
+                 payload's own pointer cannot be decided"
+            )));
+        }
+        Ok(layers.boxed == 0 && layers.innermost_nullable_pointer)
+    }
+
+    /// Why an optional of `value` cannot be laid out, or `None` when it can.
+    fn undecidable_payload(value: &TypeKind, type_ctx: &TypeCtx) -> Option<String> {
+        if matches!(value, TypeKind::Error) {
+            return Some("the error type".to_string());
+        }
+        let parameter = Self::type_parameter_name(value, type_ctx.facts.definitions())?;
+        (!type_ctx.open_params.contains(parameter)).then(|| {
+            format!(
+                "the type parameter `{parameter}`, which the code being translated leaves \
+                 no room for"
+            )
+        })
+    }
+
+    /// The name of the type parameter `kind` stands for, in either spelling:
+    /// a generic placeholder, or a bare name the type table defines as one.
+    fn type_parameter_name<'k>(
+        kind: &'k TypeKind,
+        definitions: &HashMap<String, TypeDefinition>,
+    ) -> Option<&'k str> {
+        if let TypeKind::Generic(name, _, _) = kind {
+            return Some(name);
+        }
+        let TypeKind::Custom(name, None) = kind else {
+            return None;
+        };
+        matches!(definitions.get(name), Some(TypeDefinition::Generic(_))).then_some(name)
     }
 
     /// True when an element of `kind` is a scalar, whose bytes are its value.

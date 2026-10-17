@@ -15,6 +15,7 @@ use crate::codegen::cranelift::translator::{
     empty_module_ctx, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
 use crate::error::CodegenError;
+use crate::mir::option_layout::{resolve_alias, OptionalLayers};
 use crate::mir::rc::{is_field_managed, is_word_slot_managed};
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::TypeFacts;
@@ -324,12 +325,20 @@ impl<'a> FunctionTranslator<'a> {
     /// table or known only as `TypeDefinition::Generic`. This guards the
     /// elem-drop-fn override sites where emitting a reference to an undefined
     /// symbol would later fail at link time.
+    ///
+    /// An optional of such a placeholder is unresolved too: whether it is a box
+    /// or the payload's own pointer depends on the argument the placeholder
+    /// stands for, so releasing it without that argument would free a box that
+    /// may be the payload itself.
     pub fn is_unresolved_generic_elem(
         elem_kind: &TypeKind,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> bool {
         match elem_kind {
             TypeKind::Generic(_, _, _) => true,
+            TypeKind::Option(payload) => {
+                Self::is_unresolved_generic_elem(&payload.kind, type_definitions)
+            }
             TypeKind::Custom(name, _) => {
                 if BuiltinCollectionKind::from_name(name).is_some() {
                     return false;
@@ -368,7 +377,6 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Future(_)
             | TypeKind::Function(_)
             | TypeKind::Meta(_)
-            | TypeKind::Option(_)
             | TypeKind::Void
             | TypeKind::Error
             | TypeKind::Linear(_) => false,
@@ -470,11 +478,13 @@ impl<'a> FunctionTranslator<'a> {
     /// own `equals`, anything else by its bytes (the runtime default).
     ///
     /// An optional element is none of those itself — its bytes are the address
-    /// of its `Some` box — so it registers the rule of the value it wraps,
-    /// together with how many boxes the runtime must open to reach that value
-    /// and how wide the value is. A rule is registered only where it is the one
-    /// `==` applies; an element whose equality is a walk over fields keeps the
-    /// byte rule rather than being matched half-right.
+    /// of its `Some` box, or the payload pointer itself, null when absent — so
+    /// it registers the rule of the value it wraps, together with how many
+    /// boxes the runtime must open to reach that value, whether the innermost
+    /// layer is such a nullable pointer, and how wide the value is. A rule is
+    /// registered only where it is the one `==` applies; an element whose
+    /// equality is a walk over fields keeps the byte rule rather than being
+    /// matched half-right.
     ///
     /// This is the one place both containers take the rule from. It has to run
     /// before the first element is stored, since the runtime places each element
@@ -490,7 +500,8 @@ impl<'a> FunctionTranslator<'a> {
         if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
-        let (depth, value_kind) = Self::peel_optionals(elem_kind);
+        let layers = OptionalLayers::of(elem_kind, type_ctx.facts.definitions());
+        let value_kind = &*layers.value;
         let Some(rule) = Self::value_identity_rule(builder, ctx, value_kind, type_ctx)? else {
             return Ok(());
         };
@@ -504,8 +515,7 @@ impl<'a> FunctionTranslator<'a> {
                 (setters.set_hash_fn)(builder, ctx, container_ptr, hash)?;
             }
         }
-        let Some(word) = Self::element_identity_kind(rule, depth, value_kind, type_ctx.ptr_type)
-        else {
+        let Some(word) = Self::element_identity_kind(rule, &layers, type_ctx.ptr_type) else {
             return Ok(());
         };
         let kind = builder.ins().iconst(type_ctx.ptr_type, word);
@@ -548,14 +558,13 @@ impl<'a> FunctionTranslator<'a> {
         Ok(Self::is_matched_by_bytes(value_kind).then_some(ElementRule::Bytes))
     }
 
-    /// The element kind word registering `rule` for a value wrapped in `depth`
-    /// optionals, or `None` when there is nothing to register: an unwrapped
-    /// value matched by its bytes is what every container already starts at,
-    /// and an equality callback settles matching on its own.
+    /// The element kind word registering `rule` for a value wrapped in the
+    /// optional `layers`, or `None` when there is nothing to register: an
+    /// unwrapped value matched by its bytes is what every container already
+    /// starts at, and an equality callback settles matching on its own.
     fn element_identity_kind(
         rule: ElementRule,
-        depth: usize,
-        value_kind: &TypeKind,
+        layers: &OptionalLayers<'_>,
         ptr_type: cl_types::Type,
     ) -> Option<i64> {
         let base = match rule {
@@ -563,12 +572,12 @@ impl<'a> FunctionTranslator<'a> {
             ElementRule::FloatValue(kind) => kind,
             ElementRule::Bytes | ElementRule::OwnEquals(_) => Self::BYTES_ELEMENT_KIND,
         };
-        if depth == 0 {
+        if layers.boxed == 0 && !layers.innermost_nullable_pointer {
             return (base != Self::BYTES_ELEMENT_KIND).then_some(base);
         }
         let value_size =
-            crate::codegen::cranelift::types::translate_type_kind(value_kind, ptr_type).bytes();
-        Self::optional_element_kind(base, depth, value_size)
+            crate::codegen::cranelift::types::translate_type_kind(&layers.value, ptr_type).bytes();
+        Self::optional_element_kind(base, layers, value_size)
     }
 
     /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.
@@ -842,8 +851,8 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         // Resolve type aliases before dispatching so that e.g.
         // `type IntArray is [int; 2]` correctly frees via rt_array_free.
-        let resolved = Self::resolve_alias(kind, type_ctx.facts.definitions());
-        let kind = resolved.unwrap_or(kind);
+        let resolved = resolve_alias(kind, type_ctx.facts.definitions());
+        let kind = resolved.as_ref().map_or(kind, |target| &target.kind);
 
         if Self::is_map_type(kind) {
             Self::emit_drop_map(builder, ctx, kind, ptr, type_ctx)
@@ -856,6 +865,11 @@ impl<'a> FunctionTranslator<'a> {
         } else if let TypeKind::Tuple(element_exprs) = kind {
             Self::emit_drop_tuple(builder, ctx, kind, element_exprs, ptr, header_ptr, type_ctx)
         } else if let TypeKind::Option(inner) = kind {
+            // An optional held as its payload's own pointer has no box: the
+            // allocation reaching zero is the payload's, released as one.
+            if Self::nullable_pointer_layout(kind, type_ctx)? {
+                return Self::emit_type_drop(builder, ctx, &inner.kind, ptr, header_ptr, type_ctx);
+            }
             Self::emit_drop_option(builder, ctx, inner, ptr, header_ptr, type_ctx)
         } else if kind == &TypeKind::String {
             // miri_rt_string_free takes the payload pointer (not header) — it
@@ -975,21 +989,21 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let tuple_type = kind.clone();
-        let managed_fields: Vec<(i32, TypeKind)> = element_exprs
+        let managed_fields = element_exprs
             .iter()
             .enumerate()
             .filter_map(|(i, expr)| {
                 let ExpressionKind::Type(ty, _) = &expr.node else {
                     return None;
                 };
-                if !is_word_slot_managed(&ty.kind) {
-                    return None;
-                }
-                let (offset, _) =
-                    layout::field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type);
-                Some((offset, ty.kind.clone()))
+                is_word_slot_managed(&ty.kind).then_some((i, &ty.kind))
             })
-            .collect();
+            .map(|(i, field_kind)| {
+                let (offset, _) =
+                    layout::field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type)?;
+                Ok((offset, field_kind.clone()))
+            })
+            .collect::<Result<Vec<(i32, TypeKind)>, CodegenError>>()?;
         for (offset, field_kind) in managed_fields {
             let field_ptr = builder.ins().load(ptr_type, MemFlags::new(), ptr, offset);
             Self::emit_decref_value(builder, ctx, &field_kind, field_ptr, type_ctx)?;
@@ -997,7 +1011,9 @@ impl<'a> FunctionTranslator<'a> {
         Self::call_libc_free(builder, ctx, header_ptr)
     }
 
-    /// DecRef an Option's inner value (when managed), then free the RC block.
+    /// DecRef a boxed Option's inner value (when managed), then free the box.
+    /// An optional held as its payload's pointer never reaches here: it has no
+    /// box to free.
     fn emit_drop_option(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1464,25 +1480,6 @@ impl<'a> FunctionTranslator<'a> {
         Self::call_libc_free(builder, ctx, header_ptr)
     }
 
-    /// Resolves a type alias to its underlying type kind.
-    /// Returns `Some(resolved_kind)` if the type is an alias, `None` otherwise.
-    pub fn resolve_alias<'b>(
-        kind: &TypeKind,
-        type_definitions: &'b HashMap<String, TypeDefinition>,
-    ) -> Option<&'b TypeKind> {
-        if let TypeKind::Custom(name, _) = kind {
-            if let Some(TypeDefinition::Alias(alias_def)) = type_definitions.get(name) {
-                // Recurse to handle chained aliases (A -> B -> [int])
-                let inner = &alias_def.template.kind;
-                Self::resolve_alias(inner, type_definitions).or(Some(inner))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
     /// Emits DecRef calls for all managed fields of a struct, class, or enum.
     ///
     /// For structs and classes, iterates all fields and emits a DecRef sequence
@@ -1615,7 +1612,7 @@ impl<'a> FunctionTranslator<'a> {
                 *field_idx,
                 type_ctx.facts.definitions(),
                 ptr_type,
-            );
+            )?;
             let field_ptr = builder
                 .ins()
                 .load(ptr_type, MemFlags::new(), payload_ptr, offset);

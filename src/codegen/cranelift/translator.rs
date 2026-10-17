@@ -478,7 +478,17 @@ impl<'a> FunctionTranslator<'a> {
                     value = match inline_elem.take() {
                         Some(vec_kind) => Self::load_inline_element_field(
                             builder, value, &vec_kind, *idx, type_ctx,
-                        ),
+                        )?,
+                        // The payload of an optional held as its payload's
+                        // pointer is that same word: there is no box to open.
+                        None if Self::opens_nullable_pointer(
+                            &current_type.kind,
+                            *idx,
+                            type_ctx,
+                        )? =>
+                        {
+                            value
+                        }
                         None => Self::load_owned_field(
                             builder,
                             value,
@@ -486,7 +496,7 @@ impl<'a> FunctionTranslator<'a> {
                             *idx,
                             expected_ty,
                             type_ctx,
-                        ),
+                        )?,
                     };
                     current_type = Self::type_after_projection(reached, &current_type);
                 }
@@ -530,14 +540,14 @@ impl<'a> FunctionTranslator<'a> {
         vec_kind: &TypeKind,
         idx: usize,
         type_ctx: &TypeCtx,
-    ) -> Value {
+    ) -> Result<Value, CodegenError> {
         let (offset, field_ty) = layout::field_layout(
             vec_kind,
             idx,
             type_ctx.facts.definitions(),
             type_ctx.ptr_type,
-        );
-        builder.ins().load(field_ty, MemFlags::new(), value, offset)
+        )?;
+        Ok(builder.ins().load(field_ty, MemFlags::new(), value, offset))
     }
 
     /// Load field `idx` out of the aggregate of type `owner_type` at `value`.
@@ -552,29 +562,29 @@ impl<'a> FunctionTranslator<'a> {
         idx: usize,
         expected_ty: Option<&Type>,
         type_ctx: &TypeCtx,
-    ) -> Value {
+    ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         if matches!(owner_type.kind, TypeKind::Function(_)) {
             // Closure env field: capture `idx` lives at
             // payload_ptr + (idx+2)*ptr_size (slot 0=fn_ptr, slot 1=dtor_ptr).
             let offset = (idx as i64 + 2) * ptr_type.bytes() as i64;
-            return builder
+            return Ok(builder
                 .ins()
-                .load(ptr_type, MemFlags::new(), value, offset as i32);
+                .load(ptr_type, MemFlags::new(), value, offset as i32));
         }
         let (offset, mut field_ty) = layout::field_layout(
             &owner_type.kind,
             idx,
             type_ctx.facts.definitions(),
             ptr_type,
-        );
+        )?;
         if let Some(expected) = expected_ty {
             if Self::field_width_comes_from_expected_ty(&owner_type.kind, type_ctx) {
                 field_ty =
                     crate::codegen::cranelift::types::translate_type_kind(&expected.kind, ptr_type);
             }
         }
-        builder.ins().load(field_ty, MemFlags::new(), value, offset)
+        Ok(builder.ins().load(field_ty, MemFlags::new(), value, offset))
     }
 
     /// True when a field of `owner_kind` must be loaded at the destination's
@@ -746,9 +756,15 @@ impl<'a> FunctionTranslator<'a> {
                 PlaceElem::Deref => {
                     addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
                 }
+                PlaceElem::Field(idx)
+                    if Self::opens_nullable_pointer(&current_type.kind, *idx, type_ctx)? =>
+                {
+                    // The word reached so far is already the payload pointer.
+                    current_type = Self::type_after_projection(reached, &current_type);
+                }
                 PlaceElem::Field(idx) => {
                     let (offset, _) =
-                        layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type);
+                        layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type)?;
                     addr = builder.ins().iadd_imm(addr, offset as i64);
                     current_type = Self::type_after_projection(reached, &current_type);
                     // A field that owns its own allocation stores a *pointer* to
@@ -756,8 +772,11 @@ impl<'a> FunctionTranslator<'a> {
                     // the pointer rather than adding another offset to the
                     // object holding it. Skipping the load writes the value into
                     // the outer object's own slot: the store lands one level too
-                    // high, and what it overwrote is leaked.
-                    if crate::mir::rc::is_field_managed(&current_type.kind) {
+                    // high, and what it overwrote is leaked. A field is a
+                    // one-word slot, so a vector held in one — a class or
+                    // struct field, a tuple element, a boxed optional's or an
+                    // enum's payload — is such a pointer too.
+                    if crate::mir::rc::is_word_slot_managed(&current_type.kind) {
                         addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
                     }
                 }
@@ -783,6 +802,29 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         Ok((addr, current_type))
+    }
+
+    /// Whether projecting field `idx` out of a value of `owner` reads the
+    /// payload of an optional held as its payload's own pointer — a projection
+    /// that moves no address, since the optional's word is the payload.
+    ///
+    /// Such an optional has exactly one field; any other index means MIR and
+    /// the layout disagree about the value, and is reported.
+    fn opens_nullable_pointer(
+        owner: &TypeKind,
+        idx: usize,
+        type_ctx: &TypeCtx,
+    ) -> Result<bool, CodegenError> {
+        if !Self::nullable_pointer_layout(owner, type_ctx)? {
+            return Ok(false);
+        }
+        if idx != 0 {
+            return Err(CodegenError::Internal(format!(
+                "field {idx} is projected from `{owner:?}`, an optional whose only field is \
+                 its payload"
+            )));
+        }
+        Ok(true)
     }
 
     /// The type a projection walk reached, as `kind`, or `fallback` when the
@@ -821,12 +863,19 @@ impl<'a> FunctionTranslator<'a> {
                 builder.ins().store(MemFlags::new(), value, addr, 0);
             }
             PlaceElem::Field(idx) => {
+                if Self::opens_nullable_pointer(&current_type.kind, *idx, type_ctx)? {
+                    return Err(CodegenError::Internal(format!(
+                        "a store reaches into the payload of `{:?}`, an optional held as its \
+                         payload's pointer, which has no slot of its own to write",
+                        current_type.kind
+                    )));
+                }
                 let (offset, field_ty) = layout::field_layout(
                     &current_type.kind,
                     *idx,
                     type_ctx.facts.definitions(),
                     type_ctx.ptr_type,
-                );
+                )?;
                 // Storing into an inline vector component: narrow/extend the
                 // value to the component width. `arr[i].x` is typed without a
                 // concrete scalar width upstream, so an `f64` literal can reach

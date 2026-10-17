@@ -403,6 +403,14 @@ impl<'a> FunctionTranslator<'a> {
             );
         }
 
+        if let AggregateKind::Option(optional) = kind {
+            if Self::builds_nullable_pointer(optional, type_ctx)? {
+                return Self::translate_nullable_pointer_some(
+                    builder, ctx, optional, operands, locals, type_ctx,
+                );
+            }
+        }
+
         let is_collection = matches!(
             kind,
             AggregateKind::Array | AggregateKind::List | AggregateKind::Map | AggregateKind::Set
@@ -428,6 +436,47 @@ impl<'a> FunctionTranslator<'a> {
             type_ctx,
             expected_ty,
         )
+    }
+
+    /// Whether the optional an aggregate builds is held as its payload's own
+    /// pointer rather than a box.
+    ///
+    /// The aggregate names the optional type it builds; one that names anything
+    /// else leaves the layout undecidable, and guessing it would hand a box to
+    /// a reader expecting the bare pointer, or the reverse.
+    fn builds_nullable_pointer(
+        optional: &crate::ast::types::Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<bool, CodegenError> {
+        if !matches!(optional.kind, TypeKind::Option(_)) {
+            return Err(CodegenError::Internal(format!(
+                "an optional aggregate carries `{:?}`, which is not an optional type; its \
+                 layout cannot be decided",
+                optional.kind
+            )));
+        }
+        Self::nullable_pointer_layout(&optional.kind, type_ctx)
+    }
+
+    /// Build `Some(r)` for an optional held as its payload's own pointer: the
+    /// value is `r`'s pointer, with no box around it. The reference the
+    /// optional holds is the one the operand hands over.
+    fn translate_nullable_pointer_some(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        optional: &crate::ast::types::Type,
+        operands: &[Operand],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        let [payload] = operands else {
+            return Err(CodegenError::Internal(format!(
+                "an optional `{:?}` is built from {} values; `Some` holds exactly one",
+                optional.kind,
+                operands.len()
+            )));
+        };
+        Self::translate_operand(builder, ctx, payload, locals, type_ctx, None)
     }
 
     /// Build a heap-allocated `Array`, `List`, `Map`, or `Set` aggregate from `operands`.
@@ -2828,7 +2877,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for i in 0..element_exprs.len() {
             let (offset, cl_ty) =
-                field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type);
+                field_layout(&tuple_type, i, type_ctx.facts.definitions(), ptr_type)?;
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
@@ -2862,7 +2911,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for i in 0..def.fields.len() {
             let (offset, cl_ty) =
-                field_layout(struct_type, i, type_ctx.facts.definitions(), ptr_type);
+                field_layout(struct_type, i, type_ctx.facts.definitions(), ptr_type)?;
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);

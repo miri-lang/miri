@@ -7,6 +7,7 @@ use crate::ast::statement::{BindingResidency as AstResidency, VariableDeclaratio
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::{BindingResidency as MirResidency, DeviceHandleId};
+use crate::mir::option_layout::resolve_alias;
 use crate::mir::types::MirType;
 use crate::mir::{
     Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass, Terminator,
@@ -124,24 +125,13 @@ fn emit_void_runtime_call(
 /// `type Meters is int` arrives as `Custom("Meters")`. Left that way, every
 /// decision that follows reads an opaque name rather than the type behind it:
 /// the coercion the initializer needs, the storage the value gets, and whether
-/// it is reference counted. Aliases may chain, so the walk continues until it
-/// reaches a type that is not itself an alias; a cycle stops it and yields the
-/// type as written.
+/// it is reference counted. A generic alias stands for its template at the
+/// arguments it is written with (`Opt<Node>` for `type Opt<T> is T?` is
+/// `Node?`), and aliases may chain; [`resolve_alias`] reads both, the same way
+/// the optional layout and the release path do. A cycle yields the type as
+/// written.
 fn resolve_alias_target(tc: &crate::type_checker::TypeChecker, ty: &Type) -> Type {
-    let mut current = ty.clone();
-    let mut visited = std::collections::HashSet::new();
-    while let TypeKind::Custom(name, _) = &current.kind {
-        if !visited.insert(name.clone()) {
-            return ty.clone();
-        }
-        let Some(crate::type_checker::context::TypeDefinition::Alias(alias)) =
-            tc.type_definitions().get(name.as_str())
-        else {
-            break;
-        };
-        current = alias.template.clone();
-    }
-    current
+    resolve_alias(&ty.kind, tc.type_definitions()).unwrap_or_else(|| ty.clone())
 }
 
 /// A declared type in the form every later pass expects.

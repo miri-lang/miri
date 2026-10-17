@@ -22,7 +22,7 @@ use super::{local_display_name, VerificationViolation};
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
-use crate::mir::option_layout::OptionalLayers;
+use crate::mir::option_layout::{is_nullable_pointer_optional, OptionalLayers};
 use crate::mir::place::PlaceElem;
 use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
@@ -225,8 +225,7 @@ impl<'a> Layouts<'a> {
             projection: prefix.to_vec(),
         };
         let holder_ty = self.place_type(&holder)?;
-        let layers = OptionalLayers::of(&holder_ty.kind, self.definitions);
-        if layers.boxed > 0 || !layers.innermost_nullable_pointer {
+        if !is_nullable_pointer_optional(&holder_ty.kind, self.definitions) {
             return None;
         }
         Some(VerificationViolation {
@@ -329,7 +328,7 @@ impl<'a> Layouts<'a> {
         let source = OptionalLayers::of(&source.kind, self.definitions);
         let target = OptionalLayers::of(&target.kind, self.definitions);
         let is_absent_placeholder =
-            |layers: &OptionalLayers<'_>| matches!(layers.value, TypeKind::Void | TypeKind::Error);
+            |layers: &OptionalLayers<'_>| matches!(*layers.value, TypeKind::Void | TypeKind::Error);
         if !is_optional(&source)
             || !is_optional(&target)
             || is_absent_placeholder(&source)

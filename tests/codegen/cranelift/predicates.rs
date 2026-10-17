@@ -303,3 +303,56 @@ fn is_integer_kind_not_other() {
     assert!(!FunctionTranslator::is_integer_kind(&TypeKind::Boolean));
     assert!(!FunctionTranslator::is_integer_kind(&TypeKind::Void));
 }
+
+/// The element kind word, decoded against the runtime's bit layout
+/// (`element_identity::through_optionals`): the rule in bits 0..8, the boxed
+/// depth in bits 8..16, the innermost-nullable flag at bit 16, and the boxed
+/// value's size from bit 17. The runtime opens exactly the boxes the word
+/// names, so a bit out of place reads a pointer as a value.
+#[test]
+fn test_optional_element_kind_matches_the_runtime_bit_layout() {
+    use miri::mir::option_layout::OptionalLayers;
+    use std::borrow::Cow;
+    let node = TypeKind::Custom("Node".to_string(), None);
+    let layers = |boxed, innermost_nullable_pointer, value: &TypeKind| OptionalLayers {
+        boxed,
+        innermost_nullable_pointer,
+        value: Cow::Owned(value.clone()),
+    };
+    let string_content = 1;
+    let f64_value = 4;
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(string_content, &layers(0, true, &node), 8),
+        Some(1 | (1 << 16) | (8 << 17)),
+        "a nullable pointer, no box"
+    );
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(string_content, &layers(1, true, &node), 8),
+        Some(1 | (1 << 8) | (1 << 16) | (8 << 17)),
+        "one box around a nullable pointer"
+    );
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(f64_value, &layers(2, false, &TypeKind::F64), 8),
+        Some(4 | (2 << 8) | (8 << 17)),
+        "two boxes around a value"
+    );
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(f64_value, &layers(0, false, &TypeKind::F64), 8),
+        None,
+        "no optional layer to describe"
+    );
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(
+            f64_value,
+            &layers(256, false, &TypeKind::F64),
+            8
+        ),
+        None,
+        "a depth past the eight bits the runtime reads"
+    );
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(f64_value, &layers(1, false, &TypeKind::F64), 17),
+        None,
+        "a value wider than the runtime compares"
+    );
+}

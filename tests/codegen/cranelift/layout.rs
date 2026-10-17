@@ -49,17 +49,20 @@ fn test_tuple_field_layout_with_padding() {
 
     // Fields start after the count header (ptr_size = 8 bytes)
     // Field 0: I8 at offset 8
-    let (offset, ty) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&tuple_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 8);
     assert_eq!(ty, types::I8);
 
     // Field 1: I32, alignment 4 → offset 9 padded to 12
-    let (offset, ty) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&tuple_kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 12);
     assert_eq!(ty, types::I32);
 
     // Field 2: I64, alignment 8 → offset 12+4=16, already aligned
-    let (offset, ty) = field_layout(&tuple_kind, 2, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&tuple_kind, 2, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 16);
     assert_eq!(ty, types::I64);
 }
@@ -87,7 +90,8 @@ fn test_tuple_single_field() {
     let tuple_kind = TypeKind::Tuple(vec![create_type_expr(TypeKind::I32)]);
 
     // Field 0 starts after count header (8 bytes)
-    let (offset, ty) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&tuple_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 8);
     assert_eq!(ty, types::I32);
 
@@ -118,8 +122,10 @@ fn test_tuple_no_padding_needed() {
     ]);
 
     // Fields start after count header (8 bytes)
-    let (offset0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr);
-    let (offset1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    let (offset0, _) =
+        field_layout(&tuple_kind, 0, &type_defs, ptr).expect("the field has a layout");
+    let (offset1, _) =
+        field_layout(&tuple_kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset0, 8);
     assert_eq!(offset1, 12);
 
@@ -141,15 +147,18 @@ fn test_tuple_with_pointer_sized_elements() {
 
     // Fields start after count header (8 bytes)
     // String@8 (8 bytes), I32@16 (4 bytes, align=4, 16 is ok), String@24 (align=8, 20→24)
-    let (offset0, ty0) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    let (offset0, ty0) =
+        field_layout(&tuple_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset0, 8);
     assert_eq!(ty0, ptr);
 
-    let (offset1, ty1) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    let (offset1, ty1) =
+        field_layout(&tuple_kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset1, 16);
     assert_eq!(ty1, types::I32);
 
-    let (offset2, ty2) = field_layout(&tuple_kind, 2, &type_defs, ptr);
+    let (offset2, ty2) =
+        field_layout(&tuple_kind, 2, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset2, 24);
     assert_eq!(ty2, ptr);
 
@@ -169,11 +178,13 @@ fn test_tuple_with_i128() {
     ]);
 
     // Fields start after count header (8 bytes)
-    let (offset0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    let (offset0, _) =
+        field_layout(&tuple_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset0, 8);
 
     // I128 alignment is 16 → offset 9 padded to 16
-    let (offset1, ty1) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    let (offset1, ty1) =
+        field_layout(&tuple_kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset1, 16);
     assert_eq!(ty1, types::I128);
 
@@ -196,7 +207,7 @@ fn test_tuple_out_of_range_field_idx() {
     ]);
 
     // Field index 2 is out of range — panics in debug, falls through in release
-    let _ = field_layout(&tuple_kind, 2, &type_defs, ptr);
+    let _ = field_layout(&tuple_kind, 2, &type_defs, ptr).expect("the field has a layout");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -235,17 +246,20 @@ fn test_struct_field_layout_with_padding() {
     let custom_kind = TypeKind::Custom("MyStruct".to_string(), None);
 
     // Field 0: I16 at offset 0
-    let (offset, ty) = field_layout(&custom_kind, 0, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&custom_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 0);
     assert_eq!(ty, types::I16);
 
     // Field 1: F64, align=8, offset 2 → 8
-    let (offset, ty) = field_layout(&custom_kind, 1, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&custom_kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 8);
     assert_eq!(ty, types::F64);
 
     // Field 2: I64, align=8, offset 16 → 16
-    let (offset, ty) = field_layout(&custom_kind, 2, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&custom_kind, 2, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 16);
     assert_eq!(ty, types::I64);
 }
@@ -290,7 +304,8 @@ fn test_struct_single_field() {
 
     let custom_kind = TypeKind::Custom("Single".to_string(), None);
 
-    let (offset, ty) = field_layout(&custom_kind, 0, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&custom_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 0);
     assert_eq!(ty, types::I32);
 
@@ -312,9 +327,9 @@ fn test_struct_uniform_fields_no_padding() {
 
     let custom_kind = TypeKind::Custom("Uniform".to_string(), None);
 
-    let (o0, _) = field_layout(&custom_kind, 0, &type_defs, ptr);
-    let (o1, _) = field_layout(&custom_kind, 1, &type_defs, ptr);
-    let (o2, _) = field_layout(&custom_kind, 2, &type_defs, ptr);
+    let (o0, _) = field_layout(&custom_kind, 0, &type_defs, ptr).expect("the field has a layout");
+    let (o1, _) = field_layout(&custom_kind, 1, &type_defs, ptr).expect("the field has a layout");
+    let (o2, _) = field_layout(&custom_kind, 2, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(o0, 0);
     assert_eq!(o1, 8);
     assert_eq!(o2, 16);
@@ -339,10 +354,10 @@ fn test_struct_worst_case_padding() {
     let custom_kind = TypeKind::Custom("Padded".to_string(), None);
 
     // I8@0, I64@8, I8@16, I64@24
-    let (o0, _) = field_layout(&custom_kind, 0, &type_defs, ptr);
-    let (o1, _) = field_layout(&custom_kind, 1, &type_defs, ptr);
-    let (o2, _) = field_layout(&custom_kind, 2, &type_defs, ptr);
-    let (o3, _) = field_layout(&custom_kind, 3, &type_defs, ptr);
+    let (o0, _) = field_layout(&custom_kind, 0, &type_defs, ptr).expect("the field has a layout");
+    let (o1, _) = field_layout(&custom_kind, 1, &type_defs, ptr).expect("the field has a layout");
+    let (o2, _) = field_layout(&custom_kind, 2, &type_defs, ptr).expect("the field has a layout");
+    let (o3, _) = field_layout(&custom_kind, 3, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(o0, 0);
     assert_eq!(o1, 8);
     assert_eq!(o2, 16);
@@ -367,7 +382,7 @@ fn test_struct_out_of_range_field_idx() {
     let custom_kind = TypeKind::Custom("S".to_string(), None);
 
     // Field index 1 is out of range — panics in debug, falls through in release
-    let _ = field_layout(&custom_kind, 1, &type_defs, ptr);
+    let _ = field_layout(&custom_kind, 1, &type_defs, ptr).expect("the field has a layout");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -406,17 +421,26 @@ fn test_enum_with_payload() {
     assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 3 * ptr.bytes());
 
     // Field 0: discriminant at offset 0
-    assert_eq!(field_layout(&enum_kind, 0, &type_defs, ptr).0, 0);
+    assert_eq!(
+        field_layout(&enum_kind, 0, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
+        0
+    );
 
     // Field 1: first payload at offset ptr_size
     assert_eq!(
-        field_layout(&enum_kind, 1, &type_defs, ptr).0,
+        field_layout(&enum_kind, 1, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
         ptr.bytes() as i32
     );
 
     // Field 2: second payload at offset 2 * ptr_size
     assert_eq!(
-        field_layout(&enum_kind, 2, &type_defs, ptr).0,
+        field_layout(&enum_kind, 2, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
         2 * (ptr.bytes() as i32)
     );
 }
@@ -435,7 +459,8 @@ fn test_enum_all_unit_variants() {
     assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), ptr.bytes());
 
     // Discriminant at offset 0
-    let (offset, ty) = field_layout(&enum_kind, 0, &type_defs, ptr);
+    let (offset, ty) =
+        field_layout(&enum_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 0);
     assert_eq!(ty, ptr);
 }
@@ -488,10 +513,30 @@ fn test_enum_wide_payload_widens_every_slot() {
 
     let enum_kind = TypeKind::Custom("Wide".to_string(), None);
 
-    assert_eq!(field_layout(&enum_kind, 0, &type_defs, ptr).0, 0);
-    assert_eq!(field_layout(&enum_kind, 1, &type_defs, ptr).0, 16);
-    assert_eq!(field_layout(&enum_kind, 2, &type_defs, ptr).0, 32);
-    assert_eq!(field_layout(&enum_kind, 3, &type_defs, ptr).0, 48);
+    assert_eq!(
+        field_layout(&enum_kind, 0, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
+        0
+    );
+    assert_eq!(
+        field_layout(&enum_kind, 1, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
+        16
+    );
+    assert_eq!(
+        field_layout(&enum_kind, 2, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
+        32
+    );
+    assert_eq!(
+        field_layout(&enum_kind, 3, &type_defs, ptr)
+            .expect("the field has a layout")
+            .0,
+        48
+    );
     // Discriminant slot + the three fields of the widest variant, 16 bytes each.
     assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 64);
 }
@@ -506,7 +551,8 @@ fn test_enum_discriminant_is_pointer_type() {
 
     let enum_kind = TypeKind::Custom("E".to_string(), None);
 
-    let (_, disc_ty) = field_layout(&enum_kind, 0, &type_defs, ptr);
+    let (_, disc_ty) =
+        field_layout(&enum_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(disc_ty, ptr, "Discriminant should be pointer-typed");
 }
 
@@ -521,8 +567,8 @@ fn test_enum_payload_fields_are_pointer_typed() {
     let enum_kind = TypeKind::Custom("E".to_string(), None);
 
     // Even though the actual types are I8 and Boolean, enum payload uses ptr-sized slots
-    let (_, ty1) = field_layout(&enum_kind, 1, &type_defs, ptr);
-    let (_, ty2) = field_layout(&enum_kind, 2, &type_defs, ptr);
+    let (_, ty1) = field_layout(&enum_kind, 1, &type_defs, ptr).expect("the field has a layout");
+    let (_, ty2) = field_layout(&enum_kind, 2, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(ty1, ptr);
     assert_eq!(ty2, ptr);
 }
@@ -609,9 +655,9 @@ fn test_class_field_layout_uses_pointer_slots() {
 
     let kind = TypeKind::Custom("C".to_string(), None);
 
-    let (o0, t0) = field_layout(&kind, 0, &type_defs, ptr);
-    let (o1, t1) = field_layout(&kind, 1, &type_defs, ptr);
-    let (o2, t2) = field_layout(&kind, 2, &type_defs, ptr);
+    let (o0, t0) = field_layout(&kind, 0, &type_defs, ptr).expect("the field has a layout");
+    let (o1, t1) = field_layout(&kind, 1, &type_defs, ptr).expect("the field has a layout");
+    let (o2, t2) = field_layout(&kind, 2, &type_defs, ptr).expect("the field has a layout");
     // Offsets are relative to the payload pointer (past the 16-byte header);
     // every class keeps its first word for the vtable pointer.
     assert_eq!(o0, ptr.bytes() as i32);
@@ -665,7 +711,7 @@ fn test_generic_typedef_is_pointer_sized() {
     let kind = TypeKind::Custom("T".to_string(), None);
     assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
 
-    let (offset, ty) = field_layout(&kind, 0, &type_defs, ptr);
+    let (offset, ty) = field_layout(&kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 0);
     assert_eq!(ty, ptr);
 }
@@ -717,13 +763,17 @@ fn test_alias_to_struct_resolves_layout() {
     );
 
     // Field layout should match too
-    let (alias_o0, alias_t0) = field_layout(&alias_kind, 0, &type_defs, ptr);
-    let (direct_o0, direct_t0) = field_layout(&direct_kind, 0, &type_defs, ptr);
+    let (alias_o0, alias_t0) =
+        field_layout(&alias_kind, 0, &type_defs, ptr).expect("the field has a layout");
+    let (direct_o0, direct_t0) =
+        field_layout(&direct_kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(alias_o0, direct_o0);
     assert_eq!(alias_t0, direct_t0);
 
-    let (alias_o1, alias_t1) = field_layout(&alias_kind, 1, &type_defs, ptr);
-    let (direct_o1, direct_t1) = field_layout(&direct_kind, 1, &type_defs, ptr);
+    let (alias_o1, alias_t1) =
+        field_layout(&alias_kind, 1, &type_defs, ptr).expect("the field has a layout");
+    let (direct_o1, direct_t1) =
+        field_layout(&direct_kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(alias_o1, direct_o1);
     assert_eq!(alias_t1, direct_t1);
 }
@@ -754,8 +804,10 @@ fn test_alias_to_tuple_resolves_layout() {
         aggregate_size(&tuple_type, &type_defs, ptr)
     );
 
-    let (alias_o0, alias_t0) = field_layout(&alias_kind, 0, &type_defs, ptr);
-    let (direct_o0, direct_t0) = field_layout(&tuple_type, 0, &type_defs, ptr);
+    let (alias_o0, alias_t0) =
+        field_layout(&alias_kind, 0, &type_defs, ptr).expect("the field has a layout");
+    let (direct_o0, direct_t0) =
+        field_layout(&tuple_type, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(alias_o0, direct_o0);
     assert_eq!(alias_t0, direct_t0);
 }
@@ -774,11 +826,11 @@ fn test_unknown_custom_type_fallback() {
     // Falls back to pointer-sized
     assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
 
-    let (offset, ty) = field_layout(&kind, 0, &type_defs, ptr);
+    let (offset, ty) = field_layout(&kind, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset, 0);
     assert_eq!(ty, ptr);
 
-    let (offset1, _) = field_layout(&kind, 1, &type_defs, ptr);
+    let (offset1, _) = field_layout(&kind, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(offset1, ptr.bytes() as i32);
 }
 
@@ -792,16 +844,19 @@ fn test_non_aggregate_types_use_pointer_slots() {
     let ptr = ptr_ty();
 
     // Primitive types hitting the wildcard arm
-    let (o0, t0) = field_layout(&TypeKind::I32, 0, &type_defs, ptr);
+    let (o0, t0) =
+        field_layout(&TypeKind::I32, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(o0, 0);
     assert_eq!(t0, ptr);
 
-    let (o1, t1) = field_layout(&TypeKind::I32, 1, &type_defs, ptr);
+    let (o1, t1) =
+        field_layout(&TypeKind::I32, 1, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(o1, ptr.bytes() as i32);
     assert_eq!(t1, ptr);
 
     // String type
-    let (o0, _) = field_layout(&TypeKind::String, 0, &type_defs, ptr);
+    let (o0, _) =
+        field_layout(&TypeKind::String, 0, &type_defs, ptr).expect("the field has a layout");
     assert_eq!(o0, 0);
 
     // Collection types also hit the wildcard
@@ -825,8 +880,8 @@ fn test_layout_with_32bit_pointers() {
     ]);
 
     // Fields start after count header (ptr_size = 4 bytes for 32-bit)
-    let (o0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr32);
-    let (o1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr32);
+    let (o0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr32).expect("the field has a layout");
+    let (o1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr32).expect("the field has a layout");
     assert_eq!(o0, 4);
     assert_eq!(o1, 8); // I32 alignment = 4, offset 5 → 8
 
@@ -847,8 +902,9 @@ fn test_enum_layout_with_32bit_pointers() {
     // 32-bit: discriminant (4) + 1 field (4) = 8
     assert_eq!(aggregate_size(&kind, &type_defs, ptr32), 8);
 
-    let (disc_off, _) = field_layout(&kind, 0, &type_defs, ptr32);
-    let (payload_off, _) = field_layout(&kind, 1, &type_defs, ptr32);
+    let (disc_off, _) = field_layout(&kind, 0, &type_defs, ptr32).expect("the field has a layout");
+    let (payload_off, _) =
+        field_layout(&kind, 1, &type_defs, ptr32).expect("the field has a layout");
     assert_eq!(disc_off, 0);
     assert_eq!(payload_off, 4);
 }
@@ -923,7 +979,8 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
 
     let kind = TypeKind::Custom("Child".to_string(), None);
     for index in 0..layout.fields.len() {
-        let (offset, cl_ty) = field_layout(&kind, index, &type_defs, ptr);
+        let (offset, cl_ty) =
+            field_layout(&kind, index, &type_defs, ptr).expect("the field has a layout");
         assert_eq!(
             (offset, cl_ty),
             layout.fields[index],
@@ -958,4 +1015,56 @@ fn a_base_field_sits_where_it_does_in_a_subclass_that_dispatches() {
 
     assert_eq!(base.fields[0], child.fields[0]);
     assert_eq!(base.fields[0].0, ptr.bytes() as i32);
+}
+
+#[test]
+fn test_optional_field_layout_refuses_an_optional_with_no_box() {
+    // An optional of a class is the class pointer itself; an offset into it
+    // would read the class's own first word as the payload.
+    let node = TypeKind::Custom("Node".to_string(), None);
+    let defs = HashMap::from([(
+        "Node".to_string(),
+        TypeDefinition::Class(make_class("Node", None, vec![("v", TypeKind::Int)])),
+    )]);
+    let pointer = TypeKind::Option(Box::new(t(node)));
+    let error = field_layout(&pointer, 0, &defs, ptr_ty())
+        .expect_err("a nullable-pointer optional has no payload offset");
+    assert!(
+        error.to_string().contains("no box to hold the payload"),
+        "unexpected error: {error}"
+    );
+
+    let boxed = TypeKind::Option(Box::new(t(TypeKind::Int)));
+    assert_eq!(
+        field_layout(&boxed, 0, &defs, ptr_ty()).expect("a boxed optional has a payload slot"),
+        (0, ptr_ty())
+    );
+}
+
+#[test]
+fn test_generic_alias_field_layout_is_its_template_at_its_arguments() {
+    // `type Id<T> is T` at a tuple lays out as that tuple.
+    let defs = HashMap::from([(
+        "Id".to_string(),
+        TypeDefinition::Alias(AliasDefinition {
+            template: t(TypeKind::Custom("T".to_string(), None)),
+            generics: Some(vec![GenericDefinition {
+                name: "T".to_string(),
+                constraint: None,
+                kind: miri::ast::types::TypeDeclarationKind::None,
+            }]),
+        }),
+    )]);
+    let tuple = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I8),
+        create_type_expr(TypeKind::I64),
+    ]);
+    let aliased = TypeKind::Custom(
+        "Id".to_string(),
+        Some(vec![create_type_expr(tuple.clone())]),
+    );
+    assert_eq!(
+        field_layout(&aliased, 1, &defs, ptr_ty()).expect("the alias has a layout"),
+        field_layout(&tuple, 1, &defs, ptr_ty()).expect("the tuple has a layout"),
+    );
 }

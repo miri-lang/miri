@@ -297,3 +297,36 @@ fn main()
 ";
     assert_runs_with_output(source, "4");
 }
+
+#[test]
+fn test_a_component_write_reaches_a_vector_held_in_a_field_or_tuple_slot() {
+    // A field holds its vector as a pointer to the vector's own allocation;
+    // the write must land inside that allocation, not in the holder's slot.
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.gpu.vector
+
+struct S
+    p Vec2<f32>
+
+class Inner
+    var p Vec3<f32>
+
+class Outer
+    var inner Inner
+    var q Vec2<f32>
+
+fn main()
+    var s = S(p: Vec2<f32>(1.0, 2.0))
+    s.p.y = 9.0
+    var o = Outer(inner: Inner(p: Vec3<f32>(1.0, 2.0, 3.0)), q: Vec2<f32>(4.0, 5.0))
+    o.inner.p.z = 8.0
+    o.q.x = 6.0
+    var t = (Vec2<f32>(1.0, 2.0), 3)
+    t.0.x = 7.0
+    println(f"{s.p.x} {s.p.y} {o.inner.p.y} {o.inner.p.z} {o.q.x} {o.q.y} {t.0.x} {t.0.y}")
+"#,
+        "1.0 9.0 2.0 8.0 6.0 5.0 7.0 2.0",
+    );
+}

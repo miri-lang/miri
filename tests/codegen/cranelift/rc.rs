@@ -376,42 +376,29 @@ fn test_custom_type_with_generic_args_resolves_if_definition_known() {
 }
 
 #[test]
-fn test_alias_resolves_to_its_underlying_kind() {
-    let table = defs([("Name", alias_to(TypeKind::String))]);
-    assert_eq!(
-        FunctionTranslator::resolve_alias(&custom("Name"), &table),
-        Some(&TypeKind::String)
-    );
-}
-
-#[test]
-fn test_chained_alias_resolves_to_the_final_kind() {
-    let table = defs([
-        ("Outer", alias_to(custom("Inner"))),
-        ("Inner", alias_to(TypeKind::String)),
-    ]);
-    assert_eq!(
-        FunctionTranslator::resolve_alias(&custom("Outer"), &table),
-        Some(&TypeKind::String),
-        "the drop path must see through every hop of an alias chain"
-    );
-}
-
-#[test]
-fn test_non_alias_custom_type_does_not_resolve() {
-    let table = defs([("Widget", TypeDefinition::Class(class("Widget")))]);
-    assert_eq!(
-        FunctionTranslator::resolve_alias(&custom("Widget"), &table),
-        None
-    );
-}
-
-#[test]
-fn test_builtin_kind_does_not_resolve_as_an_alias() {
-    assert_eq!(
-        FunctionTranslator::resolve_alias(&TypeKind::String, &HashMap::new()),
-        None
-    );
+fn test_an_optional_of_an_unresolved_parameter_is_unresolved() {
+    // A shared drop thunk keeps a `v T?` field only if it can release it; at
+    // `T = Node` the optional is the bare `Node` pointer, not a box, so a
+    // thunk that cannot tell must skip it exactly as it skips a bare `T`.
+    let table = defs([("Node", TypeDefinition::Class(class("Node")))]);
+    let parameter = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    let optional = |kind: TypeKind| TypeKind::Option(Box::new(ty(kind)));
+    for kind in [
+        optional(parameter.clone()),
+        optional(optional(parameter.clone())),
+        optional(custom("T")),
+    ] {
+        assert!(
+            FunctionTranslator::is_unresolved_generic_elem(&kind, &table),
+            "{kind:?} must be skipped like the parameter it wraps"
+        );
+    }
+    for kind in [optional(custom("Node")), optional(TypeKind::Int)] {
+        assert!(
+            !FunctionTranslator::is_unresolved_generic_elem(&kind, &table),
+            "{kind:?} is resolved"
+        );
+    }
 }
 
 #[test]
