@@ -70,6 +70,8 @@ pub struct FunctionTranslator<'a> {
 /// and returns the cached id on subsequent calls.
 pub(crate) struct ModuleCtx<'a> {
     pub(crate) module: &'a mut ObjectModule,
+    /// Whether the code being emitted carries the runtime's checking hooks.
+    pub(crate) runtime_checks: RuntimeChecks,
     pub(crate) string_literals: &'a mut BTreeMap<String, usize>,
     pub(crate) cached_funcs: HashMap<&'static str, cranelift_module::FuncId>,
     /// The per-type thunks (`miri.T.$decref` and the like) already declared in
@@ -120,6 +122,31 @@ pub(crate) struct CallSite<'a> {
     pub(crate) args: &'a [Value],
 }
 
+/// What compiled code does about the runtime's checks: the heap guard, the
+/// leak check, and the allocation and reference-count counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeChecks {
+    /// Every hook is emitted behind a test of the runtime's tracking state, so
+    /// one binary runs checked or plain as its environment asks.
+    Observable,
+    /// No hook is emitted and the tracking state is never read: a release
+    /// build. A call into the runtime left on a path through a loop makes the
+    /// register allocator treat every value live across it as clobbered, so a
+    /// hook skipped at run time still costs the loop its registers. The entry
+    /// point instead tells the runtime once, at startup, that the checks are
+    /// absent, and the runtime keeps its own hooks off to match.
+    CompiledOut,
+}
+
+/// How a user function's code is emitted beyond its MIR: whether it keeps the
+/// runtime's checking hooks, and whether it is the program's entry point, which
+/// is where a build that leaves them out says so to the runtime.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Emission {
+    pub(crate) runtime_checks: RuntimeChecks,
+    pub(crate) is_entry: bool,
+}
+
 /// Build an empty `ModuleCtx` with an unpopulated FuncId cache.
 /// Caches populate lazily as code generation needs each runtime symbol.
 pub(crate) fn empty_module_ctx<'a>(
@@ -129,6 +156,7 @@ pub(crate) fn empty_module_ctx<'a>(
 ) -> ModuleCtx<'a> {
     ModuleCtx {
         module,
+        runtime_checks: RuntimeChecks::Observable,
         string_literals,
         cached_funcs: HashMap::new(),
         thunk_funcs: HashMap::new(),
@@ -184,13 +212,15 @@ impl<'a> FunctionTranslator<'a> {
             facts,
         }
     }
-    /// Translate a MIR function body to Cranelift IR.
-    pub fn translate(
+    /// Translate a MIR function body to Cranelift IR, emitted as `emission`
+    /// says.
+    pub(crate) fn translate(
         &mut self,
         body: &Body,
         module: &mut ObjectModule,
         string_literals: &mut BTreeMap<String, usize>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
+        emission: Emission,
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
@@ -200,6 +230,10 @@ impl<'a> FunctionTranslator<'a> {
             Self::setup_entry_params(&mut builder, body, &locals, &blocks, self.ptr_type);
 
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
+        module_ctx.runtime_checks = emission.runtime_checks;
+        if emission.is_entry && emission.runtime_checks == RuntimeChecks::CompiledOut {
+            Self::call_rt_checks_compiled_out(&mut builder, &mut module_ctx)?;
+        }
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
             facts: self.facts,
@@ -1964,6 +1998,9 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         body: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<(), CodegenError>,
     ) -> Result<(), CodegenError> {
+        if ctx.runtime_checks == RuntimeChecks::CompiledOut {
+            return Ok(());
+        }
         let is_off = Self::emit_tracking_is_off(builder, ctx)?;
         let track_block = builder.create_block();
         let merge_block = builder.create_block();
@@ -2004,6 +2041,26 @@ impl<'a> FunctionTranslator<'a> {
             state,
             rt::TRACKING_STATE_OFF,
         ))
+    }
+
+    /// Calls `miri_rt_checks_compiled_out()`, which tells the runtime this
+    /// program carries none of its checking hooks.
+    fn call_rt_checks_compiled_out(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+    ) -> Result<(), CodegenError> {
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::CHECKS_COMPILED_OUT,
+                param_types: &[],
+                return_types: &[],
+                args: &[],
+            },
+        )?;
+        Ok(())
     }
 
     /// Calls `miri_rt_class_alloc_track(ptr)` to register an inline `malloc`

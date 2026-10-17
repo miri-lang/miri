@@ -9,6 +9,7 @@ import hashlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "bench"))
@@ -161,6 +162,18 @@ class CommandTest(unittest.TestCase):
         env = run.child_environment(Path("/w"))
         self.assertEqual(set(env), {"PATH", "HOME", "PYTHONHASHSEED", "DENO_DIR"})
         self.assertEqual(env["PYTHONHASHSEED"], "0")
+
+
+class CountedBuildTest(unittest.TestCase):
+    def test_the_counted_build_is_the_timed_line_without_release(self):
+        ctx = argparse.Namespace(charter=run.load_charter(), work_dir=Path("/work"))
+        with mock.patch.object(run, "build_with_line", return_value="build-failed") as build:
+            status = run.counted_build(ctx, "nbody", Path("nbody.mi"))
+        self.assertEqual(status, "build-failed")
+        self.assertEqual(ctx.charter["languages"]["miri"]["build"], "miri build --release --opt-level 3 -o {out} {src}")
+        build.assert_called_once_with(
+            ctx, "miri", "miri build --opt-level 3 -o {out} {src}", Path("nbody.mi"), Path("/work/bin/nbody.miri.counted")
+        )
 
 
 class ReviewTest(unittest.TestCase):

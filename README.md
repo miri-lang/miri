@@ -133,7 +133,7 @@ make lint         # Check formatting + clippy
 make format       # Auto-format all code
 ```
 
-The compiler emits unoptimized code unless asked otherwise. `miri build --release` and `miri run --release` optimize (they mean `--opt-level 3`); `--opt-level 0`–`3` picks a level explicitly and wins over `--release`. Level 0 does not optimize, and 1–3 run the backend's speed optimizations. Time a program only from an optimized build.
+The compiler emits unoptimized code unless asked otherwise. `miri build --release` and `miri run --release` optimize (they mean `--opt-level 3`); `--opt-level 0`–`3` picks a level explicitly and wins over `--release`. Level 0 does not optimize, and 1–3 run the backend's speed optimizations. Time a program only from an optimized build. `--release` also leaves the runtime checks out of the code it emits: the heap guard (`MIRI_HEAP_GUARD=1`), the leak check (`MIRI_LEAK_CHECK=1`) and the allocation and reference-count counters. A release program started with one of them asked for runs unchecked and says so on stderr; to run the checks on optimized code, build with `--opt-level 3` and without `--release`.
 
 ## Writing Miri with an AI Agent
 

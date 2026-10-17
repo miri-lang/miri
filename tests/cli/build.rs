@@ -527,10 +527,11 @@ fn clif_function<'a>(
     (blocks, names)
 }
 
-/// A write into a list element asks whether the list is shared by reading its
-/// count inline; the runtime is called for it only on the path taken when the
-/// heap guard or another tracking mode is on, so a hot loop of field writes
-/// makes no call for the question.
+/// In a build that keeps the runtime checks, a write into a list element asks
+/// whether the list is shared by reading its count inline; the runtime is
+/// called for it only on the path taken when the heap guard or another
+/// tracking mode is on, so a hot loop of field writes makes no call for the
+/// question.
 #[test]
 fn test_the_sharing_check_calls_the_runtime_only_when_tracking() {
     let source = create_test_file(FIELD_WRITE);
@@ -541,7 +542,7 @@ fn test_the_sharing_check_calls_the_runtime_only_when_tracking() {
         .arg(source.path())
         .arg("--out")
         .arg(&out)
-        .args(["--release", "--emit", "clif"])
+        .args(["--opt-level", "3", "--emit", "clif"])
         .assert()
         .success();
     let listing = std::fs::read_to_string(out_dir.path().join("write.clif")).unwrap();
@@ -591,6 +592,233 @@ fn test_the_sharing_check_calls_the_runtime_only_when_tracking() {
         "1.0 3.0",
         "value semantics"
     );
+}
+
+const CHECKED_HEAP_WORK: &str = r#"
+use system.io
+use system.collections.list
+
+struct Body
+    x float
+    vx float
+
+class Counter
+    var hits int
+
+    fn init()
+        self.hits = 0
+
+fn write(start [Body], i int, v float) [Body]
+    var bodies = start
+    bodies[i].x = v
+    bodies
+
+fn count(n int) int
+    var total = 0
+    var i = 0
+    while i < n
+        var c = Counter()
+        c.hits = i
+        total = total + c.hits
+        i = i + 1
+    total
+
+fn main()
+    let b = List([Body(x: 1.0, vx: 2.0)])
+    let c = write(b, 0, 3.0)
+    let counters = List([Counter(), Counter()])
+    println(f"{b[0].x} {c[0].x} {count(4)} {counters.length()}")
+"#;
+
+/// The runtime symbols compiled code reaches only to serve a check or a
+/// counter: the tracking state it tests and the hooks behind that test.
+const CHECK_HOOKS: [&str; 7] = [
+    "miri_rt_tracking_state",
+    "miri_rt_rc_is_shared",
+    "miri_rt_class_alloc_track",
+    "miri_rt_class_free_track",
+    "miri_rt_release_check",
+    "miri_rt_rc_stats_dup",
+    "miri_rt_rc_stats_free",
+];
+
+/// Builds `CHECKED_HEAP_WORK` with `flags` and the CLIF listing, returning the
+/// executable and the listing.
+fn build_heap_work(flags: &[&str], out_dir: &std::path::Path) -> (std::path::PathBuf, String) {
+    let source = create_test_file(CHECKED_HEAP_WORK);
+    let out = out_dir.join("heap");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(flags)
+        .args(["--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.join("heap.clif")).unwrap();
+    (out, listing)
+}
+
+/// The check hooks a function's CLIF listing references, by name.
+fn referenced_check_hooks(listing: &str, function: &str) -> Vec<String> {
+    let (_, names) = clif_function(listing, function);
+    let mut hooks: Vec<String> = names
+        .values()
+        .filter(|name| CHECK_HOOKS.contains(name))
+        .map(|name| name.to_string())
+        .collect();
+    hooks.sort();
+    hooks.dedup();
+    hooks
+}
+
+/// The functions a CLIF listing holds, by the name each is headed with.
+fn listed_functions(listing: &str) -> Vec<&str> {
+    let lines: Vec<&str> = listing.lines().collect();
+    lines
+        .windows(2)
+        .filter(|pair| pair[1].starts_with("function "))
+        .filter_map(|pair| pair[0].strip_prefix("; "))
+        .collect()
+}
+
+/// A release build leaves the runtime checks out of the code it emits: no
+/// compiled function loads the tracking state or reaches a hook behind it, so
+/// no call is left on a path through a loop for a check that is not running.
+/// Only the type thunks keep theirs, and the runtime holds them off from the
+/// entry point's first call. The same program built without `--release` keeps
+/// every hook.
+#[test]
+fn test_a_release_build_emits_no_runtime_check_hooks() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let (out, listing) = build_heap_work(&["--release"], out_dir.path());
+    let functions = listed_functions(&listing);
+    for function in ["miri.write", "miri.count", "main"] {
+        assert!(functions.contains(&function), "{function} is not listed");
+    }
+    for function in functions.iter().filter(|name| !name.contains('$')) {
+        assert_eq!(
+            referenced_check_hooks(&listing, function),
+            Vec::<String>::new(),
+            "{function} still reaches a check hook:\n{listing}"
+        );
+    }
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "1.0 3.0 6 2");
+
+    let checked_dir = tempfile::tempdir().unwrap();
+    let (_, checked) = build_heap_work(&["--opt-level", "3"], checked_dir.path());
+    assert!(
+        referenced_check_hooks(&checked, "miri.count").contains(&"miri_rt_tracking_state".into()),
+        "a build without --release lost its check hooks:\n{checked}"
+    );
+}
+
+/// The first call a release build's entry point makes tells the runtime its
+/// checks are compiled out, before any statement of the program runs; a
+/// build that keeps them makes no such call.
+#[test]
+fn test_a_release_entry_point_first_reports_its_checks_compiled_out() {
+    let notice = "miri_rt_checks_compiled_out";
+    let first_call = |listing: &str| {
+        let (blocks, names) = clif_function(listing, "main");
+        let entry = &blocks.first().expect("main has a block").1;
+        let call = entry
+            .lines()
+            .find(|line| line.contains("call fn"))
+            .expect("main makes a call");
+        let handle = call
+            .split("call ")
+            .nth(1)
+            .unwrap()
+            .split('(')
+            .next()
+            .unwrap();
+        names[handle].to_string()
+    };
+    let out_dir = tempfile::tempdir().unwrap();
+    let (_, release) = build_heap_work(&["--release"], out_dir.path());
+    assert_eq!(first_call(&release), notice);
+
+    let checked_dir = tempfile::tempdir().unwrap();
+    let (_, checked) = build_heap_work(&["--opt-level", "3"], checked_dir.path());
+    assert!(
+        !checked.contains(notice),
+        "a checked build reports its checks compiled out"
+    );
+}
+
+/// The line a release program prints when started with the heap guard and the
+/// leak check asked for.
+const GUARD_AND_LEAK_IGNORED: &str = "miri: MIRI_HEAP_GUARD, MIRI_LEAK_CHECK ignored: this \
+     program was built with --release, which leaves the runtime checks out; build it \
+     without --release to use them";
+
+/// A release binary started with checks asked for runs unchecked and says so
+/// once on stderr. It neither ignores the request silently nor reports on the
+/// half of the heap its runtime sees: the program frees class instances its
+/// compiled code allocated through a list the runtime releases, which no
+/// leak count could balance, and it still exits 0 with no leak report.
+#[test]
+fn test_a_release_binary_names_the_checks_it_cannot_run() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let (out, _) = build_heap_work(&["--release"], out_dir.path());
+    let run = Command::new(&out)
+        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .env_remove("MIRI_ALLOC_COUNT")
+        .env_remove("MIRI_RC_STATS")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "release binary failed: {stderr}");
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "1.0 3.0 6 2");
+    assert_eq!(stderr.trim(), GUARD_AND_LEAK_IGNORED);
+}
+
+/// The same program built without `--release` runs the checks it is asked for.
+#[test]
+fn test_a_checked_build_counts_what_it_is_asked_to() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let (checked, _) = build_heap_work(&["--opt-level", "3"], out_dir.path());
+    let run = Command::new(&checked)
+        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_ALLOC_COUNT", "1")
+        .env_remove("MIRI_LEAK_CHECK")
+        .env_remove("MIRI_RC_STATS")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "checked binary failed: {stderr}");
+    assert!(
+        stderr.starts_with("MIRI_ALLOC_COUNT:") && !stderr.contains("--release"),
+        "the checked build did not count as asked: {stderr}"
+    );
+}
+
+/// A script's entry point is synthesized around its top-level statements, and
+/// `miri run --release` builds through the same path as `miri build`: both
+/// report their checks compiled out.
+#[test]
+fn test_a_released_script_run_names_the_checks_it_cannot_run() {
+    let source = create_test_file(HELLO_WORLD_SCRIPT);
+    let run = miri_cmd()
+        .arg("run")
+        .arg(source.path())
+        .arg("--release")
+        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "released script failed: {stderr}");
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("Hello from script!"),
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    assert!(stderr.contains(GUARD_AND_LEAK_IGNORED), "stderr: {stderr}");
 }
 
 const CONSTANT_DIVISOR: &str = r#"

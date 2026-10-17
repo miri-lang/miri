@@ -7,8 +7,9 @@
 //! is timed every port under `bench/workloads/<name>/` is built with its
 //! charter build line, run on the manifest's parameter, and its stdout compared
 //! with the checksum the manifest records. The Miri ports also run under the
-//! leak check and the heap guard and are built with the MIR verifier on: a
-//! benchmark program that leaks is a bug report, not a result.
+//! leak check and the heap guard and are built with the MIR verifier on, and
+//! without `--release`, which would leave those checks out: a benchmark
+//! program that leaks is a bug report, not a result.
 //!
 //! Size S runs in the normal suite. `MIRI_BENCH_SIZES=s,m,l` runs more. A port
 //! whose toolchain is not installed is skipped with a line naming the
@@ -131,6 +132,18 @@ fn with_miri_checks(command: &mut Command, heap_guard: bool) {
         .env_remove("CC");
 }
 
+/// The line a Miri port is built with in this gate: the charter's, without
+/// `--release`. A release build leaves the runtime checks out of the code it
+/// emits, and this gate exists to run them; the optimization level stays the
+/// one the charter times.
+fn checked_build_line(line: &str) -> String {
+    let words: Vec<&str> = line
+        .split_whitespace()
+        .filter(|word| *word != "--release")
+        .collect();
+    words.join(" ")
+}
+
 /// Build one port into `work_dir`, returning the executable its run line
 /// names, or `None` when its toolchain is absent. A language that runs from
 /// source builds nothing.
@@ -143,6 +156,11 @@ fn build_port(
     let out = work_dir.join(format!("{language}.out"));
     let Some(build_line) = charter_line(charter, language, "build") else {
         return Some(out);
+    };
+    let build_line = if language == "miri" {
+        checked_build_line(&build_line)
+    } else {
+        build_line
     };
     let mut build = command_for(&build_line, src, &out)?;
     build.current_dir(work_dir);
@@ -203,6 +221,11 @@ fn assert_port_output(
         format!("{}\n", case.checksum),
         "the {language} port of {workload} printed a different checksum at {}",
         case.label
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("ignored: this program was built"),
+        "the {language} port of {workload} ran without the checks this gate asks for:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
     true
 }

@@ -14,7 +14,8 @@
 //!
 //! Compiled code reaches the counters only through the hooks it guards with
 //! the runtime's tracking state, so with every observer off an increment or a
-//! decrement costs one load and one predicted branch, and nothing more. At exit
+//! decrement costs one load and one predicted branch, and nothing more. A
+//! release build carries no hooks at all, and never counts. At exit
 //! the counts are printed to stderr after the allocation count.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,10 +27,12 @@ static DROP_FREE: AtomicUsize = AtomicUsize::new(0);
 static COW_COPY: AtomicUsize = AtomicUsize::new(0);
 static REALLOC: AtomicUsize = AtomicUsize::new(0);
 
-/// Whether `MIRI_RC_STATS=1` was set, read once.
+/// Whether `MIRI_RC_STATS=1` was set, read once, in a program that carries
+/// the checking hooks.
 pub fn is_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("MIRI_RC_STATS").as_deref() == Ok("1"))
+    !crate::handler_config::checks_compiled_out()
+        && *ENABLED.get_or_init(|| std::env::var("MIRI_RC_STATS").as_deref() == Ok("1"))
 }
 
 fn count(counter: &AtomicUsize) {

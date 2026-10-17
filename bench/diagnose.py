@@ -266,7 +266,12 @@ def disassembly(binary, symbols):
 # The Miri runtime's own counters.
 
 
-def runtime_counts(port, input_path, ctx):
+def runtime_counts(ctx, workload, input_path):
+    """The counters of the Miri port's counted build, which keeps the hooks
+    the timed release build leaves out."""
+    port = run.counted_build(ctx, workload.name, workload.port("miri"))
+    if not isinstance(port, run.Built):
+        return {"unavailable": port}
     env = run.child_environment(ctx.work_dir, {"MIRI_ALLOC_COUNT": "1", "MIRI_RC_STATS": "1"})
     done = subprocess.run([*port.run_words, str(input_path)], env=env, capture_output=True, text=True, check=False)
     return {"allocation_count": run.allocation_count(done.stderr), **run.runtime_counters(done.stderr)}
@@ -312,7 +317,7 @@ def diagnose_cell(ctx, summary, workload, size, out_dir):
         (out_dir / f"flamegraph.{language}.svg").write_text(flamegraph_svg(folded, f"{workload.name} {size} {language}"))
         (out_dir / f"top.{language}.json").write_text(json.dumps(tops[language], indent=1) + "\n")
     copy_listings(miri_listing, out_dir, hot_miri_functions(tops.get("miri", [])))
-    runtime = runtime_counts(built["miri"], input_path, ctx) if "miri" in built else {}
+    runtime = runtime_counts(ctx, workload, input_path) if "miri" in built else {}
     (out_dir / "runtime.json").write_text(json.dumps(runtime, indent=1) + "\n")
     (out_dir / "DIAGNOSIS.md").write_text(diagnosis_markdown(workload, size, summary, tops, counter_data, runtime))
 

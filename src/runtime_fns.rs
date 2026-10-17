@@ -61,6 +61,10 @@ pub mod rt {
     /// codegen loads it and branches, so an unobserved allocation pays a load
     /// rather than a call it cannot inline.
     pub const TRACKING_STATE: &str = "miri_rt_tracking_state";
+    /// Compiler-internal: called once at the entry point of a release build,
+    /// which carries none of the hooks above, not in stdlib. The runtime then
+    /// keeps its own checks off to match and says so if one was asked for.
+    pub const CHECKS_COMPILED_OUT: &str = "miri_rt_checks_compiled_out";
     /// Compiler-internal: answers whether a managed object has more than one
     /// reference, not in stdlib. Asked before a write into a struct, or into a
     /// collection reached through a field, so the write copies a shared value
@@ -386,6 +390,7 @@ pub mod rt {
         RC_STATS_DUP,
         RC_STATS_FREE,
         TRACKING_STATE,
+        CHECKS_COMPILED_OUT,
         RC_IS_SHARED,
         // Array
         ARRAY_NEW,

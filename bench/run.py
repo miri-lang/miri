@@ -490,19 +490,41 @@ def build(ctx, workload_name, language, src, variant):
         return "unsupported"
     line_key = "native_build" if variant == "native" else "build"
     out = ctx.work_dir / "bin" / f"{workload_name}.{language}.{variant}"
-    out.parent.mkdir(parents=True, exist_ok=True)
     if "build" in spec:
         if line_key not in spec:
             return "unsupported"
-        words, assignments = command_words(spec[line_key], src, out, ctx.programs())
-        if not program_available(words):
-            return "toolchain-missing"
-        done = subprocess.run(words, env=ctx.build_env(language) | assignments, cwd=ctx.work_dir, capture_output=True, check=False)
-        if done.returncode != 0:
-            return "build-failed"
-    elif variant == "native":
+        return build_with_line(ctx, language, spec[line_key], src, out)
+    if variant == "native":
         return "unsupported"
-    run_words, _ = command_words(spec["run"], src, out, ctx.programs())
+    return built_port(ctx, language, src, out)
+
+
+def counted_build(ctx, workload_name, src):
+    """The Miri port built for the untimed counter run: the charter's build line
+    without `--release`, which leaves the runtime's counters out of the code it
+    emits. The optimisation level stays the timed one, so the counts describe
+    the program that was timed. Returns how to run it, or a status string."""
+    words = ctx.charter["languages"]["miri"]["build"].split()
+    line = " ".join(word for word in words if word != "--release")
+    return build_with_line(ctx, "miri", line, src, ctx.work_dir / "bin" / f"{workload_name}.miri.counted")
+
+
+def build_with_line(ctx, language, line, src, out):
+    """Build one port with `line` into `out`, returning how to run it, or a
+    status string."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    words, assignments = command_words(line, src, out, ctx.programs())
+    if not program_available(words):
+        return "toolchain-missing"
+    done = subprocess.run(words, env=ctx.build_env(language) | assignments, cwd=ctx.work_dir, capture_output=True, check=False)
+    if done.returncode != 0:
+        return "build-failed"
+    return built_port(ctx, language, src, out)
+
+
+def built_port(ctx, language, src, out):
+    """How to run the port built at `out`, or a status string."""
+    run_words, _ = command_words(ctx.charter["languages"][language]["run"], src, out, ctx.programs())
     if not program_available(run_words):
         return "toolchain-missing"
     return Built(language, run_words, out.stat().st_size if out.is_file() else None)
@@ -629,7 +651,8 @@ def verify(ctx, cell, timeout_s):
 def record_allocations(ctx, env, cell, cap_s):
     """One untimed run of the Miri port with the runtime's allocation and
     reference-counting counters on, recorded as its own `alloc-count` record:
-    the counters cost time, so they never run in a measured run."""
+    the counters cost time, so they never run in a measured run, and `cell`
+    holds the counted build, since the timed one carries no counters."""
     env_with_counter = child_environment(ctx.work_dir, {"MIRI_ALLOC_COUNT": "1", "MIRI_RC_STATS": "1"})
     result = measure(cell.words(), env_with_counter, ctx.work_dir, cap_s)
     record = base_record(ctx, env, cell.workload, "miri", cell.variant, cell.size, "alloc-count")
@@ -800,7 +823,11 @@ def run_workload_size(ctx, env, workload, ready, size, floors):
             ctx.records.append(status_record(ctx, env, workload, language, variant, size, status))
     cap = time_cap(ctx, c_wall)
     if "miri" in verified:
-        record_allocations(ctx, env, Cell(workload, verified["miri"], variant, size, "cold", input_path, pin_words(ctx.profile)), cap)
+        counted = counted_build(ctx, workload.name, workload.port("miri"))
+        if isinstance(counted, Built):
+            record_allocations(ctx, env, Cell(workload, counted, variant, size, "cold", input_path, pin_words(ctx.profile)), cap)
+        else:
+            ctx.records.append(status_record(ctx, env, workload, "miri", variant, size, counted, mode="alloc-count"))
     for mode in modes:
         cells = [Cell(workload, built, variant, size, mode, input_path, pin_words(ctx.profile)) for built in verified.values()]
         if cells:

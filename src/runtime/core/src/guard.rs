@@ -466,6 +466,9 @@ static GUARD_ENABLED_INIT: std::sync::Once = std::sync::Once::new();
 
 /// Returns whether the guard is enabled (checked via cached atomic bool).
 fn is_guard_enabled() -> bool {
+    if crate::handler_config::checks_compiled_out() {
+        return false;
+    }
     GUARD_ENABLED_INIT.call_once(|| {
         let enabled = std::env::var("MIRI_HEAP_GUARD").as_deref() == Ok("1");
         GUARD_ENABLED.store(enabled, Ordering::Relaxed);
@@ -494,6 +497,9 @@ pub const TRACKING_ON: u8 = 2;
 /// Cranelift-emitted program into this static library — so hoisting the test to
 /// the call site is what keeps an unobserved allocation down to a load and a
 /// branch it will predict.
+///
+/// A release build emits neither the load nor the hooks, and its entry point
+/// stores [`TRACKING_OFF`] here before its first statement runs.
 ///
 /// "Tracking" is wider than the guard on purpose. The leak counter registers
 /// its exit handler from the same hook, so a program that only allocates inline

@@ -249,6 +249,7 @@ fn test_compile_with_all_opt_levels() {
             opt_level: opt,
             pic: true,
             ir_listing: false,
+            runtime_checks: true,
         };
         let artifact = backend
             .compile(&[], &options)
@@ -269,6 +270,7 @@ fn test_compile_with_pic_disabled() {
         opt_level: OptLevel::None,
         pic: false,
         ir_listing: false,
+        runtime_checks: true,
     };
     let artifact = backend
         .compile(&[], &options)

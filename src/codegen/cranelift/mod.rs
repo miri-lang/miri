@@ -40,6 +40,7 @@ use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
 
 pub use translator::FunctionTranslator;
+use translator::{Emission, RuntimeChecks};
 pub use types::translate_type;
 
 /// Describes a runtime function to be declared as an external import.
@@ -90,6 +91,18 @@ pub struct CraneliftOptions {
     /// Whether to return the CLIF of every compiled function, as Cranelift
     /// left it after optimizing, in the artifact's `ir_listing`.
     pub ir_listing: bool,
+    /// Whether compiled code keeps the runtime's checking hooks — the heap
+    /// guard, the leak check and the allocation and reference-count counters —
+    /// each behind a test of the runtime's tracking state. A release build
+    /// leaves them out.
+    pub runtime_checks: bool,
+}
+
+/// One user function handed to `compile_function`.
+struct FunctionUnit<'b> {
+    name: &'b str,
+    body: &'b Body,
+    runtime_checks: RuntimeChecks,
 }
 
 /// Optimization levels for Cranelift.
@@ -125,6 +138,7 @@ impl Default for CraneliftOptions {
             opt_level: OptLevel::None,
             pic: true,
             ir_listing: false,
+            runtime_checks: true,
         }
     }
 }
@@ -277,12 +291,20 @@ impl Backend for CraneliftBackend {
 
         let mut string_literals = BTreeMap::new();
         let mut listing = options.ir_listing.then(String::new);
+        let runtime_checks = if options.runtime_checks {
+            RuntimeChecks::Observable
+        } else {
+            RuntimeChecks::CompiledOut
+        };
         for (name, body) in &cpu_bodies {
             self.compile_function(
                 &mut module,
                 &mut ctx,
-                name,
-                body,
+                FunctionUnit {
+                    name,
+                    body,
+                    runtime_checks,
+                },
                 &isa,
                 &mut string_literals,
                 &kernel_registry,
@@ -587,8 +609,8 @@ impl CraneliftBackend {
     /// # Arguments
     /// * `module` - The ObjectModule being built.
     /// * `ctx` - The Cranelift Context for this function.
-    /// * `name` - The symbol name of the function.
-    /// * `body` - The MIR Body to translate.
+    /// * `unit` - The function's symbol name, its MIR body, and whether its
+    ///   code keeps the runtime's checking hooks.
     /// * `isa` - The TargetIsa for code generation.
     /// * `string_literals` - A map to collect and deduplicate string literals found in the function.
     /// * `listing` - When given, receives the function's CLIF after Cranelift optimized it.
@@ -597,19 +619,29 @@ impl CraneliftBackend {
         &self,
         module: &mut ObjectModule,
         ctx: &mut Context,
-        name: &str,
-        body: &Body,
+        unit: FunctionUnit<'_>,
         isa: &Arc<dyn TargetIsa>,
         string_literals: &mut BTreeMap<String, usize>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
         listing: Option<&mut String>,
     ) -> Result<(), CodegenError> {
+        let FunctionUnit {
+            name,
+            body,
+            runtime_checks,
+        } = unit;
         // Create function translator
         let mut translator = FunctionTranslator::new(isa, body, &self.facts);
 
         // Translate MIR to Cranelift IR
+        // Every executable's entry point is linked under this one name, a
+        // script's synthesized `main` included.
+        let emission = Emission {
+            runtime_checks,
+            is_entry: name == Symbol::entry().link_name(),
+        };
         translator
-            .translate(body, module, string_literals, kernel_registry)
+            .translate(body, module, string_literals, kernel_registry, emission)
             .map_err(|e| CodegenError::translation(name, e.to_string()))?;
 
         // Get the function signature and declare it

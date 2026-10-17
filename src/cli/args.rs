@@ -120,7 +120,8 @@ pub enum Commands {
         #[arg(required = true)]
         path: PathBuf,
 
-        /// Build in release mode: optimized code, as `--opt-level 3`. Use it
+        /// Build in release mode: optimized code, as `--opt-level 3`, without
+        /// the runtime checks (`MIRI_HEAP_GUARD`, `MIRI_LEAK_CHECK`). Use it
         /// for anything you time
         #[arg(long)]
         release: bool,
@@ -149,7 +150,8 @@ pub enum Commands {
         #[arg(short, long)]
         out: Option<PathBuf>,
 
-        /// Build in release mode: optimized code, as `--opt-level 3`. Use it
+        /// Build in release mode: optimized code, as `--opt-level 3`, without
+        /// the runtime checks (`MIRI_HEAP_GUARD`, `MIRI_LEAK_CHECK`). Use it
         /// for anything you time
         #[arg(long)]
         release: bool,
@@ -526,7 +528,8 @@ pub enum DeterminismCommand {
         #[arg(required = true)]
         path: PathBuf,
 
-        /// Build in release mode: optimized code, as `--opt-level 3`. Use it
+        /// Build in release mode: optimized code, as `--opt-level 3`, without
+        /// the runtime checks (`MIRI_HEAP_GUARD`, `MIRI_LEAK_CHECK`). Use it
         /// for anything you time
         #[arg(long)]
         release: bool,

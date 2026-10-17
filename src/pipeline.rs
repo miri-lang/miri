@@ -553,7 +553,9 @@ pub struct GpuProgram {
 pub struct BuildOptions {
     /// Output path for the compiled artifact. If `None`, a temp directory is used.
     pub out_path: Option<PathBuf>,
-    /// Whether to build in release mode: MIR records no local names. The
+    /// Whether to build in release mode: MIR records no local names, and
+    /// compiled code carries none of the runtime's checking hooks (the heap
+    /// guard, the leak check, the allocation and reference-count counters). The
     /// optimization level is set apart, in `opt_level`; see
     /// [`BuildOptions::resolve_opt_level`] for how a caller derives it.
     pub release: bool,
@@ -1968,6 +1970,7 @@ impl Pipeline {
             let options = CraneliftOptions {
                 opt_level: OptLevel::for_level(opts.opt_level),
                 ir_listing: opts.emit.contains(&Listing::Clif),
+                runtime_checks: !opts.release,
                 ..Default::default()
             };
             let artifact = backend

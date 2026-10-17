@@ -5,7 +5,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
-    CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
+    CallSite, ElementShape, FunctionTranslator, ModuleCtx, RuntimeChecks, TypeCtx,
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::error::CodegenError;
@@ -1020,9 +1020,10 @@ impl<'a> FunctionTranslator<'a> {
     /// Answers `miri_rt_rc_is_shared(ptr)` without the call while nothing is
     /// tracking the heap: a null pointer is not shared, and otherwise the count
     /// in the word before the payload is compared with 1, so an immortal
-    /// value's negative count reads as shared, as in the runtime. With the
-    /// heap guard or another tracking mode on, the runtime answers, so the
-    /// guard still checks that the block is live.
+    /// value's negative count reads as shared, as in the runtime. In a build
+    /// that keeps the runtime's checks, the runtime answers while the heap
+    /// guard or another tracking mode is on, so the guard still checks that
+    /// the block is live.
     fn emit_inline_is_shared(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1046,8 +1047,6 @@ impl<'a> FunctionTranslator<'a> {
             })?;
 
         let check_block = builder.create_block();
-        let count_block = builder.create_block();
-        let runtime_block = builder.create_block();
         let join_block = builder.create_block();
         builder.append_block_param(join_block, answer_type);
 
@@ -1057,20 +1056,49 @@ impl<'a> FunctionTranslator<'a> {
             .brif(*ptr, check_block, &[], join_block, &[not_shared.into()]);
 
         builder.switch_to_block(check_block);
+        builder.seal_block(check_block);
+        let answer = match ctx.runtime_checks {
+            RuntimeChecks::CompiledOut => Self::emit_count_is_shared(builder, *ptr, answer_type),
+            RuntimeChecks::Observable => {
+                Self::emit_observable_is_shared(builder, ctx, callee, *ptr, &sig, answer_type)?
+            }
+        };
+        builder.ins().jump(join_block, &[answer.into()]);
+
+        builder.seal_block(join_block);
+        builder.switch_to_block(join_block);
+        Ok(builder.block_params(join_block)[0])
+    }
+
+    /// Answers whether `ptr` is shared inline while the runtime's tracking state
+    /// reads off, and through the runtime otherwise, so the heap guard still
+    /// checks that the block is live.
+    fn emit_observable_is_shared(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        ptr: cranelift_codegen::ir::Value,
+        sig: &Signature,
+        answer_type: cranelift_codegen::ir::Type,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        let count_block = builder.create_block();
+        let runtime_block = builder.create_block();
+        let join_block = builder.create_block();
+        builder.append_block_param(join_block, answer_type);
+
         let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
         builder
             .ins()
             .brif(tracking_off, count_block, &[], runtime_block, &[]);
 
         builder.switch_to_block(count_block);
-        let shared = Self::emit_count_is_shared(builder, *ptr, answer_type);
+        let shared = Self::emit_count_is_shared(builder, ptr, answer_type);
         builder.ins().jump(join_block, &[shared.into()]);
 
         builder.switch_to_block(runtime_block);
-        let answer = Self::call_is_shared_runtime(builder, ctx, callee, *ptr, &sig)?;
+        let answer = Self::call_is_shared_runtime(builder, ctx, callee, ptr, sig)?;
         builder.ins().jump(join_block, &[answer.into()]);
 
-        builder.seal_block(check_block);
         builder.seal_block(count_block);
         builder.seal_block(runtime_block);
         builder.seal_block(join_block);

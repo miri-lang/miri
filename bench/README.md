@@ -45,7 +45,8 @@ with no shell, in an environment holding only `PATH`, `HOME`,
 exit, and CPU time and peak memory come from the child's `wait4` resource usage.
 A noisy cell is re-run from its warm-up as the charter allows, and every
 attempt is kept. Sizes S and M also run in hot mode. Each Miri cell gets one
-extra, untimed run with the runtime's allocation counter on.
+extra, untimed run with the runtime's allocation counter on, from a build of
+the same line without `--release`: a release build leaves the counters out.
 
 ## What it writes
 

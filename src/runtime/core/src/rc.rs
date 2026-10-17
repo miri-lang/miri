@@ -51,7 +51,14 @@ fn ensure_exit_handler_registered() {
 /// Called at process exit to report any leaked allocations.
 /// This is the leak-check portion of the exit handler; allocation count reporting
 /// is handled separately by `alloc_count::report_at_exit()`.
+///
+/// The handler may have been registered at load time, before a release build's
+/// entry point said its compiled code counts nothing; such a program's balance
+/// covers only the runtime's half of the heap, so it is never reported.
 pub(crate) fn report_leak_check_at_exit() {
+    if crate::handler_config::checks_compiled_out() {
+        return;
+    }
     // Report allocation count first
     crate::alloc_count::report_at_exit();
 
