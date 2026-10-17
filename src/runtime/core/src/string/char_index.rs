@@ -16,11 +16,14 @@
 //!   from its byte offset, so a front-to-back walk steps over each character
 //!   once in total.
 //!
-//! The memory is sound because a string's bytes never change while it is
-//! alive: every operation returns a new string. An entry is keyed by the
-//! string's address, its data address and its byte length, and dropping a
-//! string forgets its entry, so a later string allocated at the same address
-//! never inherits it.
+//! A string known to be ASCII ([`MiriString::ascii`]) never reaches the
+//! memory: its character index is its byte offset outright.
+//!
+//! The memory is sound because a string's bytes change only by an append to
+//! a string nothing else holds, which forgets the string's entry, as does
+//! dropping it; an entry is also keyed by the string's address, its data
+//! address and its byte length, so a later string allocated at the same
+//! address never inherits it.
 
 use std::cell::Cell;
 
@@ -121,6 +124,9 @@ pub(crate) fn forget(string: &MiriString) {
 /// # Safety
 /// `string` holds valid UTF-8.
 pub(crate) unsafe fn char_count(string: &MiriString) -> usize {
+    if string.ascii {
+        return string.len;
+    }
     let text = string.as_str();
     with_entry(string, |entry| {
         *entry.char_count.get_or_insert_with(|| {
@@ -136,6 +142,9 @@ pub(crate) unsafe fn char_count(string: &MiriString) -> usize {
 /// # Safety
 /// `string` holds valid UTF-8.
 pub(crate) unsafe fn char_byte_offset(string: &MiriString, index: usize) -> Option<usize> {
+    if string.ascii {
+        return (index < string.len).then_some(index);
+    }
     let text = string.as_str();
     with_entry(string, |entry| {
         if entry.is_ascii() {
@@ -178,6 +187,9 @@ pub(crate) unsafe fn char_boundary(string: &MiriString, index: usize) -> Option<
 /// # Safety
 /// `string` holds valid UTF-8 and `byte` is a character boundary in it.
 pub(crate) unsafe fn char_index_of_byte(string: &MiriString, byte: usize) -> usize {
+    if string.ascii {
+        return byte;
+    }
     let text = string.as_str();
     with_entry(string, |entry| {
         if entry.is_ascii() {
@@ -204,6 +216,9 @@ pub(crate) unsafe fn char_index_of_byte(string: &MiriString, byte: usize) -> usi
 /// # Safety
 /// `string` holds valid UTF-8.
 pub(crate) unsafe fn char_at(string: &MiriString, index: usize) -> Option<char> {
+    if string.ascii {
+        return (index < string.len).then(|| char::from(*string.data.add(index)));
+    }
     let offset = char_byte_offset(string, index)?;
     string.as_str().get(offset..)?.chars().next()
 }
@@ -261,6 +276,32 @@ mod tests {
             "walk of {} bytes probed {probes}",
             string.len
         );
+    }
+
+    /// The last character of an ASCII megabyte is found without stepping over
+    /// a single character: its index is its byte offset.
+    #[test]
+    fn a_lookup_at_the_end_of_an_ascii_megabyte_steps_over_nothing() {
+        let string = megabyte_of("ab cd ef g ");
+        assert!(string.ascii);
+        take_probes();
+        let last = string.len - 1;
+        let offset = unsafe { char_byte_offset(&string, last) };
+        let count = unsafe { char_count(&string) };
+        assert_eq!(offset, Some(last));
+        assert_eq!(count, string.len);
+        assert_eq!(take_probes(), 0);
+    }
+
+    /// A string holding any byte above ASCII is not marked ASCII, and its
+    /// characters are still found where they are.
+    #[test]
+    fn a_multibyte_string_is_not_marked_ascii() {
+        let string = megabyte_of("añ€😀 ");
+        assert!(!string.ascii);
+        let count = unsafe { char_count(&string) };
+        assert_eq!(unsafe { char_at(&string, count - 1) }, Some(' '));
+        assert_eq!(unsafe { char_at(&string, 1) }, Some('ñ'));
     }
 
     #[test]

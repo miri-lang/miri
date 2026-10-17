@@ -533,7 +533,12 @@ impl CraneliftBackend {
         let mut struct_ctx = DataDescription::new();
         struct_ctx.set_align(ptr_size as u64);
         struct_ctx.define(
-            Self::build_miri_string_struct_bytes(literal.len() as u64, ptr_size).into_boxed_slice(),
+            Self::build_miri_string_struct_bytes(
+                literal.len() as u64,
+                literal.is_ascii(),
+                ptr_size,
+            )
+            .into_boxed_slice(),
         );
 
         // Relocation for the data pointer at offset ptr_size
@@ -564,12 +569,14 @@ impl CraneliftBackend {
         Ok(bytes_id)
     }
 
-    /// Build the `MiriString` struct payload: `[RC | DataPtr | Len | Cap]`
-    /// with the high RC bit set so the runtime treats the literal as immortal.
+    /// Build the `MiriString` struct payload: `[RC | DataPtr | Len | Cap |
+    /// Ascii]` with the high RC bit set so the runtime treats the literal as
+    /// immortal, and the ASCII flag the runtime reads a character index by.
     /// The DataPtr slot (offset `ptr_size`) is left zero — the caller writes
     /// the relocation via `write_data_addr`.
-    fn build_miri_string_struct_bytes(len: u64, ptr_size: u32) -> Vec<u8> {
-        let mut data = vec![0u8; 4 * ptr_size as usize];
+    fn build_miri_string_struct_bytes(len: u64, ascii: bool, ptr_size: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 5 * ptr_size as usize];
+        data[4 * ptr_size as usize] = u8::from(ascii);
         if ptr_size == 4 {
             data[0..4].copy_from_slice(&(1u32 << 31).to_ne_bytes());
             data[8..12].copy_from_slice(&(len as u32).to_ne_bytes());

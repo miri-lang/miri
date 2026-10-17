@@ -17,6 +17,7 @@ use std::str;
 /// | `data`     | `*mut u8`  | Pointer to UTF-8 encoded bytes (not null-terminated) |
 /// | `len`      | `usize`    | Number of bytes in the string                        |
 /// | `capacity` | `usize`    | Allocated capacity in bytes                          |
+/// | `ascii`    | `bool`     | Whether every byte is ASCII, so character index = byte offset |
 ///
 /// # Ownership
 /// The `data` pointer is allocated via [`crate::alloc::miri_alloc`] and freed
@@ -27,6 +28,11 @@ pub struct MiriString {
     pub data: *mut u8,
     pub len: usize,
     pub capacity: usize,
+    /// Every byte is ASCII: each character is one byte, so a character index
+    /// is a byte offset and the character count is the byte length, with no
+    /// walk over the UTF-8. Settled when the string is built, and kept true
+    /// by an append only of ASCII bytes.
+    pub ascii: bool,
 }
 
 impl MiriString {
@@ -37,6 +43,7 @@ impl MiriString {
             data: std::ptr::null_mut(),
             len: 0,
             capacity: 0,
+            ascii: true,
         }
     }
 
@@ -72,6 +79,7 @@ impl MiriString {
             data,
             len: bytes.len(),
             capacity,
+            ascii: bytes.is_ascii(),
         }
     }
 

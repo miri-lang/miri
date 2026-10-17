@@ -54,10 +54,12 @@ pub unsafe extern "C" fn miri_rt_string_concat(
         std::ptr::copy_nonoverlapping((*right).data, data.add(left_len), right_len);
     }
 
+    let is_ascii = |side: *const MiriString| side.is_null() || (*side).ascii;
     into_raw_ptr(MiriString {
         data,
         len: total_len,
         capacity: total_len,
+        ascii: is_ascii(left) && is_ascii(right),
     })
 }
 
@@ -192,6 +194,7 @@ unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), string.data.add(string.len), bytes.len());
     string.len = total;
+    string.ascii = string.ascii && bytes.is_ascii();
     super::char_index::forget(string);
     left
 }

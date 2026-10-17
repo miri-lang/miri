@@ -820,3 +820,31 @@ fn test_ffi_string_from_raw_zero_len() {
         miri_rt_string_free(s);
     }
 }
+
+/// Joining and appending keep a string marked ASCII exactly while every byte
+/// it holds is ASCII.
+#[test]
+fn test_ascii_mark_follows_concat_and_append() {
+    unsafe {
+        let ascii = miri_rt_string_from_raw("abc".as_ptr(), 3);
+        let accented = miri_rt_string_from_raw("é".as_ptr(), "é".len());
+        assert!((*ascii).ascii);
+        assert!(!(*accented).ascii);
+
+        let joined = miri_rt_string_concat(ascii, ascii);
+        assert!((*joined).ascii);
+        let mixed = miri_rt_string_concat(ascii, accented);
+        assert!(!(*mixed).ascii);
+
+        let grown = miri_rt_string_append(joined, ascii);
+        assert!((*grown).ascii, "an ASCII append keeps the mark");
+        let grown = miri_rt_string_append(grown, accented);
+        assert!(!(*grown).ascii, "a non-ASCII append clears it");
+        assert_eq!((*grown).as_str(), "abcabcabcé");
+
+        miri_rt_string_free(grown);
+        miri_rt_string_free(mixed);
+        miri_rt_string_free(accented);
+        miri_rt_string_free(ascii);
+    }
+}
