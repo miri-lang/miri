@@ -29,8 +29,10 @@ use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use crate::type_checker::context::MethodInfo;
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 pub(crate) mod atomic_buffers;
 pub(crate) mod attributes;
@@ -276,6 +278,11 @@ pub struct TypeChecker {
     /// The public type-set names each module file declares, read once per
     /// file by the signature shorthand (see [`type_set_shorthand`]).
     pub(crate) type_set_exports: HashMap<std::path::PathBuf, Vec<String>>,
+    /// A shared copy of the global type definitions, taken the first time a
+    /// later stage asks for one and dropped whenever a definition changes, so
+    /// every body lowered from one finished check reads one table without
+    /// copying it.
+    pub(crate) shared_type_definitions: OnceCell<Rc<HashMap<String, TypeDefinition>>>,
 }
 
 impl Default for TypeChecker {
@@ -327,6 +334,7 @@ impl TypeChecker {
             synthesized_type_use_site: None,
             type_set_allowed: false,
             type_set_exports: HashMap::new(),
+            shared_type_definitions: OnceCell::new(),
         }
     }
 
@@ -468,6 +476,21 @@ impl TypeChecker {
     /// Returns the global type definitions.
     pub fn type_definitions(&self) -> &HashMap<String, TypeDefinition> {
         &self.type_table.global_type_definitions
+    }
+
+    /// The global type definitions as one shared table, copied once per state
+    /// of the table rather than once per reader.
+    pub fn shared_type_definitions(&self) -> Rc<HashMap<String, TypeDefinition>> {
+        Rc::clone(
+            self.shared_type_definitions
+                .get_or_init(|| Rc::new(self.type_table.global_type_definitions.clone())),
+        )
+    }
+
+    /// Forgets the shared copy of the global type definitions, which a change
+    /// to any of them makes stale.
+    pub(crate) fn invalidate_shared_type_definitions(&mut self) {
+        self.shared_type_definitions.take();
     }
 
     /// Returns the global scope (function/variable declarations).

@@ -505,33 +505,21 @@ fn callee_violation(body: &Body, kind: &TerminatorKind) -> Option<VerificationVi
 /// reads them. A parameter the body takes over is tracked like a local of its
 /// own, holding the one reference its caller funded.
 fn collect_tracked_locals(body: &Body, env_captures: &HashSet<Local>) -> Vec<Local> {
-    body.local_decls
-        .iter()
-        .enumerate()
-        .filter(|(index, decl)| {
-            (*index > body.arg_count || body.is_owned_param(Local(*index)))
-                && !env_captures.contains(&Local(*index))
-                && decl
-                    .mir_ty
-                    .is_managed(&body.unmanaged_type_names, &body.type_params)
+    (0..body.local_decls.len())
+        .map(Local)
+        .filter(|&local| {
+            (local.0 > body.arg_count || body.is_owned_param(local))
+                && !env_captures.contains(&local)
+                && body.is_counted_local(local)
         })
-        .map(|(index, _)| Local(index))
         .collect()
 }
 
 /// Managed parameter locals — caller-owned, must never receive a callee-side DecRef.
 fn collect_managed_param_locals(body: &Body) -> HashSet<Local> {
-    body.local_decls
-        .iter()
-        .enumerate()
-        .filter(|(index, decl)| {
-            *index >= 1
-                && *index <= body.arg_count
-                && decl
-                    .mir_ty
-                    .is_managed(&body.unmanaged_type_names, &body.type_params)
-        })
-        .map(|(index, _)| Local(index))
+    (1..body.local_decls.len().min(body.arg_count + 1))
+        .map(Local)
+        .filter(|&local| body.is_counted_local(local))
         .collect()
 }
 

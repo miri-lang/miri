@@ -282,9 +282,7 @@ fn is_released_by_body(body: &Body, local: Local) -> bool {
     local.0 > body.arg_count
         && !body.env_capture_locals.contains(&local)
         && decl.device_handle.is_none()
-        && decl
-            .mir_ty
-            .is_managed(&body.unmanaged_type_names, &body.type_params)
+        && body.is_counted_local(local)
         && !type_has_destructor(local, &body.local_decls, &body.has_drop_types)
 }
 

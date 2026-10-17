@@ -185,8 +185,7 @@ fn is_ownable_param(body: &Body, param: Local, drop_hooks: &DropHookReach) -> bo
     let is_out = body.out_params.get(param.0 - 1).copied().unwrap_or(false);
     let is_type_parameter =
         |name: &str| body.type_params.contains(name) || body.open_params.contains(name);
-    decl.mir_ty
-        .is_managed(&body.unmanaged_type_names, &body.type_params)
+    body.is_counted_local(param)
         && !is_out
         && decl.device_handle.is_none()
         && !decl.mir_ty.is_inline_vector()

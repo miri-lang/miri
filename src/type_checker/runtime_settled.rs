@@ -73,6 +73,7 @@ impl TypeChecker {
         {
             class_def.runtime_settled_methods = settled;
         }
+        self.invalidate_shared_type_definitions();
     }
 
     fn runtime_settled_methods(

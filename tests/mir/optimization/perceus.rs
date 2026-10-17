@@ -22,13 +22,16 @@ use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
 use miri::mir::lowering::lower_function;
 use miri::mir::optimization::insert_rc;
+use miri::mir::rc::RcClassifier;
 use miri::mir::verify::verify_body;
 use miri::mir::{
     AggregateKind, Body, ExecutionModel, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::pipeline::Pipeline;
+use miri::type_checker::context::{AliasDefinition, TypeDefinition};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 fn span() -> Span {
     Span::new(0, 0)
@@ -671,15 +674,21 @@ fn test_monomorphized_class_place_is_increfd() {
 }
 
 #[test]
-fn test_unmanaged_type_name_gets_no_rc_ops() {
-    // A type alias to a primitive keeps its own name into MIR (`type Meters is
-    // int` arrives as Custom("Meters")), but there is no allocation behind it.
+fn test_alias_to_scalar_gets_no_rc_ops() {
+    // A local spelled with an alias to a primitive (`type Meters is int`, as
+    // `Custom("Meters")`) has no allocation behind it: the classifier reads
+    // the alias through the program's type table.
     let mut body = body_with(
         &[ty(TypeKind::Void), custom("Meters"), custom("Meters")],
         0,
         vec![assign(place(2), use_copy(place(1))), storage_dead(place(2))],
     );
-    body.unmanaged_type_names.insert("Meters".to_string());
+    let meters = TypeDefinition::Alias(AliasDefinition {
+        template: ty(TypeKind::Int),
+        generics: None,
+    });
+    let definitions = HashMap::from([("Meters".to_string(), meters)]);
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions));
 
     assert_eq!(
         rc_statements(&mut body),

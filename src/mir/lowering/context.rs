@@ -133,8 +133,9 @@ impl<'a> LoweringContext<'a> {
         type_checker: &'a crate::type_checker::TypeChecker,
         is_release: bool,
     ) -> Self {
-        // Pre-compute the custom names that never denote a heap object.
-        body.unmanaged_type_names = Self::compute_unmanaged_type_names(type_checker);
+        // Reference counting reads the program's type table, shared by every body.
+        body.rc_classifier =
+            crate::mir::rc::RcClassifier::new(type_checker.shared_type_definitions());
         // Pre-compute field type map for struct/class types (used by Perceus to resolve
         // Field(i) projections without access to the type checker at optimization time).
         body.field_types = Self::compute_field_types(type_checker);
@@ -737,14 +738,10 @@ impl<'a> LoweringContext<'a> {
         LocalDecl::new(super::apply_generic_sub(&ty, &self.generic_subs), span)
     }
 
-    /// Returns `true` if `kind` requires reference-count management.
-    /// Delegates to the single authority in `crate::mir::rc::is_managed_type`.
+    /// Returns `true` if `kind` requires reference-count management, as the
+    /// body's classifier decides it (see [`crate::mir::rc::RcClassifier`]).
     pub fn is_perceus_managed(&self, kind: &crate::ast::types::TypeKind) -> bool {
-        crate::mir::rc::is_managed_type(
-            kind,
-            &self.body.unmanaged_type_names,
-            &self.body.type_params,
-        )
+        self.body.is_counted(kind)
     }
 
     /// Emits `StorageDead` for `local` if it was created at or after `watermark`
@@ -819,33 +816,6 @@ impl<'a> LoweringContext<'a> {
     /// Returns true if the given type has auto-copy semantics (no RC needed).
     pub fn is_type_auto_copy(&self, ty: &Type) -> bool {
         crate::type_checker::utils::is_auto_copy(&ty.kind, self.type_checker.type_definitions())
-    }
-
-    /// Computes the set of custom type names that never denote a heap object.
-    ///
-    /// A type alias keeps its own name all the way into MIR, so `type Meters is
-    /// int` arrives as `Custom("Meters")` with nothing to tell the RC pass that
-    /// the value behind it is a bare integer. Collecting those names here lets
-    /// `is_managed_type` answer correctly without resolving aliases itself.
-    /// An alias to a managed type is left out, so it keeps its RC treatment.
-    fn compute_unmanaged_type_names(
-        type_checker: &crate::type_checker::TypeChecker,
-    ) -> std::collections::HashSet<String> {
-        let definitions = type_checker.type_definitions();
-        let mut unmanaged = std::collections::HashSet::new();
-        for (name, definition) in definitions {
-            if !matches!(
-                definition,
-                crate::type_checker::context::TypeDefinition::Alias(_)
-            ) {
-                continue;
-            }
-            let kind = crate::ast::types::TypeKind::Custom(name.clone(), None);
-            if crate::type_checker::utils::is_auto_copy(&kind, definitions) {
-                unmanaged.insert(name.clone());
-            }
-        }
-        unmanaged
     }
 
     /// Builds the set of type names whose release runs a `fn drop(self)` hook,

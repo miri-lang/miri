@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::types::Type;
+use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::BasicBlockData;
 use crate::mir::place::{Local, Place};
+use crate::mir::rc::RcClassifier;
 use crate::mir::statement::Statement;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
@@ -39,19 +40,9 @@ pub struct Body {
     pub execution_model: ExecutionModel,
     /// Backend-specific metadata. None for CPU functions.
     pub backend_metadata: Option<BackendMetadata>,
-    /// Names of custom types that never denote a heap object, and so are never
-    /// reference counted.
-    ///
-    /// These are type aliases that resolve to an unmanaged type: `type Meters is
-    /// int` reaches MIR as `Custom("Meters")`, but the value behind it is a bare
-    /// integer with no allocation to release. Aliases to a managed type (`type ID
-    /// is String`) are absent from this set and stay managed.
-    ///
-    /// Auto-copy structs and enums are deliberately NOT listed here. They are
-    /// heap-allocated like any other aggregate, so they need releasing; their
-    /// bitwise-copy semantics are a question about assignment, decided separately
-    /// at lowering.
-    pub unmanaged_type_names: HashSet<String>,
+    /// Decides which of this body's values are reference counted, read
+    /// against the program's type table at [`Body::type_params`].
+    pub rc_classifier: RcClassifier,
     /// Maps struct/class type names to their ordered field types (in layout order).
     /// Used by Perceus to resolve `Field(i)` place projections and determine
     /// whether the projected field is a managed type.
@@ -67,8 +58,8 @@ pub struct Body {
     /// Empty for non-closure functions.
     pub env_capture_locals: Vec<Local>,
     /// Names of generic type parameters in scope for this function body.
-    /// Used by `is_managed_type` to distinguish unresolved generic placeholders
-    /// (which are never managed) from concrete user-defined types.
+    /// Used by [`Body::is_counted`] to distinguish unresolved generic placeholders
+    /// (which are never counted) from concrete user-defined types.
     /// Populated from the function's explicit generics and from `TypeKind::Generic`
     /// names found in parameter/return types (captures class-level generics too).
     pub type_params: HashSet<String>,
@@ -209,7 +200,7 @@ impl Body {
             span,
             execution_model,
             backend_metadata: None,
-            unmanaged_type_names: HashSet::new(),
+            rc_classifier: RcClassifier::default(),
             field_types: HashMap::new(),
             class_type_params: HashMap::new(),
             env_capture_locals: Vec::new(),
@@ -258,6 +249,16 @@ impl Body {
             }
         }
         counts
+    }
+
+    /// Whether a value of `kind`, written in this body, is reference counted.
+    pub fn is_counted(&self, kind: &TypeKind) -> bool {
+        self.rc_classifier.is_counted(kind, &self.type_params)
+    }
+
+    /// Whether the value `local` holds is reference counted.
+    pub fn is_counted_local(&self, local: Local) -> bool {
+        self.is_counted(&self.local_decls[local.0].ty.kind)
     }
 
     /// Whether `local` is a parameter this body takes over from its callers

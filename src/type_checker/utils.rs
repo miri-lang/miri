@@ -1498,6 +1498,7 @@ impl TypeChecker {
     pub(crate) fn register_type_definition(&mut self, name: String, def: TypeDefinition) {
         self.type_table.visible_type_names.insert(name.clone());
         self.type_table.global_type_definitions.insert(name, def);
+        self.invalidate_shared_type_definitions();
     }
 
     /// Resolves a type definition that is visible from user code.

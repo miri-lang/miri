@@ -191,7 +191,7 @@ fn lower_function_body(
     ctx.use_compilation_ids(compilation_ids);
     ctx.read_source_of(ast_func);
 
-    // Populate generic type parameter names so that `is_managed_type` can
+    // Populate generic type parameter names so that `Body::is_counted` can
     // distinguish unresolved generic placeholders from concrete user types.
     ctx.body.type_params = collect_type_params(decl, tc);
     ctx.body.open_params = ctx.body.type_params.clone();
@@ -1024,7 +1024,7 @@ fn is_gpu_storage_param(kind: &TypeKind) -> bool {
 ///   generics that appear in method signatures, e.g. `T` in `List<T>::push(item: T)`)
 /// - `TypeKind::Generic` names found in the return type
 ///
-/// The resulting set is stored in `Body::type_params` and used by `is_managed_type`
+/// The resulting set is stored in `Body::type_params` and used by `Body::is_counted`
 /// to distinguish unresolved generic placeholders from concrete user-defined types.
 fn collect_type_params(
     decl: &crate::ast::statement::FunctionDeclarationData,

@@ -3,83 +3,128 @@
 
 //! Shared reference-counting helpers for MIR.
 //!
-//! This module is the single authority on whether a type requires RC management.
-//! Both the Perceus optimization pass and the MIR lowering context delegate here.
+//! [`RcClassifier`] is the single authority on whether a value of a type is
+//! reference counted: the lowering context, Perceus, the passes that move or
+//! elide references and the verifier all ask it, through [`Body::is_counted`].
+//! It answers from the value-class authority over the declared type.
+//!
+//! [`Body::is_counted`]: crate::mir::Body::is_counted
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{BuiltinCollectionKind, TypeKind};
-use std::collections::HashSet;
+use crate::ast::types::{TypeKind, SELF_TYPE_NAME};
+use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::value_class::{value_class, LayoutScope, ValueClass, WordRole};
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::rc::Rc;
 
-/// Returns `true` if a type is managed (heap-allocated, needs RC).
+/// Whether a bitwise value is reference counted.
 ///
-/// Managed types are: Option, List, Array, Map, Set, Tuple, and Custom types
-/// that are NOT generic type parameters.
-///
-/// Auto-copy classification deliberately does not appear here. Whether a value
-/// is copied bitwise on assignment is a question about assignment; whether its
-/// storage must be released is a question about allocation. Every aggregate is
-/// heap-allocated, so every aggregate needs releasing — an auto-copy struct that
-/// was excluded here was allocated with nothing to free it.
-///
-/// `unmanaged_type_names` contains custom names that never denote a heap object
-/// — type aliases resolving to an unmanaged type, which reach MIR still wearing
-/// the alias name (`type Meters is int` arrives as `Custom("Meters")`).
-///
-/// `type_params` contains the names of in-scope generic type parameters
-/// (e.g. `{"T", "K", "V"}` for a function `fn foo<T, K, V>(...)`).
-/// A `Custom(name, _)` whose name is in `type_params` is an unresolved generic
-/// placeholder — never a concrete heap object, so never managed.
-pub fn is_managed_type(
-    kind: &TypeKind,
-    unmanaged_type_names: &HashSet<String>,
-    type_params: &HashSet<String>,
-) -> bool {
-    match kind {
-        // Collections, Tuples, and Strings use heap allocation and need RC. An
-        // Option is either the address of its `Some` box or, around a
-        // reference-counted pointer, that pointer itself; both are counted.
-        TypeKind::Option(_) | TypeKind::Tuple(_) => true,
-        // Canonical collection variants are normalized to Custom before RC analysis.
-        // Keep them here as a safety net for any residual code paths.
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => true,
-        // Strings are allocated via alloc_with_rc, freed via miri_rt_string_free.
-        TypeKind::String => true,
-        // Closures/lambdas are heap-allocated via closure_alloc and reference-counted.
-        TypeKind::Function(_) => true,
-        // Explicit generic type parameters are never concrete heap objects.
-        TypeKind::Generic(_, _, _) => false,
-        TypeKind::Custom(name, args) => {
-            // Exclude generic placeholders that appear as Custom types (e.g. when
-            // the type checker stores Custom("T", None) for a generic param reference).
-            // Also exclude "Self" — a reserved keyword, never a user-defined type.
-            if name == "Self"
-                || unmanaged_type_names.contains(name.as_str())
-                || type_params.contains(name.as_str())
-            {
-                return false;
-            }
+/// A struct, tuple or optional the value-class authority calls bitwise is
+/// still built in a heap allocation of its own and released like any other
+/// aggregate, so it is counted. This is the one place that says so.
+const BITWISE_VALUE_IS_COUNTED: bool = true;
 
-            // `Atomic<u32>` and `Atomic<i32>` are scalar wrappers, not managed.
-            if is_builtin_atomic(name, args.as_deref()) {
-                return false;
-            }
+/// Decides whether a value of a type is reference counted, by its value class
+/// read against the program's type table.
+///
+/// A body carries one, shared with every other body lowered from the same
+/// check, and asks it at the body's own type parameters.
+#[derive(Clone, Default)]
+pub struct RcClassifier {
+    definitions: Rc<HashMap<String, TypeDefinition>>,
+}
 
-            // After normalization, builtin collection types arrive as
-            // Custom("List", Some([...])) — these ARE heap-managed.
-            // However, inside stdlib class bodies the names appear as
-            // Custom("List", None) / Custom("Array", None) for unresolved generic
-            // class self-references — those locals hold element values, not collections,
-            // so they must NOT be treated as managed.
-            if let Some(_kind) = BuiltinCollectionKind::from_name(name) {
-                // If args is Some (instantiated), it's a real collection.
-                // If args is None, it's the unresolved self-reference inside class body.
-                return args.is_some();
-            }
+impl RcClassifier {
+    pub fn new(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
+        Self { definitions }
+    }
 
-            // All other user-defined types (classes, structs, enums) are managed.
-            true
+    /// Whether a value of `kind`, written in a body that leaves `type_params`
+    /// open, is reference counted.
+    pub fn is_counted(&self, kind: &TypeKind, type_params: &HashSet<String>) -> bool {
+        !is_never_counted(kind)
+            && is_counted_class(&value_class(
+                kind,
+                LayoutScope::new(&self.definitions, type_params),
+            ))
+    }
+}
+
+impl fmt::Debug for RcClassifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RcClassifier")
+            .field("definitions", &self.definitions.len())
+            .finish()
+    }
+}
+
+/// Two classifiers are equal when they read one table, or both read an empty
+/// one. Type definitions have no equality of their own, so two copies of one
+/// program's table are told apart.
+impl PartialEq for RcClassifier {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.definitions, &other.definitions)
+            || (self.definitions.is_empty() && other.definitions.is_empty())
+    }
+}
+
+/// Whether a value of class `class` is reference counted.
+fn is_counted_class(class: &ValueClass) -> bool {
+    match class {
+        ValueClass::Scalar(_) | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => {
+            false
         }
-        _ => false,
+        ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
+        ValueClass::Bitwise(_) => BITWISE_VALUE_IS_COUNTED,
+    }
+}
+
+/// The kinds no value of which is counted, whatever their value class.
+///
+/// - `void` holds no value.
+/// - The native `Result` and `Future` kinds hold none in a body: the type
+///   checker spells every `Result` as the `Result` enum, and an `async` call
+///   is typed at its result, so a `Future` local is only ever an annotation.
+/// - A `Linear` wrapper is used exactly once by the type checker's rule, and
+///   no release path counts it.
+/// - `Self`, unsubstituted, stands for the receiver's type the way a type
+///   parameter stands for its argument.
+fn is_never_counted(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Void | TypeKind::Result(_, _) | TypeKind::Future(_) | TypeKind::Linear(_) => true,
+        TypeKind::Custom(name, None) => name == SELF_TYPE_NAME,
+        TypeKind::Custom(_, Some(_))
+        | TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::String
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Error
+        | TypeKind::OneOf(_)
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Option(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Function(_)
+        | TypeKind::Meta(_) => false,
     }
 }
 

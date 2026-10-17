@@ -18,7 +18,6 @@
 //! [`LocalDecl`]: crate::mir::LocalDecl
 
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
-use std::collections::HashSet;
 
 /// A resolved, AST-expression-free type for use in MIR analysis.
 ///
@@ -72,8 +71,8 @@ pub enum MirType {
     Future(Box<MirType>),
 
     /// A named user-defined type (struct, class, or enum).
-    /// Generic arguments are not tracked — only the base name is needed for
-    /// RC management decisions.
+    /// Generic arguments are not tracked: whether a value is reference counted
+    /// is asked of the declared type, which keeps them.
     Custom(String),
 
     /// A compiler-known vector (`Vec2`, `Vec3`, `Vec4`), written with its
@@ -87,12 +86,12 @@ pub enum MirType {
     Function,
 
     /// An unresolved generic type parameter (e.g. `T`, `K`, `V`).
-    /// Generic parameters are never concrete heap objects, so this variant is
-    /// never managed.
+    /// Generic parameters are never concrete heap objects.
     Generic,
 
-    /// A type that could not be resolved during MIR construction.
-    /// Treated as non-managed to avoid false-positive IncRef/DecRef.
+    /// A type that could not be resolved during MIR construction. A
+    /// projection through one resolves to nothing, so it gets no IncRef or
+    /// DecRef.
     Unknown,
 }
 
@@ -155,8 +154,8 @@ impl MirType {
     /// name canonicalizes to a built-in collection and the args are instantiated,
     /// and the atomic element type to the scalar it is stored as.
     /// When `args` is `None`, the name appears as an unresolved self-reference
-    /// inside a stdlib class body — keep it as `MirType::Custom` so the managed-
-    /// type check excludes it correctly.
+    /// inside a stdlib class body — keep it as `MirType::Custom`, an element
+    /// value rather than a collection.
     fn from_custom(name: &str, args: Option<&[crate::ast::expression::Expression]>) -> Self {
         // The atomic element type is stored as its scalar component, so it is
         // that scalar to every analysis — a user type sharing the name is not.
@@ -202,47 +201,6 @@ impl MirType {
         matches!(self, MirType::Vector(_))
     }
 
-    /// Returns `true` if this type requires reference-count management.
-    ///
-    /// Mirrors the logic of [`crate::mir::rc::is_managed_type`] but operates on
-    /// [`MirType`] values, avoiding any AST traversal.
-    pub fn is_managed(
-        &self,
-        unmanaged_type_names: &HashSet<String>,
-        type_params: &HashSet<String>,
-    ) -> bool {
-        match self {
-            // Collections, Option, and Tuple are always RC-managed.
-            MirType::Option(_)
-            | MirType::List(_)
-            | MirType::Array(_)
-            | MirType::Map(_, _)
-            | MirType::Set(_)
-            | MirType::Tuple(_) => true,
-            // String is RC-managed: allocated via alloc_with_rc, freed via miri_rt_string_free.
-            MirType::String => true,
-            // Closures are heap-allocated via alloc_with_rc and must be RC-tracked.
-            MirType::Function => true,
-            // Generic parameters and unknown types are never managed.
-            MirType::Generic | MirType::Unknown => false,
-            // Custom (user-defined) types: managed unless they are unresolved
-            // generic placeholders or reserved names.
-            // Also exclude unresolved collection class names (e.g. Custom("List"))
-            // that appear in stdlib method signatures.
-            // A vector binding holds its own allocation, the same as any other
-            // struct — only a vector stored *inside* a collection buffer is
-            // inline bytes, and `is_place_managed` excludes that position.
-            MirType::Custom(name) | MirType::Vector(name) => {
-                name != "Self"
-                    && !unmanaged_type_names.contains(name.as_str())
-                    && !type_params.contains(name.as_str())
-                    && BuiltinCollectionKind::from_name(name).is_none()
-            }
-            // All other types (primitives) are not managed.
-            _ => false,
-        }
-    }
-
     /// Resolves a type expression node into a [`MirType`].
     ///
     /// The parser encodes type arguments inside collection type annotations
@@ -257,7 +215,7 @@ impl MirType {
     ///   `"MyClass"`, or a generic parameter; mapped to `Custom(name)`.
     ///
     /// Any other expression form (e.g. a size literal in `[T; 4]`) maps to
-    /// [`MirType::Unknown`], which is treated as non-managed.
+    /// [`MirType::Unknown`].
     ///
     /// [`Expression`]: crate::ast::expression::Expression
     /// [`Type`]: crate::ast::types::Type
@@ -272,15 +230,10 @@ impl MirType {
                 }
             }
             crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                // A bare identifier in element-type position is a type name.
-                // Store it as Custom(name) and let `is_managed` resolve it at
-                // analysis time when `auto_copy_types` and `type_params` are
-                // available.  This correctly handles:
-                //   - User-defined class names → Custom("MyClass") → managed
-                //   - Generic parameters (T, K, …) → Custom("T"), filtered by
-                //     type_params in `is_managed`
-                //   - Collection class names (List, Array, …) → Custom("List"),
-                //     filtered by BuiltinCollectionKind in `is_managed`
+                // A bare identifier in element-type position is a type name,
+                // kept as written; whether it is a class, a generic parameter
+                // or a collection's own name is decided where the type table
+                // and the body's type parameters are known.
                 MirType::Custom(name.clone())
             }
             _ => MirType::Unknown,
