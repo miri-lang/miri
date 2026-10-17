@@ -16,6 +16,7 @@ pub mod forall_gpu;
 pub mod function;
 pub mod gpu;
 pub mod gpu_launch;
+pub mod helpers;
 pub mod if_statement;
 pub mod instantiation_limits;
 pub mod literal;

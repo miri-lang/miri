@@ -1231,6 +1231,9 @@ impl TypeChecker {
             .all(|t| self.are_compatible(t, first_type, context));
 
         if is_homogeneous {
+            // The tuple class's methods are compiled per element type like any
+            // generic class's, so the instantiation a call reaches is recorded.
+            self.record_generic_class_instantiation(TUPLE_TYPE_NAME, vec![first_type.clone()]);
             (
                 Some(TUPLE_TYPE_NAME.to_string()),
                 Some(vec![self.create_type_expression(first_type.clone())]),

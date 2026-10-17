@@ -12,6 +12,8 @@
 //! because the verifier is right is distinguishable from one passing because the
 //! verifier reports nothing at all.
 
+mod optional_representation;
+
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;

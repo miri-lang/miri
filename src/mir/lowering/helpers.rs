@@ -402,12 +402,16 @@ fn substitute_variant_field_types(
 /// are safe to assign via DPS without an intermediate Cast.
 ///
 /// Two optionals are one value only when neither is provably an optional layer
-/// short of the other: `Option<T>` and `Option<int>` are one box, but an `int?`
-/// stored where an `Option<int?>` is declared still needs its outer `Some` box.
+/// short of the other and their payloads are laid out alike: `Option<T>` and
+/// `Option<int>` are one box, but an `int?` stored where an `Option<int?>` is
+/// declared still needs its outer `Some` box, and an `Option<T>` of a type
+/// parameter is a box where an `Option<Node>` is the bare `Node` pointer.
 pub(crate) fn mir_types_structurally_match(a: &MirType, b: &MirType) -> bool {
     match (a, b) {
         (MirType::Option(_), MirType::Option(_)) => {
-            !is_missing_optional_layer(a, b) && !is_missing_optional_layer(b, a)
+            !is_missing_optional_layer(a, b)
+                && !is_missing_optional_layer(b, a)
+                && !are_payloads_laid_out_apart(a, b)
         }
         _ => matches!(
             (a, b),
@@ -442,6 +446,98 @@ pub(crate) fn missing_optional_layers(source: &MirType, target: &MirType) -> usi
         }
         (MirType::Generic | MirType::Unknown | MirType::Void | MirType::Error, _) => 0,
         (_, target) => option_depth(target),
+    }
+}
+
+/// Whether the payloads two optionals wrap, peeled together, may be laid out
+/// differently: one as a box and the other as its bare payload pointer.
+///
+/// A payload that names a type by its bare name — a class, an alias, a type
+/// parameter spelled by name — is laid out by what the name stands for, which
+/// these types do not say. Two different such names, or one beside a pointer
+/// payload or a generic parameter, may therefore differ; one beside a scalar
+/// cannot, since a scalar only meets a name standing for a scalar or for a
+/// parameter, both boxed. The `void` a `None` literal is typed at, an
+/// unresolved type and an error hold no payload and agree with any.
+fn are_payloads_laid_out_apart(a: &MirType, b: &MirType) -> bool {
+    if let (MirType::Option(a), MirType::Option(b)) = (a, b) {
+        return are_payloads_laid_out_apart(a, b);
+    }
+    if a == b {
+        return false;
+    }
+    match (payload_layout(a), payload_layout(b)) {
+        (PayloadLayout::Absent, _)
+        | (_, PayloadLayout::Absent)
+        | (PayloadLayout::Pointer, PayloadLayout::Pointer)
+        | (
+            PayloadLayout::Boxed | PayloadLayout::Parameter,
+            PayloadLayout::Boxed | PayloadLayout::Parameter,
+        )
+        | (PayloadLayout::Named, PayloadLayout::Boxed)
+        | (PayloadLayout::Boxed, PayloadLayout::Named) => false,
+        (
+            PayloadLayout::Pointer,
+            PayloadLayout::Boxed | PayloadLayout::Parameter | PayloadLayout::Named,
+        )
+        | (
+            PayloadLayout::Boxed | PayloadLayout::Parameter | PayloadLayout::Named,
+            PayloadLayout::Pointer,
+        )
+        | (PayloadLayout::Named, PayloadLayout::Named | PayloadLayout::Parameter)
+        | (PayloadLayout::Parameter, PayloadLayout::Named) => true,
+    }
+}
+
+/// How an optional lays out a payload of one MIR type, as far as the type says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PayloadLayout {
+    /// Held in a box.
+    Boxed,
+    /// The payload's own pointer, null when absent.
+    Pointer,
+    /// A generic parameter: held in a box until substitution names its type.
+    Parameter,
+    /// Decided by what a bare type name stands for.
+    Named,
+    /// No payload to lay out.
+    Absent,
+}
+
+/// The layout an optional gives a `payload` of this MIR type.
+fn payload_layout(payload: &MirType) -> PayloadLayout {
+    match payload {
+        MirType::String
+        | MirType::List(_)
+        | MirType::Array(_)
+        | MirType::Map(_, _)
+        | MirType::Set(_)
+        | MirType::Tuple(_)
+        | MirType::Function => PayloadLayout::Pointer,
+        MirType::Custom(_) => PayloadLayout::Named,
+        MirType::Void | MirType::Error | MirType::Unknown => PayloadLayout::Absent,
+        MirType::Int
+        | MirType::I8
+        | MirType::I16
+        | MirType::I32
+        | MirType::I64
+        | MirType::I128
+        | MirType::U8
+        | MirType::U16
+        | MirType::U32
+        | MirType::U64
+        | MirType::U128
+        | MirType::Float
+        | MirType::F16
+        | MirType::F32
+        | MirType::F64
+        | MirType::Boolean
+        | MirType::Identifier
+        | MirType::RawPtr
+        | MirType::Result(_, _)
+        | MirType::Future(_)
+        | MirType::Option(_) => PayloadLayout::Boxed,
+        MirType::Generic => PayloadLayout::Parameter,
     }
 }
 

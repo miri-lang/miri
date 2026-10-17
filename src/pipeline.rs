@@ -2636,7 +2636,7 @@ impl Pipeline {
         }
 
         let verify_mode = self.verify_mode();
-        let argument_mode_violations =
+        let program_violations =
             Self::decide_owned_parameters(result, &mut lowered, verify_mode.is_some());
 
         let mut bodies: Vec<(String, mir::Body)> = lowered
@@ -2665,11 +2665,11 @@ impl Pipeline {
             mir::optimization::elide_unshare_checks(body);
         }
 
-        // Check RC invariants and cross-residency readback fencing after
-        // Perceus, and that every call passes an owned argument exactly where
-        // its callee takes one over.
+        // Check RC invariants, cross-residency readback fencing and optional
+        // layouts after Perceus, and that every call passes an owned argument
+        // exactly where its callee takes one over.
         if let Some(mode) = verify_mode {
-            Self::report_mir_violations(result, &bodies, argument_mode_violations, &mode)?;
+            Self::report_mir_violations(result, &bodies, program_violations, &mode)?;
         }
 
         Ok(bodies)
@@ -2689,8 +2689,10 @@ impl Pipeline {
     /// mark the calls passing them, before Perceus funds those arguments.
     ///
     /// When `is_verifying`, also check across the program that every call
-    /// passes an owned argument exactly where its callee takes one over; the
-    /// findings are returned to join the per-body checks run after Perceus.
+    /// passes an owned argument exactly where its callee takes one over, and
+    /// hands each optional argument and receives each optional result at the
+    /// layout the callee declares; the findings are returned to join the
+    /// per-body checks run after Perceus.
     fn decide_owned_parameters(
         result: &PipelineResult,
         lowered: &mut [(Symbol, mir::Body)],
@@ -2703,11 +2705,15 @@ impl Pipeline {
             &synthesized,
             &mir::type_facts::DropHookReach::new(type_definitions),
         );
-        if is_verifying {
-            mir::verify::verify_owned_argument_modes(lowered)
-        } else {
-            Vec::new()
+        if !is_verifying {
+            return Vec::new();
         }
+        let mut violations = mir::verify::verify_owned_argument_modes(lowered);
+        violations.extend(mir::verify::verify_optional_call_layouts(
+            lowered,
+            type_definitions,
+        ));
+        violations
     }
 
     /// Emit the generic-class methods and trait defaults the lowered bodies
@@ -2989,6 +2995,10 @@ impl Pipeline {
                 &intrinsic_backed,
             ));
             violations.extend(mir::verify::verify_cross_residency_readback(body));
+            violations.extend(mir::verify::verify_optional_representation(
+                body,
+                result.type_checker.type_definitions(),
+            ));
             if !violations.is_empty() {
                 functions_with_violations += 1;
             }

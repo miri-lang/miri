@@ -106,6 +106,10 @@ use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
+mod optional_representation;
+
+pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
+
 /// Largest delta the domain represents; past it a local is reported rather than
 /// followed, which keeps the lattice finite.
 const DELTA_CAP: i32 = 8;
@@ -1344,9 +1348,10 @@ fn local_display_name(body: &Body, local: Local) -> String {
 /// is reference-counted.
 ///
 /// `intrinsic_backed` names the symbols exempt from the rule: those methods
-/// settle element ownership by calling the runtime (`miri_rt_list_clone`
-/// retains what it copies, `miri_rt_list_take_at` hands the container's own
-/// reference over), and none of that is visible as an RC operation in MIR.
+/// only hand elements between the caller and the runtime, which settles their
+/// ownership (`miri_rt_list_clone` retains every element it copies, and `push`
+/// gives its element to a store that keeps the caller's reference), and none
+/// of that is visible as an RC operation in MIR.
 pub fn verify_collection_element_ownership(
     body: &Body,
     shared_collection_methods: &HashSet<Symbol>,

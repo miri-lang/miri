@@ -20,6 +20,7 @@ use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Positional arguments that are gpu-resident bindings carrying a device handle.
@@ -490,7 +491,7 @@ fn emit_resolved_method_call(
         _ => resolve_generic_class_monomorph(ctx, m.obj_ty, m.method_name, m.method_info),
     };
     if mono.is_some() {
-        ctx.record_class_instantiations(m.obj_ty);
+        ctx.record_class_instantiations(&receiver_class_type(m.obj_ty));
     }
     let return_ty = call_result_type(ctx, &m, &mono);
     let arg_types = method_argument_types(ctx, &m);
@@ -914,6 +915,7 @@ fn resolve_super_monomorph(
 /// parameters (`class Child extends Base<String>`), and every body the child
 /// inherits belongs to that instantiation of the parent.
 fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(String, Vec<Type>)> {
+    let obj_ty = receiver_class_type(obj_ty);
     let TypeKind::Custom(name, arg_exprs) = &obj_ty.kind else {
         return None;
     };
@@ -930,6 +932,22 @@ fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(Strin
     };
     let resolved = super::monomorphized_arguments(arg_exprs.as_ref()?, gens.len(), defs)?;
     Some((name.clone(), resolved))
+}
+
+/// The class type a method call on `obj_ty` is dispatched at.
+///
+/// A tuple keeps its per-element type, while the type checker gives it the
+/// methods of the tuple class at its first element's type — the type every
+/// element is compatible with. Every other receiver is its own class type.
+fn receiver_class_type(obj_ty: &Type) -> Cow<'_, Type> {
+    let TypeKind::Tuple(elements) = &obj_ty.kind else {
+        return Cow::Borrowed(obj_ty);
+    };
+    let args = elements.first().map(|first| vec![first.clone()]);
+    Cow::Owned(Type::new(
+        TypeKind::Custom(TUPLE_TYPE_NAME.to_string(), args),
+        obj_ty.span,
+    ))
 }
 
 /// Resolve the monomorphized symbol and return type for `method_name` called on
