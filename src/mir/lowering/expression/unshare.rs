@@ -461,7 +461,7 @@ fn emit_copy(
 ) -> Result<(), LoweringError> {
     match unsharing {
         Unsharing::Struct(name, declared) => {
-            emit_struct_copy(ctx, place, ty, (&name, &declared), copy, span)
+            emit_struct_copy(ctx, place, ty, (&name, &declared), copy, span)?
         }
         Unsharing::Collection(kind) => {
             let written_bb = ctx.new_basic_block();
@@ -474,9 +474,30 @@ fn emit_copy(
                 span,
             );
             ctx.set_current_block(written_bb);
-            Ok(())
         }
     }
+    emit_copy_count(ctx, span);
+    Ok(())
+}
+
+/// Reports the copy just made to the runtime's copy counter
+/// (`MIRI_RC_STATS`); code generation emits the call only while the runtime
+/// is tracking.
+fn emit_copy_count(ctx: &mut LoweringContext, span: Span) {
+    let counted_bb = ctx.new_basic_block();
+    let unit = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: Operand::runtime(rt::RC_STATS_COW_COPY, span),
+            args: Vec::new(),
+            arg_modes: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(unit),
+            target: Some(counted_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(counted_bb);
 }
 
 /// Builds into `copy` a struct with the fields of the one at `place`.

@@ -9,7 +9,9 @@
 //! - `dup`: increments compiled code made;
 //! - `drop`: decrements compiled code made;
 //! - `drop_free`: decrements that reached zero and released the value;
-//! - `cow_copy`: copy-on-write writes that had to copy a shared collection;
+//! - `cow_copy`: copies a write made of a value it found shared — a
+//!   collection copied by its copy-on-write entry point or by a write through
+//!   a path, or a struct rebuilt by one;
 //! - `realloc`: buffers the runtime grew in place or moved.
 //!
 //! Compiled code reaches the counters only through the hooks it guards with
@@ -47,7 +49,7 @@ pub fn count_drop() {
     count(&DROP);
 }
 
-/// Counts a copy-on-write write that copied a shared collection.
+/// Counts a write that copied a value it found shared.
 pub fn count_cow_copy() {
     count(&COW_COPY);
 }
@@ -55,6 +57,14 @@ pub fn count_cow_copy() {
 /// Counts a buffer the runtime grew or moved.
 pub fn count_realloc() {
     count(&REALLOC);
+}
+
+/// Hook compiled code calls after a write through a path copied a value it
+/// found shared — a collection cloned or a struct rebuilt — while the
+/// runtime's tracking state is on.
+#[no_mangle]
+pub extern "C" fn miri_rt_rc_stats_cow_copy() {
+    count_cow_copy();
 }
 
 /// Hook compiled code calls after incrementing a reference count, while the

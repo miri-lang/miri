@@ -66,6 +66,67 @@ println(f"{a.length()} {b.length()}")
     assert!(line.contains("cow_copy=1"), "{line}");
 }
 
+/// A write through `b.items` finds both the struct `b` and its list shared
+/// with `a`, and copies each — two copies, counted although no copy-on-write
+/// entry point made them. A second write, through what is now `b`'s own,
+/// copies nothing more.
+#[test]
+fn test_rc_stats_counts_the_copies_a_write_through_a_path_makes() {
+    let program = |writes: &str| {
+        format!(
+            "use system.io\nuse system.collections.list\n\nstruct Bag\n    items [int]\n\nvar a = Bag(items: List([1, 2]))\nvar b = a\n{writes}println(f\"{{a.items[0]}} {{b.items[0]}}\")\n"
+        )
+    };
+    let once = rc_stats(&program("b.items[0] = 5\n"), &[]);
+    let twice = rc_stats(&program("b.items[0] = 5\nb.items[1] = 6\n"), &[]);
+    assert!(once.contains("cow_copy=2"), "{once}");
+    assert!(twice.contains("cow_copy=2"), "{twice}");
+}
+
+/// A write into a list nothing else holds copies nothing.
+#[test]
+fn test_rc_stats_counts_no_copy_for_an_unshared_write_through_a_path() {
+    let line = rc_stats(
+        r#"
+use system.io
+use system.collections.list
+
+struct Cell
+    x int
+
+var a = List([Cell(x: 1)])
+a[0].x = 2
+println(f"{a[0].x}")
+"#,
+        &[],
+    );
+    assert!(line.contains("cow_copy=0"), "{line}");
+}
+
+/// A struct rebuilt because the list holding it was shared counts as a copy
+/// as well: the write copies the shared list, the two lists then share the
+/// element, and the write rebuilds it — two copies.
+#[test]
+fn test_rc_stats_counts_a_struct_copied_by_a_write_through_a_path() {
+    let line = rc_stats(
+        r#"
+use system.io
+use system.collections.list
+
+struct Cell
+    x int
+    name String
+
+var a = List([Cell(x: 1, name: "n")])
+var b = a
+b[0].x = 2
+println(f"{a[0].x} {b[0].x}")
+"#,
+        &[],
+    );
+    assert!(line.contains("cow_copy=2"), "{line}");
+}
+
 #[test]
 fn test_rc_stats_counts_the_buffers_the_runtime_grew() {
     let line = rc_stats(

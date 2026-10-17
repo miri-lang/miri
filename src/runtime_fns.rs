@@ -56,6 +56,11 @@ pub mod rt {
     /// Compiler-internal: counts a decrement that reached zero, for
     /// `MIRI_RC_STATS`, not in stdlib. Called only while the tracking state is on.
     pub const RC_STATS_FREE: &str = "miri_rt_rc_stats_free";
+    /// Compiler-internal: counts a copy a write through a path made of a value
+    /// it found shared, for `MIRI_RC_STATS`, not in stdlib. Lowering calls it
+    /// on the copy path; code generation emits it only while the tracking state
+    /// is on, and not at all in a release build.
+    pub const RC_STATS_COW_COPY: &str = "miri_rt_rc_stats_cow_copy";
     /// Compiler-internal: runtime byte telling compiled code whether either
     /// tracking hook above is worth calling. A data symbol, not a function —
     /// codegen loads it and branches, so an unobserved allocation pays a load
@@ -390,6 +395,7 @@ pub mod rt {
         RELEASE_CHECK,
         RC_STATS_DUP,
         RC_STATS_FREE,
+        RC_STATS_COW_COPY,
         TRACKING_STATE,
         CHECKS_COMPILED_OUT,
         RC_IS_SHARED,

@@ -1034,6 +1034,9 @@ impl<'a> FunctionTranslator<'a> {
             let unique = Self::emit_inline_copy_on_write(builder, ctx, callee, &arg_values, &sig)?;
             return Self::define_call_destination(builder, locals, destination, unique);
         }
+        if callee.runtime_name() == Some(rt::RC_STATS_COW_COPY) {
+            return Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_COW_COPY);
+        }
         if callee.runtime_name() == Some(rt::LIST_PUSH) {
             if let Some(push) = ListPush::of(builder, &arg_values) {
                 return Self::emit_inline_list_push(builder, ctx, callee, push, &sig);
