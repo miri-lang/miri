@@ -384,8 +384,8 @@ impl TypeChecker {
         } else {
             return unwrapped;
         };
-        // TODO: a method call writing its type arguments out — `obj.f<T>()` —
-        // wraps a member access, which is not unwrapped here, so its written
+        // A method call writing explicit type arguments — `obj.f<T>()` — wraps
+        // a member access, which is not unwrapped here, so its written
         // arguments bind nothing and the call is inferred as if it wrote none.
         let Some(name) = self.function_name_written(base, context) else {
             return unwrapped;

@@ -287,10 +287,10 @@ impl TypeChecker {
     /// binding that already has a value. Anything else has no value until it
     /// runs, and yields `None`.
     ///
-    /// TODO: float arithmetic is not folded, so `let k = 2.0 * e` has no value
+    /// Float arithmetic is not folded, so `let k = 2.0 * e` has no value
     /// and keeps `float` where `let m = 2 * 3` takes the width of each use.
-    /// Folding it (or re-narrowing the initializer per use) makes the two
-    /// agree.
+    /// Folding it (or re-narrowing the initializer per use) would align
+    /// the behavior.
     fn constant_literal(init: &Expression, kind: &TypeKind, context: &Context) -> Option<Literal> {
         if let Some(value) = Self::try_eval_const_int_with_context(init, context) {
             return integer_constant(kind, value);
