@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod append;
 pub mod basic;
 pub mod completion;
 pub mod errors;

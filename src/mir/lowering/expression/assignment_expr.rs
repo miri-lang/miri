@@ -34,6 +34,11 @@ fn assign_to_identifier(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     if let ExpressionKind::Identifier(name, _) = &id_expr.node {
+        if let Some(&local) = ctx.variable_map.get(name.as_str()) {
+            if let Some(pieces) = appended_strings(ctx, local, name, op, rhs) {
+                return lower_string_append(ctx, local, &pieces, expr, dest);
+            }
+        }
         let rhs_watermark = ctx.body.local_decls.len();
         let val = lower_expression(ctx, rhs, None)?;
 
@@ -60,6 +65,118 @@ fn assign_to_identifier(
             expr.span,
         ))
     }
+}
+
+/// The strings `s = s + t + u` or `s += t` appends, in order, to the string
+/// local `local` named `name` holds: when `local` is declared `String` and is
+/// a binding of this host body, and every piece is a string too.
+fn appended_strings<'e>(
+    ctx: &LoweringContext,
+    local: crate::mir::Local,
+    name: &str,
+    op: &crate::ast::operator::AssignmentOp,
+    rhs: &'e Expression,
+) -> Option<Vec<&'e Expression>> {
+    use crate::ast::operator::{AssignmentOp, BinaryOp};
+    let decl = ctx.body.local_decls.get(local.0)?;
+    let is_host = decl.device_handle.is_none()
+        && !ctx.body.env_capture_locals.contains(&local)
+        && !ctx.body.is_gpu();
+    if decl.ty.kind != TypeKind::String || !is_host {
+        return None;
+    }
+    let pieces = match op {
+        AssignmentOp::AssignAdd => vec![rhs],
+        AssignmentOp::Assign => {
+            // `s + a + b` is `(s + a) + b`: walk down the left operands to `s`.
+            let mut pieces = Vec::new();
+            let mut current = rhs;
+            loop {
+                if let ExpressionKind::Binary(left, BinaryOp::Add, right) = &current.node {
+                    pieces.push(right.as_ref());
+                    current = left.as_ref();
+                    continue;
+                }
+                let reaches_target = matches!(
+                    &current.node,
+                    ExpressionKind::Identifier(n, _) if n.as_str() == name
+                );
+                if !reaches_target || pieces.is_empty() {
+                    return None;
+                }
+                break;
+            }
+            pieces.reverse();
+            pieces
+        }
+        AssignmentOp::AssignSub
+        | AssignmentOp::AssignMul
+        | AssignmentOp::AssignDiv
+        | AssignmentOp::AssignMod => return None,
+    };
+    let is_string = |piece: &&Expression| {
+        ctx.recorded_type(piece.id)
+            .is_some_and(|ty| ty.kind == TypeKind::String)
+    };
+    pieces.iter().all(is_string).then_some(pieces)
+}
+
+/// Lowers `s = s + t + …` and `s += t` on the string local `local` to one
+/// append per piece, each taking over `local`'s reference and handing back the
+/// result, written back into `local`: the runtime extends a string nothing
+/// else holds in place, and copies a shared one.
+fn lower_string_append(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    pieces: &[&Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    for piece in pieces {
+        append_piece(ctx, local, piece, expr.span)?;
+    }
+    let value = Operand::Copy(Place::new(local));
+    finalize_assign_result(ctx, value, dest, expr, watermark)
+}
+
+/// Appends the string `appended` evaluates to onto the string `local` holds.
+fn append_piece(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    appended: &Expression,
+    expr_span: crate::error::syntax::Span,
+) -> Result<(), LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let piece = lower_expression(ctx, appended, None)?;
+    let piece = ensure_place(ctx, piece, expr_span);
+    let result = ctx.push_temp(Type::new(TypeKind::String, expr_span), expr_span);
+    let target = ctx.new_basic_block();
+    ctx.set_terminator(crate::mir::Terminator::new(
+        crate::mir::TerminatorKind::Call {
+            func: Operand::runtime(crate::runtime_fns::rt::STRING_APPEND, expr_span),
+            args: vec![
+                Operand::Move(Place::new(local)),
+                Operand::Copy(piece.clone()),
+            ],
+            arg_modes: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(result),
+            target: Some(target),
+        },
+        expr_span,
+    ));
+    ctx.set_current_block(target);
+    // `Assign`, not `Reassign`: the call took over what `local` held.
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(local),
+            Rvalue::Use(Operand::Move(Place::new(result))),
+        ),
+        span: expr_span,
+    });
+    ctx.emit_temp_drop(piece.local, watermark, expr_span);
+    Ok(())
 }
 
 fn assign_to_var_simple(

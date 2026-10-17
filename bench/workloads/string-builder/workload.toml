@@ -14,11 +14,6 @@ parameter = "How many pieces are appended."
 # a calibration run on the publication profile, so they are provisional.
 provisional = true
 
-# A port that cannot run yet, and why. The identity gate skips it with this
-# reason; it stays listed so the gap is published rather than dropped.
-[blocked]
-miri = "appending to a string copies all of it, so building one piece by piece is quadratic and the port would run for minutes even at size S"
-
 [sizes.s]
 parameter = 400000
 checksum = "4221690 992338580"

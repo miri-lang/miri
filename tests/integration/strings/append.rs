@@ -1,0 +1,135 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+//! `s = s + t` and `s += t` append into the string a local holds when nothing
+//! else holds it, instead of copying all of it into a new one.
+
+use super::utils::{assert_runs_untracked, assert_runs_with_output};
+
+/// The raw allocations a program makes, as `MIRI_ALLOC_COUNT` reports them.
+fn raw_allocations(code: &str) -> usize {
+    let result = crate::utils::miri_run_with_env(code, "MIRI_ALLOC_COUNT", "1");
+    assert!(result.success, "{}", result.output());
+    let line = result
+        .stderr
+        .lines()
+        .find(|line| line.starts_with("MIRI_ALLOC_COUNT:"))
+        .unwrap_or_else(|| panic!("no allocation count in:\n{}", result.stderr));
+    line.split("raw=")
+        .nth(1)
+        .and_then(|rest| rest.split([' ', ')']).next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or_else(|| panic!("no raw count in: {line}"))
+}
+
+fn builder(pieces: usize, append: &str) -> String {
+    format!(
+        "use system.io\n\nfn main()\n    var s = \"\"\n    var i = 0\n    while i < {pieces}\n        {append}\n        i = i + 1\n    println(f\"{{s.length()}}\")\n"
+    )
+}
+
+/// Building a string piece by piece grows its buffer by doubling, so twice the
+/// pieces cost one more allocation or so, not twice as many.
+#[test]
+fn test_appending_to_an_unshared_string_allocates_logarithmically() {
+    for append in ["s += \"ab\"", "s = s + \"ab\""] {
+        let few = raw_allocations(&builder(2000, append));
+        let many = raw_allocations(&builder(4000, append));
+        assert!(
+            many <= few + 2,
+            "`{append}`: 2000 pieces allocated {few} times, 4000 allocated {many}"
+        );
+    }
+}
+
+#[test]
+fn test_appending_leaves_another_holder_of_the_string_unchanged() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var s = "a"
+    s += "b"
+    let kept = s
+    s += "c"
+    s = s + "d"
+    println(f"{s} {kept}")
+"#,
+        "abcd ab",
+    );
+}
+
+#[test]
+fn test_a_string_appended_to_itself_doubles() {
+    assert_runs_untracked(
+        r#"
+use system.io
+
+fn main()
+    var s = "xy"
+    s += "z"
+    s = s + s
+    s += s
+    println(f"{s} {s.length()}")
+"#,
+        "xyzxyzxyzxyz 12",
+    );
+}
+
+#[test]
+fn test_a_long_build_keeps_every_piece_in_order() {
+    assert_runs_untracked(
+        r#"
+use system.io
+
+fn main()
+    var s = ""
+    var i = 0
+    while i < 1000
+        s += f"{i % 10}"
+        i = i + 1
+    println(f"{s.length()} {s.substring(0, 12)} {s.substring(990, 1000)}")
+"#,
+        "1000 012345678901 0123456789",
+    );
+}
+
+#[test]
+fn test_appending_to_a_string_literal_copies_the_literal() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn greet() String
+    var s = "hello"
+    s += ", world"
+    return s
+
+fn main()
+    println(greet())
+    println(greet())
+"#,
+        "hello, world\nhello, world",
+    );
+}
+
+#[test]
+fn test_a_chain_of_pieces_appends_each_in_order() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn label(n int) String: f"<{n}>"
+
+fn main()
+    var s = "["
+    var i = 0
+    while i < 3
+        s = s + label(i) + "," + s.substring(0, 1)
+        i = i + 1
+    println(s)
+"#,
+        "[<0>,[<1>,[<2>,[",
+    );
+}

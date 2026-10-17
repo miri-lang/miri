@@ -60,6 +60,81 @@ pub unsafe extern "C" fn miri_rt_string_concat(
     })
 }
 
+/// Appends `right` to `left` and returns the result, taking over the caller's
+/// reference to `left`: what `s = s + t` and `s += t` compile to.
+///
+/// A `left` nothing else holds is extended in place, into spare capacity that
+/// grows by doubling, so building a string piece by piece costs amortised
+/// constant time per byte. A `left` something else holds — shared, or an
+/// immortal literal — is left unchanged: the result is a new string, and the
+/// caller's reference to `left` is released. `right` is only read, and may be
+/// `left` itself.
+///
+/// # Safety
+/// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
+/// - The caller must own the reference to `left` it passes; it no longer does
+///   after the call.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_append(
+    left: *mut MiriString,
+    right: *const MiriString,
+) -> *mut MiriString {
+    guard::guard_check(left as *mut u8);
+    guard::guard_check(right as *mut u8);
+    if left.is_null() {
+        return miri_rt_string_concat(left, right);
+    }
+    let count = (left as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+    if *count as isize != 1 {
+        let joined = miri_rt_string_concat(left, right);
+        if *count as isize > 1 {
+            *count -= 1;
+        }
+        return joined;
+    }
+    let right_len = if right.is_null() { 0 } else { (*right).len };
+    if right_len == 0 {
+        return left;
+    }
+    let string = &mut *left;
+    let Some(total) = string.len.checked_add(right_len) else {
+        return left;
+    };
+    if total > string.capacity && !grow(string, total) {
+        return left;
+    }
+    // A `right` that is `left` itself reads from the buffer just grown.
+    let source = if std::ptr::eq(right, left) {
+        string.data
+    } else {
+        (*right).data
+    };
+    std::ptr::copy_nonoverlapping(source, string.data.add(string.len), right_len);
+    string.len = total;
+    super::char_index::forget(string);
+    left
+}
+
+/// Grows the buffer of `string` to hold at least `needed` bytes, doubling its
+/// capacity so repeated appends are amortised. Returns false, leaving the
+/// string as it was, when the memory cannot be had.
+unsafe fn grow(string: &mut MiriString, needed: usize) -> bool {
+    let doubled = string.capacity.saturating_mul(2);
+    let capacity = needed.max(doubled).max(16);
+    let data = if string.data.is_null() || string.capacity == 0 {
+        crate::alloc::miri_alloc(capacity, 1)
+    } else {
+        crate::alloc::miri_realloc(string.data, string.capacity, 1, capacity)
+    };
+    if data.is_null() {
+        return false;
+    }
+    string.data = data;
+    string.capacity = capacity;
+    true
+}
+
 /// Converts a string to lowercase (Unicode-aware).
 ///
 /// # Safety

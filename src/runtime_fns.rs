@@ -255,6 +255,9 @@ pub mod rt {
     pub const STRING_CHAR_COUNT: &str = "miri_rt_string_char_count";
     pub const STRING_IS_EMPTY: &str = "miri_rt_string_is_empty";
     pub const STRING_CONCAT: &str = "miri_rt_string_concat";
+    /// Compiler-internal: `s = s + t` and `s += t` on a string a local holds,
+    /// not in stdlib. Takes over the reference to `s` it is passed.
+    pub const STRING_APPEND: &str = "miri_rt_string_append";
     pub const STRING_CLONE: &str = "miri_rt_string_clone";
     pub const STRING_EQUALS: &str = "miri_rt_string_equals";
     pub const STRING_HASH: &str = "miri_rt_string_hash";
@@ -535,6 +538,7 @@ pub mod rt {
         STRING_CHAR_COUNT,
         STRING_IS_EMPTY,
         STRING_CONCAT,
+        STRING_APPEND,
         STRING_CLONE,
         STRING_EQUALS,
         STRING_HASH,
@@ -633,7 +637,7 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
         rt::LIST_PUSH | rt::SET_ADD => &[1],
         rt::LIST_INSERT => &[2],
         rt::MAP_SET => &[1, 2],
-        rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW => &[0],
+        rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW | rt::STRING_APPEND => &[0],
         _ => &[],
     }
 }
