@@ -2066,7 +2066,7 @@ impl<'a> BodyEmitter<'a> {
             | crate::mir::AggregateKind::Set
             | crate::mir::AggregateKind::Map
             | crate::mir::AggregateKind::Enum(_, _)
-            | crate::mir::AggregateKind::Option
+            | crate::mir::AggregateKind::Option(_)
             | crate::mir::AggregateKind::Closure(_, _) => Err(CodegenError::Internal(format!(
                 "WGSL backend: rvalue aggregate kind {:?} not yet supported",
                 kind

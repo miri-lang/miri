@@ -88,6 +88,7 @@ fn try_lower_option_some(
     let arg_watermark = ctx.body.local_decls.len();
     let inner_val = lower_expression(ctx, &args[0], None)?;
     let inner_val = widen_some_payload(ctx, inner_val, &args[0], expr);
+    let optional = some_optional_type(ctx, &args[0], expr);
     let target = if let Some(d) = dest {
         d
     } else {
@@ -97,7 +98,7 @@ fn try_lower_option_some(
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             target.clone(),
-            Rvalue::Aggregate(AggregateKind::Option, vec![inner_val.clone()]),
+            Rvalue::Aggregate(AggregateKind::Option(optional), vec![inner_val.clone()]),
         ),
         span: expr.span,
     });
@@ -105,6 +106,25 @@ fn try_lower_option_some(
         ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
     }
     Ok(Some(Operand::Copy(target)))
+}
+
+/// The optional `some_expr` builds, at the instantiation being lowered.
+///
+/// The type checker records it on the `Some(..)` expression itself, so it holds
+/// wherever the value is written — a field of `self` as much as a local. Where
+/// nothing is recorded, the optional is the one wrapping the payload `arg`.
+fn some_optional_type(ctx: &LoweringContext, arg: &Expression, some_expr: &Expression) -> Type {
+    let recorded = ctx
+        .recorded_type(some_expr.id)
+        .map(|ty| crate::mir::lowering::variable::canonical_declared_type(ctx.type_checker, &ty))
+        .filter(|ty| matches!(ty.kind, TypeKind::Option(_)));
+    if let Some(optional) = recorded {
+        return optional;
+    }
+    let payload = ctx
+        .recorded_type(arg.id)
+        .unwrap_or_else(|| resolve_type(ctx.type_checker, arg));
+    Type::new(TypeKind::Option(Box::new(payload)), some_expr.span)
 }
 
 /// A number handed to `Some` where a wider optional is declared

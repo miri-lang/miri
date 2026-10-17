@@ -727,7 +727,10 @@ pub fn coerce_rvalue_in(
 /// reached through [`coerce_rvalue_in`].
 pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue {
     if coercion_wraps_in_some(op_ty, target_ty) {
-        crate::mir::Rvalue::Aggregate(crate::mir::AggregateKind::Option, vec![operand])
+        crate::mir::Rvalue::Aggregate(
+            crate::mir::AggregateKind::Option(target_ty.clone()),
+            vec![operand],
+        )
     } else {
         crate::mir::Rvalue::Cast(Box::new(operand), target_ty.clone())
     }

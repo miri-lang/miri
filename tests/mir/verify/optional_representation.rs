@@ -189,9 +189,39 @@ fn cast_between_optionals_of_different_layouts_is_flagged() {
 fn aggregate_slot_of_a_different_optional_layout_is_flagged() {
     let mut kinds = meeting_kinds();
     kinds.push(optional(optional(node())));
-    let wrap = Rvalue::Aggregate(AggregateKind::Option, vec![copy(1)]);
+    let wrap = Rvalue::Aggregate(
+        AggregateKind::Option(ty(optional(optional(node())))),
+        vec![copy(1)],
+    );
     let body = body_of(&kinds, 0, vec![ret_block(vec![assign(place(4), wrap)])]);
     assert_flagged(&body, &["_4", "T?", "Node?"]);
+}
+
+#[test]
+fn some_built_at_a_different_optional_layout_than_its_destination_is_flagged() {
+    // `Some(node)` says it builds a `Node??` but is written into a `Node?`.
+    let wrap = Rvalue::Aggregate(
+        AggregateKind::Option(ty(optional(optional(node())))),
+        vec![copy(3)],
+    );
+    let body = body_of(
+        &meeting_kinds(),
+        0,
+        vec![ret_block(vec![assign(place(2), wrap)])],
+    );
+    assert_flagged(&body, &["a `Some` built as a Node??", "into `_2` at Node?"]);
+}
+
+#[test]
+fn some_built_at_its_destination_type_meets_cleanly() {
+    let mut kinds = meeting_kinds();
+    kinds.push(optional(optional(node())));
+    let wrap = Rvalue::Aggregate(
+        AggregateKind::Option(ty(optional(optional(node())))),
+        vec![copy(2)],
+    );
+    let body = body_of(&kinds, 0, vec![ret_block(vec![assign(place(4), wrap)])]);
+    assert_clean(&body);
 }
 
 #[test]
@@ -271,7 +301,10 @@ fn optionals_sharing_a_layout_meet_cleanly() {
         assign(place(5), Rvalue::Use(Operand::Copy(payload(3)))),
         assign(
             place(4),
-            Rvalue::Aggregate(AggregateKind::Option, vec![copy(3)]),
+            Rvalue::Aggregate(
+                AggregateKind::Option(ty(optional(optional(node())))),
+                vec![copy(3)],
+            ),
         ),
     ];
     let body = body_of(&kinds, 0, vec![ret_block(statements)]);

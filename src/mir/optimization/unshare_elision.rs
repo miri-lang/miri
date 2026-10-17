@@ -369,7 +369,7 @@ fn is_struct(kind: &AggregateKind) -> bool {
         | AggregateKind::Set
         | AggregateKind::Map
         | AggregateKind::Enum(..)
-        | AggregateKind::Option
+        | AggregateKind::Option(_)
         | AggregateKind::Closure(..) => false,
     }
 }

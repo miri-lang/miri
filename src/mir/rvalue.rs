@@ -34,8 +34,13 @@ pub enum AggregateKind {
     /// Uses `Rc<str>` to avoid repeated string cloning during lowering.
     /// First operand is the discriminant, followed by associated values.
     Enum(Rc<str>, Rc<str>),
-    /// An Option value, `Some(val)`. It is heap-allocated for correct representation.
-    Option,
+    /// An Option value, `Some(val)`. The `Type` is the optional being built —
+    /// the `T?` itself, never its payload — after the instantiation's
+    /// substitution, so a `Some` written into a field or element is described
+    /// by its own type rather than by the local the place is rooted at.
+    /// [`crate::mir::option_layout`] decides from it how each layer is laid
+    /// out; today every layer is a heap box holding the payload.
+    Option(Type),
     /// A closure allocation. The `Symbol` names the body the closure calls.
     /// The `Type` is the lambda's function type (used to build fn_ptr signature in codegen).
     /// Operands are captured values in slot order.
@@ -156,7 +161,7 @@ fn write_aggregate(
             write_comma_separated(f, ops)?;
             write!(f, ")")
         }
-        AggregateKind::Option => {
+        AggregateKind::Option(_) => {
             write!(f, "Some(")?;
             write_comma_separated(f, ops)?;
             write!(f, ")")

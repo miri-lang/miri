@@ -467,7 +467,7 @@ impl<'a> FunctionTranslator<'a> {
             | AggregateKind::Class(_)
             | AggregateKind::FormattedString
             | AggregateKind::Enum(_, _)
-            | AggregateKind::Option
+            | AggregateKind::Option(_)
             | AggregateKind::Closure(_, _) => Err(CodegenError::Internal(format!(
                 "internal codegen error: non-collection AggregateKind {:?} reached collection branch",
                 kind
@@ -736,7 +736,7 @@ impl<'a> FunctionTranslator<'a> {
                 | AggregateKind::Class(_)
                 | AggregateKind::Enum(_, _)
                 | AggregateKind::Tuple
-                | AggregateKind::Option
+                | AggregateKind::Option(_)
         );
         if operands.len() == 1 && !needs_pointer_layout {
             return Self::translate_operand(builder, ctx, &operands[0], locals, type_ctx, None);
@@ -813,7 +813,7 @@ impl<'a> FunctionTranslator<'a> {
             translated,
             tuple_header,
             is_tuple,
-            matches!(kind, AggregateKind::Option),
+            matches!(kind, AggregateKind::Option(_)),
             ptr_size,
         )
     }
@@ -882,7 +882,7 @@ impl<'a> FunctionTranslator<'a> {
         };
         // An enum's field 0 is its discriminant; an Option carries no
         // discriminant field, so its payload starts at field 0.
-        let first_payload = usize::from(!matches!(kind, AggregateKind::Option));
+        let first_payload = usize::from(!matches!(kind, AggregateKind::Option(_)));
         translated
             .into_iter()
             .enumerate()
@@ -1019,13 +1019,14 @@ impl<'a> FunctionTranslator<'a> {
                         .collect(),
                 )
             }
-            AggregateKind::Option => expected_ty.and_then(|ty| {
-                if let TypeKind::Option(inner) = &ty.kind {
-                    Some(vec![Some((**inner).clone())])
-                } else {
-                    None
-                }
-            }),
+            // The optional the aggregate builds names its payload, whatever
+            // place — a local, a field, an element — the value is written to.
+            AggregateKind::Option(optional) => {
+                let TypeKind::Option(payload) = &optional.kind else {
+                    return None;
+                };
+                Some(vec![Some(payload.as_ref().clone())])
+            }
             AggregateKind::Tuple
             | AggregateKind::Struct(_)
             | AggregateKind::Class(_)

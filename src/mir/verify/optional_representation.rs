@@ -144,14 +144,15 @@ impl<'a> Layouts<'a> {
                 let Some(target) = target else {
                     return Vec::new();
                 };
-                operands
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(slot, operand)| {
-                        let slot_ty = self.aggregate_slot(kind, target, slot)?;
-                        self.meeting_violation(dest, operand, slot_ty, "aggregate slot")
-                    })
-                    .collect()
+                let mut violations: Vec<VerificationViolation> = self
+                    .built_type_violation(dest, kind, target)
+                    .into_iter()
+                    .collect();
+                violations.extend(operands.iter().enumerate().filter_map(|(slot, operand)| {
+                    let slot_ty = self.aggregate_slot(kind, target, slot)?;
+                    self.meeting_violation(dest, operand, slot_ty, "aggregate slot")
+                }));
+                violations
             }
             Rvalue::Ref(place) => self
                 .payload_slot_violation(place, "a reference to")
@@ -185,6 +186,30 @@ impl<'a> Layouts<'a> {
                 "a {what} writes `{operand}`, a {} laid out as {source_layout}, into `{dest}` at \
                  {}, laid out as {target_layout}, so the two optionals are not one value",
                 source.kind, target.kind
+            ),
+        })
+    }
+
+    /// The violation a `Some(..)` aggregate raises when the optional it says it
+    /// builds is laid out apart from the `target` type of `dest`, the place it
+    /// is written to.
+    fn built_type_violation(
+        &self,
+        dest: &Place,
+        kind: &AggregateKind,
+        target: &Type,
+    ) -> Option<VerificationViolation> {
+        let AggregateKind::Option(built) = kind else {
+            return None;
+        };
+        let (built_layout, target_layout) = self.disagreement(built, target)?;
+        Some(VerificationViolation {
+            local: dest.local,
+            local_name: local_display_name(self.body, dest.local),
+            message: format!(
+                "a `Some` built as a {}, laid out as {built_layout}, is written into `{dest}` at \
+                 {}, laid out as {target_layout}, so the two optionals are not one value",
+                built.kind, target.kind
             ),
         })
     }
@@ -377,7 +402,7 @@ impl<'a> Layouts<'a> {
         slot: usize,
     ) -> Option<&'a Type> {
         match kind {
-            AggregateKind::Option
+            AggregateKind::Option(_)
             | AggregateKind::Tuple
             | AggregateKind::Struct(_)
             | AggregateKind::Class(_) => self.field_type(target, slot),

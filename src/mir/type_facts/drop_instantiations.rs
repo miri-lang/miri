@@ -241,7 +241,7 @@ fn constructed_type(rvalue: &Rvalue) -> Option<&Type> {
         | AggregateKind::Set
         | AggregateKind::Map
         | AggregateKind::Enum(_, _)
-        | AggregateKind::Option
+        | AggregateKind::Option(_)
         | AggregateKind::Closure(_, _) => None,
     }
 }
