@@ -858,7 +858,10 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         let scope = type_ctx.layout_scope();
         let Some(layout) = aggregate_layout(&built.kind, scope, type_ctx.ptr_type) else {
-            return Self::open_parameter_payload(builder, built, translated, type_ctx);
+            return Err(CodegenError::Internal(format!(
+                "an aggregate building `{}` has no struct or tuple layout",
+                built.kind
+            )));
         };
         if layout.fields.len() != translated.len() {
             return Err(CodegenError::Internal(format!(
@@ -876,35 +879,6 @@ impl<'a> FunctionTranslator<'a> {
             })
             .collect::<Result<_, _>>()?;
         Ok((offsets, layout.size))
-    }
-
-    /// The payload of a struct copy built at a type the body leaves open.
-    ///
-    /// No declaration lays such a value out, and nothing reads it as a struct:
-    /// every field read of an open parameter is a word. It arises only where
-    /// lowering takes a parameter for the program's struct of the same name.
-    /// TODO: `value_aggregate_fields` in `mir/lowering/expression/value_copy.rs`
-    /// resolves a body's type parameter by name against the program's types,
-    /// so a shared `Map<K, V>` body in a program declaring `struct V` copies
-    /// its `V` value as that struct. Once it skips open parameters this path
-    /// is unreachable and should refuse instead.
-    fn open_parameter_payload(
-        builder: &FunctionBuilder,
-        built: &crate::ast::types::Type,
-        translated: &[Value],
-        type_ctx: &TypeCtx,
-    ) -> Result<(Vec<u32>, u32), CodegenError> {
-        let is_open_parameter = matches!(
-            &built.kind,
-            TypeKind::Custom(name, None) if type_ctx.layout_scope().is_parameter(name)
-        );
-        if !is_open_parameter {
-            return Err(CodegenError::Internal(format!(
-                "an aggregate building `{}` has no struct or tuple layout",
-                built.kind
-            )));
-        }
-        Self::compute_aggregate_layout(builder, translated, false, type_ctx.ptr_type.bytes())
     }
 
     /// Where a struct or tuple field declared at `field_ty` is stored, after

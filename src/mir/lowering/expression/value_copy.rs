@@ -147,11 +147,16 @@ pub(crate) fn copy_value_aggregate(
 ///
 /// Classes are excluded because they carry reference semantics by design, and a
 /// struct with a managed field is excluded because it is reference counted, so
-/// two names for it share one object on purpose.
+/// two names for it share one object on purpose. A bare name the body leaves
+/// open as a type parameter is that parameter, never the program's struct of
+/// the same name.
 fn value_aggregate_fields(ctx: &LoweringContext, ty: &Type) -> Option<Vec<Type>> {
-    let TypeKind::Custom(name, _) = &ty.kind else {
+    let TypeKind::Custom(name, args) = &ty.kind else {
         return None;
     };
+    if args.is_none() && ctx.body.type_params.contains(name.as_str()) {
+        return None;
+    }
     if !ctx.is_type_auto_copy(ty) {
         return None;
     }

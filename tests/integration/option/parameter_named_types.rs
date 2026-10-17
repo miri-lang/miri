@@ -59,3 +59,32 @@ fn main()
         "3 2",
     );
 }
+
+#[test]
+fn structs_named_like_collection_parameters_compile_and_run() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.map
+
+struct T
+    x int
+
+struct K
+    y int
+
+fn main()
+    var xs = List<int>()
+    xs.push(3)
+    xs.push(4)
+    var m = Map<int, int>()
+    m[1] = 10
+    let t = T(x: 1)
+    let k = K(y: 2)
+    let got = m.get(1) ?? 0
+    println(f"{t.x} {k.y} {xs.length()} {got}")
+"#,
+        "1 2 2 10",
+    );
+}
