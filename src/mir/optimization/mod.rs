@@ -44,6 +44,7 @@
 pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
+pub mod index_numbering;
 pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
@@ -202,6 +203,10 @@ pub fn elide_rc(body: &mut Body) {
 /// Remove each uniqueness check a write path repeats after an earlier check or
 /// a fresh value has already settled that nothing else holds the place.
 ///
+/// Computed indices holding one value are first named alike
+/// ([`index_numbering::number_indices`]), so two writes through `l[i + 1]`
+/// reach one place.
+///
 /// Must be called after [`elide_rc`], on bodies whose reference counting is
 /// explicit, so every retain that could share a place again is visible.
 /// A body that runs on a GPU is left alone; it never checks.
@@ -213,5 +218,6 @@ pub fn elide_unshare_checks(body: &mut Body) {
     if runs_on_a_gpu(body) {
         return;
     }
+    index_numbering::number_indices(body);
     UnshareElision.run(body);
 }

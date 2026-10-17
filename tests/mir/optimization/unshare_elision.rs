@@ -295,6 +295,84 @@ fn touch(start [Cell], j int) [Cell]
 }
 
 #[test]
+fn test_writes_through_one_computed_index_check_the_element_once() {
+    // Each write computes `i + 1` into a temp of its own; the two temps hold
+    // one value, so the second write reaches the element the first checked.
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], i int) [Cell]
+    var l = start
+    l[i + 1].x = 1
+    l[i + 1].name = "y"
+    l
+"#,
+    );
+    assert_eq!(checks_in(&source, ".touch"), 2);
+}
+
+#[test]
+fn test_changing_a_computed_index_between_writes_keeps_the_element_check() {
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], j int) [Cell]
+    var l = start
+    var i = j
+    l[i + 1].x = 1
+    i = j + 1
+    l[i + 1].x = 2
+    l
+"#,
+    );
+    assert_eq!(checks_in(&source, ".touch"), 3);
+}
+
+#[test]
+fn test_a_computed_index_in_a_loop_is_checked_once_per_iteration() {
+    // Within an iteration the second write reaches the element the first
+    // checked; the index changes every iteration, so the element check stays
+    // in the loop, beside the check of the list.
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], n int) [Cell]
+    var l = start
+    var i = 0
+    while i < n
+        l[i + 1].x = i
+        l[i + 1].x = i + 1
+        i = i + 1
+    l
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(reachable_checks(&body), 2);
+}
+
+#[test]
+fn test_writes_through_one_computed_index_keep_value_semantics() {
+    crate::integration::utils::assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+struct Cell
+    x int
+    y int
+
+fn main()
+    var l = List([Cell(x: 0, y: 0), Cell(x: 0, y: 0), Cell(x: 0, y: 0)])
+    let kept = l
+    var i = 0
+    l[i + 1].x = 1
+    l[i + 1].y = 2
+    i = 1
+    l[i + 1].x = 3
+    println(f"{kept[1].x} {kept[1].y} {l[1].x} {l[1].y} {l[2].x} {l[2].y}")
+"#,
+        "0 0 1 2 3 0",
+    );
+}
+
+#[test]
 fn test_passing_the_list_to_a_call_between_writes_keeps_every_check() {
     let source = with_cell(
         r#"

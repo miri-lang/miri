@@ -4,6 +4,7 @@
 pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
+pub mod index_numbering;
 pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
