@@ -27,11 +27,14 @@ use miri::type_checker::ModuleId;
 const SOURCE: &str = "
 trait Op<T>
     fn keep(a T, b T) T
+    fn find(a T) T?
     fn size() int
 
 class Impl<T> implements Op<T>
     fn keep(a T, b T) T
         return b
+    fn find(a T) T?
+        return Some(a)
     fn size() int
         return 1
 
@@ -43,6 +46,8 @@ class Wrap<T>
 class Buf<T, Size> implements Op<T>
     fn keep(a T, b T) T
         return b
+    fn find(a T) T?
+        return Some(a)
     fn size() int
         return 1
 ";
@@ -581,5 +586,50 @@ fn an_instance_built_from_a_root_is_compiled_for_its_own_arguments() {
     assert_eq!(
         link_names(&demand.take_named_slot_symbols()),
         vec!["miri.Impl$Wrap_int.keep"]
+    );
+}
+
+/// A bare vtable's slot names the body shared by every instantiation, which
+/// lays an optional of the class's parameter out as a box. A caller reaching
+/// that slot through a receiver at a reference type reads the result as the
+/// pointer itself, so filling such a slot is refused rather than miscompiled.
+#[test]
+fn a_bare_vtable_slot_handing_back_an_optional_of_its_parameter_is_refused() {
+    let fixture = Fixture::new();
+    let find = fixture.slot("find");
+    let open_param = TypeKind::Custom("T".to_string(), None);
+    let shared = BodySketch::new()
+        .constructs(impl_at(open_param))
+        .with_parameter("T")
+        .body();
+    let main = BodySketch::new()
+        .dispatches(op_at(TypeKind::String), find)
+        .body();
+    let mut demand = VtableDemand::default();
+    fixture.record(&mut demand, &[(sym("make"), shared), (sym("main"), main)]);
+    let caller = BodySketch::new().calls("make").body();
+    let refusal = fixture
+        .try_record(&mut demand, &[(sym("run"), caller)])
+        .expect_err("a shared body cannot answer an optional of its parameter");
+    let text = refusal.to_string();
+    assert!(text.contains("find"), "{text}");
+    assert!(text.contains("miri.Impl.$vtable"), "{text}");
+}
+
+/// The same slot of an instance spelled at its arguments names the body
+/// compiled for them, which lays the optional out as its callers do.
+#[test]
+fn a_spelled_vtable_slot_handing_back_an_optional_of_its_parameter_is_filled() {
+    let fixture = Fixture::new();
+    let find = fixture.slot("find");
+    let main = BodySketch::new()
+        .constructs(impl_at(TypeKind::String))
+        .dispatches(op_at(TypeKind::String), find)
+        .body();
+    let mut demand = VtableDemand::default();
+    fixture.record(&mut demand, &[(sym("main"), main)]);
+    assert_eq!(
+        link_names(&demand.take_named_slot_symbols()),
+        vec!["miri.Impl$String.find"]
     );
 }

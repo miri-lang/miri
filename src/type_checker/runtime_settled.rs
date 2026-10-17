@@ -47,7 +47,9 @@ use crate::ast::pattern::{MatchBranch, Pattern};
 use crate::ast::statement::VariableDeclaration;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::{Statement, StatementKind};
-use crate::type_checker::context::{ClassDefinition, GenericDefinition, TypeDefinition};
+use crate::type_checker::context::{
+    ClassDefinition, GenericDefinition, MethodInfo, TypeDefinition,
+};
 use crate::type_checker::function_analysis::CalleeKind;
 use crate::type_checker::generics::is_generic_parameter_kind;
 use crate::type_checker::statements::declarations::class_def::method_body;
@@ -145,15 +147,28 @@ fn base_class_settled_methods<'d>(
 /// Whether the method `method_name` of `class_def` takes or returns an
 /// optional whose innermost payload is one of the class's type parameters.
 fn signature_holds_a_parameter_optional(class_def: &ClassDefinition, method_name: &str) -> bool {
-    let Some(method) = class_def.methods.get(method_name) else {
-        return false;
-    };
+    class_def
+        .methods
+        .get(method_name)
+        .is_some_and(|method| hands_a_parameter_optional(method, class_def.generics.as_ref()))
+}
+
+/// Whether `method` takes or returns an optional whose innermost payload is
+/// one of `generics`, the type parameters of the class or trait declaring it.
+///
+/// Such an optional is laid out by what the parameter is instantiated at, so
+/// one body shared by every instantiation cannot hand it to a caller that
+/// knows the argument.
+pub(crate) fn hands_a_parameter_optional(
+    method: &MethodInfo,
+    generics: Option<&Vec<GenericDefinition>>,
+) -> bool {
     method
         .params
         .iter()
         .map(|(_, ty)| ty)
         .chain(std::iter::once(&method.return_type))
-        .any(|ty| is_parameter_optional(&ty.kind, class_def.generics.as_ref()))
+        .any(|ty| is_parameter_optional(&ty.kind, generics))
 }
 
 /// Whether `kind` is an optional, at any depth of nesting, of a parameter

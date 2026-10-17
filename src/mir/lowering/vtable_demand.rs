@@ -41,7 +41,10 @@ use crate::mir::{
     AggregateKind, BasicBlock, BasicBlockData, Body, FunctionConstant, Operand, Place, Rvalue,
     TerminatorKind,
 };
-use crate::type_checker::context::{GenericDefinition, TypeDefinition};
+use crate::type_checker::context::{
+    class_ancestry, trait_lineage, ClassDefinition, GenericDefinition, TypeDefinition,
+};
+use crate::type_checker::runtime_settled::hands_a_parameter_optional;
 use crate::type_checker::TypeChecker;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
@@ -99,6 +102,11 @@ struct ReachedVtable {
     lineage: Lineage,
     /// Each slot the instance gives a body that no reached call reads yet.
     unfilled: BTreeMap<usize, (String, Symbol)>,
+    /// The slots among `unfilled` whose body cannot answer a reached call; see
+    /// [`shared_body_hands_a_parameter_optional`].
+    refused: BTreeSet<usize>,
+    /// Where the body that built the instance builds it.
+    built_at: Span,
     filled: Vec<FilledSlot>,
 }
 
@@ -125,6 +133,8 @@ pub struct VtableDemand {
     newly_named: Vec<Symbol>,
     /// How many reached vtables each class has at value arguments.
     value_instances: HashMap<String, usize>,
+    /// The first slot a reached call reads that its vtable cannot answer.
+    refusal: Option<LoweringError>,
 }
 
 impl VtableDemand {
@@ -205,7 +215,7 @@ impl VtableDemand {
                 self.add_dispatch(dispatch, &mut pending);
             }
         }
-        Ok(())
+        self.refusal.take().map_or(Ok(()), Err)
     }
 
     /// Mark `symbol` as named by a body reached through `lineage`: reach it
@@ -239,7 +249,7 @@ impl VtableDemand {
             return Ok(());
         }
         self.admit(&instance, span, lineage, tables)?;
-        let vtable = ReachedVtable::of(instance, lineage, tables);
+        let vtable = ReachedVtable::of(instance, span, lineage, tables);
         let read: Vec<usize> = self
             .dispatches
             .iter()
@@ -318,6 +328,11 @@ impl VtableDemand {
         let Some((method, target)) = vtable.unfilled.remove(&slot) else {
             return;
         };
+        if vtable.refused.contains(&slot) {
+            let refusal = unanswerable_slot(symbol, &method, vtable.built_at);
+            self.refusal.get_or_insert(refusal);
+            return;
+        }
         let lineage = Some(Rc::new(Step {
             instance: vtable.instance.clone(),
             method: Some(method.clone()),
@@ -337,14 +352,26 @@ impl ReachedVtable {
     /// The vtable `instance` points at, built by a body reached through
     /// `lineage`. Its slots name the bodies compiled for the instance's own
     /// arguments, however it was reached.
-    fn of(instance: VtableInstance, lineage: &Lineage, tables: DemandTables) -> Self {
+    fn of(
+        instance: VtableInstance,
+        built_at: Span,
+        lineage: &Lineage,
+        tables: DemandTables,
+    ) -> Self {
         let type_defs = tables.type_checker.type_definitions();
-        let unfilled = instance
+        let unfilled: BTreeMap<usize, (String, Symbol)> = instance
             .slot_targets(type_defs)
             .into_iter()
             .filter_map(|(method, target)| {
                 Some((tables.layout.slot(method)?, (method.to_string(), target?)))
             })
+            .collect();
+        let refused = unfilled
+            .iter()
+            .filter(|(_, (method, _))| {
+                shared_body_hands_a_parameter_optional(&instance, method, type_defs)
+            })
+            .map(|(slot, _)| *slot)
             .collect();
         let supertypes = supertype_pins(&instance, tables.type_checker);
         Self {
@@ -352,6 +379,8 @@ impl ReachedVtable {
             supertypes,
             lineage: lineage.clone(),
             unfilled,
+            refused,
+            built_at,
             filled: Vec::new(),
         }
     }
@@ -368,6 +397,60 @@ impl ReachedVtable {
             .find(|(name, _)| name == receiver)
             .is_some_and(|(_, pins)| pins_agree(pins, &dispatch.pins))
     }
+}
+
+/// Whether the slot for `method` of `instance`'s vtable names a body shared by
+/// every instantiation that takes or returns an optional of a type parameter.
+///
+/// Only a generic class's bare vtable names such a body: the instance was built
+/// where its arguments have no spelling. The shared body lays that optional out
+/// as a box, while a caller reading the slot through a receiver at a reference
+/// type reads it as the pointer itself.
+fn shared_body_hands_a_parameter_optional(
+    instance: &VtableInstance,
+    method: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    let Some(TypeDefinition::Class(class_def)) = type_defs.get(instance.class()) else {
+        return false;
+    };
+    if !instance.args().is_empty() || class_def.generics.as_ref().is_none_or(Vec::is_empty) {
+        return false;
+    }
+    let chain: Vec<&ClassDefinition> = class_ancestry(instance.class(), type_defs)
+        .map(|(_, class)| class)
+        .collect();
+    let declared_by_a_class = chain.iter().any(|class| {
+        class
+            .methods
+            .get(method)
+            .is_some_and(|info| hands_a_parameter_optional(info, class.generics.as_ref()))
+    });
+    let declared_by_a_trait = chain
+        .iter()
+        .flat_map(|class| class.traits.iter())
+        .flat_map(|trait_name| trait_lineage(type_defs, trait_name))
+        .any(|(_, trait_def)| {
+            trait_def
+                .methods
+                .get(method)
+                .is_some_and(|info| hands_a_parameter_optional(info, trait_def.generics.as_ref()))
+        });
+    declared_by_a_class || declared_by_a_trait
+}
+
+/// The refusal for a reached call reading `method` through the vtable `symbol`,
+/// built at `span`, whose shared body cannot answer it.
+fn unanswerable_slot(symbol: &str, method: &str, span: Span) -> LoweringError {
+    LoweringError::internal(
+        crate::diagnostics::DiagnosticCode::MirValidationFailed,
+        format!(
+            "the vtable `{symbol}` of an instance built where its type arguments have no \
+             spelling would answer `{method}` with the body shared by every instantiation, \
+             which lays an optional of its type parameter out differently from its callers"
+        ),
+        span,
+    )
 }
 
 /// Whether two spellings of one type's arguments can name one instantiation:

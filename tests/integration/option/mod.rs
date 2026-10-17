@@ -11,6 +11,7 @@ pub mod matching;
 pub mod nested;
 pub mod nullable_pointer;
 pub mod nullable_pointer_aliases;
+pub mod nullable_pointer_dispatch;
 pub mod nullable_pointer_flows;
 pub mod optional_arguments;
 pub mod optional_elements;
