@@ -37,8 +37,9 @@ pub fn lower_struct_constructor(
     type_args: Option<&[Expression]>,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Check if this is a vector type (Vec2, Vec3, Vec4, etc.)
-    let is_vec = types::vec_dim(struct_name).is_some();
+    // A compiler-known vector is written with its component; a program's own
+    // struct of the same name is constructed like any other.
+    let is_vec = types::written_vec_dim(struct_name, type_args).is_some();
     let arg_watermark = ctx.body.local_decls.len();
     let (positional_args, mut named_args) = partition_constructor_args(ctx, args)?;
 

@@ -76,6 +76,11 @@ pub enum MirType {
     /// RC management decisions.
     Custom(String),
 
+    /// A compiler-known vector (`Vec2`, `Vec3`, `Vec4`), written with its
+    /// component. A program's own type of the same name, written without one,
+    /// is a [`MirType::Custom`] like any other.
+    Vector(String),
+
     /// A heap-allocated closure (function value with a captured environment).
     /// Closure structs are RC-managed: [malloc_ptr][RC][fn_ptr][cap0][cap1]...
     /// The closure local holds `payload_ptr` (the word past the RC header).
@@ -160,6 +165,9 @@ impl MirType {
                 return Self::from_expr(component);
             }
         }
+        if crate::ast::types::written_vec_dim(name, args).is_some() {
+            return MirType::Vector(name.to_string());
+        }
         let Some(builtin) = BuiltinCollectionKind::from_name(name) else {
             return MirType::Custom(name.to_string());
         };
@@ -186,12 +194,12 @@ impl MirType {
     /// one managed type whose element position holds bytes rather than a
     /// pointer.
     ///
-    /// The name alone decides it, which is sound only because every vector
+    /// Only a vector written with its component is one: a program's own type
+    /// named `Vec3` is an ordinary struct, held behind a pointer. Every vector
     /// that reaches MIR has a component with an inline layout: the type checker
-    /// refuses the rest where they are written (`validate_vector_component`),
-    /// so a vector codegen would have stored as a pointer never gets this far.
+    /// refuses the rest where they are written (`validate_vector_component`).
     pub fn is_inline_vector(&self) -> bool {
-        matches!(self, MirType::Custom(name) if crate::ast::types::vec_dim(name.as_str()).is_some())
+        matches!(self, MirType::Vector(_))
     }
 
     /// Returns `true` if this type requires reference-count management.
@@ -224,7 +232,7 @@ impl MirType {
             // A vector binding holds its own allocation, the same as any other
             // struct — only a vector stored *inside* a collection buffer is
             // inline bytes, and `is_place_managed` excludes that position.
-            MirType::Custom(name) => {
+            MirType::Custom(name) | MirType::Vector(name) => {
                 name != "Self"
                     && !unmanaged_type_names.contains(name.as_str())
                     && !type_params.contains(name.as_str())

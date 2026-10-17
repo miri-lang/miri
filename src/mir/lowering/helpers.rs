@@ -514,7 +514,7 @@ fn payload_layout(payload: &MirType) -> PayloadLayout {
         | MirType::Set(_)
         | MirType::Tuple(_)
         | MirType::Function => PayloadLayout::Pointer,
-        MirType::Custom(_) => PayloadLayout::Named,
+        MirType::Custom(_) | MirType::Vector(_) => PayloadLayout::Named,
         MirType::Void | MirType::Error | MirType::Unknown => PayloadLayout::Absent,
         MirType::Int
         | MirType::I8

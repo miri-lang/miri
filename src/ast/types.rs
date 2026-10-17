@@ -908,7 +908,12 @@ pub fn vec_type_dim(kind: &TypeKind) -> Option<u8> {
     let TypeKind::Custom(name, type_args) = kind else {
         return None;
     };
-    if !names_a_component(type_args.as_deref()) {
+    written_vec_dim(name, type_args.as_deref())
+}
+
+/// [`vec_type_dim`] for a type written as `name` with `type_args`.
+pub fn written_vec_dim(name: &str, type_args: Option<&[Expression]>) -> Option<u8> {
+    if !names_a_component(type_args) {
         return None;
     }
     vec_dim(name)

@@ -813,7 +813,7 @@ pub fn accelerable_binding_kind(kind: &TypeKind) -> Option<AcceleratorBindingKin
         // A fixed-width vector rides as a uniform; every other nominal accelerable
         // type (a `struct`/`class`, an `Array`/`List` in resolved envelope form,
         // an `Atomic` cell) backs a storage buffer.
-        TypeKind::Custom(name, _) if vec_dim(name).is_some() => {
+        TypeKind::Custom(..) if crate::ast::types::vec_type_dim(kind).is_some() => {
             Some(AcceleratorBindingKind::Uniform)
         }
         TypeKind::Custom(..) => Some(AcceleratorBindingKind::Storage),

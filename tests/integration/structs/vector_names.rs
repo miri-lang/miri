@@ -53,3 +53,84 @@ println(f"{dot(Vec2(x: 1, y: 2), Vec2(x: 3, y: 4))}")
         "11",
     );
 }
+
+#[test]
+fn test_a_users_vec3_read_from_a_list_is_counted_like_any_struct() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+struct Vec3
+    x float
+    y float
+    z float
+
+fn first(xs List<Vec3>) Vec3
+    let v = xs[0]
+    v
+
+fn main()
+    var xs = List<Vec3>()
+    xs.push(Vec3(x: 1.0, y: 2.0, z: 3.0))
+    let v = first(xs)
+    let w = List<Vec3>([Vec3(x: 7.0, y: 8.0, z: 9.0)])
+    var total = 0.0
+    for p in w
+        total = total + p.y
+    println(f"{v.x} {v.z} {xs[0].y} {total}")
+"#,
+        "1.0 3.0 2.0 8.0",
+    );
+}
+
+#[test]
+fn test_a_users_vec2_class_in_a_list_is_released_once() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Vec2
+    var x int
+    fn drop()
+        println(f"drop {self.x}")
+
+fn main()
+    var xs = List<Vec2>()
+    xs.push(Vec2(x: 1))
+    xs.push(Vec2(x: 2))
+    let a = xs[0]
+    println(f"got {a.x}")
+"#,
+        "got 1\ndrop 1\ndrop 2",
+    );
+}
+
+#[test]
+fn test_a_users_vec3_is_matched_and_copied_by_value_like_any_struct() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.set
+
+struct Vec3
+    x float
+    y float
+    z float
+
+fn main()
+    var s = Set<Vec3>()
+    s.add(Vec3(x: 1.0, y: 2.0, z: 3.0))
+    s.add(Vec3(x: 1.0, y: 2.0, z: 3.0))
+    s.add(Vec3(x: 4.0, y: 2.0, z: 3.0))
+    var xs = List<Vec3>()
+    xs.push(Vec3(x: 1.0, y: 2.0, z: 3.0))
+    var ys = xs
+    xs[0].x = 9.0
+    println(f"{s.length()} {xs[0].x} {ys[0].x}")
+"#,
+        "2 9.0 1.0",
+    );
+}

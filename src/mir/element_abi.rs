@@ -218,6 +218,7 @@ fn register_scalar(reached: &MirType) -> Option<TypeKind> {
         | MirType::Option(_)
         | MirType::Future(_)
         | MirType::Custom(_)
+        | MirType::Vector(_)
         | MirType::Function
         | MirType::Generic
         | MirType::Unknown => return None,

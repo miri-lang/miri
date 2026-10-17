@@ -369,7 +369,7 @@ fn unsharing(ctx: &LoweringContext, ty: &Type, in_collection: bool) -> Option<Un
     let TypeKind::Custom(name, _) = &ty.kind else {
         return None;
     };
-    if crate::ast::types::vec_dim(name).is_some() {
+    if crate::ast::types::vec_type_dim(&ty.kind).is_some() {
         return None;
     }
     let Some(TypeDefinition::Struct(definition)) =

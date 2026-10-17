@@ -653,7 +653,7 @@ fn project_field(
         MirType::Tuple(elems) => Some((elems.get(index)?.clone(), None)),
         // Custom(struct/class).Field(i) → the declared field type, read at the
         // instance's type arguments.
-        MirType::Custom(name) => {
+        MirType::Custom(name) | MirType::Vector(name) => {
             let declared_field = ctx.field_types.get(name.as_str())?.get(index)?;
             let field_ty = field_type_in_instance(
                 ctx.class_type_params,

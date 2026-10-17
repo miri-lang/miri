@@ -11,7 +11,7 @@
 //! per instantiation, which the container calls as it calls a class's
 //! `equals`.
 
-use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{vec_type_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::monomorphized_arguments;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::type_checker::context::TypeDefinition;
@@ -29,7 +29,7 @@ pub fn synthesized_equality_symbol(
     };
     // A compiler-known vector is stored inline in its slot, whose bytes are
     // its components: matching them is already `==`.
-    if vec_dim(name).is_some() {
+    if vec_type_dim(ty).is_some() {
         return None;
     }
     let generics = match type_defs.get(name.as_str()) {
@@ -75,7 +75,7 @@ pub fn element_hash_symbol(
         ),
         _ => return None,
     };
-    if vec_dim(name).is_some() {
+    if vec_type_dim(ty).is_some() {
         return None;
     }
     let generics = match type_defs.get(name) {
