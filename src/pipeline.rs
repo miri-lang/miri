@@ -2691,8 +2691,9 @@ impl Pipeline {
     /// When `is_verifying`, also check across the program that every call
     /// passes an owned argument exactly where its callee takes one over, and
     /// hands each optional argument and receives each optional result at the
-    /// layout the callee declares; the findings are returned to join the
-    /// per-body checks run after Perceus.
+    /// layout the callee declares, and holds each argument and result as
+    /// bytes exactly where the callee does; the findings are returned to join
+    /// the per-body checks run after Perceus.
     fn decide_owned_parameters(
         result: &PipelineResult,
         lowered: &mut [(Symbol, mir::Body)],
@@ -2710,6 +2711,10 @@ impl Pipeline {
         }
         let mut violations = mir::verify::verify_owned_argument_modes(lowered);
         violations.extend(mir::verify::verify_optional_call_layouts(
+            lowered,
+            type_definitions,
+        ));
+        violations.extend(mir::verify::verify_value_call_classes(
             lowered,
             type_definitions,
         ));
@@ -2996,6 +3001,10 @@ impl Pipeline {
             ));
             violations.extend(mir::verify::verify_cross_residency_readback(body));
             violations.extend(mir::verify::verify_optional_representation(
+                body,
+                result.type_checker.type_definitions(),
+            ));
+            violations.extend(mir::verify::verify_value_representation(
                 body,
                 result.type_checker.type_definitions(),
             ));

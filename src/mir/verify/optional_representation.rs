@@ -102,9 +102,9 @@ fn written_by(kind: &TerminatorKind) -> Option<&Place> {
 }
 
 /// Reads the types and optional layouts of one body's places.
-struct Layouts<'a> {
-    body: &'a Body,
-    definitions: &'a HashMap<String, TypeDefinition>,
+pub(super) struct Layouts<'a> {
+    pub(super) body: &'a Body,
+    pub(super) definitions: &'a HashMap<String, TypeDefinition>,
 }
 
 impl<'a> Layouts<'a> {
@@ -349,7 +349,7 @@ impl<'a> Layouts<'a> {
 
     /// The type `operand` reads, unless it is the absent value, which is null
     /// under every layout.
-    fn operand_type(&self, operand: &'a Operand) -> Option<&'a Type> {
+    pub(super) fn operand_type(&self, operand: &'a Operand) -> Option<&'a Type> {
         match operand {
             Operand::Constant(constant) => {
                 (!matches!(constant.literal, Literal::None)).then_some(&constant.ty)
@@ -362,7 +362,7 @@ impl<'a> Layouts<'a> {
     /// The type of the value at `place`, when its projections can be read from
     /// the body alone: a dereference, an enum payload, a closure capture and a
     /// field of a generic class are not.
-    fn place_type(&self, place: &Place) -> Option<&'a Type> {
+    pub(super) fn place_type(&self, place: &Place) -> Option<&'a Type> {
         let mut current = &self.body.local_decls.get(place.local.0)?.ty;
         for elem in &place.projection {
             current = match elem {
@@ -400,7 +400,7 @@ impl<'a> Layouts<'a> {
 
     /// The type slot `slot` of an aggregate of `kind` holds, built into a
     /// value of `target` type.
-    fn aggregate_slot(
+    pub(super) fn aggregate_slot(
         &self,
         kind: &AggregateKind,
         target: &'a Type,

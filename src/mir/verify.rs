@@ -107,8 +107,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
 mod optional_representation;
+mod value_representation;
 
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
+pub use value_representation::{verify_value_call_classes, verify_value_representation};
 
 /// Largest delta the domain represents; past it a local is reported rather than
 /// followed, which keeps the lattice finite.

@@ -13,6 +13,7 @@
 //! verifier reports nothing at all.
 
 mod optional_representation;
+mod value_representation;
 
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};

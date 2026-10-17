@@ -30,24 +30,59 @@ const BITWISE_VALUE_IS_COUNTED: bool = true;
 ///
 /// A body carries one, shared with every other body lowered from the same
 /// check, and asks it at the body's own type parameters.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RcClassifier {
     definitions: Rc<HashMap<String, TypeDefinition>>,
+    is_bitwise_counted: bool,
+}
+
+impl Default for RcClassifier {
+    fn default() -> Self {
+        Self::new(Rc::default())
+    }
 }
 
 impl RcClassifier {
+    /// A classifier that counts a bitwise value the way every program is
+    /// compiled.
     pub fn new(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
-        Self { definitions }
+        Self {
+            definitions,
+            is_bitwise_counted: BITWISE_VALUE_IS_COUNTED,
+        }
+    }
+
+    /// A classifier that holds every bitwise value as its bytes, uncounted.
+    ///
+    /// No program is compiled this way. It is the representation the
+    /// value-representation verifier guards, and lets a hand-built body be
+    /// checked against it.
+    pub fn with_uncounted_bitwise_values(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
+        Self {
+            definitions,
+            is_bitwise_counted: false,
+        }
     }
 
     /// Whether a value of `kind`, written in a body that leaves `type_params`
     /// open, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind, type_params: &HashSet<String>) -> bool {
         !is_never_counted(kind)
-            && is_counted_class(&value_class(
+            && self.is_counted_class(&value_class(
                 kind,
                 LayoutScope::new(&self.definitions, type_params),
             ))
+    }
+
+    /// Whether a value of class `class` is reference counted.
+    fn is_counted_class(&self, class: &ValueClass) -> bool {
+        match class {
+            ValueClass::Scalar(_) | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => {
+                false
+            }
+            ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
+            ValueClass::Bitwise(_) => self.is_bitwise_counted,
+        }
     }
 }
 
@@ -55,28 +90,19 @@ impl fmt::Debug for RcClassifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RcClassifier")
             .field("definitions", &self.definitions.len())
+            .field("is_bitwise_counted", &self.is_bitwise_counted)
             .finish()
     }
 }
 
-/// Two classifiers are equal when they read one table, or both read an empty
-/// one. Type definitions have no equality of their own, so two copies of one
-/// program's table are told apart.
+/// Two classifiers are equal when they count bitwise values alike and read
+/// one table, or both read an empty one. Type definitions have no equality of
+/// their own, so two copies of one program's table are told apart.
 impl PartialEq for RcClassifier {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.definitions, &other.definitions)
-            || (self.definitions.is_empty() && other.definitions.is_empty())
-    }
-}
-
-/// Whether a value of class `class` is reference counted.
-fn is_counted_class(class: &ValueClass) -> bool {
-    match class {
-        ValueClass::Scalar(_) | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => {
-            false
-        }
-        ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
-        ValueClass::Bitwise(_) => BITWISE_VALUE_IS_COUNTED,
+        self.is_bitwise_counted == other.is_bitwise_counted
+            && (Rc::ptr_eq(&self.definitions, &other.definitions)
+                || (self.definitions.is_empty() && other.definitions.is_empty()))
     }
 }
 
