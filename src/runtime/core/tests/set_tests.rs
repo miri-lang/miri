@@ -519,8 +519,10 @@ fn test_set_cow_shared_copies_and_decrefs() {
     }
 }
 
+/// An immortal set is never handed out for writing: a copy is, and the
+/// original is left alone.
 #[test]
-fn test_set_cow_immortal_returns_same_pointer() {
+fn test_set_cow_immortal_copies_and_leaves_the_original() {
     unsafe {
         let set = miri_rt_set_new(8);
         miri_rt_set_add(set, 1);
@@ -529,11 +531,13 @@ fn test_set_cow_immortal_returns_same_pointer() {
         *rc_ptr = immortal;
 
         let cowed = miri_rt_set_cow(set);
-        assert_eq!(cowed, set, "immortal RC → no copy");
+        assert_ne!(cowed, set, "immortal RC → fresh pointer");
         assert_eq!(*rc_ptr, immortal, "immortal RC unchanged");
+        assert_eq!(miri_rt_set_len(cowed), 1);
 
         *rc_ptr = 1;
         miri_rt_set_free(set);
+        miri_rt_set_free(cowed);
     }
 }
 

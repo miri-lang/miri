@@ -11,7 +11,7 @@ use super::facts::{FactId, Facts};
 use super::places::PlaceTable;
 use super::Check;
 use crate::mir::analysis::traversal::reverse_postorder;
-use crate::mir::{BasicBlock, Body, Terminator};
+use crate::mir::{BasicBlock, Body, Place, Terminator};
 
 /// The part a block plays in a check.
 #[derive(Debug, Clone, Copy)]
@@ -111,16 +111,16 @@ impl<'a> Dataflow<'a> {
         entry
     }
 
-    /// Whether `check`'s place is known unshared just before it is asked.
-    pub(super) fn is_answered(&self, check: &Check, entry: &EntryStates) -> bool {
-        let Some(fact) = self.table.id(&check.place) else {
+    /// Whether `place` is known unshared just before the terminator of
+    /// `block`.
+    pub(super) fn is_known_before(&self, block: usize, place: &Place, entry: &EntryStates) -> bool {
+        let Some(fact) = self.table.id(place) else {
             return false;
         };
-        let Some(mut facts) = entry.get(check.call).cloned().flatten() else {
+        let Some(mut facts) = entry.get(block).cloned().flatten() else {
             return false;
         };
-        self.program
-            .apply_statements(&mut facts, check.call, self.table);
+        self.program.apply_statements(&mut facts, block, self.table);
         facts.contains(fact)
     }
 

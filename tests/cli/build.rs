@@ -821,6 +821,163 @@ fn test_a_released_script_run_names_the_checks_it_cannot_run() {
     assert!(stderr.contains(GUARD_AND_LEAK_IGNORED), "stderr: {stderr}");
 }
 
+const STRIDED_WRITES: &str = r#"
+use system.io
+use system.collections.list
+
+fn mark(n int) int
+    var flags = List<bool>()
+    var i = 0
+    while i < n
+        flags.push(false)
+        i = i + 1
+    var p = 2
+    while p * p < n
+        var m = p * p
+        while m < n
+            flags[m] = true
+            m = m + p
+        p = p + 1
+    var kept = flags
+    kept[0] = true
+    var count = 0
+    i = 0
+    while i < n
+        if not flags[i]
+            count = count + 1
+        i = i + 1
+    count
+
+fn main()
+    println(f"{mark(100)}")
+"#;
+
+/// Builds `STRIDED_WRITES` with `flags`, returning the executable, the blocks
+/// of `miri.mark` that call `miri_rt_list_cow`, and for each the text of every
+/// block that branches or jumps to it.
+fn copy_on_write_callers(
+    flags: &[&str],
+    out_dir: &std::path::Path,
+) -> (std::path::PathBuf, Vec<Vec<String>>, String) {
+    let source = create_test_file(STRIDED_WRITES);
+    let out = out_dir.join("strided");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(flags)
+        .args(["--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.join("strided.clif")).unwrap();
+    let (blocks, names) = clif_function(&listing, "miri.mark");
+    let handle_of = |target: &str| {
+        names
+            .iter()
+            .filter(|(_, name)| **name == target)
+            .map(|(handle, _)| handle.to_string())
+            .collect::<Vec<_>>()
+    };
+    let cow = handle_of("miri_rt_list_cow");
+    let tracking = handle_of("miri_rt_tracking_state");
+    let entered_from = |label: &str| -> Vec<String> {
+        blocks
+            .iter()
+            .filter(|(_, body)| {
+                body.lines().any(|l| {
+                    (l.starts_with("brif") || l.starts_with("jump"))
+                        && l.split([' ', ',', '(']).any(|word| word == label)
+                })
+            })
+            .map(|(_, body)| {
+                // Name the tracking state so a caller can tell its test apart
+                // from the count compare.
+                tracking.iter().fold(body.clone(), |text, gv| {
+                    text.replace(gv.as_str(), "TRACKING")
+                })
+            })
+            .collect()
+    };
+    let callers = blocks
+        .iter()
+        .filter(|(_, body)| cow.iter().any(|f| body.contains(&format!("call {f}("))))
+        .map(|(label, _)| entered_from(label))
+        .collect();
+    (out, callers, listing)
+}
+
+/// Whether `block` compares the count in the word before a payload with 1.
+fn compares_the_count(block: &str) -> bool {
+    let loaded: Vec<&str> = block
+        .lines()
+        .filter(|line| line.contains("= load.i64") && line.ends_with("-8"))
+        .filter_map(|line| line.split(" = ").next())
+        .collect();
+    loaded.iter().any(|count| {
+        block.lines().any(|line| {
+            line.contains("icmp") && line.contains(" ne ") && line.contains(&format!("{count},"))
+        })
+    })
+}
+
+/// A write into a list held by a local reaches the runtime's copy-on-write
+/// entry point only past an inline compare of the list's count with 1: a list
+/// only one binding holds goes straight to the write. The values are
+/// unchanged: the write into `kept` copies, so `flags` keeps its first element
+/// unmarked and counts 27 (0, 1 and the 25 primes below 100) rather than 26.
+#[test]
+fn test_a_list_write_reaches_the_copy_on_write_runtime_only_past_a_count_compare() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let (out, callers, listing) = copy_on_write_callers(&["--release"], out_dir.path());
+    assert!(
+        !callers.is_empty(),
+        "the writes lost their copy-on-write call:\n{listing}"
+    );
+    for entered_from in &callers {
+        assert!(
+            !entered_from.is_empty() && entered_from.iter().all(|block| compares_the_count(block)),
+            "a copy-on-write call is reached without the count compare:\n{listing}"
+        );
+    }
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "27");
+}
+
+/// In a build that keeps the runtime checks, the copy-on-write entry point is
+/// also reached while the runtime is tracking, so the heap guard validates the
+/// list before a write; it is reached from the count compare or from the test
+/// of the tracking state, and from nothing else.
+#[test]
+fn test_a_checked_build_reaches_copy_on_write_while_tracking() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let (out, callers, listing) = copy_on_write_callers(&["--opt-level", "3"], out_dir.path());
+    assert!(
+        !callers.is_empty(),
+        "the writes lost their copy-on-write call:\n{listing}"
+    );
+    for entered_from in &callers {
+        assert!(
+            entered_from.iter().any(|block| block.contains("TRACKING"))
+                && entered_from
+                    .iter()
+                    .all(|block| block.contains("TRACKING") || compares_the_count(block)),
+            "a copy-on-write call is reached past neither test:\n{listing}"
+        );
+    }
+    let run = Command::new(&out)
+        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "27");
+}
+
 const CONSTANT_DIVISOR: &str = r#"
 use system.io
 

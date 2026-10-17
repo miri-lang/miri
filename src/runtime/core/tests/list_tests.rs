@@ -777,8 +777,10 @@ fn test_list_cow_shared_copies_and_decrefs() {
     }
 }
 
+/// An immortal list is shared by every reader for the whole run, so it is
+/// never handed out for writing: a copy is, and the original is left alone.
 #[test]
-fn test_list_cow_immortal_returns_same_pointer() {
+fn test_list_cow_immortal_copies_and_leaves_the_original() {
     unsafe {
         let list = make_i32_list(&[1, 2, 3]);
         let rc_ptr = (list as *mut u8).sub(miri_runtime_core::rc::RC_HEADER_SIZE) as *mut usize;
@@ -787,13 +789,15 @@ fn test_list_cow_immortal_returns_same_pointer() {
         *rc_ptr = immortal;
 
         let cowed = miri_rt_list_cow(list);
-        assert_eq!(cowed, list, "immortal RC → no copy");
+        assert_ne!(cowed, list, "immortal RC → fresh pointer");
         assert_eq!(*rc_ptr, immortal, "immortal RC unchanged");
+        assert_eq!(miri_rt_list_len(cowed), 3);
 
         // Restore RC=1 so test cleanup deallocs without leaving a dangling
         // "second owner" in the allocator balance.
         *rc_ptr = 1;
         miri_rt_list_free(list);
+        miri_rt_list_free(cowed);
     }
 }
 

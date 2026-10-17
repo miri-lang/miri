@@ -5,7 +5,10 @@
 //!
 //! A write through a path first asks, for each value on it and outermost
 //! first, whether anything else holds that value, and copies the value when
-//! something does (`lowering::expression::unshare`). Once a place has been
+//! something does (`lowering::expression::unshare`). A write into a collection
+//! a local holds asks the collection's copy-on-write entry point instead, which
+//! copies it when something else holds it and hands it back unchanged
+//! otherwise (`lowering::method_dispatch::emit_cow_check`). Once a place has been
 //! found unshared, or has just been given a value only it holds, nothing makes
 //! it shared again until the program retains, copies, moves, hands to a call or
 //! replaces what it holds — so a later check on the same place before any of
@@ -14,7 +17,8 @@
 //! A forward must-analysis carries the set of places known to hold a value
 //! nothing else holds. A place enters it on the edge a check takes when the
 //! answer is no, and when it is assigned a struct just built, the result of a
-//! runtime call that allocates ([`returns_unshared`]), or a value moved out of
+//! runtime call that allocates ([`returns_unshared`]) or of a copy-on-write
+//! entry point ([`is_copy_on_write`]), or a value moved out of
 //! a whole local known unshared that nothing else reads — no retain, release,
 //! copy or second move of that local anywhere in the body — so no alias of the
 //! value outlives the move. A place enters only while every place it is
@@ -30,6 +34,9 @@
 //! other elements known unshared stay known, since each is still held by the
 //! collection alone, while everything inside the element replaced is
 //! forgotten.
+//!
+//! A copy-on-write call on a place already known unshared would hand it back
+//! unchanged, so it becomes a move of the place into the call's destination.
 //!
 //! Blocks only a removed check's copy path reached become unreachable; they
 //! are emptied and end in `unreachable`, and no block is renumbered. A
@@ -49,10 +56,10 @@ use crate::mir::optimization::OptimizationPass;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    AggregateKind, BasicBlock, Body, Discriminant, Local, Operand, Place, Rvalue, Terminator,
-    TerminatorKind,
+    AggregateKind, BasicBlock, Body, Discriminant, Local, Operand, Place, Rvalue, Statement,
+    StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{returns_unshared, rt};
+use crate::runtime_fns::{is_copy_on_write, returns_unshared, rt};
 use dataflow::Dataflow;
 use effects::Program;
 use places::PlaceTable;
@@ -80,33 +87,57 @@ struct Check {
     unshared: BasicBlock,
 }
 
+/// A copy-on-write call as lowering emits it: `call` hands `place`, a whole
+/// local, to a collection's copy-on-write entry point, writes what it hands
+/// back into `destination` and continues at `target`.
+struct CopyOnWrite {
+    call: usize,
+    place: Place,
+    destination: Place,
+    target: BasicBlock,
+}
+
+/// What the analysis found already answered.
+#[derive(Default)]
+struct Answers {
+    /// Each check as the block asking and the block its answer "no"
+    /// continues at.
+    checks: Vec<(usize, BasicBlock)>,
+    copy_on_writes: Vec<CopyOnWrite>,
+}
+
 /// Replaces every check whose place is known unshared where it is asked with a
-/// jump to the path its answer takes. Returns true if any check was removed.
+/// jump to the path its answer takes, and every copy-on-write call on such a
+/// place with a move of it. Returns true if anything was removed.
 fn elide_answered_checks(body: &mut Body) -> bool {
     if !asks_whether_shared(body) {
         return false;
     }
-    let answered = answered_checks(body);
-    if answered.is_empty() {
+    let answers = answered(body);
+    if answers.checks.is_empty() && answers.copy_on_writes.is_empty() {
         return false;
     }
     let unreachable_before: HashSet<usize> = body.find_unreachable_blocks().into_iter().collect();
-    for (call, target) in answered {
+    for (call, target) in answers.checks {
         replace_terminator(body, call, TerminatorKind::Goto { target });
+    }
+    for copy in answers.copy_on_writes {
+        replace_with_move(body, copy);
     }
     clear_newly_unreachable(body, &unreachable_before);
     true
 }
 
-/// Whether any block of `body` ends by asking whether a value is shared.
+/// Whether any block of `body` ends by asking whether a value is shared, or
+/// by asking a collection's copy-on-write entry point.
 fn asks_whether_shared(body: &Body) -> bool {
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.as_ref())
         .any(|terminator| match &terminator.kind {
-            TerminatorKind::Call { func, .. } => {
-                func.called_runtime_name() == Some(rt::RC_IS_SHARED)
-            }
+            TerminatorKind::Call { func, .. } => func
+                .called_runtime_name()
+                .is_some_and(|name| name == rt::RC_IS_SHARED || is_copy_on_write(name)),
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::Return
@@ -116,14 +147,18 @@ fn asks_whether_shared(body: &Body) -> bool {
         })
 }
 
-/// Each check whose place is known unshared where it is asked, as the block
-/// asking and the block its answer "no" continues at.
-fn answered_checks(body: &Body) -> Vec<(usize, BasicBlock)> {
+/// Each check and each copy-on-write call whose place is known unshared where
+/// it is asked.
+fn answered(body: &Body) -> Answers {
     let uses = LocalUseCounts::of(body);
     let checks = recognize_checks(body, &uses);
-    let table = PlaceTable::of(body, &checks);
-    if checks.iter().all(|check| table.id(&check.place).is_none()) {
-        return Vec::new();
+    let copy_on_writes = recognize_copy_on_writes(body);
+    let asked: Vec<&Place> = (checks.iter().map(|check| &check.place))
+        .chain(copy_on_writes.iter().map(|copy| &copy.place))
+        .collect();
+    let table = PlaceTable::of(body, &asked);
+    if asked.iter().all(|place| table.id(place).is_none()) {
+        return Answers::default();
     }
     let mut asks = vec![false; body.basic_blocks.len()];
     for check in &checks {
@@ -134,11 +169,70 @@ fn answered_checks(body: &Body) -> Vec<(usize, BasicBlock)> {
     let program = Program::of(body, &table, &uses, &asks);
     let dataflow = Dataflow::new(body, &program, &table, &checks);
     let entry = dataflow.solve(body);
-    checks
-        .iter()
-        .filter(|check| dataflow.is_answered(check, &entry))
-        .map(|check| (check.call, check.unshared))
+    Answers {
+        checks: (checks.iter())
+            .filter(|check| dataflow.is_known_before(check.call, &check.place, &entry))
+            .map(|check| (check.call, check.unshared))
+            .collect(),
+        copy_on_writes: (copy_on_writes.into_iter())
+            .filter(|copy| dataflow.is_known_before(copy.call, &copy.place, &entry))
+            .collect(),
+    }
+}
+
+/// Every copy-on-write call in `body` on a whole local.
+fn recognize_copy_on_writes(body: &Body) -> Vec<CopyOnWrite> {
+    (0..body.basic_blocks.len())
+        .filter_map(|call| recognize_copy_on_write(body, call))
         .collect()
+}
+
+fn recognize_copy_on_write(body: &Body, call: usize) -> Option<CopyOnWrite> {
+    let TerminatorKind::Call {
+        func,
+        args,
+        destination,
+        target: Some(target),
+        arg_modes: _,
+        arg_handles: _,
+    } = &body.basic_blocks.get(call)?.terminator.as_ref()?.kind
+    else {
+        return None;
+    };
+    if !func.called_runtime_name().is_some_and(is_copy_on_write) {
+        return None;
+    }
+    let [Operand::Move(place)] = args.as_slice() else {
+        return None;
+    };
+    place.projection.is_empty().then(|| CopyOnWrite {
+        call,
+        place: place.clone(),
+        destination: destination.clone(),
+        target: *target,
+    })
+}
+
+/// Ends the block of `copy` by moving its place into its destination and
+/// going on where the call would have: the call would have handed the place's
+/// value back unchanged.
+fn replace_with_move(body: &mut Body, copy: CopyOnWrite) {
+    let fallback = body.span;
+    let Some(data) = body.basic_blocks.get_mut(copy.call) else {
+        return;
+    };
+    let span = data.terminator.as_ref().map_or(fallback, |old| old.span);
+    data.statements.push(Statement {
+        kind: StatementKind::Assign(copy.destination, Rvalue::Use(Operand::Move(copy.place))),
+        span,
+    });
+    replace_terminator(
+        body,
+        copy.call,
+        TerminatorKind::Goto {
+            target: copy.target,
+        },
+    );
 }
 
 /// Ends `block` with `kind`, keeping the span of the terminator it replaces.
@@ -276,10 +370,13 @@ fn is_struct(kind: &AggregateKind) -> bool {
     }
 }
 
-/// Whether `func` names a runtime function handing back a block it has just
-/// allocated.
-fn allocates(func: &Operand) -> bool {
-    func.called_runtime_name().is_some_and(returns_unshared)
+/// Whether `func` names a runtime function handing back a value nothing else
+/// holds: a block it has just allocated, or what a copy-on-write entry point
+/// hands back — its argument when its count was 1, and a copy only the caller
+/// holds otherwise, an immortal argument included.
+fn hands_back_unshared(func: &Operand) -> bool {
+    func.called_runtime_name()
+        .is_some_and(|name| returns_unshared(name) || is_copy_on_write(name))
 }
 
 /// How many times each local is written, and — counted only when first asked

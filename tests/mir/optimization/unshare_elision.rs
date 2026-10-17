@@ -98,6 +98,137 @@ fn with_cell(function: &str) -> String {
     format!("{CELL}\n{function}\n\nfn main()\n    println(\"ok\")\n")
 }
 
+/// The copy-on-write calls `body` still reaches.
+fn reachable_copy_on_writes(body: &Body) -> usize {
+    reachable_blocks(body)
+        .filter(|block| calls_runtime(block.terminator.as_ref(), rt::LIST_COW))
+        .count()
+}
+
+#[test]
+fn test_a_second_write_to_a_local_list_does_not_ask_to_copy_it_again() {
+    let source = with_cell(
+        r#"
+fn touch(n int) int
+    var l = List([1, 2, 3])
+    l[0] = n
+    l[1] = n
+    l[2] = n
+    l[0] + l[1] + l[2]
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(reachable_copy_on_writes(&body), 1);
+}
+
+#[test]
+fn test_binding_the_list_between_writes_keeps_its_copy_on_write() {
+    let source = with_cell(
+        r#"
+fn touch(n int) int
+    var l = List([1, 2, 3])
+    l[0] = n
+    let s = l
+    l[1] = n
+    s[1] + l[1]
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(reachable_copy_on_writes(&body), 2);
+}
+
+#[test]
+fn test_a_write_in_a_loop_keeps_its_copy_on_write() {
+    // Every iteration but the first may follow a binding of the list, so the
+    // write in the loop asks each time; the write after the loop, which
+    // nothing between shares, does not ask again.
+    let source = with_cell(
+        r#"
+fn touch(n int) int
+    var l = List([1, 2, 3])
+    l[0] = n
+    var i = 0
+    while i < n
+        l[1] = i
+        let s = l
+        i = i + s[0]
+    l[2] = n
+    l[2] = 0
+    l[0] + l[1]
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(reachable_copy_on_writes(&body), 3);
+}
+
+#[test]
+fn test_a_list_bound_from_a_parameter_asks_to_copy_once() {
+    // The caller may still hold the parameter's list, so the first write
+    // through the local bound to it asks; that answer makes the local's list
+    // its own, so the second write does not ask again.
+    let source = with_cell(
+        r#"
+fn touch(l [int], n int) int
+    var m = l
+    m[0] = n
+    m[1] = n
+    m[0] + m[1]
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(reachable_copy_on_writes(&body), 1);
+}
+
+#[test]
+fn test_writes_into_maps_sets_and_arrays_keep_value_semantics() {
+    crate::integration::utils::assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.map
+use system.collections.set
+
+fn main()
+    var m = {"a": 1}
+    m["b"] = 2
+    let mm = m
+    m["a"] = 3
+    m["c"] = 4
+    var s = {1, 2}
+    s.add(3)
+    let ss = s
+    s.add(4)
+    var a = [1, 2, 3]
+    a[0] = 5
+    let aa = a
+    a[1] = 6
+    a[2] = 7
+    println(f"{mm['a']} {mm.length()} {m['a']} {m.length()} {ss.length()} {s.length()} {aa[1]} {a[1]} {a[2]}")
+"#,
+        "1 2 3 3 3 4 2 6 7",
+    );
+}
+
+#[test]
+fn test_a_write_after_binding_the_list_still_copies_it() {
+    crate::integration::utils::assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List([1, 2, 3])
+    l[0] = 7
+    l[2] = 8
+    let s = l
+    l[1] = 9
+    l[2] = 10
+    println(f"{s[0]} {s[1]} {s[2]} {l[0]} {l[1]} {l[2]}")
+"#,
+        "7 2 8 7 9 10",
+    );
+}
+
 #[test]
 fn test_repeated_writes_to_one_element_check_the_path_once() {
     let source = with_cell(

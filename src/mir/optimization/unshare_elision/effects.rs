@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use super::facts::{FactId, Facts, Mask};
 use super::places::PlaceTable;
-use super::{allocates, fresh_source, FreshSource, LocalUseCounts};
+use super::{fresh_source, hands_back_unshared, FreshSource, LocalUseCounts};
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -235,7 +235,8 @@ impl ProgramBuilder<'_> {
     }
 
     /// A call to `func`: it reads its callee and arguments, and stores its
-    /// result into `destination`, fresh when `func` allocates it.
+    /// result into `destination`, fresh when `func` hands back a value nothing
+    /// else holds.
     fn call(
         &mut self,
         func: &Operand,
@@ -243,7 +244,7 @@ impl ProgramBuilder<'_> {
         arg_modes: &[ArgMode],
         destination: &Place,
     ) -> Option<Effect> {
-        let fresh = if allocates(func) {
+        let fresh = if hands_back_unshared(func) {
             Freshness::Always
         } else {
             Freshness::Never

@@ -475,6 +475,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_cow(ptr: *mut MiriArray) -> *mut MiriArray {
+        crate::guard::resolve_tracking_state();
         guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr;

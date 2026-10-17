@@ -14,7 +14,7 @@ use crate::mir::{
     arg_mode, AggregateKind, ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::rt;
+use crate::runtime_fns::{is_copy_on_write, rt};
 use cranelift_codegen::ir::{
     condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, StackSlotData,
     StackSlotKind, TrapCode,
@@ -987,6 +987,10 @@ impl<'a> FunctionTranslator<'a> {
             let shared = Self::emit_inline_is_shared(builder, ctx, callee, &arg_values, sig)?;
             return Self::define_call_destination(builder, locals, destination, shared);
         }
+        if callee.runtime_name().is_some_and(is_copy_on_write) {
+            let unique = Self::emit_inline_copy_on_write(builder, ctx, callee, &arg_values, &sig)?;
+            return Self::define_call_destination(builder, locals, destination, unique);
+        }
         let func_name = callee.link_name();
         let func_id = ctx
             .module
@@ -1096,11 +1100,69 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().jump(join_block, &[shared.into()]);
 
         builder.switch_to_block(runtime_block);
-        let answer = Self::call_is_shared_runtime(builder, ctx, callee, ptr, sig)?;
+        let answer = Self::call_pointer_runtime(builder, ctx, callee, ptr, sig)?;
         builder.ins().jump(join_block, &[answer.into()]);
 
         builder.seal_block(count_block);
         builder.seal_block(runtime_block);
+        builder.seal_block(join_block);
+        builder.switch_to_block(join_block);
+        Ok(builder.block_params(join_block)[0])
+    }
+
+    /// Calls a collection's copy-on-write entry point only when its answer is
+    /// not already known: a null pointer and a value whose count is 1 come
+    /// back unchanged, as the runtime would hand them back, without the call.
+    /// Every other count — shared, or the negative count of an immortal value —
+    /// takes the call, which hands back a copy. In a build that keeps the
+    /// runtime's checks, the call is also taken whenever the runtime's tracking
+    /// state does not read off, so the heap guard still validates the block
+    /// before the write, and the call settles a state not yet read.
+    fn emit_inline_copy_on_write(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        arg_values: &[cranelift_codegen::ir::Value],
+        sig: &Signature,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        let [ptr] = arg_values else {
+            return Err(CodegenError::Internal(format!(
+                "{} takes one pointer, got {} arguments",
+                callee.link_name(),
+                arg_values.len()
+            )));
+        };
+        let ptr_type = builder.func.dfg.value_type(*ptr);
+        let count_block = builder.create_block();
+        let runtime_block = builder.create_block();
+        let join_block = builder.create_block();
+        builder.append_block_param(join_block, ptr_type);
+
+        builder
+            .ins()
+            .brif(*ptr, count_block, &[], join_block, &[(*ptr).into()]);
+
+        builder.switch_to_block(count_block);
+        builder.seal_block(count_block);
+        if ctx.runtime_checks == RuntimeChecks::Observable {
+            let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
+            let unobserved_block = builder.create_block();
+            builder
+                .ins()
+                .brif(tracking_off, unobserved_block, &[], runtime_block, &[]);
+            builder.switch_to_block(unobserved_block);
+            builder.seal_block(unobserved_block);
+        }
+        let shared = Self::emit_count_is_shared(builder, *ptr, cranelift_codegen::ir::types::I8);
+        builder
+            .ins()
+            .brif(shared, runtime_block, &[], join_block, &[(*ptr).into()]);
+
+        builder.switch_to_block(runtime_block);
+        builder.seal_block(runtime_block);
+        let copy = Self::call_pointer_runtime(builder, ctx, callee, *ptr, sig)?;
+        builder.ins().jump(join_block, &[copy.into()]);
+
         builder.seal_block(join_block);
         builder.switch_to_block(join_block);
         Ok(builder.block_params(join_block)[0])
@@ -1126,8 +1188,9 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Calls the runtime's `miri_rt_rc_is_shared(ptr)` and returns its answer.
-    fn call_is_shared_runtime(
+    /// Calls the one-pointer runtime entry point `callee` on `ptr` and returns
+    /// its answer.
+    fn call_pointer_runtime(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         callee: &Symbol,

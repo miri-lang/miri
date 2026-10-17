@@ -932,8 +932,10 @@ fn test_map_cow_shared_copies_and_decrefs() {
     }
 }
 
+/// An immortal map is never handed out for writing: a copy is, and the
+/// original is left alone.
 #[test]
-fn test_map_cow_immortal_returns_same_pointer() {
+fn test_map_cow_immortal_copies_and_leaves_the_original() {
     unsafe {
         let map = miri_rt_map_new(8, 8, 0);
         miri_rt_map_set(map, 1, 100);
@@ -942,11 +944,13 @@ fn test_map_cow_immortal_returns_same_pointer() {
         *rc_ptr = immortal;
 
         let cowed = miri_rt_map_cow(map);
-        assert_eq!(cowed, map, "immortal RC → no copy");
+        assert_ne!(cowed, map, "immortal RC → fresh pointer");
         assert_eq!(*rc_ptr, immortal, "immortal RC unchanged");
+        assert_eq!(miri_rt_map_len(cowed), 1);
 
         *rc_ptr = 1;
         miri_rt_map_free(map);
+        miri_rt_map_free(cowed);
     }
 }
 

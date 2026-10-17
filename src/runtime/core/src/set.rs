@@ -637,21 +637,27 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_cow(ptr: *mut MiriSet) -> *mut MiriSet {
+        crate::guard::resolve_tracking_state();
         guard::guard_check(ptr as *mut u8);
         if ptr.is_null() {
             return ptr;
         }
         let rc_ptr = (ptr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
-        let rc = *rc_ptr;
-        if (rc as isize) < 0 || rc <= 1 {
+        let rc = *rc_ptr as isize;
+        if rc == 1 {
             return ptr;
         }
+        // Shared, or immortal — held by every reader for the whole run: the
+        // write goes to a copy only the caller holds, and an immortal
+        // original keeps its count.
         let new_ptr = miri_rt_set_clone(ptr);
         crate::rc_stats::count_cow_copy();
         if new_ptr.is_null() {
             return ptr;
         }
-        *rc_ptr -= 1;
+        if rc > 1 {
+            *rc_ptr -= 1;
+        }
         new_ptr
     }
 

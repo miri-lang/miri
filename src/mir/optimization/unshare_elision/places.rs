@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use super::facts::{FactId, Facts};
-use super::{allocates, fresh_source, Check, FreshSource};
+use super::{fresh_source, hands_back_unshared, FreshSource};
 use crate::mir::{Body, Local, Place, PlaceElem, Rvalue, StatementKind, TerminatorKind};
 
 /// What a tracked place is reached through.
@@ -40,10 +40,10 @@ pub(super) struct PlaceTable {
 impl PlaceTable {
     /// Tracks every place in `body` that may come to be known unshared and
     /// that no fact is refused for (see [`Eligibility`]).
-    pub(super) fn of(body: &Body, checks: &[Check]) -> Self {
+    pub(super) fn of(body: &Body, asked: &[&Place]) -> Self {
         let eligibility = Eligibility::of(body);
         let mut seen = HashSet::new();
-        let mut places: Vec<Place> = candidates(body, checks)
+        let mut places: Vec<Place> = candidates(body, asked)
             .filter(|place| eligibility.is_trackable(place) && seen.insert(*place))
             .cloned()
             .collect();
@@ -144,11 +144,11 @@ fn parent_of(place: &Place, ids: &HashMap<Place, FactId>) -> Parent {
         .map_or(Parent::Untracked, |id| Parent::Tracked(*id))
 }
 
-/// Every place that may come to be known unshared: each place a check asks
-/// about, and each destination of a store that may give it a value only it
-/// holds.
-fn candidates<'a>(body: &'a Body, checks: &'a [Check]) -> impl Iterator<Item = &'a Place> {
-    let asked = checks.iter().map(|check| &check.place);
+/// Every place that may come to be known unshared: each place a check or a
+/// copy-on-write call asks about, and each destination of a store that may
+/// give it a value only it holds.
+fn candidates<'a>(body: &'a Body, asked: &'a [&'a Place]) -> impl Iterator<Item = &'a Place> {
+    let asked = asked.iter().copied();
     let stored = body
         .basic_blocks
         .iter()
@@ -176,7 +176,7 @@ fn candidates<'a>(body: &'a Body, checks: &'a [Check]) -> impl Iterator<Item = &
                 arg_modes: _,
                 arg_handles: _,
                 target: _,
-            } => allocates(func).then_some(destination),
+            } => hands_back_unshared(func).then_some(destination),
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::Return

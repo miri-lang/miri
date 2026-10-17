@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::types::BuiltinCollectionKind;
-use miri::runtime_fns::{cow_fn, returns_unshared, rt};
+use miri::runtime_fns::{cow_fn, is_copy_on_write, returns_unshared, rt};
 
 #[test]
 fn cow_fn_returns_correct_values() {
@@ -26,6 +26,28 @@ fn returns_unshared_lists_only_the_collection_clones() {
         assert!(
             !returns_unshared(other),
             "{other} may hand back a shared value"
+        );
+    }
+}
+
+#[test]
+fn is_copy_on_write_names_every_collection_kind_entry_point_and_nothing_else() {
+    for kind in [
+        BuiltinCollectionKind::List,
+        BuiltinCollectionKind::Set,
+        BuiltinCollectionKind::Map,
+        BuiltinCollectionKind::Array,
+    ] {
+        let cow = cow_fn(kind).expect("every collection kind has a copy-on-write entry point");
+        assert!(
+            is_copy_on_write(cow),
+            "{cow} is a copy-on-write entry point"
+        );
+    }
+    for other in [rt::LIST_CLONE, rt::RC_IS_SHARED, rt::LIST_PUSH] {
+        assert!(
+            !is_copy_on_write(other),
+            "{other} is not a copy-on-write entry point"
         );
     }
 }

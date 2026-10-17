@@ -625,12 +625,23 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
     }
 }
 
+/// Whether `name` is the copy-on-write entry point of a built-in collection:
+/// it hands back its argument when its count is 1, and otherwise — shared, or
+/// immortal — a copy only the caller holds, releasing its hold on a shared
+/// original. Either way what it hands back is held by the caller alone.
+pub fn is_copy_on_write(name: &str) -> bool {
+    matches!(
+        name,
+        rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW
+    )
+}
+
 /// Whether `name` hands back a value nothing else holds: a block it has just
 /// allocated, whose count is 1, so asking whether it is shared answers no.
 ///
-/// Only the collection clones qualify. A copy-on-write entry point returns its
-/// receiver unchanged when that receiver is immortal, which still reads as
-/// shared, so it is not listed.
+/// Only the collection clones qualify. A copy-on-write entry point hands back
+/// its receiver itself when nothing else holds it, so it allocates nothing and
+/// is not listed; [`is_copy_on_write`] names those.
 pub fn returns_unshared(name: &str) -> bool {
     matches!(
         name,
