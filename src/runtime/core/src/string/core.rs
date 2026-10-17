@@ -56,6 +56,14 @@ impl MiriString {
     #[must_use]
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
+        Self::from_str_of_ascii(s, s.is_ascii())
+    }
+
+    /// As [`Self::from_str`], for text already known to be ASCII or not —
+    /// a piece of a string whose own mark says so — so it is not scanned
+    /// again.
+    #[must_use]
+    pub(crate) fn from_str_of_ascii(s: &str, ascii: bool) -> Self {
         if s.is_empty() {
             return Self::new();
         }
@@ -79,7 +87,7 @@ impl MiriString {
             data,
             len: bytes.len(),
             capacity,
-            ascii: bytes.is_ascii(),
+            ascii,
         }
     }
 

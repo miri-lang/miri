@@ -84,12 +84,29 @@ pub unsafe extern "C" fn miri_rt_string_split(
             }
         }
     } else {
-        // Non-empty separator: split at occurrences
-        for part in s_str.split(sep_str) {
-            let part_string = into_raw_ptr(MiriString::from_str(part));
+        // Every piece of an ASCII string is ASCII, so none is scanned again.
+        let ascii = s.is_null() || (*s).ascii;
+        let push_piece = |part: &str| {
+            let part_string = into_raw_ptr(MiriString::from_str_of_ascii(
+                part,
+                ascii || part.is_ascii(),
+            ));
             if !part_string.is_null() {
                 push_word(list, part_string as usize);
             }
+        };
+        match sep_str.as_bytes() {
+            // A one-byte separator is ASCII, so a byte equal to it is a whole
+            // character and every piece between two of them is UTF-8: scan the
+            // bytes rather than search for a pattern.
+            [byte] => {
+                let pieces = s_str.bytes().filter(|b| b == byte).count() + 1;
+                crate::list::ffi::miri_rt_list_reserve(list, pieces as i64);
+                for part in s_str.as_bytes().split(|b| b == byte) {
+                    push_piece(std::str::from_utf8_unchecked(part));
+                }
+            }
+            _ => s_str.split(sep_str).for_each(push_piece),
         }
     }
 
