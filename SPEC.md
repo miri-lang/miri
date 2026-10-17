@@ -260,6 +260,8 @@ println(f"{n:x} {n:08b}") // ff 11111111
 
 A spec that cannot format its value is refused at compile time (MER_TYP_082).
 
+A string's characters are fixed when it is built: `s[0] = "x"` is refused (MER_TYP_042). Build a new string — with `replace`, slicing or an f-string — and assign it to a `var`.
+
 ---
 
 ## Structs
@@ -349,6 +351,8 @@ let t = (1, "hello", true)
 println(f"{t[0]}")   // 1
 println(f"{t[1]}")   // hello
 ```
+
+A tuple's elements are fixed when it is built: `t[0] = 5` and `t.0 = 5` are refused (MER_TYP_042). To change one, build a new tuple and assign it to a `var`: `t = (5, t.1)`. Binding a tuple to a second name therefore never lets a write through one name be seen through the other.
 
 Tuples support destructuring in match expressions:
 

@@ -777,7 +777,9 @@ impl TypeChecker {
                 context,
             );
         }
-        self.infer_member(obj, prop, member_expr.span, context)
+        let element = self.infer_member(obj, prop, member_expr.span, context);
+        self.refuse_element_store_into_fixed_value(obj, span);
+        element
     }
 
     fn infer_assignment_to_index(
@@ -797,7 +799,32 @@ impl TypeChecker {
                 context,
             );
         }
-        self.infer_index(obj, index, index_expr.span, context)
+        let element = self.infer_index(obj, index, index_expr.span, context);
+        self.refuse_element_store_into_fixed_value(obj, span);
+        element
+    }
+
+    /// Refuses a store into one element of `obj` when `obj` is a tuple or a
+    /// string, whose elements are fixed when the value is built: the value is
+    /// replaced as a whole instead, which a mutable binding allows.
+    fn refuse_element_store_into_fixed_value(&mut self, obj: &Expression, span: Span) {
+        let Some(kind) = self.get_type(obj.id).map(|ty| ty.kind.clone()) else {
+            return;
+        };
+        let (message, help) = match kind {
+            TypeKind::Tuple(_) => TUPLE_ELEMENT_STORE,
+            TypeKind::Custom(ref name, _) if name == crate::ast::types::TUPLE_TYPE_NAME => {
+                TUPLE_ELEMENT_STORE
+            }
+            TypeKind::String => STRING_CHARACTER_STORE,
+            _ => return,
+        };
+        self.report_error_with_help(
+            DiagnosticCode::TypImmutabilityViolation,
+            message.to_string(),
+            span,
+            help.to_string(),
+        );
     }
 
     /// Reports a field or element written through `target`, which is not
@@ -1101,3 +1128,15 @@ fn written_through(target: &Expression) -> Option<&str> {
     }
     None
 }
+
+/// The refusal of a store into one element of a tuple, and its help.
+const TUPLE_ELEMENT_STORE: (&str, &str) = (
+    "Cannot assign to an element of a tuple: a tuple's elements are fixed when it is built",
+    "build a new tuple with the element changed, e.g. 't = (5, t.1)'",
+);
+
+/// The refusal of a store into one character of a string, and its help.
+const STRING_CHARACTER_STORE: (&str, &str) = (
+    "Cannot assign to a character of a string: a string's characters are fixed when it is built",
+    "build a new string, e.g. with 'replace' or an f-string, and assign it to the variable",
+);

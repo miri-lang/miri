@@ -61,3 +61,41 @@ t.0 = 10
         "Cannot assign to field of immutable variable",
     );
 }
+
+#[test]
+fn test_a_tuple_element_cannot_be_assigned_by_index() {
+    assert_compiler_error(
+        r#"
+var t = (1, 2)
+t[0] = 5
+"#,
+        "a tuple's elements are fixed when it is built",
+    );
+}
+
+#[test]
+fn test_a_tuple_element_cannot_be_assigned_by_position() {
+    assert_compiler_error(
+        r#"
+var t = (1, "a")
+t.1 = "b"
+"#,
+        "a tuple's elements are fixed when it is built",
+    );
+}
+
+#[test]
+fn test_a_new_tuple_replaces_one_with_a_changed_element() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var t = (1, "a" + "b")
+    let u = t
+    t = (5, t.1)
+    println(f"{t.0} {t.1} {u.0}")
+"#,
+        "5 ab 1",
+    );
+}
