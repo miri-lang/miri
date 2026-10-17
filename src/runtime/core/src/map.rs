@@ -15,11 +15,34 @@ use std::ptr;
 use crate::element_identity::ElementIdentity;
 use crate::rc::{alloc_with_rc, free_with_rc};
 use crate::slot_cursor::SlotCursor;
+use std::cell::Cell;
 
-/// State flags for hash table slots.
+/// State flags for hash table slots. An occupied slot's state has its high bit
+/// set and carries seven bits of its key's hash below it ([`occupied_tag`]),
+/// so a probe passes over a slot holding a different key without reading the
+/// key in most cases.
 const SLOT_EMPTY: u8 = 0;
-const SLOT_OCCUPIED: u8 = 1;
 const SLOT_TOMBSTONE: u8 = 2;
+const SLOT_OCCUPIED_BIT: u8 = 0x80;
+
+/// The state an occupied slot holding a key of hash `hash` carries.
+fn occupied_tag(hash: u64) -> u8 {
+    SLOT_OCCUPIED_BIT | (hash >> 57) as u8
+}
+
+/// Whether a slot in state `state` holds an entry.
+fn is_occupied(state: u8) -> bool {
+    state & SLOT_OCCUPIED_BIT != 0
+}
+
+/// Where a key belongs: the slot that holds it, or the one it would be
+/// inserted at, and the state an entry for it carries.
+#[derive(Clone, Copy)]
+struct Probe {
+    slot: usize,
+    found: bool,
+    tag: u8,
+}
 
 /// Initial capacity for new maps.
 const INITIAL_CAPACITY: usize = 8;
@@ -71,6 +94,11 @@ pub struct MiriMap {
     /// independent deep copy instead of IncRef-ing the shared pointer.
     val_clone_fn: usize,
     cursor: SlotCursor,
+    /// The slot of the key the last lookup found, while the table has not
+    /// changed since: a `set` right after a `get` of the same key —
+    /// `counts[k] = (counts.get(k) ?? 0) + 1` — finds it there with one
+    /// comparison instead of hashing and probing again.
+    last_found: Cell<Option<Probe>>,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
@@ -120,44 +148,89 @@ impl MiriMap {
     /// full walk inspects each slot once.
     unsafe fn nth_entry(&self, nth: usize) -> Option<usize> {
         let states = self.states;
-        self.cursor.nth_occupied(self.capacity, nth, |slot| {
-            *states.add(slot) == SLOT_OCCUPIED
-        })
+        self.cursor
+            .nth_occupied(self.capacity, nth, |slot| is_occupied(*states.add(slot)))
     }
 
     /// Finds the slot for a given key (for lookup or insertion).
     /// Returns (slot_index, found) where found indicates if the key was found.
-    unsafe fn find_slot(&self, key: *const u8) -> (usize, bool) {
+    /// Forgets every position remembered over the table: the walk cursor and
+    /// the last probe. Called whenever an entry is added, removed or moved.
+    fn layout_changed(&self) {
+        self.cursor.forget();
+        self.last_found.set(None);
+    }
+
+    unsafe fn find_slot(&self, key: *const u8) -> Probe {
+        // A key is in one slot at most, so the slot the last lookup found it
+        // in answers for any key equal to the one stored there.
+        if let Some(last) = self.last_found.get() {
+            let stored = self.keys.add(last.slot * self.key_size);
+            if self.key_identity.same(stored, key, self.key_size) {
+                return last;
+            }
+        }
+        let probe = self.probe(key);
+        if probe.found {
+            self.last_found.set(Some(probe));
+        }
+        probe
+    }
+
+    unsafe fn probe(&self, key: *const u8) -> Probe {
         if self.capacity == 0 {
-            return (0, false);
+            return Probe {
+                slot: 0,
+                found: false,
+                tag: SLOT_OCCUPIED_BIT,
+            };
         }
         let hash = self.key_identity.hash(key, self.key_size);
-        let mut idx = (hash as usize) % self.capacity;
+        let tag = occupied_tag(hash);
+        // Capacities double from a power of two, so wrapping is a mask.
+        let wrap = |slot: usize| {
+            if self.capacity.is_power_of_two() {
+                slot & (self.capacity - 1)
+            } else {
+                slot % self.capacity
+            }
+        };
+        let mut idx = wrap(hash as usize);
         let mut first_tombstone: Option<usize> = None;
 
         for _ in 0..self.capacity {
             let state = *self.states.add(idx);
-            match state {
-                SLOT_EMPTY => {
-                    // Key not found; return first tombstone if any, else this empty slot
-                    return (first_tombstone.unwrap_or(idx), false);
-                }
-                SLOT_OCCUPIED => {
-                    let existing_key = self.keys.add(idx * self.key_size);
-                    if self.key_identity.same(existing_key, key, self.key_size) {
-                        return (idx, true);
-                    }
-                }
-                SLOT_TOMBSTONE if first_tombstone.is_none() => {
-                    first_tombstone = Some(idx);
-                }
-                _ => {}
+            if state == SLOT_EMPTY {
+                // Key not found; return first tombstone if any, else this empty slot
+                let slot = first_tombstone.unwrap_or(idx);
+                return Probe {
+                    slot,
+                    found: false,
+                    tag,
+                };
             }
-            idx = (idx + 1) % self.capacity;
+            if state == tag {
+                let existing_key = self.keys.add(idx * self.key_size);
+                if self.key_identity.same(existing_key, key, self.key_size) {
+                    return Probe {
+                        slot: idx,
+                        found: true,
+                        tag,
+                    };
+                }
+            } else if state == SLOT_TOMBSTONE && first_tombstone.is_none() {
+                first_tombstone = Some(idx);
+            }
+            idx = wrap(idx + 1);
         }
 
         // Table is full (shouldn't happen with proper load factor)
-        (first_tombstone.unwrap_or(0), false)
+        let slot = first_tombstone.unwrap_or(0);
+        Probe {
+            slot,
+            found: false,
+            tag,
+        }
     }
 
     /// Allocates the internal arrays for a given capacity.
@@ -270,10 +343,10 @@ impl MiriMap {
         self.values = new_values;
         self.capacity = new_capacity;
         self.len = 0;
-        self.cursor.forget();
+        self.layout_changed();
 
         for i in 0..old_capacity {
-            if *old_states.add(i) == SLOT_OCCUPIED {
+            if is_occupied(*old_states.add(i)) {
                 let key = old_keys.add(i * self.key_size);
                 let value = old_values.add(i * self.value_size);
                 self.insert_raw(key, value);
@@ -292,7 +365,11 @@ impl MiriMap {
 
     /// Inserts a key-value pair without checking load factor.
     unsafe fn insert_raw(&mut self, key: *const u8, value: *const u8) {
-        let (idx, found) = self.find_slot(key);
+        let Probe {
+            slot: idx,
+            found,
+            tag,
+        } = self.find_slot(key);
 
         // If the key already exists and values are managed, DecRef the old value
         // before overwriting so the old object's RC is decremented correctly.
@@ -323,9 +400,9 @@ impl MiriMap {
             ptr::copy_nonoverlapping(value, dest_value, self.value_size);
         }
         if !found {
-            *self.states.add(idx) = SLOT_OCCUPIED;
+            *self.states.add(idx) = tag;
             self.len += 1;
-            self.cursor.forget();
+            self.layout_changed();
         }
     }
 
@@ -353,7 +430,9 @@ impl MiriMap {
         if self.capacity == 0 || self.len == 0 {
             return ptr::null();
         }
-        let (idx, found) = self.find_slot(key);
+        let Probe {
+            slot: idx, found, ..
+        } = self.find_slot(key);
         if found {
             self.values.add(idx * self.value_size)
         } else {
@@ -367,7 +446,9 @@ impl MiriMap {
         if self.capacity == 0 || self.len == 0 {
             return false;
         }
-        let (idx, found) = self.find_slot(key);
+        let Probe {
+            slot: idx, found, ..
+        } = self.find_slot(key);
         if found {
             // DecRef the value being removed if managed.
             if self.val_drop_fn != 0 && self.value_size > 0 {
@@ -389,7 +470,7 @@ impl MiriMap {
             }
             *self.states.add(idx) = SLOT_TOMBSTONE;
             self.len -= 1;
-            self.cursor.forget();
+            self.layout_changed();
             true
         } else {
             false
@@ -402,8 +483,7 @@ impl MiriMap {
         if self.capacity == 0 || self.len == 0 {
             return false;
         }
-        let (_, found) = self.find_slot(key);
-        found
+        self.find_slot(key).found
     }
 
     /// Clears all entries from the map.
@@ -428,7 +508,7 @@ impl MiriMap {
                     };
                 if val_drop.is_some() || key_drop.is_some() {
                     for i in 0..self.capacity {
-                        if *self.states.add(i) == SLOT_OCCUPIED {
+                        if is_occupied(*self.states.add(i)) {
                             if let Some(drop_fn) = val_drop {
                                 let val_addr = self.values.add(i * self.value_size) as *const usize;
                                 let val_ptr = *val_addr;
@@ -450,7 +530,7 @@ impl MiriMap {
             }
         }
         self.len = 0;
-        self.cursor.forget();
+        self.layout_changed();
     }
 }
 
@@ -505,7 +585,8 @@ pub mod ffi {
         (*map).val_drop_fn = 0;
         (*map).key_drop_fn = 0;
         (*map).val_clone_fn = 0;
-        (*map).cursor.forget();
+        (*map).layout_changed();
+        std::ptr::write(&raw mut (*map).last_found, Cell::new(None));
         map
     }
 
@@ -866,7 +947,7 @@ pub mod ffi {
         if map.key_drop_fn != 0 && !map.states.is_null() && map.capacity > 0 {
             let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(map.key_drop_fn);
             for i in 0..map.capacity {
-                if *map.states.add(i) == SLOT_OCCUPIED {
+                if is_occupied(*map.states.add(i)) {
                     let key_addr = map.keys.add(i * map.key_size) as *const usize;
                     let key_ptr = *key_addr;
                     if key_ptr != 0 {
@@ -912,7 +993,7 @@ pub mod ffi {
         (*new_map).val_clone_fn = src.val_clone_fn;
         if !src.states.is_null() && src.capacity > 0 {
             for i in 0..src.capacity {
-                if *src.states.add(i) == SLOT_OCCUPIED {
+                if is_occupied(*src.states.add(i)) {
                     let key = src.keys.add(i * src.key_size);
                     let val = src.values.add(i * src.value_size.max(1));
 
@@ -1018,7 +1099,7 @@ pub mod ffi {
                 let drop_fn: unsafe extern "C" fn(*mut u8) =
                     std::mem::transmute((*map).val_drop_fn);
                 for i in 0..(*map).capacity {
-                    if *(*map).states.add(i) == SLOT_OCCUPIED {
+                    if is_occupied(*(*map).states.add(i)) {
                         let val_addr = (*map).values.add(i * (*map).value_size) as *const usize;
                         let val_ptr = *val_addr;
                         if val_ptr != 0 {

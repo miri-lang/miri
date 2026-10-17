@@ -18,6 +18,7 @@ pub mod managed_element_transforms;
 pub mod methods;
 pub mod optional_values;
 pub mod rc_aliasing;
+pub mod repeated_lookups;
 pub mod scalar_widths;
 pub mod string_keys;
 pub mod type_errors;

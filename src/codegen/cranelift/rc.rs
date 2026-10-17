@@ -678,10 +678,12 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Emits a loop that DecRefs each managed value in a map's hash table.
     ///
-    /// Iterates over all `capacity` slots, checks the state byte for SLOT_OCCUPIED (1),
-    /// and DecRefs the value pointer in each occupied slot.
+    /// Iterates over all `capacity` slots, checks the state byte for the
+    /// occupied bit, and DecRefs the value pointer in each occupied slot.
     ///
-    /// MiriMap states array: 1 byte per slot (0=empty, 1=occupied, 2=tombstone).
+    /// MiriMap states array: 1 byte per slot — 0 empty, 2 tombstone, and an
+    /// occupied slot with its high bit (0x80) set over seven bits of its key's
+    /// hash.
     /// Values are stored as pointer-sized entries (managed types are always pointers).
     fn emit_map_managed_values_drop_loop(
         builder: &mut FunctionBuilder,
@@ -719,7 +721,7 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .brif(in_range, check_block, &[], after_loop, &[]);
 
-        // Check state[i] == SLOT_OCCUPIED (1)
+        // Check the occupied bit of state[i]
         builder.switch_to_block(check_block);
         builder.seal_block(check_block);
         let state_addr = builder.ins().iadd(states, i);
@@ -727,11 +729,11 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .load(cl_types::I8, MemFlags::new(), state_addr, 0);
         let state = builder.ins().uextend(ptr_type, state_i8);
-        let slot_occupied = builder.ins().iconst(ptr_type, 1);
-        let is_occupied = builder.ins().icmp(
-            cranelift_codegen::ir::condcodes::IntCC::Equal,
-            state,
-            slot_occupied,
+        let occupied_bit = builder.ins().band_imm(state, 0x80);
+        let is_occupied = builder.ins().icmp_imm(
+            cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+            occupied_bit,
+            0,
         );
         builder
             .ins()
