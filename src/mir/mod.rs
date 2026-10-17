@@ -27,6 +27,7 @@ pub mod lowering;
 pub mod module;
 pub mod operand;
 pub mod optimization;
+pub mod option_layout;
 pub mod place;
 pub mod rc;
 pub mod residency;
