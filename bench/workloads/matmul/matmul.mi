@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=014054d6d71c0360b6df06c4f134b7b27b29dbae6ee1a6938e4aeb2e9fd88fc1
+// port-checklist: reviewed 2026-10-17 by review-agent sha256=8df2b49e0b5a5c9fc93f2925cb212fca5ee45791acd076f6fb5c466e235409f7
 
 // matmul: the naive triple loop multiplying two n by n matrices held as
 // lists of rows. Stresses float multiply-add, nested list reads and the cache.
@@ -16,9 +16,11 @@ use system.collections.list
 
 fn matrix(n int, offset int) [[float]]
     var rows = List<[float]>()
+    rows.reserve(n)
     var i = 0
     while i < n
         var row = List<float>()
+        row.reserve(n)
         var j = 0
         while j < n
             row.push(((i * j + offset * (i + j)) % 10) as float)

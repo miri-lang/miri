@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=74a788c74dc5175f46f5fad069b23ce42c592bdcbabfbed9a0d3eb5e4961dd27
+// port-checklist: reviewed 2026-10-17 by review-agent sha256=772cd01ff3655bbcf9417791dab2da44005c2da79893b9103f2c81038ab0a986
 
 // closures: map, filter and fold pipelines over a list of numbers, each stage
 // a lambda capturing a local of the round. Stresses closure creation and
@@ -18,6 +18,7 @@ use system.collections.list
 /// round, each capturing a local.
 fn kernel(n int) String
     var xs = List<int>()
+    xs.reserve(n)
     var i = 0
     while i < n
         xs.push(i)

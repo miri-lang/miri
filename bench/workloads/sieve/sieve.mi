@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=8a9fec70e6b45265f1bfe199f47d478a39a48e4019fb93003162a0c1a963c497
+// port-checklist: reviewed 2026-10-17 by review-agent sha256=a98c7251849f50b53ff5cfa8d5f0abfdfc395c254977d8f5aa1b11786a7da028
 
 // sieve: the sieve of Eratosthenes up to n. Stresses a list of booleans,
 // strided writes and a data-dependent branch.
@@ -15,10 +15,7 @@ use system.collections.list
 /// How many primes there are up to `n`, and their sum modulo 1000000007.
 fn kernel(n int) String
     var composite = List<bool>()
-    var i = 0
-    while i <= n
-        composite.push(false)
-        i += 1
+    composite.resize(n + 1, false)
     var count = 0
     var sum = 0
     var p = 2

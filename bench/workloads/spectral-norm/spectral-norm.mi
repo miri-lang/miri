@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=515f8446d1286a519aa1001c0d4352ef8e80f60d033bb57a6af1f104d2849cb6
+// port-checklist: reviewed 2026-10-17 by review-agent sha256=2f23f47bcad9c411c800129a684695f70b58f47b3e967c5a0e624e9daa078cfe
 
 // spectral-norm: the largest eigenvalue of an infinite matrix, by power
 // iteration on its first n rows. Stresses float arithmetic, a small function
@@ -20,6 +20,7 @@ fn entry(i int, j int) float
 fn times(v [float]) [float]
     let n = v.length()
     var out = List<float>()
+    out.reserve(n)
     var i = 0
     while i < n
         var sum = 0.0
@@ -34,6 +35,7 @@ fn times(v [float]) [float]
 fn times_transposed(v [float]) [float]
     let n = v.length()
     var out = List<float>()
+    out.reserve(n)
     var i = 0
     while i < n
         var sum = 0.0
@@ -51,11 +53,9 @@ fn times_both(v [float]) [float]: times_transposed(times(v))
 /// billionths, truncated toward zero.
 fn kernel(n int) String
     var u = List<float>()
-    var i = 0
-    while i < n
-        u.push(1.0)
-        i += 1
+    u.resize(n, 1.0)
     var v = List<float>()
+    var i = 0
     var round = 0
     while round < 10
         v = times_both(u)

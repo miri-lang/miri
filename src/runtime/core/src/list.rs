@@ -130,8 +130,21 @@ impl MiriList {
 
         // Growth strategy: double or use required, whichever is larger
         let new_capacity = std::cmp::max(self.capacity.saturating_mul(2), required);
-        let new_capacity = std::cmp::max(new_capacity, 4); // Minimum capacity
+        self.grow_to(std::cmp::max(new_capacity, 4)); // Minimum capacity
+    }
 
+    /// Ensures capacity for `capacity` elements in all, growing the buffer to
+    /// exactly that many when it holds fewer: a list whose final size is known
+    /// before it is filled then never grows and keeps no spare slots.
+    fn reserve_total(&mut self, capacity: usize) {
+        if capacity > self.capacity {
+            self.grow_to(capacity);
+        }
+    }
+
+    /// Moves the elements into a buffer of `new_capacity` slots, larger than
+    /// the current one.
+    fn grow_to(&mut self, new_capacity: usize) {
         let new_size = new_capacity
             .checked_mul(self.elem_size)
             .unwrap_or_else(|| std::process::abort());
@@ -851,6 +864,20 @@ pub mod ffi {
                 }
             }
             miri_rt_list_free(ptr as *mut MiriList);
+        }
+    }
+
+    /// Makes room for `capacity` elements in all without growing again; a
+    /// negative or smaller capacity changes nothing.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_reserve(ptr: *mut MiriList, capacity: i64) {
+        guard::guard_check(ptr as *mut u8);
+        if ptr.is_null() {
+            return;
+        }
+        if let Ok(capacity) = usize::try_from(capacity) {
+            (*ptr).reserve_total(capacity);
         }
     }
 

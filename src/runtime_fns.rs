@@ -112,6 +112,7 @@ pub mod rt {
     pub const LIST_REMOVE: &str = "miri_rt_list_remove";
     pub const LIST_TAKE_AT: &str = "miri_rt_list_take_at";
     pub const LIST_CLEAR: &str = "miri_rt_list_clear";
+    pub const LIST_RESERVE: &str = "miri_rt_list_reserve";
     pub const LIST_REVERSE: &str = "miri_rt_list_reverse";
     pub const LIST_SORT: &str = "miri_rt_list_sort";
     pub const LIST_IS_EMPTY: &str = "miri_rt_list_is_empty";
@@ -420,6 +421,7 @@ pub mod rt {
         LIST_REMOVE,
         LIST_TAKE_AT,
         LIST_CLEAR,
+        LIST_RESERVE,
         LIST_REVERSE,
         LIST_SORT,
         LIST_IS_EMPTY,

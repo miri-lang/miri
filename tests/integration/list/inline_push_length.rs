@@ -7,7 +7,7 @@
 //! Both paths run only while the runtime observes nothing, so these programs
 //! run untracked: under the leak check every push would take the runtime call.
 
-use super::utils::{assert_runs_untracked, assert_runs_with_output};
+use super::utils::{assert_runs_untracked, assert_runs_with_output, get_allocation_count_value};
 
 #[test]
 fn test_pushes_past_every_growth_keep_every_element() {
@@ -150,5 +150,23 @@ fn main()
     println(f"{measure()} {count(Some(l))} {count(None)} {shadow.length()}")
 "#,
         "4 4 -1 2",
+    );
+}
+
+/// A list reserved for its final size before it is filled never grows: it
+/// allocates its buffer once, where one filled from empty reallocates as it
+/// doubles.
+#[test]
+fn test_a_reserved_list_allocates_its_buffer_once() {
+    let fill = |reserve: &str| {
+        format!(
+            "use system.io\nuse system.collections.list\n\nfn main()\n    var l = List<int>()\n{reserve}    var i = 0\n    while i < 1000\n        l.push(i)\n        i = i + 1\n    println(f\"{{l.length()}}\")\n"
+        )
+    };
+    let reserved = get_allocation_count_value(&fill("    l.reserve(1000)\n"));
+    let grown = get_allocation_count_value(&fill(""));
+    assert!(
+        reserved < grown,
+        "reserving allocated {reserved} times, growing {grown}"
     );
 }

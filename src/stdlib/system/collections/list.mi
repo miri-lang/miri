@@ -35,6 +35,7 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Iterable<T>, 
     runtime "core" fn miri_rt_list_remove(l Self, index int) bool
     runtime "core" fn miri_rt_list_take_at(l Self, index int) bool
     runtime "core" fn miri_rt_list_clear(l Self)
+    runtime "core" fn miri_rt_list_reserve(l Self, capacity int)
     runtime "core" fn miri_rt_list_reverse(l Self)
     runtime "core" fn miri_rt_list_sort(l Self)
     runtime "core" fn miri_rt_list_clone(l Self) List<T>
@@ -126,6 +127,27 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Iterable<T>, 
     /// Removes all elements from the list.
     public fn clear()
         miri_rt_list_clear(self)
+
+    /// Makes room for `capacity` elements in all, so pushing up to that many
+    /// never grows the list. A capacity at or below the current one changes
+    /// nothing; neither does the length.
+    ///
+    /// Example:
+    ///     var squares = List<int>()
+    ///     squares.reserve(100)
+    ///     for i in 0..100: squares.push(i * i)
+    public fn reserve(capacity int)
+        miri_rt_list_reserve(self, capacity)
+
+    /// Grows the list to `length` elements by appending `value`, or shrinks it
+    /// to `length` by removing elements from the end. A list built to a known
+    /// size is filled in one call: `flags.resize(n, false)`.
+    public fn resize(length int, value T)
+        self.reserve(length)
+        while self.length() < length
+            self.push(value)
+        while self.length() > length
+            self.pop()
 
     /// Sorts the list in ascending order.
     public fn sort()
