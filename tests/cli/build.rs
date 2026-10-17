@@ -978,6 +978,80 @@ fn test_a_checked_build_reaches_copy_on_write_while_tracking() {
     assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "27");
 }
 
+const FILL: &str = r#"
+use system.io
+use system.collections.list
+
+fn fill(n int) int
+    var l = List<int>()
+    var i = 0
+    while i < n
+        l.push(i)
+        i = i + 1
+    var total = 0
+    i = 0
+    while i < l.length()
+        total = total + l[i]
+        i = i + 1
+    total
+
+fn main()
+    println(f"{fill(100)}")
+"#;
+
+/// A list's length is read from its header rather than through the method
+/// and a runtime call, and a push reaches the runtime only past an inline
+/// compare of the length with the capacity: a list with room takes the
+/// element without a call.
+#[test]
+fn test_a_list_fill_loop_reads_the_length_inline_and_pushes_without_a_call_while_room_remains() {
+    let source = create_test_file(FILL);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("fill");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--release", "--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("fill.clif")).unwrap();
+    let (blocks, names) = clif_function(&listing, "miri.fill");
+    let referenced: Vec<&&str> = names.values().collect();
+    for gone in ["miri.List.length", "miri_rt_list_len"] {
+        assert!(
+            !referenced.contains(&&gone),
+            "fill still calls {gone}:\n{listing}"
+        );
+    }
+    let push: Vec<&str> = names
+        .iter()
+        .filter(|(_, name)| **name == "miri_rt_list_push")
+        .map(|(handle, _)| *handle)
+        .collect();
+    let calling: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| push.iter().any(|f| body.contains(&format!("call {f}("))))
+        .map(|(label, _)| *label)
+        .collect();
+    assert!(!calling.is_empty(), "fill lost its push:\n{listing}");
+    for label in calling {
+        let checks_room = blocks.iter().any(|(_, body)| {
+            body.contains("icmp ult")
+                && body.lines().any(|l| {
+                    l.starts_with("brif") && l.split([' ', ',', '(']).any(|word| word == label)
+                })
+        });
+        assert!(
+            checks_room,
+            "{label} pushes without checking for room:\n{listing}"
+        );
+    }
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "4950");
+}
+
 const CONSTANT_DIVISOR: &str = r#"
 use system.io
 

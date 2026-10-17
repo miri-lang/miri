@@ -41,6 +41,49 @@ type PreparedCallArgs = (
     Vec<(cranelift_codegen::ir::Value, Local)>,
 );
 
+/// Word offsets of the fields of a list's header (`MiriList`, laid out in C
+/// order) that a push compiled inline reads and writes.
+const LIST_DATA: i32 = 0;
+const LIST_LEN: i32 = 1;
+const LIST_CAPACITY: i32 = 2;
+const LIST_ELEM_SIZE: i32 = 3;
+
+/// A `miri_rt_list_push` call compiled inline: the list, the address of the
+/// element's bytes, the number of them as passed, and the width the element
+/// is loaded and stored at.
+struct ListPush {
+    list: cranelift_codegen::ir::Value,
+    element: cranelift_codegen::ir::Value,
+    payload: cranelift_codegen::ir::Value,
+    width: cranelift_codegen::ir::Type,
+}
+
+impl ListPush {
+    /// The push `args` make, when the element's byte count is a constant one
+    /// load and one store can move: 1, 2, 4 or 8.
+    fn of(builder: &FunctionBuilder, args: &[cranelift_codegen::ir::Value]) -> Option<Self> {
+        use cranelift_codegen::ir::{types, InstructionData, ValueDef};
+        let [list, element, payload] = args else {
+            return None;
+        };
+        let ValueDef::Result(inst, _) = builder.func.dfg.value_def(*payload) else {
+            return None;
+        };
+        let InstructionData::UnaryImm { imm, .. } = builder.func.dfg.insts[inst] else {
+            return None;
+        };
+        let width = [types::I8, types::I16, types::I32, types::I64]
+            .into_iter()
+            .find(|width| i64::from(width.bytes()) == imm.bits())?;
+        Some(Self {
+            list: *list,
+            element: *element,
+            payload: *payload,
+            width,
+        })
+    }
+}
+
 impl<'a> FunctionTranslator<'a> {
     /// Translate a MIR statement.
     pub(crate) fn translate_statement(
@@ -991,6 +1034,11 @@ impl<'a> FunctionTranslator<'a> {
             let unique = Self::emit_inline_copy_on_write(builder, ctx, callee, &arg_values, &sig)?;
             return Self::define_call_destination(builder, locals, destination, unique);
         }
+        if callee.runtime_name() == Some(rt::LIST_PUSH) {
+            if let Some(push) = ListPush::of(builder, &arg_values) {
+                return Self::emit_inline_list_push(builder, ctx, callee, push, &sig);
+            }
+        }
         let func_name = callee.link_name();
         let func_id = ctx
             .module
@@ -1166,6 +1214,94 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(join_block);
         builder.switch_to_block(join_block);
         Ok(builder.block_params(join_block)[0])
+    }
+
+    /// Appends an element to a list without the call while the list has room
+    /// for it: the element's bytes are stored into the next slot and the
+    /// length is bumped. A null list, a full one, a slot wider than the
+    /// element, and — in a build that keeps the runtime's checks — any push
+    /// while the runtime is tracking take the call, which grows the buffer,
+    /// zeroes a slot's spare bytes and lets the heap guard see the list.
+    fn emit_inline_list_push(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        push: ListPush,
+        sig: &Signature,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = builder.func.dfg.value_type(push.list);
+        let word = ptr_type.bytes() as i32;
+        let header_block = builder.create_block();
+        let store_block = builder.create_block();
+        let runtime_block = builder.create_block();
+        let join_block = builder.create_block();
+
+        builder
+            .ins()
+            .brif(push.list, header_block, &[], runtime_block, &[]);
+        builder.switch_to_block(header_block);
+        builder.seal_block(header_block);
+        if ctx.runtime_checks == RuntimeChecks::Observable {
+            let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
+            let unobserved_block = builder.create_block();
+            builder
+                .ins()
+                .brif(tracking_off, unobserved_block, &[], runtime_block, &[]);
+            builder.switch_to_block(unobserved_block);
+            builder.seal_block(unobserved_block);
+        }
+        let header = MemFlags::trusted();
+        let len = builder
+            .ins()
+            .load(ptr_type, header, push.list, LIST_LEN * word);
+        let capacity = builder
+            .ins()
+            .load(ptr_type, header, push.list, LIST_CAPACITY * word);
+        let slot = builder
+            .ins()
+            .load(ptr_type, header, push.list, LIST_ELEM_SIZE * word);
+        let has_room = builder.ins().icmp(IntCC::UnsignedLessThan, len, capacity);
+        let fills_slot = builder
+            .ins()
+            .icmp_imm(IntCC::Equal, slot, push.width.bytes() as i64);
+        let fast = builder.ins().band(has_room, fills_slot);
+        builder
+            .ins()
+            .brif(fast, store_block, &[], runtime_block, &[]);
+
+        builder.switch_to_block(store_block);
+        builder.seal_block(store_block);
+        let data = builder
+            .ins()
+            .load(ptr_type, header, push.list, LIST_DATA * word);
+        let offset = builder.ins().imul_imm(len, push.width.bytes() as i64);
+        let dest = builder.ins().iadd(data, offset);
+        let element = builder
+            .ins()
+            .load(push.width, MemFlags::new(), push.element, 0);
+        builder.ins().store(MemFlags::trusted(), element, dest, 0);
+        let grown = builder.ins().iadd_imm(len, 1);
+        builder
+            .ins()
+            .store(header, grown, push.list, LIST_LEN * word);
+        builder.ins().jump(join_block, &[]);
+
+        builder.switch_to_block(runtime_block);
+        builder.seal_block(runtime_block);
+        let func_name = callee.link_name();
+        let func_id = ctx
+            .module
+            .declare_function(&func_name, Linkage::Import, sig)
+            .map_err(|e| CodegenError::declare_function(func_name, e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder
+            .ins()
+            .call(local_func, &[push.list, push.element, push.payload]);
+        builder.ins().jump(join_block, &[]);
+
+        builder.seal_block(join_block);
+        builder.switch_to_block(join_block);
+        Ok(())
     }
 
     /// Whether the count in the word before the payload at `ptr` is other than

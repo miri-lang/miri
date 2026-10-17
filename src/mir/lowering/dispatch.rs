@@ -677,6 +677,45 @@ fn store_operand_temp(ctx: &mut LoweringContext, op: Operand, ty: Type, span: Sp
     local
 }
 
+/// The host local a receiver expression names directly, when the local is
+/// itself declared as the built-in collection `kind`: a binding, not a capture
+/// or a gpu-resident one, read without lowering anything. A local declared at
+/// another type — an optional narrowed to the collection, say — is left to the
+/// method call, since a read of the header goes by the local's own type.
+fn host_binding(
+    ctx: &LoweringContext,
+    obj: &Expression,
+    kind: BuiltinCollectionKind,
+) -> Option<Local> {
+    let ExpressionKind::Identifier(name, _) = &obj.node else {
+        return None;
+    };
+    let local = *ctx.variable_map.get(name.as_str())?;
+    let decl = ctx.body.local_decls.get(local.0)?;
+    let is_host = decl.device_handle.is_none() && !ctx.body.env_capture_locals.contains(&local);
+    let is_declared_kind = decl.ty.kind.as_builtin_collection() == Some(kind);
+    (is_host && is_declared_kind && !ctx.body.is_gpu()).then_some(local)
+}
+
+/// Lower `collection.length()` on a collection a local holds to a read of the
+/// count its header keeps, instead of a call to the method and from it to
+/// the runtime. Like the length a `for` loop reads, it is not validated by the
+/// heap guard.
+fn lower_collection_length(
+    ctx: &mut LoweringContext,
+    local: Local,
+    dest: Option<Place>,
+    span: &Span,
+) -> Operand {
+    let destination =
+        dest.unwrap_or_else(|| Place::new(ctx.push_temp(Type::new(TypeKind::Int, *span), *span)));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(destination.clone(), Rvalue::Len(Place::new(local))),
+        span: *span,
+    });
+    Operand::Copy(destination)
+}
+
 /// Lower list.push(item) to miri_rt_list_push.
 fn lower_list_push(
     ctx: &mut LoweringContext,
@@ -1184,6 +1223,12 @@ pub(super) fn try_lower_collection_intrinsic(
 
     if args.len() == 1 && method_name == "push" && builtin == Some(BuiltinCollectionKind::List) {
         return lower_list_push(ctx, obj, obj_ty, &args[0], span);
+    }
+
+    if let (true, "length", Some(kind)) = (args.is_empty(), method_name, builtin) {
+        if let Some(local) = host_binding(ctx, obj, kind) {
+            return Ok(Some(lower_collection_length(ctx, local, dest, span)));
+        }
     }
 
     if args.len() == 2 && method_name == "insert" && builtin == Some(BuiltinCollectionKind::List) {

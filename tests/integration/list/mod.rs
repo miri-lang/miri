@@ -13,6 +13,7 @@ pub mod errors;
 pub mod float_collections;
 pub mod float_widths;
 pub mod indexing_iteration;
+pub mod inline_push_length;
 pub mod integration;
 pub mod membership;
 pub mod methods;
