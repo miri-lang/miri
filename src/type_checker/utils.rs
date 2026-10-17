@@ -16,12 +16,11 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::types::{
-    element_layout, is_vector_component, scalar_width, vec_dim, vec_type_dim,
-    BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME,
-    DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
-    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
-    RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME, SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES,
-    WARP_CONTEXT_TYPE_NAME,
+    is_vector_component, scalar_width, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
+    TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
+    GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
+    LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
+    SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -30,7 +29,9 @@ use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
+use crate::type_checker::element_layout::element_layout;
 use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
+use crate::type_checker::value_class::LayoutScope;
 
 /// The element type a definition that names `Iterable` without an argument
 /// yields.
@@ -232,11 +233,8 @@ fn is_resource_inner<'a>(
 /// [`is_perceus_managed`] alone is not that question: it calls a struct managed
 /// only when one of its fields is, so a struct of plain scalars passes it while
 /// still being reached through a reference.
-pub fn is_zero_fillable_element(
-    kind: &TypeKind,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
-) -> bool {
-    if element_layout(kind).is_address {
+pub fn is_zero_fillable_element(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    if element_layout(kind, scope).is_address {
         return true;
     }
     if let TypeKind::Custom(name, _) = kind {
@@ -244,13 +242,13 @@ pub fn is_zero_fillable_element(
             return true;
         }
         if matches!(
-            type_definitions.get(name),
+            scope.definitions.get(name),
             Some(TypeDefinition::Struct(_) | TypeDefinition::Enum(_))
         ) {
             return false;
         }
     }
-    !is_perceus_managed(kind, type_definitions)
+    !is_perceus_managed(kind, scope.definitions)
 }
 
 /// Determines whether a type requires Perceus reference counting.
@@ -2826,7 +2824,9 @@ impl TypeChecker {
         let TypeKind::Custom(name, args) = &ty.kind else {
             return false;
         };
-        if vec_type_dim(&ty.kind).is_none() || element_layout(&ty.kind).is_address {
+        if vec_type_dim(&ty.kind).is_none()
+            || element_layout(&ty.kind, LayoutScope::program(self.type_definitions())).is_address
+        {
             return false;
         }
         self.validate_vector_component(name, args.as_deref(), span);

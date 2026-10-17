@@ -545,7 +545,7 @@ impl<'a> FunctionTranslator<'a> {
             .first()
             .and_then(|op| Self::direct_operand_kind(op, type_ctx))
             .and_then(|k| {
-                crate::codegen::cranelift::translator::inline_vec_element_layout(k, ptr_type)
+                crate::codegen::cranelift::translator::inline_vec_element_layout(k, type_ctx)
                     .map(|(stride, _, _)| stride)
             });
         let elem_size = match (inline_stride, translated.first()) {
@@ -586,7 +586,7 @@ impl<'a> FunctionTranslator<'a> {
         // source aggregate (`val` is its address); pointer-sized elements store
         // the operand value directly.
         let inline = first_op_direct_kind.and_then(|k| {
-            crate::codegen::cranelift::translator::inline_vec_element_layout(k, ptr_type)
+            crate::codegen::cranelift::translator::inline_vec_element_layout(k, type_ctx)
         });
 
         if !translated.is_empty() {
@@ -650,7 +650,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let word = ptr_type.bytes();
         let (key_size, value_size) =
-            Self::declared_map_entry_bytes(expected_ty, ptr_type).unwrap_or((word, word));
+            Self::declared_map_entry_bytes(expected_ty, type_ctx).unwrap_or((word, word));
         let key_size_val = builder.ins().iconst(ptr_type, i64::from(key_size));
         let value_size_val = builder.ins().iconst(ptr_type, i64::from(value_size));
         let bytes_key_kind = builder.ins().iconst(ptr_type, 0);
@@ -661,13 +661,13 @@ impl<'a> FunctionTranslator<'a> {
     /// slots, or `None` when the destination is not a map spelled with both.
     fn declared_map_entry_bytes(
         expected_ty: Option<&crate::ast::types::Type>,
-        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
     ) -> Option<(u32, u32)> {
         use crate::codegen::cranelift::translator::{declared_element_bytes, type_argument};
         let (key, value) = FunctionTranslator::map_key_value_exprs(&expected_ty?.kind)?;
         Some((
-            declared_element_bytes(&type_argument(key)?.kind, ptr_type),
-            declared_element_bytes(&type_argument(value)?.kind, ptr_type),
+            declared_element_bytes(&type_argument(key)?.kind, type_ctx),
+            declared_element_bytes(&type_argument(value)?.kind, type_ctx),
         ))
     }
 
@@ -689,7 +689,7 @@ impl<'a> FunctionTranslator<'a> {
             .and_then(|ty| FunctionTranslator::set_elem_expr(&ty.kind))
             .and_then(type_argument)
             .map_or(ptr_type.bytes(), |elem| {
-                declared_element_bytes(&elem.kind, ptr_type)
+                declared_element_bytes(&elem.kind, type_ctx)
             });
         let elem_size_val = builder.ins().iconst(ptr_type, i64::from(elem_size));
         Self::call_rt_set_new(builder, ctx, elem_size_val)

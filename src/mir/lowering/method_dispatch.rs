@@ -15,6 +15,8 @@ use crate::type_checker::context::{
     class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
     TypeDefinition,
 };
+use crate::type_checker::element_layout::element_layout;
+use crate::type_checker::value_class::LayoutScope;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
@@ -645,8 +647,8 @@ fn call_result_type(
 /// as a pointer, so both agree on layout — a managed argument needs its own
 /// body for a different reason, spelled out in
 /// [`shared_body_misreads_a_managed_element`].
-fn differs_from_pointer_width_fallback(kind: &TypeKind) -> bool {
-    let layout = crate::ast::types::element_layout(kind);
+fn differs_from_pointer_width_fallback(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    let layout = element_layout(kind, scope);
     layout.is_address
         || layout.payload != crate::ast::types::VALUE_WORD_BYTES
         || crate::type_checker::float_literals::is_float_width(kind)
@@ -724,11 +726,13 @@ fn shared_body_misreads_a_managed_element(
 /// of the collection it gets back, and compares it by address.
 ///
 /// Every other class always needs one, so it passes straight through.
+/// `scope` is what each argument's layout is read against.
 fn builtin_collection_needs_its_own_body(
     class_name: &str,
     class_def: &crate::type_checker::context::ClassDefinition,
     method_name: &str,
     resolved: &[Type],
+    scope: LayoutScope<'_>,
 ) -> bool {
     if BuiltinCollectionKind::from_name(class_name).is_none() {
         return true;
@@ -742,7 +746,7 @@ fn builtin_collection_needs_its_own_body(
         // answer from the marker's own spelling.
         .filter(|arg| crate::type_checker::generics::extract_value_generic(arg).is_none())
         .any(|arg| {
-            differs_from_pointer_width_fallback(&arg.kind)
+            differs_from_pointer_width_fallback(&arg.kind, scope)
                 || orders_differently_from_signed_fallback(&arg.kind)
                 || shared_body_misreads_a_managed_element(class_def, method_name, &arg.kind)
         })
@@ -824,7 +828,10 @@ pub(crate) fn instantiated_callee(
     let Some(TypeDefinition::Class(class_def)) = defs.get(name) else {
         return None;
     };
-    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved) {
+    // The arguments are the call's resolved ones, read against the program's
+    // table: no body's open parameters are known where a callee is named.
+    let scope = LayoutScope::program(defs);
+    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved, scope) {
         return None;
     }
     let (owner, owner_args) =

@@ -74,6 +74,11 @@ impl RcClassifier {
             ))
     }
 
+    /// The type table every type is classified against.
+    pub fn definitions(&self) -> &HashMap<String, TypeDefinition> {
+        &self.definitions
+    }
+
     /// Whether a value of class `class` is reference counted.
     fn is_counted_class(&self, class: &ValueClass) -> bool {
         match class {

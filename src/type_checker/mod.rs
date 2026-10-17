@@ -44,6 +44,7 @@ pub(crate) mod call_instantiation;
 mod compatibility;
 mod compiled_instances;
 mod derived_conformance;
+pub mod element_layout;
 pub use compiled_instances::CompiledInstance;
 pub mod context;
 pub(crate) mod diagnostics;

@@ -103,6 +103,7 @@ use crate::mir::terminator::{arg_mode, ArgMode};
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
 use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
+use crate::type_checker::element_layout::element_layout;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
@@ -1148,7 +1149,7 @@ fn apply_terminator(
     let result = &body.local_decls[destination.local.0].ty.kind;
     let borrows = func
         .and_then(Operand::called_runtime_name)
-        .is_some_and(|name| hands_back_a_borrow(name, result));
+        .is_some_and(|name| hands_back_a_borrow(name, result, body.layout_scope()));
     if destination.projection.is_empty() && !borrows {
         adjust(state, tracked, destination.local, 1);
     }
@@ -1178,7 +1179,7 @@ fn release_taken_args(
         };
         // An element the container lays out inline is copied as bytes; the
         // caller keeps the reference it passed.
-        if crate::ast::types::element_layout(&body.local_decls[local.0].ty.kind).is_address {
+        if element_layout(&body.local_decls[local.0].ty.kind, body.layout_scope()).is_address {
             continue;
         }
         release(body, &Place::new(local), tracked, state, violations);
@@ -1455,8 +1456,8 @@ fn element_width_violation(
     let slot = argument.position.checked_sub(1)?;
     let slot_ty = concrete_collection_slot(argument.receiver_ty, slot, body)?;
     let operand_ty = concrete_operand_type(argument.operand, body)?;
-    let slot_bytes = compute_elem_size_from_type(&slot_ty.kind);
-    let operand_bytes = compute_elem_size_from_type(&operand_ty.kind);
+    let slot_bytes = compute_elem_size_from_type(&slot_ty.kind, body.layout_scope());
+    let operand_bytes = compute_elem_size_from_type(&operand_ty.kind, body.layout_scope());
     if slot_bytes == operand_bytes {
         return None;
     }

@@ -12,6 +12,7 @@ pub mod constructor;
 pub mod context;
 pub mod control_flow;
 pub mod division_by_zero;
+pub mod element_layout;
 pub mod escape_analysis;
 pub mod float;
 pub mod forall;

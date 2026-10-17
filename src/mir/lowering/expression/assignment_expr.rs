@@ -696,7 +696,10 @@ pub(crate) fn inc_ref_if_managed(
     ty: &Type,
     expr: &Expression,
 ) {
-    if ctx.is_perceus_managed(&ty.kind) && !crate::ast::types::element_layout(&ty.kind).is_address {
+    if ctx.is_perceus_managed(&ty.kind)
+        && !crate::type_checker::element_layout::element_layout(&ty.kind, ctx.body.layout_scope())
+            .is_address
+    {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::IncRef(place.clone()),
@@ -971,7 +974,11 @@ pub(crate) fn emit_map_get_checked_call(
     // away from the entry the map is still holding.
     let temp = ctx.push_temp(value_ty.clone(), expr.span);
     if ctx.is_perceus_managed(&value_ty.kind)
-        && crate::runtime_fns::hands_back_a_borrow(rt::MAP_GET_CHECKED, &value_ty.kind)
+        && crate::runtime_fns::hands_back_a_borrow(
+            rt::MAP_GET_CHECKED,
+            &value_ty.kind,
+            ctx.body.layout_scope(),
+        )
     {
         ctx.mark_borrowed_temp(temp);
     }

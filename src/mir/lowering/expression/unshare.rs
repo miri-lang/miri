@@ -32,6 +32,7 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::element_layout::element_layout;
 
 /// One step of the path a write reaches through, read off the expression
 /// before any code for it is emitted.
@@ -292,7 +293,7 @@ fn lower_entry_place(
         crate::mir::lowering::helpers::ensure_place(ctx, entry, obj.span)
     };
     let entry = lookup(ctx);
-    if crate::ast::types::element_layout(&value_ty.kind).is_address {
+    if element_layout(&value_ty.kind, ctx.body.layout_scope()).is_address {
         return Ok(WrittenPlace {
             place: entry.clone(),
             write_back: Some(EntryWriteBack {

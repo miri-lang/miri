@@ -455,7 +455,7 @@ impl<'a> FunctionTranslator<'a> {
         let Some((stride, dim, component)) =
             crate::codegen::cranelift::translator::inline_vec_element_layout(
                 &element_kind,
-                ptr_type,
+                type_ctx,
             )
         else {
             return Ok(value);

@@ -1014,49 +1014,8 @@ pub const WIDE_SCALAR_BYTES: i64 = 16;
 /// type is still a type parameter.
 pub const VALUE_WORD_BYTES: i64 = 8;
 
-/// How a collection holds an element of one type and how that element travels
-/// to the runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ElementLayout {
-    /// Bytes that are the element — what a runtime entry point is told to copy
-    /// out of the address it is handed.
-    pub payload: i64,
-    /// Spacing between consecutive elements of a list or an array, which is
-    /// what an index read strides by. Never less than `payload`.
-    pub stride: i64,
-    /// Whether the operand carrying the element is already the address of its
-    /// bytes. An inline vector is; every other element is a value, whose
-    /// address is taken to hand it over.
-    pub is_address: bool,
-}
-
-/// The layout of a collection element of type `kind`.
-///
-/// This is the one place an element's width is decided. The stride a list is
-/// allocated with, the payload each call hands the runtime, and whether that
-/// call must take the element's address all come from here, so a store and the
-/// read or lookup that must match it cannot disagree.
-pub fn element_layout(kind: &TypeKind) -> ElementLayout {
-    if let Some(inline) = inline_element_layout(kind) {
-        return ElementLayout {
-            payload: inline.payload,
-            stride: inline.stride,
-            is_address: true,
-        };
-    }
-    if let Some(inner) = atomic_inner_kind(kind) {
-        return element_layout(inner);
-    }
-    let width = scalar_element_bytes(kind);
-    ElementLayout {
-        payload: width,
-        stride: width,
-        is_address: false,
-    }
-}
-
 /// The type an `Atomic<T>` wraps, which is what it occupies in a collection.
-fn atomic_inner_kind(kind: &TypeKind) -> Option<&TypeKind> {
+pub fn atomic_inner_kind(kind: &TypeKind) -> Option<&TypeKind> {
     let TypeKind::Custom(name, Some(args)) = kind else {
         return None;
     };
@@ -1131,24 +1090,12 @@ pub fn is_atomic_integer_buffer(kind: &TypeKind) -> bool {
     )
 }
 
-/// Byte width of an element that is not laid out inline: a scalar's own width,
-/// or a value word for anything the element holds by reference or has not
-/// resolved yet.
-///
-/// An `f16` element is the exception to its scalar width: a collection holds
-/// it in a value word, which is what every host path that stores one writes.
-fn scalar_element_bytes(kind: &TypeKind) -> i64 {
-    if matches!(kind, TypeKind::F16) {
-        return VALUE_WORD_BYTES;
-    }
-    scalar_width(kind).unwrap_or(VALUE_WORD_BYTES)
-}
-
 /// The exact byte width of a scalar value, or `None` for a type that is not a
 /// scalar held by value.
 ///
-/// Every width in the compiler is read from here or from [`element_layout`],
-/// which is built on it; nowhere else spells a scalar's size.
+/// Every width in the compiler is read from here or from the element-layout
+/// authority in the type checker, which is built on it; nowhere else spells a
+/// scalar's size.
 pub fn scalar_width(kind: &TypeKind) -> Option<i64> {
     let bytes = match kind {
         TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,

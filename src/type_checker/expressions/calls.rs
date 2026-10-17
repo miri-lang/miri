@@ -56,6 +56,7 @@ use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::{free_function_owner, GenericBodyId};
 use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::{is_gpu_compatible, is_zero_fillable_element};
+use crate::type_checker::value_class::LayoutScope;
 use crate::type_checker::DeclaredFunction;
 use crate::type_checker::{CalleeKind, TypeChecker};
 use std::collections::HashMap;
@@ -3744,7 +3745,10 @@ impl TypeChecker {
         if self.refuse_unsupported_vector_component(elem_type, span) {
             return true;
         }
-        if is_zero_fillable_element(&elem_type.kind, &self.type_table.global_type_definitions) {
+        if is_zero_fillable_element(
+            &elem_type.kind,
+            LayoutScope::program(self.type_definitions()),
+        ) {
             return false;
         }
         self.report_error(

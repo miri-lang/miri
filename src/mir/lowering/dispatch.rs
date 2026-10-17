@@ -15,6 +15,7 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
+use crate::type_checker::element_layout::element_layout;
 use crate::type_checker::CalleeKind;
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
@@ -831,7 +832,7 @@ pub(super) fn donate_operand_to_container(
     span: Span,
 ) -> (Operand, Option<Local>) {
     let src = operand_src_local(&op);
-    if crate::ast::types::element_layout(&ty.kind).is_address {
+    if element_layout(&ty.kind, ctx.body.layout_scope()).is_address {
         return (move_to_copy(op), src);
     }
     let local = store_operand_temp(ctx, move_to_copy(op), ty, span);

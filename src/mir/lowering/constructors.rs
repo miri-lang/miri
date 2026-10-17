@@ -15,6 +15,8 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, StructDefinition};
+use crate::type_checker::element_layout::element_layout;
+use crate::type_checker::value_class::LayoutScope;
 
 use super::dispatch::resolve_inherited_method;
 use super::helpers::coerce_rvalue_in;
@@ -694,7 +696,9 @@ pub(crate) fn lower_list_constructor(
     };
 
     let elem_kind = sequence_elem_kind(ctx, &list_ty);
-    let elem_size = elem_kind.as_ref().map_or(8, compute_elem_size_from_type);
+    let elem_size = elem_kind.as_ref().map_or(8, |kind| {
+        compute_elem_size_from_type(kind, ctx.body.layout_scope())
+    });
 
     match args {
         [list] if is_list_argument(ctx, list) => {
@@ -708,7 +712,8 @@ pub(crate) fn lower_list_constructor(
             // An inline element is copied as its component bytes; there is no
             // reference in its slot for the list to take.
             let elems_are_managed = elem_kind.is_some_and(|kind| {
-                ctx.is_perceus_managed(&kind) && !types::element_layout(&kind).is_address
+                ctx.is_perceus_managed(&kind)
+                    && !element_layout(&kind, ctx.body.layout_scope()).is_address
             });
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
@@ -728,9 +733,9 @@ pub(crate) fn emit_empty_list(
     list_ty: &Type,
     destination: Place,
 ) {
-    let elem_size = sequence_elem_kind(ctx, list_ty)
-        .as_ref()
-        .map_or(8, compute_elem_size_from_type);
+    let elem_size = sequence_elem_kind(ctx, list_ty).as_ref().map_or(8, |kind| {
+        compute_elem_size_from_type(kind, ctx.body.layout_scope())
+    });
     let size_op = int_constant(elem_size, span);
     emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
 }
@@ -1065,7 +1070,8 @@ pub(crate) fn lower_array_constructor(
     // storage the runtime hands back is already a valid value of its type and no
     // managed-element handling applies. Every other managed element is a
     // reference the type checker refuses; reaching here with one is a compiler bug.
-    if ctx.is_perceus_managed(&elem_type.kind) && !types::element_layout(&elem_type.kind).is_address
+    if ctx.is_perceus_managed(&elem_type.kind)
+        && !element_layout(&elem_type.kind, ctx.body.layout_scope()).is_address
     {
         return Err(LoweringError::unsupported_expression(
             format!(
@@ -1076,7 +1082,7 @@ pub(crate) fn lower_array_constructor(
         ));
     }
 
-    let elem_size = compute_elem_size_from_type(&elem_type.kind);
+    let elem_size = compute_elem_size_from_type(&elem_type.kind, ctx.body.layout_scope());
 
     // Set up the destination
     let (destination, result_op) = if let Some(d) = dest {
@@ -1198,7 +1204,7 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
 }
 
 /// Computes the element size in bytes for a collection element type: the
-/// stride [`types::element_layout`] gives it.
-pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
-    types::element_layout(kind).stride
+/// stride [`element_layout`] gives it, read against `scope`.
+pub(crate) fn compute_elem_size_from_type(kind: &TypeKind, scope: LayoutScope<'_>) -> i64 {
+    element_layout(kind, scope).stride
 }

@@ -11,6 +11,7 @@ use crate::mir::statement::Statement;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
+use crate::type_checker::value_class::LayoutScope;
 use crate::type_checker::DeclaredFunction;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -249,6 +250,12 @@ impl Body {
             }
         }
         counts
+    }
+
+    /// What a type written in this body is laid out against: the program's
+    /// type table and the type parameters this body leaves open.
+    pub fn layout_scope(&self) -> LayoutScope<'_> {
+        LayoutScope::new(self.rc_classifier.definitions(), &self.type_params)
     }
 
     /// Whether a value of `kind`, written in this body, is reference counted.

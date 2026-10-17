@@ -12,6 +12,7 @@ use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
+use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::{TypeDefinition, TypeFacts};
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
@@ -526,7 +527,7 @@ impl<'a> FunctionTranslator<'a> {
                     inline_elem = elem_type
                         .as_ref()
                         .map(|t| t.kind.clone())
-                        .filter(|k| inline_vec_element_layout(k, ptr_type).is_some());
+                        .filter(|k| inline_vec_element_layout(k, type_ctx).is_some());
                     if let Some(elem_type) = elem_type {
                         current_type = elem_type;
                     }
@@ -1770,7 +1771,7 @@ impl<'a> FunctionTranslator<'a> {
         // Inline vector elements are addressed by their std430 stride and the
         // index expression yields the element *address* (the projection chain
         // loads individual fields from it); pointer-sized elements are loaded.
-        let inline = elem_kind.and_then(|k| inline_vec_element_layout(k, ptr_type));
+        let inline = elem_kind.and_then(|k| inline_vec_element_layout(k, type_ctx));
         let cl_elem_ty = match elem_kind {
             Some(k) => crate::codegen::cranelift::types::translate_type_kind(k, ptr_type),
             None => ptr_type,
@@ -1917,7 +1918,7 @@ impl<'a> FunctionTranslator<'a> {
         // Inline vector elements occupy their std430 stride and are written as
         // raw component bytes copied from `value` (the source element/aggregate
         // address); they carry no managed pointer to DecRef.
-        let inline = elem_type_kind.and_then(|k| inline_vec_element_layout(k, ptr_type));
+        let inline = elem_type_kind.and_then(|k| inline_vec_element_layout(k, type_ctx));
         let cl_elem_ty = match elem_type_kind {
             Some(elem_kind) => {
                 crate::codegen::cranelift::types::translate_type_kind(elem_kind, ptr_type)
@@ -2257,12 +2258,12 @@ impl<'a> FunctionTranslator<'a> {
 /// element's stride, never less than a value word. The floor is what lets a
 /// method compiled once for every element type hand the container its element
 /// in a value word; the runtime lays each element it is handed out at this
-/// width (see `crate::ast::types::element_layout` for the element's own width).
-pub(crate) fn declared_element_bytes(kind: &TypeKind, ptr_type: cl_types::Type) -> u32 {
-    let stride = crate::ast::types::element_layout(kind).stride;
+/// width (see [`element_layout`] for the element's own width).
+pub(crate) fn declared_element_bytes(kind: &TypeKind, type_ctx: &TypeCtx) -> u32 {
+    let stride = element_layout(kind, type_ctx.layout_scope()).stride;
     u32::try_from(stride)
         .unwrap_or(u32::MAX)
-        .max(ptr_type.bytes())
+        .max(type_ctx.ptr_type.bytes())
 }
 
 /// The type a collection's type argument names, or `None` when the argument is
@@ -2280,7 +2281,7 @@ pub(crate) fn type_argument(argument: &crate::ast::expression::Expression) -> Op
 /// which keeps every caller's non-inline path on its existing behavior.
 pub(crate) fn inline_vec_element_layout(
     kind: &TypeKind,
-    ptr_type: cl_types::Type,
+    type_ctx: &TypeCtx,
 ) -> Option<(i64, u8, cl_types::Type)> {
     let TypeKind::Custom(name, Some(args)) = kind else {
         return None;
@@ -2289,11 +2290,12 @@ pub(crate) fn inline_vec_element_layout(
     let crate::ast::expression::ExpressionKind::Type(scalar, _) = &args.first()?.node else {
         return None;
     };
-    let layout = crate::ast::types::element_layout(kind);
+    let layout = element_layout(kind, type_ctx.layout_scope());
     if !layout.is_address {
         return None;
     }
     let stride = layout.stride;
-    let component = crate::codegen::cranelift::types::translate_type_kind(&scalar.kind, ptr_type);
+    let component =
+        crate::codegen::cranelift::types::translate_type_kind(&scalar.kind, type_ctx.ptr_type);
     Some((stride, dim, component))
 }

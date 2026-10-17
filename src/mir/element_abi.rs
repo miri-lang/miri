@@ -20,18 +20,21 @@
 //!
 //! The positions come from [`crate::runtime_fns::element_positions`] and
 //! [`crate::runtime_fns::returns_element_value`]; the width, and whether the
-//! operand is already an address, from [`crate::ast::types::element_layout`].
+//! operand is already an address, from
+//! [`crate::type_checker::element_layout::element_layout`], read against the
+//! body's own layout scope.
 //! The pass runs after reference counting, which has already accounted for the
 //! element as the value it is.
 
 use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
-use crate::ast::types::{element_layout, ElementLayout, Type, TypeKind};
+use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::{
     AggregateKind, ArgMode, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType,
     Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
+pub use crate::type_checker::element_layout::{element_layout, ElementLayout};
 
 /// Rewrite every element argument in `body` into its address and byte count,
 /// and every element result into caller storage the runtime writes.
@@ -154,15 +157,18 @@ fn element_address(
 fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> {
     match arg {
         Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-            Ok(element_layout(&body.local_decls[place.local.0].ty.kind))
+            Ok(element_layout(
+                &body.local_decls[place.local.0].ty.kind,
+                body.layout_scope(),
+            ))
         }
-        Operand::Constant(constant) => Ok(element_layout(&constant.ty.kind)),
-        Operand::Function(function) => Ok(element_layout(&function.ty.kind)),
+        Operand::Constant(constant) => Ok(element_layout(&constant.ty.kind, body.layout_scope())),
+        Operand::Function(function) => Ok(element_layout(&function.ty.kind, body.layout_scope())),
         Operand::Copy(place) | Operand::Move(place) => {
             let reached = arg.ty_projected(body).ok_or_else(|| {
                 format!("the collection element {place} reaches a type this pass cannot size")
             })?;
-            projected_layout(&reached).ok_or_else(|| {
+            projected_layout(body, &reached).ok_or_else(|| {
                 format!(
                     "the collection element {place} is an inline vector read through a \
                      projection, whose component width is not known here"
@@ -175,12 +181,13 @@ fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> 
 /// The layout of an element whose type is known only as the MIR type a
 /// projection reaches, or `None` for an inline vector, whose components that
 /// type does not record.
-fn projected_layout(reached: &MirType) -> Option<ElementLayout> {
+fn projected_layout(body: &Body, reached: &MirType) -> Option<ElementLayout> {
     if reached.is_inline_vector() {
         return None;
     }
     Some(element_layout(
         &register_scalar(reached).unwrap_or(TypeKind::RawPtr),
+        body.layout_scope(),
     ))
 }
 
@@ -258,7 +265,7 @@ fn return_element_through_storage(body: &mut Body, block: usize) -> Result<(), S
         return Ok(());
     };
     let kind = destination_kind(body, &destination)?;
-    let layout = element_layout(&kind);
+    let layout = element_layout(&kind, body.layout_scope());
     let (storage, is_out) = if layout.is_address {
         build_zero_vector(body, block, &destination, &kind, span)?;
         (destination, false)
