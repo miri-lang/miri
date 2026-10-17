@@ -7,8 +7,13 @@
 //! shares a built-in collection's body and the MIR verifier's exemption both
 //! read the set it records, [`ClassDefinition::runtime_settled_methods`].
 //!
-//! A body the class declares is settled when both hold:
+//! A body the class declares is settled when all three hold:
 //!
+//! - **Its signature hands no optional of a type parameter across the call.**
+//!   How an optional is laid out depends on its payload: one holding a
+//!   reference-counted pointer can be that pointer, null when absent, where one
+//!   holding the pointer-width stand-in needs a box. A `pop` that returns `T?`
+//!   therefore builds a different value at each kind of argument.
 //! - **Every call is settled.** It calls a `runtime` function, a built-in
 //!   variant constructor (`Some`, `Ok`, `Err`), `self.m()` for a method `m` of
 //!   this class that is itself settled, or `super.m()` for a settled method of
@@ -24,8 +29,8 @@
 //!   checker recorded no type for counts as reading one.
 //!
 //! What stays is a body that moves elements between the caller and the
-//! runtime: `pop` reads `self[len - 1]` and hands the list's own reference
-//! over with a runtime take, and only a body that names the intrinsic can pair
+//! runtime: `push` hands its element to a runtime store that keeps the
+//! caller's reference, and only a body that names the intrinsic can pair
 //! with it.
 //!
 //! The rule is judged with this class's own bodies as the callees of `self`;
@@ -77,15 +82,7 @@ impl TypeChecker {
         let Some(TypeDefinition::Class(class_def)) = definitions.get(class_name) else {
             return BTreeSet::new();
         };
-        let bodies: Vec<(&str, &Statement)> = method_statements
-            .iter()
-            .filter_map(|stmt| match &stmt.node {
-                StatementKind::FunctionDeclaration(decl) => {
-                    method_body(decl).map(|body| (decl.name.as_str(), body))
-                }
-                _ => None,
-            })
-            .collect();
+        let bodies = settleable_bodies(class_def, method_statements);
         let inherited = base_class_settled_methods(class_def, definitions);
         let mut settled: BTreeSet<&str> = bodies.iter().map(|(name, _)| *name).collect();
         loop {
@@ -109,6 +106,26 @@ impl TypeChecker {
     }
 }
 
+/// The declared bodies among `method_statements`, by method name, whose
+/// signature lets them be settled; a body whose signature fails the rule never
+/// enters the set.
+fn settleable_bodies<'s>(
+    class_def: &ClassDefinition,
+    method_statements: &[&'s Statement],
+) -> Vec<(&'s str, &'s Statement)> {
+    method_statements
+        .iter()
+        .filter_map(|stmt| match &stmt.node {
+            StatementKind::FunctionDeclaration(decl)
+                if !signature_holds_a_parameter_optional(class_def, &decl.name) =>
+            {
+                method_body(decl).map(|body| (decl.name.as_str(), body))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// The settled methods of the class `class_def` extends, which a `super` call
 /// reaches; none for a class that extends nothing.
 fn base_class_settled_methods<'d>(
@@ -123,6 +140,33 @@ fn base_class_settled_methods<'d>(
         | TypeDefinition::Alias(_)
         | TypeDefinition::Trait(_) => None,
     }
+}
+
+/// Whether the method `method_name` of `class_def` takes or returns an
+/// optional whose innermost payload is one of the class's type parameters.
+fn signature_holds_a_parameter_optional(class_def: &ClassDefinition, method_name: &str) -> bool {
+    let Some(method) = class_def.methods.get(method_name) else {
+        return false;
+    };
+    method
+        .params
+        .iter()
+        .map(|(_, ty)| ty)
+        .chain(std::iter::once(&method.return_type))
+        .any(|ty| is_parameter_optional(&ty.kind, class_def.generics.as_ref()))
+}
+
+/// Whether `kind` is an optional, at any depth of nesting, of a parameter
+/// among `class_generics`.
+fn is_parameter_optional(kind: &TypeKind, class_generics: Option<&Vec<GenericDefinition>>) -> bool {
+    let TypeKind::Option(inner) = kind else {
+        return false;
+    };
+    let mut payload = &inner.kind;
+    while let TypeKind::Option(inner) = payload {
+        payload = &inner.kind;
+    }
+    is_generic_parameter_kind(payload, class_generics)
 }
 
 /// One pass over method bodies against the current guess at the settled set.

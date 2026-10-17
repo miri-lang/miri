@@ -44,14 +44,12 @@ fn list_pairs_its_element_takes_with_the_runtime_but_not_its_lookups() {
         "use system.collections.list\nfn main()\n    let l = List<int>()\n",
         "List",
     );
-    assert_settled(
-        &settled,
-        "List",
-        &["length", "pop", "remove_at", "last_index", "push", "clone"],
-    );
+    assert_settled(&settled, "List", &["length", "last_index", "push", "clone"]);
     // `remove` finds its element through the `index_of` trait default, which
-    // compares with `==`.
-    assert_unsettled(&settled, "List", &["remove"]);
+    // compares with `==`. `pop` and `remove_at` hand back an optional of the
+    // element type, whose representation depends on the element: each
+    // instantiation compiles its own body.
+    assert_unsettled(&settled, "List", &["remove", "pop", "remove_at"]);
 }
 
 #[test]
@@ -63,8 +61,9 @@ fn map_set_and_array_keep_their_runtime_backed_methods_settled() {
         other => panic!("`{name}` is not a class: {other:?}"),
     };
     let map = settled_of("Map");
-    assert_settled(&map, "Map", &["get", "is_empty", "remove"]);
-    assert_unsettled(&map, "Map", &["filter", "map", "reduce"]);
+    assert_settled(&map, "Map", &["is_empty", "remove"]);
+    // `get` hands back an optional of the value type, which depends on it.
+    assert_unsettled(&map, "Map", &["get", "filter", "map", "reduce"]);
     let set = settled_of("Set");
     assert_settled(&set, "Set", &["is_empty", "contains"]);
     assert_unsettled(&set, "Set", &["filter"]);

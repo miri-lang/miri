@@ -18,6 +18,7 @@ pub mod integration;
 pub mod membership;
 pub mod methods;
 pub mod optional_elements;
+pub mod optional_results;
 pub mod rc;
 pub mod transformable;
 pub mod wide_scalar_elements;

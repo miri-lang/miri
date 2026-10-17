@@ -678,11 +678,10 @@ fn orders_differently_from_signed_fallback(kind: &TypeKind) -> bool {
 /// which makes its shared generic body correct at every element type.
 ///
 /// The type checker records the set on the class; the rule is stated once, in
-/// [`crate::type_checker::runtime_settled`]. A settled body pairs each element
-/// read with the runtime call that hands the container's own reference over
-/// (`pop` and `remove_at` do), and only a body that can name the intrinsic can
-/// pair with it: re-lowering one against an owning read would leave that
-/// donated reference with no one to release it. A method the collection only
+/// [`crate::type_checker::runtime_settled`]. A settled body only hands elements
+/// between the caller and the runtime — `push` gives its element to a store
+/// that keeps the caller's reference — so lowering it once leaves every
+/// reference where the runtime expects it. A method the collection only
 /// inherits is never in the set.
 pub(crate) fn is_settled_by_the_runtime(
     class_def: &crate::type_checker::context::ClassDefinition,
