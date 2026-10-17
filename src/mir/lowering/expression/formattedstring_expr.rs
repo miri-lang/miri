@@ -13,7 +13,8 @@ use crate::error::syntax::Span;
 use crate::mir::lowering::constructors::int_constant;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::{
-    emit_runtime_to_string, emit_string_concat, emit_to_string, lower_expression,
+    emit_runtime_to_string, emit_string_append, emit_string_concat, emit_to_string,
+    lower_expression,
 };
 use crate::runtime_fns::rt;
 
@@ -256,9 +257,14 @@ fn concat_formattedstring_parts(
     let mut accumulator = string_parts[0];
     for &next_part in &string_parts[1..] {
         let old_acc = accumulator;
-        let result = emit_string_concat(ctx, old_acc, next_part, &parent_expr.span)?;
-
-        ctx.emit_temp_drop(old_acc, parts_watermark, parent_expr.span);
+        // A temp of this string's own is appended to in place; a part that is
+        // a binding of the program is read, never taken, so the first step
+        // copies it into a new string.
+        let result = if old_acc.0 >= parts_watermark {
+            emit_string_append(ctx, old_acc, next_part, &parent_expr.span)
+        } else {
+            emit_string_concat(ctx, old_acc, next_part, &parent_expr.span)?
+        };
         ctx.emit_temp_drop(next_part, parts_watermark, parent_expr.span);
 
         accumulator = result;

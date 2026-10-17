@@ -320,6 +320,36 @@ fn emit_runtime_to_string(
     Ok(result)
 }
 
+/// Emits an append of the string `right` holds onto the string `left` holds,
+/// taking over `left`'s reference, and returns the local holding the result:
+/// `left` itself grown in place when nothing else held it, a new string
+/// otherwise. `left` must be a temp the caller owns and does not release.
+pub(super) fn emit_string_append(
+    ctx: &mut LoweringContext,
+    left: crate::mir::place::Local,
+    right: crate::mir::place::Local,
+    span: &crate::error::syntax::Span,
+) -> crate::mir::place::Local {
+    let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: Operand::runtime(crate::runtime_fns::rt::STRING_APPEND, *span),
+            args: vec![
+                Operand::Move(Place::new(left)),
+                Operand::Copy(Place::new(right)),
+            ],
+            arg_modes: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(result),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    result
+}
+
 /// Emits a call to `String.concat` and returns the result local.
 ///
 /// Concatenates two String values by calling the `concat` method of `String`.

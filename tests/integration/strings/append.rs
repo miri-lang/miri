@@ -133,3 +133,36 @@ fn main()
         "[<0>,[<1>,[<2>,[",
     );
 }
+
+/// A formatted string grows its own buffer as it adds each part, and leaves
+/// every string a part was read from — a field, an element, a map value, a
+/// binding — as it was.
+#[test]
+fn test_a_formatted_string_leaves_the_strings_it_reads_unchanged() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.map
+
+struct Person
+    name String
+
+class Box
+    var label String
+    fn init(label String)
+        self.label = label
+
+fn main()
+    let p = Person(name: "ann")
+    let l = List(["x", "y"])
+    let m = {"k": "v"}
+    let bx = Box("lbl")
+    let s = "plain"
+    let t = (s, "two")
+    let built = f"{p.name}!{l[0]}?{m['k']}#{bx.label}*{s}+{t.1}~"
+    println(f"{built} | {p.name} {l[0]} {m['k']} {bx.label} {s} {t.1}")
+"#,
+        "ann!x?v#lbl*plain+two~ | ann x v lbl plain two",
+    );
+}
