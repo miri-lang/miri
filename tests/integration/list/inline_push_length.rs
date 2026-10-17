@@ -170,3 +170,35 @@ fn test_a_reserved_list_allocates_its_buffer_once() {
         "reserving allocated {reserved} times, growing {grown}"
     );
 }
+
+/// The buffers a program allocates, as `MIRI_ALLOC_COUNT` reports them.
+fn buffer_allocations(code: &str) -> usize {
+    let result = crate::utils::miri_run_with_env(code, "MIRI_ALLOC_COUNT", "1");
+    assert!(result.success, "{}", result.output());
+    let line = result
+        .stderr
+        .lines()
+        .find(|line| line.starts_with("MIRI_ALLOC_COUNT:"))
+        .unwrap_or_else(|| panic!("no allocation count in:\n{}", result.stderr));
+    line.split("buffers=")
+        .nth(1)
+        .and_then(|rest| rest.split([' ', ')']).next())
+        .and_then(|count| count.parse().ok())
+        .unwrap_or_else(|| panic!("no buffer count in: {line}"))
+}
+
+/// `map` and `filter` give their result room for every element before
+/// building it, so a result of a thousand elements allocates its buffer once,
+/// as one of two does, instead of once per doubling.
+#[test]
+fn test_map_and_filter_results_allocate_their_buffer_once() {
+    let program = |n: usize| {
+        format!(
+            "use system.io\nuse system.collections.list\n\nfn main()\n    var l = List<int>()\n    l.resize({n}, 3)\n    let doubled = l.map(fn(x int) int: x * 2)\n    let kept = l.filter(fn(x int) bool: x > 1)\n    println(f\"{{doubled.length()}} {{kept.length()}}\")\n"
+        )
+    };
+    assert_eq!(
+        buffer_allocations(&program(1000)),
+        buffer_allocations(&program(2))
+    );
+}

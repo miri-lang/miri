@@ -24,16 +24,22 @@ public trait Transformable<T>
         var result = List<T>()
         var i = 0
         let n = self.length()
+        result.reserve(n)
         while i < n
             result.push(f(self.element_at(i)))
             i += 1
         return result
 
     /// Returns a new List containing only elements for which `f` returns true.
+    ///
+    /// The result is given room for every element up front, so building it
+    /// never reallocates; a filter that keeps few elements holds the unused
+    /// room until the result is released.
     public fn filter(f fn(T) bool) [T]
         var result = List<T>()
         var i = 0
         let n = self.length()
+        result.reserve(n)
         while i < n
             let item = self.element_at(i)
             if f(item)

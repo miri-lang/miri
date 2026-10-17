@@ -48,12 +48,14 @@ public trait Sequenced<T> extends Transformable<T>
         var source = List<T>()
         var k = 0
         let n = self.length()
+        source.reserve(n)
         while k < n
             source.push(self.element_at(k))
             k += 1
         var width = 1
         while width < n
             var merged = List<T>()
+            merged.reserve(n)
             var lo = 0
             while lo < n
                 let mid = if lo + width < n: lo + width else: n
@@ -96,6 +98,7 @@ public trait Sequenced<T> extends Transformable<T>
     public fn reversed() [T]
         var result = List<T>()
         let n = self.length()
+        result.reserve(n)
         var i = n - 1
         while i >= 0
             result.push(self.element_at(i))
@@ -111,6 +114,7 @@ public trait Sequenced<T> extends Transformable<T>
         let m = other.length()
         var lim = n
         if m < lim: lim = m
+        result.reserve(lim)
         var i = 0
         while i < lim
             result.push((self.element_at(i), other.element_at(i)))
@@ -121,6 +125,7 @@ public trait Sequenced<T> extends Transformable<T>
     public fn enumerate() [(int, T)]
         var result = List<(int, T)>()
         let n = self.length()
+        result.reserve(n)
         var i = 0
         while i < n
             result.push((i, self.element_at(i)))
