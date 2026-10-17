@@ -4,9 +4,10 @@
 //! The settled facts about a program's types that a backend reads while it
 //! emits code: the definition of every named type, the instantiations whose
 //! method bodies were lowered, the instantiations a value is released at, the
-//! slots each vtable is filled with, and the answers the dispatch rules give
-//! for a type — its drop hook, its `clone`, the traits it implements and the
-//! methods a container asks of its elements.
+//! slots each vtable is filled with, the value class a type's values are
+//! represented by, and the answers the dispatch rules give for a type — its
+//! drop hook, its `clone`, the traits it implements and the methods a
+//! container asks of its elements.
 //!
 //! The pipeline builds one [`TypeFacts`] after type checking and lowering have
 //! settled every instantiation, and hands it to the backend read-only. A
@@ -26,6 +27,9 @@ use std::collections::{HashMap, HashSet};
 pub use crate::type_checker::context::{
     ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo, StructDefinition,
     TypeDefinition,
+};
+pub use crate::type_checker::value_class::{
+    value_class, FieldRepr, ScalarKind, ValueClass, ValueField, ValueLayout,
 };
 pub use drop_reach::DropHookReach;
 

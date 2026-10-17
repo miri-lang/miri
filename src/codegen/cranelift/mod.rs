@@ -17,6 +17,8 @@ pub mod translate_rvalue;
 pub mod translate_statement;
 pub mod translator;
 mod types;
+pub mod value_abi;
+pub mod value_locals;
 mod vtable;
 
 use crate::ast::types::{BuiltinCollectionKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
@@ -457,7 +459,8 @@ impl CraneliftBackend {
 
     /// Pre-declare all user functions with MIR-derived signatures so call sites
     /// compiled before the callee resolve to the correct signature (avoids
-    /// the DFG-inferred widened-type mismatch).
+    /// the DFG-inferred widened-type mismatch). Each is the signature its body
+    /// is defined under.
     fn predeclare_user_functions(
         &self,
         module: &mut ObjectModule,
@@ -467,29 +470,7 @@ impl CraneliftBackend {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
         for (name, body) in bodies.iter() {
-            let mut sig = Signature::new(call_conv);
-            if !body.local_decls.is_empty() {
-                let ret_ty = &body.local_decls[0].ty;
-                if ret_ty.kind != crate::ast::types::TypeKind::Void {
-                    sig.returns
-                        .push(AbiParam::new(translate_type(ret_ty, ptr_type)));
-                }
-            }
-            // Scalar `out` params use ptr_type (copy-in/copy-out ABI) — must match
-            // the signature built in FunctionTranslator::build_signature.
-            for i in 1..=body.arg_count {
-                if i < body.local_decls.len() {
-                    let param_ty = &body.local_decls[i].ty;
-                    let cl_type = if crate::mir::body::written_back_out_params(body)
-                        .contains(&crate::mir::Local(i))
-                    {
-                        ptr_type
-                    } else {
-                        translate_type(param_ty, ptr_type)
-                    };
-                    sig.params.push(AbiParam::new(cl_type));
-                }
-            }
+            let sig = value_abi::body_signature(body, call_conv, ptr_type);
             module
                 .declare_function(name, Linkage::Export, &sig)
                 .map_err(|e| CodegenError::declare_function(*name, e.to_string()))?;

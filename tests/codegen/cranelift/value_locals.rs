@@ -1,0 +1,391 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+//! A bitwise value held as its bytes, in a stack slot of the frame holding it.
+//!
+//! No program holds a value this way yet: every bitwise value is still
+//! counted. These bodies are hand-built with a classifier that holds bitwise
+//! values as their bytes, so the storage, copying and call convention a value
+//! uses is compiled — with the Cranelift verifier on — and run before any
+//! program depends on it.
+
+use miri::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
+use miri::ast::types::{Type, TypeKind};
+use miri::ast::MemberVisibility;
+use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions};
+use miri::codegen::Backend;
+use miri::error::syntax::Span;
+use miri::mir::place::PlaceElem;
+use miri::mir::rc::RcClassifier;
+use miri::mir::symbol::Symbol;
+use miri::mir::type_facts::TypeFacts;
+use miri::mir::{
+    AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Constant, ExecutionModel, Local,
+    LocalDecl, Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+};
+use miri::type_checker::context::{StructDefinition, TypeDefinition};
+use miri::type_checker::ModuleId;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::rc::Rc;
+
+fn span() -> Span {
+    Span::default()
+}
+
+fn ty(kind: TypeKind) -> Type {
+    Type::new(kind, span())
+}
+
+fn point() -> TypeKind {
+    TypeKind::Custom("P".to_string(), None)
+}
+
+/// `struct P { x int, y float }`.
+fn definitions() -> HashMap<String, TypeDefinition> {
+    let fields = [("x", TypeKind::Int), ("y", TypeKind::Float)]
+        .into_iter()
+        .map(|(name, kind)| (name.to_string(), ty(kind), MemberVisibility::Public))
+        .collect();
+    let point = StructDefinition {
+        fields,
+        generics: None,
+        module: String::new(),
+    };
+    HashMap::from([("P".to_string(), TypeDefinition::Struct(point))])
+}
+
+fn place(local: usize) -> Place {
+    Place::new(Local(local))
+}
+
+fn field(local: usize, index: usize) -> Place {
+    Place {
+        local: Local(local),
+        projection: vec![PlaceElem::Field(index)],
+    }
+}
+
+fn copy(place: Place) -> Operand {
+    Operand::Copy(place)
+}
+
+fn int(value: i64) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span: span(),
+        ty: ty(TypeKind::Int),
+        literal: Literal::Integer(IntegerLiteral::I64(value)),
+    }))
+}
+
+fn float(value: f64) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span: span(),
+        ty: ty(TypeKind::Float),
+        literal: Literal::Float(FloatLiteral::F64(value.to_bits())),
+    }))
+}
+
+fn assign(dest: Place, rvalue: Rvalue) -> Statement {
+    Statement {
+        kind: StatementKind::Assign(dest, rvalue),
+        span: span(),
+    }
+}
+
+fn binary(op: BinOp, lhs: Operand, rhs: Operand) -> Rvalue {
+    Rvalue::BinaryOp(op, Box::new(lhs), Box::new(rhs))
+}
+
+fn block(statements: Vec<Statement>, kind: TerminatorKind) -> BasicBlockData {
+    let mut data = BasicBlockData::new(None);
+    data.statements = statements;
+    data.terminator = Some(Terminator::new(kind, span()));
+    data
+}
+
+fn function(name: &str) -> Symbol {
+    Symbol::function(&ModuleId::Program, name, &[])
+}
+
+fn call(callee: Symbol, args: Vec<Operand>, destination: usize, target: usize) -> TerminatorKind {
+    TerminatorKind::Call {
+        func: Operand::function(callee, span()),
+        args,
+        arg_modes: Vec::new(),
+        arg_handles: Vec::new(),
+        destination: place(destination),
+        target: Some(BasicBlock(target)),
+    }
+}
+
+/// A body over locals of `kinds`, `_0` first, taking `arg_count` of them, and
+/// holding bitwise values as their bytes.
+fn body_of(kinds: &[TypeKind], arg_count: usize, blocks: Vec<BasicBlockData>) -> Body {
+    let mut body = Body::new(arg_count, span(), ExecutionModel::Cpu);
+    for kind in kinds {
+        body.new_local(LocalDecl::new(ty(kind.clone()), span()));
+    }
+    body.basic_blocks.extend(blocks);
+    body.rc_classifier = RcClassifier::with_uncounted_bitwise_values(Rc::new(definitions()));
+    body
+}
+
+/// `fn make(x int, y float) P` builds its result in the caller's slot.
+fn make() -> Body {
+    let build = Rvalue::Aggregate(
+        AggregateKind::Struct(ty(point())),
+        vec![copy(place(1)), copy(place(2))],
+    );
+    body_of(
+        &[point(), TypeKind::Int, TypeKind::Float],
+        2,
+        vec![block(vec![assign(place(0), build)], TerminatorKind::Return)],
+    )
+}
+
+/// `fn shift(p P) P`: copies `p`, adds one to the copy's `x`, returns the
+/// copy.
+fn shift() -> Body {
+    let statements = vec![
+        assign(place(2), Rvalue::Use(copy(place(1)))),
+        assign(field(2, 0), binary(BinOp::Add, copy(field(2, 0)), int(1))),
+        assign(place(0), Rvalue::Use(copy(place(2)))),
+    ];
+    body_of(
+        &[point(), point(), point()],
+        1,
+        vec![block(statements, TerminatorKind::Return)],
+    )
+}
+
+/// `main` exits with `10 * b.x + int(2 * b.y) + a.x + (c.x - 99)`, where
+/// `a = make(3, 2.5)`, `b = shift(a)`, then `a.x = 10`, `c = b`, `c.x = 99`.
+///
+/// Every term reads a different value: 55 holds only when `shift` got a copy
+/// of `a`, `b` came back through its return slot, and `c` is a copy of `b`.
+fn main_body() -> Body {
+    let kinds = [
+        TypeKind::Int,
+        point(),
+        point(),
+        point(),
+        TypeKind::Int,
+        TypeKind::Float,
+        TypeKind::Int,
+        TypeKind::Int,
+    ];
+    let statements = vec![
+        assign(field(1, 0), Rvalue::Use(int(10))),
+        assign(place(3), Rvalue::Use(copy(place(2)))),
+        assign(field(3, 0), Rvalue::Use(int(99))),
+        assign(place(5), binary(BinOp::Mul, copy(field(2, 1)), float(2.0))),
+        assign(
+            place(6),
+            Rvalue::Cast(Box::new(copy(place(5))), ty(TypeKind::Int)),
+        ),
+        assign(place(7), binary(BinOp::Mul, copy(field(2, 0)), int(10))),
+        assign(place(7), binary(BinOp::Add, copy(place(7)), copy(place(6)))),
+        assign(
+            place(7),
+            binary(BinOp::Add, copy(place(7)), copy(field(1, 0))),
+        ),
+        assign(place(4), binary(BinOp::Sub, copy(field(3, 0)), int(99))),
+        assign(place(0), binary(BinOp::Add, copy(place(7)), copy(place(4)))),
+    ];
+    body_of(
+        &kinds,
+        0,
+        vec![
+            block(
+                Vec::new(),
+                call(function("make"), vec![int(3), float(2.5)], 1, 1),
+            ),
+            block(
+                Vec::new(),
+                call(function("shift"), vec![copy(place(1))], 2, 2),
+            ),
+            block(statements, TerminatorKind::Return),
+        ],
+    )
+}
+
+fn backend_for(bodies: &[&Body]) -> CraneliftBackend {
+    let mut backend = CraneliftBackend::new().expect("host backend");
+    let facts = TypeFacts::new(
+        definitions(),
+        HashMap::new(),
+        Default::default(),
+        bodies.iter().copied(),
+    )
+    .expect("type facts");
+    backend.set_type_facts(facts);
+    backend
+}
+
+/// Compile `program`, every body by its link name, with its CLIF listing.
+fn compile(program: &[(String, &Body)]) -> Result<(Vec<u8>, String), String> {
+    let bodies: Vec<&Body> = program.iter().map(|(_, body)| *body).collect();
+    let named: Vec<(&str, &Body)> = program
+        .iter()
+        .map(|(name, body)| (name.as_str(), *body))
+        .collect();
+    let options = CraneliftOptions {
+        ir_listing: true,
+        ..CraneliftOptions::default()
+    };
+    let artifact = backend_for(&bodies)
+        .compile(&named, &options)
+        .map_err(|error| error.to_string())?;
+    Ok((artifact.bytes, artifact.ir_listing.unwrap_or_default()))
+}
+
+fn runtime_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runtime/core/target/release")
+}
+
+/// Link `object` against the core runtime and run it, returning its exit
+/// status.
+fn run(object: &[u8]) -> i32 {
+    let dir = std::env::temp_dir().join(format!("miri-value-locals-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let object_path = dir.join("program.o");
+    let exe_path = dir.join("program");
+    std::fs::write(&object_path, object).expect("object written");
+    let status = Command::new("cc")
+        .arg(&object_path)
+        .arg("-o")
+        .arg(&exe_path)
+        .arg(format!("-L{}", runtime_dir().display()))
+        .arg("-lmiri_runtime_core")
+        .arg("-lm")
+        .status()
+        .expect("the linker runs");
+    assert!(status.success(), "linking failed: {status}");
+    let exit = Command::new(&exe_path).status().expect("the program runs");
+    let _ = std::fs::remove_dir_all(&dir);
+    exit.code().expect("the program exits")
+}
+
+fn program() -> (Body, Body, Body) {
+    (make(), shift(), main_body())
+}
+
+#[test]
+fn a_value_is_built_copied_passed_and_returned_by_its_bytes() {
+    let (make, shift, main) = program();
+    let named = [
+        (function("make").link_name(), &make),
+        (function("shift").link_name(), &shift),
+        (Symbol::entry().link_name(), &main),
+    ];
+    let (object, listing) = compile(&named).expect("the program compiles and verifies");
+    assert!(
+        !listing.contains("malloc"),
+        "a value held as its bytes allocates nothing:\n{listing}"
+    );
+    assert_eq!(run(&object), 55);
+}
+
+/// The CLIF header line of the function linked as `name` in `listing`.
+fn header_of<'l>(listing: &'l str, name: &str) -> &'l str {
+    let marker = format!("; {name}\n");
+    let start = listing.find(&marker).expect("the function is listed") + marker.len();
+    listing[start..].lines().next().unwrap_or_default()
+}
+
+#[test]
+fn a_value_body_is_signed_with_a_return_slot_and_an_address_parameter() {
+    let (make, shift, main) = program();
+    let make_name = function("make").link_name();
+    let shift_name = function("shift").link_name();
+    let named = [
+        (make_name.clone(), &make),
+        (shift_name.clone(), &shift),
+        (Symbol::entry().link_name(), &main),
+    ];
+    let (_, listing) = compile(&named).expect("the program compiles and verifies");
+    let make_header = header_of(&listing, &make_name);
+    assert!(
+        make_header.contains("(i64, i64, f64)") && !make_header.contains("->"),
+        "`make` takes its return slot first and returns nothing: {make_header}"
+    );
+    let shift_header = header_of(&listing, &shift_name);
+    assert!(
+        shift_header.contains("(i64, i64)") && !shift_header.contains("->"),
+        "`shift` takes its return slot and its value by address: {shift_header}"
+    );
+}
+
+/// A body whose only statement is `statement`, over a value `_1` and a raw
+/// word `_2`.
+fn refused(statement: Statement) -> String {
+    let body = body_of(
+        &[TypeKind::Void, point(), TypeKind::RawPtr],
+        0,
+        vec![block(vec![statement], TerminatorKind::Return)],
+    );
+    match compile(&[("refused".to_string(), &body)]) {
+        Ok(_) => panic!("the body must be refused"),
+        Err(error) => error,
+    }
+}
+
+#[test]
+fn a_value_stored_into_a_word_is_refused() {
+    let error = refused(assign(place(2), Rvalue::Use(copy(place(1)))));
+    assert!(error.contains("stored into a word"), "{error}");
+}
+
+#[test]
+fn a_count_adjustment_of_a_value_is_refused() {
+    let error = refused(Statement {
+        kind: StatementKind::IncRef(place(1)),
+        span: span(),
+    });
+    assert!(
+        error.contains("IncRef") && error.contains("no count"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_value_passed_to_a_runtime_function_is_refused() {
+    let body = body_of(
+        &[TypeKind::Void, point()],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                TerminatorKind::Call {
+                    func: Operand::runtime("miri_rt_example", span()),
+                    args: vec![copy(place(1))],
+                    arg_modes: Vec::new(),
+                    arg_handles: Vec::new(),
+                    destination: place(0),
+                    target: Some(BasicBlock(1)),
+                },
+            ),
+            block(Vec::new(), TerminatorKind::Return),
+        ],
+    );
+    let error = compile(&[("caller".to_string(), &body)])
+        .err()
+        .expect("the body must be refused");
+    assert!(error.contains("runtime function"), "{error}");
+}
+
+#[test]
+fn an_optional_held_as_bytes_is_refused_until_it_has_a_translation() {
+    let optional = TypeKind::Option(Box::new(ty(TypeKind::Int)));
+    let body = body_of(
+        &[TypeKind::Void, optional],
+        0,
+        vec![block(Vec::new(), TerminatorKind::Return)],
+    );
+    let error = compile(&[("holder".to_string(), &body)])
+        .err()
+        .expect("the body must be refused");
+    assert!(error.contains("no translation"), "{error}");
+}

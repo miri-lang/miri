@@ -38,6 +38,10 @@ fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
         out_param_ptr_vars: EMPTY_OUT.get_or_init(HashMap::new),
         open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
         bound_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
+        // A thunk-like context with no body: it holds no value as its bytes.
+        values: Box::leak(Box::new(
+            miri::codegen::cranelift::value_locals::ValueLocals::none(),
+        )),
     }
 }
 

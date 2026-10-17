@@ -14,6 +14,7 @@
 
 use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME};
 use crate::codegen::cranelift::translator::FunctionTranslator;
+use crate::codegen::cranelift::value_abi::{miri_signature, Passing, Returning};
 use crate::error::CodegenError;
 use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
 use crate::mir::symbol::{Symbol, ThunkKind};
@@ -295,12 +296,13 @@ fn emit_user_method_call(
         builder.ins().call(local_trap, &[]);
         return Ok(builder.ins().iconst(callee.method.answer_type(ptr_type), 0));
     }
-    let mut sig = Signature::new(callee.call_conv);
-    sig.params.push(AbiParam::new(ptr_type)); // self
-    sig.params.push(AbiParam::new(ptr_type)); // other
-    sig.params.push(AbiParam::new(ptr_type)); // allocator
-    sig.returns
-        .push(AbiParam::new(callee.method.answer_type(ptr_type)));
+    let receiver_other_and_allocator = [Passing::Word(ptr_type); 3];
+    let sig = miri_signature(
+        callee.call_conv,
+        ptr_type,
+        &receiver_other_and_allocator,
+        Returning::Word(callee.method.answer_type(ptr_type)),
+    );
 
     let callee_name = callee.symbol.link_name();
     let func_id = module

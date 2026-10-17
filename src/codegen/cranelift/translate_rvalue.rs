@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::Expression;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
@@ -11,6 +11,9 @@ use crate::codegen::cranelift::layout::{
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
+use crate::codegen::cranelift::value_abi::{
+    function_type_signature, miri_signature, Passing, Returning,
+};
 use crate::error::CodegenError;
 use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
@@ -116,6 +119,12 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::Ref(place) => {
+                // A value held as its bytes already lives at an address.
+                if let Some((address, _)) =
+                    Self::value_place_address(builder, place, locals, type_ctx)?
+                {
+                    return Ok(address);
+                }
                 let value = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
                 let val_ty = builder.func.dfg.value_type(value);
                 let size = val_ty.bytes();
@@ -1838,7 +1847,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::translate_constant(builder, ctx, constant, type_ctx)
             }
             Operand::Function(function) => {
-                Self::translate_function_operand(builder, ctx, function, type_ctx.ptr_type)
+                Self::translate_function_operand(builder, ctx, function, type_ctx)
             }
         }
     }
@@ -1866,7 +1875,7 @@ impl<'a> FunctionTranslator<'a> {
             Literal::None => Ok(builder.ins().iconst(ptr_type, 0)),
             Literal::String(s) => Self::translate_string_literal(builder, ctx, s, ptr_type),
             Literal::Identifier(name) => {
-                Self::translate_identifier_literal(builder, ctx, name, &constant.ty, ptr_type)
+                Self::translate_identifier_literal(builder, ctx, name, &constant.ty, type_ctx)
             }
             Literal::Regex(_) => Err(CodegenError::Internal(
                 "Regex literal reached codegen; MIR lowering must replace all regex literals with calls to Regex.from_validated_pattern()"
@@ -1979,12 +1988,12 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         name: &str,
         ty: &crate::ast::types::Type,
-        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
-        let TypeKind::Function(func_data) = &ty.kind else {
-            return Ok(builder.ins().iconst(ptr_type, 0));
+        let TypeKind::Function(data) = &ty.kind else {
+            return Ok(builder.ins().iconst(type_ctx.ptr_type, 0));
         };
-        Self::function_address(builder, ctx, name, func_data, ptr_type)
+        Self::function_address(builder, ctx, name, data, type_ctx)
     }
 
     /// A function named as a value: its address. A function operand whose type
@@ -1995,46 +2004,44 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         function: &FunctionConstant,
-        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
-        let TypeKind::Function(func_data) = &function.ty.kind else {
+        let TypeKind::Function(data) = &function.ty.kind else {
             return Err(CodegenError::Internal(format!(
                 "the function {} is read as a value, but its operand carries no function type",
                 function.symbol
             )));
         };
         let name = function.symbol.link_name();
-        Self::function_address(builder, ctx, &name, func_data, ptr_type)
+        Self::function_address(builder, ctx, &name, data, type_ctx)
     }
 
-    /// Declare `name` as an import with the signature `func_data` spells and
-    /// take its address.
+    /// Declare `name` as an import with the signature `data` spells and take
+    /// its address.
     fn function_address(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &str,
-        func_data: &crate::ast::types::FunctionTypeData,
+        data: &crate::ast::types::FunctionTypeData,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let call_conv = builder.func.signature.call_conv;
+        let sig = function_type_signature(data, &[], type_ctx.values, call_conv, ptr_type);
+        Self::declared_function_address(builder, ctx, name, &sig, ptr_type)
+    }
+
+    /// Declare `name` as an import under `sig` and take its address.
+    fn declared_function_address(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &str,
+        sig: &Signature,
         ptr_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
-        let call_conv = builder.func.signature.call_conv;
-        let mut sig = Signature::new(call_conv);
-        for param in &func_data.params {
-            if let ExpressionKind::Type(param_type, _) = &param.typ.node {
-                sig.params
-                    .push(AbiParam::new(translate_type(param_type, ptr_type)));
-            }
-        }
-        if let Some(ret_expr) = &func_data.return_type {
-            if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
-                if ret_type.kind != TypeKind::Void {
-                    sig.returns
-                        .push(AbiParam::new(translate_type(ret_type, ptr_type)));
-                }
-            }
-        }
         let func_id = ctx
             .module
-            .declare_function(name, Linkage::Import, &sig)
+            .declare_function(name, Linkage::Import, sig)
             .map_err(|e| CodegenError::declare_function(name.to_string(), e.to_string()))?;
         let func_ref = ctx.module.declare_func_in_func(func_id, builder.func);
         Ok(builder.ins().func_addr(ptr_type, func_ref))
@@ -2071,7 +2078,7 @@ impl<'a> FunctionTranslator<'a> {
             Self::alloc_closure_payload(builder, ctx, layout.payload_bytes, ptr_type, ptr_size)?;
 
         // Store fn_ptr at payload[0].
-        let fn_ptr = Self::declare_closure_fn_ptr(builder, ctx, lambda_name, fn_type, ptr_type)?;
+        let fn_ptr = Self::declare_closure_fn_ptr(builder, ctx, lambda_name, fn_type, type_ctx)?;
         builder.ins().store(MemFlags::new(), fn_ptr, payload_ptr, 0);
 
         // Store destructor_ptr at payload[1].
@@ -2129,39 +2136,17 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         lambda_name: &str,
         fn_type: &crate::ast::types::Type,
-        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
-        use cranelift_module::Module;
+        let ptr_type = type_ctx.ptr_type;
         let call_conv = builder.func.signature.call_conv;
-        let mut sig = cranelift_codegen::ir::Signature::new(call_conv);
-        sig.params
-            .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
-        if let crate::ast::types::TypeKind::Function(func_data) = &fn_type.kind {
-            for param in &func_data.params {
-                if let ExpressionKind::Type(param_type, _) = &param.typ.node {
-                    sig.params
-                        .push(cranelift_codegen::ir::AbiParam::new(translate_type(
-                            param_type, ptr_type,
-                        )));
-                }
-            }
-            if let Some(ret_expr) = &func_data.return_type {
-                if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
-                    if ret_type.kind != TypeKind::Void {
-                        sig.returns
-                            .push(cranelift_codegen::ir::AbiParam::new(translate_type(
-                                ret_type, ptr_type,
-                            )));
-                    }
-                }
-            }
-        }
-        let func_id = ctx
-            .module
-            .declare_function(lambda_name, cranelift_module::Linkage::Import, &sig)
-            .map_err(|e| CodegenError::declare_function(lambda_name.to_string(), e.to_string()))?;
-        let func_ref = ctx.module.declare_func_in_func(func_id, builder.func);
-        Ok(builder.ins().func_addr(ptr_type, func_ref))
+        let env = [Passing::Word(ptr_type)];
+        let sig = if let TypeKind::Function(data) = &fn_type.kind {
+            function_type_signature(data, &env, type_ctx.values, call_conv, ptr_type)
+        } else {
+            miri_signature(call_conv, ptr_type, &env, Returning::Nothing)
+        };
+        Self::declared_function_address(builder, ctx, lambda_name, &sig, ptr_type)
     }
 
     /// Resolve the closure's destructor pointer. When any capture is managed,

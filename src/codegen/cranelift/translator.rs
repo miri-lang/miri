@@ -11,6 +11,8 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
+use crate::codegen::cranelift::value_abi::body_signature;
+use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
 use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
@@ -112,6 +114,9 @@ pub struct TypeCtx<'a> {
     /// A value still naming one of them missed that substitution, and is
     /// reported rather than released through a shared drop function.
     pub bound_params: &'a HashSet<String>,
+    /// The locals of the code being translated that hold a bitwise value as
+    /// its bytes, and how it holds any other type.
+    pub values: &'a ValueLocals<'a>,
 }
 
 impl TypeCtx<'_> {
@@ -173,6 +178,15 @@ pub(crate) fn empty_module_ctx<'a>(
     }
 }
 
+/// What binding a body's entry-block parameters to its locals reads.
+#[derive(Clone, Copy)]
+struct EntryBinding<'e> {
+    body: &'e Body,
+    locals: &'e HashMap<Local, Variable>,
+    values: &'e ValueLocals<'e>,
+    ptr_type: cl_types::Type,
+}
+
 /// Normalized element type for runtime decref/clone helper dispatch.
 ///
 /// Collapses canonical `TypeKind::{List,Array,Set,Map}` and the post-
@@ -232,11 +246,17 @@ impl<'a> FunctionTranslator<'a> {
         emission: Emission,
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;
+        let values = ValueLocals::of(body)?;
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
 
         let (locals, blocks) = Self::declare_locals_and_blocks(&mut builder, body, self.ptr_type);
-        let out_param_ptr_vars =
-            Self::setup_entry_params(&mut builder, body, &locals, &blocks, self.ptr_type);
+        let entry = EntryBinding {
+            body,
+            locals: &locals,
+            values: &values,
+            ptr_type: self.ptr_type,
+        };
+        let out_param_ptr_vars = Self::setup_entry_params(&mut builder, &entry, &blocks);
 
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
         module_ctx.runtime_checks = emission.runtime_checks;
@@ -251,6 +271,7 @@ impl<'a> FunctionTranslator<'a> {
             out_param_ptr_vars: &out_param_ptr_vars,
             open_params: &body.open_params,
             bound_params: &body.bound_params,
+            values: &values,
         };
 
         Self::translate_blocks(
@@ -299,23 +320,38 @@ impl<'a> FunctionTranslator<'a> {
     /// as pointers — the pointer is saved into a `Variable` for later writeback
     /// at Return; the value load is deferred to the main loop so the entry
     /// block stays Pristine until `switch_to_block` runs.
+    ///
+    /// A result held as its bytes arrives first, as the address of the
+    /// caller's slot, and becomes `_0`'s `Variable`. A value parameter is the
+    /// address of its bytes, and so is a value `out` parameter: it is written
+    /// in place, with nothing to write back.
     fn setup_entry_params(
         builder: &mut FunctionBuilder,
-        body: &Body,
-        locals: &HashMap<Local, Variable>,
+        entry: &EntryBinding,
         blocks: &HashMap<BasicBlock, Block>,
-        ptr_type: cl_types::Type,
     ) -> HashMap<Local, Variable> {
+        let EntryBinding {
+            body,
+            locals,
+            values,
+            ptr_type,
+        } = *entry;
         let mut out_param_ptr_vars: HashMap<Local, Variable> = HashMap::new();
         let Some(&entry_block) = blocks.get(&BasicBlock(0)) else {
             return out_param_ptr_vars;
         };
         builder.switch_to_block(entry_block);
-        let params_vec: Vec<Value> = builder.block_params(entry_block).to_vec();
+        let mut params_vec: Vec<Value> = builder.block_params(entry_block).to_vec();
+        if values.layout(Local(0)).is_some() && !params_vec.is_empty() {
+            let return_slot = params_vec.remove(0);
+            if let Some(&var) = locals.get(&Local(0)) {
+                builder.def_var(var, return_slot);
+            }
+        }
         let written_back = crate::mir::body::written_back_out_params(body);
         for (i, param_val) in params_vec.into_iter().enumerate() {
             let local = Local(i + 1);
-            if written_back.contains(&local) {
+            if written_back.contains(&local) && values.layout(local).is_none() {
                 let ptr_var = builder.declare_var(ptr_type);
                 builder.def_var(ptr_var, param_val);
                 out_param_ptr_vars.insert(local, ptr_var);
@@ -345,6 +381,7 @@ impl<'a> FunctionTranslator<'a> {
             builder.switch_to_block(block);
 
             if idx == 0 {
+                Self::define_value_slots(builder, body, locals, type_ctx.values, ptr_type);
                 Self::load_scalar_out_params(builder, body, locals, out_param_ptr_vars, ptr_type);
                 if !body.env_capture_locals.is_empty() {
                     Self::load_closure_captures(builder, body, locals, ptr_type);
@@ -414,33 +451,7 @@ impl<'a> FunctionTranslator<'a> {
     }
     /// Build the function signature from the MIR body.
     pub(crate) fn build_signature(&mut self, body: &Body) -> Result<(), CodegenError> {
-        self.func.signature.call_conv = self.call_conv;
-
-        // Return type is local 0
-        if !body.local_decls.is_empty() {
-            let ret_ty = &body.local_decls[0].ty;
-            if ret_ty.kind != TypeKind::Void {
-                let cl_type = translate_type(ret_ty, self.ptr_type);
-                self.func.signature.returns.push(AbiParam::new(cl_type));
-            }
-        }
-
-        // Parameters are locals 1..=arg_count
-        for i in 1..=body.arg_count {
-            if i < body.local_decls.len() {
-                let param_ty = &body.local_decls[i].ty;
-                // Out params are passed as the address of the caller's slot
-                // (copy-in/copy-out ABI).
-                let cl_type = if crate::mir::body::written_back_out_params(body).contains(&Local(i))
-                {
-                    self.ptr_type
-                } else {
-                    translate_type(param_ty, self.ptr_type)
-                };
-                self.func.signature.params.push(AbiParam::new(cl_type));
-            }
-        }
-
+        self.func.signature = body_signature(body, self.call_conv, self.ptr_type);
         Ok(())
     }
     /// Read a value from a place.
@@ -462,6 +473,10 @@ impl<'a> FunctionTranslator<'a> {
         expected_ty: Option<&Type>,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
+        if let Some((address, spot)) = Self::value_place_address(builder, place, locals, type_ctx)?
+        {
+            return Ok(Self::read_value_spot(builder, address, spot));
+        }
         let var = locals
             .get(&place.local)
             .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;

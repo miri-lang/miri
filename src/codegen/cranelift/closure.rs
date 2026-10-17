@@ -9,6 +9,7 @@
 
 use crate::codegen::cranelift::translate_type;
 use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
+use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
 use crate::mir::rc::is_word_slot_managed;
 use crate::mir::symbol::Symbol;
@@ -150,6 +151,7 @@ impl<'a> FunctionTranslator<'a> {
             out_param_ptr_vars: &empty_out_ptr_vars,
             open_params: &body.open_params,
             bound_params: &body.bound_params,
+            values: &ValueLocals::none(),
         };
 
         let layout = CaptureLayout::of_body(body, ptr_type);

@@ -9,6 +9,8 @@ use crate::codegen::cranelift::translator::{
     CallSite, ElementShape, FunctionTranslator, ModuleCtx, RuntimeChecks, TypeCtx,
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
+use crate::codegen::cranelift::value_abi::{call_arguments, miri_signature, CallResult, Passing};
+use crate::codegen::cranelift::value_locals::copy_chunks;
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
@@ -17,8 +19,8 @@ use crate::mir::{
 };
 use crate::runtime_fns::{is_copy_on_write, rt};
 use cranelift_codegen::ir::{
-    condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, StackSlotData,
-    StackSlotKind, TrapCode,
+    condcodes::IntCC, Block, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind,
+    TrapCode,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
@@ -32,15 +34,56 @@ struct ListLiteral<'t> {
     elem_ty: &'t crate::ast::types::Type,
 }
 
-/// Output of `prepare_call_args`: per-arg Cranelift values, the partially-built
-/// call signature (params filled, returns appended later by the caller), and
-/// the list of scalar-out stack slots paired with their caller-side `Local`s
-/// for post-call writeback.
-type PreparedCallArgs = (
-    Vec<cranelift_codegen::ir::Value>,
-    Signature,
-    Vec<(cranelift_codegen::ir::Value, Local)>,
-);
+/// What a call names: its callee when it calls one directly, its arguments
+/// with the mode each is passed in, and its destination.
+struct CallOperands<'c> {
+    callee: Option<&'c Symbol>,
+    args: &'c [Operand],
+    arg_modes: &'c [ArgMode],
+    destination: &'c Place,
+}
+
+/// A call's translated arguments, how each is passed, the scalar `out` slots
+/// to read back after it with the caller-side local each belongs to, and where
+/// its result goes.
+struct PreparedCall {
+    values: Vec<cranelift_codegen::ir::Value>,
+    passings: Vec<Passing>,
+    out_slots: Vec<(cranelift_codegen::ir::Value, Local)>,
+    result: CallResult,
+}
+
+impl PreparedCall {
+    fn with_capacity(count: usize) -> Self {
+        Self {
+            values: Vec::with_capacity(count),
+            passings: Vec::with_capacity(count),
+            out_slots: Vec::new(),
+            result: CallResult::nothing(),
+        }
+    }
+
+    /// The signature the call is made under, `leading` passed ahead of its
+    /// arguments.
+    fn signature(
+        &self,
+        leading: &[Passing],
+        call_conv: cranelift_codegen::isa::CallConv,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Signature {
+        let params: Vec<Passing> = leading.iter().chain(&self.passings).copied().collect();
+        miri_signature(call_conv, ptr_type, &params, self.result.returning)
+    }
+
+    /// The values the call is made with, `leading` ahead of its arguments.
+    fn arguments(
+        &self,
+        leading: &[cranelift_codegen::ir::Value],
+    ) -> Vec<cranelift_codegen::ir::Value> {
+        let args: Vec<_> = leading.iter().chain(&self.values).copied().collect();
+        call_arguments(self.result.slot, &args)
+    }
+}
 
 /// Word offsets of the fields of a list's header (`MiriList`, laid out in C
 /// order) that a push compiled inline reads and writes.
@@ -97,12 +140,15 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::IncRef(place) => {
+                Self::refuse_count_of_value(place, "IncRef", type_ctx)?;
                 Self::translate_inc_ref(builder, ctx, place, locals, type_ctx)
             }
             StatementKind::DecRef(place) => {
+                Self::refuse_count_of_value(place, "DecRef", type_ctx)?;
                 Self::translate_dec_ref(builder, ctx, place, locals, type_ctx)
             }
             StatementKind::Dealloc(place) => {
+                Self::refuse_count_of_value(place, "Dealloc", type_ctx)?;
                 Self::translate_dealloc(builder, ctx, place, locals, type_ctx)
             }
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
@@ -297,6 +343,9 @@ impl<'a> FunctionTranslator<'a> {
     /// the destination's declared type if widths differ, and store. After an
     /// empty `Set<T>()` constructor, also register elem_drop_fn / elem_clone_fn
     /// from the destination type's element annotation.
+    ///
+    /// A destination inside a value held as its bytes is written in place; a
+    /// word destination never receives the address of one.
     fn translate_assign(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -305,6 +354,11 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
+        if let Some((address, spot)) = Self::value_place_address(builder, place, locals, type_ctx)?
+        {
+            return Self::assign_value_place(builder, ctx, address, spot, rvalue, locals, type_ctx);
+        }
+        Self::refuse_value_escape(rvalue, type_ctx)?;
         let ptr_type = type_ctx.ptr_type;
 
         // Compute destination type for potential use in operand translation.
@@ -469,13 +523,8 @@ impl<'a> FunctionTranslator<'a> {
             stride as u32,
         )?;
         let component_bytes = component.bytes() as i32;
-        for lane in 0..dim as i32 {
-            let offset = lane * component_bytes;
-            let read = builder
-                .ins()
-                .load(component, MemFlags::new(), value, offset);
-            builder.ins().store(MemFlags::new(), read, copy, offset);
-        }
+        let lanes = (0..dim as i32).map(|lane| (lane * component_bytes, component));
+        copy_chunks(builder, value, copy, lanes);
         Ok(copy)
     }
 
@@ -735,7 +784,6 @@ impl<'a> FunctionTranslator<'a> {
                 arg_modes,
                 destination,
                 target.as_ref(),
-                body,
                 locals,
                 blocks,
                 type_ctx,
@@ -760,7 +808,10 @@ impl<'a> FunctionTranslator<'a> {
         }
         if let Some(&var) = locals.get(&Local(0)) {
             let ret_ty = &body.local_decls[0].ty;
-            if ret_ty.kind != TypeKind::Void {
+            // A value held as its bytes was written through the return slot.
+            if type_ctx.values.layout(Local(0)).is_some() {
+                builder.ins().return_(&[]);
+            } else if ret_ty.kind != TypeKind::Void {
                 let value = builder.use_var(var);
                 builder.ins().return_(&[value]);
             } else {
@@ -842,32 +893,23 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let callee = Self::direct_callee(func)?;
-        let func_name = callee.map(Symbol::link_name);
-
-        let (arg_values, sig, out_arg_slots) = Self::prepare_call_args(
-            builder,
-            ctx,
-            func_name.as_deref(),
+        let operands = CallOperands {
+            callee,
             args,
             arg_modes,
-            locals,
-            type_ctx,
-        )?;
+            destination,
+        };
+        let call = Self::prepare_call(builder, ctx, &operands, locals, type_ctx)?;
 
         let dest_ty = &body.local_decls[destination.local.0].ty;
-        let mut sig = sig;
-        if dest_ty.kind != TypeKind::Void {
-            sig.returns
-                .push(AbiParam::new(translate_type(dest_ty, ptr_type)));
-        }
-
         if let Some(callee) = callee {
+            let sig = call.signature(&[], builder.func.signature.call_conv, ptr_type);
             Self::dispatch_named_call(
                 builder,
                 ctx,
                 callee,
                 args,
-                arg_values,
+                call.arguments(&[]),
                 sig,
                 dest_ty,
                 destination,
@@ -876,21 +918,10 @@ impl<'a> FunctionTranslator<'a> {
                 ptr_type,
             )?;
         } else {
-            Self::dispatch_indirect_call(
-                builder,
-                ctx,
-                func,
-                arg_values,
-                sig,
-                dest_ty,
-                destination,
-                locals,
-                type_ctx,
-                ptr_type,
-            )?;
+            Self::dispatch_indirect_call(builder, ctx, func, &call, destination, locals, type_ctx)?;
         }
 
-        Self::writeback_out_arg_slots(builder, &out_arg_slots, locals, type_ctx, ptr_type);
+        Self::writeback_out_arg_slots(builder, &call.out_slots, locals, type_ctx, ptr_type);
         if let Some(t) = target {
             builder.ins().jump(blocks[t], &[]);
         }
@@ -928,50 +959,59 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Translate every call argument, applying ptr-width widening for runtime
-    /// collection calls and copy-in/copy-out for scalar `out` params. Returns
-    /// `(arg_values, signature-with-params-filled, out_arg_slots)` where
-    /// `out_arg_slots` records the stack slot + caller local for each scalar
-    /// out arg so the caller can read updated values back after the call.
-    #[allow(clippy::too_many_arguments)]
-    fn prepare_call_args(
+    /// Translate every call argument and the call's destination.
+    ///
+    /// A word argument is widened to the width the callee was declared with,
+    /// and a scalar `out` argument is passed as a slot read back after the
+    /// call: `out_slots` pairs each such slot with its caller-side local. A
+    /// value argument held as its bytes is passed as an address, and a value
+    /// result goes through a return slot.
+    fn prepare_call(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        func_name: Option<&str>,
-        args: &[Operand],
-        arg_modes: &[ArgMode],
+        operands: &CallOperands,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
-    ) -> Result<PreparedCallArgs, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let predeclared_sig = Self::lookup_predeclared_sig(ctx, func_name);
+    ) -> Result<PreparedCall, CodegenError> {
+        let is_runtime = operands
+            .callee
+            .is_some_and(|callee| callee.runtime_name().is_some());
+        let func_name = operands.callee.map(Symbol::link_name);
+        let predeclared_sig = Self::lookup_predeclared_sig(ctx, func_name.as_deref());
+        let mut call = PreparedCall::with_capacity(operands.args.len());
+        call.result =
+            Self::call_result(builder, operands.destination, is_runtime, locals, type_ctx)?;
+        // The callee was declared with its return slot ahead of the arguments.
+        let first_declared = usize::from(call.result.slot.is_some());
 
-        let mut sig = Signature::new(builder.func.signature.call_conv);
-        let mut arg_values = Vec::with_capacity(args.len());
-        let mut out_arg_slots: Vec<(cranelift_codegen::ir::Value, Local)> = Vec::new();
-
-        for (i, arg) in args.iter().enumerate() {
+        for (i, arg) in operands.args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
-            let out_local = Self::out_local_for_arg(arg_modes, i, arg);
-            let val = if let Some(local) = out_local {
-                let addr = Self::box_value_in_stack_slot(builder, val, ptr_type);
-                out_arg_slots.push((addr, local));
-                addr
-            } else {
-                let is_unsigned = Self::operand_is_unsigned(arg, type_ctx)?;
-                Self::cast_arg_to_predeclared(
-                    builder,
-                    val,
-                    i,
-                    predeclared_sig.as_ref(),
-                    is_unsigned,
-                )?
+            if let Some(layout) = type_ctx.values.operand_value(arg)? {
+                let mode = arg_mode(operands.arg_modes, i);
+                let address =
+                    Self::value_argument(builder, val, layout, mode, is_runtime, type_ctx)?;
+                call.values.push(address);
+                call.passings.push(Passing::ByAddress);
+                continue;
+            }
+            let val = match Self::out_local_for_arg(operands.arg_modes, i, arg) {
+                Some(local) => {
+                    let addr = Self::box_value_in_stack_slot(builder, val, type_ctx.ptr_type);
+                    call.out_slots.push((addr, local));
+                    addr
+                }
+                None => {
+                    let is_unsigned = Self::operand_is_unsigned(arg, type_ctx)?;
+                    let declared = predeclared_sig.as_ref();
+                    let position = first_declared + i;
+                    Self::cast_arg_to_predeclared(builder, val, position, declared, is_unsigned)?
+                }
             };
-            arg_values.push(val);
-            sig.params
-                .push(AbiParam::new(builder.func.dfg.value_type(val)));
+            call.values.push(val);
+            call.passings
+                .push(Passing::Word(builder.func.dfg.value_type(val)));
         }
-        Ok((arg_values, sig, out_arg_slots))
+        Ok(call)
     }
 
     /// Look up `func_name`'s pre-existing module declaration so later call
@@ -1118,13 +1158,11 @@ impl<'a> FunctionTranslator<'a> {
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         let call = builder.ins().call(local_func, &arg_values);
 
-        let maybe_result = if dest_ty.kind != TypeKind::Void {
-            let result = builder.inst_results(call)[0];
+        // A result written through a return slot comes back in no register.
+        let maybe_result = builder.inst_results(call).first().copied();
+        if let Some(result) = maybe_result {
             Self::define_call_destination(builder, locals, destination, result)?;
-            Some(result)
-        } else {
-            None
-        };
+        }
 
         let runtime_name = callee.runtime_name();
         if runtime_name == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY) {
@@ -1415,39 +1453,31 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Indirect call through a closure pointer. Loads fn_ptr from
-    /// `payload[0]`, prepends env_ptr (= closure_ptr) to args and sig, and
-    /// invokes via `call_indirect`.
-    #[allow(clippy::too_many_arguments)]
+    /// `payload[0]`, passes env_ptr (= closure_ptr) ahead of the arguments,
+    /// and invokes via `call_indirect`.
     fn dispatch_indirect_call(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         func: &Operand,
-        arg_values: Vec<cranelift_codegen::ir::Value>,
-        sig: Signature,
-        dest_ty: &crate::ast::types::Type,
+        call: &PreparedCall,
         destination: &Place,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
-        ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
         let closure_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx, None)?;
         let fn_ptr = builder
             .ins()
             .load(ptr_type, MemFlags::new(), closure_ptr, 0);
 
-        let mut full_args = vec![closure_ptr];
-        full_args.extend_from_slice(&arg_values);
-
-        let mut full_sig = Signature::new(builder.func.signature.call_conv);
-        full_sig.params.push(AbiParam::new(ptr_type)); // env_ptr
-        full_sig.params.extend(sig.params);
-        full_sig.returns.extend(sig.returns);
+        let call_conv = builder.func.signature.call_conv;
+        let full_sig = call.signature(&[Passing::Word(ptr_type)], call_conv, ptr_type);
+        let full_args = call.arguments(&[closure_ptr]);
 
         let sig_ref = builder.import_signature(full_sig);
         let call = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
 
-        if dest_ty.kind != TypeKind::Void {
-            let result = builder.inst_results(call)[0];
+        if let Some(&result) = builder.inst_results(call).first() {
             Self::define_call_destination(builder, locals, destination, result)?;
         }
         Ok(())
@@ -1629,31 +1659,31 @@ impl<'a> FunctionTranslator<'a> {
         arg_modes: &[ArgMode],
         destination: &Place,
         target: Option<&BasicBlock>,
-        body: &Body,
         locals: &HashMap<Local, Variable>,
         blocks: &HashMap<BasicBlock, Block>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        debug_assert!(
-            !args.is_empty(),
-            "VirtualCall must have at least one arg (receiver)"
-        );
+        let operands = CallOperands {
+            callee: None,
+            args,
+            arg_modes,
+            destination,
+        };
+        let prepared = Self::prepare_call(builder, ctx, &operands, locals, type_ctx)?;
+        let receiver = prepared.values.first().copied().ok_or_else(|| {
+            CodegenError::Internal("a virtual call carries no receiver".to_string())
+        })?;
 
-        let (arg_values, mut sig, out_arg_slots) =
-            Self::prepare_call_args(builder, ctx, None, args, arg_modes, locals, type_ctx)?;
-        let dest_ty = &body.local_decls[destination.local.0].ty;
-        if dest_ty.kind != TypeKind::Void {
-            sig.returns
-                .push(AbiParam::new(translate_type(dest_ty, ptr_type)));
-        }
-
-        let fn_ptr = Self::load_vtable_fn_ptr(builder, arg_values[0], vtable_slot, ptr_type);
+        let fn_ptr = Self::load_vtable_fn_ptr(builder, receiver, vtable_slot, ptr_type);
+        let sig = prepared.signature(&[], builder.func.signature.call_conv, ptr_type);
         let sig_ref = builder.import_signature(sig);
-        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+        let call = builder
+            .ins()
+            .call_indirect(sig_ref, fn_ptr, &prepared.arguments(&[]));
 
-        Self::store_vcall_result(builder, call, dest_ty, destination, locals)?;
-        Self::writeback_out_arg_slots(builder, &out_arg_slots, locals, type_ctx, ptr_type);
+        Self::store_vcall_result(builder, call, destination, locals)?;
+        Self::writeback_out_arg_slots(builder, &prepared.out_slots, locals, type_ctx, ptr_type);
         if let Some(t) = target {
             builder.ins().jump(blocks[t], &[]);
         }
@@ -1677,19 +1707,18 @@ impl<'a> FunctionTranslator<'a> {
             .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset)
     }
 
-    /// Write the (non-void) result of a virtual call back into the destination
-    /// local. No-op for void return types.
+    /// Write the result a virtual call returns in a register back into the
+    /// destination local. No-op when it returns none: a void result, or one
+    /// written through a return slot.
     fn store_vcall_result(
         builder: &mut FunctionBuilder,
         call: cranelift_codegen::ir::Inst,
-        dest_ty: &crate::ast::types::Type,
         destination: &Place,
         locals: &HashMap<Local, Variable>,
     ) -> Result<(), CodegenError> {
-        if dest_ty.kind == TypeKind::Void {
+        let Some(&result) = builder.inst_results(call).first() else {
             return Ok(());
-        }
-        let result = builder.inst_results(call)[0];
+        };
         let dest_var = locals.get(&destination.local).ok_or_else(|| {
             CodegenError::Internal(format!(
                 "Unknown vcall destination local: {:?}",

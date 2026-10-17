@@ -14,6 +14,8 @@ use crate::codegen::cranelift::structural_elements::StructuralElement;
 use crate::codegen::cranelift::translator::{
     empty_module_ctx, CallSite, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
+use crate::codegen::cranelift::value_abi::{miri_signature, Passing, Returning};
+use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
 use crate::mir::option_layout::{resolve_alias, OptionalLayers};
 use crate::mir::rc::{is_field_managed, is_word_slot_managed};
@@ -2085,6 +2087,7 @@ impl<'a> FunctionTranslator<'a> {
             out_param_ptr_vars: &empty_out_ptr_vars,
             open_params: &open_params,
             bound_params: &no_bound_params,
+            values: &ValueLocals::none(),
         };
 
         if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts) {
@@ -2137,9 +2140,13 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
-        let mut user_sig = Signature::new(call_conv);
-        user_sig.params.push(AbiParam::new(ptr_type)); // self
-        user_sig.params.push(AbiParam::new(ptr_type)); // allocator
+        let receiver_and_allocator = [Passing::Word(ptr_type), Passing::Word(ptr_type)];
+        let user_sig = miri_signature(
+            call_conv,
+            ptr_type,
+            &receiver_and_allocator,
+            Returning::Nothing,
+        );
         let user_drop_id = module_ctx
             .module
             .declare_function(hook_name, Linkage::Import, &user_sig)
@@ -2278,6 +2285,7 @@ impl<'a> FunctionTranslator<'a> {
             out_param_ptr_vars: &empty_out_ptr_vars,
             open_params: &element.open_params,
             bound_params: &element.bound_params,
+            values: &ValueLocals::none(),
         };
 
         Self::emit_decref_value(&mut builder, &mut module_ctx, &element.kind, ptr, &type_ctx)?;
@@ -2515,10 +2523,13 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(call_block);
         builder.seal_block(call_block);
 
-        let mut user_clone_sig = Signature::new(call_conv);
-        user_clone_sig.params.push(AbiParam::new(ptr_type)); // self
-        user_clone_sig.params.push(AbiParam::new(ptr_type)); // allocator
-        user_clone_sig.returns.push(AbiParam::new(ptr_type));
+        let receiver_and_allocator = [Passing::Word(ptr_type), Passing::Word(ptr_type)];
+        let user_clone_sig = miri_signature(
+            call_conv,
+            ptr_type,
+            &receiver_and_allocator,
+            Returning::Word(ptr_type),
+        );
 
         let user_clone_id = module
             .declare_function(&clone_method_name, Linkage::Import, &user_clone_sig)
@@ -2680,6 +2691,7 @@ mod drop_thunk_tests {
             out_param_ptr_vars: &out_ptrs,
             open_params: &open_params,
             bound_params: &bound_params,
+            values: &ValueLocals::none(),
         };
         FunctionTranslator::drop_thunk(name, args, &type_ctx)
     }
@@ -2721,6 +2733,7 @@ mod drop_thunk_tests {
             out_param_ptr_vars: &out_ptrs,
             open_params: &open_params,
             bound_params: &bound_params,
+            values: &ValueLocals::none(),
         };
         FunctionTranslator::drop_thunk(name, args, &type_ctx)
     }

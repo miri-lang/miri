@@ -142,6 +142,10 @@ fn minimal_type_ctx<'a>(
         out_param_ptr_vars: out_ptrs,
         open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
         bound_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
+        // A thunk-like context with no body: it holds no value as its bytes.
+        values: Box::leak(Box::new(
+            miri::codegen::cranelift::value_locals::ValueLocals::none(),
+        )),
     }
 }
 
