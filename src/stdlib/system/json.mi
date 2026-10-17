@@ -69,6 +69,8 @@ class JsonParser
     private var line int
     private var column int
     private var error JsonError?
+    /// The code point under the cursor, read once as the cursor arrives.
+    private var current int
 
     fn init(source String)
         self.source = source
@@ -76,10 +78,11 @@ class JsonParser
         self.line = 1
         self.column = 1
         self.error = None
+        self.current = source.code_at(0) ?? -1
 
     /// The code point under the cursor, or -1 at the end of the input.
     public fn peek() int
-        self.source.code_at(self.position) ?? -1
+        self.current
 
     /// Whether any input remains.
     public fn has_more() bool
@@ -87,14 +90,23 @@ class JsonParser
 
     /// Moves past the current character, keeping line and column current.
     public fn advance()
-        let current = self.source.code_at(self.position) ?? -1
-        if current >= 0
+        let passed = self.current
+        if passed >= 0
             self.position = self.position + 1
-            if current == 10
+            self.current = self.source.code_at(self.position) ?? -1
+            if passed == 10
                 self.line = self.line + 1
                 self.column = 1
             else
                 self.column = self.column + 1
+
+    /// The character index of the cursor.
+    public fn offset() int
+        self.position
+
+    /// The source text from character `start` up to the cursor.
+    public fn text_since(start int) String
+        self.source.substring(start, self.position)
 
     /// Consumes the current character and returns it.
     public fn take() String
@@ -410,6 +422,9 @@ public enum Json
         let open_column = parser.column_number()
         parser.advance()
         var out = ""
+        // Plain characters are taken as one run, ending at an escape or the
+        // closing quote, rather than one string each.
+        var run = parser.offset()
         var reading = true
         while reading
             let current = parser.peek()
@@ -417,20 +432,23 @@ public enum Json
                 parser.fail(JsonError.UnterminatedString(open_line, open_column))
                 return None
             if current == 34
+                out = out + parser.text_since(run)
                 parser.advance()
                 reading = false
             else
                 if current == 92
+                    out = out + parser.text_since(run)
                     match Json.escape_sequence(parser)
                         Some(piece)
                             out = out + piece
                         None
                             return None
+                    run = parser.offset()
                 else
                     if current < 32
                         parser.fail(JsonError.UnexpectedCharacter(Json.describe(current), parser.line_number(), parser.column_number()))
                         return None
-                    out = out + parser.take()
+                    parser.advance()
         Some(out)
 
     private static fn escape_sequence(parser JsonParser) String?
@@ -607,11 +625,17 @@ public enum Json
 
     private static fn quoted(text String) String
         var out = "\""
+        // Characters that need no escape are appended as one run.
+        var run = 0
         var index = 0
-        while index < text.length()
-            out = out + Json.escaped_character(text.code_at(index) ?? 0)
+        let length = text.length()
+        while index < length
+            let code = text.code_at(index) ?? 0
+            if code == 34 or code == 92 or code < 32
+                out = out + text.substring(run, index) + Json.escaped_character(code)
+                run = index + 1
             index = index + 1
-        out + "\""
+        out + text.substring(run, length) + "\""
 
     private static fn escaped_character(code int) String
         if code == 34
