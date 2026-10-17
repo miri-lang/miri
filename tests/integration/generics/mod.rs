@@ -14,6 +14,7 @@ pub mod derived_trait_conformance;
 pub mod distinct_parameters;
 pub mod explicit_type_arguments;
 pub mod extends;
+pub mod field_arguments;
 pub mod generic_type_drop_thunks;
 pub mod invariance;
 pub mod lambdas;

@@ -59,10 +59,10 @@ pub fn lower_struct_constructor(
     let mut pos_iter = positional_args.into_iter();
 
     for (field_name, field_ty, _visibility) in &def.fields {
-        let op = if let Some(op) = pos_iter.next() {
-            op
-        } else if let Some(op) = named_args.remove(field_name.as_str()) {
-            op
+        let arg = if let Some(arg) = pos_iter.next() {
+            arg
+        } else if let Some(arg) = named_args.remove(field_name.as_str()) {
+            arg
         } else {
             return Err(LoweringError::missing_struct_field(
                 field_name.clone(),
@@ -72,7 +72,7 @@ pub fn lower_struct_constructor(
         };
 
         let field_ty = apply_generic_sub(field_ty, &field_subs);
-        operands.push(coerce_to_field(ctx, op, &field_ty, arg_watermark, *span));
+        operands.push(coerce_to_field(ctx, arg, &field_ty, arg_watermark, *span));
     }
 
     let struct_ty = if is_vec || def.generics.is_none() {
@@ -128,12 +128,12 @@ pub fn lower_struct_constructor(
 /// ever gives back.
 fn coerce_to_field(
     ctx: &mut LoweringContext,
-    op: Operand,
+    (op, op_ty): Argument,
     field_ty: &Type,
     arg_watermark: usize,
     span: Span,
 ) -> Operand {
-    let op_ty = canonical_declared_type(ctx.type_checker, op.ty(&ctx.body));
+    let op_ty = canonical_declared_type(ctx.type_checker, &op_ty);
     let target_ty = canonical_declared_type(ctx.type_checker, field_ty);
     if op_ty.kind == target_ty.kind || super::helpers::spellings_of_one_value(&op_ty, &target_ty) {
         return op;
@@ -149,24 +149,38 @@ fn coerce_to_field(
     Operand::Copy(Place::new(temp))
 }
 
+/// A lowered constructor argument and the type of the value it carries.
+///
+/// The type is read with the argument, not off the operand afterwards: an
+/// argument read in place off another instance's field is a projected place,
+/// whose operand type is the instance's own, so an optional field handed on
+/// would look like a value that still needs wrapping in `Some`.
+type Argument = (Operand, Type);
+
+/// Lowers `value` into an [`Argument`].
+fn lower_argument(
+    ctx: &mut LoweringContext,
+    value: &Expression,
+) -> Result<Argument, LoweringError> {
+    let op = lower_expression(ctx, value, None)?;
+    let ty = super::dispatch::argument_type(ctx, &op, value);
+    Ok((op, ty))
+}
+
 /// Separates positional and named arguments for a constructor call.
 fn partition_constructor_args<'a>(
     ctx: &mut LoweringContext,
     args: &'a [Expression],
-) -> Result<(Vec<Operand>, HashMap<&'a str, Operand>), LoweringError> {
+) -> Result<(Vec<Argument>, HashMap<&'a str, Argument>), LoweringError> {
     let mut positional_args = Vec::with_capacity(args.len());
     let mut named_args = HashMap::with_capacity(args.len());
 
     for arg in args {
         match &arg.node {
             ExpressionKind::NamedArgument(name, value) => {
-                let op = lower_expression(ctx, value, None)?;
-                named_args.insert(name.as_str(), op);
+                named_args.insert(name.as_str(), lower_argument(ctx, value)?);
             }
-            _ => {
-                let op = lower_expression(ctx, arg, None)?;
-                positional_args.push(op);
-            }
+            _ => positional_args.push(lower_argument(ctx, arg)?),
         }
     }
     Ok((positional_args, named_args))
@@ -484,17 +498,17 @@ fn lower_class_without_init(
     let mut pos_iter = positional_args.into_iter();
 
     for (field_name, field_info) in all_fields {
-        let op = if let Some(op) = pos_iter.next() {
-            op
-        } else if let Some(op) = named_args.remove(field_name.as_str()) {
-            op
+        let arg = if let Some(arg) = pos_iter.next() {
+            arg
+        } else if let Some(arg) = named_args.remove(field_name.as_str()) {
+            arg
         } else {
             field_initial_value(ctx, field_info, span)?
         };
 
         operands.push(coerce_to_field(
             ctx,
-            op,
+            arg,
             &field_info.ty,
             arg_watermark,
             *span,
@@ -523,10 +537,14 @@ fn field_initial_value(
     ctx: &mut LoweringContext,
     field: &crate::type_checker::context::FieldInfo,
     span: &Span,
-) -> Result<Operand, LoweringError> {
+) -> Result<Argument, LoweringError> {
     match &field.initializer {
-        Some(initializer) => lower_expression(ctx, initializer, None),
-        None => Ok(create_default_value(&field.ty, span)),
+        Some(initializer) => lower_argument(ctx, initializer),
+        None => {
+            let op = create_default_value(&field.ty, span);
+            let ty = op.ty(&ctx.body).clone();
+            Ok((op, ty))
+        }
     }
 }
 
@@ -540,8 +558,8 @@ fn initial_field_values(
 ) -> Result<Vec<Operand>, LoweringError> {
     let mut values = Vec::with_capacity(all_fields.len());
     for (_, field_info) in all_fields {
-        let op = field_initial_value(ctx, field_info, span)?;
-        values.push(coerce_to_field(ctx, op, &field_info.ty, watermark, *span));
+        let arg = field_initial_value(ctx, field_info, span)?;
+        values.push(coerce_to_field(ctx, arg, &field_info.ty, watermark, *span));
     }
     Ok(values)
 }

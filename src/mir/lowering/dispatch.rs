@@ -1743,7 +1743,7 @@ fn retain_still_held_value(ctx: &mut LoweringContext, op: &Operand, op_ty: &Type
 /// type, a collection or an aggregate, which would make every such argument look
 /// like it needs converting. The type checker's type for the argument is the
 /// element's own.
-fn argument_type(ctx: &LoweringContext, op: &Operand, arg: &Expression) -> Type {
+pub(crate) fn argument_type(ctx: &LoweringContext, op: &Operand, arg: &Expression) -> Type {
     match op {
         Operand::Copy(place) | Operand::Move(place) if !place.projection.is_empty() => {
             ctx.resolved_type(arg)
