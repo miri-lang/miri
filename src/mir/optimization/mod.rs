@@ -45,6 +45,7 @@ pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
 pub mod index_numbering;
+pub mod loop_unsharing;
 pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
@@ -205,7 +206,9 @@ pub fn elide_rc(body: &mut Body) {
 ///
 /// Computed indices holding one value are first named alike
 /// ([`index_numbering::number_indices`]), so two writes through `l[i + 1]`
-/// reach one place.
+/// reach one place, and a collection every iteration of a loop asks to copy is
+/// made its own once before the loop ([`loop_unsharing::hoist_loop_unsharing`]),
+/// so the questions inside the loop can be answered.
 ///
 /// Must be called after [`elide_rc`], on bodies whose reference counting is
 /// explicit, so every retain that could share a place again is visible.
@@ -219,5 +222,6 @@ pub fn elide_unshare_checks(body: &mut Body) {
         return;
     }
     index_numbering::number_indices(body);
+    loop_unsharing::hoist_loop_unsharing(body);
     UnshareElision.run(body);
 }

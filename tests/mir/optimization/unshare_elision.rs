@@ -229,6 +229,141 @@ fn main()
     );
 }
 
+/// Whether `block` lies on a cycle of `body`'s control flow.
+fn is_on_a_cycle(body: &Body, block: usize) -> bool {
+    let successors = |index: usize| {
+        body.basic_blocks
+            .get(index)
+            .and_then(|data| data.terminator.as_ref())
+            .map(|terminator| terminator.successors())
+            .unwrap_or_default()
+    };
+    let mut seen = vec![false; body.basic_blocks.len()];
+    let mut stack: Vec<usize> = successors(block).iter().map(|b| b.0).collect();
+    while let Some(next) = stack.pop() {
+        if next == block {
+            return true;
+        }
+        if seen.get(next).copied().unwrap_or(true) {
+            continue;
+        }
+        seen[next] = true;
+        stack.extend(successors(next).iter().map(|b| b.0));
+    }
+    false
+}
+
+/// The reachable blocks of `body` that call runtime function `name` from
+/// inside a loop.
+fn calls_in_loops(body: &Body, name: &str) -> usize {
+    let unreachable = body.find_unreachable_blocks();
+    (0..body.basic_blocks.len())
+        .filter(|index| !unreachable.contains(index))
+        .filter(|index| calls_runtime(body.basic_blocks[*index].terminator.as_ref(), name))
+        .filter(|index| is_on_a_cycle(body, *index))
+        .count()
+}
+
+#[test]
+fn test_a_list_written_every_iteration_is_made_its_own_before_the_loop() {
+    let source = with_cell(
+        r#"
+fn mark(n int) int
+    var flags = List([false, false, false, false])
+    var m = 0
+    while m < n
+        flags[m % 4] = true
+        m = m + 1
+    if flags[0]: 1 else: 0
+"#,
+    );
+    let body = body_named(&source, ".mark");
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 0);
+    assert_eq!(reachable_copy_on_writes(&body), 1);
+}
+
+#[test]
+fn test_a_list_path_written_every_iteration_is_checked_in_the_loop() {
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], n int) [Cell]
+    var l = start
+    var i = 0
+    while i < n
+        l[0].x = i
+        i = i + 1
+    l
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    // The list and its element are both asked about in the loop: hoisting
+    // the list's check would keep the list live across the whole loop, which
+    // code generation spills.
+    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 2);
+}
+
+#[test]
+fn test_a_list_shared_in_the_loop_is_checked_every_iteration() {
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], n int) int
+    var l = start
+    var i = 0
+    var total = 0
+    while i < n
+        l[0].x = i
+        let s = l
+        total = total + s[0].x
+        i = i + 1
+    total
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 2);
+}
+
+#[test]
+fn test_a_list_written_on_some_iterations_only_is_not_copied_before_the_loop() {
+    // Copying before the loop would copy a shared list the loop might never
+    // write, so the check stays where the write is.
+    let source = with_cell(
+        r#"
+fn mark(n int) int
+    var flags = List([false, false, false, false])
+    var m = 0
+    while m < n
+        if m == 3
+            flags[0] = true
+        m = m + 1
+    if flags[0]: 1 else: 0
+"#,
+    );
+    let body = body_named(&source, ".mark");
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 1);
+}
+
+#[test]
+fn test_a_snapshot_taken_inside_a_loop_keeps_its_values() {
+    crate::integration::utils::assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List([0, 0, 0])
+    let before = l
+    var snaps = List<[int]>()
+    var i = 0
+    while i < 3
+        l[i] = i + 1
+        snaps.push(l)
+        i = i + 1
+    println(f"{before[0]} {snaps[0][0]} {snaps[0][1]} {snaps[1][1]} {snaps[1][2]} {l[2]}")
+"#,
+        "0 1 0 2 0 3",
+    );
+}
+
 #[test]
 fn test_repeated_writes_to_one_element_check_the_path_once() {
     let source = with_cell(
@@ -345,6 +480,7 @@ fn touch(start [Cell], n int) [Cell]
     );
     let body = body_named(&source, ".touch");
     assert_eq!(reachable_checks(&body), 2);
+    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 2);
 }
 
 #[test]
