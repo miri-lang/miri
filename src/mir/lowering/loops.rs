@@ -842,7 +842,10 @@ fn lower_for_over_iterable(
 ) -> Result<(), LoweringError> {
     ctx.push_scope();
 
-    let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
+    // Read at the active instantiation: a generic body's iterable is recorded
+    // once at its parameter, which would bind a managed element as unmanaged and
+    // leave each pass's reference unreleased.
+    let iterable_ty = ctx.recorded_type(iterable.id);
     let bindings = bind_loop_variables(ctx, span, decls, &iterable_ty);
     let list_local = lower_loop_iterable(ctx, iterable, iterable_ty, span)?;
 
