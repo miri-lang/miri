@@ -25,7 +25,11 @@
 //! reached through is in the set, so a path through a class instance, which
 //! is shared by design and never checked, never yields a fact; neither does a
 //! place rooted at or indexed by a parameter, a captured binding, a
-//! gpu-resident one or a local whose address is taken.
+//! gpu-resident one or a local whose address is taken. A parameter loses
+//! nothing by this: no write goes through one, so a body writing a
+//! parameter's elements binds it to a local first, and an owned parameter is
+//! moved into that binding, whose checks the analysis answers like any other
+//! local's.
 //!
 //! Two index locals may name one element, so a read or write that reaches an
 //! element through any index is taken to reach every element of that

@@ -365,6 +365,76 @@ fn main()
 }
 
 #[test]
+fn test_an_owned_parameter_written_twice_checks_each_place_once() {
+    // A parameter cannot be written through, so a body that writes its
+    // elements binds it first; an owned one is moved into the binding, whose
+    // checks then answer the repeated ones as any local's do.
+    let source = format!(
+        "{CELL}\n{}",
+        r#"
+fn touch(start [Cell], i int) [Cell]
+    var l = start
+    l[i].x = 1
+    l[i].x = 2
+    l
+
+fn main()
+    var c = List([Cell(x: 0, name: "a")])
+    c = touch(c, 0)
+    println(f"{c[0].x}")
+"#
+    );
+    let body = body_named(&source, ".touch");
+    assert!(
+        body.is_owned_param(Local(1)),
+        "the list is handed over to touch"
+    );
+    assert_eq!(reachable_checks(&body), 2);
+}
+
+#[test]
+fn test_a_borrowed_parameter_written_twice_checks_each_place_once_and_copies() {
+    // The caller keeps a borrowed list, so the binding shares it: its first
+    // check copies, and the copy answers the second write's checks.
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], i int) int
+    var l = start
+    l[i].x = 1
+    l[i].x = 2
+    start[i].x + l[i].x
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert!(
+        !body.is_owned_param(Local(1)),
+        "touch reads the list after the writes"
+    );
+    assert_eq!(reachable_checks(&body), 2);
+    crate::integration::utils::assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+struct Cell
+    x int
+    name String
+
+fn touch(start [Cell], i int) int
+    var l = start
+    l[i].x = 5
+    l[i].x = 7
+    start[i].x * 10 + l[i].x
+
+fn main()
+    let c = List([Cell(x: 1, name: "a")])
+    println(f"{touch(c, 0)} {c[0].x}")
+"#,
+        "17 1",
+    );
+}
+
+#[test]
 fn test_repeated_writes_to_one_element_check_the_path_once() {
     let source = with_cell(
         r#"
