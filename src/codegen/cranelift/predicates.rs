@@ -144,6 +144,12 @@ impl<'a> FunctionTranslator<'a> {
     /// element, immediately above the rule.
     const OPTIONAL_DEPTH_BITS: u32 = 8;
 
+    /// The bit, just above the depth, that says the innermost optional is a
+    /// nullable pointer rather than a box. Mirrors the runtime's
+    /// `element_identity`; no layout the backend builds sets it yet, so the
+    /// element kind leaves it clear and only skips over it.
+    const INNERMOST_NULLABLE_BITS: u32 = 1;
+
     /// How many optionals the element kind can say an element is wrapped in.
     /// Mirrors the runtime's `element_identity::MAX_OPTIONAL_DEPTH`.
     const MAX_OPTIONAL_DEPTH: usize = (1 << Self::OPTIONAL_DEPTH_BITS) - 1;
@@ -170,7 +176,9 @@ impl<'a> FunctionTranslator<'a> {
         if value_size == 0 || value_size > Self::MAX_OPTIONAL_VALUE_SIZE {
             return None;
         }
-        let size = i64::from(value_size) << (Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS);
+        let size_shift =
+            Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS + Self::INNERMOST_NULLABLE_BITS;
+        let size = i64::from(value_size) << size_shift;
         Some(rule | (depth as i64) << Self::ELEMENT_RULE_BITS | size)
     }
 

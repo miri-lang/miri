@@ -18,12 +18,21 @@
 //!   callback the compiler generates from that type's `equals`, and hashed
 //!   through one it generates from the same type's `hash`.
 //!
-//! An optional element applies none of these to itself: its bytes are the
-//! address of its `Some` box, and two separately built `Some(2)`s hold that
-//! same 2 at two addresses. So the compiler also says how many optionals wrap
-//! the element and how wide the value inside is, and the rules above apply to
-//! that value once every box has been opened. A `None` is the absence of one,
-//! equal only to a `None` reached after opening as many boxes.
+//! An optional element is laid out one of two ways, layer by layer, and the
+//! compiler says which in the kind word:
+//!
+//! - a **boxed** layer is the address of its `Some` box, null for `None`. Two
+//!   separately built `Some(2)`s hold that same 2 at two addresses, so the
+//!   rules above never apply to a box's address: the compiler says how many
+//!   boxed layers wrap the element and how wide the value in the innermost box
+//!   is, and the rules apply to that value once every box has been opened;
+//! - a **nullable pointer** layer, possible only innermost and only around a
+//!   managed pointer, is that pointer itself, null for `None`. It is not
+//!   opened: once the boxes are, its word is tested for null and otherwise read
+//!   by the rule exactly as a bare pointer element would be.
+//!
+//! A `None` is the absence of a value, equal only to a `None` found at the same
+//! layer: `None` is not `Some(None)`, whichever way each layer is laid out.
 //!
 //! Hashing follows the same rule, since two elements that compare equal have
 //! to land in the same probe chain.
@@ -74,8 +83,15 @@ fn float_width(rule: usize) -> Option<usize> {
 /// Width of the field holding the rule that settles a resolved value.
 const RULE_BITS: u32 = 8;
 
-/// Width of the field holding how many optionals wrap the element.
+/// Width of the field holding how many boxed optionals wrap the element.
 const DEPTH_BITS: u32 = 8;
+
+/// The bit, just above the depth, saying the innermost optional is a nullable
+/// pointer rather than a box.
+const NULLABLE_BIT: u32 = RULE_BITS + DEPTH_BITS;
+
+/// Where the boxed value's size starts, above the nullable bit.
+const SIZE_SHIFT: u32 = NULLABLE_BIT + 1;
 
 /// How many optionals one element may be wrapped in and still be matched by
 /// content. Nesting deeper than this keeps the byte rule: the compiler declines
@@ -83,12 +99,23 @@ const DEPTH_BITS: u32 = 8;
 /// that would open the wrong number of boxes.
 pub const MAX_OPTIONAL_DEPTH: usize = (1 << DEPTH_BITS) - 1;
 
-/// The kind word registering `rule` for a value reached by opening `depth`
-/// optionals, each box holding `value_size` bytes. `depth` of zero is the
-/// element itself and leaves `rule` exactly as the two bare constants spell it,
-/// so a container whose elements are not optional encodes as it always did.
-pub const fn through_optionals(rule: usize, depth: usize, value_size: usize) -> usize {
-    rule | (depth << RULE_BITS) | (value_size << (RULE_BITS + DEPTH_BITS))
+/// The kind word registering `rule` for a value reached by opening
+/// `boxed_depth` boxed optionals, each box holding `value_size` bytes, and then,
+/// when `innermost_nullable` is set, one optional more whose `None` is a null
+/// pointer and whose `Some` is the pointer itself.
+///
+/// With no optional at all — `boxed_depth` zero and no nullable layer — the word
+/// is `rule` exactly as the bare constants spell it, so a container whose
+/// elements are not optional encodes as it always did.
+pub const fn through_optionals(
+    rule: usize,
+    boxed_depth: usize,
+    value_size: usize,
+    innermost_nullable: bool,
+) -> usize {
+    rule | (boxed_depth << RULE_BITS)
+        | ((innermost_nullable as usize) << NULLABLE_BIT)
+        | (value_size << SIZE_SHIFT)
 }
 
 /// What an element slot holds once every optional wrapping it is opened.
@@ -107,7 +134,8 @@ enum Resolved {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct ElementIdentity {
-    /// The rule, the optional depth and the wrapped value's size, packed by
+    /// The rule, the boxed depth, the nullable bit and the boxed value's size,
+    /// packed by
     /// [`through_optionals`]. The rule is consulted when `equals_fn` is zero.
     kind: usize,
     /// Address of an [`ElementEqualsFn`], or zero when the element type defines
@@ -147,28 +175,37 @@ impl ElementIdentity {
         self.kind & ((1 << RULE_BITS) - 1)
     }
 
-    /// How many optionals wrap the element; zero when it is not optional.
+    /// How many boxed optionals wrap the element; zero when none does.
     fn optional_depth(&self) -> usize {
         (self.kind >> RULE_BITS) & MAX_OPTIONAL_DEPTH
+    }
+
+    /// True when the innermost optional is a nullable pointer, tested for null
+    /// in its slot rather than opened.
+    fn innermost_nullable(&self) -> bool {
+        (self.kind >> NULLABLE_BIT) & 1 == 1
     }
 
     /// The number of bytes the settling rule reads, given the element slot's
     /// own `slot_size`. An optional's boxed value has a width of its own — an
     /// `int?` box holds eight bytes where an `i32?` box holds four, with the
-    /// rest of the box never written — so only the element itself is read at
-    /// the size of its slot.
+    /// rest of the box never written — so only a value no box holds, the
+    /// element itself, is read at the size of its slot.
     fn value_size(&self, slot_size: usize) -> usize {
         if self.optional_depth() == 0 {
             return slot_size;
         }
-        self.kind >> (RULE_BITS + DEPTH_BITS)
+        self.kind >> SIZE_SHIFT
     }
 
     /// Opens every optional wrapping the element stored at `elem`.
     ///
     /// Each box holds its value at offset zero, so opening one is reading the
     /// pointer and continuing at what it points to; a null pointer is a `None`
-    /// and ends the walk at the depth it was found.
+    /// and ends the walk at the depth it was found. A nullable innermost layer
+    /// is not opened: its word *is* the payload pointer, so a null word is a
+    /// `None` one layer below the boxes, and any other leaves the value at the
+    /// slot holding that word — where the rule reads a bare pointer element.
     ///
     /// # Safety
     ///
@@ -181,6 +218,9 @@ impl ElementIdentity {
                 return Resolved::Missing(opened);
             }
             at = inner;
+        }
+        if self.innermost_nullable() && (*(at as *const *const u8)).is_null() {
+            return Resolved::Missing(self.optional_depth());
         }
         Resolved::Value(at)
     }
@@ -335,4 +375,83 @@ unsafe fn bytes_equal(a: *const u8, b: *const u8, len: usize) -> bool {
         return true;
     }
     std::slice::from_raw_parts(a, len) == std::slice::from_raw_parts(b, len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An identity registering `rule` through `boxed_depth` boxes over a
+    /// pointer-wide value, ending in a nullable pointer when `nullable` says so.
+    fn identity(rule: usize, boxed_depth: usize, nullable: bool) -> ElementIdentity {
+        let mut identity = ElementIdentity::BYTES;
+        identity.set_kind(through_optionals(rule, boxed_depth, 8, nullable));
+        identity
+    }
+
+    /// The address of a slot holding `word`, as a container stores an element.
+    fn slot(word: &usize) -> *const u8 {
+        (word as *const usize).cast()
+    }
+
+    #[test]
+    fn a_nullable_layer_hashes_none_apart_from_some_none() {
+        let identity = identity(BY_BYTES, 1, true);
+        let none = 0usize;
+        let inner_none = 0usize;
+        let some_none = &inner_none as *const usize as usize;
+        unsafe {
+            assert_ne!(
+                identity.hash(slot(&none), 8),
+                identity.hash(slot(&some_none), 8)
+            );
+            assert!(!identity.same(slot(&none), slot(&some_none), 8));
+        }
+    }
+
+    #[test]
+    fn a_nullable_layer_reads_its_pointer_word_without_opening_it() {
+        let identity = identity(BY_BYTES, 0, true);
+        let pointee = 7u64;
+        let present = &pointee as *const u64 as usize;
+        let none = 0usize;
+        unsafe {
+            assert!(matches!(
+                identity.resolve(slot(&none)),
+                Resolved::Missing(0)
+            ));
+            assert!(matches!(
+                identity.resolve(slot(&present)),
+                Resolved::Value(at) if at == slot(&present)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_boxed_encoding_without_the_nullable_bit_resolves_as_before() {
+        let identity = identity(BY_BYTES, 1, false);
+        let value = 0u64;
+        let some_zero = &value as *const u64 as usize;
+        unsafe {
+            let boxed: *const u8 = (&value as *const u64).cast();
+            assert!(matches!(
+                identity.resolve(slot(&some_zero)),
+                Resolved::Value(at) if at == boxed
+            ));
+        }
+    }
+
+    #[test]
+    fn a_bare_kind_word_is_its_rule() {
+        assert_eq!(
+            through_optionals(BY_STRING_CONTENT, 0, 8, false) & 0xff,
+            BY_STRING_CONTENT
+        );
+        assert_eq!(
+            identity(BY_F64_VALUE, 3, true).rule(),
+            BY_F64_VALUE,
+            "the nullable bit does not leak into the rule"
+        );
+        assert_eq!(identity(BY_BYTES, 3, true).optional_depth(), 3);
+    }
 }

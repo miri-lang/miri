@@ -724,6 +724,7 @@ fn test_set_of_optionals_matches_equal_values_in_separate_boxes() {
                 miri_runtime_core::element_identity::BY_BYTES,
                 1,
                 8,
+                false,
             ),
         );
         let stored = owned_box(2);
@@ -758,6 +759,7 @@ fn test_set_of_optionals_keeps_an_absent_value_apart_from_a_present_one() {
                 miri_runtime_core::element_identity::BY_BYTES,
                 1,
                 8,
+                false,
             ),
         );
         let zero = owned_box(0);
@@ -789,6 +791,7 @@ fn test_set_of_optional_strings_matches_boxed_content() {
                 miri_runtime_core::element_identity::BY_STRING_CONTENT,
                 1,
                 8,
+                false,
             ),
         );
         let stored_text = owned_string("pear");
@@ -822,6 +825,7 @@ fn test_set_of_optionals_reads_a_narrow_value_at_its_own_width() {
                 miri_runtime_core::element_identity::BY_BYTES,
                 1,
                 4,
+                false,
             ),
         );
         let stored = owned_box(0x1111_1111_0000_0007);
@@ -838,6 +842,109 @@ fn test_set_of_optionals_reads_a_narrow_value_at_its_own_width() {
         miri_rt_set_free(set);
         release_box(stored);
         release_box(probe);
+    }
+}
+
+/// An optional whose innermost payload is a managed pointer is that pointer,
+/// with `None` a null word: there is no box to open, so the slot is read the
+/// way a bare string element is, and only a null is the absence of a value.
+#[test]
+fn test_set_of_nullable_strings_matches_content_and_keeps_null_apart() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::through_optionals(
+                miri_runtime_core::element_identity::BY_STRING_CONTENT,
+                0,
+                8,
+                true,
+            ),
+        );
+        let stored = owned_string("pear");
+        let probe = owned_string("pear");
+        let empty = owned_string("");
+
+        assert_eq!(miri_rt_set_add(set, 0), 1, "an absent string is a value");
+        assert_eq!(miri_rt_set_add(set, 0), 0, "and it is one value");
+        assert_eq!(miri_rt_set_add(set, stored), 1);
+        assert_eq!(
+            miri_rt_set_add(set, probe),
+            0,
+            "equal content in another allocation is a duplicate"
+        );
+        assert_eq!(
+            miri_rt_set_add(set, empty),
+            1,
+            "an empty string is present, not absent"
+        );
+        assert_eq!(miri_rt_set_len(set), 3);
+        assert_eq!(miri_rt_set_contains(set, probe), 1);
+        assert_eq!(miri_rt_set_contains(set, 0), 1);
+
+        miri_rt_set_free(set);
+        release_string(stored);
+        release_string(probe);
+        release_string(empty);
+    }
+}
+
+/// One boxed layer around a nullable string: `None` is a null slot, `Some(None)`
+/// a box holding a null word, and `Some(Some(s))` a box holding the string's
+/// pointer. The three are three different values, and a present empty string
+/// is not an absent one.
+#[test]
+fn test_set_of_boxed_nullable_strings_keeps_each_layer_of_absence_apart() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::through_optionals(
+                miri_runtime_core::element_identity::BY_STRING_CONTENT,
+                1,
+                8,
+                true,
+            ),
+        );
+        let stored_text = owned_string("pear");
+        let probe_text = owned_string("pear");
+        let some_none = owned_box(0);
+        let other_some_none = owned_box(0);
+        let stored = owned_box(stored_text as u64);
+        let probe = owned_box(probe_text as u64);
+        let empty_text = owned_string("");
+        let some_empty = owned_box(empty_text as u64);
+
+        assert_eq!(miri_rt_set_add(set, 0), 1);
+        assert_eq!(miri_rt_set_add(set, some_none), 1, "Some(None) is not None");
+        assert_eq!(
+            miri_rt_set_add(set, other_some_none),
+            0,
+            "two boxes holding None are one value"
+        );
+        assert_eq!(miri_rt_set_add(set, stored), 1);
+        assert_eq!(miri_rt_set_add(set, probe), 0);
+        assert_eq!(
+            miri_rt_set_add(set, some_empty),
+            1,
+            "Some(Some(\"\")) is not Some(None)"
+        );
+        assert_eq!(miri_rt_set_len(set), 4);
+        assert_eq!(miri_rt_set_contains(set, 0), 1);
+        assert_eq!(miri_rt_set_contains(set, other_some_none), 1);
+        assert_eq!(miri_rt_set_contains(set, probe), 1);
+
+        assert_eq!(miri_rt_set_remove(set, other_some_none), 1);
+        assert_eq!(miri_rt_set_contains(set, 0), 1, "None outlives Some(None)");
+        assert_eq!(miri_rt_set_contains(set, some_none), 0);
+
+        miri_rt_set_free(set);
+        for boxed in [some_none, other_some_none, stored, probe, some_empty] {
+            release_box(boxed);
+        }
+        for text in [stored_text, probe_text, empty_text] {
+            release_string(text);
+        }
     }
 }
 
