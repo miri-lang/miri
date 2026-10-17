@@ -2021,8 +2021,7 @@ impl<'a> FunctionTranslator<'a> {
             call_conv,
         )?;
 
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(func_name, e.to_string()))?;
         ctx.clear();
 
@@ -2210,8 +2209,7 @@ impl<'a> FunctionTranslator<'a> {
             &sig,
         )?;
 
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(decref_name, e.to_string()))?;
         ctx.clear();
         Ok(())
@@ -2249,8 +2247,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut builder_ctx = FunctionBuilderContext::new();
         Self::emit_structural_decref_body(module, ctx, &mut builder_ctx, element, facts, ptr_type)?;
 
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(decref_name, e.to_string()))?;
         ctx.clear();
         Ok(())
@@ -2478,8 +2475,7 @@ impl<'a> FunctionTranslator<'a> {
             call_conv,
         )?;
 
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(clone_name, e.to_string()))?;
         ctx.clear();
         Ok(())

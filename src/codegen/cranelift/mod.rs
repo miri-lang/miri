@@ -646,16 +646,16 @@ impl CraneliftBackend {
 
         // Get the function signature and declare it
         let sig = translator.signature().clone();
+        let function = translator.into_function();
         let func_id = module
             .declare_function(name, Linkage::Export, &sig)
             .map_err(|e| CodegenError::declare_function(name, e.to_string()))?;
 
         // Set the function in context
-        ctx.func = translator.into_function();
+        ctx.func = function;
 
         // Define the function
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
         if let Some(listing) = listing {
             listing.push_str(&format!(
@@ -1025,5 +1025,51 @@ impl CraneliftBackend {
 impl fmt::Display for CraneliftBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CraneliftBackend(target={})", self.isa.triple())
+    }
+}
+
+/// Defines `func_id` from the function in `ctx`, with every call into a Miri
+/// runtime library made direct ([`call_runtime_directly`]). Every function the
+/// backend emits is defined through here.
+pub(crate) fn define_function(
+    module: &mut ObjectModule,
+    func_id: cranelift_module::FuncId,
+    ctx: &mut Context,
+) -> Result<(), Box<cranelift_module::ModuleError>> {
+    call_runtime_directly(&mut ctx.func, module.declarations());
+    module.define_function(func_id, ctx).map_err(Box::new)
+}
+
+/// Marks every Miri runtime function `func` calls as colocated, so the
+/// call is a direct branch the static linker resolves rather than a load
+/// of the callee's address from the GOT and an indirect branch. The
+/// runtime libraries are linked into every executable, well within a
+/// direct branch's reach; anything else imported, such as the C library,
+/// keeps the call position-independent code makes.
+fn call_runtime_directly(
+    func: &mut cranelift_codegen::ir::Function,
+    declarations: &cranelift_module::ModuleDeclarations,
+) {
+    use cranelift_codegen::ir::ExternalName;
+    let runtime: Vec<cranelift_codegen::ir::FuncRef> = (func.dfg.ext_funcs.iter())
+        .filter_map(|(func_ref, data)| {
+            let ExternalName::User(user) = &data.name else {
+                return None;
+            };
+            let name = &func.params.user_named_funcs()[*user];
+            if name.namespace != 0 {
+                return None;
+            }
+            let id = cranelift_module::FuncId::from_u32(name.index);
+            let decl = declarations.get_function_decl(id);
+            let is_runtime = decl.linkage == Linkage::Import
+                && decl
+                    .linkage_name(id)
+                    .starts_with(crate::runtime_fns::RUNTIME_SYMBOL_PREFIX);
+            is_runtime.then_some(func_ref)
+        })
+        .collect();
+    for func_ref in runtime {
+        func.dfg.ext_funcs[func_ref].colocated = true;
     }
 }

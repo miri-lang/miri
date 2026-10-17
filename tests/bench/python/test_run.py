@@ -176,6 +176,15 @@ class CountedBuildTest(unittest.TestCase):
         )
 
 
+class RuntimeProfileTest(unittest.TestCase):
+    def test_the_environment_records_the_runtime_build_profile(self):
+        profile = run.runtime_profile()
+        self.assertEqual(profile["name"], "release")
+        self.assertEqual(profile["lto"], "fat")
+        self.assertEqual(profile["codegen-units"], 1)
+        self.assertEqual(profile["panic"], "abort")
+
+
 class ReviewTest(unittest.TestCase):
     def test_the_hash_is_of_the_file_without_its_review_line(self):
         body = "// header\n\nint main() {}\n"

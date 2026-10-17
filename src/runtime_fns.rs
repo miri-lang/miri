@@ -22,6 +22,11 @@
 //! `tests/stdlib/runtime_fns_sync.rs` enforces this automatically.
 
 /// Constants for all `miri_rt_*` runtime symbols.
+/// The prefix of every symbol a Miri runtime library exports. The libraries
+/// are linked statically into every program, so a call to such a symbol may be
+/// a direct branch rather than a load of its address from the GOT.
+pub const RUNTIME_SYMBOL_PREFIX: &str = "miri_rt_";
+
 pub mod rt {
     // Closure
     /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure malloc, not in stdlib.

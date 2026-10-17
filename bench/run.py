@@ -467,10 +467,17 @@ def environment(ctx, languages):
         "runner_commit": git("rev-parse", "HEAD"),
         "miri_sha": git("rev-parse", "HEAD"),
         "miri_version": first_line([str(ctx.miri), "--version"]),
-        "miri_runtime_profile": "release",
+        "miri_runtime_profile": runtime_profile(),
         "toolchain_versions": toolchain_versions(ctx, languages),
         "python_runner": platform.python_version(),
     }
+
+
+def runtime_profile():
+    """The build profile of the runtime library every Miri program links, as
+    its manifest sets it: the profile's name and each setting it overrides."""
+    manifest = tomllib.loads((REPO / "src" / "runtime" / "core" / "Cargo.toml").read_text())
+    return {"name": "release", **manifest.get("profile", {}).get("release", {})}
 
 
 # Building and verifying.

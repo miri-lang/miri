@@ -1052,6 +1052,48 @@ fn test_a_list_fill_loop_reads_the_length_inline_and_pushes_without_a_call_while
     assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "4950");
 }
 
+/// Every call into a Miri runtime library is a direct branch: the libraries
+/// are linked into the executable, so the callee is declared colocated rather
+/// than reached through the GOT. A C library function, such as `malloc`, keeps
+/// the position-independent call.
+#[test]
+fn test_calls_into_the_runtime_are_direct_and_calls_into_the_c_library_are_not() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let (_, listing) = build_heap_work(&["--release"], out_dir.path());
+    let mut runtime_calls = 0;
+    let mut c_calls = 0;
+    for function in listed_functions(&listing) {
+        let (_, names) = clif_function(&listing, function);
+        let header = &listing[listing.find(&format!("; {function}\n")).unwrap()..];
+        for (handle, name) in &names {
+            let Some(declaration) = header
+                .lines()
+                .find(|line| line.trim_start().starts_with(&format!("{handle} = ")))
+            else {
+                continue;
+            };
+            if name.starts_with("miri_rt_") && handle.starts_with("fn") {
+                runtime_calls += 1;
+                assert!(
+                    declaration.contains("colocated"),
+                    "{function} calls {name} through the GOT: {declaration}"
+                );
+            }
+            if *name == "malloc" {
+                c_calls += 1;
+                assert!(
+                    !declaration.contains("colocated"),
+                    "{function} calls malloc directly: {declaration}"
+                );
+            }
+        }
+    }
+    assert!(
+        runtime_calls > 0 && c_calls > 0,
+        "nothing was checked:\n{listing}"
+    );
+}
+
 const CONSTANT_DIVISOR: &str = r#"
 use system.io
 

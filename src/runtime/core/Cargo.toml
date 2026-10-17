@@ -14,3 +14,14 @@ regex = "1.13.1"
 
 [features]
 default = []
+
+# The library every Miri program links. Its hot entry points — list writes,
+# map probes, string appends — are what a program spends its calls on, so it
+# is built as one unit with link-time optimisation. It never catches a panic:
+# a fault traps with a code, and an unwind across the C boundary into
+# compiled code would be undefined, so a panic aborts.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"

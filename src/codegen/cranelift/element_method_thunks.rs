@@ -192,8 +192,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut builder_ctx = FunctionBuilderContext::new();
         emit_element_method_body(module, ctx, &mut builder_ctx, &callee)?;
 
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(thunk_name, e.to_string()))?;
         ctx.clear();
         Ok(())

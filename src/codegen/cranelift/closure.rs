@@ -112,8 +112,7 @@ impl<'a> FunctionTranslator<'a> {
         let mut builder_ctx = FunctionBuilderContext::new();
         Self::emit_closure_destructor_body(module, ctx, &mut builder_ctx, body, facts, ptr_type)?;
 
-        module
-            .define_function(func_id, ctx)
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(dtor_name, e.to_string()))?;
         ctx.clear();
         Ok(())
