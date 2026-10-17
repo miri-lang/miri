@@ -12,6 +12,7 @@ pub mod if_else;
 pub mod jump;
 pub mod loop_variables;
 pub mod match_assignment;
+pub mod range_values;
 pub mod unless;
 pub mod until;
 pub mod while_for;

@@ -942,6 +942,9 @@ pub fn lower_for(
     if let ExpressionKind::Range(iterable_expr, _, RangeExpressionType::IterableObject) =
         &iterable.node
     {
+        if let Some(element_ty) = range_value_element(ctx, iterable_expr) {
+            return lower_for_over_range_value(ctx, span, decls, iterable_expr, element_ty, body);
+        }
         // The iterable is in the start position, delegate to list/array handling
         return lower_for_over_iterable(ctx, span, decls, iterable_expr, body);
     }
@@ -1068,6 +1071,163 @@ pub fn lower_for(
         ));
     }
     Ok(())
+}
+
+/// The element type of `iterable` when it is a range value — a range bound to
+/// a name, passed in or returned, rather than written in the loop header.
+fn range_value_element(ctx: &LoweringContext, iterable: &Expression) -> Option<Type> {
+    let ty = ctx.recorded_type(iterable.id)?;
+    let TypeKind::Custom(name, Some(args)) = &ty.kind else {
+        return None;
+    };
+    if name != crate::ast::types::RANGE_TYPE_NAME {
+        return None;
+    }
+    Some(ctx.resolved_type(args.first()?))
+}
+
+/// Lower `for x in r` over a range value `r`.
+///
+/// A range value holds its start, its end and whether the end is included, so
+/// the loop reads all three from it once and runs from the start while the
+/// variable is below the end, or at it when the end is included. Each pass
+/// leaves at the end before stepping, as a range written in the header does.
+fn lower_for_over_range_value(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decls: &[VariableDeclaration],
+    range_value: &Expression,
+    element_ty: Type,
+    body: &Statement,
+) -> Result<(), LoweringError> {
+    ctx.push_scope();
+    let bounds = range_value_bounds(ctx, range_value, element_ty.clone(), span)?;
+    let loop_var = ctx.push_local(decls[0].name.clone(), element_ty.clone(), *span);
+    assign(ctx, loop_var, Rvalue::Use(bounds.start.clone()), span);
+
+    let header_bb = ctx.new_basic_block();
+    let body_bb = ctx.new_basic_block();
+    let increment_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+    goto(ctx, header_bb, span);
+
+    ctx.set_current_block(header_bb);
+    let keep_going = range_value_condition(ctx, loop_var, &bounds, span);
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(keep_going)),
+            targets: vec![(Discriminant::bool_true(), body_bb)],
+            otherwise: exit_bb,
+        },
+        *span,
+    ));
+
+    ctx.enter_loop(exit_bb, increment_bb);
+    ctx.set_current_block(body_bb);
+    lower_statement(ctx, body)?;
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        goto(ctx, increment_bb, span);
+    }
+    ctx.exit_loop();
+
+    ctx.set_current_block(increment_bb);
+    let step = RangeStep {
+        loop_var,
+        loop_var_ty: element_ty,
+        // An exclusive range never reaches its end inside a pass, so leaving
+        // at the end is right for both kinds.
+        inclusive_end: Some(bounds.end),
+        header_bb,
+        exit_bb,
+    };
+    emit_range_step(ctx, step, span);
+    ctx.set_current_block(exit_bb);
+    ctx.pop_scope(*span);
+    Ok(())
+}
+
+/// The parts of a range value a loop reads once: its start, and the locals
+/// holding its end and whether the end is included.
+struct RangeValueBounds {
+    start: Operand,
+    end: crate::mir::Local,
+    inclusive: crate::mir::Local,
+}
+
+/// Evaluate `range_value` into a temp the loop's scope owns, typed as the
+/// `(start, end, inclusive)` tuple a range value is built as, and read its
+/// end and inclusive flag into locals of their own.
+fn range_value_bounds(
+    ctx: &mut LoweringContext,
+    range_value: &Expression,
+    element_ty: Type,
+    span: &Span,
+) -> Result<RangeValueBounds, LoweringError> {
+    let bool_ty = Type::new(TypeKind::Boolean, *span);
+    let parts_ty = super::expression::tuple_expr::tuple_of(
+        vec![element_ty.clone(), element_ty.clone(), bool_ty.clone()],
+        *span,
+    );
+    let parts = ctx.push_temp(parts_ty, *span);
+    lower_expression(ctx, range_value, Some(Place::new(parts)))?;
+    if !ctx.borrowed_temps.contains(&parts) && !ctx.is_owned_by_a_scope(parts) {
+        ctx.register_scope_temp(parts);
+    }
+    let part = |index| {
+        Operand::Copy(Place {
+            local: parts,
+            projection: vec![crate::mir::PlaceElem::Field(index)],
+        })
+    };
+    let end = ctx.push_temp(element_ty, *span);
+    assign(ctx, end, Rvalue::Use(part(1)), span);
+    let inclusive = ctx.push_temp(bool_ty, *span);
+    assign(ctx, inclusive, Rvalue::Use(part(2)), span);
+    Ok(RangeValueBounds {
+        start: part(0),
+        end,
+        inclusive,
+    })
+}
+
+/// The local holding whether another pass runs: the variable is below the
+/// end, or at it and the end is included.
+fn range_value_condition(
+    ctx: &mut LoweringContext,
+    loop_var: crate::mir::Local,
+    bounds: &RangeValueBounds,
+    span: &Span,
+) -> crate::mir::Local {
+    let compare = |ctx: &mut LoweringContext, op, left: crate::mir::Local, right| {
+        let result = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+        let rvalue = Rvalue::BinaryOp(
+            op,
+            Box::new(Operand::Copy(Place::new(left))),
+            Box::new(Operand::Copy(Place::new(right))),
+        );
+        assign(ctx, result, rvalue, span);
+        result
+    };
+    let below = compare(ctx, BinOp::Lt, loop_var, bounds.end);
+    let at_end = compare(ctx, BinOp::Eq, loop_var, bounds.end);
+    let at_included_end = compare(ctx, BinOp::BitAnd, at_end, bounds.inclusive);
+    compare(ctx, BinOp::BitOr, below, at_included_end)
+}
+
+/// Append `local = rvalue` to the current block.
+fn assign(ctx: &mut LoweringContext, local: crate::mir::Local, rvalue: Rvalue, span: &Span) {
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(local), rvalue),
+        span: *span,
+    });
+}
+
+/// End the current block with a jump to `target`.
+fn goto(ctx: &mut LoweringContext, target: crate::mir::BasicBlock, span: &Span) {
+    ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
 }
 
 /// The step at the end of one pass of a range loop.
