@@ -365,7 +365,7 @@ fn fresh_source(rvalue: &Rvalue) -> FreshSource<'_> {
 fn is_struct(kind: &AggregateKind) -> bool {
     match kind {
         AggregateKind::Struct(_) => true,
-        AggregateKind::Tuple
+        AggregateKind::Tuple(_)
         | AggregateKind::Array
         | AggregateKind::Class(_)
         | AggregateKind::List

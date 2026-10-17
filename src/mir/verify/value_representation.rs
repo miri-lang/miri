@@ -458,7 +458,7 @@ fn held_in(kind: &AggregateKind, dest: &Place) -> String {
         AggregateKind::Closure(_, _) => format!("captured by the closure built into `{dest}`"),
         AggregateKind::Enum(_, _) => format!("held in the enum payload built into `{dest}`"),
         AggregateKind::Option(_) => format!("held in the optional payload built into `{dest}`"),
-        AggregateKind::Tuple
+        AggregateKind::Tuple(_)
         | AggregateKind::Struct(_)
         | AggregateKind::Class(_)
         | AggregateKind::Array

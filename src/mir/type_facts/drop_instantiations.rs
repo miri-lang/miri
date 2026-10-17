@@ -234,7 +234,7 @@ fn constructed_type(rvalue: &Rvalue) -> Option<&Type> {
     };
     match kind {
         AggregateKind::Struct(ty) | AggregateKind::Class(ty) => Some(ty),
-        AggregateKind::Tuple
+        AggregateKind::Tuple(_)
         | AggregateKind::Array
         | AggregateKind::List
         | AggregateKind::FormattedString

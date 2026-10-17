@@ -12,5 +12,6 @@ pub mod errors;
 pub mod functions;
 pub mod iteration;
 pub mod methods;
+pub mod mixed_widths;
 pub mod optional_results;
 pub mod rc;

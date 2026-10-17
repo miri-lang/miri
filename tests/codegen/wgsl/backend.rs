@@ -708,7 +708,10 @@ fn unsupported_rvalue_aggregate_is_rejected() {
         &mut body,
         vec![assign(
             Place::new(dst),
-            Rvalue::Aggregate(AggregateKind::Tuple, vec![]),
+            Rvalue::Aggregate(
+                AggregateKind::Tuple(Type::new(TypeKind::Tuple(vec![]), span)),
+                vec![],
+            ),
         )],
     );
 

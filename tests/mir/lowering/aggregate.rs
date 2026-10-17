@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::{make_int_const, make_string_const};
-use miri::ast::expression::ExpressionKind;
+use crate::mir::utils::{make_int_const, make_string_const, mir_lower_code};
+use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::statement::{Statement, StatementKind as AstStatementKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::lowering::lower_class_method;
 use miri::mir::{AggregateKind, Body, Rvalue, StatementKind};
 use miri::pipeline::Pipeline;
+
+/// The tuple type `(int, int)`.
+fn int_pair() -> Type {
+    let int = || Expression {
+        id: 0,
+        node: ExpressionKind::Type(Box::new(Type::new(TypeKind::Int, Span::default())), false),
+        span: Span::default(),
+    };
+    Type::new(TypeKind::Tuple(vec![int(), int()]), Span::default())
+}
 
 fn assert_display(rvalue: &Rvalue, expected: &str) {
     assert_eq!(format!("{}", rvalue), expected);
@@ -17,7 +27,7 @@ fn assert_display(rvalue: &Rvalue, expected: &str) {
 #[test]
 fn test_aggregate_tuple_display() {
     let rvalue = Rvalue::Aggregate(
-        AggregateKind::Tuple,
+        AggregateKind::Tuple(int_pair()),
         vec![make_int_const(1), make_int_const(2)],
     );
     assert_display(&rvalue, "(const Integer(I32(1)), const Integer(I32(2)))");
@@ -86,11 +96,11 @@ fn test_aggregate_struct_display() {
 #[test]
 fn test_aggregate_equality() {
     let a = Rvalue::Aggregate(
-        AggregateKind::Tuple,
+        AggregateKind::Tuple(int_pair()),
         vec![make_int_const(1), make_int_const(2)],
     );
     let b = Rvalue::Aggregate(
-        AggregateKind::Tuple,
+        AggregateKind::Tuple(int_pair()),
         vec![make_int_const(1), make_int_const(2)],
     );
     assert_eq!(a, b);
@@ -168,5 +178,58 @@ fn main()
         optional_aggregate_types(&body),
         vec![TypeKind::Option(Box::new(node))],
         "`Some(n)` stored into `self.left` must carry `Node?`:\n{body}"
+    );
+}
+
+/// The type every tuple aggregate in `body` carries, in statement order.
+fn tuple_aggregate_types(body: &Body) -> Vec<String> {
+    body.basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| {
+            let (StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue)) =
+                &statement.kind
+            else {
+                return None;
+            };
+            let Rvalue::Aggregate(AggregateKind::Tuple(ty), _) = rvalue else {
+                return None;
+            };
+            Some(ty.kind.to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn a_tuple_literal_carries_the_tuple_type_its_elements_are_stored_at() {
+    let body = mir_lower_code(
+        r#"
+fn main()
+    let t = (7 as i8, 1234567890123, 2.5 as f32)
+    let held (int?, String) = (3, "s")
+"#,
+    );
+    assert_eq!(
+        tuple_aggregate_types(&body),
+        vec![
+            "Tuple(i8, int, f32)".to_string(),
+            "Tuple(int?, String)".to_string()
+        ],
+        "each tuple literal must carry its own tuple type:\n{body}"
+    );
+}
+
+#[test]
+fn a_range_value_carries_the_tuple_of_its_bounds_and_its_flag() {
+    let body = mir_lower_code(
+        r#"
+fn main()
+    let r = 2..5
+"#,
+    );
+    assert_eq!(
+        tuple_aggregate_types(&body),
+        vec!["Tuple(int, int, bool)".to_string()],
+        "a range value is built as `(start, end, inclusive)`:\n{body}"
     );
 }

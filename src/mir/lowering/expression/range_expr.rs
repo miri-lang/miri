@@ -12,6 +12,7 @@ use crate::mir::{
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::expression::tuple_expr::tuple_of;
 use crate::mir::lowering::helpers::resolve_type;
 
 pub(crate) fn lower_range_expr(
@@ -26,13 +27,17 @@ pub(crate) fn lower_range_expr(
     // This provides enough info for backends to iterate the range
 
     let start_op = lower_expression(ctx, start_expr, None)?;
+    let start_ty = ctx.resolved_type(start_expr);
 
     // End value - if not provided, create a "max" sentinel or just use start
-    let end_op = if let Some(end_expr) = end_expr_opt {
-        lower_expression(ctx, end_expr, None)?
+    let (end_op, end_ty) = if let Some(end_expr) = end_expr_opt {
+        (
+            lower_expression(ctx, end_expr, None)?,
+            ctx.resolved_type(end_expr),
+        )
     } else {
         // Range with no end (used for iterable objects) - use start as placeholder
-        start_op.clone()
+        (start_op.clone(), start_ty.clone())
     };
 
     // is_inclusive flag
@@ -40,11 +45,13 @@ pub(crate) fn lower_range_expr(
         range_type,
         crate::ast::expression::RangeExpressionType::Inclusive
     );
+    let flag_ty = Type::new(TypeKind::Boolean, expr.span);
     let inclusive_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
-        ty: Type::new(TypeKind::Boolean, expr.span),
+        ty: flag_ty.clone(),
         literal: crate::ast::literal::Literal::Boolean(is_inclusive),
     }));
+    let built = tuple_of(vec![start_ty, end_ty, flag_ty], expr.span);
 
     // Create tuple aggregate (start, end, is_inclusive)
     let (target, ret_op) = if let Some(d) = dest {
@@ -57,7 +64,10 @@ pub(crate) fn lower_range_expr(
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             target,
-            Rvalue::Aggregate(AggregateKind::Tuple, vec![start_op, end_op, inclusive_op]),
+            Rvalue::Aggregate(
+                AggregateKind::Tuple(built),
+                vec![start_op, end_op, inclusive_op],
+            ),
         ),
         span: expr.span,
     });

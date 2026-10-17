@@ -408,7 +408,7 @@ impl<'a> Layouts<'a> {
     ) -> Option<&'a Type> {
         match kind {
             AggregateKind::Option(_)
-            | AggregateKind::Tuple
+            | AggregateKind::Tuple(_)
             | AggregateKind::Struct(_)
             | AggregateKind::Class(_) => self.field_type(target, slot),
             AggregateKind::Array | AggregateKind::List | AggregateKind::Set => {

@@ -10,5 +10,6 @@ pub mod fields;
 pub mod functions;
 pub mod later_declared_struct;
 pub mod managed_field_assignment;
+pub mod mixed_widths;
 pub mod value_semantics;
 pub mod vector_names;

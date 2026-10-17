@@ -6,7 +6,7 @@ use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout::{
-    class_payload_layout, enum_payload_slot_size, field_layout, ClassPayloadLayout,
+    aggregate_layout, class_payload_layout, enum_payload_slot_size, field_layout, PayloadLayout,
 };
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
@@ -511,7 +511,7 @@ impl<'a> FunctionTranslator<'a> {
                     operands.len()
                 )))
             }
-            AggregateKind::Tuple
+            AggregateKind::Tuple(_)
             | AggregateKind::Struct(_)
             | AggregateKind::Class(_)
             | AggregateKind::FormattedString
@@ -778,13 +778,13 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(builder.ins().iconst(ptr_type, 0));
         }
 
-        let is_tuple = matches!(kind, AggregateKind::Tuple);
+        let is_tuple = matches!(kind, AggregateKind::Tuple(_));
         let needs_pointer_layout = matches!(
             kind,
             AggregateKind::Struct(_)
                 | AggregateKind::Class(_)
                 | AggregateKind::Enum(_, _)
-                | AggregateKind::Tuple
+                | AggregateKind::Tuple(_)
                 | AggregateKind::Option(_)
         );
         if operands.len() == 1 && !needs_pointer_layout {
@@ -797,9 +797,10 @@ impl<'a> FunctionTranslator<'a> {
             .collect::<Result<_, _>>()?;
         let translated =
             Self::coerce_payload_values(builder, kind, translated, type_ctx, expected_ty)?;
-
-        let (field_offsets, total_size) =
-            Self::payload_layout(builder, kind, &translated, type_ctx, expected_ty, is_tuple)?;
+        let (field_offsets, total_size) = match Self::declared_aggregate_type(kind) {
+            Some(built) => Self::declared_payload(builder, built, &translated, type_ctx)?,
+            None => Self::payload_layout(builder, kind, &translated, type_ctx, expected_ty)?,
+        };
 
         let payload_ptr =
             Self::alloc_aggregate_payload(builder, ctx, ptr_type, ptr_size, total_size)?;
@@ -823,23 +824,128 @@ impl<'a> FunctionTranslator<'a> {
         Ok(payload_ptr)
     }
 
-    /// Where each translated value is stored inside the payload, and how many
-    /// bytes the payload needs.
+    /// The struct or tuple type an aggregate of `kind` builds, when it builds
+    /// one: those are laid out by their declaration, the way every read of
+    /// them is.
+    fn declared_aggregate_type(kind: &AggregateKind) -> Option<&crate::ast::types::Type> {
+        match kind {
+            AggregateKind::Struct(built) | AggregateKind::Tuple(built) => Some(built),
+            AggregateKind::Class(_)
+            | AggregateKind::Enum(_, _)
+            | AggregateKind::Option(_)
+            | AggregateKind::FormattedString
+            | AggregateKind::Closure(_, _)
+            | AggregateKind::Array
+            | AggregateKind::List
+            | AggregateKind::Map
+            | AggregateKind::Set => None,
+        }
+    }
+
+    /// Where each value of a struct or tuple of type `built` is stored, as
+    /// [`aggregate_layout`] places it, and the payload size.
+    ///
+    /// The layout comes from the type, never from the values: a value is
+    /// stored at the width its field is declared at, so the bytes written are
+    /// the bytes every field read, equality and drop path finds. A value of
+    /// any other width means the aggregate and its type disagree, and storing
+    /// it would write a field where none of them reads it.
+    fn declared_payload(
+        builder: &FunctionBuilder,
+        built: &crate::ast::types::Type,
+        translated: &[Value],
+        type_ctx: &TypeCtx,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        let scope = type_ctx.layout_scope();
+        let Some(layout) = aggregate_layout(&built.kind, scope, type_ctx.ptr_type) else {
+            return Self::open_parameter_payload(builder, built, translated, type_ctx);
+        };
+        if layout.fields.len() != translated.len() {
+            return Err(CodegenError::Internal(format!(
+                "an aggregate building `{}` carries {} values for {} fields",
+                built.kind,
+                translated.len(),
+                layout.fields.len()
+            )));
+        }
+        let offsets = translated
+            .iter()
+            .zip(&layout.fields)
+            .map(|(&value, &(offset, field_ty))| {
+                Self::declared_field_offset(builder, value, offset, field_ty, &built.kind)
+            })
+            .collect::<Result<_, _>>()?;
+        Ok((offsets, layout.size))
+    }
+
+    /// The payload of a struct copy built at a type the body leaves open.
+    ///
+    /// No declaration lays such a value out, and nothing reads it as a struct:
+    /// every field read of an open parameter is a word. It arises only where
+    /// lowering takes a parameter for the program's struct of the same name.
+    /// TODO: `value_aggregate_fields` in `mir/lowering/expression/value_copy.rs`
+    /// resolves a body's type parameter by name against the program's types,
+    /// so a shared `Map<K, V>` body in a program declaring `struct V` copies
+    /// its `V` value as that struct. Once it skips open parameters this path
+    /// is unreachable and should refuse instead.
+    fn open_parameter_payload(
+        builder: &FunctionBuilder,
+        built: &crate::ast::types::Type,
+        translated: &[Value],
+        type_ctx: &TypeCtx,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        let is_open_parameter = matches!(
+            &built.kind,
+            TypeKind::Custom(name, None) if type_ctx.layout_scope().is_parameter(name)
+        );
+        if !is_open_parameter {
+            return Err(CodegenError::Internal(format!(
+                "an aggregate building `{}` has no struct or tuple layout",
+                built.kind
+            )));
+        }
+        Self::compute_aggregate_layout(builder, translated, false, type_ctx.ptr_type.bytes())
+    }
+
+    /// Where a struct or tuple field declared at `field_ty` is stored, after
+    /// checking that `value` has that width.
+    fn declared_field_offset(
+        builder: &FunctionBuilder,
+        value: Value,
+        offset: i32,
+        field_ty: cl_types::Type,
+        built: &TypeKind,
+    ) -> Result<u32, CodegenError> {
+        let value_ty = builder.func.dfg.value_type(value);
+        if value_ty != field_ty {
+            return Err(CodegenError::Internal(format!(
+                "a `{value_ty}` value is built into the `{field_ty}` field at offset {offset} \
+                 of `{built}`"
+            )));
+        }
+        u32::try_from(offset).map_err(|_| {
+            CodegenError::Internal(format!("field offset {offset} of `{built}` is negative"))
+        })
+    }
+
+    /// Where each translated value of an aggregate that is neither a struct
+    /// nor a tuple is stored inside the payload, and how many bytes the
+    /// payload needs.
     ///
     /// A class instance is laid out by its declared fields, because that is
     /// what every later read and write of one reaches through. The values a
     /// constructor hands over say nothing about how much room the instance
     /// needs: a field the constructor leaves to `init` arrives as a placeholder
     /// one byte wide, and sizing the allocation from those widths hands out an
-    /// object smaller than its own fields. Every other aggregate carries its
-    /// real values here, so their own widths are the layout.
+    /// object smaller than its own fields. An enum value takes the slots every
+    /// match reads it from. An optional's box and a formatted string carry
+    /// their real values here, so their own widths are the layout.
     fn payload_layout(
         builder: &FunctionBuilder,
         kind: &AggregateKind,
         translated: &[Value],
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
-        is_tuple: bool,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         if let Some(layout) = Self::declared_class_layout(kind, type_ctx) {
             return Self::class_field_offsets(layout, translated.len());
@@ -855,15 +961,11 @@ impl<'a> FunctionTranslator<'a> {
         if let AggregateKind::Enum(enum_name, _) = kind {
             return Self::enum_value_layout(builder, enum_name, translated, type_ctx, expected_ty);
         }
-        let ptr_size = type_ctx.ptr_type.bytes();
-        let tuple_header = if is_tuple { ptr_size } else { 0 };
         Self::compute_aggregate_layout(
             builder,
             translated,
-            tuple_header,
-            is_tuple,
             matches!(kind, AggregateKind::Option(_)),
-            ptr_size,
+            type_ctx.ptr_type.bytes(),
         )
     }
 
@@ -955,10 +1057,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The declared payload layout of the class `kind` constructs, or `None`
     /// when `kind` is not a class or names one this build has no definition for.
-    fn declared_class_layout(
-        kind: &AggregateKind,
-        type_ctx: &TypeCtx,
-    ) -> Option<ClassPayloadLayout> {
+    fn declared_class_layout(kind: &AggregateKind, type_ctx: &TypeCtx) -> Option<PayloadLayout> {
         let AggregateKind::Class(ty) = kind else {
             return None;
         };
@@ -985,7 +1084,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Storing the operands anyway would put them at offsets nothing reads them
     /// back from, so this reports rather than guesses.
     fn class_field_offsets(
-        layout: ClassPayloadLayout,
+        layout: PayloadLayout,
         operand_count: usize,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         if layout.fields.len() != operand_count {
@@ -1076,7 +1175,7 @@ impl<'a> FunctionTranslator<'a> {
                 };
                 Some(vec![Some(payload.as_ref().clone())])
             }
-            AggregateKind::Tuple
+            AggregateKind::Tuple(_)
             | AggregateKind::Struct(_)
             | AggregateKind::Class(_)
             | AggregateKind::FormattedString
@@ -1120,20 +1219,20 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Compute per-field offsets and total payload size for a struct-like aggregate.
-    /// An Option's payload takes a slot at least pointer-sized.
+    /// Compute per-field offsets and total payload size for an aggregate laid
+    /// out from its values' own widths: an optional's box, a formatted string,
+    /// or a struct copy at an open type parameter. An Option's payload takes a
+    /// slot at least pointer-sized.
     /// Uses u64 internally to prevent silent wraparound, then checks final size fits in u32.
     fn compute_aggregate_layout(
         builder: &FunctionBuilder,
         translated: &[Value],
-        header_size: u32,
-        is_tuple: bool,
         is_option: bool,
         ptr_size: u32,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
-        let mut current_offset: u64 = header_size as u64;
+        let mut current_offset: u64 = 0;
         let mut field_offsets = Vec::with_capacity(translated.len());
-        let mut max_align: u32 = if is_tuple { ptr_size } else { 1 };
+        let mut max_align: u32 = 1;
 
         for &val in translated {
             let ty = builder.func.dfg.value_type(val);

@@ -10,8 +10,12 @@ use std::rc::Rc;
 /// Kind of aggregate being constructed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AggregateKind {
-    /// A tuple, e.g., `(1, "hello", true)` - fixed size, heterogeneous
-    Tuple,
+    /// A tuple, e.g., `(1, "hello", true)` - fixed size, heterogeneous.
+    /// The `Type` is the tuple being built, a `TypeKind::Tuple` whose elements
+    /// are the types the operands are stored at, so the layout the tuple is
+    /// built with is the one every read of it uses rather than one guessed
+    /// from the place it is written into.
+    Tuple(Type),
     /// An array, e.g., `[1, 2, 3; 3]` - fixed size, homogeneous
     Array,
     /// A struct, e.g., `Point { x: 1, y: 2 }` - named fields
@@ -114,7 +118,7 @@ fn write_aggregate(
     ops: &[Operand],
 ) -> fmt::Result {
     match kind {
-        AggregateKind::Tuple => {
+        AggregateKind::Tuple(_) => {
             write!(f, "(")?;
             write_comma_separated(f, ops)?;
             write!(f, ")")

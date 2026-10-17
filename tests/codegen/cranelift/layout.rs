@@ -5,7 +5,9 @@ use cranelift_codegen::ir::types;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
-use miri::codegen::cranelift::layout::{aggregate_size, class_payload_layout, field_layout};
+use miri::codegen::cranelift::layout::{
+    aggregate_layout, aggregate_size, class_payload_layout, field_layout,
+};
 
 use miri::error::syntax::Span;
 use miri::mir::option_layout::LayoutScope;
@@ -194,10 +196,6 @@ fn test_tuple_with_i128() {
 }
 
 #[test]
-#[cfg_attr(
-    debug_assertions,
-    should_panic(expected = "tuple field index 2 out of range")
-)]
 fn test_tuple_out_of_range_field_idx() {
     let type_defs = HashMap::new();
     let ptr = ptr_ty();
@@ -207,9 +205,13 @@ fn test_tuple_out_of_range_field_idx() {
         create_type_expr(TypeKind::I32),
     ]);
 
-    // Field index 2 is out of range — panics in debug, falls through in release
-    let _ = field_layout(&tuple_kind, 2, LayoutScope::program(&type_defs), ptr)
-        .expect("the field has a layout");
+    // Field index 2 names no element, so no offset answers it.
+    let error = field_layout(&tuple_kind, 2, LayoutScope::program(&type_defs), ptr)
+        .expect_err("an index past the last element has no layout");
+    assert!(
+        error.to_string().contains("field index 2 out of range"),
+        "unexpected error: {error}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -377,10 +379,6 @@ fn test_struct_worst_case_padding() {
 }
 
 #[test]
-#[cfg_attr(
-    debug_assertions,
-    should_panic(expected = "struct 'S' field index 1 out of range")
-)]
 fn test_struct_out_of_range_field_idx() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
@@ -390,9 +388,13 @@ fn test_struct_out_of_range_field_idx() {
 
     let custom_kind = TypeKind::Custom("S".to_string(), None);
 
-    // Field index 1 is out of range — panics in debug, falls through in release
-    let _ = field_layout(&custom_kind, 1, LayoutScope::program(&type_defs), ptr)
-        .expect("the field has a layout");
+    // Field index 1 names no field, so no offset answers it.
+    let error = field_layout(&custom_kind, 1, LayoutScope::program(&type_defs), ptr)
+        .expect_err("an index past the last field has no layout");
+    assert!(
+        error.to_string().contains("field index 1 out of range"),
+        "unexpected error: {error}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1094,4 +1096,145 @@ fn test_generic_alias_field_layout_is_its_template_at_its_arguments() {
         field_layout(&tuple, 1, LayoutScope::program(&defs), ptr_ty())
             .expect("the tuple has a layout"),
     );
+}
+
+/// Asserts that the layout a struct or tuple of `kind` is built with places
+/// every field exactly where `field_layout` reads it from, and returns it.
+fn built_layout_agrees_with_reads(
+    kind: &TypeKind,
+    defs: &HashMap<String, TypeDefinition>,
+) -> (Vec<(i32, types::Type)>, u32) {
+    let scope = LayoutScope::program(defs);
+    let layout =
+        aggregate_layout(kind, scope, ptr_ty()).expect("a struct or tuple has a payload layout");
+    for (index, placed) in layout.fields.iter().enumerate() {
+        let read = field_layout(kind, index, scope, ptr_ty()).expect("the field has a layout");
+        assert_eq!(
+            *placed, read,
+            "field {index} of {kind:?} is built apart from where it is read"
+        );
+    }
+    (layout.fields, layout.size)
+}
+
+fn mixed_widths() -> StructDefinition {
+    make_struct(vec![
+        ("a", TypeKind::I8),
+        ("b", TypeKind::Int),
+        ("c", TypeKind::F32),
+    ])
+}
+
+#[test]
+fn a_mixed_width_struct_is_built_where_its_fields_are_read() {
+    let defs = HashMap::from([("Mixed".to_string(), TypeDefinition::Struct(mixed_widths()))]);
+    let mixed = TypeKind::Custom("Mixed".to_string(), None);
+    assert_eq!(
+        built_layout_agrees_with_reads(&mixed, &defs),
+        (vec![(0, types::I8), (8, types::I64), (16, types::F32)], 24)
+    );
+}
+
+#[test]
+fn a_mixed_width_tuple_is_built_where_its_elements_are_read() {
+    let defs = HashMap::new();
+    let tuple = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I8),
+        create_type_expr(TypeKind::Int),
+        create_type_expr(TypeKind::F32),
+    ]);
+    // The element count occupies the first word.
+    assert_eq!(
+        built_layout_agrees_with_reads(&tuple, &defs),
+        (vec![(8, types::I8), (16, types::I64), (24, types::F32)], 32)
+    );
+}
+
+#[test]
+fn a_nested_struct_field_is_built_as_the_word_it_is_read_as() {
+    let outer = make_struct(vec![
+        ("flag", TypeKind::Boolean),
+        ("inner", TypeKind::Custom("Mixed".to_string(), None)),
+        ("w", TypeKind::I16),
+    ]);
+    let defs = HashMap::from([
+        ("Mixed".to_string(), TypeDefinition::Struct(mixed_widths())),
+        ("Outer".to_string(), TypeDefinition::Struct(outer)),
+    ]);
+    let kind = TypeKind::Custom("Outer".to_string(), None);
+    assert_eq!(
+        built_layout_agrees_with_reads(&kind, &defs),
+        (vec![(0, types::I8), (8, types::I64), (16, types::I16)], 24)
+    );
+}
+
+#[test]
+fn a_128_bit_field_is_built_at_its_own_alignment() {
+    let wide = make_struct(vec![
+        ("a", TypeKind::Boolean),
+        ("w", TypeKind::I128),
+        ("b", TypeKind::Boolean),
+    ]);
+    let defs = HashMap::from([("Wide".to_string(), TypeDefinition::Struct(wide))]);
+    let kind = TypeKind::Custom("Wide".to_string(), None);
+    assert_eq!(
+        built_layout_agrees_with_reads(&kind, &defs),
+        (vec![(0, types::I8), (16, types::I128), (32, types::I8)], 48)
+    );
+
+    let tuple = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::Boolean),
+        create_type_expr(TypeKind::U128),
+    ]);
+    assert_eq!(
+        built_layout_agrees_with_reads(&tuple, &HashMap::new()),
+        (vec![(8, types::I8), (16, types::I128)], 32)
+    );
+}
+
+#[test]
+fn adjacent_bool_fields_are_built_byte_by_byte() {
+    let flags = make_struct(vec![
+        ("a", TypeKind::Boolean),
+        ("b", TypeKind::Boolean),
+        ("n", TypeKind::I32),
+    ]);
+    let defs = HashMap::from([("Flags".to_string(), TypeDefinition::Struct(flags))]);
+    let kind = TypeKind::Custom("Flags".to_string(), None);
+    assert_eq!(
+        built_layout_agrees_with_reads(&kind, &defs),
+        (vec![(0, types::I8), (1, types::I8), (4, types::I32)], 8)
+    );
+}
+
+#[test]
+fn a_vector_is_built_component_after_component() {
+    let vector = TypeKind::Custom(
+        "Vec3".to_string(),
+        Some(vec![create_type_expr(TypeKind::F32)]),
+    );
+    assert_eq!(
+        built_layout_agrees_with_reads(&vector, &HashMap::new()),
+        (vec![(0, types::F32), (4, types::F32), (8, types::F32)], 12)
+    );
+}
+
+#[test]
+fn only_a_struct_tuple_or_vector_has_an_aggregate_layout() {
+    let defs = HashMap::from([(
+        "C".to_string(),
+        TypeDefinition::Class(make_class("C", None, vec![("x", TypeKind::Int)])),
+    )]);
+    let scope = LayoutScope::program(&defs);
+    for kind in [
+        TypeKind::Custom("C".to_string(), None),
+        TypeKind::Custom("Unknown".to_string(), None),
+        TypeKind::Int,
+        TypeKind::Option(Box::new(t(TypeKind::Int))),
+    ] {
+        assert!(
+            aggregate_layout(&kind, scope, ptr_ty()).is_none(),
+            "{kind:?} is not laid out as a struct or tuple"
+        );
+    }
 }

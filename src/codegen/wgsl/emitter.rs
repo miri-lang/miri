@@ -2058,7 +2058,7 @@ impl<'a> BodyEmitter<'a> {
                     )))
                 }
             }
-            crate::mir::AggregateKind::Tuple
+            crate::mir::AggregateKind::Tuple(_)
             | crate::mir::AggregateKind::Array
             | crate::mir::AggregateKind::Class(_)
             | crate::mir::AggregateKind::List

@@ -85,7 +85,11 @@ pub fn field_layout(
 ) -> Result<(i32, CraneliftType), CodegenError> {
     let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
-        TypeKind::Tuple(element_exprs) => Ok(tuple_field_layout(element_exprs, field_idx, ptr_ty)),
+        TypeKind::Tuple(element_exprs) => placed_field(
+            tuple_payload_layout(element_exprs, ptr_ty),
+            field_idx,
+            local_type,
+        ),
         TypeKind::Option(_) => boxed_optional_field_layout(local_type, field_idx, scope, ptr_ty),
         // An open type parameter names no definition, however the program
         // spells its own types.
@@ -93,27 +97,8 @@ pub fn field_layout(
             Ok(((field_idx as i32) * ptr_size, ptr_ty))
         }
         TypeKind::Custom(name, type_args) => {
-            // Only substitute type arguments for compiler-known vector types (Vec2, Vec3, Vec4).
-            // Other generic types (e.g. List<T>, List<Tuple<...>>) have field layout defined
-            // by their type definition, not their type arguments.
-            if let Some(dim) = crate::ast::types::vec_dim(name) {
-                if let Some(args) = type_args {
-                    if !args.is_empty() {
-                        // Try to extract the element type from the first type argument
-                        if let ExpressionKind::Type(elem_type, _) = &args[0].node {
-                            debug_assert!(
-                                field_idx < dim as usize,
-                                "field_layout: vector '{}' field index {} out of bounds for dimension {}",
-                                name,
-                                field_idx,
-                                dim
-                            );
-                            let elem_cl_ty = translate_type_kind(&elem_type.kind, ptr_ty);
-                            let field_offset = (field_idx as i32) * elem_cl_ty.bytes() as i32;
-                            return Ok((field_offset, elem_cl_ty));
-                        }
-                    }
-                }
+            if let Some(layout) = vector_payload_layout(name, type_args.as_deref(), ptr_ty) {
+                return placed_field(layout, field_idx, local_type);
             }
             custom_field_layout(name, type_args.as_deref(), field_idx, scope, ptr_ty)
         }
@@ -169,32 +154,166 @@ fn boxed_optional_field_layout(
     Ok(((field_idx as i32) * ptr_ty.bytes() as i32, ptr_ty))
 }
 
-fn tuple_field_layout(
-    element_exprs: &[crate::ast::expression::Expression],
-    field_idx: usize,
+/// Where each field of a struct, tuple or compiler-known vector of `kind`
+/// sits in its payload, and how many bytes the payload needs; `None` for any
+/// other kind.
+///
+/// This is the one authority for those payloads: the aggregate that builds a
+/// value, every field read and write, equality, and the drop and clone paths
+/// all place a field by it, so the bytes a value is built with are the bytes it
+/// is read from. Fields are laid out from the declaration, each at its natural
+/// alignment in declaration order, at the instantiation `kind` names; a tuple
+/// keeps its element count in the word ahead of its first element.
+pub fn aggregate_layout(
+    kind: &TypeKind,
+    scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
-) -> (i32, CraneliftType) {
-    let ptr_size = ptr_ty.bytes() as i32;
-    debug_assert!(
-        field_idx < element_exprs.len(),
-        "field_layout: tuple field index {} out of range (len {})",
-        field_idx,
-        element_exprs.len()
-    );
-    // Tuple layout: [elem_count: ptr_size][field0][field1]...
-    // Fields start after the count header.
-    let mut offset: i32 = ptr_size;
-    for (i, elem_expr) in element_exprs.iter().enumerate() {
-        let cl_ty = type_from_expression(elem_expr, ptr_ty);
-        let alignment = type_alignment(cl_ty);
-        offset = align_to(offset, alignment);
-        if i == field_idx {
-            return (offset, cl_ty);
+) -> Option<PayloadLayout> {
+    match kind {
+        TypeKind::Tuple(element_exprs) => Some(tuple_payload_layout(element_exprs, ptr_ty)),
+        // An open type parameter names no definition, however the program
+        // spells its own types.
+        TypeKind::Custom(name, None) if scope.is_parameter(name) => None,
+        TypeKind::Custom(name, type_args) => {
+            custom_aggregate_layout(name, type_args.as_deref(), scope, ptr_ty)
         }
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => None,
+    }
+}
+
+/// [`aggregate_layout`] of `Custom(name, type_args)`: a compiler-known vector,
+/// a struct, or an alias of either.
+fn custom_aggregate_layout(
+    name: &str,
+    type_args: Option<&[Expression]>,
+    scope: LayoutScope<'_>,
+    ptr_ty: CraneliftType,
+) -> Option<PayloadLayout> {
+    if let Some(layout) = vector_payload_layout(name, type_args, ptr_ty) {
+        return Some(layout);
+    }
+    match scope.definitions.get(name)? {
+        TypeDefinition::Struct(struct_def) => {
+            Some(struct_payload_layout(struct_def, type_args, ptr_ty))
+        }
+        TypeDefinition::Alias(_) => {
+            let written = TypeKind::Custom(name.to_string(), type_args.map(<[_]>::to_vec));
+            let target = resolve_alias(&written, scope.definitions)?;
+            aggregate_layout(&target.kind, scope, ptr_ty)
+        }
+        TypeDefinition::Enum(_)
+        | TypeDefinition::Class(_)
+        | TypeDefinition::Generic(_)
+        | TypeDefinition::Trait(_) => None,
+    }
+}
+
+/// The payload of a compiler-known vector written with its component type
+/// (`Vec3<f32>`): its components one after another. `None` for any other
+/// name, a program's own `Vec3` among them.
+fn vector_payload_layout(
+    name: &str,
+    type_args: Option<&[Expression]>,
+    ptr_ty: CraneliftType,
+) -> Option<PayloadLayout> {
+    let dim = crate::ast::types::vec_dim(name)?;
+    let ExpressionKind::Type(component, _) = &type_args?.first()?.node else {
+        return None;
+    };
+    let component = translate_type_kind(&component.kind, ptr_ty);
+    Some(place_fields(0, (0..dim).map(|_| component)))
+}
+
+/// The payload of a tuple: the element count in the first word, then each
+/// element at the type its type argument names.
+fn tuple_payload_layout(element_exprs: &[Expression], ptr_ty: CraneliftType) -> PayloadLayout {
+    let elements = element_exprs
+        .iter()
+        .map(|element| type_from_expression(element, ptr_ty));
+    place_fields(ptr_ty.bytes() as i32, elements)
+}
+
+/// The payload of a struct at the instantiation `type_args` names.
+fn struct_payload_layout(
+    struct_def: &StructDefinition,
+    type_args: Option<&[Expression]>,
+    ptr_ty: CraneliftType,
+) -> PayloadLayout {
+    let fields = struct_def
+        .fields
+        .iter()
+        .map(|(_name, field_ty, _vis)| struct_field_type(struct_def, field_ty, type_args, ptr_ty));
+    place_fields(0, fields)
+}
+
+/// Field `field_idx` of `layout`, the payload of a value of `kind`. An index
+/// past the last field names no field, and no offset answers it.
+fn placed_field(
+    layout: PayloadLayout,
+    field_idx: usize,
+    kind: &TypeKind,
+) -> Result<(i32, CraneliftType), CodegenError> {
+    layout.fields.get(field_idx).copied().ok_or_else(|| {
+        CodegenError::Internal(format!(
+            "field index {field_idx} out of range: `{kind}` has {} fields",
+            layout.fields.len()
+        ))
+    })
+}
+
+/// Lays `field_types` out after `header` bytes, each at its natural alignment
+/// in order, and pads the whole to the widest alignment among the fields and
+/// the header word.
+fn place_fields(
+    header: i32,
+    field_types: impl IntoIterator<Item = CraneliftType>,
+) -> PayloadLayout {
+    let mut fields = Vec::new();
+    let mut offset = header;
+    let mut max_align = header.max(1);
+    for cl_ty in field_types {
+        let alignment = type_alignment(cl_ty);
+        max_align = max_align.max(alignment);
+        offset = align_to(offset, alignment);
+        fields.push((offset, cl_ty));
         offset += cl_ty.bytes() as i32;
     }
-    // Unreachable if debug_assert passed; fallback for release builds
-    (offset, ptr_ty)
+    PayloadLayout {
+        fields,
+        size: align_to(offset, max_align) as u32,
+    }
 }
 
 fn custom_field_layout(
@@ -212,7 +331,9 @@ fn custom_field_layout(
     };
     Ok(match def {
         TypeDefinition::Struct(struct_def) => {
-            struct_field_layout(name, struct_def, type_args, field_idx, ptr_ty)
+            let written = TypeKind::Custom(name.to_string(), type_args.map(<[_]>::to_vec));
+            let layout = struct_payload_layout(struct_def, type_args, ptr_ty);
+            return placed_field(layout, field_idx, &written);
         }
         TypeDefinition::Enum(enum_def) => enum_field_layout(enum_def, type_args, field_idx, ptr_ty),
         TypeDefinition::Alias(_) => {
@@ -245,34 +366,6 @@ fn struct_field_type(
 ) -> CraneliftType {
     let stored = member_type_at(struct_def.generics.as_deref(), type_args, field_ty);
     translate_type_kind(&stored.kind, ptr_ty)
-}
-
-fn struct_field_layout(
-    name: &str,
-    struct_def: &StructDefinition,
-    type_args: Option<&[Expression]>,
-    field_idx: usize,
-    ptr_ty: CraneliftType,
-) -> (i32, CraneliftType) {
-    debug_assert!(
-        field_idx < struct_def.fields.len(),
-        "field_layout: struct '{}' field index {} out of range (len {})",
-        name,
-        field_idx,
-        struct_def.fields.len()
-    );
-    let mut offset: i32 = 0;
-    for (i, (_field_name, field_ty, _vis)) in struct_def.fields.iter().enumerate() {
-        let cl_ty = struct_field_type(struct_def, field_ty, type_args, ptr_ty);
-        let alignment = type_alignment(cl_ty);
-        offset = align_to(offset, alignment);
-        if i == field_idx {
-            return (offset, cl_ty);
-        }
-        offset += cl_ty.bytes() as i32;
-    }
-    // Unreachable if debug_assert passed; fallback for release builds
-    (offset, ptr_ty)
 }
 
 /// Where field `field_idx` of an enum value sits: the discriminant is field 0,
@@ -340,30 +433,30 @@ pub fn enum_payload_field_kind(
     member_type_at(enum_def.generics.as_deref(), type_args, &declared).kind
 }
 
-/// Where each field of a class instance sits, and how much memory the fields
+/// Where each field of a heap payload sits, and how much memory the fields
 /// need.
 ///
-/// Both answers come from one walk so they cannot disagree. Sizing an instance
+/// Both answers come from one walk so they cannot disagree. Sizing a payload
 /// from anything other than the fields it holds — the widths of the values a
 /// constructor happens to hand over, say — gives an object whose allocation is
 /// smaller than the offsets written into it, and the write past the end lands
 /// in whatever the allocator put next.
-pub struct ClassPayloadLayout {
-    /// Offset and Cranelift type of each field, in the order
-    /// [`field_types`] lists them.
+pub struct PayloadLayout {
+    /// Offset and Cranelift type of each field, in declaration order.
     pub fields: Vec<(i32, CraneliftType)>,
-    /// Bytes the payload occupies, counting the vtable slot every class
-    /// carries ahead of its first field.
+    /// Bytes the payload occupies, counting any header ahead of its first
+    /// field: a class's vtable slot, a tuple's element count.
     pub size: u32,
 }
 
-/// Lay out one class instance's payload. See [`ClassPayloadLayout`].
+/// Lay out one class instance's payload, its fields in the order
+/// [`field_types`] lists them. See [`PayloadLayout`].
 pub fn class_payload_layout(
     name: &str,
     type_args: Option<&[Expression]>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
-) -> ClassPayloadLayout {
+) -> PayloadLayout {
     let ptr_size = ptr_ty.bytes() as i32;
     // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr][field0][field1]...
     // Offset 0 holds the vtable pointer — null for a class without a vtable —
@@ -372,21 +465,10 @@ pub fn class_payload_layout(
     // dispatches while its base does not must still find each inherited field
     // where the base's bodies read it.
     let field_kinds = class_field_kinds(name, type_args, type_definitions);
-    let mut fields = Vec::with_capacity(field_kinds.len());
-    let mut offset: i32 = ptr_size;
-    let mut max_align = ptr_size;
-    for field_kind in &field_kinds {
-        let cl_ty = translate_type_kind(field_kind, ptr_ty);
-        let alignment = type_alignment(cl_ty);
-        max_align = max_align.max(alignment);
-        offset = align_to(offset, alignment);
-        fields.push((offset, cl_ty));
-        offset += cl_ty.bytes() as i32;
-    }
-    ClassPayloadLayout {
-        fields,
-        size: align_to(offset, max_align) as u32,
-    }
+    let fields = field_kinds
+        .iter()
+        .map(|field_kind| translate_type_kind(field_kind, ptr_ty));
+    place_fields(ptr_size, fields)
 }
 
 /// The kind each field of an instance of `name` at `type_args` stores, in the
@@ -432,7 +514,7 @@ pub fn aggregate_size(
 ) -> u32 {
     let ptr_size = ptr_ty.bytes();
     match local_type {
-        TypeKind::Tuple(element_exprs) => tuple_aggregate_size(element_exprs, ptr_ty),
+        TypeKind::Tuple(element_exprs) => tuple_payload_layout(element_exprs, ptr_ty).size,
         TypeKind::Custom(name, type_args) => {
             custom_aggregate_size(name, type_args.as_deref(), type_definitions, ptr_ty)
         }
@@ -472,25 +554,6 @@ pub fn aggregate_size(
     }
 }
 
-/// Size of a tuple aggregate: `[count_header][field0][field1]...`, padded to
-/// the maximum field alignment.
-fn tuple_aggregate_size(
-    element_exprs: &[crate::ast::expression::Expression],
-    ptr_ty: CraneliftType,
-) -> u32 {
-    let ptr_size = ptr_ty.bytes() as i32;
-    let mut max_align = ptr_size;
-    let mut total = ptr_size;
-    for elem_expr in element_exprs {
-        let cl_ty = type_from_expression(elem_expr, ptr_ty);
-        let alignment = type_alignment(cl_ty);
-        max_align = max_align.max(alignment);
-        total = align_to(total, alignment);
-        total += cl_ty.bytes() as i32;
-    }
-    align_to(total, max_align) as u32
-}
-
 /// Size of a `Custom(name, _)` aggregate by dispatching on the resolved
 /// `TypeDefinition`. Unknown names and definitions that carry no on-stack
 /// payload (classes, traits, generics) fall back to a pointer slot.
@@ -516,24 +579,15 @@ fn custom_aggregate_size(
     }
 }
 
-/// Size of a struct aggregate: sum of field sizes with per-field alignment,
-/// padded to the maximum encountered alignment (at least ptr-sized).
+/// Size of a struct aggregate: its payload, padded to at least a pointer's
+/// alignment.
 fn struct_aggregate_size(
     struct_def: &StructDefinition,
     type_args: Option<&[Expression]>,
     ptr_ty: CraneliftType,
 ) -> u32 {
-    let ptr_size = ptr_ty.bytes() as i32;
-    let mut max_align = ptr_size;
-    let mut total: i32 = 0;
-    for (_field_name, field_ty, _vis) in &struct_def.fields {
-        let cl_ty = struct_field_type(struct_def, field_ty, type_args, ptr_ty);
-        let alignment = type_alignment(cl_ty);
-        max_align = max_align.max(alignment);
-        total = align_to(total, alignment);
-        total += cl_ty.bytes() as i32;
-    }
-    align_to(total, max_align) as u32
+    let payload = struct_payload_layout(struct_def, type_args, ptr_ty).size as i32;
+    align_to(payload, ptr_ty.bytes() as i32) as u32
 }
 
 /// Size of an enum aggregate: the discriminant slot followed by as many

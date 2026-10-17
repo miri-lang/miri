@@ -290,7 +290,7 @@ fn cast_of_a_value_to_a_counted_word_is_flagged() {
 
 #[test]
 fn value_in_a_counted_aggregate_slot_is_flagged() {
-    let built = Rvalue::Aggregate(AggregateKind::Tuple, vec![copy(2), copy(1)]);
+    let built = Rvalue::Aggregate(AggregateKind::Tuple(ty(holder())), vec![copy(2), copy(1)]);
     assert_flagged(
         vec![assign(place(4), built)],
         &["aggregate slot", "`_4`", "(int, int)", "String"],

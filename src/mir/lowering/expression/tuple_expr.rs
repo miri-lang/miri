@@ -46,22 +46,17 @@ pub(crate) fn lower_tuple_expr(
         });
     }
 
+    let built = AggregateKind::Tuple(built_tuple_type(&ty, element_types));
     let result = if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                d.clone(),
-                Rvalue::Aggregate(AggregateKind::Tuple, ops.clone()),
-            ),
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Aggregate(built, ops.clone())),
             span: expr.span,
         });
         Operand::Copy(d)
     } else {
         let temp = ctx.push_temp(ty, expr.span);
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                Place::new(temp),
-                Rvalue::Aggregate(AggregateKind::Tuple, ops.clone()),
-            ),
+            kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Aggregate(built, ops.clone())),
             span: expr.span,
         });
         Operand::Copy(Place::new(temp))
@@ -76,4 +71,28 @@ pub(crate) fn lower_tuple_expr(
     }
 
     Ok(result)
+}
+
+/// The tuple a tuple literal builds: one element per type its operands are
+/// stored at. A literal the checker recorded no tuple type for keeps the type
+/// it was recorded at, which code generation refuses to lay out.
+fn built_tuple_type(recorded: &Type, element_types: Vec<Type>) -> Type {
+    if !matches!(recorded.kind, TypeKind::Tuple(_)) {
+        return recorded.clone();
+    }
+    tuple_of(element_types, recorded.span)
+}
+
+/// The tuple type whose elements are `element_types`, each written as a
+/// non-nullable type argument the way a canonical tuple spells them.
+pub(crate) fn tuple_of(element_types: Vec<Type>, span: crate::error::syntax::Span) -> Type {
+    let elements = element_types
+        .into_iter()
+        .map(|element| Expression {
+            id: 0,
+            span,
+            node: ExpressionKind::Type(Box::new(element), false),
+        })
+        .collect();
+    Type::new(TypeKind::Tuple(elements), span)
 }

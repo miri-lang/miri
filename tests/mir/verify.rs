@@ -187,6 +187,19 @@ fn body_of(local_tys: &[Type], arg_count: usize, blocks: Vec<BasicBlockData>) ->
 }
 
 /// Locals: 0 the return slot, 1 the managed temp, 2 an unmanaged call destination.
+/// The tuple type whose elements are `elements`.
+fn tuple_of(elements: Vec<Type>) -> Type {
+    let elements = elements
+        .into_iter()
+        .map(|element| miri::ast::expression::Expression {
+            id: 0,
+            node: miri::ast::expression::ExpressionKind::Type(Box::new(element), false),
+            span: span(),
+        })
+        .collect();
+    Type::new(TypeKind::Tuple(elements), span())
+}
+
 fn temp_body(blocks: Vec<BasicBlockData>) -> Body {
     body_of(&[void_ty(), string_ty(), void_ty()], 0, blocks)
 }
@@ -916,7 +929,7 @@ fn a_reference_retained_for_a_slot_belongs_to_neither_local() {
             stmt(StatementKind::Assign(
                 place(2),
                 Rvalue::Aggregate(
-                    miri::mir::rvalue::AggregateKind::Tuple,
+                    miri::mir::rvalue::AggregateKind::Tuple(tuple_of(vec![string_ty()])),
                     vec![Operand::Copy(place(1))],
                 ),
             )),
@@ -934,7 +947,7 @@ fn a_reference_retained_for_a_slot_belongs_to_neither_local() {
             stmt(StatementKind::Assign(
                 place(2),
                 Rvalue::Aggregate(
-                    miri::mir::rvalue::AggregateKind::Tuple,
+                    miri::mir::rvalue::AggregateKind::Tuple(tuple_of(vec![string_ty()])),
                     vec![Operand::Copy(place(1))],
                 ),
             )),
@@ -1427,7 +1440,10 @@ fn tuple_around(dest: usize, source: usize) -> Statement {
     stmt(StatementKind::Assign(
         place(dest),
         Rvalue::Aggregate(
-            AggregateKind::Tuple,
+            AggregateKind::Tuple(tuple_of(vec![
+                Type::new(TypeKind::RawPtr, span()),
+                Type::new(TypeKind::Int, span()),
+            ])),
             vec![
                 Operand::Copy(place(source)),
                 constant(
