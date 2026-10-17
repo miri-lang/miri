@@ -258,6 +258,11 @@ pub mod rt {
     /// Compiler-internal: `s = s + t` and `s += t` on a string a local holds,
     /// not in stdlib. Takes over the reference to `s` it is passed.
     pub const STRING_APPEND: &str = "miri_rt_string_append";
+    /// Compiler-internal: a formatted string appending a signed integer's
+    /// digits onto the text it holds, not in stdlib. Takes over that text.
+    pub const STRING_APPEND_INT: &str = "miri_rt_string_append_int";
+    /// Compiler-internal: the unsigned twin of [`STRING_APPEND_INT`].
+    pub const STRING_APPEND_UINT: &str = "miri_rt_string_append_uint";
     pub const STRING_CLONE: &str = "miri_rt_string_clone";
     pub const STRING_EQUALS: &str = "miri_rt_string_equals";
     pub const STRING_HASH: &str = "miri_rt_string_hash";
@@ -539,6 +544,8 @@ pub mod rt {
         STRING_IS_EMPTY,
         STRING_CONCAT,
         STRING_APPEND,
+        STRING_APPEND_INT,
+        STRING_APPEND_UINT,
         STRING_CLONE,
         STRING_EQUALS,
         STRING_HASH,
@@ -637,7 +644,13 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
         rt::LIST_PUSH | rt::SET_ADD => &[1],
         rt::LIST_INSERT => &[2],
         rt::MAP_SET => &[1, 2],
-        rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW | rt::STRING_APPEND => &[0],
+        rt::LIST_COW
+        | rt::MAP_COW
+        | rt::SET_COW
+        | rt::ARRAY_COW
+        | rt::STRING_APPEND
+        | rt::STRING_APPEND_INT
+        | rt::STRING_APPEND_UINT => &[0],
         _ => &[],
     }
 }

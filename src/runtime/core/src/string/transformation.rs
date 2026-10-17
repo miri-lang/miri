@@ -9,6 +9,7 @@
 
 use super::{into_raw_ptr, miri_rt_string_new, MiriString};
 use crate::guard;
+use std::fmt::Write;
 
 /// Concatenates two strings and returns a new string.
 ///
@@ -82,38 +83,125 @@ pub unsafe extern "C" fn miri_rt_string_append(
 ) -> *mut MiriString {
     guard::guard_check(left as *mut u8);
     guard::guard_check(right as *mut u8);
+    if right.is_null() || (*right).len == 0 {
+        return append_bytes(left, &[]);
+    }
+    if std::ptr::eq(right, left) {
+        // Appending a string to itself reads bytes the append may move; read
+        // them first.
+        let copy = (*right).as_str().as_bytes().to_vec();
+        return append_bytes(left, &copy);
+    }
+    append_bytes(
+        left,
+        std::slice::from_raw_parts((*right).data, (*right).len),
+    )
+}
+
+/// Appends the decimal digits of `value` to `left`, taking over the caller's
+/// reference to `left`, as [`miri_rt_string_append`] does: what a formatted
+/// string compiles an interpolated signed integer to once it holds its own
+/// text, with no string of the digits allocated on the way.
+///
+/// # Safety
+/// As [`miri_rt_string_append`] for `left`.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_append_int(
+    left: *mut MiriString,
+    value: i64,
+) -> *mut MiriString {
+    guard::guard_check(left as *mut u8);
+    let mut digits = DecimalDigits::new();
+    let _ = write!(digits, "{value}");
+    append_bytes(left, digits.as_bytes())
+}
+
+/// The unsigned twin of [`miri_rt_string_append_int`].
+///
+/// # Safety
+/// As [`miri_rt_string_append`] for `left`.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_append_uint(
+    left: *mut MiriString,
+    value: u64,
+) -> *mut MiriString {
+    guard::guard_check(left as *mut u8);
+    let mut digits = DecimalDigits::new();
+    let _ = write!(digits, "{value}");
+    append_bytes(left, digits.as_bytes())
+}
+
+/// The decimal text of a 64-bit integer, written on the stack.
+struct DecimalDigits {
+    bytes: [u8; 20],
+    len: usize,
+}
+
+impl DecimalDigits {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 20],
+            len: 0,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+impl std::fmt::Write for DecimalDigits {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let end = self.len + text.len();
+        let slot = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+        slot.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// Appends `bytes` to `left`, taking over the caller's reference to `left`:
+/// in place when nothing else holds it, into a new string otherwise.
+///
+/// # Safety
+/// `left` is a valid `MiriString` pointer the caller owns a reference to, or
+/// null; `bytes` is valid UTF-8 and lies outside `left`'s buffer.
+unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
     if left.is_null() {
-        return miri_rt_string_concat(left, right);
+        return into_raw_ptr(MiriString::from_str(std::str::from_utf8_unchecked(bytes)));
     }
     let count = (left as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
     if *count as isize != 1 {
-        let joined = miri_rt_string_concat(left, right);
+        let joined = joined_copy(&*left, bytes);
         if *count as isize > 1 {
             *count -= 1;
         }
         return joined;
     }
-    let right_len = if right.is_null() { 0 } else { (*right).len };
-    if right_len == 0 {
+    if bytes.is_empty() {
         return left;
     }
     let string = &mut *left;
-    let Some(total) = string.len.checked_add(right_len) else {
+    let Some(total) = string.len.checked_add(bytes.len()) else {
         return left;
     };
     if total > string.capacity && !grow(string, total) {
         return left;
     }
-    // A `right` that is `left` itself reads from the buffer just grown.
-    let source = if std::ptr::eq(right, left) {
-        string.data
-    } else {
-        (*right).data
-    };
-    std::ptr::copy_nonoverlapping(source, string.data.add(string.len), right_len);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), string.data.add(string.len), bytes.len());
     string.len = total;
     super::char_index::forget(string);
     left
+}
+
+/// A new string holding the text of `left` followed by `bytes`.
+unsafe fn joined_copy(left: &MiriString, bytes: &[u8]) -> *mut MiriString {
+    let mut text = String::with_capacity(left.len + bytes.len());
+    text.push_str(left.as_str());
+    text.push_str(std::str::from_utf8_unchecked(bytes));
+    into_raw_ptr(MiriString::from_str(&text))
 }
 
 /// Grows the buffer of `string` to hold at least `needed` bytes, doubling its

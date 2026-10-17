@@ -166,3 +166,44 @@ fn main()
         "ann!x?v#lbl*plain+two~ | ann x v lbl plain two",
     );
 }
+
+/// A formatted string appends each integer's digits straight onto the text
+/// it is building, for every integer width and sign, and an integer first or
+/// after one of the program's own strings is written the same way.
+#[test]
+fn test_formatted_integers_of_every_width_keep_their_text() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let name = "n"
+    let small i8 = -128
+    let short i16 = 32767
+    let word i32 = -2147483648
+    let wide = -9223372036854775807 - 1
+    let byte u8 = 255
+    let unsigned u32 = 4294967295
+    let big u64 = 18446744073709551615
+    println(f"{small}|{short}|{word}|{wide}|{byte}|{unsigned}|{big}")
+    println(f"{name}{wide}{name}")
+    println(f"{0}{-1}:{name}")
+"#,
+        "-128|32767|-2147483648|-9223372036854775808|255|4294967295|18446744073709551615\nn-9223372036854775808n\n0-1:n",
+    );
+}
+
+/// A formatted string appends each number's digits onto its own text, with no
+/// string of the digits allocated on the way: a piece holding two numbers
+/// costs the two allocations of its own text, not two more per number.
+#[test]
+fn test_formatted_numbers_allocate_no_string_of_their_own() {
+    let program = format!(
+        "use system.io\n\nfn main()\n    var total = 0\n    var i = 0\n    while i < 1000\n        let piece = f\"<{{i}}:{{i * 2}}>\"\n        total = total + piece.length()\n        i = i + 1\n    println(f\"{{total}}\")\n"
+    );
+    let allocations = raw_allocations(&program);
+    assert!(
+        allocations <= 2 * 1000 + 10,
+        "1000 pieces of two numbers allocated {allocations} times"
+    );
+}
