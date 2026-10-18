@@ -11,7 +11,7 @@ use crate::mir::statement::Statement;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
-use crate::type_checker::value_class::LayoutScope;
+use crate::type_checker::value_class::{LayoutScope, ValueLayout};
 use crate::type_checker::DeclaredFunction;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -261,6 +261,18 @@ impl Body {
     /// Whether a value of `kind`, written in this body, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind) -> bool {
         self.rc_classifier.is_counted(kind, &self.type_params)
+    }
+
+    /// The layout a value of `kind`, written in this body, is held in as its
+    /// bytes, or `None` when it is held as a word.
+    ///
+    /// This is the one answer the verifier and every backend read: a GPU body
+    /// lays its values out in the shader backends, so it holds none here.
+    pub fn value_layout(&self, kind: &TypeKind) -> Option<ValueLayout> {
+        if self.is_gpu() {
+            return None;
+        }
+        self.rc_classifier.value_layout(kind, &self.type_params)
     }
 
     /// Whether the value `local` holds is reference counted.

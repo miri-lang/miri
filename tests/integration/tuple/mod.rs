@@ -10,6 +10,7 @@ pub mod edge_cases;
 pub mod element_conversion;
 pub mod errors;
 pub mod functions;
+pub mod indexed_elements;
 pub mod iteration;
 pub mod methods;
 pub mod mixed_widths;

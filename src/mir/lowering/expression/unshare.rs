@@ -13,10 +13,9 @@
 //! into the copy.
 //!
 //! A class instance is a reference by design and is never copied, but a value
-//! reached through one of its fields is. A struct of plain scalars is copied
-//! every time it is bound (`value_copy`), so no second name holds it — unless a
-//! collection holds it, since cloning a collection copies its elements'
-//! pointers rather than the elements.
+//! reached through one of its fields is. A struct or tuple held as its bytes is
+//! copied every time it is bound, wherever it is held — a frame, a field, a
+//! collection — so no second name ever holds it and it is never unshared.
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
@@ -60,9 +59,9 @@ impl Step<'_> {
 
 /// How a value on a write's path is made its own before the write.
 enum Unsharing {
-    /// A struct holding a managed field, by name and with its fields' types
-    /// as declared: rebuilt from its fields.
-    Struct(String, Vec<Type>),
+    /// A struct held as a reference-counted allocation, with this many
+    /// fields: rebuilt from its fields.
+    Struct(usize),
     /// A built-in collection: cloned by the runtime.
     Collection(BuiltinCollectionKind),
 }
@@ -149,7 +148,6 @@ pub(crate) fn lower_written_entry_place(
         return Ok(None);
     };
     let mut place = Place::new(*root);
-    let mut in_collection = false;
     let mut write_back = None;
     for step in &steps {
         match step {
@@ -158,17 +156,15 @@ pub(crate) fn lower_written_entry_place(
             Step::Element(index, _) => {
                 let index_local = lower_index_local(ctx, index)?;
                 place.projection.push(PlaceElem::Index(index_local));
-                in_collection = true;
             }
             Step::Entry(key, map_ty, value_ty) => {
                 let entry = lower_entry_place(ctx, &place, map_ty, key, value_ty, obj)?;
                 place = entry.place;
                 write_back = entry.write_back;
-                in_collection = true;
                 continue;
             }
         }
-        if let Some(unsharing) = unsharing(ctx, step.ty(), in_collection) {
+        if let Some(unsharing) = unsharing(ctx, step.ty()) {
             emit_unshare(ctx, &place, step.ty(), unsharing, obj.span)?;
         }
     }
@@ -238,7 +234,7 @@ fn root_step<'e>(ctx: &LoweringContext, name: &str) -> Option<Step<'e>> {
         return None;
     }
     let is_parameter = (1..=ctx.body.arg_count).contains(&local.0);
-    if is_parameter && unsharing(ctx, &decl.ty, false).is_some() {
+    if is_parameter && unsharing(ctx, &decl.ty).is_some() {
         return None;
     }
     Some(Step::Root(local, decl.ty.clone()))
@@ -293,7 +289,9 @@ fn lower_entry_place(
         crate::mir::lowering::helpers::ensure_place(ctx, entry, obj.span)
     };
     let entry = lookup(ctx);
-    if element_layout(&value_ty.kind, ctx.body.layout_scope()).is_address {
+    let is_held_inline = element_layout(&value_ty.kind, ctx.body.layout_scope()).is_address
+        || ctx.body.value_layout(&value_ty.kind).is_some();
+    if is_held_inline {
         return Ok(WrittenPlace {
             place: entry.clone(),
             write_back: Some(EntryWriteBack {
@@ -305,7 +303,7 @@ fn lower_entry_place(
             }),
         });
     }
-    let Some(unsharing) = unsharing(ctx, value_ty, true) else {
+    let Some(unsharing) = unsharing(ctx, value_ty) else {
         ctx.emit_temp_drop(key_place.local, key_watermark, key.span);
         return Ok(WrittenPlace {
             place: entry,
@@ -356,21 +354,22 @@ fn lower_index_local(
 /// How a value of type `ty` is made its own before a write, or `None` when a
 /// value of that type is never shared or is shared by design.
 ///
-/// A struct of plain scalars is copied whenever a binding, a field or a
-/// closure takes it, so outside a collection no second holder exists. A
-/// collection's clone copies its elements' pointers rather than the elements,
-/// so one held in a collection (`in_collection`) may be shared all the same.
-/// A vector is the exception: a collection holds it inline, as its components'
-/// bytes, so no element of one is ever shared, and a copy built for it would
-/// be stored by value and never released.
-fn unsharing(ctx: &LoweringContext, ty: &Type, in_collection: bool) -> Option<Unsharing> {
+/// A value held as its bytes is copied whenever a binding, a field, an element
+/// or a closure takes it, so no second holder of it ever exists. Any other
+/// struct is a reference-counted allocation that a copy shares, and a write
+/// copies it first. A vector is never shared either: a collection holds it
+/// inline, as its components' bytes, and a copy built for it would be stored
+/// by value and never released.
+fn unsharing(ctx: &LoweringContext, ty: &Type) -> Option<Unsharing> {
     if let Some(kind) = ty.kind.as_builtin_collection() {
         return Some(Unsharing::Collection(kind));
     }
     let TypeKind::Custom(name, _) = &ty.kind else {
         return None;
     };
-    if crate::ast::types::vec_type_dim(&ty.kind).is_some() {
+    if crate::ast::types::vec_type_dim(&ty.kind).is_some()
+        || ctx.body.value_layout(&ty.kind).is_some()
+    {
         return None;
     }
     let Some(TypeDefinition::Struct(definition)) =
@@ -378,12 +377,7 @@ fn unsharing(ctx: &LoweringContext, ty: &Type, in_collection: bool) -> Option<Un
     else {
         return None;
     };
-    let declared = definition
-        .fields
-        .iter()
-        .map(|(_, field_ty, _)| field_ty.clone())
-        .collect();
-    (in_collection || !ctx.is_type_auto_copy(ty)).then(|| Unsharing::Struct(name.clone(), declared))
+    Some(Unsharing::Struct(definition.fields.len()))
 }
 
 /// Replaces the value at `place` with a copy of it when anything else holds it.
@@ -461,9 +455,7 @@ fn emit_copy(
     span: Span,
 ) -> Result<(), LoweringError> {
     match unsharing {
-        Unsharing::Struct(name, declared) => {
-            emit_struct_copy(ctx, place, ty, (&name, &declared), copy, span)?
-        }
+        Unsharing::Struct(field_count) => emit_struct_copy(ctx, place, ty, field_count, copy, span),
         Unsharing::Collection(kind) => {
             let written_bb = ctx.new_basic_block();
             emit_runtime_call(
@@ -504,29 +496,23 @@ fn emit_copy_count(ctx: &mut LoweringContext, span: Span) {
 /// Builds into `copy` a struct with the fields of the one at `place`.
 ///
 /// Each managed field is retained by the aggregate, so the copy and the
-/// original each own what they hold. A field holding a struct of plain scalars
-/// is rebuilt too, because neither the original nor the copy retains it and
-/// sharing it would let a write through one reach the other.
+/// original each own what they hold; a value held as its bytes is copied as
+/// those bytes.
 fn emit_struct_copy(
     ctx: &mut LoweringContext,
     place: &Place,
     ty: &Type,
-    (name, declared): (&str, &[Type]),
+    field_count: usize,
     copy: Local,
     span: Span,
-) -> Result<(), LoweringError> {
-    let mut operands = Vec::with_capacity(declared.len());
-    for (idx, declared_ty) in declared.iter().enumerate() {
-        let field_ty = crate::mir::lowering::field_type_in_instance(
-            &ctx.body.class_type_params,
-            name,
-            Some(ty),
-            declared_ty,
-        );
-        let mut field_place = place.clone();
-        field_place.projection.push(PlaceElem::Field(idx));
-        operands.push(field_copy_operand(ctx, field_place, &field_ty, span)?);
-    }
+) {
+    let operands = (0..field_count)
+        .map(|idx| {
+            let mut field_place = place.clone();
+            field_place.projection.push(PlaceElem::Field(idx));
+            Operand::Copy(field_place)
+        })
+        .collect();
     ctx.push_statement(Statement {
         kind: StatementKind::Assign(
             Place::new(copy),
@@ -534,17 +520,6 @@ fn emit_struct_copy(
         ),
         span,
     });
-    Ok(())
-}
-
-fn field_copy_operand(
-    ctx: &mut LoweringContext,
-    field_place: Place,
-    field_ty: &Type,
-    span: Span,
-) -> Result<Operand, LoweringError> {
-    let rebuilt = super::value_copy::copy_value_aggregate(ctx, &field_place, field_ty, None, span)?;
-    Ok(rebuilt.unwrap_or(Operand::Copy(field_place)))
 }
 
 /// The runtime copy a shared collection is replaced with before a write.

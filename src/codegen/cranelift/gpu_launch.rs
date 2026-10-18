@@ -868,9 +868,16 @@ fn load_dim3_components(
     let base_addr = read_operand_value(builder, op, locals, type_ctx)?;
     let dim3_kind = TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None);
     let ptr_ty = type_ctx.ptr_type;
-    let (off_x, ty_x) = field_layout(&dim3_kind, 0, type_ctx.layout_scope(), ptr_ty)?;
-    let (off_y, ty_y) = field_layout(&dim3_kind, 1, type_ctx.layout_scope(), ptr_ty)?;
-    let (off_z, ty_z) = field_layout(&dim3_kind, 2, type_ctx.layout_scope(), ptr_ty)?;
+    let component = |index| -> Result<(i32, cl_types::Type), CodegenError> {
+        let (offset, member) = field_layout(&dim3_kind, index, type_ctx.layout_scope(), ptr_ty)?;
+        let ty = member.word().ok_or_else(|| {
+            CodegenError::Internal(format!("`Dim3` component {index} is not a scalar"))
+        })?;
+        Ok((offset, ty))
+    };
+    let (off_x, ty_x) = component(0)?;
+    let (off_y, ty_y) = component(1)?;
+    let (off_z, ty_z) = component(2)?;
     let x = builder.ins().load(ty_x, MemFlags::new(), base_addr, off_x);
     let y = builder.ins().load(ty_y, MemFlags::new(), base_addr, off_y);
     let z = builder.ins().load(ty_z, MemFlags::new(), base_addr, off_z);

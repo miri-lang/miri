@@ -11,6 +11,7 @@ pub mod optimization;
 pub mod optimizations;
 pub mod option_layout;
 pub mod place;
+pub mod place_type;
 pub mod rc;
 pub mod residency;
 pub mod ssa;

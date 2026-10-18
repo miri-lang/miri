@@ -17,15 +17,14 @@
 //! - No count is kept for a value, and its address never reaches a word slot
 //!   that outlives the frame: either is refused as an internal error.
 //!
-//! While every bitwise value is still counted no local is a value local, and
-//! none of this emits anything.
+//! A value held inline in a class, a struct, a tuple, a collection, a payload
+//! or a closure's environment is reached the same way, through the address its
+//! holder's layout places it at.
 
-use crate::ast::types::TypeKind;
+use crate::ast::types::{Type, TypeKind};
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::error::CodegenError;
-use crate::mir::type_facts::{
-    value_class, FieldRepr, ScalarKind, ValueClass, ValueField, ValueLayout,
-};
+use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{AggregateKind, Body, Local, Operand, Place, PlaceElem, Rvalue};
 use cranelift_codegen::ir::{
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Value,
@@ -67,6 +66,15 @@ impl<'a> FunctionTranslator<'a> {
         let Some(spot) = type_ctx.values.spot(place)? else {
             return Ok(None);
         };
+        if place
+            .projection
+            .iter()
+            .any(|elem| matches!(elem, PlaceElem::Index(_)))
+        {
+            return Err(CodegenError::Internal(format!(
+                "`{place}` picks an element of a value by a value, which has no fixed address"
+            )));
+        }
         let var = locals
             .get(&place.local)
             .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;
@@ -95,21 +103,134 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// The address of the bytes of the whole value `operand` reads; anything
-    /// else read where a value's bytes are expected is refused.
+    /// The address of the bytes of the whole value `operand` reads — in a
+    /// value local, or held inline in a field, an element or a payload —
+    /// anything else read where a value's bytes are expected is refused.
+    ///
+    /// `expected` is the type the bytes are read as, which says what an enum
+    /// payload holds.
     pub(crate) fn value_operand_address(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         operand: &Operand,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected: Option<&Type>,
     ) -> Result<Value, CodegenError> {
         if type_ctx.values.operand_value(operand)?.is_none() {
-            return Err(CodegenError::Internal(format!(
-                "`{operand}` is read where a value's bytes are expected, but holds none"
-            )));
+            let reached = Self::operand_projected_kind(operand, type_ctx)?;
+            let is_held = matches!(operand, Operand::Copy(_) | Operand::Move(_))
+                && Self::reaches_held_value(&reached, expected, type_ctx);
+            if !is_held {
+                return Err(CodegenError::Internal(format!(
+                    "`{operand}` is read where a value's bytes are expected, but holds none"
+                )));
+            }
         }
-        Self::translate_operand(builder, ctx, operand, locals, type_ctx, None)
+        Self::translate_operand(builder, ctx, operand, locals, type_ctx, expected)
+    }
+
+    /// The address of element `index` of the tuple held as its bytes at
+    /// `base`, laid out as `layout`, and what that element holds.
+    ///
+    /// Only a tuple whose elements are all laid out alike is indexed by a
+    /// value: its elements sit one stride apart. An index past the last
+    /// element stops the program, as an out-of-bounds read of a collection
+    /// does.
+    pub(crate) fn value_element_address<'l>(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        base: Value,
+        index: Value,
+        layout: &'l ValueLayout,
+    ) -> Result<(Value, &'l FieldRepr), CodegenError> {
+        let (stride, element) = uniform_element(layout)?;
+        let index_type = builder.func.dfg.value_type(index);
+        let count = builder.ins().iconst(index_type, layout.fields.len() as i64);
+        Self::trap_out_of_bounds(builder, ctx, index, count)?;
+        let elem_offset = builder.ins().imul_imm(index, i64::from(stride));
+        Ok((builder.ins().iadd(base, elem_offset), element))
+    }
+
+    /// Stop the program with an out-of-bounds report unless `index` is below
+    /// `count`.
+    fn trap_out_of_bounds(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        index: Value,
+        count: Value,
+    ) -> Result<(), CodegenError> {
+        let out_of_bounds = builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+            index,
+            count,
+        );
+        let panic_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder
+            .ins()
+            .brif(out_of_bounds, panic_block, &[], cont_block, &[]);
+        builder.switch_to_block(panic_block);
+        Self::call_rt_array_panic_oob(builder, ctx, index, count)?;
+        builder
+            .ins()
+            .trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+        builder.switch_to_block(cont_block);
+        builder.seal_block(panic_block);
+        builder.seal_block(cont_block);
+        Ok(())
+    }
+
+    /// Read the place rooted in a value local whose projection indexes a
+    /// tuple held as its bytes by a value: a scalar is loaded, a whole value
+    /// is its address.
+    pub(crate) fn read_indexed_value_place(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        let root = type_ctx.values.layout(place.local).ok_or_else(|| {
+            CodegenError::Internal(format!("`{place}` is not rooted in a value local"))
+        })?;
+        let var = locals
+            .get(&place.local)
+            .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;
+        let mut address = builder.use_var(*var);
+        let mut reached = ReachedRepr::Value(root);
+        for elem in &place.projection {
+            let ReachedRepr::Value(layout) = reached else {
+                return Err(projection_error(elem, "a scalar"));
+            };
+            let (next, repr) = match elem {
+                PlaceElem::Field(index) => {
+                    let field = member(layout, *index)?;
+                    let next = builder.ins().iadd_imm(address, i64::from(field.offset));
+                    (next, &field.repr)
+                }
+                PlaceElem::Index(index) => {
+                    let index_var = locals.get(index).ok_or_else(|| {
+                        CodegenError::Internal(format!("Unknown index local: {index:?}"))
+                    })?;
+                    let index_val = builder.use_var(*index_var);
+                    Self::value_element_address(builder, ctx, address, index_val, layout)?
+                }
+                PlaceElem::Deref => {
+                    return Err(projection_error(elem, "a value held as its bytes"))
+                }
+            };
+            address = next;
+            reached = ReachedRepr::of(repr, elem)?;
+        }
+        Ok(match reached {
+            ReachedRepr::Scalar(scalar) => {
+                builder
+                    .ins()
+                    .load(scalar_type(scalar), MemFlags::new(), address, 0)
+            }
+            ReachedRepr::Value(_) => address,
+        })
     }
 
     /// Refuse a count adjustment of a place rooted in a value local: a value
@@ -130,6 +251,11 @@ impl<'a> FunctionTranslator<'a> {
     /// Refuse an assignment into a word that reads a whole value held as its
     /// bytes: what it would store is the address of a stack slot, which the
     /// word outlives.
+    ///
+    /// An aggregate that holds its members in an allocation of its own — a
+    /// class, a struct or tuple held as a reference, an enum, a box, a
+    /// closure's environment, an array — copies such a value's bytes in, and
+    /// is no escape.
     pub(crate) fn refuse_value_escape(
         rvalue: &Rvalue,
         type_ctx: &TypeCtx,
@@ -137,7 +263,23 @@ impl<'a> FunctionTranslator<'a> {
         let operands: &[Operand] = match rvalue {
             Rvalue::Use(operand) => std::slice::from_ref(operand),
             Rvalue::Cast(operand, _) => std::slice::from_ref(operand.as_ref()),
-            Rvalue::Aggregate(_, operands) => operands,
+            Rvalue::Aggregate(
+                AggregateKind::Struct(_)
+                | AggregateKind::Tuple(_)
+                | AggregateKind::Class(_)
+                | AggregateKind::Enum(_, _)
+                | AggregateKind::Option(_)
+                | AggregateKind::Closure(_, _)
+                | AggregateKind::Array,
+                _,
+            ) => return Ok(()),
+            Rvalue::Aggregate(
+                AggregateKind::FormattedString
+                | AggregateKind::List
+                | AggregateKind::Map
+                | AggregateKind::Set,
+                operands,
+            ) => operands,
             Rvalue::Ref(_)
             | Rvalue::BinaryOp(..)
             | Rvalue::UnaryOp(..)
@@ -168,6 +310,7 @@ impl<'a> FunctionTranslator<'a> {
         rvalue: &Rvalue,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected: Option<&Type>,
     ) -> Result<(), CodegenError> {
         match spot {
             ValueSpot::Scalar { scalar, .. } => {
@@ -175,30 +318,33 @@ impl<'a> FunctionTranslator<'a> {
                 Self::store_scalar(builder, value, scalar, address, 0)
             }
             ValueSpot::Value { layout, .. } => {
-                Self::assign_whole_value(builder, ctx, address, layout, rvalue, locals, type_ctx)
+                let target = ValueBuild { address, layout };
+                Self::assign_whole_value(builder, ctx, target, rvalue, locals, type_ctx, expected)
             }
         }
     }
 
-    /// Fill the bytes of a value laid out as `layout` at `address` from
-    /// `rvalue`: an aggregate builds them in place, a value read copies them.
-    #[allow(clippy::too_many_arguments)]
-    fn assign_whole_value(
+    /// Fill the bytes of the value `target` describes from `rvalue`: an
+    /// aggregate builds them in place, a value read copies them. `expected` is
+    /// the type the value is, which says what an enum payload read holds.
+    pub(crate) fn assign_whole_value(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        address: Value,
-        layout: &ValueLayout,
+        target: ValueBuild,
         rvalue: &Rvalue,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
+        expected: Option<&Type>,
     ) -> Result<(), CodegenError> {
+        let ValueBuild { address, layout } = target;
         match rvalue {
             Rvalue::Aggregate(AggregateKind::Struct(_) | AggregateKind::Tuple(_), operands) => {
                 let build = ValueBuild { address, layout };
                 Self::build_value_in_place(builder, ctx, build, operands, locals, type_ctx)
             }
             Rvalue::Use(operand) => {
-                let source = Self::value_operand_address(builder, ctx, operand, locals, type_ctx)?;
+                let source =
+                    Self::value_operand_address(builder, ctx, operand, locals, type_ctx, expected)?;
                 copy_value(builder, source, address, layout);
                 Ok(())
             }
@@ -266,7 +412,8 @@ impl<'a> FunctionTranslator<'a> {
                 Self::store_scalar(builder, value, *scalar, address, field.offset)
             }
             FieldRepr::Value(inner) => {
-                let source = Self::value_operand_address(builder, ctx, operand, locals, type_ctx)?;
+                let source =
+                    Self::value_operand_address(builder, ctx, operand, locals, type_ctx, None)?;
                 let dest = builder.ins().iadd_imm(address, i64::from(field.offset));
                 copy_value(builder, source, dest, inner);
                 Ok(())
@@ -299,19 +446,9 @@ impl<'a> FunctionTranslator<'a> {
 }
 
 /// The layout of a value of `kind` written in `body`, when the body holds it
-/// as its bytes: the value-class authority calls it bitwise and the body's
-/// classifier does not count it.
+/// as its bytes (see [`Body::value_layout`]).
 pub fn value_layout(body: &Body, kind: &TypeKind) -> Option<ValueLayout> {
-    if body.is_gpu() || matches!(kind, TypeKind::Void) {
-        return None;
-    }
-    match value_class(kind, body.layout_scope()) {
-        ValueClass::Bitwise(layout) if !body.is_counted(kind) => Some(layout),
-        ValueClass::Bitwise(_)
-        | ValueClass::Scalar(_)
-        | ValueClass::Word(_)
-        | ValueClass::Managed => None,
-    }
+    body.value_layout(kind)
 }
 
 /// Which locals of the body being translated are value locals, with each
@@ -357,6 +494,12 @@ impl<'b> ValueLocals<'b> {
             body: None,
             layouts: Vec::new(),
         }
+    }
+
+    /// The body whose locals these are, when the code being translated has
+    /// one.
+    pub fn body(&self) -> Option<&'b Body> {
+        self.body
     }
 
     /// The layout of `local`, when it is a value local.
@@ -418,9 +561,9 @@ impl<'l> ValueSpot<'l> {
 
 /// Where `projection` reaches inside a value laid out as `layout`.
 ///
-/// Only field projections move inside a value; a value holds no pointer to
-/// dereference and no collection to index, and an optional's bytes are not
-/// projected into here.
+/// Field projections move inside a value, and an index picks an element of a
+/// tuple whose elements are laid out alike; a value holds no pointer to
+/// dereference, and an optional's bytes are not projected into here.
 fn locate<'l>(
     layout: &'l ValueLayout,
     projection: &[PlaceElem],
@@ -431,26 +574,68 @@ fn locate<'l>(
             ValueSpot::Value { offset, layout } => (offset, layout),
             ValueSpot::Scalar { .. } => return Err(projection_error(elem, "a scalar")),
         };
-        let index = match elem {
-            PlaceElem::Field(index) => *index,
-            PlaceElem::Deref | PlaceElem::Index(_) => {
-                return Err(projection_error(elem, "a value held as its bytes"))
+        let (field_offset, repr) = match elem {
+            PlaceElem::Field(index) => {
+                let field = member(outer, *index)?;
+                (field.offset, &field.repr)
             }
+            // An element picked by a value has no offset known here; only
+            // what it holds is.
+            PlaceElem::Index(_) => (0, uniform_element(outer)?.1),
+            PlaceElem::Deref => return Err(projection_error(elem, "a value held as its bytes")),
         };
-        let field = member(outer, index)?;
-        spot = match &field.repr {
+        spot = match repr {
             FieldRepr::Scalar(scalar) => ValueSpot::Scalar {
-                offset: offset + field.offset,
+                offset: offset + field_offset,
                 scalar: *scalar,
             },
             FieldRepr::Value(inner) => ValueSpot::Value {
-                offset: offset + field.offset,
+                offset: offset + field_offset,
                 layout: inner,
             },
             FieldRepr::OptionTag => return Err(projection_error(elem, "an optional's bytes")),
         };
     }
     Ok(spot)
+}
+
+/// What a projection inside a value held as its bytes has reached.
+#[derive(Clone, Copy)]
+enum ReachedRepr<'l> {
+    Scalar(ScalarKind),
+    Value(&'l ValueLayout),
+}
+
+impl<'l> ReachedRepr<'l> {
+    fn of(repr: &'l FieldRepr, elem: &PlaceElem) -> Result<Self, CodegenError> {
+        match repr {
+            FieldRepr::Scalar(scalar) => Ok(Self::Scalar(*scalar)),
+            FieldRepr::Value(inner) => Ok(Self::Value(inner)),
+            FieldRepr::OptionTag => Err(projection_error(elem, "an optional's bytes")),
+        }
+    }
+}
+
+/// The stride between the elements of a tuple held as its bytes, and what
+/// each element holds; refused unless every element is laid out alike.
+fn uniform_element(layout: &ValueLayout) -> Result<(u32, &FieldRepr), CodegenError> {
+    let first = layout
+        .fields
+        .first()
+        .ok_or_else(|| CodegenError::Internal("an empty value is indexed".to_string()))?;
+    let stride = match layout.fields.get(1) {
+        Some(second) => second.offset - first.offset,
+        None => layout.size,
+    };
+    let is_uniform = layout.fields.iter().enumerate().all(|(position, field)| {
+        field.repr == first.repr && field.offset == first.offset + stride * position as u32
+    });
+    if !is_uniform {
+        return Err(CodegenError::Internal(
+            "a value whose elements are laid out apart is indexed by a value".to_string(),
+        ));
+    }
+    Ok((stride, &first.repr))
 }
 
 /// Member `index` of the value laid out as `layout`, refusing an optional's
@@ -546,7 +731,7 @@ fn copy_width(layout: &ValueLayout) -> u32 {
 /// A value being built in place: where its bytes start and how they are laid
 /// out.
 #[derive(Clone, Copy)]
-struct ValueBuild<'l> {
-    address: Value,
-    layout: &'l ValueLayout,
+pub(crate) struct ValueBuild<'l> {
+    pub(crate) address: Value,
+    pub(crate) layout: &'l ValueLayout,
 }

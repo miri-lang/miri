@@ -97,6 +97,15 @@ impl<'a> FunctionTranslator<'a> {
                 slot: Some(address),
             });
         }
+        if !destination.projection.is_empty() {
+            let reached = Self::resolve_projected_type_kind(destination, type_ctx)?;
+            if type_ctx.value_layout(&reached).is_some() {
+                return Err(CodegenError::Internal(format!(
+                    "a call's result is written straight into `{destination}`, a value held \
+                     inline in its holder, which only a value local receives"
+                )));
+            }
+        }
         let dest_ty = type_ctx.local_types[destination.local.0];
         let returning = if dest_ty.kind == TypeKind::Void {
             Returning::Nothing

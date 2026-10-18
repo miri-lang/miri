@@ -18,10 +18,10 @@ use crate::codegen::cranelift::value_abi::{miri_signature, Passing, Returning};
 use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
 use crate::mir::option_layout::{resolve_alias, OptionalLayers};
-use crate::mir::rc::{is_field_managed, is_word_slot_managed};
+use crate::mir::rc::{is_element_counted, is_slot_counted};
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::TypeFacts;
-use crate::mir::type_facts::{EnumDefinition, TypeDefinition};
+use crate::mir::type_facts::{EnumDefinition, TypeDefinition, ValueLayout};
 use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
@@ -188,6 +188,10 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
+        // A value held as its bytes holds no reference to release.
+        if type_ctx.value_layout(elem_kind).is_some() {
+            return Ok(None);
+        }
         if let Some(encoding) =
             crate::codegen::cranelift::structural_elements::structural_thunk_symbol(elem_kind)
         {
@@ -509,19 +513,40 @@ impl<'a> FunctionTranslator<'a> {
         };
         if let ElementRule::OwnEquals(addr) = rule {
             (setters.set_equals_fn)(builder, ctx, container_ptr, addr)?;
-            if let Some(thunk) =
-                crate::mir::dispatch::element_hash_symbol(value_kind, type_ctx.facts.definitions())
-            {
+            let hash_thunk = Self::fieldwise_identity_thunk(ThunkKind::Hash, value_kind, type_ctx)
+                .or_else(|| {
+                    crate::mir::dispatch::element_hash_symbol(
+                        value_kind,
+                        type_ctx.facts.definitions(),
+                    )
+                });
+            if let Some(thunk) = hash_thunk {
                 let hash =
                     Self::get_element_hash_thunk_addr(builder, ctx, &thunk, type_ctx.ptr_type)?;
                 (setters.set_hash_fn)(builder, ctx, container_ptr, hash)?;
             }
         }
-        let Some(word) = Self::element_identity_kind(rule, &layers, type_ctx.ptr_type) else {
+        let held = type_ctx.value_layout(value_kind);
+        let Some(word) = Self::element_identity_kind(rule, &layers, held.as_ref(), type_ctx) else {
             return Ok(());
         };
         let kind = builder.ins().iconst(type_ctx.ptr_type, word);
         (setters.set_kind)(builder, ctx, container_ptr, kind)
+    }
+
+    /// The field-wise `equals` or `hash` thunk a set or map matches a tuple of
+    /// `value_kind` through, when it is held as its bytes and its bytes are
+    /// not its value (see [`crate::codegen::cranelift::value_identity_thunks`]).
+    fn fieldwise_identity_thunk(
+        kind: ThunkKind,
+        value_kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Option<Symbol> {
+        let (encoding, _) = crate::codegen::cranelift::fieldwise_value_identity(
+            value_kind,
+            type_ctx.layout_scope(),
+        )?;
+        Some(Symbol::structural_thunk(kind, encoding))
     }
 
     /// The rule matching two values of `value_kind` the way `==` compares them,
@@ -539,6 +564,11 @@ impl<'a> FunctionTranslator<'a> {
         value_kind: &TypeKind,
         type_ctx: &TypeCtx,
     ) -> Result<Option<ElementRule>, CodegenError> {
+        if let Some(thunk) = Self::fieldwise_identity_thunk(ThunkKind::Equals, value_kind, type_ctx)
+        {
+            let addr = Self::get_custom_equals_thunk_addr(builder, ctx, &thunk, type_ctx.ptr_type)?;
+            return Ok(Some(ElementRule::OwnEquals(addr)));
+        }
         if let Some(addr) = Self::elem_equals_addr_for_kind(builder, ctx, value_kind, type_ctx)? {
             return Ok(Some(ElementRule::OwnEquals(addr)));
         }
@@ -564,21 +594,35 @@ impl<'a> FunctionTranslator<'a> {
     /// optional `layers`, or `None` when there is nothing to register: an
     /// unwrapped value matched by its bytes is what every container already
     /// starts at, and an equality callback settles matching on its own.
+    ///
+    /// A value held as its bytes, laid out as `held`, has no word for a
+    /// callback to be handed, so its callbacks are handed its address.
     fn element_identity_kind(
         rule: ElementRule,
         layers: &OptionalLayers<'_>,
-        ptr_type: cl_types::Type,
+        held: Option<&ValueLayout>,
+        type_ctx: &TypeCtx,
     ) -> Option<i64> {
         let base = match rule {
             ElementRule::StringContent => Self::STRING_CONTENT_ELEMENT_KIND,
             ElementRule::FloatValue(kind) => kind,
             ElementRule::Bytes | ElementRule::OwnEquals(_) => Self::BYTES_ELEMENT_KIND,
         };
+        let base = match held {
+            Some(_) => Self::by_slot_address(base),
+            None => base,
+        };
         if layers.boxed == 0 && !layers.innermost_nullable_pointer {
             return (base != Self::BYTES_ELEMENT_KIND).then_some(base);
         }
-        let value_size =
-            crate::codegen::cranelift::types::translate_type_kind(&layers.value, ptr_type).bytes();
+        let value_size = match held {
+            Some(layout) => layout.size,
+            None => crate::codegen::cranelift::types::translate_type_kind(
+                &layers.value,
+                type_ctx.ptr_type,
+            )
+            .bytes(),
+        };
         Self::optional_element_kind(base, layers, value_size)
     }
 
@@ -905,7 +949,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         if let Some(val_expr) = Self::map_val_expr(kind) {
             if let ExpressionKind::Type(val_ty, _) = &val_expr.node {
-                if is_field_managed(&val_ty.kind) {
+                if is_element_counted(&val_ty.kind, type_ctx.layout_scope()) {
                     let ptr_type = type_ctx.ptr_type;
                     let ptr_size = ptr_type.bytes() as i32;
                     let states = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
@@ -945,7 +989,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         if let Some(inner_expr) = Self::collection_elem_expr(kind) {
             if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
-                if is_field_managed(&inner_ty.kind) {
+                if is_element_counted(&inner_ty.kind, type_ctx.layout_scope()) {
                     let ptr_type = type_ctx.ptr_type;
                     let ptr_size = ptr_type.bytes() as i32;
                     let data = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
@@ -998,7 +1042,7 @@ impl<'a> FunctionTranslator<'a> {
                 let ExpressionKind::Type(ty, _) = &expr.node else {
                     return None;
                 };
-                is_word_slot_managed(&ty.kind).then_some((i, &ty.kind))
+                is_slot_counted(&ty.kind, type_ctx.layout_scope()).then_some((i, &ty.kind))
             })
             .map(|(i, field_kind)| {
                 let (offset, _) =
@@ -1024,7 +1068,7 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if is_word_slot_managed(&inner.kind) {
+        if is_slot_counted(&inner.kind, type_ctx.layout_scope()) {
             let ptr_type = type_ctx.ptr_type;
             let cl_inner_ty =
                 crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
@@ -1584,7 +1628,7 @@ impl<'a> FunctionTranslator<'a> {
             .filter(|(_, field)| {
                 !(is_generic && Self::is_unresolved_generic_elem(&field.kind, definitions))
             })
-            .filter(|(_, field)| is_word_slot_managed(&field.kind))
+            .filter(|(_, field)| is_slot_counted(&field.kind, type_ctx.layout_scope()))
             .map(|(idx, field)| (idx, field.kind))
             .collect()
     }
@@ -1649,7 +1693,12 @@ impl<'a> FunctionTranslator<'a> {
         // site carries, so both sides resolve payloads by the same rule.
         let type_args: Option<Vec<Expression>> =
             inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
-        let slot_size = layout::enum_payload_slot_size(enum_def, type_args.as_deref(), ptr_type);
+        let slot_size = layout::enum_payload_slot_size(
+            enum_def,
+            type_args.as_deref(),
+            type_ctx.layout_scope(),
+            ptr_type,
+        );
 
         for (variant_idx, managed_fields) in
             Self::enum_variants_with_managed_fields(enum_def, type_args.as_deref(), type_ctx)
@@ -1700,7 +1749,8 @@ impl<'a> FunctionTranslator<'a> {
                                 &kind,
                                 type_ctx.facts.definitions(),
                             );
-                        (!unresolved && is_word_slot_managed(&kind)).then_some((fi, kind))
+                        (!unresolved && is_slot_counted(&kind, type_ctx.layout_scope()))
+                            .then_some((fi, kind))
                     })
                     .collect();
                 if managed.is_empty() {
@@ -1854,7 +1904,7 @@ impl<'a> FunctionTranslator<'a> {
         // function values)
         // are heap-allocated with an RC header. Route through the inline
         // decref-and-drop emitter so nested managed payloads are released.
-        if is_field_managed(elem_type_kind) {
+        if is_element_counted(elem_type_kind, type_ctx.layout_scope()) {
             let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
             Self::emit_decref_value(builder, ctx, elem_type_kind, old_val, type_ctx)?;
         }

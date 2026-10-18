@@ -83,11 +83,14 @@ pub fn emit_structural_equality(
         | TypeKind::RawPtr
         | TypeKind::Void
         | TypeKind::Identifier => Ok(emit_scalar_equality(ctx, span, lhs_op, rhs_op, is_eq)),
+        TypeKind::Tuple(elements) => {
+            let element_types = tuple_element_types(elements);
+            emit_fields_equality(ctx, span, &element_types, (lhs_op, rhs_op), is_eq)
+        }
         TypeKind::List(_)
         | TypeKind::Map(_, _)
         | TypeKind::Set(_)
         | TypeKind::Array(_, _)
-        | TypeKind::Tuple(_)
         | TypeKind::Function(_)
         | TypeKind::Future(_)
         | TypeKind::Generic(_, _, _)
@@ -316,11 +319,18 @@ fn emit_option_payload_compare(
         final_bb,
         span,
     } = octx;
+    // A `None` written literally holds no payload to read, and the null
+    // checks ahead have already settled every comparison with it: the
+    // payload comparison is never reached.
+    if is_absent_literal(&lhs_op) || is_absent_literal(&rhs_op) {
+        ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, span));
+        return Ok(());
+    }
     let watermark = ctx.body.local_decls.len();
 
-    // A constant operand — `None` written literally — has no place to project
-    // from, so `ensure_place` materialises one. The watermark keeps an operand
-    // that already had a place from being released here as well as by its owner.
+    // A constant operand has no place to project from, so `ensure_place`
+    // materialises one. The watermark keeps an operand that already had a
+    // place from being released here as well as by its owner.
     let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, span);
     let rhs_place = crate::mir::lowering::helpers::ensure_place(ctx, rhs_op, span);
     let lhs_base = lhs_place.local;
@@ -349,6 +359,14 @@ fn emit_option_payload_compare(
 
     settle_verdict(ctx, result_local, verdict, is_eq, final_bb, span);
     Ok(())
+}
+
+/// Whether `operand` is the absent value written literally.
+fn is_absent_literal(operand: &Operand) -> bool {
+    matches!(
+        operand,
+        Operand::Constant(constant) if matches!(constant.literal, crate::ast::literal::Literal::None)
+    )
 }
 
 /// Store a comparison's verdict, inverted for `!=`, and jump to `final_bb`.
@@ -929,7 +947,31 @@ fn emit_struct_field_equality(
         .map(|(_, field_ty, _)| field_ty.clone())
         .collect();
     let field_types = substituted_member_types(&declared_types, type_args, generics.as_ref());
+    emit_fields_equality(ctx, span, &field_types, (lhs_op, rhs_op), is_eq)
+}
 
+/// The types a tuple's elements are written at.
+fn tuple_element_types(elements: &[crate::ast::expression::Expression]) -> Vec<Type> {
+    elements
+        .iter()
+        .filter_map(|element| {
+            let crate::ast::expression::ExpressionKind::Type(ty, _) = &element.node else {
+                return None;
+            };
+            Some(ty.as_ref().clone())
+        })
+        .collect()
+}
+
+/// Emit equality of two aggregates whose members have `field_types`: every
+/// member compared at its own type, the verdict true when all agree.
+fn emit_fields_equality(
+    ctx: &mut LoweringContext,
+    span: Span,
+    field_types: &[Type],
+    (lhs_op, rhs_op): (Operand, Operand),
+    is_eq: bool,
+) -> Result<crate::mir::Local, LoweringError> {
     let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, span);
     let rhs_place = crate::mir::lowering::helpers::ensure_place(ctx, rhs_op, span);
 

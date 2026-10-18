@@ -6,14 +6,13 @@
 //!
 //! The layout is decided against a [`LayoutScope`] — the program's type table
 //! and the type parameters the code asking leaves open — so it can read what
-//! a named type is, not only how it is spelled. Today a bitwise value is still
-//! held as a reference in one value word; the scope is what lets it be laid
-//! out by its own bytes instead.
+//! a named type is, not only how it is spelled: a value held as its bytes is
+//! laid out inline by those bytes.
 
 use crate::ast::types::{
     atomic_inner_kind, inline_element_layout, scalar_width, TypeKind, VALUE_WORD_BYTES,
 };
-use crate::type_checker::value_class::{value_class, LayoutScope, ValueClass};
+use crate::type_checker::value_class::{held_value_layout, LayoutScope};
 
 /// How a collection holds an element of one type and how that element travels
 /// to the runtime.
@@ -62,7 +61,7 @@ pub fn element_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> ElementLayout 
     if let Some(width) = held_scalar_bytes(kind) {
         return ElementLayout::held_by_value(width);
     }
-    ElementLayout::held_by_value(word_held_bytes(kind, scope))
+    word_or_value_layout(kind, scope)
 }
 
 /// Byte width of an element held as the scalar it is spelled as, or `None`
@@ -77,14 +76,20 @@ fn held_scalar_bytes(kind: &TypeKind) -> Option<i64> {
     scalar_width(kind)
 }
 
-/// Byte width of an element that is not a scalar as spelled.
+/// The layout of an element that is not a scalar as spelled.
 ///
-/// Every such element is held in one value word: a reference, a type
-/// parameter, a name that resolves to a scalar, and a bitwise value, which is
-/// still built in an allocation of its own and stored by its pointer.
-fn word_held_bytes(kind: &TypeKind, scope: LayoutScope<'_>) -> i64 {
-    match value_class(kind, scope) {
-        ValueClass::Bitwise(_) => VALUE_WORD_BYTES,
-        ValueClass::Scalar(_) | ValueClass::Word(_) | ValueClass::Managed => VALUE_WORD_BYTES,
+/// A value held as its bytes is held inline, one value after another at its
+/// own alignment, and handed over as the address of those bytes; its operand
+/// is the value, whose address is taken to hand it over. Every other such
+/// element is held in one value word: a reference, a type parameter, a name
+/// that resolves to a scalar.
+fn word_or_value_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> ElementLayout {
+    match held_value_layout(kind, scope) {
+        Some(layout) => ElementLayout {
+            payload: i64::from(layout.size),
+            stride: i64::from(layout.size.next_multiple_of(layout.align.max(1))),
+            is_address: false,
+        },
+        None => ElementLayout::held_by_value(VALUE_WORD_BYTES),
     }
 }

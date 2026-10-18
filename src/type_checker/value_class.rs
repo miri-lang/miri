@@ -22,6 +22,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{
     vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, AUTO_COPY_MAX_SIZE,
+    RANGE_TYPE_NAME,
 };
 use crate::type_checker::context::{GenericDefinition, StructDefinition, TypeDefinition};
 use std::collections::{HashMap, HashSet};
@@ -177,6 +178,26 @@ pub fn value_class(kind: &TypeKind, scope: LayoutScope<'_>) -> ValueClass {
     classifier
         .classify(kind, Names::Body(scope.type_params))
         .into_class()
+}
+
+/// The layout a value of `kind` is held in as its own bytes, decided against
+/// `scope`, or `None` when it is held as one word.
+///
+/// This is the one place that decides which bitwise values leave the heap. A
+/// struct or tuple the authority calls bitwise is held as its bytes: in a
+/// frame's stack slot, inline in the class, struct or collection holding it.
+/// An optional is not, and neither is a value with an optional anywhere
+/// inside it, since an optional keeps the word it is held in — a nullable
+/// pointer or a boxed layer — wherever it appears. A value of no bytes has
+/// nothing to hold.
+pub fn held_value_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> Option<ValueLayout> {
+    match value_class(kind, scope) {
+        ValueClass::Bitwise(layout) if layout.is_held_as_bytes() => Some(layout),
+        ValueClass::Bitwise(_)
+        | ValueClass::Scalar(_)
+        | ValueClass::Word(_)
+        | ValueClass::Managed => None,
+    }
 }
 
 /// A classification on its way out: the public class, or a managed value
@@ -377,6 +398,9 @@ impl<'a> Classifier<'a> {
         if let Some(component) = atomic_component(name, args.as_deref(), names) {
             return self.classify_argument(component);
         }
+        if let Some(element) = range_element(name, args.as_deref(), names) {
+            return self.classify_range(element);
+        }
         if BuiltinCollectionKind::from_name(name).is_some() {
             return collection_verdict(args.is_some());
         }
@@ -455,6 +479,23 @@ impl<'a> Classifier<'a> {
         }
     }
 
+    /// A range over `element`: built as its start, its end and whether the
+    /// end is included, a tuple of those three.
+    fn classify_range(&mut self, element: Argument<'_, 'a>) -> Verdict {
+        let mut layout = LayoutBuilder::default();
+        for _ in 0..2 {
+            let Some(repr) = self.member_repr(element) else {
+                return Verdict::Pointer;
+            };
+            layout.push(repr);
+        }
+        layout.push(FieldRepr::Scalar(ScalarKind::Boolean));
+        match layout.finish() {
+            Some(layout) => Verdict::Class(ValueClass::Bitwise(layout)),
+            None => Verdict::Pointer,
+        }
+    }
+
     /// An optional of `payload`: a tag followed by the payload when the
     /// payload is a value, the payload's own pointer when it is one, and a
     /// boxed layer otherwise — over a word, over an optional held as a
@@ -500,6 +541,22 @@ fn atomic_component<'n, 'a>(
     Argument::written(args?.first()?, names)
 }
 
+/// The element `T` of the compiler-known range type `Range<T>`, whose value is
+/// built as the tuple of its start, its end and whether the end is included.
+fn range_element<'n, 'a>(
+    name: &str,
+    args: Option<&'a [Expression]>,
+    names: Names<'n, 'a>,
+) -> Option<Argument<'n, 'a>> {
+    if name != RANGE_TYPE_NAME {
+        return None;
+    }
+    let [element] = args? else {
+        return None;
+    };
+    Argument::written(element, names)
+}
+
 /// The scalar `kind` is, or `None` for every kind that is not one.
 fn scalar_kind(kind: &TypeKind) -> Option<ScalarKind> {
     let scalar = match kind {
@@ -543,6 +600,52 @@ fn scalar_kind(kind: &TypeKind) -> Option<ScalarKind> {
 }
 
 impl ValueLayout {
+    /// Whether a bitwise value laid out this way is held as its bytes rather
+    /// than as a word (see [`held_value_layout`]).
+    pub fn is_held_as_bytes(&self) -> bool {
+        self.size > 0 && !self.holds_option()
+    }
+
+    /// Whether two values laid out this way are equal exactly when their
+    /// bytes are: no member is a float, whose `-0.0` and `0.0` are equal and
+    /// whose NaN equals nothing, and no byte is padding, whose contents are
+    /// unspecified.
+    pub fn is_compared_by_bytes(&self) -> bool {
+        !self.holds_float() && self.member_bytes() == self.size
+    }
+
+    /// Whether a float appears anywhere in this layout.
+    fn holds_float(&self) -> bool {
+        self.fields.iter().any(|field| match &field.repr {
+            FieldRepr::Scalar(ScalarKind::Float(_)) => true,
+            FieldRepr::Value(inner) => inner.holds_float(),
+            FieldRepr::Scalar(
+                ScalarKind::Signed(_) | ScalarKind::Unsigned(_) | ScalarKind::Boolean,
+            )
+            | FieldRepr::OptionTag => false,
+        })
+    }
+
+    /// How many of this layout's bytes are members rather than padding.
+    fn member_bytes(&self) -> u32 {
+        self.fields
+            .iter()
+            .map(|field| match &field.repr {
+                FieldRepr::Value(inner) => inner.member_bytes(),
+                FieldRepr::Scalar(_) | FieldRepr::OptionTag => field.repr.size_and_align().0,
+            })
+            .sum()
+    }
+
+    /// Whether an optional's tag appears anywhere in this layout.
+    fn holds_option(&self) -> bool {
+        self.fields.iter().any(|field| match &field.repr {
+            FieldRepr::OptionTag => true,
+            FieldRepr::Value(inner) => inner.holds_option(),
+            FieldRepr::Scalar(_) => false,
+        })
+    }
+
     /// The layout of a value with no members: nothing to read or write.
     fn empty() -> Self {
         Self {

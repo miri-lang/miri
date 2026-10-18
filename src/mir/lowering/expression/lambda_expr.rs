@@ -377,7 +377,7 @@ fn emit_closure_aggregate(
         let operand = if ctx.self_references.contains_key(&cap.outer_local) {
             lower_self_reference_value(ctx, cap.outer_local, closure.span, None)
         } else {
-            captured_value(ctx, cap.outer_local, closure.span)?
+            captured_value(cap.outer_local)
         };
         capture_operands.push(operand);
     }
@@ -434,18 +434,10 @@ fn emit_closure_aggregate(
 
 /// The value a closure captures from `outer_local`.
 ///
-/// A closure captures by value. A struct of plain scalars is a pointer to a
-/// block no one else retains, so handing the closure that pointer would let a
-/// later write to the binding change what the closure sees; it is copied
-/// instead. Every other value is retained by the closure, and a write to one
-/// made after the capture copies it first (`unshare`).
-fn captured_value(
-    ctx: &mut LoweringContext,
-    outer_local: Local,
-    span: Span,
-) -> Result<Operand, LoweringError> {
-    let place = Place::new(outer_local);
-    let ty = ctx.body.local_decls[outer_local.0].ty.clone();
-    let copy = super::value_copy::copy_value_aggregate(ctx, &place, &ty, None, span)?;
-    Ok(copy.unwrap_or(Operand::Copy(place)))
+/// A closure captures by value. A value held as its bytes is copied into the
+/// closure's environment as those bytes, so a later write to the binding is
+/// never seen by the closure. Every other value is retained by the closure,
+/// and a write to one made after the capture copies it first (`unshare`).
+fn captured_value(outer_local: Local) -> Operand {
+    Operand::Copy(Place::new(outer_local))
 }

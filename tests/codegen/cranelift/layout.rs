@@ -6,8 +6,10 @@ use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::layout::{
-    aggregate_layout, aggregate_size, class_payload_layout, field_layout,
+    aggregate_layout, aggregate_size, class_payload_layout, field_layout, Member,
 };
+use miri::codegen::cranelift::value_locals::scalar_type;
+use miri::mir::type_facts::{held_value_layout, FieldRepr};
 
 use miri::error::syntax::Span;
 use miri::mir::option_layout::LayoutScope;
@@ -50,24 +52,24 @@ fn test_tuple_field_layout_with_padding() {
         create_type_expr(TypeKind::I64),
     ]);
 
-    // Fields start after the count header (ptr_size = 8 bytes)
-    // Field 0: I8 at offset 8
+    // A tuple of scalars is held as its bytes, with no count header.
+    // Field 0: I8 at offset 0
     let (offset, ty) = field_layout(&tuple_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(offset, 8);
-    assert_eq!(ty, types::I8);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, Member::Word(types::I8));
 
-    // Field 1: I32, alignment 4 → offset 9 padded to 12
+    // Field 1: I32, alignment 4 → offset 1 padded to 4
     let (offset, ty) = field_layout(&tuple_kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(offset, 12);
-    assert_eq!(ty, types::I32);
+    assert_eq!(offset, 4);
+    assert_eq!(ty, Member::Word(types::I32));
 
-    // Field 2: I64, alignment 8 → offset 12+4=16, already aligned
+    // Field 2: I64, alignment 8 → offset 4+4=8, already aligned
     let (offset, ty) = field_layout(&tuple_kind, 2, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(offset, 16);
-    assert_eq!(ty, types::I64);
+    assert_eq!(offset, 8);
+    assert_eq!(ty, Member::Word(types::I64));
 }
 
 #[test]
@@ -81,7 +83,8 @@ fn test_tuple_aggregate_size_with_padding() {
         create_type_expr(TypeKind::I64),
     ]);
 
-    // Layout: count@0, I8@8, I32@12, I64@16 → end=24, max_align=8 → final=24
+    // Allocated as a tuple, the count word comes first:
+    // count@0, I8@8, I32@12, I64@16 → end=24, max_align=8 → final=24
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 24);
 }
 
@@ -92,13 +95,14 @@ fn test_tuple_single_field() {
 
     let tuple_kind = TypeKind::Tuple(vec![create_type_expr(TypeKind::I32)]);
 
-    // Field 0 starts after count header (8 bytes)
+    // A tuple of scalars is held as its bytes: field 0 starts at its start.
     let (offset, ty) = field_layout(&tuple_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(offset, 8);
-    assert_eq!(ty, types::I32);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, Member::Word(types::I32));
 
-    // Size: count@0 (8 bytes) + I32@8 (4 bytes) = 12, max_align=8 → align_to(12, 8) = 16
+    // Allocated as a tuple: count@0 (8 bytes) + I32@8 (4 bytes) = 12,
+    // max_align=8 → align_to(12, 8) = 16
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 16);
 }
 
@@ -124,15 +128,15 @@ fn test_tuple_no_padding_needed() {
         create_type_expr(TypeKind::I32),
     ]);
 
-    // Fields start after count header (8 bytes)
+    // A tuple of scalars is held as its bytes, with no count header.
     let (offset0, _) = field_layout(&tuple_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     let (offset1, _) = field_layout(&tuple_kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(offset0, 8);
-    assert_eq!(offset1, 12);
+    assert_eq!(offset0, 0);
+    assert_eq!(offset1, 4);
 
-    // Total = count@0 (8) + I32@8 (4) + I32@12 (4) = 16, max_align=8 → 16
+    // Allocated as a tuple: count@0 (8) + I32@8 (4) + I32@12 (4) = 16, max_align=8 → 16
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 16);
 }
 
@@ -153,17 +157,17 @@ fn test_tuple_with_pointer_sized_elements() {
     let (offset0, ty0) = field_layout(&tuple_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset0, 8);
-    assert_eq!(ty0, ptr);
+    assert_eq!(ty0, Member::Word(ptr));
 
     let (offset1, ty1) = field_layout(&tuple_kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset1, 16);
-    assert_eq!(ty1, types::I32);
+    assert_eq!(ty1, Member::Word(types::I32));
 
     let (offset2, ty2) = field_layout(&tuple_kind, 2, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset2, 24);
-    assert_eq!(ty2, ptr);
+    assert_eq!(ty2, Member::Word(ptr));
 
     // Total = count@0 (8) + String@8 (8) + I32@16 (4) + String@24 (8) = 32, max_align=8 → 32
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 32);
@@ -180,18 +184,19 @@ fn test_tuple_with_i128() {
         create_type_expr(TypeKind::I128),
     ]);
 
-    // Fields start after count header (8 bytes)
+    // A tuple of scalars is held as its bytes, with no count header.
     let (offset0, _) = field_layout(&tuple_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(offset0, 8);
+    assert_eq!(offset0, 0);
 
-    // I128 alignment is 16 → offset 9 padded to 16
+    // I128 alignment is 16 → offset 1 padded to 16
     let (offset1, ty1) = field_layout(&tuple_kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset1, 16);
-    assert_eq!(ty1, types::I128);
+    assert_eq!(ty1, Member::Word(types::I128));
 
-    // Total = count@0 (8) + I8@8 (1) + I128@16 (16) = 32, max_align=16 → 32
+    // Allocated as a tuple: count@0 (8) + I8@8 (1) + I128@16 (16) = 32,
+    // max_align=16 → 32
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 32);
 }
 
@@ -253,19 +258,19 @@ fn test_struct_field_layout_with_padding() {
     let (offset, ty) = field_layout(&custom_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 0);
-    assert_eq!(ty, types::I16);
+    assert_eq!(ty, Member::Word(types::I16));
 
     // Field 1: F64, align=8, offset 2 → 8
     let (offset, ty) = field_layout(&custom_kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 8);
-    assert_eq!(ty, types::F64);
+    assert_eq!(ty, Member::Word(types::F64));
 
     // Field 2: I64, align=8, offset 16 → 16
     let (offset, ty) = field_layout(&custom_kind, 2, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 16);
-    assert_eq!(ty, types::I64);
+    assert_eq!(ty, Member::Word(types::I64));
 }
 
 #[test]
@@ -311,7 +316,7 @@ fn test_struct_single_field() {
     let (offset, ty) = field_layout(&custom_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 0);
-    assert_eq!(ty, types::I32);
+    assert_eq!(ty, Member::Word(types::I32));
 
     // Size: 4, max_align=max(8,4)=8, align_to(4,8) = 8
     assert_eq!(aggregate_size(&custom_kind, &type_defs, ptr), 8);
@@ -474,7 +479,7 @@ fn test_enum_all_unit_variants() {
     let (offset, ty) = field_layout(&enum_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 0);
-    assert_eq!(ty, ptr);
+    assert_eq!(ty, Member::Word(ptr));
 }
 
 #[test]
@@ -565,7 +570,11 @@ fn test_enum_discriminant_is_pointer_type() {
 
     let (_, disc_ty) = field_layout(&enum_kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(disc_ty, ptr, "Discriminant should be pointer-typed");
+    assert_eq!(
+        disc_ty,
+        Member::Word(ptr),
+        "Discriminant should be pointer-typed"
+    );
 }
 
 #[test]
@@ -583,8 +592,8 @@ fn test_enum_payload_fields_are_pointer_typed() {
         .expect("the field has a layout");
     let (_, ty2) = field_layout(&enum_kind, 2, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
-    assert_eq!(ty1, ptr);
-    assert_eq!(ty2, ptr);
+    assert_eq!(ty1, Member::Word(ptr));
+    assert_eq!(ty2, Member::Word(ptr));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -681,9 +690,9 @@ fn test_class_field_layout_uses_pointer_slots() {
     assert_eq!(o1, 2 * ptr.bytes() as i32);
     assert_eq!(o2, 3 * ptr.bytes() as i32);
 
-    assert_eq!(t0, ptr);
-    assert_eq!(t1, ptr);
-    assert_eq!(t2, ptr);
+    assert_eq!(t0, Member::Word(ptr));
+    assert_eq!(t1, Member::Word(ptr));
+    assert_eq!(t2, Member::Word(ptr));
 }
 
 #[test]
@@ -731,7 +740,7 @@ fn test_generic_typedef_is_pointer_sized() {
     let (offset, ty) = field_layout(&kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 0);
-    assert_eq!(ty, ptr);
+    assert_eq!(ty, Member::Word(ptr));
 }
 
 #[test]
@@ -850,7 +859,7 @@ fn test_unknown_custom_type_fallback() {
     let (offset, ty) = field_layout(&kind, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(offset, 0);
-    assert_eq!(ty, ptr);
+    assert_eq!(ty, Member::Word(ptr));
 
     let (offset1, _) = field_layout(&kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
@@ -870,12 +879,12 @@ fn test_non_aggregate_types_use_pointer_slots() {
     let (o0, t0) = field_layout(&TypeKind::I32, 0, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(o0, 0);
-    assert_eq!(t0, ptr);
+    assert_eq!(t0, Member::Word(ptr));
 
     let (o1, t1) = field_layout(&TypeKind::I32, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     assert_eq!(o1, ptr.bytes() as i32);
-    assert_eq!(t1, ptr);
+    assert_eq!(t1, Member::Word(ptr));
 
     // String type
     let (o0, _) = field_layout(&TypeKind::String, 0, LayoutScope::program(&type_defs), ptr)
@@ -902,15 +911,16 @@ fn test_layout_with_32bit_pointers() {
         create_type_expr(TypeKind::I32),
     ]);
 
-    // Fields start after count header (ptr_size = 4 bytes for 32-bit)
+    // A tuple of scalars is held as its bytes, whatever the pointer width.
     let (o0, _) = field_layout(&tuple_kind, 0, LayoutScope::program(&type_defs), ptr32)
         .expect("the field has a layout");
     let (o1, _) = field_layout(&tuple_kind, 1, LayoutScope::program(&type_defs), ptr32)
         .expect("the field has a layout");
-    assert_eq!(o0, 4);
-    assert_eq!(o1, 8); // I32 alignment = 4, offset 5 → 8
+    assert_eq!(o0, 0);
+    assert_eq!(o1, 4); // I32 alignment = 4, offset 1 → 4
 
-    // Size: count@0 (4) + I8@4 (1) + I32@8 (4) = 12, max_align=max(4,1,4)=4, align_to(12,4)=12
+    // Allocated as a tuple: count@0 (4) + I8@4 (1) + I32@8 (4) = 12,
+    // max_align=max(4,1,4)=4, align_to(12,4)=12
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr32), 12);
 }
 
@@ -991,7 +1001,7 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
         )),
     );
 
-    let layout = class_payload_layout("Child", None, &type_defs, ptr);
+    let layout = class_payload_layout("Child", None, LayoutScope::program(&type_defs), ptr);
 
     assert_eq!(
         layout.fields.len(),
@@ -1005,10 +1015,11 @@ fn class_payload_size_covers_every_field_including_inherited_ones() {
 
     let kind = TypeKind::Custom("Child".to_string(), None);
     for index in 0..layout.fields.len() {
-        let (offset, cl_ty) = field_layout(&kind, index, LayoutScope::program(&type_defs), ptr)
+        let (offset, member) = field_layout(&kind, index, LayoutScope::program(&type_defs), ptr)
             .expect("the field has a layout");
+        let cl_ty = member.word().expect("a scalar class field is a word");
         assert_eq!(
-            (offset, cl_ty),
+            (offset, Member::Word(cl_ty)),
             layout.fields[index],
             "field {} is reached at a different place than it is laid out",
             index
@@ -1036,8 +1047,8 @@ fn a_base_field_sits_where_it_does_in_a_subclass_that_dispatches() {
     child.traits = vec!["Named".to_string()];
     type_defs.insert("Child".to_string(), TypeDefinition::Class(child));
 
-    let base = class_payload_layout("Base", None, &type_defs, ptr);
-    let child = class_payload_layout("Child", None, &type_defs, ptr);
+    let base = class_payload_layout("Base", None, LayoutScope::program(&type_defs), ptr);
+    let child = class_payload_layout("Child", None, LayoutScope::program(&type_defs), ptr);
 
     assert_eq!(base.fields[0], child.fields[0]);
     assert_eq!(base.fields[0].0, ptr.bytes() as i32);
@@ -1064,7 +1075,7 @@ fn test_optional_field_layout_refuses_an_optional_with_no_box() {
     assert_eq!(
         field_layout(&boxed, 0, LayoutScope::program(&defs), ptr_ty())
             .expect("a boxed optional has a payload slot"),
-        (0, ptr_ty())
+        word(0, ptr_ty())
     );
 }
 
@@ -1098,23 +1109,51 @@ fn test_generic_alias_field_layout_is_its_template_at_its_arguments() {
     );
 }
 
+/// The layout a struct or tuple of `kind` is built with: its own bytes for a
+/// value held as its bytes, which is built in place member by member, and its
+/// payload layout for one held as a reference.
+fn built_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> (Vec<(i32, Member)>, u32) {
+    let Some(value) = held_value_layout(kind, scope) else {
+        let layout = aggregate_layout(kind, scope, ptr_ty())
+            .expect("a struct or tuple has a payload layout");
+        return (layout.fields, layout.size);
+    };
+    let fields = value
+        .fields
+        .iter()
+        .map(|field| {
+            let member = match &field.repr {
+                FieldRepr::Scalar(scalar) => Member::Word(scalar_type(*scalar)),
+                FieldRepr::Value(inner) => Member::Inline(inner.clone()),
+                FieldRepr::OptionTag => panic!("no struct or tuple field is an optional's tag"),
+            };
+            (field.offset as i32, member)
+        })
+        .collect();
+    (fields, value.size)
+}
+
+/// A word member of type `ty` at `offset`.
+fn word(offset: i32, ty: types::Type) -> (i32, Member) {
+    (offset, Member::Word(ty))
+}
+
 /// Asserts that the layout a struct or tuple of `kind` is built with places
 /// every field exactly where `field_layout` reads it from, and returns it.
 fn built_layout_agrees_with_reads(
     kind: &TypeKind,
     defs: &HashMap<String, TypeDefinition>,
-) -> (Vec<(i32, types::Type)>, u32) {
+) -> (Vec<(i32, Member)>, u32) {
     let scope = LayoutScope::program(defs);
-    let layout =
-        aggregate_layout(kind, scope, ptr_ty()).expect("a struct or tuple has a payload layout");
-    for (index, placed) in layout.fields.iter().enumerate() {
+    let layout = built_layout(kind, scope);
+    for (index, placed) in layout.0.iter().enumerate() {
         let read = field_layout(kind, index, scope, ptr_ty()).expect("the field has a layout");
         assert_eq!(
             *placed, read,
             "field {index} of {kind:?} is built apart from where it is read"
         );
     }
-    (layout.fields, layout.size)
+    layout
 }
 
 fn mixed_widths() -> StructDefinition {
@@ -1131,7 +1170,14 @@ fn a_mixed_width_struct_is_built_where_its_fields_are_read() {
     let mixed = TypeKind::Custom("Mixed".to_string(), None);
     assert_eq!(
         built_layout_agrees_with_reads(&mixed, &defs),
-        (vec![(0, types::I8), (8, types::I64), (16, types::F32)], 24)
+        (
+            vec![
+                word(0, types::I8),
+                word(8, types::I64),
+                word(16, types::F32)
+            ],
+            24
+        )
     );
 }
 
@@ -1143,15 +1189,22 @@ fn a_mixed_width_tuple_is_built_where_its_elements_are_read() {
         create_type_expr(TypeKind::Int),
         create_type_expr(TypeKind::F32),
     ]);
-    // The element count occupies the first word.
+    // A tuple of scalars is held as its bytes, with no count header.
     assert_eq!(
         built_layout_agrees_with_reads(&tuple, &defs),
-        (vec![(8, types::I8), (16, types::I64), (24, types::F32)], 32)
+        (
+            vec![
+                word(0, types::I8),
+                word(8, types::I64),
+                word(16, types::F32)
+            ],
+            24
+        )
     );
 }
 
 #[test]
-fn a_nested_struct_field_is_built_as_the_word_it_is_read_as() {
+fn a_nested_struct_field_is_built_inline_where_it_is_read() {
     let outer = make_struct(vec![
         ("flag", TypeKind::Boolean),
         ("inner", TypeKind::Custom("Mixed".to_string(), None)),
@@ -1162,9 +1215,20 @@ fn a_nested_struct_field_is_built_as_the_word_it_is_read_as() {
         ("Outer".to_string(), TypeDefinition::Struct(outer)),
     ]);
     let kind = TypeKind::Custom("Outer".to_string(), None);
+    let mixed = TypeKind::Custom("Mixed".to_string(), None);
+    let inner_layout = held_value_layout(&mixed, LayoutScope::program(&defs))
+        .expect("a struct of scalars is held as its bytes");
+    // `inner` sits inline, all 24 bytes of it, read as the address of them.
     assert_eq!(
         built_layout_agrees_with_reads(&kind, &defs),
-        (vec![(0, types::I8), (8, types::I64), (16, types::I16)], 24)
+        (
+            vec![
+                word(0, types::I8),
+                (8, Member::Inline(inner_layout)),
+                word(32, types::I16)
+            ],
+            40
+        )
     );
 }
 
@@ -1179,7 +1243,14 @@ fn a_128_bit_field_is_built_at_its_own_alignment() {
     let kind = TypeKind::Custom("Wide".to_string(), None);
     assert_eq!(
         built_layout_agrees_with_reads(&kind, &defs),
-        (vec![(0, types::I8), (16, types::I128), (32, types::I8)], 48)
+        (
+            vec![
+                word(0, types::I8),
+                word(16, types::I128),
+                word(32, types::I8)
+            ],
+            48
+        )
     );
 
     let tuple = TypeKind::Tuple(vec![
@@ -1188,7 +1259,7 @@ fn a_128_bit_field_is_built_at_its_own_alignment() {
     ]);
     assert_eq!(
         built_layout_agrees_with_reads(&tuple, &HashMap::new()),
-        (vec![(8, types::I8), (16, types::I128)], 32)
+        (vec![word(0, types::I8), word(16, types::I128)], 32)
     );
 }
 
@@ -1203,7 +1274,10 @@ fn adjacent_bool_fields_are_built_byte_by_byte() {
     let kind = TypeKind::Custom("Flags".to_string(), None);
     assert_eq!(
         built_layout_agrees_with_reads(&kind, &defs),
-        (vec![(0, types::I8), (1, types::I8), (4, types::I32)], 8)
+        (
+            vec![word(0, types::I8), word(1, types::I8), word(4, types::I32)],
+            8
+        )
     );
 }
 
@@ -1215,7 +1289,14 @@ fn a_vector_is_built_component_after_component() {
     );
     assert_eq!(
         built_layout_agrees_with_reads(&vector, &HashMap::new()),
-        (vec![(0, types::F32), (4, types::F32), (8, types::F32)], 12)
+        (
+            vec![
+                word(0, types::F32),
+                word(4, types::F32),
+                word(8, types::F32)
+            ],
+            12
+        )
     );
 }
 

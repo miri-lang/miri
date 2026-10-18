@@ -18,13 +18,15 @@ pub mod translate_statement;
 pub mod translator;
 mod types;
 pub mod value_abi;
+pub(crate) mod value_identity_thunks;
 pub mod value_locals;
 mod vtable;
 
-use crate::ast::types::{BuiltinCollectionKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
+use crate::ast::types::{BuiltinCollectionKind, TypeKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::error::CodegenError;
+use crate::mir::option_layout::{LayoutScope, OptionalLayers};
 use crate::mir::symbol::{StringLiteralPart, Symbol};
 use crate::mir::type_facts::TypeDefinition;
 use crate::mir::type_facts::TypeFacts;
@@ -441,7 +443,10 @@ impl CraneliftBackend {
                 continue;
             }
             let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
-                crate::mir::rc::is_word_slot_managed(&body.local_decls[cap_local.0].ty.kind)
+                crate::mir::rc::is_slot_counted(
+                    &body.local_decls[cap_local.0].ty.kind,
+                    body.layout_scope(),
+                )
             });
             if has_managed {
                 FunctionTranslator::generate_closure_destructor(
@@ -950,6 +955,7 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         bodies: &[(&str, &Body)],
     ) -> Result<(), CodegenError> {
+        let mut matched_by_fields = std::collections::BTreeMap::new();
         for element in structural_elements::structural_element_types(bodies) {
             FunctionTranslator::generate_structural_decref_function(
                 module,
@@ -957,6 +963,16 @@ impl CraneliftBackend {
                 isa,
                 &element,
                 &self.facts,
+            )?;
+            let scope = LayoutScope::new(self.facts.definitions(), &element.open_params);
+            let layers = OptionalLayers::of(&element.kind, scope);
+            if let Some((encoding, layout)) = fieldwise_value_identity(&layers.value, scope) {
+                matched_by_fields.insert(encoding, layout);
+            }
+        }
+        for (encoding, layout) in matched_by_fields {
+            value_identity_thunks::generate_value_identity_thunks(
+                module, ctx, isa, &encoding, &layout,
             )?;
         }
         Ok(())
@@ -1060,4 +1076,19 @@ fn call_runtime_directly(
     for func_ref in runtime {
         func.dfg.ext_funcs[func_ref].colocated = true;
     }
+}
+
+/// The structural symbol suffix and layout of `kind` when a set or map
+/// matches it through the field-wise `equals` and `hash` thunks: a tuple held
+/// as its bytes whose bytes are not its value. `None` for every other kind.
+pub(crate) fn fieldwise_value_identity(
+    kind: &TypeKind,
+    scope: LayoutScope<'_>,
+) -> Option<(String, crate::mir::type_facts::ValueLayout)> {
+    let layout = crate::mir::type_facts::held_value_layout(kind, scope)?;
+    if layout.is_compared_by_bytes() {
+        return None;
+    }
+    let encoding = structural_elements::structural_thunk_symbol(kind)?;
+    Some((encoding, layout))
 }

@@ -652,17 +652,18 @@ fn test_nbody_advance_checks_each_written_path_once_per_iteration() {
         "/bench/workloads/nbody/nbody.mi"
     );
     let source = std::fs::read_to_string(path).expect("nbody source should be readable");
-    assert_eq!(checks_in(&source, ".advance"), 5);
+    assert_eq!(checks_in(&source, ".advance"), 2);
 }
 
 /// The n-body step whose allocation count and checksum
 /// `integration::memory::owned_parameters` pins writes six paths, and lowering
-/// asks twice before each — about the list, then the body in it: twelve
-/// checks. The pass keeps five, fewer than the writes, so that checksum also
-/// guards writes the pass lets run without asking.
+/// asks before each whether the list is shared; a body in it is held as its
+/// bytes, never shared, and never asked about. The pass keeps two checks,
+/// fewer than the writes, so that checksum also guards writes the pass lets
+/// run without asking.
 #[test]
 fn test_the_pinned_nbody_step_asks_fewer_times_than_it_writes() {
-    assert_eq!(checks_in(&nbody_owned(1000), ".advance"), 5);
+    assert_eq!(checks_in(&nbody_owned(1000), ".advance"), 2);
 }
 
 /// The pass recognizes a check only in the shape lowering emits: the call

@@ -16,7 +16,7 @@ use crate::type_checker::context::{
     TypeDefinition,
 };
 use crate::type_checker::element_layout::element_layout;
-use crate::type_checker::value_class::LayoutScope;
+use crate::type_checker::value_class::{held_value_layout, value_class, LayoutScope, ValueClass};
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
@@ -498,10 +498,36 @@ fn emit_resolved_method_call(
     let return_ty = call_result_type(ctx, &m, &mono);
     let arg_types = method_argument_types(ctx, &m);
     let obj_watermark = ctx.body.local_decls.len();
-    let (self_op, obj_temp_local) =
+    let (self_op, obj_temp_local, boxed) =
         prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
     let (destination, op) = super::dispatch::call_destination(ctx, return_ty, dest, *m.span);
+    let span = *m.span;
+    let result = emit_method_call(
+        ctx,
+        &m,
+        mono,
+        (self_op, obj_temp_local, obj_watermark),
+        (&destination, &op, &arg_types),
+    );
+    if let Some(boxed) = boxed {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Dealloc(Place::new(boxed)),
+            span,
+        });
+    }
+    result
+}
 
+/// Emit the call `m` resolves to — through its vtable slot when it is
+/// dispatched, otherwise to `mono` or the method's shared body — on the
+/// receiver `self_op`.
+fn emit_method_call(
+    ctx: &mut LoweringContext,
+    m: &ResolvedMethod,
+    mono: Option<(Symbol, Type)>,
+    (self_op, obj_temp_local, obj_watermark): (Operand, Option<Local>, usize),
+    (destination, op, arg_types): (&Place, &Operand, &[Type]),
+) -> Result<Option<Operand>, LoweringError> {
     if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
         if let Some(slot) = vtable_slot_index(
             &ctx.vtable_layout(),
@@ -515,9 +541,9 @@ fn emit_resolved_method_call(
                 self_op,
                 m.args,
                 m.method_info,
-                &arg_types,
-                &destination,
-                &op,
+                arg_types,
+                destination,
+                op,
                 obj_temp_local,
                 obj_watermark,
                 *m.span,
@@ -534,9 +560,9 @@ fn emit_resolved_method_call(
         self_op,
         m.args,
         m.method_info,
-        &arg_types,
-        &destination,
-        &op,
+        arg_types,
+        destination,
+        op,
         obj_temp_local,
         obj_watermark,
         *m.span,
@@ -647,11 +673,144 @@ fn call_result_type(
 /// as a pointer, so both agree on layout — a managed argument needs its own
 /// body for a different reason, spelled out in
 /// [`shared_body_misreads_a_managed_element`].
+///
+/// A value held as its bytes differs whatever its width: it is passed by the
+/// address of a copy, where the fallback passes the word itself.
 fn differs_from_pointer_width_fallback(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
     let layout = element_layout(kind, scope);
     layout.is_address
         || layout.payload != crate::ast::types::VALUE_WORD_BYTES
         || crate::type_checker::float_literals::is_float_width(kind)
+        || held_value_layout(kind, scope).is_some()
+}
+
+/// Whether the signature of `class_name`'s `method_name` builds a tuple or a
+/// struct out of a type parameter that some argument in `resolved` would make
+/// a value held as its bytes.
+///
+/// The shared body builds such a tuple — `(int, T)` — as a reference-counted
+/// allocation, its parameter a word, while the caller, at `T` = `int`, holds
+/// `(int, int)` as its bytes: a collection of them, handed across the call,
+/// would be read at the wrong layout on one side. A parameter at a counted
+/// argument leaves the tuple counted on both sides, so only a scalar or a
+/// value argument asks for a body of its own.
+fn signature_builds_a_value(
+    defs: &HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+    resolved: &[Type],
+    scope: LayoutScope<'_>,
+) -> bool {
+    let has_byte_argument = resolved.iter().any(|arg| {
+        crate::type_checker::generics::extract_value_generic(arg).is_none()
+            && (matches!(value_class(&arg.kind, scope), ValueClass::Scalar(_))
+                || held_value_layout(&arg.kind, scope).is_some())
+    });
+    if !has_byte_argument {
+        return false;
+    }
+    let Some((owner, method)) = resolve_inherited_method(defs, class_name, method_name) else {
+        return false;
+    };
+    let parameters: Vec<&str> = [class_name, owner.as_str()]
+        .into_iter()
+        .filter_map(|name| defs.get(name)?.generics())
+        .flatten()
+        .map(|generic| generic.name.as_str())
+        .collect();
+    method
+        .params
+        .iter()
+        .map(|(_, ty)| ty)
+        .chain(std::iter::once(&method.return_type))
+        .any(|ty| builds_aggregate_of(&ty.kind, &parameters, defs))
+}
+
+/// Whether `kind` holds, anywhere inside it, a tuple or a struct naming one
+/// of `parameters`.
+fn builds_aggregate_of(
+    kind: &TypeKind,
+    parameters: &[&str],
+    defs: &HashMap<String, TypeDefinition>,
+) -> bool {
+    let is_struct = |name: &str| matches!(defs.get(name), Some(TypeDefinition::Struct(_)));
+    let is_aggregate = matches!(kind, TypeKind::Tuple(_))
+        || matches!(kind, TypeKind::Custom(name, Some(_)) if is_struct(name));
+    if is_aggregate && mentions_parameter(kind, parameters) {
+        return true;
+    }
+    written_type_arguments(kind).any(|inner| builds_aggregate_of(&inner.kind, parameters, defs))
+}
+
+/// Whether `kind` names one of `parameters` anywhere inside it.
+fn mentions_parameter(kind: &TypeKind, parameters: &[&str]) -> bool {
+    if let TypeKind::Generic(name, _, _) | TypeKind::Custom(name, None) = kind {
+        if parameters.contains(&name.as_str()) {
+            return true;
+        }
+    }
+    written_type_arguments(kind).any(|inner| mentions_parameter(&inner.kind, parameters))
+}
+
+/// The types `kind` is written with: a tuple's elements, a type's arguments,
+/// a collection's element, key and value, an optional's payload, a function
+/// type's parameters and result.
+fn written_type_arguments(kind: &TypeKind) -> Box<dyn Iterator<Item = &Type> + '_> {
+    match kind {
+        TypeKind::Tuple(elements) | TypeKind::Custom(_, Some(elements)) => {
+            Box::new(elements.iter().filter_map(written_type))
+        }
+        TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Array(element, _) => {
+            Box::new(written_type(element).into_iter())
+        }
+        TypeKind::Map(key, value) => {
+            Box::new(written_type(key).into_iter().chain(written_type(value)))
+        }
+        TypeKind::Option(payload) => Box::new(std::iter::once(payload.as_ref())),
+        TypeKind::Function(function) => Box::new(
+            function
+                .params
+                .iter()
+                .filter_map(|param| written_type(&param.typ))
+                .chain(function.return_type.as_deref().and_then(written_type)),
+        ),
+        TypeKind::Custom(_, None)
+        | TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::OneOf(_)
+        | TypeKind::Meta(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => Box::new(std::iter::empty()),
+    }
+}
+
+/// The type a type expression writes, or `None` for a value expression.
+fn written_type(expr: &Expression) -> Option<&Type> {
+    let ExpressionKind::Type(ty, _) = &expr.node else {
+        return None;
+    };
+    Some(ty.as_ref())
 }
 
 /// Whether a type argument sorts differently from the signed integer an
@@ -750,6 +909,7 @@ fn builtin_collection_needs_its_own_body(
                 || orders_differently_from_signed_fallback(&arg.kind)
                 || shared_body_misreads_a_managed_element(class_def, method_name, &arg.kind)
         })
+        || signature_builds_a_value(scope.definitions, class_name, method_name, resolved, scope)
 }
 
 /// The symbol an operator calls for `owner`'s `method_name` on a receiver of
@@ -1000,22 +1160,67 @@ fn prepare_method_self(
     obj_ty: &Type,
     method_name: &str,
     span: Span,
-) -> Result<(Operand, Option<Local>), LoweringError> {
+) -> Result<(Operand, Option<Local>, Option<Local>), LoweringError> {
     let mutated_cow = obj_ty
         .kind
         .as_builtin_collection()
         .filter(|k| k.mutates_method(method_name))
         .and_then(cow_fn);
-    let self_op = match mutated_cow {
-        Some(cow) => lower_mutated_receiver(ctx, obj, obj_ty, Some(cow), span)?,
-        None => lower_method_receiver(ctx, obj)?,
+    let (self_op, boxed) = match mutated_cow {
+        Some(cow) => (
+            lower_mutated_receiver(ctx, obj, obj_ty, Some(cow), span)?,
+            None,
+        ),
+        None => {
+            let receiver = lower_method_receiver(ctx, obj)?;
+            box_value_tuple_receiver(ctx, receiver, obj_ty, span)
+        }
     };
     let obj_temp_local = if let Operand::Copy(ref p) = self_op {
         Some(p.local)
     } else {
         None
     };
-    Ok((self_op, obj_temp_local))
+    Ok((self_op, obj_temp_local, boxed))
+}
+
+/// The receiver a tuple's methods take, for a tuple held as its bytes.
+///
+/// The tuple class's methods read their receiver as a tuple allocation — its
+/// element count, then its elements — so a tuple held as its bytes is copied
+/// into one for the call, and the copy is returned beside the receiver for
+/// the caller to free once the call is over. The copy holds no reference, so
+/// it is a raw allocation nothing counts. Any other receiver is passed as it
+/// is.
+fn box_value_tuple_receiver(
+    ctx: &mut LoweringContext,
+    receiver: Operand,
+    obj_ty: &Type,
+    span: Span,
+) -> (Operand, Option<Local>) {
+    let TypeKind::Tuple(elements) = &obj_ty.kind else {
+        return (receiver, None);
+    };
+    if ctx.body.value_layout(&obj_ty.kind).is_none() {
+        return (receiver, None);
+    }
+    let tuple = crate::mir::lowering::helpers::ensure_place(ctx, receiver, span);
+    let operands = (0..elements.len())
+        .map(|index| {
+            let mut element = tuple.clone();
+            element.projection.push(crate::mir::PlaceElem::Field(index));
+            Operand::Copy(element)
+        })
+        .collect();
+    let boxed = ctx.push_temp(Type::new(TypeKind::RawPtr, span), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: crate::mir::StatementKind::Assign(
+            Place::new(boxed),
+            Rvalue::Aggregate(crate::mir::AggregateKind::Tuple(obj_ty.clone()), operands),
+        ),
+        span,
+    });
+    (Operand::Copy(Place::new(boxed)), Some(boxed))
 }
 
 /// Lower a method receiver, resolving `super` to the `self` binding.

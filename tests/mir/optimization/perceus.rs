@@ -846,11 +846,13 @@ fn test_lowered_alias_to_tuple_is_still_released() {
     // as its own name with nothing to say the value behind it is heap
     // allocated. Resolving the alias is what lets the RC pass see the tuple;
     // without it the block the aggregate allocated is never released.
+    // A tuple of scalars is held as its bytes and released by nobody, so the
+    // tuple here holds a string.
     let source = r#"
-type Pair is (int, int)
+type Pair is (int, String)
 
 fn probe()
-    let p Pair = (1, 2)
+    let p Pair = (1, "one")
 "#;
     let body = lowered_with_rc(source, "probe");
 
@@ -1127,5 +1129,26 @@ fn main()
         ),
         "the field's old value must be released before the store, got {:?}",
         &statements[..=store]
+    );
+}
+
+#[test]
+fn test_a_string_picked_out_of_a_tuple_by_a_value_is_retained() {
+    let source = r#"
+fn probe() String
+    let x = ("a" + "b", "c" + "d")
+    var i = 1
+    let y = x[i]
+    return y
+"#;
+    let body = lowered_with_rc(source, "probe");
+    assert!(
+        all_statements(&body).iter().any(|kind| matches!(
+            kind,
+            StatementKind::IncRef(p)
+                if p.projection.iter().any(|e| matches!(e, PlaceElem::Index(_)))
+        )),
+        "the element read out of the tuple must be retained: {:?}",
+        all_statements(&body)
     );
 }

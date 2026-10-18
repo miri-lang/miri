@@ -391,7 +391,7 @@ fn assign_to_member(
         let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
         let (obj_operand, write_back) = match super::unshare::lower_written_entry_place(ctx, obj)? {
             Some(written) => (Operand::Copy(written.place), written.write_back),
-            None => (super::value_copy::lower_projection_base(ctx, obj)?, None),
+            None => (lower_expression(ctx, obj, None)?, None),
         };
         let obj_ty = ctx
             .recorded_type(obj.id)

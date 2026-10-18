@@ -71,8 +71,9 @@ fn lower_tuple_field_access(
 
 /// Lower a field access on a struct or class type.
 ///
-/// A field holding an aggregate that assigns bitwise is rebuilt rather than
-/// referenced, so `var inner = outer.part` gives `inner` storage of its own.
+/// A field holding a value held as its bytes is read by the assignment that
+/// takes it, which copies those bytes, so `var inner = outer.part` gives
+/// `inner` storage of its own.
 fn lower_custom_field_access(
     ctx: &mut LoweringContext,
     mut place: Place,
@@ -81,13 +82,6 @@ fn lower_custom_field_access(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     place.projection.push(PlaceElem::Field(idx));
-
-    let field_ty = resolve_type(ctx.type_checker, expr);
-    if let Some(operand) =
-        super::value_copy::copy_value_aggregate(ctx, &place, &field_ty, dest.clone(), expr.span)?
-    {
-        return Ok(operand);
-    }
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
@@ -495,7 +489,7 @@ pub(crate) fn lower_member_expr(
     let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = match super_receiver(ctx, obj) {
         Some(receiver) => Operand::Copy(Place::new(receiver)),
-        None => super::value_copy::lower_projection_base(ctx, obj)?,
+        None => crate::mir::lowering::lower_expression(ctx, obj, None)?,
     };
 
     if let Some(result) = try_gpu_intrinsic(ctx, &obj_operand, prop, expr, dest.clone())? {

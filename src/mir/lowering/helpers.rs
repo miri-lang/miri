@@ -855,6 +855,11 @@ fn lower_return_expression(
         let lowered = lower_expression(ctx, expr, None)?;
         let operand = read_older_local_by_copy(lowered, watermark);
         let op_ty = operand.ty(&ctx.body).clone();
+        // A tail of no value — a `match` or `if` every path of which returns —
+        // is reached by no path, and has nothing to return.
+        if matches!(op_ty.kind, TypeKind::Void) {
+            return Ok(());
+        }
         let rvalue = coerce_rvalue_in(ctx, operand.clone(), &op_ty, ret_ty, expr.span);
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),

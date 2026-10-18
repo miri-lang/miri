@@ -11,7 +11,7 @@ use crate::codegen::cranelift::translate_type;
 use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
 use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
-use crate::mir::rc::is_word_slot_managed;
+use crate::mir::rc::is_slot_counted;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
@@ -30,10 +30,10 @@ use std::sync::Arc;
 ///
 /// The payload starts with the function pointer and the destructor pointer,
 /// one word each, and then holds each capture in a slot as wide as its value,
-/// rounded up to whole words: a float keeps its own bits and a 128-bit value
-/// both of its words. The store that builds the closure, the loads that open
-/// its body and its destructor all place a capture here, so they cannot
-/// disagree about where it is.
+/// rounded up to whole words: a float keeps its own bits, a 128-bit value both
+/// of its words, and a value held as its bytes all of them, inline. The store
+/// that builds the closure, the loads that open its body and its destructor
+/// all place a capture here, so they cannot disagree about where it is.
 pub(crate) struct CaptureLayout {
     /// The byte offset of each capture from the start of the payload.
     pub(crate) offsets: Vec<i32>,
@@ -42,18 +42,18 @@ pub(crate) struct CaptureLayout {
 }
 
 impl CaptureLayout {
-    /// The layout of captures of Cranelift types `capture_types`, in order.
+    /// The layout of captures `capture_bytes` bytes wide each, in order.
     pub(crate) fn new(
-        capture_types: impl IntoIterator<Item = cl_types::Type>,
+        capture_bytes: impl IntoIterator<Item = u32>,
         ptr_type: cl_types::Type,
     ) -> Self {
         let word = i64::from(ptr_type.bytes());
         let mut next = 2 * word;
-        let offsets = capture_types
+        let offsets = capture_bytes
             .into_iter()
-            .map(|ty| {
+            .map(|bytes| {
                 let offset = next;
-                let bytes = i64::from(ty.bytes()).max(word);
+                let bytes = i64::from(bytes).max(word);
                 next += (bytes + word - 1) / word * word;
                 i32::try_from(offset).unwrap_or(i32::MAX)
             })
@@ -68,9 +68,13 @@ impl CaptureLayout {
     /// local types.
     pub(crate) fn of_body(body: &Body, ptr_type: cl_types::Type) -> Self {
         Self::new(
-            body.env_capture_locals
-                .iter()
-                .map(|local| translate_type(&body.local_decls[local.0].ty, ptr_type)),
+            body.env_capture_locals.iter().map(|local| {
+                let ty = &body.local_decls[local.0].ty;
+                match body.value_layout(&ty.kind) {
+                    Some(layout) => layout.size,
+                    None => translate_type(ty, ptr_type).bytes(),
+                }
+            }),
             ptr_type,
         )
     }
@@ -157,7 +161,7 @@ impl<'a> FunctionTranslator<'a> {
         let layout = CaptureLayout::of_body(body, ptr_type);
         for (&cap_local, &offset) in body.env_capture_locals.iter().zip(&layout.offsets) {
             let cap_ty = &body.local_decls[cap_local.0].ty;
-            if is_word_slot_managed(&cap_ty.kind) {
+            if is_slot_counted(&cap_ty.kind, body.layout_scope()) {
                 let cap_ptr = builder
                     .ins()
                     .load(ptr_type, MemFlags::new(), env_ptr, offset);

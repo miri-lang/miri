@@ -34,10 +34,16 @@
 //! A `None` is the absence of a value, equal only to a `None` found at the same
 //! layer: `None` is not `Some(None)`, whichever way each layer is laid out.
 //!
+//! An element held inline as its bytes — a struct or tuple of scalars — is no
+//! word at all, so a callback cannot be handed "the value the slot holds": it
+//! is handed the address the element resolves to instead, which is where the
+//! compiled `equals` and `hash` read such a value from.
+//!
 //! The kind word packs all of it: bits 0..8 hold the rule, bits 8..16 how many
 //! boxed layers wrap the element, bit 16 whether one nullable pointer layer
-//! sits inside them, and the bits from 17 up the width of the value the
-//! innermost box holds. Resolving an element opens each boxed layer in turn,
+//! sits inside them, bit 17 whether callbacks are handed the resolved address
+//! rather than the word there, and the bits from 18 up the width of the value
+//! the innermost box holds. Resolving an element opens each boxed layer in turn,
 //! stopping at a null box address as a `None` at that depth; then, when bit 16
 //! is set, tests the word it reached for null, a `None` one layer below the
 //! boxes; and otherwise hands the value it reached to the rule. With no boxed
@@ -53,7 +59,8 @@ use crate::string::MiriString;
 ///
 /// Each argument is the value the element slot holds — for a managed element
 /// that is the pointer to the value, matching what the drop and clone callbacks
-/// are handed. Returns nonzero when the two are the same element.
+/// are handed — or, for an element held inline as its bytes, the address of
+/// those bytes. Returns nonzero when the two are the same element.
 pub type ElementEqualsFn = unsafe extern "C" fn(*const u8, *const u8) -> u8;
 
 /// A hash over one element value, as the compiler generates it, consistent
@@ -100,8 +107,12 @@ const DEPTH_BITS: u32 = 8;
 /// pointer rather than a box.
 const NULLABLE_BIT: u32 = RULE_BITS + DEPTH_BITS;
 
-/// Where the boxed value's size starts, above the nullable bit.
-const SIZE_SHIFT: u32 = NULLABLE_BIT + 1;
+/// The bit, just above the nullable bit, saying a callback is handed the
+/// address the element resolves to rather than the word stored there.
+const SLOT_ADDRESS_BIT: u32 = NULLABLE_BIT + 1;
+
+/// Where the boxed value's size starts, above the slot-address bit.
+const SIZE_SHIFT: u32 = SLOT_ADDRESS_BIT + 1;
 
 /// How many optionals one element may be wrapped in and still be matched by
 /// content. Nesting deeper than this keeps the byte rule: the compiler declines
@@ -126,6 +137,12 @@ pub const fn through_optionals(
     rule | (boxed_depth << RULE_BITS)
         | ((innermost_nullable as usize) << NULLABLE_BIT)
         | (value_size << SIZE_SHIFT)
+}
+
+/// `kind`, with callbacks handed the address the element resolves to: the
+/// kind word of an element held inline as its bytes.
+pub const fn by_slot_address(kind: usize) -> usize {
+    kind | (1 << SLOT_ADDRESS_BIT)
 }
 
 /// What an element slot holds once every optional wrapping it is opened.
@@ -194,6 +211,21 @@ impl ElementIdentity {
     /// in its slot rather than opened.
     fn innermost_nullable(&self) -> bool {
         (self.kind >> NULLABLE_BIT) & 1 == 1
+    }
+
+    /// True when a callback is handed the address the element resolves to,
+    /// rather than the word stored there.
+    fn hands_over_address(&self) -> bool {
+        (self.kind >> SLOT_ADDRESS_BIT) & 1 == 1
+    }
+
+    /// The argument a callback is handed for the value resolved at `at`.
+    unsafe fn callback_argument(&self, at: *const u8) -> *const u8 {
+        if self.hands_over_address() {
+            at
+        } else {
+            *(at as *const *const u8)
+        }
     }
 
     /// The number of bytes the settling rule reads, given the element slot's
@@ -266,7 +298,7 @@ impl ElementIdentity {
                 return 0;
             }
             let hash: ElementHashFn = std::mem::transmute(self.hash_fn);
-            let value = hash(*(at as *const *const u8)).to_ne_bytes();
+            let value = hash(self.callback_argument(at)).to_ne_bytes();
             return crate::hash::fnv1a(value.as_ptr(), value.len());
         }
         if self.rule() == BY_STRING_CONTENT {
@@ -315,15 +347,14 @@ impl ElementIdentity {
         bytes_equal(a, b, size)
     }
 
-    /// Asks the element type's `equals` about the two values the slots hold.
+    /// Asks the element type's `equals` about the two values the slots hold,
+    /// or about the two inline values at `a` and `b`.
     ///
     /// The generated callback treats a null value as equal only to another null,
     /// so the runtime never hands the user's method a missing receiver.
     unsafe fn same_through_callback(&self, a: *const u8, b: *const u8) -> bool {
         let equals: ElementEqualsFn = std::mem::transmute(self.equals_fn);
-        let left = *(a as *const *const u8);
-        let right = *(b as *const *const u8);
-        equals(left, right) != 0
+        equals(self.callback_argument(a), self.callback_argument(b)) != 0
     }
 }
 

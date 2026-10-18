@@ -10,7 +10,7 @@ use crate::codegen::cranelift::translator::{
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::codegen::cranelift::value_abi::{call_arguments, miri_signature, CallResult, Passing};
-use crate::codegen::cranelift::value_locals::copy_chunks;
+use crate::codegen::cranelift::value_locals::{copy_chunks, ValueBuild};
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
@@ -354,9 +354,8 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if let Some((address, spot)) = Self::value_place_address(builder, place, locals, type_ctx)?
-        {
-            return Self::assign_value_place(builder, ctx, address, spot, rvalue, locals, type_ctx);
+        if Self::assign_value_destination(builder, ctx, place, rvalue, locals, type_ctx)? {
+            return Ok(());
         }
         Self::refuse_value_escape(rvalue, type_ctx)?;
         let ptr_type = type_ctx.ptr_type;
@@ -411,6 +410,98 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Write `rvalue` into `place` when the place holds a value as its bytes —
+    /// in a value local, or inline in a class or struct field, a collection
+    /// element or a payload — and answer whether it did.
+    fn assign_value_destination(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        rvalue: &Rvalue,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<bool, CodegenError> {
+        if let Some((address, spot)) = Self::value_place_address(builder, place, locals, type_ctx)?
+        {
+            let expected = Self::value_destination_type(place, type_ctx)?;
+            Self::assign_value_place(
+                builder,
+                ctx,
+                address,
+                spot,
+                rvalue,
+                locals,
+                type_ctx,
+                Some(&expected),
+            )?;
+            return Ok(true);
+        }
+        let Some(dest_ty) = Self::held_destination_type(place, type_ctx)? else {
+            return Ok(false);
+        };
+        Self::assign_held_place(builder, ctx, place, &dest_ty, rvalue, locals, type_ctx)?;
+        Ok(true)
+    }
+
+    /// The type a destination rooted in a value local reaches, which an enum
+    /// payload read into it is read as.
+    fn value_destination_type(
+        place: &Place,
+        type_ctx: &TypeCtx,
+    ) -> Result<crate::ast::types::Type, CodegenError> {
+        let kind = Self::resolve_projected_type_kind(place, type_ctx)?;
+        let span = type_ctx.local_types[place.local.0].span;
+        Ok(crate::ast::types::Type::new(kind, span))
+    }
+
+    /// The type a projected destination outside every value local reaches,
+    /// when that is a value held inline in its holder — a class or struct
+    /// field, a collection element, a payload.
+    fn held_destination_type(
+        place: &Place,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<crate::ast::types::Type>, CodegenError> {
+        if place.projection.is_empty() {
+            return Ok(None);
+        }
+        let kind = Self::resolve_projected_type_kind(place, type_ctx)?;
+        if type_ctx.value_layout(&kind).is_none() {
+            return Ok(None);
+        }
+        let span = type_ctx.local_types[place.local.0].span;
+        Ok(Some(crate::ast::types::Type::new(kind, span)))
+    }
+
+    /// Write `rvalue` into the value of type `dest_ty` held inline at
+    /// `place`, in place: built there, or copied from where it is read.
+    fn assign_held_place(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        dest_ty: &crate::ast::types::Type,
+        rvalue: &Rvalue,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let layout = type_ctx.value_layout(&dest_ty.kind).ok_or_else(|| {
+            CodegenError::Internal(format!("`{place}` holds no value as its bytes"))
+        })?;
+        let address = Self::held_place_address(builder, ctx, place, locals, type_ctx)?;
+        let target = ValueBuild {
+            address,
+            layout: &layout,
+        };
+        Self::assign_whole_value(
+            builder,
+            ctx,
+            target,
+            rvalue,
+            locals,
+            type_ctx,
+            Some(dest_ty),
+        )
     }
 
     /// Refuses an assignment that moves an optional's word into an optional laid

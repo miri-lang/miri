@@ -102,13 +102,29 @@ fn half_float_element_is_held_in_a_value_word() {
 }
 
 #[test]
-fn referenced_and_aggregate_elements_are_held_in_a_value_word() {
+fn referenced_and_optional_elements_are_held_in_a_value_word() {
     let probe = Probe::of(SOURCE);
-    for parameter in ["text", "node", "pt", "pair", "maybe", "maybe_node"] {
+    for parameter in ["text", "node", "maybe", "maybe_node"] {
         assert_eq!(
             probe.layout_of(parameter),
             held_by_value(8),
             "`{parameter}` should be held in a value word"
+        );
+    }
+}
+
+#[test]
+fn struct_and_tuple_elements_of_scalars_are_held_inline_as_their_bytes() {
+    let probe = Probe::of(SOURCE);
+    for parameter in ["pt", "pair"] {
+        assert_eq!(
+            probe.layout_of(parameter),
+            ElementLayout {
+                payload: 16,
+                stride: 16,
+                is_address: false,
+            },
+            "`{parameter}` should be held inline as its sixteen bytes"
         );
     }
 }

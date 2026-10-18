@@ -2635,6 +2635,12 @@ impl Pipeline {
             mir::residency::insert_readbacks(body);
         }
 
+        // Hand every call a value held as its bytes from a whole local, so
+        // no callee reads one through an address inside its holder.
+        for (_symbol, body) in &mut lowered {
+            mir::value_arguments::copy_projected_value_arguments(body);
+        }
+
         let verify_mode = self.verify_mode();
         let program_violations =
             Self::decide_owned_parameters(result, &mut lowered, verify_mode.is_some());

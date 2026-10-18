@@ -7,12 +7,11 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
-use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
-use crate::mir::lowering::{field_type_in_instance, type_argument};
 use crate::mir::optimization::OptimizationPass;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
@@ -46,6 +45,13 @@ impl PerceusContext<'_> {
     /// Whether a value of `kind`, written in the body, is reference counted.
     fn is_counted(&self, kind: &TypeKind) -> bool {
         self.rc_classifier.is_counted(kind, self.type_params)
+    }
+
+    /// Whether a value of `kind` is held as its bytes, with no count.
+    fn holds_value(&self, kind: &TypeKind) -> bool {
+        self.rc_classifier
+            .value_layout(kind, self.type_params)
+            .is_some()
     }
 }
 
@@ -409,6 +415,13 @@ impl Perceus {
             return true;
         }
 
+        // A value held as its bytes — in a class field, a struct, an element —
+        // is copied, never retained.
+        if place_declared_type(source, ctx).is_some_and(|declared| ctx.holds_value(&declared.kind))
+        {
+            return false;
+        }
+
         // Fallback for complex projections where the destination is definitely managed.
         source
             .projection
@@ -589,166 +602,18 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// without its type arguments; whether the place is counted is asked of that
 /// declared type.
 fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
-    let decl = &ctx.local_decls[place.local.0];
-    if place.projection.is_empty() {
-        return ctx.is_counted(&decl.ty.kind);
-    }
-    let mut current = decl.mir_ty.clone();
-    let mut declared = decl.ty.clone();
-    for elem in &place.projection {
-        let projected = match elem {
-            PlaceElem::Deref => None,
-            PlaceElem::Index(_) => project_index(&current, &declared),
-            PlaceElem::Field(i) => project_field(ctx, place, &current, &declared, *i),
-        };
-        let Some((next, next_declared)) = projected else {
-            return false;
-        };
-        current = next;
-        declared = next_declared;
-    }
-    ctx.is_counted(&declared.kind)
+    place_declared_type(place, ctx).is_some_and(|declared| ctx.is_counted(&declared.kind))
 }
 
-/// The element an `Index` projection yields from a collection of type
-/// `current`, declared `declared`; `None` when it is no collection, or when
-/// its element is a vector, which lives inline in the collection's buffer:
-/// indexing yields an interior address rather than a pointer to an
-/// allocation of its own, and retaining or releasing it would reach into the
-/// buffer's bytes.
-fn project_index(current: &MirType, declared: &Type) -> Option<(MirType, Type)> {
-    let element = match current {
-        MirType::Array(elem) | MirType::List(elem) | MirType::Set(elem) => elem,
-        MirType::Map(_, v) => v,
-        _ => return None,
-    };
-    if element.is_inline_vector() {
-        return None;
+/// The declared type of what `place` reaches; see [`PlaceTypes::declared`].
+fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option<Type> {
+    PlaceTypes {
+        local_decls: ctx.local_decls,
+        field_types: ctx.field_types,
+        class_type_params: ctx.class_type_params,
+        closure_capture_types: ctx.closure_capture_types,
     }
-    Some((*element.clone(), indexed_element_type(declared)?))
-}
-
-/// The type a `Field(index)` projection yields from a value of type `current`,
-/// declared `declared`, paired with its declared type; `None` when the field
-/// cannot be resolved.
-fn project_field(
-    ctx: &PerceusContext,
-    place: &Place,
-    current: &MirType,
-    declared: &Type,
-    index: usize,
-) -> Option<(MirType, Type)> {
-    match current {
-        // Option<T>.Field(0) → the inner type T
-        MirType::Option(inner) if index == 0 => {
-            let TypeKind::Option(payload) = &declared.kind else {
-                return None;
-            };
-            Some((*inner.clone(), (**payload).clone()))
-        }
-        // Tuple(T0, T1, …).Field(i) → Ti
-        MirType::Tuple(elems) => {
-            let TypeKind::Tuple(elements) = &declared.kind else {
-                return None;
-            };
-            Some((
-                elems.get(index)?.clone(),
-                element_type(elements.get(index)?)?,
-            ))
-        }
-        // Custom(struct/class).Field(i) → the declared field type, read at the
-        // instance's type arguments.
-        MirType::Custom(name) | MirType::Vector(name) => {
-            let declared_field = ctx.field_types.get(name.as_str())?.get(index)?;
-            let field_ty =
-                field_type_in_instance(ctx.class_type_params, name, Some(declared), declared_field);
-            Some((MirType::from_type_kind(&field_ty.kind), field_ty))
-        }
-        // Closure.Field(i) → the type of captured variable i.
-        // Capture types are indexed by the root local because a closure
-        // is always a single-level projection (never nested).
-        MirType::Function => {
-            let capture_ty = ctx.closure_capture_types.get(&place.local)?.get(index)?;
-            Some((
-                MirType::from_type_kind(&capture_ty.kind),
-                capture_ty.clone(),
-            ))
-        }
-        _ => None,
-    }
-}
-
-/// The declared type an `Index` projection yields from a collection.
-///
-/// The walk's `MirType` keeps a collection's element resolved, but only the
-/// declared spelling still carries a class element's type arguments — a
-/// `List<Tagged<String>>` indexes to `Tagged<String>`, where the `MirType` is
-/// `Custom("Tagged")` and names the class alone. Carrying the argument through
-/// is what lets a field declared at the class parameter be read at the type it
-/// actually holds. Indexing a sequence or a set yields its element; indexing a
-/// map yields its value.
-fn indexed_element_type(collection: &Type) -> Option<Type> {
-    element_type(collection_element(&collection.kind)?)
-}
-
-/// The element expression of a collection type, or its value for a map;
-/// `None` for every other kind.
-fn collection_element(kind: &TypeKind) -> Option<&Expression> {
-    match kind {
-        TypeKind::Custom(name, Some(args)) => match BuiltinCollectionKind::from_name(name)? {
-            BuiltinCollectionKind::Array
-            | BuiltinCollectionKind::List
-            | BuiltinCollectionKind::Set => args.first(),
-            BuiltinCollectionKind::Map => args.get(1),
-        },
-        TypeKind::List(element) | TypeKind::Array(element, _) | TypeKind::Set(element) => {
-            Some(element)
-        }
-        TypeKind::Map(_, value) => Some(value),
-        TypeKind::Custom(_, None)
-        | TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Boolean
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::OneOf(_)
-        | TypeKind::Tuple(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Option(_)
-        | TypeKind::Future(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Function(_)
-        | TypeKind::Meta(_)
-        | TypeKind::Linear(_) => None,
-    }
-}
-
-/// The type an element expression of a collection or tuple type denotes: a
-/// written type, or a bare name, which names a type as written.
-fn element_type(element: &Expression) -> Option<Type> {
-    if let ExpressionKind::Identifier(name, _) = &element.node {
-        return Some(Type::new(
-            TypeKind::Custom(name.clone(), None),
-            element.span,
-        ));
-    }
-    type_argument(element)
+    .declared(place)
 }
 
 /// Whether the destination of an aggregate is an array or list whose elements

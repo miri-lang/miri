@@ -27,6 +27,7 @@ use crate::type_checker::context::TypeDefinition;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use crate::type_checker::value_class::held_value_layout;
 pub use crate::type_checker::value_class::LayoutScope;
 
 impl LayoutScope<'_> {
@@ -156,7 +157,8 @@ fn alias_target(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) 
 /// function value, and a name the type table defines as a class, struct, enum
 /// or trait. An alias is judged as the type it names at its arguments, so an
 /// alias naming an optional is an optional. False for every value held by value —
-/// scalars, aliases to them, inline vectors and atomics — for an optional
+/// scalars, aliases to them, a struct or tuple held as its bytes, inline
+/// vectors and atomics — for an optional
 /// (whose own absence must stay distinct from the outer one), for names that
 /// denote no allocation (generic parameters, a bare name the scope leaves open as a
 /// parameter, placeholders, a collection named
@@ -164,6 +166,9 @@ fn alias_target(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) 
 /// is a reference-counted pointer of.
 ///
 pub fn payload_is_nullable_pointer(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    if held_value_layout(kind, scope).is_some() {
+        return false;
+    }
     match kind {
         TypeKind::String
         | TypeKind::List(_)

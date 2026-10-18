@@ -105,8 +105,8 @@ pub(crate) fn lower_identifier_symbol(
 /// Lower a reference to a local variable: copy into `dest`, else Move/Copy per
 /// the variable's auto-copy semantics.
 ///
-/// An aggregate that assigns bitwise is rebuilt rather than referenced, so the
-/// result is independent of the variable it came from.
+/// A value held as its bytes is copied by the assignment that reads it, so
+/// the result is independent of the variable it came from.
 fn lower_local_identifier(
     ctx: &mut LoweringContext,
     local: crate::mir::Local,
@@ -120,21 +120,11 @@ fn lower_local_identifier(
         return Ok(read_at_width(ctx, source, width, expr.span, dest));
     }
     if let Some(d) = dest {
-        if let Some(operand) =
-            super::value_copy::copy_value_aggregate(ctx, &source, &ty, Some(d.clone()), expr.span)?
-        {
-            return Ok(operand);
-        }
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(source))),
             span: expr.span,
         });
         return Ok(Operand::Copy(d));
-    }
-    if let Some(operand) =
-        super::value_copy::copy_value_aggregate(ctx, &source, &ty, None, expr.span)?
-    {
-        return Ok(operand);
     }
     if ctx.is_type_auto_copy(&ty) {
         Ok(Operand::Copy(source))

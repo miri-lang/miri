@@ -108,8 +108,16 @@ fn a_body_over_values_held_as_bytes_takes_them_by_address() {
 }
 
 #[test]
-fn a_body_over_counted_values_takes_and_returns_their_pointers() {
+fn a_program_takes_and_returns_a_struct_of_scalars_by_address() {
     let body = body_of(point(), &[point(), TypeKind::Float], false);
+    let signature = body_signature(&body, CALL_CONV, PTR);
+    assert_eq!(signature, signature_of(&[PTR, PTR, types::F64], &[]));
+}
+
+#[test]
+fn a_body_over_counted_values_takes_and_returns_their_pointers() {
+    let optional = TypeKind::Option(Box::new(ty(point())));
+    let body = body_of(optional.clone(), &[optional, TypeKind::Float], false);
     let signature = body_signature(&body, CALL_CONV, PTR);
     assert_eq!(signature, signature_of(&[PTR, types::F64], &[PTR]));
 }

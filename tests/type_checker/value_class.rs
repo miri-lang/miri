@@ -420,3 +420,20 @@ fn probe(v Vec3)
     );
     assert_eq!(probe.layout_of("v").size, 24);
 }
+
+/// Sixteen `i64` fields fill the 128 bytes a value may take; one byte more,
+/// padded to the next eight, is past the limit and stays a counted struct.
+#[test]
+fn held_value_layout_holds_a_struct_up_to_the_size_limit() {
+    use miri::type_checker::value_class::held_value_layout;
+    let fields: String = (0..16).map(|i| format!("    f{i} i64\n")).collect();
+    let probe = Probe::of(&format!(
+        "struct Fits\n{fields}\nstruct Over\n{fields}    extra i8\n\nfn probe(fits Fits, over Over)\n    return\n"
+    ));
+    let held = |parameter: &str| {
+        let ty = &probe.parameters[parameter];
+        held_value_layout(&ty.kind, LayoutScope::program(&probe.definitions))
+    };
+    assert_eq!(held("fits").map(|layout| layout.size), Some(128));
+    assert_eq!(held("over"), None);
+}

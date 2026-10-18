@@ -29,7 +29,7 @@ pub use crate::type_checker::context::{
     TypeDefinition,
 };
 pub use crate::type_checker::value_class::{
-    value_class, FieldRepr, ScalarKind, ValueClass, ValueField, ValueLayout,
+    held_value_layout, value_class, FieldRepr, ScalarKind, ValueClass, ValueField, ValueLayout,
 };
 pub use drop_reach::DropHookReach;
 

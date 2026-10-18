@@ -1029,3 +1029,64 @@ fn test_set_element_entry_points_refuse_a_null_element_address() {
         miri_rt_set_free(set);
     }
 }
+
+/// An element held inline as two floats, the way a two-float struct sits in a
+/// set's slot.
+#[repr(C)]
+struct FloatPair {
+    x: f64,
+    y: f64,
+}
+
+/// An equality over two elements handed over by the address of their bytes,
+/// comparing each field as a number, standing in for a compiled field-wise
+/// `equals`.
+unsafe extern "C" fn float_pairs_equal(a: *const u8, b: *const u8) -> u8 {
+    let (a, b) = (&*(a as *const FloatPair), &*(b as *const FloatPair));
+    u8::from(a.x == b.x && a.y == b.y)
+}
+
+/// A hash consistent with [`float_pairs_equal`]: both zeros hash alike.
+unsafe extern "C" fn float_pair_hash(value: *const u8) -> i64 {
+    let pair = &*(value as *const FloatPair);
+    let x = if pair.x == 0.0 { 0.0 } else { pair.x };
+    let y = if pair.y == 0.0 { 0.0 } else { pair.y };
+    (x.to_bits() ^ y.to_bits().rotate_left(17)) as i64
+}
+
+#[test]
+fn test_set_hands_an_element_held_inline_to_its_callbacks_by_address() {
+    unsafe {
+        let size = std::mem::size_of::<FloatPair>();
+        let set = miri_rt_set_new(size);
+        miri_rt_set_set_elem_kind(
+            set,
+            miri_runtime_core::element_identity::by_slot_address(
+                miri_runtime_core::element_identity::BY_BYTES,
+            ),
+        );
+        miri_rt_set_set_elem_equals_fn(set, float_pairs_equal as usize);
+        miri_rt_set_set_elem_hash_fn(set, float_pair_hash as usize);
+        let negative_zero = FloatPair { x: -0.0, y: 1.0 };
+        let positive_zero = FloatPair { x: 0.0, y: 1.0 };
+        let other = FloatPair { x: 2.0, y: 1.0 };
+        let add = |pair: &FloatPair| {
+            miri_runtime_core::set::ffi::miri_rt_set_add(
+                set,
+                pair as *const FloatPair as *const u8,
+                size,
+            )
+        };
+        assert_eq!(add(&negative_zero), 1);
+        assert_eq!(add(&positive_zero), 0, "-0.0 and 0.0 are one element");
+        assert_eq!(add(&other), 1);
+        assert_eq!(miri_rt_set_len(set), 2);
+        let found = miri_runtime_core::set::ffi::miri_rt_set_contains(
+            set,
+            &positive_zero as *const FloatPair as *const u8,
+            size,
+        );
+        assert_eq!(found, 1);
+        miri_rt_set_free(set);
+    }
+}

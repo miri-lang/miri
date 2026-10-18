@@ -13,17 +13,24 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{TypeKind, SELF_TYPE_NAME};
 use crate::type_checker::context::TypeDefinition;
-use crate::type_checker::value_class::{value_class, LayoutScope, ValueClass, WordRole};
+use crate::type_checker::value_class::{
+    held_value_layout, value_class, LayoutScope, ValueClass, ValueLayout, WordRole,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
-/// Whether a bitwise value is reference counted.
-///
-/// A struct, tuple or optional the value-class authority calls bitwise is
-/// still built in a heap allocation of its own and released like any other
-/// aggregate, so it is counted. This is the one place that says so.
-const BITWISE_VALUE_IS_COUNTED: bool = true;
+/// Which bitwise values a classifier holds as their bytes, uncounted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeldValues {
+    /// The ones every program is compiled to hold as bytes: structs and
+    /// tuples with no optional inside, as
+    /// [`held_value_layout`](crate::type_checker::value_class::held_value_layout)
+    /// decides.
+    Program,
+    /// Every bitwise value, optionals included.
+    Every,
+}
 
 /// Decides whether a value of a type is reference counted, by its value class
 /// read against the program's type table.
@@ -33,7 +40,7 @@ const BITWISE_VALUE_IS_COUNTED: bool = true;
 #[derive(Clone)]
 pub struct RcClassifier {
     definitions: Rc<HashMap<String, TypeDefinition>>,
-    is_bitwise_counted: bool,
+    held: HeldValues,
 }
 
 impl Default for RcClassifier {
@@ -43,24 +50,24 @@ impl Default for RcClassifier {
 }
 
 impl RcClassifier {
-    /// A classifier that counts a bitwise value the way every program is
+    /// A classifier that holds bitwise values the way every program is
     /// compiled.
     pub fn new(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
         Self {
             definitions,
-            is_bitwise_counted: BITWISE_VALUE_IS_COUNTED,
+            held: HeldValues::Program,
         }
     }
 
-    /// A classifier that holds every bitwise value as its bytes, uncounted.
+    /// A classifier that holds every bitwise value as its bytes, uncounted,
+    /// optionals included.
     ///
-    /// No program is compiled this way. It is the representation the
-    /// value-representation verifier guards, and lets a hand-built body be
-    /// checked against it.
+    /// No program is compiled this way. It lets a hand-built body be checked
+    /// against a representation the compiler does not translate yet.
     pub fn with_uncounted_bitwise_values(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
         Self {
             definitions,
-            is_bitwise_counted: false,
+            held: HeldValues::Every,
         }
     }
 
@@ -68,10 +75,32 @@ impl RcClassifier {
     /// open, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind, type_params: &HashSet<String>) -> bool {
         !is_never_counted(kind)
-            && self.is_counted_class(&value_class(
-                kind,
-                LayoutScope::new(&self.definitions, type_params),
-            ))
+            && match value_class(kind, LayoutScope::new(&self.definitions, type_params)) {
+                ValueClass::Scalar(_)
+                | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => false,
+                ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
+                ValueClass::Bitwise(layout) => !self.holds_as_bytes(&layout),
+            }
+    }
+
+    /// The layout a value of `kind`, written in a body that leaves
+    /// `type_params` open, is held in as its bytes; `None` when it is held as
+    /// a word.
+    pub fn value_layout(
+        &self,
+        kind: &TypeKind,
+        type_params: &HashSet<String>,
+    ) -> Option<ValueLayout> {
+        if is_never_counted(kind) {
+            return None;
+        }
+        match value_class(kind, LayoutScope::new(&self.definitions, type_params)) {
+            ValueClass::Bitwise(layout) if self.holds_as_bytes(&layout) => Some(layout),
+            ValueClass::Bitwise(_)
+            | ValueClass::Scalar(_)
+            | ValueClass::Word(_)
+            | ValueClass::Managed => None,
+        }
     }
 
     /// The type table every type is classified against.
@@ -79,14 +108,11 @@ impl RcClassifier {
         &self.definitions
     }
 
-    /// Whether a value of class `class` is reference counted.
-    fn is_counted_class(&self, class: &ValueClass) -> bool {
-        match class {
-            ValueClass::Scalar(_) | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => {
-                false
-            }
-            ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
-            ValueClass::Bitwise(_) => self.is_bitwise_counted,
+    /// Whether a bitwise value laid out as `layout` is held as its bytes.
+    fn holds_as_bytes(&self, layout: &ValueLayout) -> bool {
+        match self.held {
+            HeldValues::Program => layout.is_held_as_bytes(),
+            HeldValues::Every => true,
         }
     }
 }
@@ -95,17 +121,17 @@ impl fmt::Debug for RcClassifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RcClassifier")
             .field("definitions", &self.definitions.len())
-            .field("is_bitwise_counted", &self.is_bitwise_counted)
+            .field("held", &self.held)
             .finish()
     }
 }
 
-/// Two classifiers are equal when they count bitwise values alike and read
+/// Two classifiers are equal when they hold bitwise values alike and read
 /// one table, or both read an empty one. Type definitions have no equality of
 /// their own, so two copies of one program's table are told apart.
 impl PartialEq for RcClassifier {
     fn eq(&self, other: &Self) -> bool {
-        self.is_bitwise_counted == other.is_bitwise_counted
+        self.held == other.held
             && (Rc::ptr_eq(&self.definitions, &other.definitions)
                 || (self.definitions.is_empty() && other.definitions.is_empty()))
     }
@@ -233,4 +259,20 @@ pub fn atomic_component(args: Option<&[Expression]>) -> Option<&Expression> {
 /// vector.
 pub fn is_word_slot_managed(kind: &TypeKind) -> bool {
     is_field_managed(kind) || crate::ast::types::vec_type_dim(kind).is_some()
+}
+
+/// Whether a one-word slot holding a value of `kind`, read against `scope`,
+/// holds a counted reference its holder releases.
+///
+/// A value held as its bytes sits inline in its holder instead: it is no
+/// reference, and its holder's release has nothing to release in it.
+pub fn is_slot_counted(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    is_word_slot_managed(kind) && held_value_layout(kind, scope).is_none()
+}
+
+/// Whether a collection element of `kind`, read against `scope`, is a counted
+/// reference the collection releases; see [`is_field_managed`]. A value held
+/// as its bytes is laid out inline and is not.
+pub fn is_element_counted(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    is_field_managed(kind) && held_value_layout(kind, scope).is_none()
 }

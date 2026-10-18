@@ -306,9 +306,10 @@ fn is_integer_kind_not_other() {
 
 /// The element kind word, decoded against the runtime's bit layout
 /// (`element_identity::through_optionals`): the rule in bits 0..8, the boxed
-/// depth in bits 8..16, the innermost-nullable flag at bit 16, and the boxed
-/// value's size from bit 17. The runtime opens exactly the boxes the word
-/// names, so a bit out of place reads a pointer as a value.
+/// depth in bits 8..16, the innermost-nullable flag at bit 16, the
+/// slot-address flag at bit 17, and the boxed value's size from bit 18. The
+/// runtime opens exactly the boxes the word names, so a bit out of place reads
+/// a pointer as a value.
 #[test]
 fn test_optional_element_kind_matches_the_runtime_bit_layout() {
     use miri::mir::option_layout::OptionalLayers;
@@ -323,17 +324,17 @@ fn test_optional_element_kind_matches_the_runtime_bit_layout() {
     let f64_value = 4;
     assert_eq!(
         FunctionTranslator::optional_element_kind(string_content, &layers(0, true, &node), 8),
-        Some(1 | (1 << 16) | (8 << 17)),
+        Some(1 | (1 << 16) | (8 << 18)),
         "a nullable pointer, no box"
     );
     assert_eq!(
         FunctionTranslator::optional_element_kind(string_content, &layers(1, true, &node), 8),
-        Some(1 | (1 << 8) | (1 << 16) | (8 << 17)),
+        Some(1 | (1 << 8) | (1 << 16) | (8 << 18)),
         "one box around a nullable pointer"
     );
     assert_eq!(
         FunctionTranslator::optional_element_kind(f64_value, &layers(2, false, &TypeKind::F64), 8),
-        Some(4 | (2 << 8) | (8 << 17)),
+        Some(4 | (2 << 8) | (8 << 18)),
         "two boxes around a value"
     );
     assert_eq!(
@@ -351,8 +352,17 @@ fn test_optional_element_kind_matches_the_runtime_bit_layout() {
         "a depth past the eight bits the runtime reads"
     );
     assert_eq!(
-        FunctionTranslator::optional_element_kind(f64_value, &layers(1, false, &TypeKind::F64), 17),
+        FunctionTranslator::optional_element_kind(0, &layers(1, false, &node), 24),
+        Some((1 << 8) | (24 << 18)),
+        "one box around a value held as its 24 bytes"
+    );
+    assert_eq!(
+        FunctionTranslator::optional_element_kind(
+            f64_value,
+            &layers(1, false, &TypeKind::F64),
+            129
+        ),
         None,
-        "a value wider than the runtime compares"
+        "a value wider than any value held as its bytes"
     );
 }

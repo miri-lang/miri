@@ -29,6 +29,7 @@ pub mod operand;
 pub mod optimization;
 pub mod option_layout;
 pub mod place;
+pub mod place_type;
 pub mod rc;
 pub mod residency;
 pub mod rvalue;
@@ -38,6 +39,7 @@ pub mod symbol;
 pub mod terminator;
 pub mod type_facts;
 pub mod types;
+pub mod value_arguments;
 pub mod verify;
 pub mod visitor;
 

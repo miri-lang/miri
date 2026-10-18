@@ -6,7 +6,8 @@ use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout::{
-    aggregate_layout, class_payload_layout, enum_payload_slot_size, field_layout, PayloadLayout,
+    aggregate_layout, class_payload_layout, enum_payload_slot_size, field_layout, Member,
+    PayloadLayout,
 };
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
@@ -14,10 +15,11 @@ use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_abi::{
     function_type_signature, miri_signature, Passing, Returning,
 };
+use crate::codegen::cranelift::value_locals::copy_value;
 use crate::error::CodegenError;
 use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
-use crate::mir::type_facts::{StructDefinition, TypeDefinition};
+use crate::mir::type_facts::{FieldRepr, StructDefinition, TypeDefinition, ValueLayout};
 use crate::mir::{
     AggregateKind, BinOp, Constant, FunctionConstant, Local, MathIntrinsic, Operand, Place, Rvalue,
     UnOp,
@@ -118,23 +120,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::translate_unop(builder, *op, val)
             }
 
-            Rvalue::Ref(place) => {
-                // A value held as its bytes already lives at an address.
-                if let Some((address, _)) =
-                    Self::value_place_address(builder, place, locals, type_ctx)?
-                {
-                    return Ok(address);
-                }
-                let value = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
-                let val_ty = builder.func.dfg.value_type(value);
-                let size = val_ty.bytes();
-                let align = size; // Simplification for scalars
-                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, align as u8);
-                let slot = builder.create_sized_stack_slot(slot_data);
-                let addr = builder.ins().stack_addr(ptr_type, slot, 0);
-                builder.ins().store(MemFlags::new(), value, addr, 0);
-                Ok(addr)
-            }
+            Rvalue::Ref(place) => Self::translate_ref(builder, ctx, place, locals, type_ctx),
 
             Rvalue::Aggregate(kind, operands) => Self::translate_aggregate(
                 builder,
@@ -192,6 +178,33 @@ impl<'a> FunctionTranslator<'a> {
                 "Atomic operations are GPU-only and not supported in CPU backend".to_string(),
             )),
         }
+    }
+
+    /// The address of `place`. A value held as its bytes already lives at one —
+    /// in a value local, or inline in its holder, where a read of it yields
+    /// that address; anything else is read and spilled to a stack slot.
+    fn translate_ref(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        if let Some((address, _)) = Self::value_place_address(builder, place, locals, type_ctx)? {
+            return Ok(address);
+        }
+        let value = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
+        if Self::operand_held_layout(&Operand::Copy(place.clone()), type_ctx)?.is_some() {
+            return Ok(value);
+        }
+        let val_ty = builder.func.dfg.value_type(value);
+        let size = val_ty.bytes();
+        let align = size; // Simplification for scalars
+        let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, align as u8);
+        let slot = builder.create_sized_stack_slot(slot_data);
+        let addr = builder.ins().stack_addr(type_ctx.ptr_type, slot, 0);
+        builder.ins().store(MemFlags::new(), value, addr, 0);
+        Ok(addr)
     }
 
     /// Translate an `Rvalue::BinaryOp` to a Cranelift value, taking the
@@ -550,13 +563,13 @@ impl<'a> FunctionTranslator<'a> {
             .iter()
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
-        let inline_stride = operands
+        let element_kind = operands
             .first()
-            .and_then(|op| Self::direct_operand_kind(op, type_ctx))
-            .and_then(|k| {
-                crate::codegen::cranelift::translator::inline_vec_element_layout(k, type_ctx)
-                    .map(|(stride, _, _)| stride)
-            });
+            .map(|op| Self::operand_projected_kind(op, type_ctx))
+            .transpose()?;
+        let inline_stride = element_kind
+            .as_ref()
+            .and_then(|k| crate::codegen::cranelift::translator::inline_stride(k, type_ctx));
         let elem_size = match (inline_stride, translated.first()) {
             (Some(stride), _) => stride,
             (None, None) => i64::from(ptr_type.bytes()),
@@ -591,32 +604,26 @@ impl<'a> FunctionTranslator<'a> {
         let first_op_direct_kind = operands
             .first()
             .and_then(|op| Self::direct_operand_kind(op, type_ctx));
-        // Inline vector elements are copied component-by-component from the
-        // source aggregate (`val` is its address); pointer-sized elements store
+        // Inline elements — a vector, a value held as its bytes — are copied
+        // from the source (`val` is its address); pointer-sized elements store
         // the operand value directly.
-        let inline = first_op_direct_kind.and_then(|k| {
-            crate::codegen::cranelift::translator::inline_vec_element_layout(k, type_ctx)
-        });
+        let inline_kind = operands
+            .first()
+            .map(|op| Self::operand_projected_kind(op, type_ctx))
+            .transpose()?
+            .filter(|k| {
+                crate::codegen::cranelift::translator::inline_stride(k, type_ctx).is_some()
+            });
 
         if !translated.is_empty() {
             // Read data pointer from MiriArray.data (offset 0)
             let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), array_ptr, 0);
             for (i, val) in translated.iter().enumerate() {
                 let offset = (i as i64) * elem_size;
-                match inline {
-                    Some((_, dim, comp_ty)) => {
-                        let comp_bytes = comp_ty.bytes() as i64;
-                        for k in 0..dim as i64 {
-                            let comp_offset = Self::store_offset_i32(k * comp_bytes)?;
-                            let comp =
-                                builder
-                                    .ins()
-                                    .load(comp_ty, MemFlags::new(), *val, comp_offset);
-                            let store_offset = Self::store_offset_i32(offset + k * comp_bytes)?;
-                            builder
-                                .ins()
-                                .store(MemFlags::new(), comp, data_ptr, store_offset);
-                        }
+                match &inline_kind {
+                    Some(kind) => {
+                        let dest = builder.ins().iadd_imm(data_ptr, offset);
+                        Self::copy_inline_element(builder, *val, dest, kind, type_ctx)?;
                     }
                     None => {
                         let store_offset = Self::store_offset_i32(offset)?;
@@ -804,12 +811,14 @@ impl<'a> FunctionTranslator<'a> {
             .iter()
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
+        let held = operands
+            .iter()
+            .map(|op| Self::operand_held_layout(op, type_ctx))
+            .collect::<Result<Vec<_>, _>>()?;
         let translated =
             Self::coerce_payload_values(builder, kind, translated, type_ctx, expected_ty)?;
-        let (field_offsets, total_size) = match Self::declared_aggregate_type(kind) {
-            Some(built) => Self::declared_payload(builder, built, &translated, type_ctx)?,
-            None => Self::payload_layout(builder, kind, &translated, type_ctx, expected_ty)?,
-        };
+        let (field_offsets, total_size) =
+            Self::member_offsets(builder, kind, (&translated, &held), type_ctx, expected_ty)?;
 
         let payload_ptr =
             Self::alloc_aggregate_payload(builder, ctx, ptr_type, ptr_size, total_size)?;
@@ -824,13 +833,87 @@ impl<'a> FunctionTranslator<'a> {
             builder.ins().store(MemFlags::new(), null, payload_ptr, 0);
         }
 
-        for (val, offset) in translated.into_iter().zip(&field_offsets) {
-            let store_offset = Self::store_offset_i32(*offset as i64)?;
-            builder
-                .ins()
-                .store(MemFlags::new(), val, payload_ptr, store_offset);
+        let members = translated.into_iter().zip(&field_offsets).zip(&held);
+        for ((val, offset), held) in members {
+            Self::store_payload_member(builder, payload_ptr, *offset, val, held.as_ref())?;
         }
         Ok(payload_ptr)
+    }
+
+    /// Store one member of an aggregate's payload at `offset`: a word as the
+    /// word `val` is, a value held as its bytes — `held` its layout, `val`
+    /// the address of its bytes — copied in inline.
+    fn store_payload_member(
+        builder: &mut FunctionBuilder,
+        payload_ptr: Value,
+        offset: u32,
+        val: Value,
+        held: Option<&ValueLayout>,
+    ) -> Result<(), CodegenError> {
+        let store_offset = Self::store_offset_i32(i64::from(offset))?;
+        match held {
+            Some(layout) => {
+                let dest = builder.ins().iadd_imm(payload_ptr, i64::from(store_offset));
+                copy_value(builder, val, dest, layout);
+            }
+            None => {
+                builder
+                    .ins()
+                    .store(MemFlags::new(), val, payload_ptr, store_offset);
+            }
+        }
+        Ok(())
+    }
+
+    /// Where each member of an aggregate of `kind` is stored in its payload,
+    /// and how many bytes the payload needs, from the translated members and
+    /// the layout of each one held as its bytes.
+    fn member_offsets(
+        builder: &FunctionBuilder,
+        kind: &AggregateKind,
+        (translated, held): (&[Value], &[Option<ValueLayout>]),
+        type_ctx: &TypeCtx,
+        expected_ty: Option<&crate::ast::types::Type>,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        match Self::declared_aggregate_type(kind) {
+            Some(built) => Self::declared_payload(builder, built, (translated, held), type_ctx),
+            None if matches!(kind, AggregateKind::Option(_)) => {
+                Self::boxed_option_payload(builder, translated, held, type_ctx)
+            }
+            None => Self::payload_layout(builder, kind, translated, type_ctx, expected_ty),
+        }
+    }
+
+    /// The layout of the value `operand` reads when it reads a whole value
+    /// held as its bytes — in a value local or inline in a holder — which a
+    /// translation of it yields as the address of those bytes.
+    pub(crate) fn operand_held_layout(
+        operand: &Operand,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<ValueLayout>, CodegenError> {
+        if let Some(layout) = type_ctx.values.operand_value(operand)? {
+            return Ok(Some(layout.clone()));
+        }
+        let (Operand::Copy(place) | Operand::Move(place)) = operand else {
+            return Ok(None);
+        };
+        let kind = Self::resolve_projected_type_kind(place, type_ctx)?;
+        Ok(type_ctx.value_layout(&kind))
+    }
+
+    /// Where an optional's box holds its payload, and how many bytes the box
+    /// needs: a value held as its bytes sits inline at the start, and any
+    /// other payload is laid out from its own width.
+    fn boxed_option_payload(
+        builder: &FunctionBuilder,
+        translated: &[Value],
+        held: &[Option<ValueLayout>],
+        type_ctx: &TypeCtx,
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        if let [Some(layout)] = held {
+            return Ok((vec![0], layout.size.max(type_ctx.ptr_type.bytes())));
+        }
+        Self::compute_aggregate_layout(builder, translated, true, type_ctx.ptr_type.bytes())
     }
 
     /// The struct or tuple type an aggregate of `kind` builds, when it builds
@@ -862,7 +945,7 @@ impl<'a> FunctionTranslator<'a> {
     fn declared_payload(
         builder: &FunctionBuilder,
         built: &crate::ast::types::Type,
-        translated: &[Value],
+        (translated, held): (&[Value], &[Option<ValueLayout>]),
         type_ctx: &TypeCtx,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
         let scope = type_ctx.layout_scope();
@@ -882,28 +965,43 @@ impl<'a> FunctionTranslator<'a> {
         }
         let offsets = translated
             .iter()
+            .zip(held)
             .zip(&layout.fields)
-            .map(|(&value, &(offset, field_ty))| {
-                Self::declared_field_offset(builder, value, offset, field_ty, &built.kind)
+            .map(|((&value, held), (offset, member))| {
+                let field = DeclaredField {
+                    offset: *offset,
+                    member,
+                    is_held: held.is_some(),
+                };
+                Self::declared_field_offset(builder, value, field, &built.kind)
             })
             .collect::<Result<_, _>>()?;
         Ok((offsets, layout.size))
     }
 
-    /// Where a struct or tuple field declared at `field_ty` is stored, after
-    /// checking that `value` has that width.
+    /// Where a struct or tuple field is stored, after checking that `value`
+    /// fits it: a word field takes a value of its own width, and a field held
+    /// inline as its bytes takes exactly an operand that reads such a value.
     fn declared_field_offset(
         builder: &FunctionBuilder,
         value: Value,
-        offset: i32,
-        field_ty: cl_types::Type,
+        field: DeclaredField,
         built: &TypeKind,
     ) -> Result<u32, CodegenError> {
+        let DeclaredField {
+            offset,
+            member,
+            is_held,
+        } = field;
         let value_ty = builder.func.dfg.value_type(value);
-        if value_ty != field_ty {
+        let fits = match member {
+            Member::Word(field_ty) => !is_held && value_ty == *field_ty,
+            Member::Inline(_) => is_held,
+        };
+        if !fits {
             return Err(CodegenError::Internal(format!(
-                "a `{value_ty}` value is built into the `{field_ty}` field at offset {offset} \
-                 of `{built}`"
+                "a `{value_ty}` value is built into the {member:?} field at offset {offset} of \
+                 `{built}`"
             )));
         }
         u32::try_from(offset).map_err(|_| {
@@ -972,7 +1070,12 @@ impl<'a> FunctionTranslator<'a> {
         let declared_slot = match type_ctx.facts.definitions().get(enum_name) {
             Some(TypeDefinition::Enum(enum_def)) => {
                 let type_args = expected_ty.and_then(|ty| Self::enum_instantiation_args(&ty.kind));
-                enum_payload_slot_size(enum_def, type_args.as_deref(), ptr_type)
+                enum_payload_slot_size(
+                    enum_def,
+                    type_args.as_deref(),
+                    type_ctx.layout_scope(),
+                    ptr_type,
+                )
             }
             // Not a known enum definition: keep the pointer-sized slot every
             // payload used before slots were sized from the variants.
@@ -1054,7 +1157,7 @@ impl<'a> FunctionTranslator<'a> {
         Some(class_payload_layout(
             class_name,
             type_args.as_deref(),
-            type_ctx.facts.definitions(),
+            type_ctx.layout_scope(),
             type_ctx.ptr_type,
         ))
     }
@@ -1140,8 +1243,10 @@ impl<'a> FunctionTranslator<'a> {
                             if crate::mir::instantiation::is_open_parameter(
                                 &kind,
                                 enum_def.generics.as_ref(),
-                            ) || crate::mir::rc::is_field_managed(&kind)
-                            {
+                            ) || crate::mir::rc::is_element_counted(
+                                &kind,
+                                type_ctx.layout_scope(),
+                            ) {
                                 None
                             } else {
                                 Some(crate::ast::types::Type::new(kind, ty.span))
@@ -1310,6 +1415,11 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
         let ty = type_ctx.local_types[place.local.0];
+        // A tuple held as its bytes keeps no count: its length is its type's.
+        let reached = Self::resolve_projected_type_kind(place, type_ctx)?;
+        if let Some(layout) = type_ctx.value_layout(&reached) {
+            return Ok(builder.ins().iconst(ptr_type, layout.fields.len() as i64));
+        }
 
         let is_tuple_type = ty.kind.is_tuple();
 
@@ -2067,11 +2177,19 @@ impl<'a> FunctionTranslator<'a> {
             .iter()
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
+        let held = capture_ops
+            .iter()
+            .map(|op| Self::operand_held_layout(op, type_ctx))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let layout = CaptureLayout::new(
             capture_vals
                 .iter()
-                .map(|val| builder.func.dfg.value_type(*val)),
+                .zip(&held)
+                .map(|(val, held)| match held {
+                    Some(value) => value.size,
+                    None => builder.func.dfg.value_type(*val).bytes(),
+                }),
             ptr_type,
         );
         let payload_ptr =
@@ -2088,11 +2206,20 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .store(MemFlags::new(), dtor_val, payload_ptr, ptr_size as i32);
 
-        // Each capture is stored at its own type, where the body loads it.
-        for (val, offset) in capture_vals.into_iter().zip(layout.offsets) {
-            builder
-                .ins()
-                .store(MemFlags::new(), val, payload_ptr, offset);
+        // Each capture is stored at its own type, where the body loads it; a
+        // value held as its bytes is copied in whole.
+        for ((val, offset), held) in capture_vals.into_iter().zip(layout.offsets).zip(&held) {
+            match held {
+                Some(value) => {
+                    let dest = builder.ins().iadd_imm(payload_ptr, i64::from(offset));
+                    copy_value(builder, val, dest, value);
+                }
+                None => {
+                    builder
+                        .ins()
+                        .store(MemFlags::new(), val, payload_ptr, offset);
+                }
+            }
         }
 
         Ok(payload_ptr)
@@ -2165,7 +2292,7 @@ impl<'a> FunctionTranslator<'a> {
         let has_managed = capture_ops.iter().any(|op| match op {
             Operand::Copy(p) | Operand::Move(p) => {
                 let kind = &type_ctx.local_types[p.local.0].kind;
-                crate::mir::rc::is_word_slot_managed(kind)
+                crate::mir::rc::is_slot_counted(kind, type_ctx.layout_scope())
             }
             Operand::Constant(_) | Operand::Function(_) => false,
         });
@@ -2929,26 +3056,84 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let tuple_type = TypeKind::Tuple(element_exprs.to_vec());
+        if let Some(layout) = type_ctx.value_layout(&tuple_type) {
+            return Ok(Self::held_value_equality(
+                builder, lhs_ptr, rhs_ptr, &layout, 0,
+            ));
+        }
 
         // Start with true (all fields equal so far)
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
 
         for i in 0..element_exprs.len() {
-            let (offset, cl_ty) = field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
-
-            let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
-            let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
-
-            let field_eq = if cl_ty.is_float() {
-                builder.ins().fcmp(FloatCC::Equal, lhs_field, rhs_field)
-            } else {
-                builder.ins().icmp(IntCC::Equal, lhs_field, rhs_field)
-            };
-
+            let (offset, member) = field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
+            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member);
             result = builder.ins().band(result, field_eq);
         }
 
         Ok(result)
+    }
+
+    /// Whether member `member` at `offset` of the two aggregates at `lhs` and
+    /// `rhs` is equal: a word compared as one, a value held inline compared
+    /// member by member.
+    fn member_equality(
+        builder: &mut FunctionBuilder,
+        (lhs, rhs): (Value, Value),
+        offset: i32,
+        member: &Member,
+    ) -> Value {
+        match member {
+            Member::Word(ty) => {
+                let left = builder.ins().load(*ty, MemFlags::new(), lhs, offset);
+                let right = builder.ins().load(*ty, MemFlags::new(), rhs, offset);
+                if ty.is_float() {
+                    builder.ins().fcmp(FloatCC::Equal, left, right)
+                } else {
+                    builder.ins().icmp(IntCC::Equal, left, right)
+                }
+            }
+            Member::Inline(layout) => {
+                let lhs = builder.ins().iadd_imm(lhs, i64::from(offset));
+                let rhs = builder.ins().iadd_imm(rhs, i64::from(offset));
+                Self::held_value_equality(builder, lhs, rhs, layout, 0)
+            }
+        }
+    }
+
+    /// Whether the two values held as their bytes at `lhs` and `rhs`, laid
+    /// out as `layout` from `offset` on, are equal: every scalar compared as
+    /// `==` compares it — a float as a number, so `-0.0` equals `0.0` and NaN
+    /// equals nothing — and every nested value member by member, never by
+    /// its bytes, whose padding is unspecified.
+    pub(crate) fn held_value_equality(
+        builder: &mut FunctionBuilder,
+        lhs: Value,
+        rhs: Value,
+        layout: &ValueLayout,
+        offset: u32,
+    ) -> Value {
+        let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+        for field in &layout.fields {
+            let at = offset + field.offset;
+            let field_eq = match &field.repr {
+                FieldRepr::Scalar(scalar) => {
+                    let ty = crate::codegen::cranelift::value_locals::scalar_type(*scalar);
+                    let at = at as i32;
+                    let left = builder.ins().load(ty, MemFlags::new(), lhs, at);
+                    let right = builder.ins().load(ty, MemFlags::new(), rhs, at);
+                    if ty.is_float() {
+                        builder.ins().fcmp(FloatCC::Equal, left, right)
+                    } else {
+                        builder.ins().icmp(IntCC::Equal, left, right)
+                    }
+                }
+                FieldRepr::Value(inner) => Self::held_value_equality(builder, lhs, rhs, inner, at),
+                FieldRepr::OptionTag => continue,
+            };
+            result = builder.ins().band(result, field_eq);
+        }
+        result
     }
 
     /// Generate structural equality comparison for two struct instances.
@@ -2962,22 +3147,18 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
+        if let Some(layout) = type_ctx.value_layout(struct_type) {
+            return Ok(Self::held_value_equality(
+                builder, lhs_ptr, rhs_ptr, &layout, 0,
+            ));
+        }
 
         // Start with true (all fields equal so far)
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
 
         for i in 0..def.fields.len() {
-            let (offset, cl_ty) = field_layout(struct_type, i, type_ctx.layout_scope(), ptr_type)?;
-
-            let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
-            let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
-
-            let field_eq = if cl_ty.is_float() {
-                builder.ins().fcmp(FloatCC::Equal, lhs_field, rhs_field)
-            } else {
-                builder.ins().icmp(IntCC::Equal, lhs_field, rhs_field)
-            };
-
+            let (offset, member) = field_layout(struct_type, i, type_ctx.layout_scope(), ptr_type)?;
+            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member);
             result = builder.ins().band(result, field_eq);
         }
 
@@ -3033,4 +3214,12 @@ impl<'a> FunctionTranslator<'a> {
 
         Ok(result)
     }
+}
+
+/// One field of a struct or tuple being built: where it sits, what it is,
+/// and whether the operand stored into it reads a value held as its bytes.
+struct DeclaredField<'m> {
+    offset: i32,
+    member: &'m Member,
+    is_held: bool,
 }

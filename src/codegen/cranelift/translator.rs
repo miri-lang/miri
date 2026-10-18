@@ -12,7 +12,7 @@ use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_abi::body_signature;
-use crate::codegen::cranelift::value_locals::ValueLocals;
+use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, ValueLocals};
 use crate::error::CodegenError;
 use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
@@ -124,6 +124,18 @@ impl TypeCtx<'_> {
     /// the program's type table and the parameters this code leaves open.
     pub fn layout_scope(&self) -> crate::mir::option_layout::LayoutScope<'_> {
         crate::mir::option_layout::LayoutScope::new(self.facts.definitions(), self.open_params)
+    }
+
+    /// The layout a value of `kind` is held in as its bytes by the code being
+    /// translated, or `None` when it is held as a word.
+    ///
+    /// A body answers for itself; code with no body of its own — a thunk, a
+    /// destructor — holds values the way every program does.
+    pub fn value_layout(&self, kind: &TypeKind) -> Option<crate::mir::type_facts::ValueLayout> {
+        match self.values.body() {
+            Some(body) => body.value_layout(kind),
+            None => crate::mir::type_facts::held_value_layout(kind, self.layout_scope()),
+        }
     }
 }
 
@@ -432,13 +444,23 @@ impl<'a> FunctionTranslator<'a> {
         let env_ptr_val = builder.use_var(env_ptr_var);
         let layout = CaptureLayout::of_body(body, ptr_type);
         for (&cap_local, &offset) in body.env_capture_locals.iter().zip(&layout.offsets) {
-            let cap_cl_type = translate_type(&body.local_decls[cap_local.0].ty, ptr_type);
+            let Some(&cap_var) = locals.get(&cap_local) else {
+                continue;
+            };
+            let cap_ty = &body.local_decls[cap_local.0].ty;
+            // A value held as its bytes is copied out of the environment
+            // into the capture's own slot.
+            if let Some(value) = body.value_layout(&cap_ty.kind) {
+                let source = builder.ins().iadd_imm(env_ptr_val, i64::from(offset));
+                let slot = builder.use_var(cap_var);
+                copy_value(builder, source, slot, &value);
+                continue;
+            }
+            let cap_cl_type = translate_type(cap_ty, ptr_type);
             let cap_val = builder
                 .ins()
                 .load(cap_cl_type, MemFlags::new(), env_ptr_val, offset);
-            if let Some(&cap_var) = locals.get(&cap_local) {
-                builder.def_var(cap_var, cap_val);
-            }
+            builder.def_var(cap_var, cap_val);
         }
     }
     /// Get the function signature.
@@ -473,9 +495,8 @@ impl<'a> FunctionTranslator<'a> {
         expected_ty: Option<&Type>,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        if let Some((address, spot)) = Self::value_place_address(builder, place, locals, type_ctx)?
-        {
-            return Ok(Self::read_value_spot(builder, address, spot));
+        if let Some(value) = Self::read_value_local_place(builder, ctx, place, locals, type_ctx)? {
+            return Ok(value);
         }
         let var = locals
             .get(&place.local)
@@ -491,14 +512,22 @@ impl<'a> FunctionTranslator<'a> {
         let mut inline_elem: Option<TypeKind> = None;
 
         let mut walk = ProjectedKind::new(place, type_ctx);
-        for proj in &place.projection {
+        let last = place.projection.len().saturating_sub(1);
+        for (position, proj) in place.projection.iter().enumerate() {
             let reached = walk.step(proj, type_ctx)?;
+            let read_expected = expected_ty.filter(|_| position == last);
             match proj {
                 PlaceElem::Deref => {
                     value = builder.ins().load(ptr_type, MemFlags::new(), value, 0);
                     inline_elem = None;
                 }
                 PlaceElem::Field(idx) => {
+                    let field = FieldRead {
+                        owner: &current_type,
+                        idx: *idx,
+                        reached,
+                        expected: read_expected,
+                    };
                     value = match inline_elem.take() {
                         Some(vec_kind) => Self::load_inline_element_field(
                             builder, value, &vec_kind, *idx, type_ctx,
@@ -513,14 +542,9 @@ impl<'a> FunctionTranslator<'a> {
                         {
                             value
                         }
-                        None => Self::load_owned_field(
-                            builder,
-                            value,
-                            &current_type,
-                            *idx,
-                            expected_ty,
-                            type_ctx,
-                        )?,
+                        None => {
+                            Self::read_owned_field(builder, value, field, expected_ty, type_ctx)?
+                        }
                     };
                     current_type = Self::type_after_projection(reached, &current_type);
                 }
@@ -539,10 +563,7 @@ impl<'a> FunctionTranslator<'a> {
                         &current_type,
                         type_ctx,
                     )?;
-                    inline_elem = elem_type
-                        .as_ref()
-                        .map(|t| t.kind.clone())
-                        .filter(|k| inline_vec_element_layout(k, type_ctx).is_some());
+                    inline_elem = Self::inline_vector_kind(elem_type.as_ref(), type_ctx);
                     if let Some(elem_type) = elem_type {
                         current_type = elem_type;
                     }
@@ -551,6 +572,84 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         Ok(value)
+    }
+
+    /// The kind of `element` when it is an inline vector, which an index read
+    /// yields as the address of its components.
+    fn inline_vector_kind(element: Option<&Type>, type_ctx: &TypeCtx) -> Option<TypeKind> {
+        element
+            .map(|t| t.kind.clone())
+            .filter(|k| inline_vec_element_layout(k, type_ctx).is_some())
+    }
+
+    /// Read `place` when it is rooted in a value local: a scalar inside it is
+    /// loaded, a whole value is its address. `None` for any other place.
+    fn read_value_local_place(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<Value>, CodegenError> {
+        let is_indexed = place
+            .projection
+            .iter()
+            .any(|elem| matches!(elem, PlaceElem::Index(_)));
+        if is_indexed && type_ctx.values.layout(place.local).is_some() {
+            return Self::read_indexed_value_place(builder, ctx, place, locals, type_ctx).map(Some);
+        }
+        Ok(Self::value_place_address(builder, place, locals, type_ctx)?
+            .map(|(address, spot)| Self::read_value_spot(builder, address, spot)))
+    }
+
+    /// Whether a projection reaching a value of `reached` kind reaches a value
+    /// held as its bytes, which a read yields as its address.
+    ///
+    /// An enum's payload names no kind of its own; the destination it is read
+    /// into, `expected`, says what it holds.
+    // TODO: a payload projection is a bare `Field(k)` with no variant, so
+    // neither MIR nor this backend can name the payload's type and the
+    // destination stands in for it. A place element that carries the variant
+    // would let `PlaceTypes` answer, and this guess would go.
+    pub(crate) fn reaches_held_value(
+        reached: &TypeKind,
+        expected: Option<&Type>,
+        type_ctx: &TypeCtx,
+    ) -> bool {
+        match reached {
+            TypeKind::Error => {
+                expected.is_some_and(|expected| type_ctx.value_layout(&expected.kind).is_some())
+            }
+            reached => type_ctx.value_layout(reached).is_some(),
+        }
+    }
+
+    /// Read field `field.idx` out of the aggregate at `value`: a value held
+    /// inline in it as the address of its bytes, anything else loaded.
+    fn read_owned_field(
+        builder: &mut FunctionBuilder,
+        value: Value,
+        field: FieldRead,
+        expected_ty: Option<&Type>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        if !Self::reaches_held_value(field.reached, field.expected, type_ctx) {
+            return Self::load_owned_field(
+                builder,
+                value,
+                field.owner,
+                field.idx,
+                expected_ty,
+                type_ctx,
+            );
+        }
+        let (offset, _) = layout::field_layout(
+            &field.owner.kind,
+            field.idx,
+            type_ctx.layout_scope(),
+            type_ctx.ptr_type,
+        )?;
+        Ok(builder.ins().iadd_imm(value, i64::from(offset)))
     }
 
     /// Load field `idx` out of an inline vector element whose address is `value`.
@@ -565,8 +664,9 @@ impl<'a> FunctionTranslator<'a> {
         idx: usize,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
-        let (offset, field_ty) =
+        let (offset, member) =
             layout::field_layout(vec_kind, idx, type_ctx.layout_scope(), type_ctx.ptr_type)?;
+        let field_ty = member_word(&member, vec_kind, idx)?;
         Ok(builder.ins().load(field_ty, MemFlags::new(), value, offset))
     }
 
@@ -592,8 +692,15 @@ impl<'a> FunctionTranslator<'a> {
                 .ins()
                 .load(ptr_type, MemFlags::new(), value, offset as i32));
         }
-        let (offset, mut field_ty) =
+        let (offset, member) =
             layout::field_layout(&owner_type.kind, idx, type_ctx.layout_scope(), ptr_type)?;
+        let mut field_ty = match member {
+            layout::Member::Word(ty) => ty,
+            // A value held inline in its holder is read as its address.
+            layout::Member::Inline(_) => {
+                return Ok(builder.ins().iadd_imm(value, i64::from(offset)));
+            }
+        };
         if let Some(expected) = expected_ty {
             if Self::field_width_comes_from_expected_ty(&owner_type.kind, type_ctx) {
                 field_ty =
@@ -748,6 +855,47 @@ impl<'a> FunctionTranslator<'a> {
         )
     }
 
+    /// The address of the value held inline at the projected `place`, outside
+    /// every value local: a value in a class or struct field, a collection
+    /// element, a payload.
+    pub(crate) fn held_place_address(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        let var = locals
+            .get(&place.local)
+            .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;
+        let base_addr = builder.use_var(*var);
+        let (addr, holder) =
+            Self::walk_projection_path(builder, ctx, place, base_addr, locals, type_ctx)?;
+        match place.projection.last() {
+            Some(PlaceElem::Field(idx)) => {
+                let (offset, _) = layout::field_layout(
+                    &holder.kind,
+                    *idx,
+                    type_ctx.layout_scope(),
+                    type_ctx.ptr_type,
+                )?;
+                Ok(builder.ins().iadd_imm(addr, i64::from(offset)))
+            }
+            Some(PlaceElem::Index(index)) => {
+                let index_var = locals.get(index).ok_or_else(|| {
+                    CodegenError::Internal(format!("Unknown index local: {index:?}"))
+                })?;
+                let index_val = builder.use_var(*index_var);
+                Self::translate_collection_index_read(
+                    builder, ctx, addr, index_val, &holder, type_ctx,
+                )
+            }
+            Some(PlaceElem::Deref) | None => Err(CodegenError::Internal(format!(
+                "`{place}` reaches no value held inline in a holder"
+            ))),
+        }
+    }
+
     /// Walk every projection on `place` *except the last*, advancing `addr`
     /// and tracking the type at the current depth. Returns the address that
     /// the final projection should consume and the type of the value at that
@@ -795,7 +943,8 @@ impl<'a> FunctionTranslator<'a> {
                     // one-word slot, so a vector held in one — a class or
                     // struct field, a tuple element, a boxed optional's or an
                     // enum's payload — is such a pointer too.
-                    if crate::mir::rc::is_word_slot_managed(&current_type.kind) {
+                    if crate::mir::rc::is_slot_counted(&current_type.kind, type_ctx.layout_scope())
+                    {
                         addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
                     }
                 }
@@ -889,12 +1038,22 @@ impl<'a> FunctionTranslator<'a> {
                         current_type.kind
                     )));
                 }
-                let (offset, field_ty) = layout::field_layout(
+                let (offset, member) = layout::field_layout(
                     &current_type.kind,
                     *idx,
                     type_ctx.layout_scope(),
                     type_ctx.ptr_type,
                 )?;
+                let field_ty = match &member {
+                    layout::Member::Word(ty) => *ty,
+                    // A value held inline: `value` is the address of the
+                    // bytes to copy in.
+                    layout::Member::Inline(value_layout) => {
+                        let dest = builder.ins().iadd_imm(addr, i64::from(offset));
+                        copy_value(builder, value, dest, value_layout);
+                        return Ok(());
+                    }
+                };
                 // Storing into an inline vector component: narrow/extend the
                 // value to the component width. `arr[i].x` is typed without a
                 // concrete scalar width upstream, so an `f64` literal can reach
@@ -1778,23 +1937,24 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
+        if let Some(layout) = type_ctx.value_layout(&base_type.kind) {
+            return Self::read_value_tuple_element(builder, ctx, base_value, idx_val, &layout);
+        }
 
         // No element type ⇒ assume pointer-sized addressing (managed collections
         // hold pointers; this matches the historical silent fallback but is now
         // explicit at the call site rather than inside the resolver).
         let elem_kind = Self::resolve_collection_elem_type(base_type);
-        // Inline vector elements are addressed by their std430 stride and the
-        // index expression yields the element *address* (the projection chain
-        // loads individual fields from it); pointer-sized elements are loaded.
-        let inline = elem_kind.and_then(|k| inline_vec_element_layout(k, type_ctx));
+        // Inline elements — a vector at its std430 stride, a value held as its
+        // bytes at its own — are addressed by their stride and the index
+        // expression yields the element *address* (the projection chain loads
+        // individual fields from it); pointer-sized elements are loaded.
+        let inline = elem_kind.and_then(|k| inline_stride(k, type_ctx));
         let cl_elem_ty = match elem_kind {
             Some(k) => crate::codegen::cranelift::types::translate_type_kind(k, ptr_type),
             None => ptr_type,
         };
-        let elem_size = match inline {
-            Some((stride, _, _)) => stride,
-            None => cl_elem_ty.bytes() as i64,
-        };
+        let elem_size = inline.unwrap_or(cl_elem_ty.bytes() as i64);
 
         // Tuples store `[count][field0][field1]...` at `base_value`; the
         // `data` field is implicit (fields start right after the count slot).
@@ -1837,6 +1997,28 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder
             .ins()
             .load(cl_elem_ty, MemFlags::new(), elem_addr, 0))
+    }
+
+    /// Read element `index` of the tuple held as its bytes at `base`: a
+    /// scalar is loaded, a whole value is its address.
+    fn read_value_tuple_element(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        base: Value,
+        index: Value,
+        layout: &crate::mir::type_facts::ValueLayout,
+    ) -> Result<Value, CodegenError> {
+        use crate::mir::type_facts::FieldRepr;
+        let (address, repr) = Self::value_element_address(builder, ctx, base, index, layout)?;
+        Ok(match repr {
+            FieldRepr::Scalar(scalar) => builder.ins().load(
+                crate::codegen::cranelift::value_locals::scalar_type(*scalar),
+                MemFlags::new(),
+                address,
+                0,
+            ),
+            FieldRepr::Value(_) | FieldRepr::OptionTag => address,
+        })
     }
 
     /// Trap unless the collection at `base` was allocated with slots of exactly
@@ -1930,20 +2112,18 @@ impl<'a> FunctionTranslator<'a> {
         // hold pointers; this matches the historical silent fallback but is now
         // explicit at the call site rather than inside the resolver).
         let elem_type_kind = Self::resolve_collection_elem_type(base_type);
-        // Inline vector elements occupy their std430 stride and are written as
-        // raw component bytes copied from `value` (the source element/aggregate
-        // address); they carry no managed pointer to DecRef.
-        let inline = elem_type_kind.and_then(|k| inline_vec_element_layout(k, type_ctx));
+        // Inline elements — a vector at its std430 stride, a value held as its
+        // bytes at its own — are written as raw bytes copied from `value` (the
+        // source element/aggregate address); they carry no managed pointer to
+        // DecRef.
+        let inline = elem_type_kind.and_then(|k| inline_stride(k, type_ctx));
         let cl_elem_ty = match elem_type_kind {
             Some(elem_kind) => {
                 crate::codegen::cranelift::types::translate_type_kind(elem_kind, ptr_type)
             }
             None => ptr_type,
         };
-        let elem_size = match inline {
-            Some((stride, _, _)) => stride,
-            None => cl_elem_ty.bytes() as i64,
-        };
+        let elem_size = inline.unwrap_or(cl_elem_ty.bytes() as i64);
 
         if inline.is_some() {
             Self::trap_unless_slots_match_stride(
@@ -1980,32 +2160,21 @@ impl<'a> FunctionTranslator<'a> {
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
         let byte_offset = builder.ins().imul(idx_val, elem_size_val);
         let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
-        match inline {
-            Some((_, dim, comp_ty)) => {
-                // Copy the vector's components inline; `value` is the source
-                // element/aggregate address. No DecRef: vectors are value types.
-                let comp_bytes = comp_ty.bytes() as i64;
-                for k in 0..dim as i64 {
-                    let comp = builder.ins().load(
-                        comp_ty,
-                        MemFlags::new(),
-                        value,
-                        (k * comp_bytes) as i32,
-                    );
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), comp, elem_addr, (k * comp_bytes) as i32);
-                }
+        match (inline, elem_type_kind) {
+            (Some(_), Some(elem_kind)) => {
+                // Copy the element's bytes inline; `value` is the source
+                // element/aggregate address. No DecRef: neither a vector nor
+                // a value held as its bytes holds a reference.
+                Self::copy_inline_element(builder, value, elem_addr, elem_kind, type_ctx)?;
             }
-            None => {
-                // DecRef the old managed element before overwriting. When the
-                // element type is unknown (None), skip — the historical fallback
-                // treated it as a primitive and emitted no decref.
-                if let Some(elem_kind) = elem_type_kind {
-                    Self::emit_managed_elem_decref(
-                        builder, ctx, elem_addr, elem_kind, ptr_type, type_ctx,
-                    )?;
-                }
+            (Some(_), None) | (None, None) => {
+                builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+            }
+            (None, Some(elem_kind)) => {
+                // DecRef the old managed element before overwriting.
+                Self::emit_managed_elem_decref(
+                    builder, ctx, elem_addr, elem_kind, ptr_type, type_ctx,
+                )?;
                 builder.ins().store(MemFlags::new(), value, elem_addr, 0);
             }
         }
@@ -2013,6 +2182,31 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(panic_block);
         builder.seal_block(cont_block);
 
+        Ok(())
+    }
+
+    /// Copy the bytes of an inline element of `kind` from `source` into the
+    /// collection slot at `dest`: a vector component by component, a value
+    /// held as its bytes as those bytes.
+    pub(crate) fn copy_inline_element(
+        builder: &mut FunctionBuilder,
+        source: Value,
+        dest: Value,
+        kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        if let Some((_, dim, component)) = inline_vec_element_layout(kind, type_ctx) {
+            let component_bytes = component.bytes() as i32;
+            let lanes = (0..i32::from(dim)).map(|lane| (lane * component_bytes, component));
+            copy_chunks(builder, source, dest, lanes);
+            return Ok(());
+        }
+        let layout = type_ctx.value_layout(kind).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "`{kind}` is copied as an inline element but is none"
+            ))
+        })?;
+        copy_value(builder, source, dest, &layout);
         Ok(())
     }
 
@@ -2266,6 +2460,16 @@ impl<'a> FunctionTranslator<'a> {
     }
 }
 
+/// One field read along a place: the aggregate holding it, its index, the
+/// kind the projection reaches, and — at the place's last projection — the
+/// type the destination reads it as.
+struct FieldRead<'r> {
+    owner: &'r Type,
+    idx: usize,
+    reached: &'r TypeKind,
+    expected: Option<&'r Type>,
+}
+
 /// The width in bytes a set or map slot holding an element of type `kind` must
 /// have.
 ///
@@ -2288,6 +2492,17 @@ pub(crate) fn type_argument(argument: &crate::ast::expression::Expression) -> Op
         crate::ast::expression::ExpressionKind::Type(ty, _) => Some(ty),
         _ => None,
     }
+}
+
+/// The stride of an element of `kind` a collection lays out inline — an
+/// inline vector or a value held as its bytes — or `None` for an element held
+/// in one word, which a read loads.
+pub(crate) fn inline_stride(kind: &TypeKind, type_ctx: &TypeCtx) -> Option<i64> {
+    if let Some((stride, _, _)) = inline_vec_element_layout(kind, type_ctx) {
+        return Some(stride);
+    }
+    type_ctx.value_layout(kind)?;
+    Some(element_layout(kind, type_ctx.layout_scope()).stride)
 }
 
 /// Inline layout of a vector value element (`Vec2`/`Vec3`/`Vec4<scalar>`) stored
@@ -2313,4 +2528,18 @@ pub(crate) fn inline_vec_element_layout(
     let component =
         crate::codegen::cranelift::types::translate_type_kind(&scalar.kind, type_ctx.ptr_type);
     Some((stride, dim, component))
+}
+
+/// The Cranelift type the word member `idx` of `owner` is read at; a value
+/// held inline there has none, and asking for one is refused.
+fn member_word(
+    member: &layout::Member,
+    owner: &TypeKind,
+    idx: usize,
+) -> Result<cl_types::Type, CodegenError> {
+    member.word().ok_or_else(|| {
+        CodegenError::Internal(format!(
+            "field {idx} of `{owner}` is a value held inline, read here as a word"
+        ))
+    })
 }

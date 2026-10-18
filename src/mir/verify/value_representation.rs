@@ -16,8 +16,9 @@
 //!   use, a cast, a slot of an aggregate, an argument and its parameter, a
 //!   call result and its destination — both sides are bytes or neither is.
 //!
-//! While every bitwise value is still counted no place is a value place, and
-//! the rule has nothing to report.
+//! Which values are held as their bytes is the body's to say
+//! ([`Body::value_layout`]); an optional is not one, and is checked by the
+//! optional-representation rule instead.
 
 use super::optional_representation::Layouts;
 use super::{local_display_name, VerificationViolation};
@@ -26,6 +27,7 @@ use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::TerminatorKind;
+use crate::mir::value_arguments::projected_value_arguments;
 use crate::mir::{Body, Local, Operand, Place};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::value_class::{value_class, LayoutScope, ValueClass, WordRole};
@@ -45,10 +47,46 @@ pub fn verify_value_representation(
         return Vec::new();
     }
     let rule = Representations::new(body, definitions);
-    body.basic_blocks
+    let mut violations: Vec<VerificationViolation> = body
+        .basic_blocks
         .iter()
         .flat_map(|block| &block.statements)
         .flat_map(|statement| rule.statement_violations(&statement.kind))
+        .collect();
+    violations.extend(projected_argument_violations(body));
+    violations
+}
+
+/// Every value argument a call takes through a projection rather than from
+/// a whole local: its address would point inside its holder, which the
+/// callee may write or free while it reads.
+fn projected_argument_violations(body: &Body) -> Vec<VerificationViolation> {
+    (0..body.basic_blocks.len())
+        .flat_map(|block| {
+            let Some(TerminatorKind::Call {
+                args, destination, ..
+            }) = body.basic_blocks[block]
+                .terminator
+                .as_ref()
+                .map(|terminator| &terminator.kind)
+            else {
+                return Vec::new();
+            };
+            projected_value_arguments(body, block)
+                .into_iter()
+                .filter_map(|position| {
+                    Some(VerificationViolation {
+                        local: destination.local,
+                        local_name: local_display_name(body, destination.local),
+                        message: format!(
+                            "argument {position}, `{}`, a value held as its bytes, is passed \
+                             by address from inside its holder rather than from a whole local",
+                            args.get(position)?
+                        ),
+                    })
+                })
+                .collect()
+        })
         .collect()
 }
 
@@ -82,19 +120,8 @@ pub fn verify_value_call_classes(
 }
 
 /// Whether a value of `kind`, written in `body`, is held as its bytes.
-///
-/// `void` holds no value, so nothing of it is held at all.
-fn holds_value(
-    body: &Body,
-    definitions: &HashMap<String, TypeDefinition>,
-    kind: &TypeKind,
-) -> bool {
-    !matches!(kind, TypeKind::Void)
-        && matches!(
-            value_class(kind, LayoutScope::new(definitions, &body.type_params)),
-            ValueClass::Bitwise(_)
-        )
-        && !body.is_counted(kind)
+fn holds_value(body: &Body, kind: &TypeKind) -> bool {
+    body.value_layout(kind).is_some()
 }
 
 /// How a value of `kind`, written in `body`, is held, in words.
@@ -202,7 +229,7 @@ impl<'a> Representations<'a> {
     }
 
     fn holds_value(&self, kind: &TypeKind) -> bool {
-        holds_value(self.layouts.body, self.layouts.definitions, kind)
+        holds_value(self.layouts.body, kind)
     }
 
     fn describe(&self, kind: &TypeKind) -> &'static str {
@@ -435,7 +462,7 @@ impl<'a> Representations<'a> {
         callee_kind: &TypeKind,
     ) -> Option<(&'static str, &'static str)> {
         let definitions = self.layouts.definitions;
-        if self.holds_value(own) == holds_value(call.callee, definitions, callee_kind) {
+        if self.holds_value(own) == holds_value(call.callee, callee_kind) {
             return None;
         }
         Some((

@@ -109,12 +109,12 @@ pub fn emit_structural_hash(
             Some(&[element.as_ref().clone(), size.as_ref().clone()]),
             value,
         ),
-        // `==` compares these as one machine word — a tuple, map or set by the
-        // block it points at, a function value by its closure — so they hash
-        // that word, which two values `==` calls equal share.
+        TypeKind::Tuple(elements) => emit_tuple_hash(ctx, span, kind, elements, value),
+        // `==` compares these as one machine word — a map or set by the block
+        // it points at, a function value by its closure — so they hash that
+        // word, which two values `==` calls equal share.
         TypeKind::Map(_, _)
         | TypeKind::Set(_)
-        | TypeKind::Tuple(_)
         | TypeKind::OneOf(_)
         | TypeKind::Function(_)
         | TypeKind::Future(_) => Ok(address_hash(ctx, span, value)),
@@ -329,6 +329,43 @@ fn emit_struct_hash(
         }
         let part =
             emit_structural_hash(ctx, span, &field_ty.kind, Operand::Copy(Place::new(field)))?;
+        hash = combine(ctx, hash, part, span);
+    }
+    Ok(hash)
+}
+
+/// Hash a tuple. One held as its bytes is hashed by its elements folded in
+/// order, none of them counted, so two such tuples `==` calls equal hash alike.
+/// Any other tuple is a counted allocation, and is hashed by its address.
+fn emit_tuple_hash(
+    ctx: &mut LoweringContext,
+    span: Span,
+    kind: &TypeKind,
+    elements: &[crate::ast::expression::Expression],
+    value: Operand,
+) -> Result<Local, LoweringError> {
+    if ctx.body.value_layout(kind).is_none() {
+        return Ok(address_hash(ctx, span, value));
+    }
+    let element_types: Vec<Type> = elements
+        .iter()
+        .filter_map(|element| {
+            let crate::ast::expression::ExpressionKind::Type(ty, _) = &element.node else {
+                return None;
+            };
+            Some(ty.as_ref().clone())
+        })
+        .collect();
+    let place = crate::mir::lowering::helpers::ensure_place(ctx, value, span);
+    let mut hash = int_constant(ctx, element_types.len() as i128, span);
+    for (index, element_ty) in element_types.iter().enumerate() {
+        let element = materialize_field(ctx, &place, PlaceElem::Field(index), element_ty, span);
+        let part = emit_structural_hash(
+            ctx,
+            span,
+            &element_ty.kind,
+            Operand::Copy(Place::new(element)),
+        )?;
         hash = combine(ctx, hash, part, span);
     }
     Ok(hash)

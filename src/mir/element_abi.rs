@@ -30,6 +30,7 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::{
     AggregateKind, ArgMode, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType,
     Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
@@ -165,6 +166,9 @@ fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> 
         Operand::Constant(constant) => Ok(element_layout(&constant.ty.kind, body.layout_scope())),
         Operand::Function(function) => Ok(element_layout(&function.ty.kind, body.layout_scope())),
         Operand::Copy(place) | Operand::Move(place) => {
+            if let Some(value) = projected_value(body, place) {
+                return Ok(element_layout(&value, body.layout_scope()));
+            }
             let reached = arg.ty_projected(body).ok_or_else(|| {
                 format!("the collection element {place} reaches a type this pass cannot size")
             })?;
@@ -176,6 +180,14 @@ fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> 
             })
         }
     }
+}
+
+/// The type of the value held as its bytes that the projected `place`
+/// reaches, or `None` when it reaches anything else.
+fn projected_value(body: &Body, place: &Place) -> Option<TypeKind> {
+    let declared = PlaceTypes::of(body).declared(place)?;
+    body.value_layout(&declared.kind)?;
+    Some(declared.kind)
 }
 
 /// The layout of an element whose type is known only as the MIR type a
@@ -269,6 +281,11 @@ fn return_element_through_storage(body: &mut Body, block: usize) -> Result<(), S
     let (storage, is_out) = if layout.is_address {
         build_zero_vector(body, block, &destination, &kind, span)?;
         (destination, false)
+    } else if body.value_layout(&kind).is_some() {
+        (
+            value_storage(body, block, (destination, target), &kind, span),
+            false,
+        )
     } else if destination.projection.is_empty() && register_scalar_kind(&kind) {
         (destination, true)
     } else {
@@ -293,6 +310,31 @@ fn return_element_through_storage(body: &mut Body, block: usize) -> Result<(), S
     );
     set_call_destination(body, block, Place::new(nothing));
     Ok(())
+}
+
+/// The address the runtime writes an element held as its bytes into, taken
+/// in `block` ahead of the call: the destination's own bytes when it is a
+/// whole local, otherwise a value local of `kind` the destination is assigned
+/// from once the call returns.
+fn value_storage(
+    body: &mut Body,
+    block: usize,
+    (destination, target): (Place, Option<BasicBlock>),
+    kind: &TypeKind,
+    span: Span,
+) -> Place {
+    let bytes = if destination.projection.is_empty() {
+        destination
+    } else {
+        let slot = Place::new(body.new_local(LocalDecl::new(Type::new(kind.clone(), span), span)));
+        if let Some(target) = target {
+            assign_after_call(body, block, target, destination, slot.clone(), span);
+        }
+        slot
+    };
+    let address = body.new_local(LocalDecl::new(Type::new(TypeKind::RawPtr, span), span));
+    push_assign(body, block, Place::new(address), Rvalue::Ref(bytes), span);
+    Place::new(address)
 }
 
 /// The destination, successor and span of the call ending `block`, when it
@@ -322,6 +364,9 @@ fn element_returning_call(body: &Body, block: usize) -> Option<(Place, Option<Ba
 fn destination_kind(body: &Body, destination: &Place) -> Result<TypeKind, String> {
     if destination.projection.is_empty() {
         return Ok(body.local_decls[destination.local.0].ty.kind.clone());
+    }
+    if let Some(value) = projected_value(body, destination) {
+        return Ok(value);
     }
     let reached = Operand::Copy(destination.clone())
         .ty_projected(body)

@@ -5,10 +5,10 @@
 //! never has its address escape into a heap slot, and never meets a counted
 //! word.
 //!
-//! Every program classifies a bitwise value as counted today, so the rule has
-//! nothing to report on one. Each fixture is a hand-built body whose classifier
-//! treats bitwise values as uncounted, the representation the rule guards, and
-//! pins one violation; the same body under the ordinary classifier is clean.
+//! Each fixture is a hand-built body over a tuple of scalars, which every
+//! program holds as its bytes, and pins one violation; the body reports the
+//! same finding whether its classifier holds every bitwise value as its bytes
+//! or only the ones every program does.
 
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
@@ -145,8 +145,8 @@ fn messages(violations: &[VerificationViolation]) -> String {
         .join("; ")
 }
 
-/// Exactly one finding carrying every fragment, and none at all once the
-/// same statements are classified as every program is today.
+/// Exactly one finding carrying every fragment, and the same finding once
+/// the statements are classified as every program is.
 fn assert_flagged(statements: Vec<Statement>, fragments: &[&str]) {
     let violations = verify_value_representation(&value_body(statements.clone()), &definitions());
     let text = messages(&violations);
@@ -154,8 +154,12 @@ fn assert_flagged(statements: Vec<Statement>, fragments: &[&str]) {
     for fragment in fragments {
         assert!(text.contains(fragment), "`{fragment}` missing from: {text}");
     }
-    let counted = body_of(&kinds(), 0, vec![ret_block(statements)], false);
-    assert_clean(&counted);
+    let program = body_of(&kinds(), 0, vec![ret_block(statements)], false);
+    let program_text = messages(&verify_value_representation(&program, &definitions()));
+    assert_eq!(
+        program_text, text,
+        "every program classifies the tuple alike"
+    );
 }
 
 fn assert_clean(body: &Body) {
@@ -401,11 +405,50 @@ fn call_matching_its_callee_classes_is_clean() {
 }
 
 #[test]
-fn value_call_mismatch_is_silent_while_bitwise_values_are_counted() {
+fn value_call_mismatch_is_flagged_as_every_program_is_classified() {
     let mut caller = caller_body(TypeKind::String, TypeKind::Void);
     let mut callee = callee_body(pair(), TypeKind::Void);
     caller.rc_classifier = RcClassifier::new(Rc::new(definitions()));
     callee.rc_classifier = RcClassifier::new(Rc::new(definitions()));
     let text = call_findings(caller, callee);
-    assert!(text.is_empty(), "expected no findings, got: {text}");
+    assert!(
+        text.contains("argument 0") && text.contains("held as its bytes"),
+        "{text}"
+    );
+}
+
+#[test]
+fn value_argument_read_from_inside_its_holder_is_flagged() {
+    let mut locals = kinds();
+    locals.push(tuple(vec![pair(), TypeKind::String]));
+    let holder_local = locals.len() - 1;
+    let call = |arg: Operand| TerminatorKind::Call {
+        func: Operand::function(callee_symbol(), span()),
+        args: vec![arg],
+        arg_modes: Vec::new(),
+        arg_handles: Vec::new(),
+        destination: place(0),
+        target: Some(BasicBlock(1)),
+    };
+    let projected = body_of(
+        &locals,
+        0,
+        vec![
+            block(Vec::new(), call(Operand::Copy(field(holder_local, 0)))),
+            ret_block(Vec::new()),
+        ],
+        false,
+    );
+    let text = messages(&verify_value_representation(&projected, &definitions()));
+    assert!(
+        text.contains("argument 0") && text.contains("whole local"),
+        "{text}"
+    );
+    let whole = body_of(
+        &locals,
+        0,
+        vec![block(Vec::new(), call(copy(1))), ret_block(Vec::new())],
+        false,
+    );
+    assert_clean(&whole);
 }

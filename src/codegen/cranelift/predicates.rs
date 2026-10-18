@@ -10,7 +10,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
-use crate::mir::option_layout::OptionalLayers;
+use crate::mir::option_layout::{LayoutScope, OptionalLayers};
 use crate::mir::type_facts::TypeDefinition;
 
 use std::collections::HashMap;
@@ -151,15 +151,28 @@ impl<'a> FunctionTranslator<'a> {
     /// `element_identity`.
     const INNERMOST_NULLABLE_BITS: u32 = 1;
 
+    /// The bit, just above the nullable bit, that says the element's
+    /// callbacks are handed the address its value resolves to: a value held
+    /// inline as its bytes. Mirrors the runtime's `element_identity`.
+    const SLOT_ADDRESS_BITS: u32 = 1;
+
     /// How many optionals the element kind can say an element is wrapped in.
     /// Mirrors the runtime's `element_identity::MAX_OPTIONAL_DEPTH`.
     const MAX_OPTIONAL_DEPTH: usize = (1 << Self::OPTIONAL_DEPTH_BITS) - 1;
 
     /// The widest boxed value the element kind can state, which is the widest
-    /// scalar the backend has: the field holding it is the rest of the word,
+    /// value held as its bytes: the field holding it is the rest of the word,
     /// but a size beyond this means the caller measured something other than a
     /// boxed value.
-    const MAX_OPTIONAL_VALUE_SIZE: u32 = 16;
+    const MAX_OPTIONAL_VALUE_SIZE: u32 = crate::ast::types::AUTO_COPY_MAX_SIZE as u32;
+
+    /// `kind`, with the element's callbacks handed the address its value
+    /// resolves to, as an element held inline as its bytes needs.
+    pub(crate) fn by_slot_address(kind: i64) -> i64 {
+        let shift =
+            Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS + Self::INNERMOST_NULLABLE_BITS;
+        kind | (1 << shift)
+    }
 
     /// The element kind registering `rule` for the value reached by opening
     /// the `layers` of an optional element, the last box holding `value_size`
@@ -184,7 +197,7 @@ impl<'a> FunctionTranslator<'a> {
             return None;
         }
         let nullable_shift = Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS;
-        let size_shift = nullable_shift + Self::INNERMOST_NULLABLE_BITS;
+        let size_shift = nullable_shift + Self::INNERMOST_NULLABLE_BITS + Self::SLOT_ADDRESS_BITS;
         let nullable = i64::from(layers.innermost_nullable_pointer) << nullable_shift;
         let size = i64::from(value_size) << size_shift;
         Some(rule | (layers.boxed as i64) << Self::ELEMENT_RULE_BITS | nullable | size)
@@ -700,12 +713,14 @@ impl<'a> FunctionTranslator<'a> {
                 crate::mir::instantiation::field_types(type_defs, name, Some(&[]))
                     .unwrap_or_default()
                     .iter()
-                    .any(|ty| crate::mir::rc::is_word_slot_managed(&ty.kind))
+                    .any(|ty| {
+                        crate::mir::rc::is_slot_counted(&ty.kind, LayoutScope::program(type_defs))
+                    })
             }
             Some(TypeDefinition::Enum(def)) => def.variants.values().any(|fields| {
-                fields
-                    .iter()
-                    .any(|ty| crate::mir::rc::is_word_slot_managed(&ty.kind))
+                fields.iter().any(|ty| {
+                    crate::mir::rc::is_slot_counted(&ty.kind, LayoutScope::program(type_defs))
+                })
             }),
             None
             | Some(TypeDefinition::Generic(_))
