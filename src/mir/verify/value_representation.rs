@@ -23,6 +23,8 @@
 use super::optional_representation::Layouts;
 use super::{local_display_name, VerificationViolation};
 use crate::ast::types::{Type, TypeKind};
+use crate::mir::option_layout::is_absent_placeholder;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
 use crate::mir::symbol::Symbol;
@@ -63,9 +65,14 @@ pub fn verify_value_representation(
 fn projected_argument_violations(body: &Body) -> Vec<VerificationViolation> {
     (0..body.basic_blocks.len())
         .flat_map(|block| {
-            let Some(TerminatorKind::Call {
-                args, destination, ..
-            }) = body.basic_blocks[block]
+            let Some(
+                TerminatorKind::Call {
+                    args, destination, ..
+                }
+                | TerminatorKind::VirtualCall {
+                    args, destination, ..
+                },
+            ) = body.basic_blocks[block]
                 .terminator
                 .as_ref()
                 .map(|terminator| &terminator.kind)
@@ -104,6 +111,7 @@ pub fn verify_value_call_classes(
     for (symbol, body) in program {
         callees.entry(symbol).or_insert(body);
     }
+    let parameters = crate::mir::place_type::CalleeParameters::of(program, Symbol::link_name);
     program
         .iter()
         .filter(|(_, body)| !body.is_gpu())
@@ -112,7 +120,11 @@ pub fn verify_value_call_classes(
             body.basic_blocks
                 .iter()
                 .filter_map(|block| block.terminator.as_ref())
-                .flat_map(|terminator| rule.call_violations(&terminator.kind, &callees))
+                .flat_map(|terminator| {
+                    let mut found = rule.call_violations(&terminator.kind, &callees);
+                    found.extend(rule.dynamic_call_violations(&terminator.kind, &parameters));
+                    found
+                })
                 .map(move |violation| (symbol.clone(), violation))
                 .collect::<Vec<_>>()
         })
@@ -232,6 +244,12 @@ impl<'a> Representations<'a> {
         holds_value(self.layouts.body, kind)
     }
 
+    /// Whether `kind` names a parameter this body leaves open; see
+    /// [`PlaceTypes::names_open_parameter`].
+    fn is_open(&self, kind: &TypeKind) -> bool {
+        PlaceTypes::of(self.layouts.body).names_open_parameter(kind)
+    }
+
     fn describe(&self, kind: &TypeKind) -> &'static str {
         describe(self.layouts.body, self.layouts.definitions, kind)
     }
@@ -325,6 +343,7 @@ impl<'a> Representations<'a> {
         let target = self.layouts.place_type(dest);
         match rvalue {
             Rvalue::Use(operand) => target
+                .as_ref()
                 .and_then(|target| self.meeting_violation(dest, operand, target, "use"))
                 .into_iter()
                 .collect(),
@@ -333,15 +352,15 @@ impl<'a> Representations<'a> {
                 .into_iter()
                 .collect(),
             Rvalue::Aggregate(kind, operands) => {
-                let Some(target) = target else {
+                if target.is_none() {
                     return Vec::new();
-                };
+                }
                 operands
                     .iter()
                     .enumerate()
                     .filter_map(|(slot, operand)| {
-                        let slot_ty = self.layouts.aggregate_slot(kind, target, slot)?;
-                        self.meeting_violation(dest, operand, slot_ty, "aggregate slot")
+                        let slot_ty = self.layouts.aggregate_slot(kind, dest, slot)?;
+                        self.meeting_violation(dest, operand, &slot_ty, "aggregate slot")
                     })
                     .collect()
             }
@@ -366,7 +385,14 @@ impl<'a> Representations<'a> {
         what: &str,
     ) -> Option<VerificationViolation> {
         let source = self.layouts.operand_type(operand)?;
-        if self.holds_value(&source.kind) == self.holds_value(&target.kind) {
+        if self.is_open(&source.kind) || self.is_open(&target.kind) {
+            return None;
+        }
+        // The absent value spelled before it met a slot is a word an
+        // assignment reads into whichever optional it is written to; met
+        // anywhere else, it is a seam the conformance pass left unsettled.
+        let is_read_into = matches!(what, "use" | "cast") && is_absent_placeholder(&source.kind);
+        if self.holds_value(&source.kind) == self.holds_value(&target.kind) || is_read_into {
             return None;
         }
         Some(self.violation(
@@ -419,6 +445,64 @@ impl<'a> Representations<'a> {
         violations
     }
 
+    /// The violations a call with no static callee — through a vtable or a
+    /// function value — raises: an argument held one way where the parameter
+    /// its slot declares is held the other. Spellings of the absent value are
+    /// the conformance rule's to judge.
+    fn dynamic_call_violations(
+        &self,
+        kind: &TerminatorKind,
+        parameters: &crate::mir::place_type::CalleeParameters,
+    ) -> Vec<VerificationViolation> {
+        let (args, destination) = match kind {
+            TerminatorKind::Call {
+                func: Operand::Copy(_) | Operand::Move(_),
+                args,
+                destination,
+                ..
+            }
+            | TerminatorKind::VirtualCall {
+                args, destination, ..
+            } => (args, destination),
+            TerminatorKind::Call { .. }
+            | TerminatorKind::GpuLaunch { .. }
+            | TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => return Vec::new(),
+        };
+        PlaceTypes::of(self.layouts.body)
+            .call_argument_slots(kind, parameters)
+            .into_iter()
+            .zip(args)
+            .enumerate()
+            .filter_map(|(position, (slot, arg))| {
+                let crate::mir::place_type::ArgumentSlot::Declared(slot) = slot else {
+                    return None;
+                };
+                let source = self.layouts.operand_type(arg)?;
+                if is_absent_placeholder(&source.kind)
+                    || self.is_open(&source.kind)
+                    || self.is_open(&slot.kind)
+                    || self.holds_value(&source.kind) == self.holds_value(&slot.kind)
+                {
+                    return None;
+                }
+                Some(self.violation(
+                    destination,
+                    format!(
+                        "argument {position}, `{arg}`, a {} held as {}, meets a parameter \
+                         declared {}, held as {}",
+                        source.kind,
+                        self.describe(&source.kind),
+                        slot.kind,
+                        self.describe(&slot.kind)
+                    ),
+                ))
+            })
+            .collect()
+    }
+
     /// The violation an argument raises against the parameter it binds.
     fn argument_violation(
         &self,
@@ -462,7 +546,10 @@ impl<'a> Representations<'a> {
         callee_kind: &TypeKind,
     ) -> Option<(&'static str, &'static str)> {
         let definitions = self.layouts.definitions;
-        if self.holds_value(own) == holds_value(call.callee, callee_kind) {
+        if self.is_open(own)
+            || PlaceTypes::of(call.callee).names_open_parameter(callee_kind)
+            || self.holds_value(own) == holds_value(call.callee, callee_kind)
+        {
             return None;
         }
         Some((

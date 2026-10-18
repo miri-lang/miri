@@ -214,6 +214,7 @@ impl ProgramBuilder<'_> {
                 arg_modes,
                 destination,
                 vtable_slot: _,
+                param_types: _,
                 target: _,
             } => {
                 let reads = self.argument_reads(args, arg_modes);

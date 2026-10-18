@@ -152,12 +152,11 @@ pub(crate) fn is_open_parameter(
 ///
 /// A struct's fields are written in its own parameters. A class's are written
 /// in the parameters of whichever ancestor declares each, and reached through
-/// the `extends` clauses that bind them ([`inherited::instantiated_field_types`]);
-/// an instance carrying no arguments — a class that declares none, or the
-/// shared body of a generic one — still follows those clauses, so a field a
-/// plain child pins through `extends Base<i128>` is stored at `i128`. An
-/// instance carrying a value argument cannot walk the chain in types alone and
-/// binds the class's own parameters directly.
+/// the `extends` clauses that bind them ([`inherited::instantiated_field_types`]),
+/// a value generic's argument passed through as its marker; an instance
+/// carrying no arguments — a class that declares none, or the shared body of
+/// a generic one — still follows those clauses, so a field a plain child pins
+/// through `extends Base<i128>` is stored at `i128`.
 ///
 /// [`collect_class_fields_all`]: crate::type_checker::context::collect_class_fields_all
 pub(crate) fn field_types(
@@ -190,7 +189,14 @@ fn class_field_types(
     let Some(args) = args else {
         return inherited::declared_field_types(definitions, name);
     };
-    if let Some(written) = type_arguments(args) {
+    // Every argument, a type or a value generic's marker, is passed by
+    // position through each `extends` clause: the base's fields are written
+    // in the base's parameters, which the clause binds.
+    if let Some(written) = args
+        .iter()
+        .map(instantiation_argument)
+        .collect::<Option<Vec<_>>>()
+    {
         return inherited::instantiated_field_types(definitions, name, &written);
     }
     crate::type_checker::context::collect_class_fields_all(def, definitions)

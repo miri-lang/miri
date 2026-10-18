@@ -174,3 +174,43 @@ fn main()
         ],
     );
 }
+
+/// A body holding a value built from a type parameter anywhere — here an
+/// optional it builds and never returns — is unsettled even when its
+/// signature names none: the shared body would build it at the parameter's
+/// stand-in layout.
+#[test]
+fn a_body_building_a_value_from_a_parameter_is_not_settled() {
+    let source = r#"
+class Holder<T>
+    fn wraps(v T) int
+        let o = Some(v)
+        return 1
+    fn plain(v T) int: 1
+
+fn main()
+    let h = Holder<int>()
+"#;
+    let settled = settled_methods(source, "Holder");
+    assert_unsettled(&settled, "Holder", &["wraps"]);
+    assert_settled(&settled, "Holder", &["plain"]);
+}
+
+/// A local declared at a value built from a type parameter makes its body
+/// unsettled even when nothing initializes it.
+#[test]
+fn a_body_declaring_a_local_built_from_a_parameter_is_not_settled() {
+    let source = r#"
+class Holder<T>
+    fn declares() int
+        var o T?
+        return 1
+    fn plain() int: 1
+
+fn main()
+    let h = Holder<int>()
+"#;
+    let settled = settled_methods(source, "Holder");
+    assert_unsettled(&settled, "Holder", &["declares"]);
+    assert_settled(&settled, "Holder", &["plain"]);
+}

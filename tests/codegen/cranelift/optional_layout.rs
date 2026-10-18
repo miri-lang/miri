@@ -3,10 +3,10 @@
 
 //! An optional moved from one place into another keeps its bits, so the two
 //! places must be laid out alike: a nullable payload pointer stored into a slot
-//! read as a box would be opened as one. The MIR verifier refuses such a flow;
+//! read as a box would be opened as one, and an optional held as its bytes
+//! has no word to store into either. The MIR verifier refuses such a flow;
 //! the backend refuses it again rather than guess, and refuses an optional
-//! whose payload it cannot lay out at all — one at the error type, or at a
-//! type parameter the body leaves no room for.
+//! whose payload it cannot lay out at all — one at the error type.
 
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
@@ -109,7 +109,7 @@ fn a_use_between_optionals_of_one_layout_compiles() {
 fn a_use_from_a_nullable_pointer_into_a_box_is_refused() {
     let body = body_assigning(
         optional(node()),
-        optional(TypeKind::Int),
+        optional(optional(node())),
         Rvalue::Use(copy_of_source()),
     );
     assert_refused(&body, "laid out");
@@ -118,11 +118,31 @@ fn a_use_from_a_nullable_pointer_into_a_box_is_refused() {
 #[test]
 fn a_cast_from_a_box_into_a_nullable_pointer_is_refused() {
     let body = body_assigning(
-        optional(TypeKind::Int),
+        optional(optional(node())),
         optional(node()),
         Rvalue::Cast(Box::new(copy_of_source()), ty(optional(node()))),
     );
     assert_refused(&body, "laid out");
+}
+
+#[test]
+fn a_use_from_an_optional_held_as_bytes_into_a_word_is_refused() {
+    let body = body_assigning(
+        optional(TypeKind::Int),
+        optional(node()),
+        Rvalue::Use(copy_of_source()),
+    );
+    assert_refused(&body, "is stored into a word");
+}
+
+#[test]
+fn a_use_from_a_word_into_an_optional_held_as_bytes_is_refused() {
+    let body = body_assigning(
+        optional(node()),
+        optional(TypeKind::Int),
+        Rvalue::Use(copy_of_source()),
+    );
+    assert_refused(&body, "holds none");
 }
 
 #[test]
@@ -153,12 +173,14 @@ fn an_optional_at_the_error_type_is_refused() {
     assert_refused(&body, "error type");
 }
 
+/// A parameter's optional is its word beside a tag, held as bytes, however
+/// the body spells the parameter: it has no word to store into a pointer.
 #[test]
-fn an_optional_of_a_parameter_the_body_leaves_closed_is_refused() {
+fn an_optional_of_a_parameter_flowing_into_a_pointer_is_refused() {
     let body = body_assigning(
         optional(parameter()),
         optional(node()),
         Rvalue::Use(copy_of_source()),
     );
-    assert_refused(&body, "type parameter `T`");
+    assert_refused(&body, "is stored into a word");
 }

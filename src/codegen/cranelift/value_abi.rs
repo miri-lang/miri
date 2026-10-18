@@ -17,13 +17,13 @@
 //!   nothing in registers.
 //! - Every other value is passed and returned as one word of its own type.
 
-use crate::ast::expression::ExpressionKind;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::codegen::cranelift::translator::{FunctionTranslator, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_locals::{copy_value, value_layout, value_slot, ValueLocals};
 use crate::error::CodegenError;
 use crate::mir::body::written_back_out_params;
+use crate::mir::instantiation::type_argument;
 use crate::mir::type_facts::ValueLayout;
 use crate::mir::{ArgMode, Body, Local, Place};
 use cranelift_codegen::ir::{types as cl_types, AbiParam, Signature, Value};
@@ -233,20 +233,23 @@ pub fn function_type_signature(
     call_conv: CallConv,
     ptr_type: cl_types::Type,
 ) -> Signature {
-    let declared = function.params.iter().filter_map(|param| {
-        let ExpressionKind::Type(param_type, _) = &param.typ.node else {
-            return None;
-        };
-        Some(passing_of(param_type, values, ptr_type))
-    });
+    let declared = function
+        .params
+        .iter()
+        .filter_map(|param| written_type(&param.typ))
+        .map(|param_type| passing_of(&param_type, values, ptr_type));
     let params: Vec<Passing> = leading.iter().copied().chain(declared).collect();
-    let written_result = function.return_type.as_deref().map(|ret| &ret.node);
-    let result = if let Some(ExpressionKind::Type(ret_type, _)) = written_result {
-        returning_of(ret_type, values, ptr_type)
-    } else {
-        Returning::Nothing
+    let result = match function.return_type.as_deref().and_then(written_type) {
+        Some(ret_type) => returning_of(&ret_type, values, ptr_type),
+        None => Returning::Nothing,
     };
     miri_signature(call_conv, ptr_type, &params, result)
+}
+
+/// The type a function type's parameter or result is written as: `T?` is
+/// the type with its nullable flag set, read as the optional it spells.
+fn written_type(expr: &crate::ast::expression::Expression) -> Option<Type> {
+    type_argument(expr)
 }
 
 /// How a parameter of type `ty` is passed.

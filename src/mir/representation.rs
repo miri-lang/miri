@@ -18,7 +18,7 @@ use crate::mir::option_layout::{LayerRepr, OptionalLayers};
 use crate::mir::rc::is_counted_in;
 use crate::type_checker::element_layout::{element_layout, ElementLayout};
 use crate::type_checker::value_class::{
-    held_value_layout, value_class, LayoutScope, ScalarKind, ValueClass, ValueLayout,
+    held_value_layout, value_class, LayoutScope, ScalarKind, ValueClass, ValueLayout, WORD_BYTES,
 };
 
 /// How a value of one type is represented at the top level: how it is held,
@@ -78,9 +78,6 @@ impl Representation {
         }
     }
 }
-
-/// The width of a pointer or of `int`, in bytes.
-const WORD_BYTES: u32 = 8;
 
 /// How a value of `kind` is held at the top level.
 fn held(kind: &TypeKind, scope: LayoutScope<'_>) -> Held {

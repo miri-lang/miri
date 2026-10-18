@@ -90,6 +90,8 @@ fn a_tuple_of_the_parameter_at_int_is_held_unlike_the_shared_tuple() {
     );
 }
 
+/// The open parameter's optional is its word beside a tag, as `int?` is;
+/// an optional of a reference is that reference instead, counted or not.
 #[test]
 fn an_optional_of_the_parameter_is_compared_layer_by_layer() {
     assert_eq!(
@@ -98,6 +100,6 @@ fn an_optional_of_the_parameter_is_compared_layer_by_layer() {
     );
     assert_eq!(
         agreement(&optional(parameter()), &optional(TypeKind::String)),
-        (false, true)
+        (false, false)
     );
 }

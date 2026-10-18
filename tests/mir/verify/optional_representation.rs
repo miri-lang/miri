@@ -280,18 +280,20 @@ fn call_writing_the_payload_of_a_pointer_optional_is_flagged() {
 
 #[test]
 fn optionals_sharing_a_layout_meet_cleanly() {
+    // An optional of an untracked word is boxed, like one of an unresolved
+    // payload; an optional of a scalar is held as its bytes instead.
     let kinds = vec![
         TypeKind::Void,
         optional(parameter()),
-        optional(TypeKind::Int),
+        optional(TypeKind::RawPtr),
         optional(node()),
         optional(optional(node())),
         node(),
     ];
     let statements = vec![
-        // Two boxes: an unresolved payload and a scalar one.
+        // Two boxes: an unresolved payload and an untracked word.
         assign(place(2), Rvalue::Use(copy(1))),
-        // A scalar optional's payload is a slot of its box.
+        // A boxed optional's payload is a slot of its box.
         assign(payload(2), Rvalue::Use(int_const())),
         // The absent value is null under every layout.
         assign(place(3), Rvalue::Use(none_of(optional(parameter())))),
@@ -394,7 +396,7 @@ fn destination_of_a_different_optional_layout_than_the_return_is_flagged() {
 #[test]
 fn call_whose_optionals_share_the_callee_layouts_is_clean() {
     let violations = call_findings(
-        caller_body(optional(node()), optional(TypeKind::Int)),
+        caller_body(optional(node()), optional(TypeKind::RawPtr)),
         callee_body(optional(node()), optional(parameter())),
     );
     assert!(violations.is_empty(), "{}", call_messages(&violations));
@@ -427,5 +429,24 @@ fn a_layout_mismatch_describes_the_layers_of_each_side() {
     assert_flagged(
         &nested,
         &["laid out as one box around the nullable payload pointer"],
+    );
+}
+
+/// An optional held as its bytes meets one held in a box as no one value.
+#[test]
+fn an_inline_optional_meeting_a_boxed_one_is_flagged() {
+    let kinds = vec![
+        TypeKind::Void,
+        optional(parameter()),
+        optional(TypeKind::Int),
+    ];
+    let body = body_of(
+        &kinds,
+        0,
+        vec![ret_block(vec![assign(place(2), Rvalue::Use(copy(1)))])],
+    );
+    assert_flagged(
+        &body,
+        &["laid out as one box", "laid out as one inline layer"],
     );
 }

@@ -905,6 +905,70 @@ fn is_structural_equality_type(ctx: &LoweringContext, kind: &TypeKind) -> bool {
     }
 }
 
+/// The two sides of a comparison of optionals, both at one optional type, and
+/// that type.
+///
+/// A bare value compared with an optional stands for the optional holding it
+/// (`w == 3` is `w == Some(3)`), and the absent value spelled at its
+/// placeholder type stands for the absent value of the optional it meets: each
+/// is brought to the other side's type, which is the one compared at.
+fn conform_compared_optionals(
+    ctx: &mut LoweringContext,
+    (lhs_op, lhs_ty): (Operand, Type),
+    (rhs_op, rhs): (Operand, &Expression),
+    watermark: usize,
+    span: crate::error::syntax::Span,
+) -> (Operand, Operand, Type) {
+    let rhs_ty = ctx
+        .recorded_type(rhs.id)
+        .map(|ty| crate::mir::lowering::variable::canonical_declared_type(ctx.type_checker, &ty))
+        .unwrap_or_else(|| crate::mir::lowering::helpers::operand_value_type(ctx, &rhs_op));
+    let lhs_ty = crate::mir::lowering::variable::canonical_declared_type(ctx.type_checker, &lhs_ty);
+    let is_optional = |ty: &Type| matches!(ty.kind, TypeKind::Option(_));
+    let is_placeholder = |ty: &Type| crate::mir::option_layout::is_absent_placeholder(&ty.kind);
+    if is_placeholder(&lhs_ty) && is_optional(&rhs_ty) && !is_placeholder(&rhs_ty) {
+        let lhs_op = read_absent_into(ctx, lhs_op, &rhs_ty, watermark, span);
+        return (lhs_op, rhs_op, rhs_ty);
+    }
+    if !is_optional(&lhs_ty) || is_placeholder(&lhs_ty) {
+        return (lhs_op, rhs_op, lhs_ty);
+    }
+    let rhs_op = if is_placeholder(&rhs_ty) {
+        read_absent_into(ctx, rhs_op, &lhs_ty, watermark, span)
+    } else {
+        let (wrapped, _) = crate::mir::lowering::helpers::wrap_for_optional_slot(
+            ctx, rhs_op, rhs_ty, &lhs_ty, watermark, span,
+        );
+        wrapped
+    };
+    (lhs_op, rhs_op, lhs_ty)
+}
+
+/// The absent value `op`, spelled at its placeholder type, read into a temp
+/// of the optional type `ty` it is compared as, and released where it is read
+/// when the expression being lowered built it.
+fn read_absent_into(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    ty: &Type,
+    watermark: usize,
+    span: crate::error::syntax::Span,
+) -> Operand {
+    let source = match op {
+        Operand::Move(place) => Operand::Copy(place),
+        other => other,
+    };
+    let temp = ctx.push_temp(ty.clone(), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(source.clone())),
+        span,
+    });
+    if let Operand::Copy(place) = &source {
+        ctx.emit_temp_drop(place.local, watermark, span);
+    }
+    Operand::Copy(Place::new(temp))
+}
+
 /// Lower structural equality for enums, Result, and structs.
 fn lower_structural_equality(
     ctx: &mut LoweringContext,
@@ -917,7 +981,7 @@ fn lower_structural_equality(
 ) -> Result<Operand, LoweringError> {
     let is_eq = matches!(op, crate::ast::operator::BinaryOp::Equal);
 
-    let ExpressionKind::Binary(lhs, _, _) = &expr.node else {
+    let ExpressionKind::Binary(lhs, _, rhs) = &expr.node else {
         return Err(LoweringError::unsupported_expression(
             "structural equality: invalid binary expression structure".to_string(),
             expr.span,
@@ -936,6 +1000,13 @@ fn lower_structural_equality(
         ));
     };
 
+    let (lhs_op, rhs_op, lhs_ty) = conform_compared_optionals(
+        ctx,
+        (lhs_op, lhs_ty),
+        (rhs_op, rhs),
+        arg_watermark,
+        expr.span,
+    );
     let operand_locals: Vec<Local> = [&lhs_op, &rhs_op]
         .iter()
         .filter_map(|o| operand_local(o))
@@ -961,26 +1032,30 @@ fn lower_structural_equality(
         }
     }
 
-    let (target, ret_op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
-    } else {
-        (
-            Place::new(comparison_result),
-            Operand::Copy(Place::new(comparison_result)),
-        )
-    };
+    Ok(deliver_comparison(ctx, comparison_result, dest, expr.span))
+}
 
-    if target.local != comparison_result {
+/// The comparison verdict in `result`, written into `dest` when the caller
+/// named one.
+fn deliver_comparison(
+    ctx: &mut LoweringContext,
+    result: Local,
+    dest: Option<Place>,
+    span: crate::error::syntax::Span,
+) -> Operand {
+    let Some(target) = dest else {
+        return Operand::Copy(Place::new(result));
+    };
+    if target.local != result {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
-                target,
-                Rvalue::Use(Operand::Copy(Place::new(comparison_result))),
+                target.clone(),
+                Rvalue::Use(Operand::Copy(Place::new(result))),
             ),
-            span: expr.span,
+            span,
         });
     }
-
-    Ok(ret_op)
+    Operand::Copy(target)
 }
 
 /// Lowers the three-way comparison of `lhs` and `rhs`, two values of a type

@@ -237,6 +237,10 @@ pub(super) fn emit_virtual_method_call(
             vtable_slot,
             args: call_args.clone(),
             arg_modes,
+            param_types: arg_types
+                .iter()
+                .map(|ty| names_a_settled_type(ctx, ty).then(|| ty.clone()))
+                .collect(),
             destination: destination.clone(),
             target: Some(target_bb),
         },
@@ -577,7 +581,10 @@ fn method_argument_types(ctx: &LoweringContext, m: &ResolvedMethod) -> Vec<Type>
     let (owner, owner_subs) = receiver_instantiation(ctx, m.obj_ty)
         .and_then(|(name, resolved)| instantiated_callee(defs, &name, &resolved, m.method_name))
         .map(|callee| (callee.owner, callee.owner_subs))
-        .unwrap_or_else(|| (m.defining_class.to_string(), HashMap::new()));
+        .unwrap_or_else(|| {
+            let subs = trait_receiver_substitution(ctx, m.obj_ty, m.defining_class);
+            (m.defining_class.to_string(), subs)
+        });
     // The body's own substitution: a trait default reads the trait's
     // parameters at what the class's clauses pin, not at a class parameter
     // that happens to share a name.
@@ -590,6 +597,39 @@ fn method_argument_types(ctx: &LoweringContext, m: &ResolvedMethod) -> Vec<Type>
             let at_receiver = super::substitute_self_type(declared, m.obj_ty);
             let instantiated = apply_generic_sub(&at_receiver, &body_subs);
             super::variable::canonical_declared_type(ctx.type_checker, &instantiated)
+        })
+        .collect()
+}
+
+/// The arguments a call through a trait-typed receiver binds the trait's own
+/// parameters to, when the trait named `defining` declares the method: a
+/// `Sink<int>` receiver reads `put(x T?)` as `put(x int?)`. Empty for any
+/// other receiver.
+fn trait_receiver_substitution(
+    ctx: &LoweringContext,
+    receiver: &Type,
+    defining: &str,
+) -> HashMap<String, Type> {
+    let TypeKind::Custom(name, Some(args)) = &receiver.kind else {
+        return HashMap::new();
+    };
+    let Some(TypeDefinition::Trait(trait_def)) = ctx.type_checker.type_definitions().get(name)
+    else {
+        return HashMap::new();
+    };
+    if name != defining {
+        return HashMap::new();
+    }
+    trait_def
+        .generics
+        .iter()
+        .flatten()
+        .zip(args)
+        .filter_map(|(generic, arg)| {
+            Some((
+                generic.name.clone(),
+                crate::mir::instantiation::type_argument(arg)?,
+            ))
         })
         .collect()
 }
@@ -795,13 +835,17 @@ struct SharedBody<'a> {
 
 impl SharedBody<'_> {
     /// Whether some parameter's argument is represented unlike the parameter,
-    /// bare, optional or doubly optional: what every shared body hands on,
-    /// whatever its signature spells.
+    /// bare, optional or doubly optional: what a shared body may hold,
+    /// whatever its signature spells. A body the runtime settles holds no
+    /// value built from a parameter (see
+    /// [`crate::type_checker::runtime_settled`]), so only the bare parameter
+    /// is compared for it.
     fn represents_an_argument_differently(&self) -> bool {
+        let probes = if self.is_settled { 1 } else { 3 };
         self.substitution.iter().any(|(name, arg)| {
             let mut open = Type::new(TypeKind::Custom(name.clone(), None), Span::default());
             let mut bound = arg.clone();
-            for _ in 0..3 {
+            for _ in 0..probes {
                 if self.differ(&open.kind, &bound.kind) {
                     return true;
                 }

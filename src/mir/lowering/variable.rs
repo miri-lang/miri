@@ -266,9 +266,30 @@ fn lower_single_variable(
     if let Some(init_expr) = init_expr_opt {
         assign_variable_initializer(ctx, local, init_expr, pre_lowered_op, &var_ty_kind, span)?;
         clear_moved_resource_source(ctx, init_expr, *span);
+    } else {
+        start_optional_absent(ctx, local, *span);
     }
     ctx.bind_local_name(decl.name.clone(), local);
     Ok(())
+}
+
+/// Write the absent value into `local` when it is an optional declared with
+/// no initializer: such a variable reads `None` until it is assigned, on
+/// every path, and an optional held as its bytes has no other way to say so.
+fn start_optional_absent(ctx: &mut LoweringContext, local: crate::mir::Local, span: Span) {
+    let ty = ctx.body.local_decls[local.0].ty.clone();
+    if !matches!(ty.kind, TypeKind::Option(_)) {
+        return;
+    }
+    let absent = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty,
+        literal: Literal::None,
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(absent)),
+        span,
+    });
 }
 
 /// Leave the local a resource was moved out of holding nothing.
@@ -419,7 +440,7 @@ fn assign_variable_initializer(
     let watermark = ctx.body.local_decls.len();
     let lowered = lower_expression(ctx, init_expr, None)?;
     let op = read_older_local_by_copy(lowered, watermark);
-    let op_ty = op.ty(&ctx.body).clone();
+    let op_ty = super::helpers::operand_value_type(ctx, &op);
     let target_ty = ctx.body.local_decls[local.0].ty.clone();
     let rvalue = if op_ty.kind != *var_ty_kind {
         coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, *span)

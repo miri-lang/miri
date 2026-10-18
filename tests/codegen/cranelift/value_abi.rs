@@ -46,19 +46,14 @@ fn definitions() -> Rc<HashMap<String, TypeDefinition>> {
     )]))
 }
 
-/// A body returning `result` and taking `params`, classified with bitwise
-/// values held as their bytes when `is_uncounted`.
-fn body_of(result: TypeKind, params: &[TypeKind], is_uncounted: bool) -> Body {
+/// A body returning `result` and taking `params`.
+fn body_of(result: TypeKind, params: &[TypeKind]) -> Body {
     let mut body = Body::new(params.len(), Span::default(), ExecutionModel::Cpu);
     body.new_local(LocalDecl::new(ty(result), Span::default()));
     for kind in params {
         body.new_local(LocalDecl::new(ty(kind.clone()), Span::default()));
     }
-    body.rc_classifier = if is_uncounted {
-        RcClassifier::with_uncounted_bitwise_values(definitions())
-    } else {
-        RcClassifier::new(definitions())
-    };
+    body.rc_classifier = RcClassifier::new(definitions());
     body
 }
 
@@ -101,39 +96,61 @@ fn a_function_returning_nothing_has_no_result_and_no_slot() {
 }
 
 #[test]
-fn a_body_over_values_held_as_bytes_takes_them_by_address() {
-    let body = body_of(point(), &[point(), TypeKind::Float], true);
-    let signature = body_signature(&body, CALL_CONV, PTR);
-    assert_eq!(signature, signature_of(&[PTR, PTR, types::F64], &[]));
-}
-
-#[test]
 fn a_program_takes_and_returns_a_struct_of_scalars_by_address() {
-    let body = body_of(point(), &[point(), TypeKind::Float], false);
+    let body = body_of(point(), &[point(), TypeKind::Float]);
     let signature = body_signature(&body, CALL_CONV, PTR);
     assert_eq!(signature, signature_of(&[PTR, PTR, types::F64], &[]));
 }
 
 #[test]
 fn a_body_over_counted_values_takes_and_returns_their_pointers() {
-    let optional = TypeKind::Option(Box::new(ty(point())));
-    let body = body_of(optional.clone(), &[optional, TypeKind::Float], false);
+    let optional = TypeKind::Option(Box::new(ty(TypeKind::String)));
+    let body = body_of(optional.clone(), &[optional, TypeKind::Float]);
     let signature = body_signature(&body, CALL_CONV, PTR);
     assert_eq!(signature, signature_of(&[PTR, types::F64], &[PTR]));
 }
 
 #[test]
-fn a_body_over_scalars_is_signed_alike_under_either_classifier() {
-    for is_uncounted in [false, true] {
-        let body = body_of(TypeKind::I32, &[TypeKind::Boolean], is_uncounted);
-        let signature = body_signature(&body, CALL_CONV, PTR);
-        assert_eq!(signature, signature_of(&[types::I8], &[types::I32]));
-    }
+fn a_body_over_scalars_takes_and_returns_them_as_words() {
+    let body = body_of(TypeKind::I32, &[TypeKind::Boolean]);
+    let signature = body_signature(&body, CALL_CONV, PTR);
+    assert_eq!(signature, signature_of(&[types::I8], &[types::I32]));
 }
 
 #[test]
 fn a_managed_struct_is_never_held_as_bytes() {
-    let body = body_of(TypeKind::String, &[TypeKind::String], true);
+    let body = body_of(TypeKind::String, &[TypeKind::String]);
     let signature = body_signature(&body, CALL_CONV, PTR);
     assert_eq!(signature, signature_of(&[PTR], &[PTR]));
+}
+
+/// An optional of a scalar or of a value held as its bytes is itself held as
+/// its bytes: taken by address, returned through the caller's slot — however
+/// the optional is spelled.
+#[test]
+fn a_body_over_optionals_held_as_bytes_takes_and_returns_them_by_address() {
+    let written_option = |payload: TypeKind| {
+        TypeKind::Custom(
+            "Option".to_string(),
+            Some(vec![miri::ast::expression::Expression::new(
+                0,
+                miri::ast::expression::ExpressionKind::Type(Box::new(ty(payload)), false),
+                Span::default(),
+            )]),
+        )
+    };
+    for optional in [
+        TypeKind::Option(Box::new(ty(TypeKind::I32))),
+        TypeKind::Option(Box::new(ty(point()))),
+        written_option(TypeKind::I32),
+        written_option(point()),
+    ] {
+        let body = body_of(optional.clone(), &[optional.clone()]);
+        let signature = body_signature(&body, CALL_CONV, PTR);
+        assert_eq!(
+            signature,
+            signature_of(&[PTR, PTR], &[]),
+            "{optional:?} is passed and returned by address"
+        );
+    }
 }

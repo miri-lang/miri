@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! The `equals` and `hash` a set or map matches a tuple held as its bytes by.
+//! The `equals` and `hash` a set or map matches a tuple or an optional held
+//! as its bytes by.
 //!
 //! A tuple has no declaration whose synthesized equality could be named, and
 //! its bytes are not always its value: a float member makes `-0.0` equal to
@@ -10,13 +11,15 @@
 //! from its layout, each handed the address of an element's bytes: one
 //! compares the members as `==` does, and one hashes them consistently with
 //! it. A tuple whose bytes are its value is matched by its bytes and needs
-//! neither.
+//! neither. An optional's bytes are never its value: an absent one's payload
+//! bytes are not part of it, so its tag is compared and hashed first, and its
+//! payload only when present.
 
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::codegen::cranelift::value_locals::scalar_type;
 use crate::error::CodegenError;
 use crate::mir::symbol::{Symbol, ThunkKind};
-use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueLayout};
+use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, Value};
 use cranelift_codegen::isa::TargetIsa;
@@ -108,21 +111,66 @@ fn mix_members(
     address: Value,
     layout: &ValueLayout,
     offset: u32,
-    mut hash: Value,
+    hash: Value,
 ) -> Value {
-    for field in &layout.fields {
-        let at = offset + field.offset;
-        hash = match &field.repr {
-            FieldRepr::Scalar(scalar) => {
-                let word = scalar_word(builder, address, at, *scalar);
-                let mixed = builder.ins().bxor(hash, word);
-                builder.ins().imul_imm(mixed, HASH_MULTIPLIER)
-            }
-            FieldRepr::Value(inner) => mix_members(builder, address, inner, at, hash),
-            FieldRepr::OptionTag => hash,
-        };
+    if layout.is_optional() {
+        return mix_optional(builder, address, layout, offset, hash);
     }
-    hash
+    layout.fields.iter().fold(hash, |hash, field| {
+        mix_member(builder, address, field, offset, hash)
+    })
+}
+
+/// `hash` with member `field` of the value at `offset` from `address` mixed
+/// into it. A tag is no member of its own: only an optional's layout holds
+/// one, mixed in with its payload.
+fn mix_member(
+    builder: &mut FunctionBuilder,
+    address: Value,
+    field: &ValueField,
+    offset: u32,
+    hash: Value,
+) -> Value {
+    let at = offset + field.offset;
+    match &field.repr {
+        FieldRepr::Scalar(scalar) => {
+            let word = scalar_word(builder, address, at, *scalar);
+            mix_word(builder, hash, word)
+        }
+        FieldRepr::Value(inner) => mix_members(builder, address, inner, at, hash),
+        FieldRepr::OptionTag => hash,
+    }
+}
+
+/// `hash` with the optional laid out as `layout` at `offset` from `address`
+/// mixed into it: its tag, and its payload only when it is present, so every
+/// two absent optionals hash alike.
+fn mix_optional(
+    builder: &mut FunctionBuilder,
+    address: Value,
+    layout: &ValueLayout,
+    offset: u32,
+    hash: Value,
+) -> Value {
+    let (Some(tag), Some(payload)) = (layout.fields.first(), layout.projected_field(0)) else {
+        return hash;
+    };
+    let presence = builder.ins().load(
+        cl_types::I8,
+        MemFlags::new(),
+        address,
+        (offset + tag.offset) as i32,
+    );
+    let tag_word = builder.ins().uextend(cl_types::I64, presence);
+    let with_tag = mix_word(builder, hash, tag_word);
+    let with_payload = mix_member(builder, address, payload, offset, with_tag);
+    builder.ins().select(presence, with_payload, with_tag)
+}
+
+/// `hash` with `word` mixed into it.
+fn mix_word(builder: &mut FunctionBuilder, hash: Value, word: Value) -> Value {
+    let mixed = builder.ins().bxor(hash, word);
+    builder.ins().imul_imm(mixed, HASH_MULTIPLIER)
 }
 
 /// The scalar at `offset` from `address`, as a 64-bit word equal for every

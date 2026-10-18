@@ -219,6 +219,13 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
+        if matches!(op, BinOp::Eq | BinOp::Ne) {
+            if let Some(equal) =
+                Self::try_optional_equality(builder, ctx, (lhs, rhs), locals, type_ctx)?
+            {
+                return Ok(Self::negate_unless_equality(builder, op, equal));
+            }
+        }
         // Structural equality: compare field-by-field instead of pointer
         // comparison for tuples and structs. Only takes the structural path
         // when the operand denotes a *whole* aggregate. A `Copy(t.0)` is a
@@ -231,12 +238,7 @@ impl<'a> FunctionTranslator<'a> {
             if let Some(result) =
                 Self::try_structural_equality(builder, ctx, lhs, rhs, locals, type_ctx)?
             {
-                return if op == BinOp::Ne {
-                    let one = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
-                    Ok(builder.ins().bxor(result, one))
-                } else {
-                    Ok(result)
-                };
+                return Ok(Self::negate_unless_equality(builder, op, result));
             }
         }
 
@@ -266,6 +268,53 @@ impl<'a> FunctionTranslator<'a> {
             rhs_val,
             lhs_unsigned || rhs_unsigned,
         )
+    }
+
+    /// `equal`, or its negation when `op` is `!=`.
+    fn negate_unless_equality(builder: &mut FunctionBuilder, op: BinOp, equal: Value) -> Value {
+        if op == BinOp::Ne {
+            let one = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+            builder.ins().bxor(equal, one)
+        } else {
+            equal
+        }
+    }
+
+    /// Whether two operands are equal when either reads an optional held as
+    /// its bytes: against the absent value, its tag is zero; against another
+    /// such optional, the tags agree and so do the payloads of present ones.
+    /// `None` when neither operand reads one.
+    fn try_optional_equality(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        (lhs, rhs): (&Operand, &Operand),
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Option<Value>, CodegenError> {
+        let is_absent = crate::codegen::cranelift::inline_optionals::is_absent;
+        let (held, other) = if is_absent(rhs) {
+            (lhs, rhs)
+        } else {
+            (rhs, lhs)
+        };
+        if is_absent(other) {
+            let Some(tag) = Self::inline_optional_tag(builder, ctx, held, locals, type_ctx)? else {
+                return Ok(None);
+            };
+            return Ok(Some(builder.ins().icmp_imm(IntCC::Equal, tag, 0)));
+        }
+        let kind = Self::operand_projected_kind(lhs, type_ctx)?;
+        let Some(layout) = type_ctx
+            .value_layout(&kind)
+            .filter(|layout| layout.is_optional())
+        else {
+            return Ok(None);
+        };
+        let lhs = Self::value_operand_address(builder, ctx, lhs, locals, type_ctx, None)?;
+        let rhs = Self::value_operand_address(builder, ctx, rhs, locals, type_ctx, None)?;
+        Ok(Some(Self::held_value_equality(
+            builder, lhs, rhs, &layout, 0,
+        )))
     }
 
     /// Compare an unsigned and a signed integer by the numbers they hold:
@@ -3113,27 +3162,66 @@ impl<'a> FunctionTranslator<'a> {
         layout: &ValueLayout,
         offset: u32,
     ) -> Value {
+        if layout.is_optional() {
+            return Self::held_optional_equality(builder, lhs, rhs, layout, offset);
+        }
         let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
         for field in &layout.fields {
-            let at = offset + field.offset;
-            let field_eq = match &field.repr {
-                FieldRepr::Scalar(scalar) => {
-                    let ty = crate::codegen::cranelift::value_locals::scalar_type(*scalar);
-                    let at = at as i32;
-                    let left = builder.ins().load(ty, MemFlags::new(), lhs, at);
-                    let right = builder.ins().load(ty, MemFlags::new(), rhs, at);
-                    if ty.is_float() {
-                        builder.ins().fcmp(FloatCC::Equal, left, right)
-                    } else {
-                        builder.ins().icmp(IntCC::Equal, left, right)
-                    }
-                }
-                FieldRepr::Value(inner) => Self::held_value_equality(builder, lhs, rhs, inner, at),
-                FieldRepr::OptionTag => continue,
-            };
+            let field_eq = Self::held_member_equality(builder, (lhs, rhs), field, offset);
             result = builder.ins().band(result, field_eq);
         }
         result
+    }
+
+    /// Whether member `field` of the two values held as their bytes at `lhs`
+    /// and `rhs`, laid out from `offset` on, is equal. A tag is no member of
+    /// its own — only an optional's layout holds one, compared with its
+    /// payload — so it compares equal here.
+    fn held_member_equality(
+        builder: &mut FunctionBuilder,
+        (lhs, rhs): (Value, Value),
+        field: &crate::mir::type_facts::ValueField,
+        offset: u32,
+    ) -> Value {
+        let at = offset + field.offset;
+        match &field.repr {
+            FieldRepr::Scalar(scalar) => {
+                let ty = crate::codegen::cranelift::value_locals::scalar_type(*scalar);
+                let at = at as i32;
+                let left = builder.ins().load(ty, MemFlags::new(), lhs, at);
+                let right = builder.ins().load(ty, MemFlags::new(), rhs, at);
+                if ty.is_float() {
+                    builder.ins().fcmp(FloatCC::Equal, left, right)
+                } else {
+                    builder.ins().icmp(IntCC::Equal, left, right)
+                }
+            }
+            FieldRepr::Value(inner) => Self::held_value_equality(builder, lhs, rhs, inner, at),
+            FieldRepr::OptionTag => builder.ins().iconst(cranelift_codegen::ir::types::I8, 1),
+        }
+    }
+
+    /// Whether the two optionals held as their bytes at `lhs` and `rhs`, laid
+    /// out as `layout` from `offset` on, are equal: both absent, or both
+    /// present with equal payloads. An absent one's payload is never compared.
+    fn held_optional_equality(
+        builder: &mut FunctionBuilder,
+        lhs: Value,
+        rhs: Value,
+        layout: &ValueLayout,
+        offset: u32,
+    ) -> Value {
+        let (Some(tag), Some(payload)) = (layout.fields.first(), layout.projected_field(0)) else {
+            return builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+        };
+        let at = (offset + tag.offset) as i32;
+        let left = builder.ins().load(cl_types::I8, MemFlags::new(), lhs, at);
+        let right = builder.ins().load(cl_types::I8, MemFlags::new(), rhs, at);
+        let same_presence = builder.ins().icmp(IntCC::Equal, left, right);
+        let absent = builder.ins().icmp_imm(IntCC::Equal, left, 0);
+        let payloads_equal = Self::held_member_equality(builder, (lhs, rhs), payload, offset);
+        let settled = builder.ins().bor(absent, payloads_equal);
+        builder.ins().band(same_presence, settled)
     }
 
     /// Generate structural equality comparison for two struct instances.

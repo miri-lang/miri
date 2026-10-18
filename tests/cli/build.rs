@@ -460,6 +460,51 @@ fn test_build_emits_mir_and_clif_beside_the_executable() {
     );
 }
 
+/// A generic class's methods are compiled at the instantiations the program
+/// reaches; the open template, written in the class's own parameters, is
+/// compiled only where something names it, and here nothing does.
+#[test]
+fn test_an_unreferenced_open_class_template_is_not_emitted() {
+    let source = create_test_file(concat!(
+        "class Box<U>\n",
+        "    var item U?\n",
+        "    fn getter() fn() U?\n",
+        "        let v = self.item\n",
+        "        return fn() U?: v\n",
+        "\n",
+        "fn main()\n",
+        "    let b = Box<int>(item: 3)\n",
+        "    println(f\"{b.getter()() ?? -1}\")\n",
+    ));
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("boxed");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--emit", "mir"])
+        .assert()
+        .success();
+
+    let mir = std::fs::read_to_string(out_dir.path().join("boxed.mir")).unwrap();
+    let functions: Vec<&str> = mir
+        .lines()
+        .filter_map(|line| line.strip_prefix("fn "))
+        .collect();
+    assert!(
+        functions.iter().any(|name| name.starts_with("miri.Box$")),
+        "the instantiation is compiled: {functions:?}"
+    );
+    assert!(
+        !functions
+            .iter()
+            .any(|name| *name == "miri.Box.getter"
+                || name.contains("lambda") && name.ends_with("$Box")),
+        "the open template and its lambda are not: {functions:?}"
+    );
+}
+
 /// Without `--emit`, nothing but the build's own files is written.
 #[test]
 fn test_build_without_emit_writes_no_listing() {

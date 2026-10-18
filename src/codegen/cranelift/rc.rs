@@ -507,7 +507,15 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
         let layers = OptionalLayers::of(elem_kind, type_ctx.layout_scope());
-        let value_kind = &*layers.value;
+        let value_kind = layers.matched_kind(elem_kind).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "a set or map element of `{elem_kind}` boxes an optional held as its bytes, \
+                 which no element rule can match"
+            ))
+        })?;
+        // An element held as its bytes whole is matched through its own
+        // callbacks; no optional layer is left for the runtime to open.
+        let wrapping = (layers.inline == 0).then_some(&layers);
         let Some(rule) = Self::value_identity_rule(builder, ctx, value_kind, type_ctx)? else {
             return Ok(());
         };
@@ -527,7 +535,8 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         let held = type_ctx.value_layout(value_kind);
-        let Some(word) = Self::element_identity_kind(rule, &layers, held.as_ref(), type_ctx) else {
+        let Some(word) = Self::element_identity_kind(rule, wrapping, held.as_ref(), type_ctx)
+        else {
             return Ok(());
         };
         let kind = builder.ins().iconst(type_ctx.ptr_type, word);
@@ -591,7 +600,8 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// The element kind word registering `rule` for a value wrapped in the
-    /// optional `layers`, or `None` when there is nothing to register: an
+    /// optional layers `wrapping` holds as words — none when the element is
+    /// matched whole — or `None` when there is nothing to register: an
     /// unwrapped value matched by its bytes is what every container already
     /// starts at, and an equality callback settles matching on its own.
     ///
@@ -599,7 +609,7 @@ impl<'a> FunctionTranslator<'a> {
     /// callback to be handed, so its callbacks are handed its address.
     fn element_identity_kind(
         rule: ElementRule,
-        layers: &OptionalLayers<'_>,
+        wrapping: Option<&OptionalLayers<'_>>,
         held: Option<&ValueLayout>,
         type_ctx: &TypeCtx,
     ) -> Option<i64> {
@@ -612,9 +622,9 @@ impl<'a> FunctionTranslator<'a> {
             Some(_) => Self::by_slot_address(base),
             None => base,
         };
-        if !layers.is_optional() {
+        let Some(layers) = wrapping.filter(|layers| layers.is_optional()) else {
             return (base != Self::BYTES_ELEMENT_KIND).then_some(base);
-        }
+        };
         let value_size = match held {
             Some(layout) => layout.size,
             None => crate::codegen::cranelift::types::translate_type_kind(

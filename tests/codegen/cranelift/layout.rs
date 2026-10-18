@@ -1071,11 +1071,19 @@ fn test_optional_field_layout_refuses_an_optional_with_no_box() {
         "unexpected error: {error}"
     );
 
-    let boxed = TypeKind::Option(Box::new(t(TypeKind::Int)));
+    let boxed = TypeKind::Option(Box::new(t(pointer.clone())));
     assert_eq!(
         field_layout(&boxed, 0, LayoutScope::program(&defs), ptr_ty())
             .expect("a boxed optional has a payload slot"),
         word(0, ptr_ty())
+    );
+
+    // An optional held as its bytes holds its payload beside its tag.
+    let inline = TypeKind::Option(Box::new(t(TypeKind::Int)));
+    assert_eq!(
+        field_layout(&inline, 0, LayoutScope::program(&defs), ptr_ty())
+            .expect("an inline optional has a payload beside its tag"),
+        word(8, ptr_ty())
     );
 }
 

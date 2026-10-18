@@ -156,7 +156,7 @@ fn lower_return(
             let watermark = ctx.body.local_decls.len();
             let lowered = lower_expression(ctx, expr, None)?;
             let ret_val = read_older_local_by_copy(lowered, watermark);
-            let val_ty = ret_val.ty(&ctx.body).clone();
+            let val_ty = super::helpers::operand_value_type(ctx, &ret_val);
             let rvalue = if val_ty.kind != ret_ty.kind {
                 coerce_rvalue_in(ctx, ret_val.clone(), &val_ty, &ret_ty, span)
             } else {

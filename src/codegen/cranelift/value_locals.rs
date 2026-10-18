@@ -22,6 +22,7 @@
 //! holder's layout places it at.
 
 use crate::ast::types::{Type, TypeKind};
+use crate::codegen::cranelift::inline_optionals::is_absent;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::error::CodegenError;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
@@ -299,6 +300,91 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Refuse an aggregate that hands a member slot held as its bytes anything
+    /// but bytes of that slot's layout: a word, the absent constant into a
+    /// counted holder, or a value held at another layout. A value built in
+    /// place clears a member the absent constant fills, and is no such store.
+    ///
+    /// In a body compiled for one instantiation every member's type can be
+    /// read; one that cannot is refused rather than stored by guess. A shared
+    /// generic body, which leaves parameters open, passes such a member on.
+    ///
+    /// A closure has no member slots of its own: each capture is stored at
+    /// the capture's own type, the type the lambda reads it at, so no capture
+    /// can miss its slot's layout.
+    pub(crate) fn refuse_word_into_held_slot(
+        place: &Place,
+        rvalue: &Rvalue,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let (Rvalue::Aggregate(kind, operands), Some(body)) = (rvalue, type_ctx.values.body())
+        else {
+            return Ok(());
+        };
+        if matches!(kind, AggregateKind::Closure(_, _)) {
+            return Ok(());
+        }
+        let slots = crate::mir::place_type::PlaceTypes::of(body);
+        let builds_in_place = slots
+            .declared(place)
+            .is_some_and(|ty| type_ctx.value_layout(&ty.kind).is_some());
+        let is_monomorphized = body.open_params.is_empty();
+        for (index, operand) in operands.iter().enumerate() {
+            let Some(slot) = slots.aggregate_slot(kind, place, index) else {
+                if is_monomorphized || (is_absent(operand) && !builds_in_place) {
+                    return Err(CodegenError::Internal(format!(
+                        "`{operand}` is stored into member {index} of `{place}`, whose type \
+                         cannot be read"
+                    )));
+                }
+                continue;
+            };
+            let Some(layout) = type_ctx.value_layout(&slot.kind) else {
+                continue;
+            };
+            let fits = if is_absent(operand) {
+                builds_in_place
+            } else {
+                Self::operand_held_layout(operand, type_ctx)?.as_ref() == Some(&layout)
+            };
+            if !fits {
+                return Err(CodegenError::Internal(format!(
+                    "`{operand}` is stored into member {index} of `{place}`, a slot of `{}` \
+                     held as its bytes, without bytes of its layout",
+                    slot.kind
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuse a virtual call handing a parameter held as its bytes a word —
+    /// the absent constant, or a value that is no value held as bytes — at
+    /// the parameter type the call site recorded for it.
+    pub(crate) fn refuse_word_into_held_parameters(
+        args: &[Operand],
+        param_types: &[Option<Type>],
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        for (position, (operand, param)) in args.iter().skip(1).zip(param_types).enumerate() {
+            let Some(param) = param else {
+                continue;
+            };
+            if type_ctx.value_layout(&param.kind).is_none() {
+                continue;
+            }
+            if is_absent(operand) || Self::operand_held_layout(operand, type_ctx)?.is_none() {
+                return Err(CodegenError::Internal(format!(
+                    "`{operand}`, a word, is passed as argument {} of a virtual call, a \
+                     parameter of `{}` held as its bytes",
+                    position + 1,
+                    param.kind
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Translate an assignment into a place rooted in a value local, whose
     /// bytes start at `address`.
     #[allow(clippy::too_many_arguments)]
@@ -315,7 +401,8 @@ impl<'a> FunctionTranslator<'a> {
         match spot {
             ValueSpot::Scalar { scalar, .. } => {
                 let value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx, None)?;
-                Self::store_scalar(builder, value, scalar, address, 0)
+                let is_unsigned = matches!(scalar, ScalarKind::Unsigned(_));
+                Self::store_scalar(builder, value, (scalar, is_unsigned), address, 0)
             }
             ValueSpot::Value { layout, .. } => {
                 let target = ValueBuild { address, layout };
@@ -342,14 +429,24 @@ impl<'a> FunctionTranslator<'a> {
                 let build = ValueBuild { address, layout };
                 Self::build_value_in_place(builder, ctx, build, operands, locals, type_ctx)
             }
+            Rvalue::Aggregate(AggregateKind::Option(_), operands) => {
+                let build = ValueBuild { address, layout };
+                Self::build_present_optional(builder, ctx, build, operands, locals, type_ctx)
+            }
+            Rvalue::Use(operand) if is_absent(operand) => Self::store_absent_value(builder, target),
+            Rvalue::Use(operand) if Self::reads_absent_placeholder(operand, type_ctx)? => {
+                Self::cast_whole_value(builder, ctx, target, operand, locals, type_ctx)
+            }
             Rvalue::Use(operand) => {
                 let source =
                     Self::value_operand_address(builder, ctx, operand, locals, type_ctx, expected)?;
                 copy_value(builder, source, address, layout);
                 Ok(())
             }
+            Rvalue::Cast(operand, _) => {
+                Self::cast_whole_value(builder, ctx, target, operand, locals, type_ctx)
+            }
             Rvalue::Aggregate(..)
-            | Rvalue::Cast(..)
             | Rvalue::Ref(_)
             | Rvalue::BinaryOp(..)
             | Rvalue::UnaryOp(..)
@@ -397,7 +494,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Store `operand` into `field` of the value whose bytes start at
     /// `address`.
     #[allow(clippy::too_many_arguments)]
-    fn store_member(
+    pub(super) fn store_member(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         address: Value,
@@ -409,12 +506,26 @@ impl<'a> FunctionTranslator<'a> {
         match &field.repr {
             FieldRepr::Scalar(scalar) => {
                 let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx, None)?;
-                Self::store_scalar(builder, value, *scalar, address, field.offset)
+                let is_unsigned = Self::operand_is_unsigned(operand, type_ctx)?;
+                Self::store_scalar(
+                    builder,
+                    value,
+                    (*scalar, is_unsigned),
+                    address,
+                    field.offset,
+                )
             }
             FieldRepr::Value(inner) => {
+                let dest = builder.ins().iadd_imm(address, i64::from(field.offset));
+                let target = ValueBuild {
+                    address: dest,
+                    layout: inner,
+                };
+                if is_absent(operand) {
+                    return Self::store_absent_value(builder, target);
+                }
                 let source =
                     Self::value_operand_address(builder, ctx, operand, locals, type_ctx, None)?;
-                let dest = builder.ins().iadd_imm(address, i64::from(field.offset));
                 copy_value(builder, source, dest, inner);
                 Ok(())
             }
@@ -425,17 +536,18 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Store `value` as a scalar of `scalar` at `offset` from `address`,
-    /// converting it to the scalar's width first.
-    fn store_scalar(
+    /// converting it to the scalar's width first: widened by its own sign,
+    /// unsigned when `from_unsigned` says so.
+    pub(super) fn store_scalar(
         builder: &mut FunctionBuilder,
         value: Value,
-        scalar: ScalarKind,
+        (scalar, from_unsigned): (ScalarKind, bool),
         address: Value,
         offset: u32,
     ) -> Result<(), CodegenError> {
         let from = builder.func.dfg.value_type(value);
         let to = scalar_type(scalar);
-        let is_unsigned = matches!(scalar, ScalarKind::Unsigned(_));
+        let is_unsigned = from_unsigned;
         let value = Self::cast_value_with_sign(builder, value, from, to, is_unsigned)?;
         let offset = i32::try_from(offset).map_err(|_| {
             CodegenError::Internal(format!("value member offset {offset} overflows"))
@@ -460,27 +572,12 @@ pub struct ValueLocals<'b> {
 
 impl<'b> ValueLocals<'b> {
     /// The value locals of `body`.
-    ///
-    /// An optional held as its bytes has no translation here — building one,
-    /// testing it and opening it are not laid out against its bytes — so a
-    /// body holding one is refused rather than miscompiled.
     pub fn of(body: &'b Body) -> Result<Self, CodegenError> {
         let layouts: Vec<Option<ValueLayout>> = body
             .local_decls
             .iter()
             .map(|decl| value_layout(body, &decl.ty.kind))
             .collect();
-        let optional = body
-            .local_decls
-            .iter()
-            .zip(&layouts)
-            .find(|(decl, layout)| layout.is_some() && matches!(decl.ty.kind, TypeKind::Option(_)));
-        if let Some((decl, _)) = optional {
-            return Err(CodegenError::Internal(format!(
-                "the optional `{}` is held as its bytes, which has no translation",
-                decl.ty.kind
-            )));
-        }
         Ok(Self {
             body: Some(body),
             layouts,
@@ -638,18 +735,10 @@ fn uniform_element(layout: &ValueLayout) -> Result<(u32, &FieldRepr), CodegenErr
     Ok((stride, &first.repr))
 }
 
-/// Member `index` of the value laid out as `layout`, refusing an optional's
-/// bytes, whose members are not the fields a projection numbers.
+/// Member `index` of the value laid out as `layout`, as a field projection
+/// numbers it: an optional's one member is its payload.
 fn member(layout: &ValueLayout, index: usize) -> Result<&ValueField, CodegenError> {
-    if matches!(
-        layout.fields.first().map(|field| &field.repr),
-        Some(FieldRepr::OptionTag)
-    ) {
-        return Err(CodegenError::Internal(format!(
-            "field {index} is projected out of an optional held as its bytes"
-        )));
-    }
-    layout.fields.get(index).ok_or_else(|| {
+    layout.projected_field(index).ok_or_else(|| {
         CodegenError::Internal(format!(
             "field {index} is projected out of a value of {} fields",
             layout.fields.len()
@@ -713,6 +802,21 @@ pub fn copy_value(builder: &mut FunctionBuilder, source: Value, dest: Value, lay
     };
     let chunks = (0..layout.size / width).map(|index| ((index * width) as i32, chunk));
     copy_chunks(builder, source, dest, chunks);
+}
+
+/// Clear every byte of a value laid out as `layout` at `dest`, in the widest
+/// chunks its size and alignment allow.
+pub fn clear_value(builder: &mut FunctionBuilder, dest: Value, layout: &ValueLayout) {
+    let width = copy_width(layout);
+    let Some(chunk) = cl_types::Type::int_with_byte_size(width as u16) else {
+        return;
+    };
+    let zero = builder.ins().iconst(chunk, 0);
+    for index in 0..layout.size / width {
+        builder
+            .ins()
+            .store(MemFlags::new(), zero, dest, (index * width) as i32);
+    }
 }
 
 /// The widest power of two, at most [`COPY_CHUNK_BYTES`], dividing both the

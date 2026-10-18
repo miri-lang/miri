@@ -9,6 +9,7 @@
 pub(crate) mod closure;
 mod element_method_thunks;
 mod gpu_launch;
+mod inline_optionals;
 pub mod layout;
 mod predicates;
 mod rc;
@@ -966,7 +967,10 @@ impl CraneliftBackend {
             )?;
             let scope = LayoutScope::new(self.facts.definitions(), &element.open_params);
             let layers = OptionalLayers::of(&element.kind, scope);
-            if let Some((encoding, layout)) = fieldwise_value_identity(&layers.value, scope) {
+            let matched = layers.matched_kind(&element.kind);
+            if let Some((encoding, layout)) =
+                matched.and_then(|kind| fieldwise_value_identity(kind, scope))
+            {
                 matched_by_fields.insert(encoding, layout);
             }
         }
@@ -1079,8 +1083,9 @@ fn call_runtime_directly(
 }
 
 /// The structural symbol suffix and layout of `kind` when a set or map
-/// matches it through the field-wise `equals` and `hash` thunks: a tuple held
-/// as its bytes whose bytes are not its value. `None` for every other kind.
+/// matches it through the field-wise `equals` and `hash` thunks: a tuple or
+/// an optional held as its bytes whose bytes are not its value. `None` for
+/// every other kind.
 pub(crate) fn fieldwise_value_identity(
     kind: &TypeKind,
     scope: LayoutScope<'_>,

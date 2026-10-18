@@ -171,3 +171,67 @@ fn main()
         "2\napple",
     );
 }
+
+#[test]
+fn test_a_generic_method_returns_a_lambda_answering_an_optional_scalar() {
+    assert_runs_with_output(
+        r#"
+class Box<U>
+    var item U?
+    fn getter() fn() U?
+        let v = self.item
+        return fn() U?: v
+
+fn main()
+    let b = Box<int>(item: 3)
+    let g = b.getter()
+    println(f"{g() ?? -1}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_a_generic_method_returns_a_lambda_answering_an_optional_string() {
+    assert_heap_guard_output(
+        r#"
+class Box<U>
+    var item U?
+    fn getter() fn() U?
+        let v = self.item
+        return fn() U?: v
+
+fn main()
+    let s = Box<String>(item: "a" + "b")
+    let g = s.getter()
+    println(f"{g() ?? '-'}")
+"#,
+        "ab",
+    );
+}
+
+#[test]
+fn test_a_lambda_over_an_optional_parameter_runs_at_two_instantiations_in_one_program() {
+    assert_heap_guard_output(
+        r#"
+class Box<U>
+    var item U?
+    fn getter() fn() U?
+        let v = self.item
+        return fn() U?: v
+    fn either(d U) U
+        let g = fn(x U?) U: x ?? d
+        return g(self.item)
+
+fn main()
+    let b = Box<int>(item: 3)
+    let n = Box<int>(item: None)
+    let s = Box<String>(item: "a" + "b")
+    let g = b.getter()
+    let h = s.getter()
+    println(f"{g() ?? -1} {n.getter()() ?? -1} {h() ?? '-'}")
+    println(f"{n.either(9)} {s.either('d')}")
+"#,
+        "3 -1 ab\n9 ab",
+    );
+}

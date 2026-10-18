@@ -155,6 +155,7 @@ fn written_places_names_virtual_call_and_launch_destinations() {
         vtable_slot: 0,
         args: vec![Operand::Copy(Place::new(Local(1)))],
         arg_modes: vec![ArgMode::Out],
+        param_types: Vec::new(),
         destination: Place::new(Local(4)),
         target: None,
     };

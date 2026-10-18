@@ -22,14 +22,19 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{
     vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, AUTO_COPY_MAX_SIZE,
-    RANGE_TYPE_NAME,
+    OPTION_TYPE_NAME, RANGE_TYPE_NAME,
 };
 use crate::type_checker::context::{GenericDefinition, StructDefinition, TypeDefinition};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-/// The width of `int` and of every pointer-width word, in bytes.
-const WORD_BYTES: u32 = 8;
+/// The width of `int` and of every pointer-width word, in bytes: the open
+/// parameter's optional holds one beside its tag.
+///
+/// TODO: this is the 64-bit hosts' pointer width, fixed. A 32-bit target needs
+/// the target's width carried in [`LayoutScope`] and read here, so the open
+/// parameter's word and the payload codegen stores into it agree.
+pub const WORD_BYTES: u32 = 8;
 
 /// How many types one classification may visit, and how deeply it may nest,
 /// before it answers `Managed`.
@@ -180,16 +185,25 @@ pub fn value_class(kind: &TypeKind, scope: LayoutScope<'_>) -> ValueClass {
         .into_class()
 }
 
+/// Whether `kind` is the type an absent value is spelled at before it meets
+/// a slot: optionals around nothing (`void?`, `void??`, ...). Such a value is
+/// a word — null when absent, otherwise a box around the next layer — however
+/// the slot it meets holds its optional; [`value_class`] classifies it so.
+pub fn is_absent_placeholder(kind: &TypeKind) -> bool {
+    let TypeKind::Option(payload) = kind else {
+        return false;
+    };
+    payload.kind == TypeKind::Void || is_absent_placeholder(&payload.kind)
+}
+
 /// The layout a value of `kind` is held in as its own bytes, decided against
 /// `scope`, or `None` when it is held as one word.
 ///
 /// This is the one place that decides which bitwise values leave the heap. A
-/// struct or tuple the authority calls bitwise is held as its bytes: in a
-/// frame's stack slot, inline in the class, struct or collection holding it.
-/// An optional is not, and neither is a value with an optional anywhere
-/// inside it, since an optional keeps the word it is held in — a nullable
-/// pointer or a boxed layer — wherever it appears. A value of no bytes has
-/// nothing to hold.
+/// struct, tuple or optional the authority calls bitwise is held as its bytes:
+/// in a frame's stack slot, inline in the class, struct or collection holding
+/// it. An optional held so is its presence tag with the payload beside it. A
+/// value of no bytes has nothing to hold.
 pub fn held_value_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> Option<ValueLayout> {
     match value_class(kind, scope) {
         ValueClass::Bitwise(layout) if layout.is_held_as_bytes() => Some(layout),
@@ -392,6 +406,9 @@ impl<'a> Classifier<'a> {
                 return self.classify_parameter(Some(parameter));
             }
         }
+        if let Some(payload) = option_payload(name, args.as_deref(), names) {
+            return self.classify_option(payload);
+        }
         if vec_type_dim(kind).is_some() {
             return Verdict::managed();
         }
@@ -497,15 +514,32 @@ impl<'a> Classifier<'a> {
     }
 
     /// An optional of `payload`: a tag followed by the payload when the
-    /// payload is a value, the payload's own pointer when it is one, and a
-    /// boxed layer otherwise — over a word, over an optional held as a
-    /// pointer, and over managed kinds that are no pointer of their own.
+    /// payload is a scalar, a value or an open parameter's word; the payload's
+    /// own pointer when it is one; and a boxed layer otherwise — over an
+    /// optional held as a pointer, over an untracked word, and over managed
+    /// kinds that are no pointer of their own.
     fn classify_option(&mut self, payload: Argument<'_, 'a>) -> Verdict {
+        // An optional of nothing is the type an absent value is spelled at
+        // before it meets a slot (see [`is_absent_placeholder`]). It keeps the
+        // word every optional's slot reads as absent when null, whatever that
+        // slot holds.
+        if !payload.is_nullable && payload.ty.kind == TypeKind::Void {
+            return Verdict::managed();
+        }
         let payload_repr = match self.classify_argument(payload) {
             Verdict::Class(ValueClass::Scalar(scalar)) => FieldRepr::Scalar(scalar),
             Verdict::Class(ValueClass::Bitwise(layout)) => FieldRepr::Value(layout),
+            // An open parameter is one uncounted word, whatever it is bound
+            // to: its optional holds that word beside a tag, the way an
+            // optional of `int` does.
+            Verdict::Class(ValueClass::Word(WordRole::Parameter)) => {
+                FieldRepr::Scalar(ScalarKind::Signed(WORD_BYTES))
+            }
             Verdict::Pointer => return Verdict::Class(ValueClass::Word(WordRole::NullablePointer)),
-            Verdict::Class(ValueClass::Word(_) | ValueClass::Managed) => return Verdict::managed(),
+            Verdict::Class(
+                ValueClass::Word(WordRole::NullablePointer | WordRole::Untracked)
+                | ValueClass::Managed,
+            ) => return Verdict::managed(),
         };
         let mut layout = LayoutBuilder::default();
         layout.push(FieldRepr::OptionTag);
@@ -539,6 +573,23 @@ fn atomic_component<'n, 'a>(
         return None;
     }
     Argument::written(args?.first()?, names)
+}
+
+/// The payload `T` of an optional written as the generic type `Option<T>`,
+/// which is the optional `T?` under another spelling: classified alike, so
+/// no consumer of the authority meets two layouts for one type.
+fn option_payload<'n, 'a>(
+    name: &str,
+    args: Option<&'a [Expression]>,
+    names: Names<'n, 'a>,
+) -> Option<Argument<'n, 'a>> {
+    if name != OPTION_TYPE_NAME {
+        return None;
+    }
+    let [payload] = args? else {
+        return None;
+    };
+    Argument::written(payload, names)
 }
 
 /// The element `T` of the compiler-known range type `Range<T>`, whose value is
@@ -601,9 +652,31 @@ fn scalar_kind(kind: &TypeKind) -> Option<ScalarKind> {
 
 impl ValueLayout {
     /// Whether a bitwise value laid out this way is held as its bytes rather
-    /// than as a word (see [`held_value_layout`]).
+    /// than as a word (see [`held_value_layout`]): every one with bytes to
+    /// hold.
     pub fn is_held_as_bytes(&self) -> bool {
-        self.size > 0 && !self.holds_option()
+        self.size > 0
+    }
+
+    /// Whether this is the layout of an optional: its presence tag, then its
+    /// payload.
+    pub fn is_optional(&self) -> bool {
+        matches!(
+            self.fields.first().map(|field| &field.repr),
+            Some(FieldRepr::OptionTag)
+        )
+    }
+
+    /// The member a field projection numbered `index` reaches.
+    ///
+    /// A struct's or tuple's members are numbered as they are laid out. An
+    /// optional's tag is no member of its own: its one member, numbered 0, is
+    /// the payload beside the tag.
+    pub fn projected_field(&self, index: usize) -> Option<&ValueField> {
+        if self.is_optional() {
+            return (index == 0).then(|| self.fields.get(1)).flatten();
+        }
+        self.fields.get(index)
     }
 
     /// Whether two values laid out this way are equal exactly when their
@@ -635,15 +708,6 @@ impl ValueLayout {
                 FieldRepr::Scalar(_) | FieldRepr::OptionTag => field.repr.size_and_align().0,
             })
             .sum()
-    }
-
-    /// Whether an optional's tag appears anywhere in this layout.
-    fn holds_option(&self) -> bool {
-        self.fields.iter().any(|field| match &field.repr {
-            FieldRepr::OptionTag => true,
-            FieldRepr::Value(inner) => inner.holds_option(),
-            FieldRepr::Scalar(_) => false,
-        })
     }
 
     /// The layout of a value with no members: nothing to read or write.

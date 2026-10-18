@@ -104,7 +104,7 @@ fn half_float_element_is_held_in_a_value_word() {
 #[test]
 fn referenced_and_optional_elements_are_held_in_a_value_word() {
     let probe = Probe::of(SOURCE);
-    for parameter in ["text", "node", "maybe", "maybe_node"] {
+    for parameter in ["text", "node", "maybe_node"] {
         assert_eq!(
             probe.layout_of(parameter),
             held_by_value(8),
@@ -116,7 +116,8 @@ fn referenced_and_optional_elements_are_held_in_a_value_word() {
 #[test]
 fn struct_and_tuple_elements_of_scalars_are_held_inline_as_their_bytes() {
     let probe = Probe::of(SOURCE);
-    for parameter in ["pt", "pair"] {
+    // An optional of a scalar is its tag and the scalar beside it.
+    for parameter in ["pt", "pair", "maybe"] {
         assert_eq!(
             probe.layout_of(parameter),
             ElementLayout {

@@ -169,6 +169,7 @@ impl BodySketch {
                     vtable_slot: slot,
                     args: vec![Operand::Copy(Place::new(receiver_local))],
                     arg_modes: Vec::new(),
+                    param_types: Vec::new(),
                     destination: Place::new(destination),
                     target: None,
                 },

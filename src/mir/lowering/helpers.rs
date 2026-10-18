@@ -612,6 +612,19 @@ pub fn release_coerced_source(
     ctx.emit_temp_drop(place.local, watermark, span);
 }
 
+/// The type of the value `op` reads: a projected place's own type — an
+/// element, a field, a tuple member — not its root local's.
+pub fn operand_value_type(ctx: &LoweringContext, op: &Operand) -> Type {
+    if let Operand::Copy(place) | Operand::Move(place) = op {
+        if !place.projection.is_empty() {
+            if let Some(ty) = crate::mir::place_type::PlaceTypes::of(&ctx.body).declared(place) {
+                return ty;
+            }
+        }
+    }
+    op.ty(&ctx.body).clone()
+}
+
 /// Wrap a bare value about to be stored into an optional slot as `Some(value)`.
 ///
 /// The type checker lets a `T` stand where a `T?` is declared, and both a
@@ -854,7 +867,7 @@ fn lower_return_expression(
         let watermark = ctx.body.local_decls.len();
         let lowered = lower_expression(ctx, expr, None)?;
         let operand = read_older_local_by_copy(lowered, watermark);
-        let op_ty = operand.ty(&ctx.body).clone();
+        let op_ty = operand_value_type(ctx, &operand);
         // A tail of no value — a `match` or `if` every path of which returns —
         // is reached by no path, and has nothing to return.
         if matches!(op_ty.kind, TypeKind::Void) {

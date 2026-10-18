@@ -6,27 +6,26 @@
 //! word.
 //!
 //! Each fixture is a hand-built body over a tuple of scalars, which every
-//! program holds as its bytes, and pins one violation; the body reports the
-//! same finding whether its classifier holds every bitwise value as its bytes
-//! or only the ones every program does.
+//! program holds as its bytes, and pins one violation.
 
 use miri::ast::expression::{Expression, ExpressionKind};
-use miri::ast::types::{Type, TypeKind};
+use miri::ast::types::{FunctionTypeData, Type, TypeDeclarationKind, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::place::PlaceElem;
 use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::{
-    verify_value_call_classes, verify_value_representation, VerificationViolation,
+    verify_bound_names, verify_optional_slots, verify_value_call_classes,
+    verify_value_representation, VerificationViolation,
 };
 use miri::mir::{
     AggregateKind, Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
-use miri::type_checker::context::TypeDefinition;
+use miri::type_checker::context::{EnumDefinition, GenericDefinition, TypeDefinition};
 use miri::type_checker::ModuleId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 fn span() -> Span {
@@ -111,30 +110,19 @@ fn kinds() -> Vec<TypeKind> {
     ]
 }
 
-/// A body whose local `i` has kind `kinds[i]`, classified with bitwise
-/// values held as their bytes when `is_uncounted`.
-fn body_of(
-    kinds: &[TypeKind],
-    arg_count: usize,
-    blocks: Vec<BasicBlockData>,
-    is_uncounted: bool,
-) -> Body {
+/// A body whose local `i` has kind `kinds[i]`.
+fn body_of(kinds: &[TypeKind], arg_count: usize, blocks: Vec<BasicBlockData>) -> Body {
     let mut body = Body::new(arg_count, span(), ExecutionModel::Cpu);
     for kind in kinds {
         body.new_local(LocalDecl::new(ty(kind.clone()), span()));
     }
     body.basic_blocks.extend(blocks);
-    let table = Rc::new(definitions());
-    body.rc_classifier = if is_uncounted {
-        RcClassifier::with_uncounted_bitwise_values(table)
-    } else {
-        RcClassifier::new(table)
-    };
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions()));
     body
 }
 
 fn value_body(statements: Vec<Statement>) -> Body {
-    body_of(&kinds(), 0, vec![ret_block(statements)], true)
+    body_of(&kinds(), 0, vec![ret_block(statements)])
 }
 
 fn messages(violations: &[VerificationViolation]) -> String {
@@ -145,21 +133,14 @@ fn messages(violations: &[VerificationViolation]) -> String {
         .join("; ")
 }
 
-/// Exactly one finding carrying every fragment, and the same finding once
-/// the statements are classified as every program is.
+/// Exactly one finding carrying every fragment.
 fn assert_flagged(statements: Vec<Statement>, fragments: &[&str]) {
-    let violations = verify_value_representation(&value_body(statements.clone()), &definitions());
+    let violations = verify_value_representation(&value_body(statements), &definitions());
     let text = messages(&violations);
     assert_eq!(violations.len(), 1, "expected one finding, got: {text}");
     for fragment in fragments {
         assert!(text.contains(fragment), "`{fragment}` missing from: {text}");
     }
-    let program = body_of(&kinds(), 0, vec![ret_block(statements)], false);
-    let program_text = messages(&verify_value_representation(&program, &definitions()));
-    assert_eq!(
-        program_text, text,
-        "every program classifies the tuple alike"
-    );
 }
 
 fn assert_clean(body: &Body) {
@@ -251,7 +232,7 @@ fn address_of_a_value_carried_through_a_copy_and_returned_is_flagged() {
         assign(place(5), Rvalue::Use(copy(2))),
         assign(place(0), Rvalue::Use(copy(5))),
     ];
-    let body = body_of(&locals, 0, vec![ret_block(statements)], true);
+    let body = body_of(&locals, 0, vec![ret_block(statements)]);
     let violations = verify_value_representation(&body, &definitions());
     let text = messages(&violations);
     assert_eq!(violations.len(), 1, "expected one finding, got: {text}");
@@ -324,7 +305,6 @@ fn value_used_by_value_and_by_address_in_a_call_is_clean() {
         &locals,
         0,
         vec![block(statements, call), ret_block(Vec::new())],
-        true,
     );
     assert_clean(&body);
 }
@@ -351,13 +331,12 @@ fn caller_body(argument: TypeKind, destination: TypeKind) -> Body {
         &[TypeKind::Void, argument, destination],
         0,
         vec![block(Vec::new(), call), ret_block(Vec::new())],
-        true,
     )
 }
 
 /// A function taking a `parameter` and returning a `returned`.
 fn callee_body(parameter: TypeKind, returned: TypeKind) -> Body {
-    body_of(&[returned, parameter], 1, vec![ret_block(Vec::new())], true)
+    body_of(&[returned, parameter], 1, vec![ret_block(Vec::new())])
 }
 
 fn call_findings(caller: Body, callee: Body) -> String {
@@ -437,7 +416,6 @@ fn value_argument_read_from_inside_its_holder_is_flagged() {
             block(Vec::new(), call(Operand::Copy(field(holder_local, 0)))),
             ret_block(Vec::new()),
         ],
-        false,
     );
     let text = messages(&verify_value_representation(&projected, &definitions()));
     assert!(
@@ -448,7 +426,221 @@ fn value_argument_read_from_inside_its_holder_is_flagged() {
         &locals,
         0,
         vec![block(Vec::new(), call(copy(1))), ret_block(Vec::new())],
-        false,
     );
     assert_clean(&whole);
+}
+
+/// A body whose classifier was never set reads the type table it is handed
+/// no differently: a tuple of scalars and an `int?` are still held as their
+/// bytes, and meeting a counted word still raises a finding.
+#[test]
+fn a_body_with_the_default_classifier_raises_the_same_finding() {
+    let optional = TypeKind::Option(Box::new(ty(TypeKind::Int)));
+    let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+    for kind in [
+        TypeKind::Void,
+        TypeKind::Option(Box::new(ty(TypeKind::String))),
+        optional,
+    ] {
+        body.new_local(LocalDecl::new(ty(kind), span()));
+    }
+    body.basic_blocks
+        .push(ret_block(vec![assign(place(2), Rvalue::Use(copy(1)))]));
+    let text = messages(&verify_value_representation(&body, &definitions()));
+    assert!(text.contains("bytes and a word meet"), "{text}");
+}
+
+/// The absent value handed as a constant where a callee takes an optional
+/// held as its bytes is an unsettled seam: a constant has no bytes to pass.
+#[test]
+fn an_absent_constant_passed_to_an_optional_held_as_bytes_is_flagged() {
+    let optional = TypeKind::Option(Box::new(ty(TypeKind::Int)));
+    let callee_symbol = Symbol::declared_function(&ModuleId::Program, "takes");
+    let callee = body_of(
+        &[TypeKind::Void, optional.clone()],
+        1,
+        vec![ret_block(Vec::new())],
+    );
+    let absent = Operand::Constant(Box::new(miri::mir::Constant {
+        span: span(),
+        ty: ty(optional),
+        literal: miri::ast::literal::Literal::None,
+    }));
+    let call = TerminatorKind::Call {
+        func: Operand::function(callee_symbol.clone(), span()),
+        args: vec![absent],
+        arg_modes: Vec::new(),
+        arg_handles: Vec::new(),
+        destination: place(0),
+        target: Some(BasicBlock(1)),
+    };
+    let caller = body_of(
+        &[TypeKind::Void],
+        0,
+        vec![block(Vec::new(), call), ret_block(Vec::new())],
+    );
+    let caller_symbol = Symbol::declared_function(&ModuleId::Program, "caller");
+    let program = vec![(caller_symbol, caller), (callee_symbol, callee)];
+    let found = verify_optional_slots(&program, Symbol::link_name);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].1.message.contains("without those bytes"),
+        "{found:?}"
+    );
+}
+
+/// The absent constant handed to a parameter whose type the call site could
+/// not record is refused: nothing says the bytes it needs are there.
+#[test]
+fn an_absent_constant_at_an_unreadable_parameter_is_flagged() {
+    let absent = Operand::Constant(Box::new(miri::mir::Constant {
+        span: span(),
+        ty: ty(TypeKind::Option(Box::new(ty(TypeKind::Void)))),
+        literal: miri::ast::literal::Literal::None,
+    }));
+    let call = TerminatorKind::VirtualCall {
+        vtable_slot: 1,
+        args: vec![copy(1), absent],
+        arg_modes: Vec::new(),
+        param_types: vec![None],
+        destination: place(0),
+        target: Some(BasicBlock(1)),
+    };
+    let caller = body_of(
+        &[TypeKind::Void, TypeKind::String],
+        0,
+        vec![block(Vec::new(), call), ret_block(Vec::new())],
+    );
+    let symbol = Symbol::declared_function(&ModuleId::Program, "caller");
+    let found = verify_optional_slots(&[(symbol, caller)], Symbol::link_name);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].1.message.contains("cannot be read"), "{found:?}");
+}
+
+/// A body compiled for one instantiation declares no local at a parameter
+/// it neither leaves open nor the program defines: such a `U?` missed its
+/// substitution, and has no layout to agree on.
+#[test]
+fn a_local_naming_an_unbound_parameter_is_flagged() {
+    let unbound = TypeKind::Option(Box::new(ty(TypeKind::Custom("U".to_string(), None))));
+    let body = body_of(&[TypeKind::Void, unbound], 0, vec![ret_block(Vec::new())]);
+    let text = messages(&verify_bound_names(&body));
+    assert!(text.contains("`_1` is declared at `U?`"), "{text}");
+
+    let mut open = body_of(
+        &[
+            TypeKind::Void,
+            TypeKind::Option(Box::new(ty(TypeKind::Custom("U".to_string(), None)))),
+        ],
+        0,
+        vec![ret_block(Vec::new())],
+    );
+    open.open_params.insert("U".to_string());
+    assert!(
+        verify_bound_names(&open).is_empty(),
+        "an open parameter is bound"
+    );
+}
+
+/// `enum Outcome<A, B>`, its two variants carrying one parameter each.
+fn outcome_definitions() -> HashMap<String, TypeDefinition> {
+    let generic = |name: &str| GenericDefinition {
+        name: name.to_string(),
+        constraint: None,
+        kind: TypeDeclarationKind::None,
+    };
+    let outcome = TypeDefinition::Enum(EnumDefinition {
+        variants: BTreeMap::from([
+            ("Good".to_string(), vec![ty(custom("A"))]),
+            ("Bad".to_string(), vec![ty(custom("B"))]),
+        ]),
+        generics: Some(vec![generic("A"), generic("B")]),
+        methods: BTreeMap::new(),
+        module: String::new(),
+        must_use: false,
+        non_exhaustive: false,
+    });
+    HashMap::from([("Outcome".to_string(), outcome)])
+}
+
+fn custom(name: &str) -> TypeKind {
+    TypeKind::Custom(name.to_string(), None)
+}
+
+#[test]
+fn an_unsettled_enum_argument_is_bound_only_at_its_position_and_in_its_arm_binding() {
+    let outcome = |a: TypeKind, b: TypeKind| {
+        TypeKind::Custom(
+            "Outcome".to_string(),
+            Some(vec![type_expr(a), type_expr(b)]),
+        )
+    };
+    let arm = assign(place(2), Rvalue::Use(Operand::Copy(field(1, 1))));
+    let mut body = body_of(
+        &[
+            TypeKind::Void,
+            outcome(TypeKind::Float, custom("B")),
+            custom("B"),
+            custom("A"),
+            custom("B"),
+            outcome(custom("B"), TypeKind::Float),
+        ],
+        0,
+        vec![ret_block(vec![arm])],
+    );
+    body.rc_classifier = RcClassifier::new(Rc::new(outcome_definitions()));
+    let text = messages(&verify_bound_names(&body));
+    assert!(
+        !text.contains("`_1`"),
+        "`B` in its own position is bound: {text}"
+    );
+    assert!(
+        !text.contains("`_2`"),
+        "the arm binding at `B` is bound: {text}"
+    );
+    assert!(text.contains("`_3` is declared at `A`"), "{text}");
+    assert!(
+        text.contains("`_4` is declared at `B`"),
+        "no arm binds `_4`: {text}"
+    );
+    assert!(
+        text.contains("`_5` is declared at `Outcome<B, float>`"),
+        "`B` in `A`'s position is a miss: {text}"
+    );
+}
+
+#[test]
+fn a_function_signature_is_checked_with_a_private_type_written_by_its_name() {
+    let returning = |kind: TypeKind| {
+        TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: Vec::new(),
+            return_type: Some(Box::new(type_expr(kind))),
+        }))
+    };
+    let mut body = body_of(
+        &[
+            TypeKind::Void,
+            returning(custom("U")),
+            returning(custom("Hidden")),
+            TypeKind::Option(Box::new(ty(custom("Hidden")))),
+        ],
+        0,
+        vec![ret_block(Vec::new())],
+    );
+    let mut definitions = outcome_definitions();
+    if let Some(private) = definitions.get("Outcome").cloned() {
+        definitions.insert("local.k.a.Hidden".to_string(), private);
+    }
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions));
+    let text = messages(&verify_bound_names(&body));
+    assert!(
+        text.contains("`_1` is declared at `Function() -> U`"),
+        "a signature is looked into: {text}"
+    );
+    assert!(
+        !text.contains("`_2`"),
+        "a private type by its name in a signature: {text}"
+    );
+    assert!(text.contains("`_3` is declared at `Hidden?`"), "{text}");
 }

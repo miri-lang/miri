@@ -239,7 +239,11 @@ fn closure_context<'a>(
     // instantiation: its types, and the symbols of closures nested in it, are
     // read at the enclosing body's type arguments.
     lambda_ctx.generic_subs = ctx.generic_subs.clone();
-    // It leaves open exactly what the enclosing body leaves open.
+    // It leaves open exactly what the enclosing body leaves open, and lays
+    // out a value of an open parameter as that body does: the signature the
+    // enclosing body declares the closure at, `fn() U?`, is read against the
+    // same parameters the lambda's own body is.
+    lambda_ctx.body.type_params = ctx.body.type_params.clone();
     lambda_ctx.body.open_params = ctx.body.open_params.clone();
     lambda_ctx.body.bound_params = ctx.body.bound_params.clone();
 

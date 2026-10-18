@@ -1039,6 +1039,63 @@ impl TraitDefaultBodies {
     }
 }
 
+/// One method a generic class declares, compiled under the class's own name:
+/// its open template, which leaves the class's parameters open.
+///
+/// Every call at concrete arguments names the body compiled for its
+/// instantiation, so a template is compiled only where something still names
+/// it — a shared generic body handing its own parameters on, or a vtable built
+/// where the arguments have no spelling. Compiling one nothing names would lay
+/// out values of parameters no instantiation settles.
+struct ClassTemplateMethod {
+    class_name: String,
+    symbol: Symbol,
+    class_site: StatementSite,
+    member: usize,
+}
+
+impl ClassTemplateMethod {
+    /// The declaring class statement and the method statement within it.
+    fn statements<'r>(&self, result: &'r PipelineResult) -> Option<(&'r Statement, &'r Statement)> {
+        let class_stmt = self.class_site.statement(result)?;
+        let StatementKind::Class(class_data) = &class_stmt.node else {
+            return None;
+        };
+        Some((class_stmt, class_data.body.get(self.member)?))
+    }
+}
+
+/// The method bodies every generic class of the program and its imports
+/// declares, the program's own first.
+fn class_template_methods(result: &PipelineResult) -> Vec<ClassTemplateMethod> {
+    let mut templates = Vec::new();
+    for (class_site, stmt) in statements_with_sites(result) {
+        let StatementKind::Class(class_data) = &stmt.node else {
+            continue;
+        };
+        if class_data.generics.is_none() {
+            continue;
+        }
+        let Some(class_name) = result.type_checker.type_identity_named_by(&class_data.name) else {
+            continue;
+        };
+        for (member, method_stmt) in class_data.body.iter().enumerate() {
+            let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+                continue;
+            };
+            if decl.body.is_some() {
+                templates.push(ClassTemplateMethod {
+                    class_name: class_name.to_string(),
+                    symbol: Symbol::method(class_name, &[], &decl.name, &[]),
+                    class_site,
+                    member,
+                });
+            }
+        }
+    }
+    templates
+}
+
 /// What every lowering round reads and no round changes: the generic function
 /// declarations, the trait default bodies, and the symbols codegen names
 /// outside any call. Built once, before the first body is lowered.
@@ -1047,6 +1104,7 @@ struct ReachTables {
     /// and its name.
     generic_functions: std::collections::HashMap<DeclaredFunction, StatementSite>,
     trait_defaults: TraitDefaultBodies,
+    class_templates: Vec<ClassTemplateMethod>,
     synthesized: HashSet<Symbol>,
     /// The slot numbering the lowered virtual calls index by.
     vtable_layout: mir::lowering::dispatch_symbols::VtableLayout,
@@ -1057,6 +1115,7 @@ impl ReachTables {
         Ok(ReachTables {
             generic_functions: function_declarations(result, |decl| decl.generics.is_some())?,
             trait_defaults: TraitDefaultBodies::collect(result),
+            class_templates: class_template_methods(result),
             synthesized: mir::lowering::dispatch_symbols::synthesized_references(
                 result.type_checker.type_definitions(),
             ),
@@ -2640,6 +2699,7 @@ impl Pipeline {
         for (_symbol, body) in &mut lowered {
             mir::value_arguments::copy_projected_value_arguments(body);
         }
+        mir::optional_conformance::conform_optional_operands(&mut lowered);
 
         let verify_mode = self.verify_mode();
         let program_violations =
@@ -2724,6 +2784,10 @@ impl Pipeline {
             lowered,
             type_definitions,
         ));
+        violations.extend(mir::verify::verify_optional_slots(
+            lowered,
+            Symbol::link_name,
+        ));
         violations
     }
 
@@ -2756,6 +2820,15 @@ impl Pipeline {
             let first_default = bodies.len();
             called.refresh(bodies, result, reach)?;
             Self::lower_called_trait_defaults(
+                result,
+                reach,
+                &called,
+                is_release,
+                bodies,
+                symbols,
+                compilation_ids,
+            )?;
+            Self::lower_called_class_templates(
                 result,
                 reach,
                 &called,
@@ -2923,6 +2996,50 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Emit the open template of each generic class method a lowered body
+    /// names: a call, or a slot of a vtable built where the class's arguments
+    /// have no spelling. One nothing names is never compiled.
+    fn lower_called_class_templates(
+        result: &PipelineResult,
+        reach: &ReachTables,
+        called: &CalledFunctions,
+        is_release: bool,
+        bodies: &mut Vec<(Symbol, mir::Body)>,
+        symbols: &mut SymbolTable,
+        compilation_ids: &mir::lowering::SharedCompilationIds,
+    ) -> Result<(), CompilerError> {
+        for template in &reach.class_templates {
+            let symbol = &template.symbol;
+            let is_named = called.contains(symbol) || reach.synthesized.contains(symbol);
+            if !is_named || symbols.is_claimed(symbol) {
+                continue;
+            }
+            let Some((class_stmt, method_stmt)) = template.statements(result) else {
+                continue;
+            };
+            if !symbols
+                .claim_at(symbol, method_stmt.span)
+                .map_err(CompilerError::Lowering)?
+            {
+                continue;
+            }
+            let self_type = Type::new(
+                TypeKind::Custom(template.class_name.clone(), None),
+                class_stmt.span,
+            );
+            let (body, lambdas) = mir::lowering::lower_class_method_with_compilation_ids(
+                method_stmt,
+                self_type,
+                &result.type_checker,
+                is_release,
+                compilation_ids.clone(),
+            )
+            .map_err(|e| monomorphized_lowering_failure(symbol, e))?;
+            Self::push_lowered_body(bodies, symbols, symbol.clone(), body, lambdas)?;
+        }
+        Ok(())
+    }
+
     /// Emit the shared body of each generic function a lowered body calls by
     /// its bare symbol.
     ///
@@ -2998,6 +3115,18 @@ impl Pipeline {
             .into_iter()
             .map(|(symbol, v)| format!("  fn {}: {}", symbol, v))
             .collect();
+        // Checked again with every retain and release in place.
+        let after_rc = mir::verify::verify_optional_slots(bodies, String::clone);
+        functions_with_violations += after_rc
+            .iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>()
+            .len();
+        all_violations.extend(
+            after_rc
+                .into_iter()
+                .map(|(name, v)| format!("  fn {}: {}", name, v)),
+        );
         for (name, body) in bodies {
             let mut violations = mir::verify::verify_body(body);
             violations.extend(mir::verify::verify_collection_element_ownership(
@@ -3014,6 +3143,7 @@ impl Pipeline {
                 body,
                 result.type_checker.type_definitions(),
             ));
+            violations.extend(mir::verify::verify_bound_names(body));
             if !violations.is_empty() {
                 functions_with_violations += 1;
             }
@@ -3039,7 +3169,9 @@ impl Pipeline {
 
     /// Lower top-level functions and the methods of every class/struct/enum
     /// declared in the user's program AST. A trait's default bodies are emitted
-    /// only where something calls them, by `lower_called_trait_defaults`.
+    /// only where something calls them, by `lower_called_trait_defaults`, and a
+    /// generic class's methods only where something names them, by
+    /// `lower_called_class_templates`.
     fn lower_program_bodies(
         &self,
         result: &PipelineResult,
@@ -3063,6 +3195,9 @@ impl Pipeline {
                         compilation_ids,
                     )?;
                 }
+                // A generic class's methods are its open templates, compiled
+                // only where something names one, by `lower_called_class_templates`.
+                StatementKind::Class(class_data) if class_data.generics.is_some() => {}
                 StatementKind::Class(class_data) => {
                     let Some(class_name) =
                         result.type_checker.type_identity_named_by(&class_data.name)
@@ -3202,6 +3337,9 @@ impl Pipeline {
                         compilation_ids,
                     )?;
                 }
+                // A generic class's methods are its open templates, compiled
+                // only where something names one, by `lower_called_class_templates`.
+                StatementKind::Class(class_data) if class_data.generics.is_some() => {}
                 StatementKind::Class(class_data) => {
                     // Extract the class name string
                     let Some(class_name) =

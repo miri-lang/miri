@@ -34,21 +34,13 @@ pub fn copy_projected_value_arguments(body: &mut Body) {
 /// value held as its bytes through a projection, and are neither handed to a
 /// runtime entry point nor written back as `out`.
 pub fn projected_value_arguments(body: &Body, block: usize) -> Vec<usize> {
-    let Some(TerminatorKind::Call {
-        func,
-        args,
-        arg_modes,
-        ..
-    }) = body.basic_blocks[block]
+    let Some((args, arg_modes)) = body.basic_blocks[block]
         .terminator
         .as_ref()
-        .map(|terminator| &terminator.kind)
+        .and_then(|terminator| miri_call_arguments(&terminator.kind))
     else {
         return Vec::new();
     };
-    if func.called_runtime_name().is_some() {
-        return Vec::new();
-    }
     let types = PlaceTypes::of(body);
     args.iter()
         .enumerate()
@@ -71,7 +63,7 @@ fn copy_argument(body: &mut Body, block: usize, position: usize) {
         return;
     };
     let span = terminator.span;
-    let TerminatorKind::Call { args, .. } = &terminator.kind else {
+    let Some((args, _)) = miri_call_arguments(&terminator.kind) else {
         return;
     };
     let Some(Operand::Copy(place) | Operand::Move(place)) = args.get(position).cloned() else {
@@ -85,11 +77,37 @@ fn copy_argument(body: &mut Body, block: usize, position: usize) {
         kind: StatementKind::Assign(copy.clone(), Rvalue::Use(Operand::Copy(place))),
         span,
     });
-    if let Some(TerminatorKind::Call { args, .. }) = body.basic_blocks[block]
+    if let Some(TerminatorKind::Call { args, .. } | TerminatorKind::VirtualCall { args, .. }) = body
+        .basic_blocks[block]
         .terminator
         .as_mut()
         .map(|terminator| &mut terminator.kind)
     {
         args[position] = Operand::Copy(copy);
+    }
+}
+
+/// The arguments and argument modes of a call `kind` makes to a Miri
+/// function — statically or through a vtable or a function value — or `None`
+/// for a runtime entry point and every other terminator.
+fn miri_call_arguments(kind: &TerminatorKind) -> Option<(&[Operand], &[ArgMode])> {
+    match kind {
+        TerminatorKind::Call {
+            func,
+            args,
+            arg_modes,
+            ..
+        } => func
+            .called_runtime_name()
+            .is_none()
+            .then_some((args.as_slice(), arg_modes.as_slice())),
+        TerminatorKind::VirtualCall {
+            args, arg_modes, ..
+        } => Some((args, arg_modes)),
+        TerminatorKind::GpuLaunch { .. }
+        | TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable => None,
     }
 }

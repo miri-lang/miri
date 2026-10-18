@@ -120,15 +120,14 @@ fn call(callee: Symbol, args: Vec<Operand>, destination: usize, target: usize) -
     }
 }
 
-/// A body over locals of `kinds`, `_0` first, taking `arg_count` of them, and
-/// holding bitwise values as their bytes.
+/// A body over locals of `kinds`, `_0` first, taking `arg_count` of them.
 fn body_of(kinds: &[TypeKind], arg_count: usize, blocks: Vec<BasicBlockData>) -> Body {
     let mut body = Body::new(arg_count, span(), ExecutionModel::Cpu);
     for kind in kinds {
         body.new_local(LocalDecl::new(ty(kind.clone()), span()));
     }
     body.basic_blocks.extend(blocks);
-    body.rc_classifier = RcClassifier::with_uncounted_bitwise_values(Rc::new(definitions()));
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions()));
     body
 }
 
@@ -248,7 +247,10 @@ fn runtime_dir() -> PathBuf {
 /// Link `object` against the core runtime and run it, returning its exit
 /// status.
 fn run(object: &[u8]) -> i32 {
-    let dir = std::env::temp_dir().join(format!("miri-value-locals-{}", std::process::id()));
+    // Each run links in a directory of its own: tests run side by side.
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("miri-value-locals-{}-{run}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch directory");
     let object_path = dir.join("program.o");
     let exe_path = dir.join("program");
@@ -376,16 +378,59 @@ fn a_value_passed_to_a_runtime_function_is_refused() {
     assert!(error.contains("runtime function"), "{error}");
 }
 
-#[test]
-fn an_optional_held_as_bytes_is_refused_until_it_has_a_translation() {
+/// `main` exits with the payload of an `int?` built present, tested by its
+/// tag and opened, plus 10 when an absent one tests absent: 17.
+fn optional_main() -> Body {
     let optional = TypeKind::Option(Box::new(ty(TypeKind::Int)));
-    let body = body_of(
-        &[TypeKind::Void, optional],
+    let none = Operand::Constant(Box::new(Constant {
+        span: span(),
+        ty: ty(optional.clone()),
+        literal: Literal::None,
+    }));
+    let present = vec![
+        assign(
+            place(1),
+            Rvalue::Aggregate(AggregateKind::Option(ty(optional.clone())), vec![int(7)]),
+        ),
+        assign(place(2), Rvalue::Use(none.clone())),
+    ];
+    let opened = vec![
+        assign(place(0), Rvalue::Use(copy(field(1, 0)))),
+        assign(place(3), binary(BinOp::Eq, copy(place(2)), none)),
+    ];
+    let switch =
+        |discr: usize, targets: Vec<(u128, usize)>, otherwise: usize| TerminatorKind::SwitchInt {
+            discr: copy(place(discr)),
+            targets: targets
+                .into_iter()
+                .map(|(value, target)| (value.into(), BasicBlock(target)))
+                .collect(),
+            otherwise: BasicBlock(otherwise),
+        };
+    let absent = vec![assign(
+        place(0),
+        binary(BinOp::Add, copy(place(0)), int(10)),
+    )];
+    body_of(
+        &[TypeKind::Int, optional.clone(), optional, TypeKind::Boolean],
         0,
-        vec![block(Vec::new(), TerminatorKind::Return)],
+        vec![
+            block(present, switch(1, vec![(0, 3)], 1)),
+            block(opened, switch(3, vec![(1, 2)], 3)),
+            block(absent, TerminatorKind::Return),
+            block(Vec::new(), TerminatorKind::Return),
+        ],
+    )
+}
+
+#[test]
+fn an_optional_is_built_tested_and_opened_by_its_bytes() {
+    let main = optional_main();
+    let named = [(Symbol::entry().link_name(), &main)];
+    let (object, listing) = compile(&named).expect("the program compiles and verifies");
+    assert!(
+        !listing.contains("malloc"),
+        "an optional held as its bytes allocates nothing:\n{listing}"
     );
-    let error = compile(&[("holder".to_string(), &body)])
-        .err()
-        .expect("the body must be refused");
-    assert!(error.contains("no translation"), "{error}");
+    assert_eq!(run(&object), 17);
 }

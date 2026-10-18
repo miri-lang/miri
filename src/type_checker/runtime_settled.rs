@@ -15,7 +15,8 @@
 //!   pointer can be that pointer, null when absent, where one holding the
 //!   pointer-width stand-in needs a box, and a tuple of scalars is held as its
 //!   bytes where a tuple of the stand-in is an allocation. A `pop` that returns
-//!   `T?` therefore builds a different value at each kind of argument.
+//!   `T?` therefore builds a different value at each kind of argument. For the
+//!   same reason no expression in the body is such a value.
 //! - **Every call is settled.** It calls a `runtime` function, a built-in
 //!   variant constructor (`Some`, `Ok`, `Err`), `self.m()` for a method `m` of
 //!   this class that is itself settled, or `super.m()` for a settled method of
@@ -95,6 +96,7 @@ impl TypeChecker {
                 types: &self.type_table.types,
                 callee_kinds: &self.fn_analysis.callee_kinds,
                 class_generics: class_def.generics.as_ref(),
+                definitions,
                 settled: &settled,
                 inherited,
             };
@@ -233,6 +235,8 @@ struct SettlementAudit<'a> {
     /// How each identifier the checker resolved is called, by id.
     callee_kinds: &'a HashMap<usize, CalleeKind>,
     class_generics: Option<&'a Vec<GenericDefinition>>,
+    /// The program's type table, which says which names are structs.
+    definitions: &'a HashMap<String, TypeDefinition>,
     /// The class's own methods still believed settled.
     settled: &'a BTreeSet<&'a str>,
     /// The settled methods of the class this one extends.
@@ -280,14 +284,51 @@ impl SettlementAudit<'_> {
         }
     }
 
+    /// Whether the declarations are settled: no local is declared at a type
+    /// built from a parameter, and every initializer is settled.
     fn declarations(&self, decls: &[VariableDeclaration]) -> bool {
-        decls
-            .iter()
-            .filter_map(|decl| decl.initializer.as_deref())
-            .all(|init| self.expression(init))
+        decls.iter().all(|decl| {
+            !decl
+                .typ
+                .as_deref()
+                .is_some_and(|written| self.declares_parameter_derived(written))
+                && decl
+                    .initializer
+                    .as_deref()
+                    .is_none_or(|init| self.expression(init))
+        })
+    }
+
+    /// Whether the written type `written` is a value built from a type
+    /// parameter: its nullable flag makes it an optional of what it names.
+    fn declares_parameter_derived(&self, written: &Expression) -> bool {
+        let ExpressionKind::Type(ty, is_nullable) = &written.node else {
+            return false;
+        };
+        let holds = |kind: &TypeKind| {
+            is_generic_parameter_kind(kind, self.class_generics)
+                || is_parameter_derived(kind, self.class_generics, self.definitions)
+        };
+        if *is_nullable {
+            return holds(&ty.kind);
+        }
+        is_parameter_derived(&ty.kind, self.class_generics, self.definitions)
     }
 
     fn expression(&self, expr: &Expression) -> bool {
+        !self.builds_on_parameter(expr) && self.expression_kind(expr)
+    }
+
+    /// Whether `expr` is a value built from a type parameter — an optional,
+    /// a tuple or a struct holding one — which the shared body would hold as
+    /// it is laid out with the parameter open, not as the argument makes it.
+    fn builds_on_parameter(&self, expr: &Expression) -> bool {
+        self.types
+            .get(&expr.id)
+            .is_some_and(|ty| is_parameter_derived(&ty.kind, self.class_generics, self.definitions))
+    }
+
+    fn expression_kind(&self, expr: &Expression) -> bool {
         match &expr.node {
             ExpressionKind::Call(callee, args) => self.callee(callee) && self.all(args),
             ExpressionKind::Binary(lhs, _, rhs) | ExpressionKind::Logical(lhs, _, rhs) => {

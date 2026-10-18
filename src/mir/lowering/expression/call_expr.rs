@@ -649,17 +649,18 @@ fn emit_enum_variant_call(
     }));
 
     let arg_watermark = ctx.body.local_decls.len();
+    let instance = resolve_type(ctx.type_checker, expr);
     let mut ops = vec![discr_op];
-    for arg in args {
-        ops.push(lower_expression(ctx, arg, None)?);
-    }
+    ops.extend(super::enumvalue_expr::lower_enum_payload(
+        ctx,
+        (type_name, variant_name),
+        &instance,
+        args,
+    )?);
 
     let target = match dest {
         Some(d) => d,
-        None => {
-            let ty = resolve_type(ctx.type_checker, expr);
-            Place::new(ctx.push_temp(ty, expr.span))
-        }
+        None => Place::new(ctx.push_temp(instance, expr.span)),
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(

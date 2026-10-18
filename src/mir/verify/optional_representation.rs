@@ -19,11 +19,10 @@
 //! does not have, and each is reported. Reading it is the pointer itself.
 
 use super::{local_display_name, VerificationViolation};
-use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::literal::Literal;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{Type, TypeKind};
 use crate::mir::option_layout::{is_nullable_pointer_optional, LayoutScope, OptionalLayers};
 use crate::mir::place::PlaceElem;
+use crate::mir::place_type::{names_open_parameter, PlaceTypes};
 use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
 use crate::mir::symbol::Symbol;
@@ -103,8 +102,8 @@ fn written_by(kind: &TerminatorKind) -> Option<&Place> {
 
 /// Reads the types and optional layouts of one body's places.
 pub(super) struct Layouts<'a> {
-    pub(super) body: &'a Body,
-    pub(super) definitions: &'a HashMap<String, TypeDefinition>,
+    pub(crate) body: &'a Body,
+    pub(crate) definitions: &'a HashMap<String, TypeDefinition>,
 }
 
 impl<'a> Layouts<'a> {
@@ -139,6 +138,7 @@ impl<'a> Layouts<'a> {
         let target = self.place_type(dest);
         match rvalue {
             Rvalue::Use(operand) => target
+                .as_ref()
                 .and_then(|target| self.meeting_violation(dest, operand, target, "use"))
                 .into_iter()
                 .collect(),
@@ -151,12 +151,12 @@ impl<'a> Layouts<'a> {
                     return Vec::new();
                 };
                 let mut violations: Vec<VerificationViolation> = self
-                    .built_type_violation(dest, kind, target)
+                    .built_type_violation(dest, kind, &target)
                     .into_iter()
                     .collect();
                 violations.extend(operands.iter().enumerate().filter_map(|(slot, operand)| {
-                    let slot_ty = self.aggregate_slot(kind, target, slot)?;
-                    self.meeting_violation(dest, operand, slot_ty, "aggregate slot")
+                    let slot_ty = self.aggregate_slot(kind, dest, slot)?;
+                    self.meeting_violation(dest, operand, &slot_ty, "aggregate slot")
                 }));
                 violations
             }
@@ -184,7 +184,7 @@ impl<'a> Layouts<'a> {
         what: &str,
     ) -> Option<VerificationViolation> {
         let source = self.operand_type(operand)?;
-        let (source_layout, target_layout) = self.disagreement(source, target)?;
+        let (source_layout, target_layout) = self.disagreement(&source, target)?;
         Some(VerificationViolation {
             local: dest.local,
             local_name: local_display_name(self.body, dest.local),
@@ -292,6 +292,11 @@ impl<'a> Layouts<'a> {
         (parameter, callee_scope): (&Type, LayoutScope<'_>),
     ) -> Option<VerificationViolation> {
         let source = self.operand_type(arg)?;
+        if names_open_parameter(&source.kind, &self.body.type_params)
+            || names_open_parameter(&parameter.kind, callee_scope.type_params)
+        {
+            return None;
+        }
         let (source_layout, target_layout) = layouts_disagree(
             OptionalLayers::of(&source.kind, self.scope()),
             OptionalLayers::of(&parameter.kind, callee_scope),
@@ -316,6 +321,11 @@ impl<'a> Layouts<'a> {
     ) -> Option<VerificationViolation> {
         let returned = &callee_body.local_decls.first()?.ty;
         let target = self.place_type(destination)?;
+        if names_open_parameter(&returned.kind, &callee_body.type_params)
+            || names_open_parameter(&target.kind, &self.body.type_params)
+        {
+            return None;
+        }
         let (source_layout, target_layout) = layouts_disagree(
             OptionalLayers::of(&returned.kind, self.scope_of(callee_body)),
             OptionalLayers::of(&target.kind, self.scope()),
@@ -333,6 +343,10 @@ impl<'a> Layouts<'a> {
 
     /// [`layouts_disagree`] for two types of this body.
     fn disagreement(&self, source: &Type, target: &Type) -> Option<(String, String)> {
+        let open = PlaceTypes::of(self.body);
+        if open.names_open_parameter(&source.kind) || open.names_open_parameter(&target.kind) {
+            return None;
+        }
         layouts_disagree(
             OptionalLayers::of(&source.kind, self.scope()),
             OptionalLayers::of(&target.kind, self.scope()),
@@ -347,78 +361,26 @@ impl<'a> Layouts<'a> {
         LayoutScope::new(self.definitions, &callee.type_params)
     }
 
-    /// The type `operand` reads, unless it is the absent value, which is null
-    /// under every layout.
-    pub(super) fn operand_type(&self, operand: &'a Operand) -> Option<&'a Type> {
-        match operand {
-            Operand::Constant(constant) => {
-                (!matches!(constant.literal, Literal::None)).then_some(&constant.ty)
-            }
-            Operand::Function(function) => Some(&function.ty),
-            Operand::Copy(place) | Operand::Move(place) => self.place_type(place),
-        }
+    /// The type `operand` reads, unless it is the absent value, whose type
+    /// is the slot it meets; see [`PlaceTypes::operand_type`].
+    pub(crate) fn operand_type(&self, operand: &Operand) -> Option<Type> {
+        PlaceTypes::of(self.body).operand_type(operand)
     }
 
-    /// The type of the value at `place`, when its projections can be read from
-    /// the body alone: a dereference, an enum payload, a closure capture and a
-    /// field of a generic class are not.
-    pub(super) fn place_type(&self, place: &Place) -> Option<&'a Type> {
-        let mut current = &self.body.local_decls.get(place.local.0)?.ty;
-        for elem in &place.projection {
-            current = match elem {
-                PlaceElem::Deref => return None,
-                PlaceElem::Field(index) => self.field_type(current, *index)?,
-                PlaceElem::Index(_) => element_type(&current.kind)?,
-            };
-        }
-        Some(current)
+    /// The type of the value at `place`; see [`PlaceTypes::declared`].
+    pub(crate) fn place_type(&self, place: &Place) -> Option<Type> {
+        PlaceTypes::of(self.body).declared(place)
     }
 
-    /// The type of field `index` of a `holder` value: an optional's payload,
-    /// a tuple's element, or a field of a struct or class this body records
-    /// at no type parameter.
-    fn field_type(&self, holder: &'a Type, index: usize) -> Option<&'a Type> {
-        if let TypeKind::Option(inner) = &holder.kind {
-            return (index == 0).then_some(inner);
-        }
-        if let TypeKind::Tuple(elements) = &holder.kind {
-            return written_type(elements.get(index)?);
-        }
-        let TypeKind::Custom(name, _) = &holder.kind else {
-            return None;
-        };
-        let is_generic = self
-            .body
-            .class_type_params
-            .get(name)
-            .is_some_and(|params| !params.is_empty());
-        if is_generic {
-            return None;
-        }
-        self.body.field_types.get(name)?.get(index)
-    }
-
-    /// The type slot `slot` of an aggregate of `kind` holds, built into a
-    /// value of `target` type.
-    pub(super) fn aggregate_slot(
+    /// The type member `slot` of an aggregate of `kind` built into `dest`
+    /// declares; see [`PlaceTypes::aggregate_slot`].
+    pub(crate) fn aggregate_slot(
         &self,
         kind: &AggregateKind,
-        target: &'a Type,
+        dest: &Place,
         slot: usize,
-    ) -> Option<&'a Type> {
-        match kind {
-            AggregateKind::Option(_)
-            | AggregateKind::Tuple(_)
-            | AggregateKind::Struct(_)
-            | AggregateKind::Class(_) => self.field_type(target, slot),
-            AggregateKind::Array | AggregateKind::List | AggregateKind::Set => {
-                element_type(&target.kind)
-            }
-            AggregateKind::Map => map_slot_type(&target.kind, slot),
-            AggregateKind::FormattedString
-            | AggregateKind::Enum(_, _)
-            | AggregateKind::Closure(_, _) => None,
-        }
+    ) -> Option<Type> {
+        PlaceTypes::of(self.body).aggregate_slot(kind, dest, slot)
     }
 }
 
@@ -449,68 +411,6 @@ fn count_of(count: usize, one: &str, many: &str) -> Option<String> {
         1 => Some(one.to_string()),
         count => Some(format!("{count} {many}")),
     }
-}
-
-/// The type an element of a collection of `kind` has; for a map, its value.
-fn element_type(kind: &TypeKind) -> Option<&Type> {
-    let position = match collection_kind(kind)? {
-        BuiltinCollectionKind::List | BuiltinCollectionKind::Array | BuiltinCollectionKind::Set => {
-            0
-        }
-        BuiltinCollectionKind::Map => 1,
-    };
-    written_type(type_argument(kind, position)?)
-}
-
-/// The type slot `slot` of a map literal holds: keys at even slots, values at
-/// odd ones.
-fn map_slot_type(kind: &TypeKind, slot: usize) -> Option<&Type> {
-    let BuiltinCollectionKind::Map = collection_kind(kind)? else {
-        return None;
-    };
-    written_type(type_argument(kind, slot % 2)?)
-}
-
-/// Which built-in collection `kind` is, in either of its spellings.
-fn collection_kind(kind: &TypeKind) -> Option<BuiltinCollectionKind> {
-    if let TypeKind::Custom(name, Some(_)) = kind {
-        return BuiltinCollectionKind::from_name(name);
-    }
-    if let TypeKind::List(_) = kind {
-        return Some(BuiltinCollectionKind::List);
-    }
-    if let TypeKind::Array(_, _) = kind {
-        return Some(BuiltinCollectionKind::Array);
-    }
-    if let TypeKind::Set(_) = kind {
-        return Some(BuiltinCollectionKind::Set);
-    }
-    if let TypeKind::Map(_, _) = kind {
-        return Some(BuiltinCollectionKind::Map);
-    }
-    None
-}
-
-/// The collection type argument at `position`, in declaration order.
-fn type_argument(kind: &TypeKind, position: usize) -> Option<&Expression> {
-    if let TypeKind::Custom(_, Some(args)) = kind {
-        return args.get(position);
-    }
-    if let TypeKind::List(element) | TypeKind::Array(element, _) | TypeKind::Set(element) = kind {
-        return (position == 0).then_some(element.as_ref());
-    }
-    if let TypeKind::Map(key, value) = kind {
-        return [key.as_ref(), value.as_ref()].get(position).copied();
-    }
-    None
-}
-
-/// The type a type argument expression spells.
-fn written_type(expression: &Expression) -> Option<&Type> {
-    let ExpressionKind::Type(ty, _) = &expression.node else {
-        return None;
-    };
-    Some(ty)
 }
 
 /// The layouts of `source` and `target`, described, when both are optionals

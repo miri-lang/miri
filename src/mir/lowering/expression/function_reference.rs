@@ -35,7 +35,6 @@ use crate::mir::{
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::helpers::resolve_type;
 
 /// The local holding a body's return value, by MIR convention.
 const RETURN_LOCAL: Local = Local(0);
@@ -205,8 +204,10 @@ fn build_forwarding_thunk(
 ) -> LambdaInfo {
     let span = expr.span;
     let params = &func_data.params;
+    // The thunk's types are the referenced function's declared ones, in the
+    // canonical spelling its body is compiled at: `Option<int>` is `int?`.
     let ret_ty = match &func_data.return_type {
-        Some(ret_expr) => resolve_type(ctx.type_checker, ret_expr),
+        Some(ret_expr) => ctx.declared_type(ret_expr),
         None => Type::new(TypeKind::Void, span),
     };
 
@@ -215,6 +216,8 @@ fn build_forwarding_thunk(
 
     let mut thunk_ctx = LoweringContext::new(body, ctx.type_checker, ctx.is_release);
     thunk_ctx.use_compilation_ids(ctx.compilation_ids.clone());
+    // Read against the enclosing body's parameters, as a lambda's body is.
+    thunk_ctx.body.type_params = ctx.body.type_params.clone();
     thunk_ctx.body.open_params = ctx.body.open_params.clone();
     thunk_ctx.body.bound_params = ctx.body.bound_params.clone();
     thunk_ctx.push_param(
@@ -225,7 +228,7 @@ fn build_forwarding_thunk(
 
     let mut args = Vec::with_capacity(params.len());
     for (index, param) in params.iter().enumerate() {
-        let param_ty = resolve_type(ctx.type_checker, &param.typ);
+        let param_ty = ctx.declared_type(&param.typ);
         let local = thunk_ctx.push_param(thunk_param_name(param, index), param_ty, span);
         args.push(Operand::Copy(Place::new(local)));
     }

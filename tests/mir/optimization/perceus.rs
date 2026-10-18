@@ -23,14 +23,15 @@ use miri::mir::block::BasicBlockData;
 use miri::mir::lowering::lower_function;
 use miri::mir::optimization::insert_rc;
 use miri::mir::rc::RcClassifier;
+use miri::mir::type_facts::{ClassDefinition, GenericDefinition};
 use miri::mir::verify::verify_body;
 use miri::mir::{
     AggregateKind, Body, ExecutionModel, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::pipeline::Pipeline;
-use miri::type_checker::context::{AliasDefinition, TypeDefinition};
-use std::collections::HashMap;
+use miri::type_checker::context::{AliasDefinition, FieldInfo, TypeDefinition};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
 fn span() -> Span {
@@ -430,7 +431,43 @@ fn return_of_generic_class_field(arg: TypeKind) -> Body {
         ))],
     )]);
     body.class_type_params = HashMap::from([("Tagged".to_string(), vec!["T".to_string()])]);
+    let definitions = HashMap::from([("Tagged".to_string(), tagged_definition())]);
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions));
     body
+}
+
+/// `class Tagged<T>` with the one field `value T`, as the program defines it.
+fn tagged_definition() -> TypeDefinition {
+    let param = ty(TypeKind::Generic(
+        "T".to_string(),
+        None,
+        miri::ast::types::TypeDeclarationKind::None,
+    ));
+    TypeDefinition::Class(ClassDefinition {
+        name: "Tagged".to_string(),
+        generics: Some(vec![GenericDefinition {
+            name: "T".to_string(),
+            constraint: None,
+            kind: miri::ast::types::TypeDeclarationKind::None,
+        }]),
+        base_class: None,
+        base_class_args: None,
+        traits: Vec::new(),
+        trait_args: HashMap::new(),
+        fields: vec![(
+            "value".to_string(),
+            FieldInfo {
+                ty: param,
+                mutable: true,
+                visibility: miri::ast::MemberVisibility::Public,
+                initializer: None,
+            },
+        )],
+        methods: BTreeMap::new(),
+        module: String::new(),
+        is_abstract: false,
+        runtime_settled_methods: BTreeSet::new(),
+    })
 }
 
 #[test]

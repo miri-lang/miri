@@ -276,10 +276,11 @@ fn finish_coalesce_result(
     }
 }
 
-/// The inner type `T` of `Option<T>` for the coalesce result temp; the lhs type
-/// itself if it is not an Option, else `Int` when untyped.
+/// The inner type `T` of `Option<T>` for the coalesce result temp, at the
+/// arguments the body is lowered at; the lhs type itself if it is not an
+/// Option, else `Int` when untyped.
 fn coalesce_inner_type(ctx: &LoweringContext, lhs: &Expression, expr: &Expression) -> Type {
-    let Some(ty) = ctx.type_checker.get_type(lhs.id).cloned() else {
+    let Some(ty) = ctx.recorded_type(lhs.id) else {
         return Type::new(TypeKind::Int, expr.span);
     };
     match &ty.kind {

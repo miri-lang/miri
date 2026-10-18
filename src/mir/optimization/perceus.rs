@@ -33,6 +33,8 @@ struct PerceusContext<'a> {
     field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     class_type_params: &'a std::collections::HashMap<String, Vec<String>>,
     type_params: &'a std::collections::HashSet<String>,
+    /// The parameters the body leaves open; see [`Body::open_params`].
+    open_params: &'a std::collections::HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Used by `is_place_managed` to resolve `closure.Field(i)` projections so that
     /// `handle_aggregate` can IncRef managed captures when building a closure aggregate.
@@ -165,6 +167,7 @@ impl OptimizationPass for Perceus {
             ref field_types,
             ref class_type_params,
             ref type_params,
+            ref open_params,
             ref closure_capture_types,
             ..
         } = *body;
@@ -175,6 +178,7 @@ impl OptimizationPass for Perceus {
             field_types,
             class_type_params,
             type_params,
+            open_params,
             closure_capture_types,
             borrowed: &borrowed,
         };
@@ -410,6 +414,13 @@ impl Perceus {
             return false;
         }
 
+        // A value held as its bytes read from a counted one — an optional
+        // read out of the placeholder word the absent value is spelled at —
+        // copies what it reads and holds no reference to it.
+        if place_declared_type(dest, ctx).is_some_and(|declared| ctx.holds_value(&declared.kind)) {
+            return false;
+        }
+
         // Direct managed place?
         if is_place_managed(source, ctx) {
             return true;
@@ -612,6 +623,10 @@ fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option<Type> {
         field_types: ctx.field_types,
         class_type_params: ctx.class_type_params,
         closure_capture_types: ctx.closure_capture_types,
+        definitions: ctx.rc_classifier.definitions(),
+        type_params: ctx.type_params,
+        open_params: ctx.open_params,
+        strict: true,
     }
     .declared(place)
 }

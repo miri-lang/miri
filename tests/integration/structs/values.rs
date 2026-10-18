@@ -601,7 +601,8 @@ fn main()
 ",
         ),
         "true false true 9.0 2.0 2 4.0",
-        18,
+        // A `P?` is held as its bytes like `P`: no optional is boxed.
+        16,
     );
 }
 

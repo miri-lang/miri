@@ -28,7 +28,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::type_checker::value_class::held_value_layout;
-pub use crate::type_checker::value_class::LayoutScope;
+pub use crate::type_checker::value_class::{is_absent_placeholder, LayoutScope};
 
 impl LayoutScope<'_> {
     /// The alias `kind` resolves to, unless `kind` names an open parameter.
@@ -65,8 +65,7 @@ pub enum LayerRepr {
 /// For `Node??` with `Node` a class, the innermost layer is the nullable
 /// `Node` pointer and the outer layer is boxed: `boxed` is 1,
 /// `innermost_nullable_pointer` is true and `value` is `Node`. For `int??`
-/// both layers are inline once optionals are held as their bytes, and both
-/// boxed until then. A type that is not optional has no layers.
+/// both layers are inline. A type that is not optional has no layers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OptionalLayers<'t> {
     /// The number of optional layers that hold their payload in a box.
@@ -116,6 +115,20 @@ impl<'t> OptionalLayers<'t> {
     pub fn is_optional(&self) -> bool {
         self.boxed > 0 || self.inline > 0 || self.innermost_nullable_pointer
     }
+
+    /// What a set or map matching an element of `kind` — the type these are
+    /// the layers of — compares and hashes: the value inside every layer held
+    /// as a word, which the runtime opens itself, or the whole element when
+    /// its layers are held as its bytes, which only its own callbacks can
+    /// read. `None` for a box around an optional held as bytes, which the
+    /// runtime can neither open nor hand a callback.
+    pub fn matched_kind<'k>(&'k self, kind: &'k TypeKind) -> Option<&'k TypeKind> {
+        match (self.inline, self.boxed) {
+            (0, _) => Some(&self.value),
+            (_, 0) => Some(kind),
+            (_, _) => None,
+        }
+    }
 }
 
 /// The optionals peeled off a type: how many, the outermost depth at which
@@ -139,7 +152,7 @@ fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Peeled<'t> 
     let mut expansions_left = scope.definitions.len();
     loop {
         if first_held_depth.is_none()
-            && matches!(&*value, TypeKind::Option(_))
+            && (matches!(&*value, TypeKind::Option(_)) || written_option_payload(&value).is_some())
             && held_value_layout(&value, scope).is_some()
         {
             first_held_depth = Some(layers);
@@ -147,23 +160,40 @@ fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Peeled<'t> 
         value = match value {
             Cow::Borrowed(TypeKind::Option(inner)) => Cow::Borrowed(&inner.kind),
             Cow::Owned(TypeKind::Option(inner)) => Cow::Owned(inner.kind),
-            other => match scope.resolve_alias(&other) {
-                Some(target) if expansions_left > 0 => {
-                    expansions_left -= 1;
-                    value = Cow::Owned(target.kind);
-                    continue;
-                }
-                Some(_) | None => {
-                    return Peeled {
-                        layers,
-                        first_held_depth,
-                        value: other,
+            other => match written_option_payload(&other) {
+                Some(payload) => Cow::Owned(payload.kind),
+                None => match scope.resolve_alias(&other) {
+                    Some(target) if expansions_left > 0 => {
+                        expansions_left -= 1;
+                        value = Cow::Owned(target.kind);
+                        continue;
                     }
-                }
+                    Some(_) | None => {
+                        return Peeled {
+                            layers,
+                            first_held_depth,
+                            value: other,
+                        }
+                    }
+                },
             },
         };
         layers += 1;
     }
+}
+
+/// The payload of an optional written as the generic type `Option<T>`: the
+/// optional `T?` under another spelling, peeled alike.
+fn written_option_payload(kind: &TypeKind) -> Option<Type> {
+    let TypeKind::Custom(name, Some(args)) = kind else {
+        return None;
+    };
+    let [payload] = args.as_slice() else {
+        return None;
+    };
+    (name == crate::ast::types::OPTION_TYPE_NAME)
+        .then(|| crate::mir::instantiation::type_argument(payload))
+        .flatten()
 }
 
 /// Whether a value of `kind` is an optional held as its payload's own pointer,

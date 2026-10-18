@@ -60,18 +60,19 @@ fn emit_enum_aggregate(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let instance = resolve_type(ctx.type_checker, expr);
     let mut ops = vec![enum_discriminant_operand(discriminant, expr.span)];
-    for arg in args {
-        ops.push(lower_expression(ctx, arg, None)?);
-    }
+    ops.extend(lower_enum_payload(
+        ctx,
+        (type_name, variant_name),
+        &instance,
+        args,
+    )?);
 
     // DPS: use the caller-provided destination, else allocate a fresh temp.
     let target = match dest {
         Some(d) => d,
-        None => {
-            let ty = resolve_type(ctx.type_checker, expr);
-            Place::new(ctx.push_temp(ty, expr.span))
-        }
+        None => Place::new(ctx.push_temp(instance, expr.span)),
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
@@ -84,6 +85,81 @@ fn emit_enum_aggregate(
         span: expr.span,
     });
     Ok(Operand::Copy(target))
+}
+
+/// Lower the payload `args` of variant `variant` of the enum `enum_name`,
+/// built at `instance`, each brought to the type its slot declares: a bare
+/// value is wrapped where the slot is an optional, and an absent value is
+/// given the slot's bytes, as a store into any optional slot does.
+pub(crate) fn lower_enum_payload(
+    ctx: &mut LoweringContext,
+    (enum_name, variant): (&str, &str),
+    instance: &Type,
+    args: &[Expression],
+) -> Result<Vec<Operand>, LoweringError> {
+    let slots = enum_payload_types(ctx, enum_name, variant, instance);
+    let mut ops = Vec::with_capacity(args.len());
+    for (position, arg) in args.iter().enumerate() {
+        let watermark = ctx.body.local_decls.len();
+        let op = lower_expression(ctx, arg, None)?;
+        let op = match slots.get(position) {
+            Some(slot) => {
+                let op_ty = crate::mir::lowering::dispatch::argument_type(ctx, &op, arg);
+                let (op, _) = crate::mir::lowering::helpers::wrap_for_optional_slot(
+                    ctx, op, op_ty, slot, watermark, arg.span,
+                );
+                op
+            }
+            None => op,
+        };
+        ops.push(op);
+    }
+    Ok(ops)
+}
+
+/// The types the payload slots of `variant` of the enum `enum_name` hold,
+/// at the arguments `instance` writes the enum with.
+fn enum_payload_types(
+    ctx: &LoweringContext,
+    enum_name: &str,
+    variant: &str,
+    instance: &Type,
+) -> Vec<Type> {
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) = ctx
+        .type_checker
+        .type_table
+        .global_type_definitions
+        .get(enum_name)
+    else {
+        return Vec::new();
+    };
+    let Some(fields) = enum_def.variants.get(variant) else {
+        return Vec::new();
+    };
+    let arguments: &[Expression] = if let TypeKind::Custom(_, Some(args)) = &instance.kind {
+        args
+    } else {
+        &[]
+    };
+    let substitution: std::collections::HashMap<String, Type> = enum_def
+        .generics
+        .iter()
+        .flatten()
+        .zip(arguments)
+        .filter_map(|(generic, arg)| {
+            Some((
+                generic.name.clone(),
+                crate::mir::instantiation::type_argument(arg)?,
+            ))
+        })
+        .collect();
+    fields
+        .iter()
+        .map(|field| {
+            let field = crate::mir::lowering::apply_generic_sub(field, &substitution);
+            crate::mir::lowering::variable::canonical_declared_type(ctx.type_checker, &field)
+        })
+        .collect()
 }
 
 /// Find the discriminant index of `variant_name` within enum `type_name`.

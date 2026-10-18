@@ -390,14 +390,12 @@ fn main()
     );
 }
 
-/// A body the type checker never judged at the types its operands have — a
-/// generic method lowered where nothing checked it — applies an operator to a
-/// string. Lowering it as a machine instruction would compare the string's
-/// address as a number; it is lowered as the trap an unchecked method
-/// reports instead, and no body keeps an arithmetic or ordering instruction
-/// on a string.
+/// A generic method nothing calls applies an operator to a string, so the
+/// type checker never judged it at the types its operands have. Nothing names
+/// its open template either, so no body of it is compiled: no body keeps an
+/// ordering instruction on a string.
 #[test]
-fn an_operator_nothing_checked_on_a_string_is_lowered_as_a_trap() {
+fn an_uncalled_generic_method_applying_an_operator_to_a_string_is_not_compiled() {
     let bodies = Pipeline::new()
         .get_gpu_mir_bodies(
             r#"
@@ -425,16 +423,10 @@ fn main()
         .filter(|(name, _)| name.ends_with(".lt"))
         .collect();
     assert!(
-        !lt.is_empty(),
-        "a body of `lt` is lowered: {:?}",
+        lt.is_empty(),
+        "no body of `lt` is lowered: {:?}",
         text.iter().map(|(n, _)| n).collect::<Vec<_>>()
     );
-    for (name, body) in lt {
-        assert!(
-            body.contains("miri_rt_method_not_checked_panic"),
-            "{name} reports the unchecked operator:\n{body}"
-        );
-    }
 }
 
 /// An explicit level wins; `release` alone means 3; neither means 0.

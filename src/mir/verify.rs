@@ -107,10 +107,14 @@ use crate::type_checker::element_layout::element_layout;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
+mod bound_names;
 mod optional_representation;
+mod optional_slots;
 mod value_representation;
 
+pub use bound_names::verify_bound_names;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
+pub use optional_slots::verify_optional_slots;
 pub use value_representation::{verify_value_call_classes, verify_value_representation};
 
 /// Largest delta the domain represents; past it a local is reported rather than
@@ -991,12 +995,28 @@ fn apply_statement(
             if dest.projection.is_empty() && rvalue_is_owning(rvalue) {
                 adjust(state, tracked, dest.local, 1);
             }
+            if takes_no_reference(body, dest, rvalue) {
+                return;
+            }
             for consumed in consumed_bare_locals(rvalue) {
                 release(body, &Place::new(consumed), tracked, state, violations);
             }
         }
         StatementKind::Nop => {}
     }
+}
+
+/// Whether `rvalue` cast into `dest` leaves its source's reference where it
+/// was: a whole local holding a value as its bytes — an optional built from a
+/// counted placeholder spelling of the absent value — reads what it is cast
+/// from and holds no reference to it.
+fn takes_no_reference(body: &Body, dest: &Place, rvalue: &Rvalue) -> bool {
+    matches!(rvalue, Rvalue::Cast(_, _))
+        && dest.projection.is_empty()
+        && body
+            .local_decls
+            .get(dest.local.0)
+            .is_some_and(|decl| body.value_layout(&decl.ty.kind).is_some())
 }
 
 fn flag_leak_at_scope_end(

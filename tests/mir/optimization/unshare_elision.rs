@@ -1092,6 +1092,7 @@ fn test_a_virtual_call_handed_the_place_forgets_it() {
             vtable_slot: 0,
             args: vec![Operand::Copy(local(2))],
             arg_modes: Vec::new(),
+            param_types: Vec::new(),
             destination: local(4),
             target: Some(next),
         });

@@ -106,19 +106,19 @@ fn counted(parameter: &str, open: &[&str]) -> bool {
 }
 
 /// Every value held in an allocation of its own is counted, an optional of a
-/// scalar included: an optional keeps its box or its nullable pointer.
+/// reference included: it is that reference's nullable pointer.
 #[test]
 fn rc_classifier_counts_every_heap_value() {
-    for parameter in ["mixed", "node", "maybe_int", "maybe_node", "text", "v"] {
+    for parameter in ["mixed", "node", "maybe_node", "text", "v"] {
         assert!(counted(parameter, &[]), "`{parameter}` should be counted");
     }
 }
 
-/// A struct or tuple of scalars — an instantiation of a generic struct at
-/// scalars included — is held as its bytes, with no count.
+/// A struct, tuple or optional of scalars — an instantiation of a generic
+/// struct at scalars included — is held as its bytes, with no count.
 #[test]
 fn rc_classifier_holds_structs_and_tuples_of_scalars_as_bytes() {
-    for parameter in ["p", "ints", "pair"] {
+    for parameter in ["p", "ints", "pair", "maybe_int"] {
         assert!(
             !counted(parameter, &[]),
             "`{parameter}` should not be counted"

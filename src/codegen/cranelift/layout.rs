@@ -120,13 +120,14 @@ impl Slot {
 }
 
 /// Where member `index` of a value held as its bytes, laid out as `layout`,
-/// sits, and what it is: a scalar at its own width, or a nested value.
+/// sits, and what it is: a scalar at its own width, or a nested value. An
+/// optional's one member is its payload, beside its tag.
 fn value_member(
     layout: &ValueLayout,
     index: usize,
     kind: &TypeKind,
 ) -> Result<(i32, Member), CodegenError> {
-    let field = layout.fields.get(index).ok_or_else(|| {
+    let field = layout.projected_field(index).ok_or_else(|| {
         CodegenError::Internal(format!(
             "field index {index} out of range: `{kind}` has {} fields",
             layout.fields.len()

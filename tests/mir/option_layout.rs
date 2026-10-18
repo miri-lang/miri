@@ -295,6 +295,23 @@ fn assert_layers(kind: TypeKind, boxed: usize, nullable: bool, value: &TypeKind)
     assert_eq!(&*layers.value, value, "innermost value of {kind:?}");
 }
 
+/// Asserts that `kind` is `inline` optional layers held as their bytes,
+/// around `value`, with no box and no nullable pointer.
+fn assert_inline_layers(kind: TypeKind, inline: usize, value: &TypeKind) {
+    let defs = definitions();
+    let layers = OptionalLayers::of(&kind, LayoutScope::program(&defs));
+    assert_eq!(
+        (
+            layers.boxed,
+            layers.inline,
+            layers.innermost_nullable_pointer
+        ),
+        (0, inline, false),
+        "layers of {kind:?}"
+    );
+    assert_eq!(&*layers.value, value, "innermost value of {kind:?}");
+}
+
 #[test]
 fn test_option_layout_pointer_payload_layers() {
     let node = custom("Node");
@@ -308,9 +325,10 @@ fn test_option_layout_pointer_payload_layers() {
 
 #[test]
 fn test_option_layout_value_payload_layers() {
-    assert_layers(optional(TypeKind::Int), 1, false, &TypeKind::Int);
-    assert_layers(optional(optional(TypeKind::Int)), 2, false, &TypeKind::Int);
-    assert_layers(optional(custom("Meters")), 1, false, &TypeKind::Int);
+    assert_inline_layers(optional(TypeKind::Int), 1, &TypeKind::Int);
+    assert_inline_layers(optional(optional(TypeKind::Int)), 2, &TypeKind::Int);
+    assert_inline_layers(optional(custom("Meters")), 1, &TypeKind::Int);
+    // An inline vector keeps an allocation of its own, so its optional is a box.
     let vector = custom_of(VEC3_TYPE_NAME, vec![TypeKind::F32]);
     assert_layers(optional(vector.clone()), 1, false, &vector);
 }
@@ -342,10 +360,9 @@ fn test_option_layout_generic_alias_is_judged_at_its_arguments() {
         true,
         &node,
     );
-    assert_layers(
+    assert_inline_layers(
         optional(custom_of("Id", vec![TypeKind::Int])),
         1,
-        false,
         &TypeKind::Int,
     );
     assert_layers(custom_of("Opt", vec![node.clone()]), 0, true, &node);
@@ -355,12 +372,7 @@ fn test_option_layout_generic_alias_is_judged_at_its_arguments() {
         true,
         &node,
     );
-    assert_layers(
-        custom_of("Opt", vec![TypeKind::Int]),
-        1,
-        false,
-        &TypeKind::Int,
-    );
+    assert_inline_layers(custom_of("Opt", vec![TypeKind::Int]), 1, &TypeKind::Int);
 }
 
 #[test]
@@ -487,23 +499,24 @@ fn layer_reprs(kind: &TypeKind) -> (Vec<LayerRepr>, usize, bool) {
     (layers.reprs(), layers.inline, layers.is_optional())
 }
 
-/// An optional's layers, named outermost first. Every program today holds
-/// an optional around a value or a scalar in a box, so no layer is inline:
-/// the struct `Pair` is held as its bytes, and `Pair?` is still boxed.
+/// An optional's layers, named outermost first. An optional around a scalar
+/// or a value held as its bytes — the struct `Pair` — is itself held as its
+/// bytes, and an optional around a reference is that reference, null when
+/// absent, with any layer outside it boxed.
 #[test]
 fn test_option_layout_reprs_name_each_layer_outermost_first() {
-    use LayerRepr::{Boxed, NullablePointer};
+    use LayerRepr::{Boxed, Inline, NullablePointer};
     let node = custom("Node");
     let pair = custom("Pair");
     let defs = definitions_with_a_held_struct();
     assert!(held_value_layout(&pair, LayoutScope::program(&defs)).is_some());
     assert_eq!(
         layer_reprs(&optional(TypeKind::Int)),
-        (vec![Boxed], 0, true)
+        (vec![Inline], 1, true)
     );
     assert_eq!(
         layer_reprs(&optional(optional(TypeKind::Int))),
-        (vec![Boxed, Boxed], 0, true)
+        (vec![Inline, Inline], 2, true)
     );
     assert_eq!(
         layer_reprs(&optional(node.clone())),
@@ -513,7 +526,10 @@ fn test_option_layout_reprs_name_each_layer_outermost_first() {
         layer_reprs(&optional(optional(node.clone()))),
         (vec![Boxed, NullablePointer], 0, true)
     );
-    assert_eq!(layer_reprs(&optional(pair.clone())), (vec![Boxed], 0, true));
+    assert_eq!(
+        layer_reprs(&optional(pair.clone())),
+        (vec![Inline], 1, true)
+    );
     assert_eq!(
         layer_reprs(&custom("MaybeNode")),
         (vec![NullablePointer], 0, true)

@@ -20,18 +20,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
-/// Which bitwise values a classifier holds as their bytes, uncounted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HeldValues {
-    /// The ones every program is compiled to hold as bytes: structs and
-    /// tuples with no optional inside, as
-    /// [`held_value_layout`](crate::type_checker::value_class::held_value_layout)
-    /// decides.
-    Program,
-    /// Every bitwise value, optionals included.
-    Every,
-}
-
 /// Decides whether a value of a type is reference counted, by its value class
 /// read against the program's type table.
 ///
@@ -40,7 +28,6 @@ enum HeldValues {
 #[derive(Clone)]
 pub struct RcClassifier {
     definitions: Rc<HashMap<String, TypeDefinition>>,
-    held: HeldValues,
 }
 
 impl Default for RcClassifier {
@@ -50,32 +37,15 @@ impl Default for RcClassifier {
 }
 
 impl RcClassifier {
-    /// A classifier that holds bitwise values the way every program is
-    /// compiled.
+    /// A classifier reading `definitions`.
     pub fn new(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
-        Self {
-            definitions,
-            held: HeldValues::Program,
-        }
-    }
-
-    /// A classifier that holds every bitwise value as its bytes, uncounted,
-    /// optionals included.
-    ///
-    /// No program is compiled this way. It lets a hand-built body be checked
-    /// against a representation the compiler does not translate yet.
-    pub fn with_uncounted_bitwise_values(definitions: Rc<HashMap<String, TypeDefinition>>) -> Self {
-        Self {
-            definitions,
-            held: HeldValues::Every,
-        }
+        Self { definitions }
     }
 
     /// Whether a value of `kind`, written in a body that leaves `type_params`
     /// open, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind, type_params: &HashSet<String>) -> bool {
-        let scope = LayoutScope::new(&self.definitions, type_params);
-        counted_by(kind, scope, |layout| self.holds_as_bytes(layout))
+        is_counted_in(kind, LayoutScope::new(&self.definitions, type_params))
     }
 
     /// The layout a value of `kind`, written in a body that leaves
@@ -90,7 +60,7 @@ impl RcClassifier {
             return None;
         }
         match value_class(kind, LayoutScope::new(&self.definitions, type_params)) {
-            ValueClass::Bitwise(layout) if self.holds_as_bytes(&layout) => Some(layout),
+            ValueClass::Bitwise(layout) if layout.is_held_as_bytes() => Some(layout),
             ValueClass::Bitwise(_)
             | ValueClass::Scalar(_)
             | ValueClass::Word(_)
@@ -102,56 +72,35 @@ impl RcClassifier {
     pub fn definitions(&self) -> &HashMap<String, TypeDefinition> {
         &self.definitions
     }
-
-    /// Whether a bitwise value laid out as `layout` is held as its bytes.
-    fn holds_as_bytes(&self, layout: &ValueLayout) -> bool {
-        match self.held {
-            HeldValues::Program => layout.is_held_as_bytes(),
-            HeldValues::Every => true,
-        }
-    }
 }
 
 impl fmt::Debug for RcClassifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RcClassifier")
             .field("definitions", &self.definitions.len())
-            .field("held", &self.held)
             .finish()
     }
 }
 
-/// Two classifiers are equal when they hold bitwise values alike and read
-/// one table, or both read an empty one. Type definitions have no equality of
-/// their own, so two copies of one program's table are told apart.
+/// Two classifiers are equal when they read one table, or both read an
+/// empty one. Type definitions have no equality of their own, so two copies
+/// of one program's table are told apart.
 impl PartialEq for RcClassifier {
     fn eq(&self, other: &Self) -> bool {
-        self.held == other.held
-            && (Rc::ptr_eq(&self.definitions, &other.definitions)
-                || (self.definitions.is_empty() && other.definitions.is_empty()))
+        Rc::ptr_eq(&self.definitions, &other.definitions)
+            || (self.definitions.is_empty() && other.definitions.is_empty())
     }
 }
 
-/// Whether a value of `kind`, read against `scope`, is reference counted the
-/// way every program is compiled.
+/// Whether a value of `kind`, read against `scope`, is reference counted.
 pub fn is_counted_in(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    counted_by(kind, scope, ValueLayout::is_held_as_bytes)
-}
-
-/// Whether a value of `kind` is reference counted, a bitwise value counted
-/// unless `holds_as_bytes` says its layout is held as bytes.
-fn counted_by(
-    kind: &TypeKind,
-    scope: LayoutScope<'_>,
-    holds_as_bytes: impl Fn(&ValueLayout) -> bool,
-) -> bool {
     !is_never_counted(kind)
         && match value_class(kind, scope) {
             ValueClass::Scalar(_) | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => {
                 false
             }
             ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
-            ValueClass::Bitwise(layout) => !holds_as_bytes(&layout),
+            ValueClass::Bitwise(layout) => !layout.is_held_as_bytes(),
         }
 }
 

@@ -93,6 +93,7 @@ impl Terminator {
                 args,
                 arg_modes,
                 vtable_slot: _,
+                param_types: _,
                 target: _,
             } => (Some(destination), args, arg_modes),
             TerminatorKind::GpuLaunch {
@@ -252,6 +253,7 @@ impl fmt::Display for Terminator {
                 vtable_slot,
                 args,
                 arg_modes: _,
+                param_types: _,
                 destination,
                 target,
             } => {
@@ -576,6 +578,11 @@ pub enum TerminatorKind {
         /// argument is [`ArgMode::Borrowed`]; read a position through
         /// [`arg_mode`], which answers `Borrowed` past the end.
         arg_modes: Vec<ArgMode>,
+        /// The type each method argument, `args[1..]`, is passed at: the
+        /// called method's parameter at the receiver's type arguments, as the
+        /// call site resolved it. `None` where a parameter names a type the
+        /// call site could not settle.
+        param_types: Vec<Option<crate::ast::types::Type>>,
         destination: Place,
         target: Option<BasicBlock>,
     },

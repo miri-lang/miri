@@ -354,6 +354,7 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
+        Self::refuse_word_into_held_slot(place, rvalue, type_ctx)?;
         if Self::assign_value_destination(builder, ctx, place, rvalue, locals, type_ctx)? {
             return Ok(());
         }
@@ -537,8 +538,8 @@ impl<'a> FunctionTranslator<'a> {
         };
         if !matches!(source_kind, TypeKind::Option(_))
             || Self::is_absent_value(rvalue)
-            || Self::is_absent_placeholder(&source_kind)
-            || Self::is_absent_placeholder(dest_kind)
+            || crate::mir::option_layout::is_absent_placeholder(&source_kind)
+            || crate::mir::option_layout::is_absent_placeholder(dest_kind)
         {
             return Ok(());
         }
@@ -550,12 +551,6 @@ impl<'a> FunctionTranslator<'a> {
             "an assignment moves `{source_kind:?}` into `{dest_kind:?}`, which are laid out \
              apart (one is its payload's own pointer, the other a box)"
         )))
-    }
-
-    /// Whether `kind` is `void?`, the type an absent value is spelled at before
-    /// it meets a slot: it holds nothing, so it agrees with every layout.
-    fn is_absent_placeholder(kind: &TypeKind) -> bool {
-        matches!(kind, TypeKind::Option(payload) if payload.kind == TypeKind::Void)
     }
 
     /// Whether `rvalue` writes the absent value, null under every layout.
@@ -865,20 +860,24 @@ impl<'a> FunctionTranslator<'a> {
                 vtable_slot,
                 args,
                 arg_modes,
+                param_types,
                 destination,
                 target,
-            } => Self::translate_virtual_call(
-                builder,
-                ctx,
-                *vtable_slot,
-                args,
-                arg_modes,
-                destination,
-                target.as_ref(),
-                locals,
-                blocks,
-                type_ctx,
-            ),
+            } => {
+                Self::refuse_word_into_held_parameters(args, param_types, type_ctx)?;
+                Self::translate_virtual_call(
+                    builder,
+                    ctx,
+                    *vtable_slot,
+                    args,
+                    arg_modes,
+                    destination,
+                    target.as_ref(),
+                    locals,
+                    blocks,
+                    type_ctx,
+                )
+            }
         }
     }
 
@@ -916,7 +915,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Translate `TerminatorKind::SwitchInt`. Lowers to a chain of `icmp` +
     /// `brif`, with a final unconditional branch to `otherwise` when no target
-    /// matches.
+    /// matches. An optional held as its bytes switches on its tag.
     #[allow(clippy::too_many_arguments)]
     fn translate_switch_int(
         builder: &mut FunctionBuilder,
@@ -928,7 +927,10 @@ impl<'a> FunctionTranslator<'a> {
         blocks: &HashMap<BasicBlock, Block>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let disc_val = Self::translate_operand(builder, ctx, discr, locals, type_ctx, None)?;
+        let disc_val = match Self::inline_optional_tag(builder, ctx, discr, locals, type_ctx)? {
+            Some(tag) => tag,
+            None => Self::translate_operand(builder, ctx, discr, locals, type_ctx, None)?,
+        };
         let disc_ty = builder.func.dfg.value_type(disc_val);
 
         if targets.is_empty() {

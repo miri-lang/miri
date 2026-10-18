@@ -188,7 +188,7 @@ fn assign_to_var_simple(
     rhs_watermark: &usize,
 ) -> Result<Operand, LoweringError> {
     let lhs_ty = ctx.body.local_decls[local.0].ty.clone();
-    let rhs_ty = val.ty(&ctx.body).clone();
+    let rhs_ty = crate::mir::lowering::helpers::operand_value_type(ctx, &val);
 
     let rvalue = if rhs_ty.kind != lhs_ty.kind && !spellings_of_one_value(&rhs_ty, &lhs_ty) {
         let val = read_older_local_by_copy(val.clone(), *rhs_watermark);

@@ -709,6 +709,35 @@ pub fn element_positions(name: &str) -> &'static [usize] {
     }
 }
 
+/// What an element argument of a collection entry point is to the
+/// collection it is handed to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementRole {
+    /// An element of a list, an array or a set.
+    Element,
+    /// A key of a map.
+    Key,
+    /// A value of a map.
+    Value,
+}
+
+/// Each argument position of `name` that carries an element (see
+/// [`element_positions`]), with what it is to the collection the call's first
+/// argument names. Exactly the positions [`element_positions`] lists.
+pub fn element_roles(name: &str) -> &'static [(usize, ElementRole)] {
+    match name {
+        rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => {
+            &[(1, ElementRole::Element)]
+        }
+        rt::LIST_SET | rt::LIST_INSERT | rt::ARRAY_SET_VAL => &[(2, ElementRole::Element)],
+        rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => {
+            &[(1, ElementRole::Key)]
+        }
+        rt::MAP_SET => &[(1, ElementRole::Key), (2, ElementRole::Value)],
+        _ => &[],
+    }
+}
+
 /// The parameter list the runtime entry point `name` really takes, given the
 /// one its Miri declaration spells.
 ///

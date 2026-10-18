@@ -28,6 +28,7 @@ pub mod module;
 pub mod operand;
 pub mod optimization;
 pub mod option_layout;
+pub mod optional_conformance;
 pub mod place;
 pub mod place_type;
 pub mod rc;

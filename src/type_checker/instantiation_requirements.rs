@@ -504,10 +504,38 @@ fn generic_parameter_name(kind: &TypeKind) -> Option<&str> {
 /// it — `Vec3<T> * f32` states as much about `T` as `a * b` does — so a
 /// requirement is decided over the whole type rather than its head alone.
 pub(crate) fn spells_a_type(kind: &TypeKind, applies: &dyn Fn(&TypeKind) -> bool) -> bool {
-    if applies(kind) {
-        return true;
+    spells_where(kind, &|kind| {
+        if applies(kind) {
+            Visit::Applies
+        } else {
+            Visit::Descends
+        }
+    })
+}
+
+/// What a walk over a type does at one type it reaches.
+#[derive(Clone, Copy)]
+pub(crate) enum Visit {
+    /// The type is what the walk looks for.
+    Applies,
+    /// It is not; the walk goes on into the types it spells.
+    Descends,
+    /// It is not, and the walk does not look into it: the visitor has
+    /// answered for everything below it.
+    Stops,
+}
+
+/// True when `visit` answers `Applies` at `kind` or at a type it spells at
+/// any depth, never looking below a type it answers `Stops` at.
+pub(crate) fn spells_where(kind: &TypeKind, visit: &dyn Fn(&TypeKind) -> Visit) -> bool {
+    match visit(kind) {
+        Visit::Applies => return true,
+        Visit::Stops => return false,
+        Visit::Descends => {}
     }
-    let spelled_by = |expr: &Expression| matches!(&expr.node, ExpressionKind::Type(ty, _) if spells_a_type(&ty.kind, applies));
+    let spells = |kind: &TypeKind| spells_where(kind, visit);
+    let spelled_by =
+        |expr: &Expression| matches!(&expr.node, ExpressionKind::Type(ty, _) if spells(&ty.kind));
     match kind {
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
             spelled_by(element)
@@ -519,9 +547,9 @@ pub(crate) fn spells_a_type(kind: &TypeKind, applies: &dyn Fn(&TypeKind) -> bool
         TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => elements.iter().any(spelled_by),
         TypeKind::Custom(_, Some(arguments)) => arguments.iter().any(spelled_by),
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
-            spells_a_type(&inner.kind, applies)
+            spells(&inner.kind)
         }
-        TypeKind::Generic(_, Some(bound), _) => spells_a_type(&bound.kind, applies),
+        TypeKind::Generic(_, Some(bound), _) => spells(&bound.kind),
         TypeKind::Function(signature) => {
             signature.params.iter().any(|param| spelled_by(&param.typ))
                 || signature.return_type.as_deref().is_some_and(spelled_by)
