@@ -40,16 +40,40 @@ impl LayoutScope<'_> {
     }
 }
 
-/// How a possibly nested optional type is laid out.
+/// How one layer of a possibly nested optional is held.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayerRepr {
+    /// The payload's own reference-counted pointer, null when absent. Only
+    /// the innermost layer, around a counted pointer, is held so.
+    NullablePointer,
+    /// A presence tag and the payload beside it, held as bytes with no count:
+    /// a layer around a scalar, a value held as its bytes, or another such
+    /// layer, as long as the whole fits a value.
+    Inline,
+    /// A box allocated for the layer, null when absent: a layer around a
+    /// nullable pointer, around anything counted, or too wide to be inline.
+    Boxed,
+}
+
+/// How a possibly nested optional type is laid out, layer by layer.
+///
+/// The layers nest outside in: `boxed` boxed layers, then `inline` layers held
+/// as bytes, then, innermost, the nullable payload pointer when there is one.
+/// A layer held inline never wraps a nullable pointer or a box, and a boxed
+/// layer never sits inside an inline one, so these counts say everything.
 ///
 /// For `Node??` with `Node` a class, the innermost layer is the nullable
 /// `Node` pointer and the outer layer is boxed: `boxed` is 1,
 /// `innermost_nullable_pointer` is true and `value` is `Node`. For `int??`
-/// both layers are boxed. A type that is not optional has no layers.
+/// both layers are inline once optionals are held as their bytes, and both
+/// boxed until then. A type that is not optional has no layers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OptionalLayers<'t> {
     /// The number of optional layers that hold their payload in a box.
     pub boxed: usize,
+    /// The number of optional layers held as their bytes, inside the boxed
+    /// ones.
+    pub inline: usize,
     /// Whether the innermost optional layer is the payload pointer itself,
     /// null when absent.
     pub innermost_nullable_pointer: bool,
@@ -64,14 +88,42 @@ impl<'t> OptionalLayers<'t> {
     /// An alias is peeled like the type it names, so an alias naming an
     /// optional adds that optional's layers.
     pub fn of(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Self {
-        let (layers, value) = peel_optionals(kind, scope);
-        let innermost_nullable_pointer = layers > 0 && payload_is_nullable_pointer(&value, scope);
+        let peeled = peel_optionals(kind, scope);
+        let layers = peeled.layers;
+        let inline = peeled.first_held_depth.map_or(0, |depth| layers - depth);
+        let innermost_nullable_pointer =
+            inline == 0 && layers > 0 && payload_is_nullable_pointer(&peeled.value, scope);
         Self {
-            boxed: layers - usize::from(innermost_nullable_pointer),
+            boxed: layers - inline - usize::from(innermost_nullable_pointer),
+            inline,
             innermost_nullable_pointer,
-            value,
+            value: peeled.value,
         }
     }
+
+    /// The representation of each layer, outermost first.
+    pub fn reprs(&self) -> Vec<LayerRepr> {
+        std::iter::repeat_n(LayerRepr::Boxed, self.boxed)
+            .chain(std::iter::repeat_n(LayerRepr::Inline, self.inline))
+            .chain(
+                self.innermost_nullable_pointer
+                    .then_some(LayerRepr::NullablePointer),
+            )
+            .collect()
+    }
+
+    /// Whether the type has any optional layer.
+    pub fn is_optional(&self) -> bool {
+        self.boxed > 0 || self.inline > 0 || self.innermost_nullable_pointer
+    }
+}
+
+/// The optionals peeled off a type: how many, the outermost depth at which
+/// the rest is held as bytes, and the value inside them all.
+struct Peeled<'t> {
+    layers: usize,
+    first_held_depth: Option<usize>,
+    value: Cow<'t, TypeKind>,
 }
 
 /// How many optionals wrap `kind`, seen through aliases, and the value they
@@ -80,11 +132,18 @@ impl<'t> OptionalLayers<'t> {
 /// Each alias expansion is followed by an optional to peel; aliases that only
 /// reach each other through optionals form an infinite type, which the bound
 /// on expansions stops at the alias reached.
-fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> (usize, Cow<'t, TypeKind>) {
+fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> Peeled<'t> {
     let mut layers = 0;
+    let mut first_held_depth = None;
     let mut value = Cow::Borrowed(kind);
     let mut expansions_left = scope.definitions.len();
     loop {
+        if first_held_depth.is_none()
+            && matches!(&*value, TypeKind::Option(_))
+            && held_value_layout(&value, scope).is_some()
+        {
+            first_held_depth = Some(layers);
+        }
         value = match value {
             Cow::Borrowed(TypeKind::Option(inner)) => Cow::Borrowed(&inner.kind),
             Cow::Owned(TypeKind::Option(inner)) => Cow::Owned(inner.kind),
@@ -94,7 +153,13 @@ fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> (usize, Cow
                     value = Cow::Owned(target.kind);
                     continue;
                 }
-                Some(_) | None => return (layers, other),
+                Some(_) | None => {
+                    return Peeled {
+                        layers,
+                        first_held_depth,
+                        value: other,
+                    }
+                }
             },
         };
         layers += 1;
@@ -106,7 +171,7 @@ fn peel_optionals<'t>(kind: &'t TypeKind, scope: LayoutScope<'_>) -> (usize, Cow
 /// one, whose only layer is a nullable pointer.
 pub fn is_nullable_pointer_optional(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
     let layers = OptionalLayers::of(kind, scope);
-    layers.boxed == 0 && layers.innermost_nullable_pointer
+    layers.boxed == 0 && layers.inline == 0 && layers.innermost_nullable_pointer
 }
 
 /// The type the alias `kind` names stands for, with the alias's parameters

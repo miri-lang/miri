@@ -13,6 +13,7 @@ pub mod option_layout;
 pub mod place;
 pub mod place_type;
 pub mod rc;
+pub mod representation;
 pub mod residency;
 pub mod ssa;
 pub mod symbol;

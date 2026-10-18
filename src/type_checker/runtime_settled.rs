@@ -9,11 +9,13 @@
 //!
 //! A body the class declares is settled when all three hold:
 //!
-//! - **Its signature hands no optional of a type parameter across the call.**
-//!   How an optional is laid out depends on its payload: one holding a
-//!   reference-counted pointer can be that pointer, null when absent, where one
-//!   holding the pointer-width stand-in needs a box. A `pop` that returns `T?`
-//!   therefore builds a different value at each kind of argument.
+//! - **Its signature hands no value built from a type parameter across the
+//!   call** — an optional, a tuple or a struct holding one. How such a value is
+//!   held depends on the argument: an optional holding a reference-counted
+//!   pointer can be that pointer, null when absent, where one holding the
+//!   pointer-width stand-in needs a box, and a tuple of scalars is held as its
+//!   bytes where a tuple of the stand-in is an allocation. A `pop` that returns
+//!   `T?` therefore builds a different value at each kind of argument.
 //! - **Every call is settled.** It calls a `runtime` function, a built-in
 //!   variant constructor (`Some`, `Ok`, `Err`), `self.m()` for a method `m` of
 //!   this class that is itself settled, or `super.m()` for a settled method of
@@ -85,7 +87,7 @@ impl TypeChecker {
         let Some(TypeDefinition::Class(class_def)) = definitions.get(class_name) else {
             return BTreeSet::new();
         };
-        let bodies = settleable_bodies(class_def, method_statements);
+        let bodies = settleable_bodies(class_def, method_statements, definitions);
         let inherited = base_class_settled_methods(class_def, definitions);
         let mut settled: BTreeSet<&str> = bodies.iter().map(|(name, _)| *name).collect();
         loop {
@@ -115,12 +117,17 @@ impl TypeChecker {
 fn settleable_bodies<'s>(
     class_def: &ClassDefinition,
     method_statements: &[&'s Statement],
+    definitions: &HashMap<String, TypeDefinition>,
 ) -> Vec<(&'s str, &'s Statement)> {
     method_statements
         .iter()
         .filter_map(|stmt| match &stmt.node {
             StatementKind::FunctionDeclaration(decl)
-                if !signature_holds_a_parameter_optional(class_def, &decl.name) =>
+                if !signature_holds_a_parameter_derived_value(
+                    class_def,
+                    &decl.name,
+                    definitions,
+                ) =>
             {
                 method_body(decl).map(|body| (decl.name.as_str(), body))
             }
@@ -145,44 +152,78 @@ fn base_class_settled_methods<'d>(
     }
 }
 
-/// Whether the method `method_name` of `class_def` takes or returns an
-/// optional whose innermost payload is one of the class's type parameters.
-fn signature_holds_a_parameter_optional(class_def: &ClassDefinition, method_name: &str) -> bool {
-    class_def
-        .methods
-        .get(method_name)
-        .is_some_and(|method| hands_a_parameter_optional(method, class_def.generics.as_ref()))
+/// Whether the method `method_name` of `class_def` takes or returns a value
+/// built from one of the class's type parameters; see
+/// [`hands_a_parameter_derived_value`].
+fn signature_holds_a_parameter_derived_value(
+    class_def: &ClassDefinition,
+    method_name: &str,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> bool {
+    class_def.methods.get(method_name).is_some_and(|method| {
+        hands_a_parameter_derived_value(method, class_def.generics.as_ref(), definitions)
+    })
 }
 
-/// Whether `method` takes or returns an optional whose innermost payload is
-/// one of `generics`, the type parameters of the class or trait declaring it.
+/// Whether `method` takes or returns a value built from one of `generics`,
+/// the type parameters of the class or trait declaring it: an optional, a
+/// tuple or a struct holding a parameter, or holding another such value.
 ///
-/// Such an optional is laid out by what the parameter is instantiated at, so
-/// one body shared by every instantiation cannot hand it to a caller that
-/// knows the argument.
-pub(crate) fn hands_a_parameter_optional(
+/// How such a value is held follows the argument the parameter is bound to,
+/// so one body shared by every instantiation cannot hand it to a caller that
+/// knows the argument. A value reached only through a counted container — the
+/// `T?` elements of a `List<T?>` — is not one: the container is a pointer
+/// whatever its elements are.
+pub(crate) fn hands_a_parameter_derived_value(
     method: &MethodInfo,
     generics: Option<&Vec<GenericDefinition>>,
+    definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
     method
         .params
         .iter()
         .map(|(_, ty)| ty)
         .chain(std::iter::once(&method.return_type))
-        .any(|ty| is_parameter_optional(&ty.kind, generics))
+        .any(|ty| is_parameter_derived(&ty.kind, generics, definitions))
 }
 
-/// Whether `kind` is an optional, at any depth of nesting, of a parameter
-/// among `class_generics`.
-fn is_parameter_optional(kind: &TypeKind, class_generics: Option<&Vec<GenericDefinition>>) -> bool {
-    let TypeKind::Option(inner) = kind else {
-        return false;
+/// Whether `kind` is an optional, a tuple or a struct holding, directly, one
+/// of `generics` or another such value.
+fn is_parameter_derived(
+    kind: &TypeKind,
+    generics: Option<&Vec<GenericDefinition>>,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> bool {
+    let holds = |inner: &TypeKind| {
+        is_generic_parameter_kind(inner, generics)
+            || is_parameter_derived(inner, generics, definitions)
     };
-    let mut payload = &inner.kind;
-    while let TypeKind::Option(inner) = payload {
-        payload = &inner.kind;
+    if let TypeKind::Option(payload) = kind {
+        return holds(&payload.kind);
     }
-    is_generic_parameter_kind(payload, class_generics)
+    aggregate_elements(kind, definitions).is_some_and(|elements| {
+        elements.iter().any(|element| {
+            let ExpressionKind::Type(ty, _) = &element.node else {
+                return false;
+            };
+            holds(&ty.kind)
+        })
+    })
+}
+
+/// The written elements of a tuple, or the type arguments of a struct;
+/// `None` for any other kind.
+fn aggregate_elements<'k>(
+    kind: &'k TypeKind,
+    definitions: &HashMap<String, TypeDefinition>,
+) -> Option<&'k [Expression]> {
+    if let TypeKind::Tuple(elements) = kind {
+        return Some(elements);
+    }
+    let TypeKind::Custom(name, Some(arguments)) = kind else {
+        return None;
+    };
+    matches!(definitions.get(name), Some(TypeDefinition::Struct(_))).then_some(arguments)
 }
 
 /// One pass over method bodies against the current guess at the settled set.

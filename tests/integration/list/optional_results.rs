@@ -289,3 +289,46 @@ fn test_pop_on_a_list_of_optionals_reaches_a_body_of_its_own() {
 fn test_pop_and_remove_at_hand_back_optional_elements_under_the_heap_guard() {
     assert_heap_guard_output(OPTIONAL_ELEMENTS, "3\n1\n1");
 }
+
+const OPTIONAL_AND_INT_ELEMENTS: &str = r#"
+use system.io
+use system.collections.list
+
+class Node
+    var value int
+
+fn main()
+    var nodes = List<Node?>()
+    nodes.push(Some(Node(value: 1)))
+    nodes.push(None)
+    var ints = List<int>()
+    ints.push(4)
+    ints.push(5)
+    let a = nodes.pop()
+    let b = ints.pop()
+    match a
+        Some(inner): println("some")
+        None: println("none")
+    match b
+        Some(n): println(f"{n}")
+        None: println("none")
+"#;
+
+/// In one program, a list of optionals reaches a `pop` of its own — its
+/// element is held unlike the word the shared body reads — while a list of
+/// `int`, held exactly as that word, keeps the shared body.
+#[test]
+fn test_pop_on_optionals_gets_its_own_body_beside_a_shared_int_pop() {
+    let names = body_names(OPTIONAL_AND_INT_ELEMENTS);
+    assert_lowers_body(&names, "miri.List$1option_Node.pop");
+    assert!(
+        !names.iter().any(|name| name.ends_with("List$int.pop")),
+        "List<int>.pop got a body of its own: {names:?}"
+    );
+    assert_lowers_body(&names, "miri.List.pop");
+}
+
+#[test]
+fn test_pop_on_optionals_beside_an_int_pop_hands_back_both() {
+    assert_heap_guard_output(OPTIONAL_AND_INT_ELEMENTS, "some\n5");
+}

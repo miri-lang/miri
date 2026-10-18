@@ -317,6 +317,7 @@ fn test_optional_element_kind_matches_the_runtime_bit_layout() {
     let node = TypeKind::Custom("Node".to_string(), None);
     let layers = |boxed, innermost_nullable_pointer, value: &TypeKind| OptionalLayers {
         boxed,
+        inline: 0,
         innermost_nullable_pointer,
         value: Cow::Owned(value.clone()),
     };

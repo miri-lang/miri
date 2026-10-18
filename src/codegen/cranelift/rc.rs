@@ -612,7 +612,7 @@ impl<'a> FunctionTranslator<'a> {
             Some(_) => Self::by_slot_address(base),
             None => base,
         };
-        if layers.boxed == 0 && !layers.innermost_nullable_pointer {
+        if !layers.is_optional() {
             return (base != Self::BYTES_ELEMENT_KIND).then_some(base);
         }
         let value_size = match held {

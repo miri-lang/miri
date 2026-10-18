@@ -20,5 +20,6 @@ pub mod methods;
 pub mod optional_elements;
 pub mod optional_results;
 pub mod rc;
+pub mod shared_bodies;
 pub mod transformable;
 pub mod wide_scalar_elements;

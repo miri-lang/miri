@@ -129,3 +129,48 @@ fn indexing_a_type_parameter_collection_other_than_self_is_not_settled_by_the_ru
     assert_settled(&settled, "Bag", &["nth_size"]);
     assert_unsettled(&settled, "Bag", &["first_of"]);
 }
+
+/// A signature holding a value built from a type parameter — an optional, a
+/// tuple or a struct with the parameter directly inside — keeps its body
+/// unsettled: such a value is held as the argument makes it, which one shared
+/// body cannot match. The same rule refuses a bare vtable's slot for it. A
+/// parameter reached only through a counted container leaves the body
+/// settled: the container is a pointer whatever its elements are.
+#[test]
+fn a_signature_holding_a_value_built_from_a_parameter_is_not_settled() {
+    let source = r#"
+use system.collections.list
+
+struct Cell<T>
+    v T
+
+class Holder<T>
+    fn takes_optional(v T?) int: 1
+    fn takes_pair(p (T, int)) int: 1
+    fn takes_cell(c Cell<T>) int: 1
+    fn takes_nested(p (T?, int)) int: 1
+    fn takes_optional_list(xs List<T?>) int: 1
+    fn takes_pair_list(xs List<(T, int)>) int: 1
+    fn takes_counted_pair(p (List<T>, int)) int: 1
+    fn takes_bare(v T) int: 1
+
+fn main()
+    let h = Holder<int>()
+"#;
+    let settled = settled_methods(source, "Holder");
+    assert_unsettled(
+        &settled,
+        "Holder",
+        &["takes_optional", "takes_pair", "takes_cell", "takes_nested"],
+    );
+    assert_settled(
+        &settled,
+        "Holder",
+        &[
+            "takes_optional_list",
+            "takes_pair_list",
+            "takes_counted_pair",
+            "takes_bare",
+        ],
+    );
+}

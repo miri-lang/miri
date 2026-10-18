@@ -399,3 +399,33 @@ fn call_whose_optionals_share_the_callee_layouts_is_clean() {
     );
     assert!(violations.is_empty(), "{}", call_messages(&violations));
 }
+
+/// A finding describes each side's layout layer by layer, outermost first.
+#[test]
+fn a_layout_mismatch_describes_the_layers_of_each_side() {
+    let unresolved = body_of(
+        &meeting_kinds(),
+        0,
+        vec![ret_block(vec![assign(place(2), Rvalue::Use(copy(1)))])],
+    );
+    assert_flagged(
+        &unresolved,
+        &[
+            "laid out as one box,",
+            "laid out as the nullable payload pointer",
+        ],
+    );
+    let wrap = Rvalue::Aggregate(
+        AggregateKind::Option(ty(optional(optional(node())))),
+        vec![copy(3)],
+    );
+    let nested = body_of(
+        &meeting_kinds(),
+        0,
+        vec![ret_block(vec![assign(place(2), wrap)])],
+    );
+    assert_flagged(
+        &nested,
+        &["laid out as one box around the nullable payload pointer"],
+    );
+}

@@ -9,15 +9,17 @@ use miri::ast::types::{
     FunctionTypeData, Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, VEC2_TYPE_NAME,
     VEC3_TYPE_NAME, VEC4_TYPE_NAME,
 };
+use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::option_layout::{
-    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, LayoutScope,
-    OptionalLayers,
+    is_nullable_pointer_optional, payload_is_nullable_pointer, resolve_alias, LayerRepr,
+    LayoutScope, OptionalLayers,
 };
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, StructDefinition,
     TraitDefinition, TypeDefinition,
 };
+use miri::type_checker::value_class::held_value_layout;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 fn ty(kind: TypeKind) -> Type {
@@ -454,4 +456,82 @@ fn test_option_layout_an_open_parameter_shadows_a_type_of_the_same_name() {
         &optional(custom("Node")),
         LayoutScope::program(&defs)
     ));
+}
+
+/// The table of [`definitions`] with `Pair`, a struct of two `int`s: a value
+/// held as its bytes.
+fn definitions_with_a_held_struct() -> HashMap<String, TypeDefinition> {
+    let field = |name: &str| {
+        (
+            name.to_string(),
+            ty(TypeKind::Int),
+            MemberVisibility::Public,
+        )
+    };
+    let mut defs = definitions();
+    defs.insert(
+        "Pair".to_string(),
+        TypeDefinition::Struct(StructDefinition {
+            fields: vec![field("a"), field("b")],
+            generics: None,
+            module: String::new(),
+        }),
+    );
+    defs
+}
+
+/// Each layer of `kind`, outermost first, with the counts behind them.
+fn layer_reprs(kind: &TypeKind) -> (Vec<LayerRepr>, usize, bool) {
+    let defs = definitions_with_a_held_struct();
+    let layers = OptionalLayers::of(kind, LayoutScope::program(&defs));
+    (layers.reprs(), layers.inline, layers.is_optional())
+}
+
+/// An optional's layers, named outermost first. Every program today holds
+/// an optional around a value or a scalar in a box, so no layer is inline:
+/// the struct `Pair` is held as its bytes, and `Pair?` is still boxed.
+#[test]
+fn test_option_layout_reprs_name_each_layer_outermost_first() {
+    use LayerRepr::{Boxed, NullablePointer};
+    let node = custom("Node");
+    let pair = custom("Pair");
+    let defs = definitions_with_a_held_struct();
+    assert!(held_value_layout(&pair, LayoutScope::program(&defs)).is_some());
+    assert_eq!(
+        layer_reprs(&optional(TypeKind::Int)),
+        (vec![Boxed], 0, true)
+    );
+    assert_eq!(
+        layer_reprs(&optional(optional(TypeKind::Int))),
+        (vec![Boxed, Boxed], 0, true)
+    );
+    assert_eq!(
+        layer_reprs(&optional(node.clone())),
+        (vec![NullablePointer], 0, true)
+    );
+    assert_eq!(
+        layer_reprs(&optional(optional(node.clone()))),
+        (vec![Boxed, NullablePointer], 0, true)
+    );
+    assert_eq!(layer_reprs(&optional(pair.clone())), (vec![Boxed], 0, true));
+    assert_eq!(
+        layer_reprs(&custom("MaybeNode")),
+        (vec![NullablePointer], 0, true)
+    );
+    assert_eq!(
+        layer_reprs(&optional(custom("MaybeNode"))),
+        (vec![Boxed, NullablePointer], 0, true)
+    );
+}
+
+#[test]
+fn test_option_layout_a_type_that_is_not_optional_has_no_layer() {
+    for kind in [
+        custom("Node"),
+        custom("Pair"),
+        TypeKind::Int,
+        custom("Meters"),
+    ] {
+        assert_eq!(layer_reprs(&kind), (Vec::new(), 0, false), "{kind:?}");
+    }
 }

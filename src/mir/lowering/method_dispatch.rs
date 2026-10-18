@@ -8,6 +8,7 @@ use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::cow_fn;
@@ -15,15 +16,14 @@ use crate::type_checker::context::{
     class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
     TypeDefinition,
 };
-use crate::type_checker::element_layout::element_layout;
-use crate::type_checker::value_class::{held_value_layout, value_class, LayoutScope, ValueClass};
+use crate::type_checker::value_class::LayoutScope;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Positional arguments that are gpu-resident bindings carrying a device handle.
 /// Only bare identifier arguments bound to a `Gpu`-residency local qualify — the
@@ -661,158 +661,6 @@ fn call_result_type(
     }
 }
 
-/// Whether a type argument is laid out differently from the pointer-width
-/// integer that an unmonomorphized generic body falls back to.
-///
-/// The element layout decides it: an element that is not one value word — a
-/// narrower or wider scalar, or an inline vector the collection holds by its
-/// components — changes the operand width, and a float changes the register
-/// class outright, so either makes the shared body's signature disagree with
-/// the call site and hand the runtime a word where the element is something
-/// else. `int` matches the fallback exactly, and every managed type is passed
-/// as a pointer, so both agree on layout — a managed argument needs its own
-/// body for a different reason, spelled out in
-/// [`shared_body_misreads_a_managed_element`].
-///
-/// A value held as its bytes differs whatever its width: it is passed by the
-/// address of a copy, where the fallback passes the word itself.
-fn differs_from_pointer_width_fallback(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    let layout = element_layout(kind, scope);
-    layout.is_address
-        || layout.payload != crate::ast::types::VALUE_WORD_BYTES
-        || crate::type_checker::float_literals::is_float_width(kind)
-        || held_value_layout(kind, scope).is_some()
-}
-
-/// Whether the signature of `class_name`'s `method_name` builds a tuple or a
-/// struct out of a type parameter that some argument in `resolved` would make
-/// a value held as its bytes.
-///
-/// The shared body builds such a tuple — `(int, T)` — as a reference-counted
-/// allocation, its parameter a word, while the caller, at `T` = `int`, holds
-/// `(int, int)` as its bytes: a collection of them, handed across the call,
-/// would be read at the wrong layout on one side. A parameter at a counted
-/// argument leaves the tuple counted on both sides, so only a scalar or a
-/// value argument asks for a body of its own.
-fn signature_builds_a_value(
-    defs: &HashMap<String, TypeDefinition>,
-    class_name: &str,
-    method_name: &str,
-    resolved: &[Type],
-    scope: LayoutScope<'_>,
-) -> bool {
-    let has_byte_argument = resolved.iter().any(|arg| {
-        crate::type_checker::generics::extract_value_generic(arg).is_none()
-            && (matches!(value_class(&arg.kind, scope), ValueClass::Scalar(_))
-                || held_value_layout(&arg.kind, scope).is_some())
-    });
-    if !has_byte_argument {
-        return false;
-    }
-    let Some((owner, method)) = resolve_inherited_method(defs, class_name, method_name) else {
-        return false;
-    };
-    let parameters: Vec<&str> = [class_name, owner.as_str()]
-        .into_iter()
-        .filter_map(|name| defs.get(name)?.generics())
-        .flatten()
-        .map(|generic| generic.name.as_str())
-        .collect();
-    method
-        .params
-        .iter()
-        .map(|(_, ty)| ty)
-        .chain(std::iter::once(&method.return_type))
-        .any(|ty| builds_aggregate_of(&ty.kind, &parameters, defs))
-}
-
-/// Whether `kind` holds, anywhere inside it, a tuple or a struct naming one
-/// of `parameters`.
-fn builds_aggregate_of(
-    kind: &TypeKind,
-    parameters: &[&str],
-    defs: &HashMap<String, TypeDefinition>,
-) -> bool {
-    let is_struct = |name: &str| matches!(defs.get(name), Some(TypeDefinition::Struct(_)));
-    let is_aggregate = matches!(kind, TypeKind::Tuple(_))
-        || matches!(kind, TypeKind::Custom(name, Some(_)) if is_struct(name));
-    if is_aggregate && mentions_parameter(kind, parameters) {
-        return true;
-    }
-    written_type_arguments(kind).any(|inner| builds_aggregate_of(&inner.kind, parameters, defs))
-}
-
-/// Whether `kind` names one of `parameters` anywhere inside it.
-fn mentions_parameter(kind: &TypeKind, parameters: &[&str]) -> bool {
-    if let TypeKind::Generic(name, _, _) | TypeKind::Custom(name, None) = kind {
-        if parameters.contains(&name.as_str()) {
-            return true;
-        }
-    }
-    written_type_arguments(kind).any(|inner| mentions_parameter(&inner.kind, parameters))
-}
-
-/// The types `kind` is written with: a tuple's elements, a type's arguments,
-/// a collection's element, key and value, an optional's payload, a function
-/// type's parameters and result.
-fn written_type_arguments(kind: &TypeKind) -> Box<dyn Iterator<Item = &Type> + '_> {
-    match kind {
-        TypeKind::Tuple(elements) | TypeKind::Custom(_, Some(elements)) => {
-            Box::new(elements.iter().filter_map(written_type))
-        }
-        TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Array(element, _) => {
-            Box::new(written_type(element).into_iter())
-        }
-        TypeKind::Map(key, value) => {
-            Box::new(written_type(key).into_iter().chain(written_type(value)))
-        }
-        TypeKind::Option(payload) => Box::new(std::iter::once(payload.as_ref())),
-        TypeKind::Function(function) => Box::new(
-            function
-                .params
-                .iter()
-                .filter_map(|param| written_type(&param.typ))
-                .chain(function.return_type.as_deref().and_then(written_type)),
-        ),
-        TypeKind::Custom(_, None)
-        | TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Boolean
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::OneOf(_)
-        | TypeKind::Meta(_)
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::Linear(_) => Box::new(std::iter::empty()),
-    }
-}
-
-/// The type a type expression writes, or `None` for a value expression.
-fn written_type(expr: &Expression) -> Option<&Type> {
-    let ExpressionKind::Type(ty, _) = &expr.node else {
-        return None;
-    };
-    Some(ty.as_ref())
-}
-
 /// Whether a type argument sorts differently from the signed integer an
 /// unmonomorphized generic body falls back to.
 ///
@@ -852,64 +700,162 @@ pub(crate) fn is_settled_by_the_runtime(
     class_def.runtime_settled_methods.contains(method_name)
 }
 
-/// Whether the shared generic body of `method_name` would mishandle a managed
-/// `elem_kind`: take it as a borrow the resulting value does not own, or
-/// compare it by address.
-///
-/// A body the runtime does not settle is ordinary Miri code. Lowered once per
-/// receiver class, its element type stays a type parameter, so Perceus reads
-/// it as unmanaged — it takes no reference to what it stores and releases
-/// nothing a function value returns, while the call site, which knows the
-/// concrete element, releases every element of the collection it gets back —
-/// and `==` on it compares the words the elements are passed in, which for a
-/// string or a class is their address. Giving the body the concrete element
-/// makes the ownership agree and sends `==` to the element's own equality.
-fn shared_body_misreads_a_managed_element(
-    class_def: &crate::type_checker::context::ClassDefinition,
-    method_name: &str,
-    elem_kind: &TypeKind,
-) -> bool {
-    !is_settled_by_the_runtime(class_def, method_name)
-        && crate::mir::rc::is_field_managed(elem_kind)
-}
-
 /// Whether a built-in collection instantiated at `resolved` needs a
 /// per-instantiation body for `method_name`, rather than the shared generic one.
 ///
-/// Three things ask for one. The shared body types every type-parameter
-/// position at the pointer-width integer fallback, so a differently-laid-out
-/// argument makes its signature disagree with the call site, and an argument
+/// The shared body is compiled once, with every type parameter open: each is
+/// one uncounted word. An instantiation may share it only when every type the
+/// body handles is represented at the instantiation's arguments as it is at
+/// that fallback; see [`SharedBody`]. Apart from representation, an argument
 /// ordered unlike a signed integer would sort wrongly in any list the body
-/// builds. And a body written in ordinary Miri code that reads a managed
-/// element takes no reference to it, while the call site releases every element
-/// of the collection it gets back, and compares it by address.
+/// builds.
 ///
 /// Every other class always needs one, so it passes straight through.
-/// `scope` is what each argument's layout is read against.
 fn builtin_collection_needs_its_own_body(
     class_name: &str,
     class_def: &crate::type_checker::context::ClassDefinition,
     method_name: &str,
     resolved: &[Type],
-    scope: LayoutScope<'_>,
+    defs: &HashMap<String, TypeDefinition>,
 ) -> bool {
     if BuiltinCollectionKind::from_name(class_name).is_none() {
         return true;
     }
-    resolved
-        .iter()
-        // A value generic occupies a parameter slot but describes no storage:
-        // an `Array`'s size neither changes the width of a type-parameter
-        // position nor holds an element anyone has to release. Both questions
-        // below are about a type argument, and asking them of a size would
-        // answer from the marker's own spelling.
-        .filter(|arg| crate::type_checker::generics::extract_value_generic(arg).is_none())
-        .any(|arg| {
-            differs_from_pointer_width_fallback(&arg.kind, scope)
-                || orders_differently_from_signed_fallback(&arg.kind)
-                || shared_body_misreads_a_managed_element(class_def, method_name, &arg.kind)
+    let arguments = ClassArguments::of(class_def, resolved);
+    if arguments
+        .substitution
+        .values()
+        .any(|arg| orders_differently_from_signed_fallback(&arg.kind))
+    {
+        return true;
+    }
+    let shared = SharedBody {
+        fallback: LayoutScope::new(defs, &arguments.parameters),
+        program: LayoutScope::new(defs, &arguments.values),
+        substitution: &arguments.substitution,
+        is_settled: is_settled_by_the_runtime(class_def, method_name),
+    };
+    let signature =
+        crate::type_checker::context::resolve_method_source(defs, class_name, method_name)
+            .map(|source| source.info());
+    shared.represents_an_argument_differently()
+        || signature.is_some_and(|method| shared.represents_signature_differently(method))
+}
+
+/// A class's type parameters at the arguments it is instantiated with.
+struct ClassArguments {
+    /// Each type parameter's argument, by the parameter's name.
+    substitution: HashMap<String, Type>,
+    /// Every parameter's name: what the shared body leaves open.
+    parameters: HashSet<String>,
+    /// The value parameters' names. A value generic occupies a parameter slot
+    /// but describes no storage — an `Array`'s size changes neither the width
+    /// of a type-parameter position nor what anyone releases — so it stays as
+    /// written on both sides of the comparison.
+    values: HashSet<String>,
+}
+
+impl ClassArguments {
+    fn of(class_def: &crate::type_checker::context::ClassDefinition, resolved: &[Type]) -> Self {
+        let mut arguments = Self {
+            substitution: HashMap::new(),
+            parameters: HashSet::new(),
+            values: HashSet::new(),
+        };
+        for (generic, arg) in class_def.generics.iter().flatten().zip(resolved) {
+            arguments.parameters.insert(generic.name.clone());
+            if crate::type_checker::generics::extract_value_generic(arg).is_some() {
+                arguments.values.insert(generic.name.clone());
+            } else {
+                arguments
+                    .substitution
+                    .insert(generic.name.clone(), arg.clone());
+            }
+        }
+        arguments
+    }
+}
+
+/// A built-in collection's shared body, set beside one instantiation of it.
+///
+/// Each type the body handles is compared at the top level: with the class's
+/// parameters open, as the shared body reads it, and at the instantiation's
+/// arguments, as the caller does. A type written inside another — the element
+/// of a `List<T>` the body returns — is compared on its own, so a parameter's
+/// argument is only ever compared with the word the body reads it as, never
+/// with the types written inside the argument. A body the runtime settles
+/// only hands values between the caller and the runtime, so reference
+/// counting is left out of the comparison for it.
+struct SharedBody<'a> {
+    fallback: LayoutScope<'a>,
+    program: LayoutScope<'a>,
+    substitution: &'a HashMap<String, Type>,
+    is_settled: bool,
+}
+
+impl SharedBody<'_> {
+    /// Whether some parameter's argument is represented unlike the parameter,
+    /// bare, optional or doubly optional: what every shared body hands on,
+    /// whatever its signature spells.
+    fn represents_an_argument_differently(&self) -> bool {
+        self.substitution.iter().any(|(name, arg)| {
+            let mut open = Type::new(TypeKind::Custom(name.clone(), None), Span::default());
+            let mut bound = arg.clone();
+            for _ in 0..3 {
+                if self.differ(&open.kind, &bound.kind) {
+                    return true;
+                }
+                open = optional_of(open);
+                bound = optional_of(bound);
+            }
+            false
         })
-        || signature_builds_a_value(scope.definitions, class_name, method_name, resolved, scope)
+    }
+
+    /// Whether a type `method`'s signature names, or a type written inside
+    /// one, is represented differently at the instantiation.
+    fn represents_signature_differently(&self, method: &MethodInfo) -> bool {
+        method
+            .params
+            .iter()
+            .map(|(_, ty)| ty)
+            .chain(std::iter::once(&method.return_type))
+            .any(|ty| self.represents_type_differently(ty))
+    }
+
+    /// Whether `open`, or a type written inside it, is represented
+    /// differently with the parameters bound. A type that names no parameter
+    /// reads alike on both sides and is not compared.
+    fn represents_type_differently(&self, open: &Type) -> bool {
+        self.mentions_parameter(&open.kind)
+            && (self.differ(&open.kind, &apply_generic_sub(open, self.substitution).kind)
+                || written_type_arguments(&open.kind)
+                    .any(|part| self.represents_type_differently(part)))
+    }
+
+    /// Whether `kind` names a parameter the instantiation binds.
+    fn mentions_parameter(&self, kind: &TypeKind) -> bool {
+        crate::type_checker::generics::generic_parameter_name(kind)
+            .is_some_and(|name| self.substitution.contains_key(name))
+            || written_type_arguments(kind).any(|part| self.mentions_parameter(&part.kind))
+    }
+
+    /// Whether `open`, read with the parameters open, and `bound`, read at the
+    /// instantiation, are represented differently.
+    fn differ(&self, open: &TypeKind, bound: &TypeKind) -> bool {
+        let shared = Representation::of(open, self.fallback);
+        let own = Representation::of(bound, self.program);
+        if self.is_settled {
+            shared.without_counting() != own.without_counting()
+        } else {
+            shared != own
+        }
+    }
+}
+
+/// The optional of `ty`.
+fn optional_of(ty: Type) -> Type {
+    Type::new(TypeKind::Option(Box::new(ty)), Span::default())
 }
 
 /// The symbol an operator calls for `owner`'s `method_name` on a receiver of
@@ -990,8 +936,7 @@ pub(crate) fn instantiated_callee(
     };
     // The arguments are the call's resolved ones, read against the program's
     // table: no body's open parameters are known where a callee is named.
-    let scope = LayoutScope::program(defs);
-    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved, scope) {
+    if !builtin_collection_needs_its_own_body(name, class_def, method_name, resolved, defs) {
         return None;
     }
     let (owner, owner_args) =

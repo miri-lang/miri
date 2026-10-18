@@ -424,19 +424,30 @@ impl<'a> Layouts<'a> {
 
 /// Whether `layers` describes an optional at all.
 fn is_optional(layers: &OptionalLayers<'_>) -> bool {
-    layers.boxed > 0 || layers.innermost_nullable_pointer
+    layers.is_optional()
 }
 
-/// A layout, in words.
+/// A layout, in words, outermost layer first.
 fn describe(layers: &OptionalLayers<'_>) -> String {
-    let boxes = match layers.boxed {
-        1 => "one box".to_string(),
-        count => format!("{count} boxes"),
-    };
-    match (layers.boxed, layers.innermost_nullable_pointer) {
-        (0, _) => "the nullable payload pointer".to_string(),
-        (_, true) => format!("{boxes} around a nullable payload pointer"),
-        (_, false) => boxes,
+    let parts: Vec<String> = [
+        count_of(layers.boxed, "one box", "boxes"),
+        count_of(layers.inline, "one inline layer", "inline layers"),
+        layers
+            .innermost_nullable_pointer
+            .then(|| "the nullable payload pointer".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    parts.join(" around ")
+}
+
+/// `count` of a kind of layer in words, or `None` when there are none.
+fn count_of(count: usize, one: &str, many: &str) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(one.to_string()),
+        count => Some(format!("{count} {many}")),
     }
 }
 
@@ -518,8 +529,7 @@ fn layouts_disagree(
         || !is_optional(&target)
         || is_absent_placeholder(&source)
         || is_absent_placeholder(&target)
-        || (source.boxed, source.innermost_nullable_pointer)
-            == (target.boxed, target.innermost_nullable_pointer)
+        || source.reprs() == target.reprs()
     {
         return None;
     }

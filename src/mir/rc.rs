@@ -74,13 +74,8 @@ impl RcClassifier {
     /// Whether a value of `kind`, written in a body that leaves `type_params`
     /// open, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind, type_params: &HashSet<String>) -> bool {
-        !is_never_counted(kind)
-            && match value_class(kind, LayoutScope::new(&self.definitions, type_params)) {
-                ValueClass::Scalar(_)
-                | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => false,
-                ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
-                ValueClass::Bitwise(layout) => !self.holds_as_bytes(&layout),
-            }
+        let scope = LayoutScope::new(&self.definitions, type_params);
+        counted_by(kind, scope, |layout| self.holds_as_bytes(layout))
     }
 
     /// The layout a value of `kind`, written in a body that leaves
@@ -135,6 +130,29 @@ impl PartialEq for RcClassifier {
             && (Rc::ptr_eq(&self.definitions, &other.definitions)
                 || (self.definitions.is_empty() && other.definitions.is_empty()))
     }
+}
+
+/// Whether a value of `kind`, read against `scope`, is reference counted the
+/// way every program is compiled.
+pub fn is_counted_in(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
+    counted_by(kind, scope, ValueLayout::is_held_as_bytes)
+}
+
+/// Whether a value of `kind` is reference counted, a bitwise value counted
+/// unless `holds_as_bytes` says its layout is held as bytes.
+fn counted_by(
+    kind: &TypeKind,
+    scope: LayoutScope<'_>,
+    holds_as_bytes: impl Fn(&ValueLayout) -> bool,
+) -> bool {
+    !is_never_counted(kind)
+        && match value_class(kind, scope) {
+            ValueClass::Scalar(_) | ValueClass::Word(WordRole::Parameter | WordRole::Untracked) => {
+                false
+            }
+            ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => true,
+            ValueClass::Bitwise(layout) => !holds_as_bytes(&layout),
+        }
 }
 
 /// The kinds no value of which is counted, whatever their value class.

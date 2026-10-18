@@ -44,7 +44,7 @@ use crate::mir::{
 use crate::type_checker::context::{
     class_ancestry, trait_lineage, ClassDefinition, GenericDefinition, TypeDefinition,
 };
-use crate::type_checker::runtime_settled::hands_a_parameter_optional;
+use crate::type_checker::runtime_settled::hands_a_parameter_derived_value;
 use crate::type_checker::TypeChecker;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
@@ -103,7 +103,7 @@ struct ReachedVtable {
     /// Each slot the instance gives a body that no reached call reads yet.
     unfilled: BTreeMap<usize, (String, Symbol)>,
     /// The slots among `unfilled` whose body cannot answer a reached call; see
-    /// [`shared_body_hands_a_parameter_optional`].
+    /// [`shared_body_hands_a_parameter_derived_value`].
     refused: BTreeSet<usize>,
     /// Where the body that built the instance builds it.
     built_at: Span,
@@ -369,7 +369,7 @@ impl ReachedVtable {
         let refused = unfilled
             .iter()
             .filter(|(_, (method, _))| {
-                shared_body_hands_a_parameter_optional(&instance, method, type_defs)
+                shared_body_hands_a_parameter_derived_value(&instance, method, type_defs)
             })
             .map(|(slot, _)| *slot)
             .collect();
@@ -400,13 +400,17 @@ impl ReachedVtable {
 }
 
 /// Whether the slot for `method` of `instance`'s vtable names a body shared by
-/// every instantiation that takes or returns an optional of a type parameter.
+/// every instantiation that takes or returns a value built from a type
+/// parameter: an optional, a tuple or a struct of one.
 ///
 /// Only a generic class's bare vtable names such a body: the instance was built
-/// where its arguments have no spelling. The shared body lays that optional out
-/// as a box, while a caller reading the slot through a receiver at a reference
-/// type reads it as the pointer itself.
-fn shared_body_hands_a_parameter_optional(
+/// where its arguments have no spelling. The shared body holds that value as
+/// it is held with the parameter open — an optional as a box, a tuple as a
+/// counted allocation — while a caller reading the slot through a receiver at
+/// a concrete argument holds it as that argument makes it: an optional of a
+/// class as the pointer itself, a tuple of scalars as its bytes. See
+/// [`hands_a_parameter_derived_value`].
+fn shared_body_hands_a_parameter_derived_value(
     instance: &VtableInstance,
     method: &str,
     type_defs: &HashMap<String, TypeDefinition>,
@@ -421,20 +425,18 @@ fn shared_body_hands_a_parameter_optional(
         .map(|(_, class)| class)
         .collect();
     let declared_by_a_class = chain.iter().any(|class| {
-        class
-            .methods
-            .get(method)
-            .is_some_and(|info| hands_a_parameter_optional(info, class.generics.as_ref()))
+        class.methods.get(method).is_some_and(|info| {
+            hands_a_parameter_derived_value(info, class.generics.as_ref(), type_defs)
+        })
     });
     let declared_by_a_trait = chain
         .iter()
         .flat_map(|class| class.traits.iter())
         .flat_map(|trait_name| trait_lineage(type_defs, trait_name))
         .any(|(_, trait_def)| {
-            trait_def
-                .methods
-                .get(method)
-                .is_some_and(|info| hands_a_parameter_optional(info, trait_def.generics.as_ref()))
+            trait_def.methods.get(method).is_some_and(|info| {
+                hands_a_parameter_derived_value(info, trait_def.generics.as_ref(), type_defs)
+            })
         });
     declared_by_a_class || declared_by_a_trait
 }
@@ -447,7 +449,7 @@ fn unanswerable_slot(symbol: &str, method: &str, span: Span) -> LoweringError {
         format!(
             "the vtable `{symbol}` of an instance built where its type arguments have no \
              spelling would answer `{method}` with the body shared by every instantiation, \
-             which lays an optional of its type parameter out differently from its callers"
+             which holds a value built from its type parameter differently from its callers"
         ),
         span,
     )

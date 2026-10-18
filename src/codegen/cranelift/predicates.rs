@@ -189,8 +189,9 @@ impl<'a> FunctionTranslator<'a> {
         layers: &OptionalLayers<'_>,
         value_size: u32,
     ) -> Option<i64> {
-        let has_layer = layers.boxed > 0 || layers.innermost_nullable_pointer;
-        if !has_layer || layers.boxed > Self::MAX_OPTIONAL_DEPTH {
+        // An inline layer has no box to open: an optional held as its bytes
+        // is matched through its own callbacks, not described here.
+        if !layers.is_optional() || layers.inline > 0 || layers.boxed > Self::MAX_OPTIONAL_DEPTH {
             return None;
         }
         if value_size == 0 || value_size > Self::MAX_OPTIONAL_VALUE_SIZE {
@@ -218,7 +219,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<bool, CodegenError> {
         let layers = OptionalLayers::of(kind, type_ctx.layout_scope());
-        if layers.boxed == 0 && !layers.innermost_nullable_pointer {
+        if !layers.is_optional() || layers.inline > 0 {
             return Ok(false);
         }
         if let Some(reason) = Self::undecidable_payload(&layers.value, type_ctx) {
