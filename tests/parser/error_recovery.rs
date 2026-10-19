@@ -228,3 +228,11 @@ fn main()
     );
     assert_eq!(fault_locations(source, &errors), vec![3, 8]);
 }
+
+#[test]
+fn test_parser_utf8_boundary_slicing_safety() {
+    let source = "fn main()\n    let x = \"🦀\".0\n    @\"🚀\"\n";
+    let mut lexer = Lexer::new(source);
+    let mut parser = Parser::new(&mut lexer, source);
+    let _ = parser.parse_all();
+}

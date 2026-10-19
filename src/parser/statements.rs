@@ -59,7 +59,10 @@ impl<'source> Parser<'source> {
             }
             _ => return Err(self.error_unexpected_lookahead_token("attribute name")),
         }
-        Ok(self.source[span.start..span.end].to_string())
+        let Some(text) = self.source.get(span.start..span.end) else {
+            return Err(self.error_unexpected_token("attribute name", "invalid source range"));
+        };
+        Ok(text.to_string())
     }
 
     /// Records attributes on the declaration they precede.
@@ -103,7 +106,12 @@ impl<'source> Parser<'source> {
         let Some((Token::String, span)) = self.lookahead else {
             return Err(self.error_unexpected_lookahead_token("a string literal"));
         };
-        let raw = &self.source[span.start..span.end];
+        let Some(raw) = self.source.get(span.start..span.end) else {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidStringLiteral,
+                span,
+            ));
+        };
         let Some(inner) = raw.get(1..raw.len().saturating_sub(1)) else {
             return Err(SyntaxError::new(
                 SyntaxErrorKind::InvalidStringLiteral,
