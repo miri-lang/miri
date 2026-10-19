@@ -60,15 +60,13 @@ impl<'source> Parser<'source> {
 
     fn is_tuple_field_access(&self) -> bool {
         if let Some((Token::Float, span)) = &self.lookahead {
-            let float_text = &self.source[span.start..span.end];
-            if let Some(int_part) = float_text.strip_prefix('.') {
-                int_part.chars().all(|c| c.is_ascii_digit() || c == '_')
-            } else {
-                false
+            if let Some(float_text) = self.source.get(span.start..span.end) {
+                if let Some(int_part) = float_text.strip_prefix('.') {
+                    return int_part.chars().all(|c| c.is_ascii_digit() || c == '_');
+                }
             }
-        } else {
-            false
         }
+        false
     }
 
     fn member_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
@@ -121,7 +119,9 @@ impl<'source> Parser<'source> {
     /// Caller must ensure the Float token is in tuple-field format.
     fn tuple_field_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
         let span = self.current_token_span();
-        let float_text = &self.source[span.start..span.end];
+        let Some(float_text) = self.source.get(span.start..span.end) else {
+            return Err(self.error_unexpected_token("tuple field access", "invalid source range"));
+        };
         let Some(int_part) = float_text.strip_prefix('.') else {
             return Err(self.error_unexpected_token("tuple field access", "float literal"));
         };
