@@ -283,7 +283,7 @@ fn mark(n int) int
 }
 
 #[test]
-fn test_a_list_path_written_every_iteration_is_checked_in_the_loop() {
+fn test_a_list_path_written_every_iteration_makes_the_list_its_own_before_the_loop() {
     let source = with_cell(
         r#"
 fn touch(start [Cell], n int) [Cell]
@@ -296,10 +296,36 @@ fn touch(start [Cell], n int) [Cell]
 "#,
     );
     let body = body_named(&source, ".touch");
-    // The list and its element are both asked about in the loop: hoisting
-    // the list's check would keep the list live across the whole loop, which
-    // code generation spills.
+    // The loop calls nothing else, so the list is made its own once before
+    // it; the element is still asked about in the loop.
+    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 1);
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 0);
+    assert_eq!(reachable_copy_on_writes(&body), 1);
+}
+
+#[test]
+fn test_a_list_path_written_in_a_loop_that_calls_out_is_checked_in_the_loop() {
+    let source = with_cell(
+        r#"
+fn report(i int)
+    println(f"{i}")
+
+fn touch(start [Cell], n int) [Cell]
+    var l = start
+    var i = 0
+    while i < n
+        l[0].x = i
+        report(i)
+        i = i + 1
+    l
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    // A call can change the list's header, so code generation reloads it at
+    // every access anyway; the list stays a value of each iteration's own
+    // rather than one held live across the call.
     assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 2);
+    assert_eq!(reachable_copy_on_writes(&body), 0);
 }
 
 #[test]
@@ -535,7 +561,7 @@ fn touch(start [Cell], j int) [Cell]
 fn test_a_computed_index_in_a_loop_is_checked_once_per_iteration() {
     // Within an iteration the second write reaches the element the first
     // checked; the index changes every iteration, so the element check stays
-    // in the loop, beside the check of the list.
+    // in the loop. The list is made its own once before it.
     let source = with_cell(
         r#"
 fn touch(start [Cell], n int) [Cell]
@@ -549,8 +575,9 @@ fn touch(start [Cell], n int) [Cell]
 "#,
     );
     let body = body_named(&source, ".touch");
-    assert_eq!(reachable_checks(&body), 2);
-    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 2);
+    assert_eq!(reachable_checks(&body), 1);
+    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 1);
+    assert_eq!(reachable_copy_on_writes(&body), 1);
 }
 
 #[test]
@@ -646,24 +673,26 @@ fn touch(start [Cell], i int, keep bool) int
 }
 
 #[test]
-fn test_nbody_advance_checks_each_written_path_once_per_iteration() {
+fn test_nbody_advance_makes_the_bodies_its_own_before_each_writing_loop() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/bench/workloads/nbody/nbody.mi"
     );
     let source = std::fs::read_to_string(path).expect("nbody source should be readable");
-    assert_eq!(checks_in(&source, ".advance"), 2);
+    let body = body_named(&source, ".advance");
+    assert_eq!(reachable_checks(&body), 0);
+    assert_eq!(reachable_copy_on_writes(&body), 2);
 }
 
 /// The n-body step whose allocation count and checksum
 /// `integration::memory::owned_parameters` pins writes six paths, and lowering
 /// asks before each whether the list is shared; a body in it is held as its
-/// bytes, never shared, and never asked about. The pass keeps two checks,
-/// fewer than the writes, so that checksum also guards writes the pass lets
-/// run without asking.
+/// bytes, never shared, and never asked about. Each loop calls nothing else,
+/// so the list is made its own once before it and no write asks at all; that
+/// checksum guards every write the pass lets run without asking.
 #[test]
 fn test_the_pinned_nbody_step_asks_fewer_times_than_it_writes() {
-    assert_eq!(checks_in(&nbody_owned(1000), ".advance"), 2);
+    assert_eq!(checks_in(&nbody_owned(1000), ".advance"), 0);
 }
 
 /// The pass recognizes a check only in the shape lowering emits: the call

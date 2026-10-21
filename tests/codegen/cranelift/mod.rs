@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod closure;
+pub mod collection_header;
 pub mod dealloc;
 pub mod determinism;
 pub mod drop_thunk_boundary;

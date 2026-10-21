@@ -14,6 +14,7 @@
 
 mod local_borrows;
 mod optional_representation;
+mod stable_collections;
 mod value_representation;
 
 use miri::ast::literal::{IntegerLiteral, Literal};

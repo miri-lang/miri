@@ -50,7 +50,7 @@ pub use backend::{
     GpuKernelArg, GpuMemoryAccess, GpuMemoryScope, I32_INDEX_MAX,
 };
 pub use block::{BasicBlock, BasicBlockData};
-pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StorageClass};
+pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StableCollection, StorageClass};
 pub use declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
     VariantDecl,

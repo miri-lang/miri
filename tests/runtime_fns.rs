@@ -2,7 +2,9 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::types::BuiltinCollectionKind;
-use miri::runtime_fns::{cow_fn, is_copy_on_write, returns_unshared, rt};
+use miri::runtime_fns::{
+    cow_fn, is_copy_on_write, leaves_collection_headers_unchanged, returns_unshared, rt,
+};
 
 #[test]
 fn cow_fn_returns_correct_values() {
@@ -48,6 +50,35 @@ fn is_copy_on_write_names_every_collection_kind_entry_point_and_nothing_else() {
         assert!(
             !is_copy_on_write(other),
             "{other} is not a copy-on-write entry point"
+        );
+    }
+}
+
+#[test]
+fn leaves_collection_headers_unchanged_names_only_calls_that_cannot_write_a_header() {
+    for reader in [
+        rt::RC_IS_SHARED,
+        rt::RC_STATS_DUP,
+        rt::RC_STATS_FREE,
+        rt::RC_STATS_COW_COPY,
+    ] {
+        assert!(
+            leaves_collection_headers_unchanged(reader),
+            "{reader} writes no collection header"
+        );
+    }
+    for writer in [
+        rt::LIST_PUSH,
+        rt::LIST_COW,
+        rt::LIST_CLONE,
+        rt::LIST_SET,
+        rt::LIST_INSERT,
+        rt::ARRAY_COW,
+        rt::ARRAY_SORT,
+    ] {
+        assert!(
+            !leaves_collection_headers_unchanged(writer),
+            "{writer} may write a collection header"
         );
     }
 }

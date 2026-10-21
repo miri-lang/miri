@@ -9,4 +9,5 @@ pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
 pub mod simplify_cfg;
+pub mod stable_collections;
 pub mod unshare_elision;

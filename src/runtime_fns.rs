@@ -754,6 +754,20 @@ pub fn returns_unshared(name: &str) -> bool {
     )
 }
 
+/// Whether a call to `name` leaves the header of every collection as it found
+/// it: the data pointer, the length and the slot size.
+///
+/// A loop whose calls all qualify may read a collection's header once before
+/// it starts. The list is an allow-list of calls that read a count or bump a
+/// statistic and reach no code that could grow, shrink, replace or release a
+/// collection; any call not named here is taken to write a header.
+pub fn leaves_collection_headers_unchanged(name: &str) -> bool {
+    matches!(
+        name,
+        rt::RC_IS_SHARED | rt::RC_STATS_DUP | rt::RC_STATS_FREE | rt::RC_STATS_COW_COPY
+    )
+}
+
 /// Argument positions of `name`, as a Miri call spells them, that carry an
 /// element the container stores or looks up.
 ///

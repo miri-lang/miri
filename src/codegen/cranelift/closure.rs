@@ -156,6 +156,7 @@ impl<'a> FunctionTranslator<'a> {
             open_params: &body.open_params,
             bound_params: &body.bound_params,
             values: &ValueLocals::none(),
+            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
 
         let layout = CaptureLayout::of_body(body, ptr_type);

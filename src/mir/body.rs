@@ -4,7 +4,7 @@
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
-use crate::mir::block::BasicBlockData;
+use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::Statement;
@@ -160,6 +160,42 @@ pub struct Body {
     /// allocator, so the WGSL backend drops this parameter and every argument
     /// read from it.
     pub allocator: Option<Local>,
+    /// The collections whose header a loop of this body leaves unchanged, so
+    /// code generation reads it once, in the loop's preheader, rather than at
+    /// every element access. Decided by
+    /// `crate::mir::optimization::stable_collections`, re-derived by
+    /// `crate::mir::verify::verify_stable_collections`.
+    pub stable_collections: Vec<StableCollection>,
+}
+
+/// An array or a list a loop indexes without changing its header: the data
+/// pointer, the length and the slot size read on entry hold on every
+/// iteration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StableCollection {
+    /// The local holding the collection.
+    pub local: Local,
+    /// The block every entry into the loop passes through, ending in a jump
+    /// to `header`, where the header is read.
+    pub preheader: BasicBlock,
+    /// The loop's header.
+    pub header: BasicBlock,
+    /// Every block of the loop, the header included, in ascending order.
+    pub blocks: Vec<BasicBlock>,
+}
+
+impl fmt::Display for StableCollection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let blocks: Vec<String> = self.blocks.iter().map(ToString::to_string).collect();
+        write!(
+            f,
+            "stable {} from {} over {}: [{}]",
+            self.local,
+            self.preheader,
+            self.header,
+            blocks.join(", ")
+        )
+    }
 }
 
 /// One generic class at concrete type arguments.
@@ -230,6 +266,7 @@ impl Body {
             generic_class_instantiations: Vec::new(),
             device_stale_flags: HashMap::new(),
             allocator: None,
+            stable_collections: Vec::new(),
         }
     }
 
@@ -624,6 +661,9 @@ impl fmt::Display for Body {
             }
             writeln!(f, "    }}")?;
             writeln!(f)?;
+        }
+        for stable in &self.stable_collections {
+            writeln!(f, "    {stable};")?;
         }
         Ok(())
     }

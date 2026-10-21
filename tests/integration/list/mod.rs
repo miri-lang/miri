@@ -15,6 +15,7 @@ pub mod float_widths;
 pub mod indexing_iteration;
 pub mod inline_push_length;
 pub mod integration;
+pub mod loop_header_reads;
 pub mod membership;
 pub mod methods;
 pub mod optional_elements;

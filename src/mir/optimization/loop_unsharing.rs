@@ -20,11 +20,15 @@
 //! compare more on entry.
 //!
 //! A uniqueness check on a whole local — the first question of a write
-//! through a path, `l[i].x = v` — is not hoisted. It redefines the local at
-//! its join every iteration; hoisted, the local is one value live through the
-//! whole loop and across its cold calls, and code generation keeps it on the
-//! stack and reloads it before every element access, which costs more than
-//! the inline check saved.
+//! through a path, `l[i].x = v` — is hoisted the same way, but only out of a
+//! loop that calls nothing but these questions, their copy paths and the
+//! runtime entry points that leave collection headers unchanged. Hoisted, the
+//! local is one value live through the whole loop; such a loop is one
+//! `stable_collections` records once the checks inside are answered, and code
+//! generation then reads the collection's header once before the loop. A loop
+//! making any other call keeps its check: code generation reloads the header
+//! at every element access there, and a local live across the calls costs
+//! more than the inline check it saves.
 //!
 //! Only a local the loop writes no other way than by these questions' own
 //! write-backs takes part, so `x` holds its value before the loop starts; a
@@ -34,20 +38,25 @@
 //! copy one the loop may never write. The one copy this adds is a shared
 //! collection entering a loop that runs no iteration at all.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use crate::mir::analysis::dominators::DominatorTree;
+use crate::mir::analysis::loops::{natural_loops, predecessors, NaturalLoop};
 use crate::mir::{
     BasicBlock, BasicBlockData, Body, Local, LocalDecl, Operand, Place, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{cow_fn, is_copy_on_write, returns_unshared};
+use crate::runtime_fns::{
+    cow_fn, is_copy_on_write, leaves_collection_headers_unchanged, returns_unshared, rt,
+};
 
-/// A natural loop: its header and every block of it, the header included.
-struct Loop {
-    header: usize,
-    blocks: BTreeSet<usize>,
-    latches: Vec<usize>,
+/// What a block asks about a whole local.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Question {
+    /// Hands it to its copy-on-write entry point.
+    CopyOnWrite,
+    /// Asks whether anything else holds it, before writing through it.
+    IsShared,
 }
 
 /// Inserts a copy-on-write before each loop that asks about a collection
@@ -62,8 +71,10 @@ pub fn hoist_loop_unsharing(body: &mut Body) -> bool {
     let loops = natural_loops(body, &dominators);
     let mut hoists: Vec<(usize, Local)> = Vec::new();
     for found in &loops {
-        for local in locals_asked_every_iteration(found, &asked, &dominators) {
-            if is_written_only_by_its_questions(body, found, local) {
+        for (local, question) in locals_asked_every_iteration(found, &asked, &dominators) {
+            let is_worth_hoisting =
+                question == Question::CopyOnWrite || calls_only_questions(body, found, &asked);
+            if is_worth_hoisting && is_written_only_by_its_questions(body, found, local) {
                 hoists.push((found.header, local));
             }
         }
@@ -76,39 +87,81 @@ pub fn hoist_loop_unsharing(body: &mut Body) -> bool {
 }
 
 /// The blocks asking about each whole local the elision may track: by local,
-/// the blocks ending in a copy-on-write call on it.
-fn whole_locals_asked(body: &Body) -> BTreeMap<usize, Vec<usize>> {
+/// the blocks ending in a copy-on-write call on it or a uniqueness check of
+/// it, with which of the two each asks.
+fn whole_locals_asked(body: &Body) -> BTreeMap<usize, Vec<(usize, Question)>> {
     let foreign = foreign_locals(body);
-    let mut asked: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    let mut asked: BTreeMap<usize, Vec<(usize, Question)>> = BTreeMap::new();
     for (index, data) in body.basic_blocks.iter().enumerate() {
-        let Some(local) = data.terminator.as_ref().and_then(asked_whole_local) else {
+        let Some((local, question)) = data.terminator.as_ref().and_then(asked_whole_local) else {
             continue;
         };
         let is_collection = (body.local_decls.get(local.0))
             .and_then(|decl| decl.ty.kind.as_builtin_collection())
             .is_some();
         if is_collection && !foreign.contains(&local) {
-            asked.entry(local.0).or_default().push(index);
+            asked.entry(local.0).or_default().push((index, question));
         }
     }
     asked
 }
 
-/// The whole local `terminator` hands to a copy-on-write call.
-// TODO: also hoist a uniqueness check on a whole local once code generation
-// loads a loop-invariant list's header before the loop; until then the
-// hoisted local is spilled and reloaded at every element access.
-fn asked_whole_local(terminator: &Terminator) -> Option<Local> {
+/// The whole local `terminator` asks about, and how: a copy-on-write call
+/// on it, or a uniqueness check of it.
+fn asked_whole_local(terminator: &Terminator) -> Option<(Local, Question)> {
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return None;
     };
-    if !func.called_runtime_name().is_some_and(is_copy_on_write) {
-        return None;
-    }
-    let [Operand::Move(place)] = args.as_slice() else {
+    let name = func.called_runtime_name()?;
+    let [argument] = args.as_slice() else {
         return None;
     };
-    place.projection.is_empty().then_some(place.local)
+    let question = match argument {
+        Operand::Move(_) if is_copy_on_write(name) => Question::CopyOnWrite,
+        Operand::Copy(_) | Operand::Move(_) if name == rt::RC_IS_SHARED => Question::IsShared,
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
+            return None;
+        }
+    };
+    let place = argument.place()?;
+    place
+        .projection
+        .is_empty()
+        .then_some((place.local, question))
+}
+
+/// Whether every call in `found` is a question about a whole local `asked`
+/// names, a copy one of those questions makes on its copy path, or a runtime
+/// entry point that leaves collection headers unchanged.
+fn calls_only_questions(
+    body: &Body,
+    found: &NaturalLoop,
+    asked: &BTreeMap<usize, Vec<(usize, Question)>>,
+) -> bool {
+    found
+        .blocks
+        .iter()
+        .filter_map(|block| body.basic_blocks.get(*block)?.terminator.as_ref())
+        .all(|terminator| match &terminator.kind {
+            TerminatorKind::Call { func, args, .. } => {
+                let Some(name) = func.called_runtime_name() else {
+                    return false;
+                };
+                let copies_an_asked_local = matches!(
+                    args.as_slice(),
+                    [argument] if argument.place().is_some_and(|place| {
+                        place.projection.is_empty() && asked.contains_key(&place.local.0)
+                    })
+                );
+                leaves_collection_headers_unchanged(name)
+                    || ((is_copy_on_write(name) || returns_unshared(name)) && copies_an_asked_local)
+            }
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => true,
+            TerminatorKind::GpuLaunch { .. } | TerminatorKind::VirtualCall { .. } => false,
+        })
 }
 
 /// Every local whose value code this body does not show may hold or change:
@@ -131,88 +184,36 @@ fn foreign_locals(body: &Body) -> HashSet<Local> {
     foreign
 }
 
-/// Every natural loop of `body`, one per header, with the blocks of all the
-/// loops sharing that header merged.
-fn natural_loops(body: &Body, dominators: &DominatorTree) -> Vec<Loop> {
-    let predecessors = predecessors(body);
-    let reachable: HashSet<usize> = {
-        let unreachable: HashSet<usize> = body.find_unreachable_blocks().into_iter().collect();
-        (0..body.basic_blocks.len())
-            .filter(|index| !unreachable.contains(index))
-            .collect()
-    };
-    let mut latches: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for &block in &reachable {
-        for successor in successors(body, block) {
-            if dominators.dominates(BasicBlock(successor), BasicBlock(block)) {
-                latches.entry(successor).or_default().push(block);
-            }
-        }
-    }
-    latches
-        .into_iter()
-        .map(|(header, latches)| {
-            let mut blocks = BTreeSet::from([header]);
-            let mut pending = latches.clone();
-            while let Some(block) = pending.pop() {
-                if blocks.insert(block) {
-                    pending.extend(predecessors.get(block).into_iter().flatten().copied());
-                }
-            }
-            Loop {
-                header,
-                blocks,
-                latches,
-            }
-        })
-        .collect()
-}
-
-fn successors(body: &Body, block: usize) -> Vec<usize> {
-    body.basic_blocks
-        .get(block)
-        .and_then(|data| data.terminator.as_ref())
-        .map(|terminator| terminator.successors().iter().map(|b| b.0).collect())
-        .unwrap_or_default()
-}
-
-fn predecessors(body: &Body) -> Vec<Vec<usize>> {
-    let mut predecessors = vec![Vec::new(); body.basic_blocks.len()];
-    for block in 0..body.basic_blocks.len() {
-        for successor in successors(body, block) {
-            if let Some(list) = predecessors.get_mut(successor) {
-                list.push(block);
-            }
-        }
-    }
-    predecessors
-}
-
-/// The locals some block of `found` asks about on every iteration.
+/// The locals some block of `found` asks about on every iteration, each
+/// with the question asked there, a copy-on-write first.
 fn locals_asked_every_iteration(
-    found: &Loop,
-    asked: &BTreeMap<usize, Vec<usize>>,
+    found: &NaturalLoop,
+    asked: &BTreeMap<usize, Vec<(usize, Question)>>,
     dominators: &DominatorTree,
-) -> Vec<Local> {
+) -> Vec<(Local, Question)> {
+    let runs_every_iteration = |block: usize| {
+        found.blocks.contains(&block)
+            && (found.latches.iter())
+                .all(|latch| dominators.dominates(BasicBlock(block), BasicBlock(*latch)))
+    };
     asked
         .iter()
-        .filter(|(_, blocks)| {
-            blocks.iter().any(|block| {
-                found.blocks.contains(block)
-                    && found
-                        .latches
-                        .iter()
-                        .all(|latch| dominators.dominates(BasicBlock(*block), BasicBlock(*latch)))
-            })
+        .filter_map(|(local, blocks)| {
+            let questions = blocks
+                .iter()
+                .filter(|(block, _)| runs_every_iteration(*block));
+            let question = questions
+                .map(|(_, question)| *question)
+                .min_by_key(|question| matches!(question, Question::IsShared))?;
+            Some((Local(*local), question))
         })
-        .map(|(local, _)| Local(*local))
         .collect()
 }
 
 /// Whether the blocks of `found` write `local` only as its questions do: a
 /// copy-on-write's result moved back into it, or a uniqueness check's fresh
 /// copy replacing it, and never start or end its storage.
-fn is_written_only_by_its_questions(body: &Body, found: &Loop, local: Local) -> bool {
+fn is_written_only_by_its_questions(body: &Body, found: &NaturalLoop, local: Local) -> bool {
     let handed_back = handed_back_temps(body, found);
     found.blocks.iter().all(|&block| {
         let Some(data) = body.basic_blocks.get(block) else {
@@ -248,7 +249,7 @@ fn is_written_only_by_its_questions(body: &Body, found: &Loop, local: Local) -> 
 
 /// The temps a call in `found` writes a value only the caller holds into: a
 /// copy-on-write's result, or a fresh copy.
-fn handed_back_temps(body: &Body, found: &Loop) -> HashSet<Local> {
+fn handed_back_temps(body: &Body, found: &NaturalLoop) -> HashSet<Local> {
     found
         .blocks
         .iter()
@@ -276,7 +277,7 @@ fn handed_back_temps(body: &Body, found: &Loop) -> HashSet<Local> {
 
 /// Routes every entry into the loop at `header` through a copy-on-write of
 /// `local`. Returns false when the loop has no entry from outside it.
-fn make_own_before(body: &mut Body, loops: &[Loop], header: usize, local: Local) -> bool {
+fn make_own_before(body: &mut Body, loops: &[NaturalLoop], header: usize, local: Local) -> bool {
     let Some(found) = loops.iter().find(|found| found.header == header) else {
         return false;
     };
@@ -287,14 +288,7 @@ fn make_own_before(body: &mut Body, loops: &[Loop], header: usize, local: Local)
         return false;
     };
     let ty = decl.ty.clone();
-    let entries: Vec<usize> = predecessors(body)
-        .get(header)
-        .map(|list| {
-            (list.iter().copied())
-                .filter(|pred| !found.blocks.contains(pred))
-                .collect()
-        })
-        .unwrap_or_default();
+    let entries = found.entries(&predecessors(body));
     if header == 0 || entries.is_empty() {
         return false;
     }

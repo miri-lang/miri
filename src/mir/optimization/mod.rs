@@ -27,7 +27,9 @@
 //! against the caller's release of it. [`elide_unshare_checks`] runs after
 //! it, on every host body at every optimization level, and removes a
 //! uniqueness check an earlier check or a freshly built value has already
-//! answered.
+//! answered. [`stable_collections::record_stable_collections`] runs last, and
+//! records each array or list a loop leaves the header of unchanged, so code
+//! generation reads that header once before the loop.
 //!
 //! # Usage
 //!
@@ -51,6 +53,7 @@ pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
 pub mod simplify_cfg;
+pub mod stable_collections;
 pub mod unshare_elision;
 
 use crate::mir::{Body, ExecutionModel};

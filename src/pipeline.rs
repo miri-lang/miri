@@ -2726,9 +2726,11 @@ impl Pipeline {
         }
 
         // Drop the uniqueness checks an earlier write through the same path
-        // already answered. Runs on the bodies with every retain explicit.
+        // already answered, on the bodies with every retain explicit; then
+        // record each collection a loop leaves the header of unchanged.
         for (_name, body) in &mut bodies {
             mir::optimization::elide_unshare_checks(body);
+            mir::optimization::stable_collections::record_stable_collections(body);
         }
 
         // Check RC invariants, cross-residency readback fencing and optional
@@ -3144,6 +3146,7 @@ impl Pipeline {
                 result.type_checker.type_definitions(),
             ));
             violations.extend(mir::verify::verify_bound_names(body));
+            violations.extend(mir::verify::verify_stable_collections(body));
             if !violations.is_empty() {
                 functions_with_violations += 1;
             }

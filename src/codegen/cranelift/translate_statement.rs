@@ -4,6 +4,9 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::codegen::cranelift::collection_header::{
+    HEADER_DATA, HEADER_LEN, LIST_CAPACITY, LIST_SLOT_SIZE,
+};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
     CallSite, ElementShape, FunctionTranslator, ModuleCtx, RuntimeChecks, TypeCtx,
@@ -84,13 +87,6 @@ impl PreparedCall {
         call_arguments(self.result.slot, &args)
     }
 }
-
-/// Word offsets of the fields of a list's header (`MiriList`, laid out in C
-/// order) that a push compiled inline reads and writes.
-const LIST_DATA: i32 = 0;
-const LIST_LEN: i32 = 1;
-const LIST_CAPACITY: i32 = 2;
-const LIST_ELEM_SIZE: i32 = 3;
 
 /// A `miri_rt_list_push` call compiled inline: the list, the address of the
 /// element's bytes, the number of them as passed, and the width the element
@@ -1455,13 +1451,13 @@ impl<'a> FunctionTranslator<'a> {
         let header = MemFlags::trusted();
         let len = builder
             .ins()
-            .load(ptr_type, header, push.list, LIST_LEN * word);
+            .load(ptr_type, header, push.list, HEADER_LEN * word);
         let capacity = builder
             .ins()
             .load(ptr_type, header, push.list, LIST_CAPACITY * word);
         let slot = builder
             .ins()
-            .load(ptr_type, header, push.list, LIST_ELEM_SIZE * word);
+            .load(ptr_type, header, push.list, LIST_SLOT_SIZE * word);
         let has_room = builder.ins().icmp(IntCC::UnsignedLessThan, len, capacity);
         let fills_slot = builder
             .ins()
@@ -1475,7 +1471,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(store_block);
         let data = builder
             .ins()
-            .load(ptr_type, header, push.list, LIST_DATA * word);
+            .load(ptr_type, header, push.list, HEADER_DATA * word);
         let offset = builder.ins().imul_imm(len, push.width.bytes() as i64);
         let dest = builder.ins().iadd(data, offset);
         let element = builder
@@ -1485,7 +1481,7 @@ impl<'a> FunctionTranslator<'a> {
         let grown = builder.ins().iadd_imm(len, 1);
         builder
             .ins()
-            .store(header, grown, push.list, LIST_LEN * word);
+            .store(header, grown, push.list, HEADER_LEN * word);
         builder.ins().jump(join_block, &[]);
 
         builder.switch_to_block(runtime_block);

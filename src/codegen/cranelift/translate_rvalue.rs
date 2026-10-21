@@ -1490,6 +1490,11 @@ impl<'a> FunctionTranslator<'a> {
         let Some(offset) = len_offset else {
             return Ok(builder.ins().iconst(ptr_type, 0));
         };
+        if place.projection.is_empty() {
+            if let Some(header) = type_ctx.stable_headers.hoisted(builder, place.local) {
+                return Ok(header.len);
+            }
+        }
 
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
@@ -1509,7 +1514,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(null_bb);
 
         builder.switch_to_block(load_bb);
-        let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, offset);
+        let len = Self::load_header_word(builder, ptr, offset, ptr_type);
         builder.def_var(len_var, len);
         builder.ins().jump(merge_bb, &[]);
         builder.seal_block(load_bb);

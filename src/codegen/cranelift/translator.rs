@@ -9,7 +9,9 @@
 use super::translate_statement::ProjectedKind;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::closure::CaptureLayout;
+use crate::codegen::cranelift::collection_header::{CollectionBase, ElementHeader};
 use crate::codegen::cranelift::layout;
+use crate::codegen::cranelift::stable_headers::StableHeaders;
 use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_abi::body_signature;
 use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, ValueLocals};
@@ -30,14 +32,6 @@ use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-
-/// User trap code raised when a collection that stores its elements inline was
-/// allocated with slots of a size other than the stride those elements are
-/// addressed at.
-///
-/// Built via `TrapCode::unwrap_user`, a `const fn`, so an invalid code fails to
-/// compile rather than panic at run time.
-const INLINE_STRIDE_TRAP_CODE: TrapCode = TrapCode::unwrap_user(3);
 
 /// Translates MIR functions to Cranelift IR.
 ///
@@ -117,6 +111,9 @@ pub struct TypeCtx<'a> {
     /// The locals of the code being translated that hold a bitwise value as
     /// its bytes, and how it holds any other type.
     pub values: &'a ValueLocals<'a>,
+    /// The collection headers the code being translated reads once per loop
+    /// rather than at every element access.
+    pub stable_headers: &'a StableHeaders,
 }
 
 impl TypeCtx<'_> {
@@ -275,6 +272,7 @@ impl<'a> FunctionTranslator<'a> {
         if emission.is_entry && emission.runtime_checks == RuntimeChecks::CompiledOut {
             Self::call_rt_checks_compiled_out(&mut builder, &mut module_ctx)?;
         }
+        let stable_headers = StableHeaders::declare(&mut builder, body, self.ptr_type)?;
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
             facts: self.facts,
@@ -284,6 +282,7 @@ impl<'a> FunctionTranslator<'a> {
             open_params: &body.open_params,
             bound_params: &body.bound_params,
             values: &values,
+            stable_headers: &stable_headers,
         };
 
         Self::translate_blocks(
@@ -400,9 +399,11 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
 
+            type_ctx.stable_headers.enter_block(idx);
             for stmt in &block_data.statements {
                 Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
+            Self::read_stable_headers(builder, idx, locals, type_ctx)?;
             if let Some(ref terminator) = block_data.terminator {
                 Self::translate_terminator(
                     builder, module_ctx, terminator, body, locals, blocks, type_ctx,
@@ -555,10 +556,11 @@ impl<'a> FunctionTranslator<'a> {
                     let idx_val = builder.use_var(*idx_var);
                     let elem_type =
                         Self::resolve_collection_elem_type_as_type(&current_type).cloned();
+                    let base = Self::collection_base(builder, place, position, value, type_ctx);
                     value = Self::translate_collection_index_read(
                         builder,
                         ctx,
-                        value,
+                        base,
                         idx_val,
                         &current_type,
                         type_ctx,
@@ -886,8 +888,9 @@ impl<'a> FunctionTranslator<'a> {
                     CodegenError::Internal(format!("Unknown index local: {index:?}"))
                 })?;
                 let index_val = builder.use_var(*index_var);
+                let base = Self::last_collection_base(builder, place, addr, type_ctx);
                 Self::translate_collection_index_read(
-                    builder, ctx, addr, index_val, &holder, type_ctx,
+                    builder, ctx, base, index_val, &holder, type_ctx,
                 )
             }
             Some(PlaceElem::Deref) | None => Err(CodegenError::Internal(format!(
@@ -913,7 +916,8 @@ impl<'a> FunctionTranslator<'a> {
         let mut current_type: Type = type_ctx.local_types[place.local.0].clone();
 
         let mut walk = ProjectedKind::new(place, type_ctx);
-        for proj in &place.projection[..place.projection.len() - 1] {
+        let prefix = &place.projection[..place.projection.len() - 1];
+        for (position, proj) in prefix.iter().enumerate() {
             let reached = walk.step(proj, type_ctx)?;
             match proj {
                 PlaceElem::Deref => {
@@ -953,10 +957,11 @@ impl<'a> FunctionTranslator<'a> {
                         CodegenError::Internal(format!("Unknown index local: {:?}", local))
                     })?;
                     let idx_val = builder.use_var(*idx_var);
+                    let base = Self::collection_base(builder, place, position, addr, type_ctx);
                     addr = Self::translate_collection_index_read(
                         builder,
                         ctx,
-                        addr,
+                        base,
                         idx_val,
                         &current_type,
                         type_ctx,
@@ -1074,10 +1079,11 @@ impl<'a> FunctionTranslator<'a> {
                     CodegenError::Internal(format!("Unknown index local: {:?}", local))
                 })?;
                 let idx_val = builder.use_var(*idx_var);
+                let base = Self::last_collection_base(builder, place, addr, type_ctx);
                 Self::translate_collection_index_write(
                     builder,
                     ctx,
-                    addr,
+                    base,
                     idx_val,
                     value,
                     current_type,
@@ -1087,6 +1093,18 @@ impl<'a> FunctionTranslator<'a> {
         }
         Ok(())
     }
+
+    /// [`Self::collection_base`] for the last projection of `place`.
+    fn last_collection_base(
+        builder: &mut FunctionBuilder,
+        place: &Place,
+        value: Value,
+        type_ctx: &TypeCtx,
+    ) -> CollectionBase {
+        let position = place.projection.len().saturating_sub(1);
+        Self::collection_base(builder, place, position, value, type_ctx)
+    }
+
     /// Look up a cached `FuncId` for `name`, or declare it as a runtime import
     /// when missing. Used by helpers that need the `FuncId` itself (not just an
     /// instruction emit) — e.g. taking the address of a runtime function for
@@ -1930,7 +1948,7 @@ impl<'a> FunctionTranslator<'a> {
     pub(crate) fn translate_collection_index_read(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        base_value: Value,
+        base: CollectionBase,
         idx_val: Value,
         base_type: &Type,
         type_ctx: &TypeCtx,
@@ -1938,6 +1956,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
         if let Some(layout) = type_ctx.value_layout(&base_type.kind) {
+            let base_value = base.address(base_type)?;
             return Self::read_value_tuple_element(builder, ctx, base_value, idx_val, &layout);
         }
 
@@ -1963,21 +1982,14 @@ impl<'a> FunctionTranslator<'a> {
         let is_tuple_type = base_type.kind.is_tuple();
 
         let (len_val, fields_base) = if is_tuple_type {
+            let base_value = base.address(base_type)?;
             let len = builder.ins().load(ptr_type, MemFlags::new(), base_value, 0);
-            let base = builder.ins().iadd_imm(base_value, ptr_size as i64);
-            (len, base)
+            let fields = builder.ins().iadd_imm(base_value, ptr_size as i64);
+            (len, fields)
         } else {
-            if inline.is_some() {
-                Self::trap_unless_slots_match_stride(
-                    builder, base_value, base_type, elem_size, ptr_type,
-                );
-            }
-            // MiriArray/MiriList layout: { data: *mut u8, len: usize, ... }
-            let data = builder.ins().load(ptr_type, MemFlags::new(), base_value, 0);
-            let len = builder
-                .ins()
-                .load(ptr_type, MemFlags::new(), base_value, ptr_size);
-            (len, data)
+            let stride = inline.map(|_| elem_size);
+            let header = Self::element_header_of(builder, base, base_type, stride, ptr_type);
+            (header.len, header.data)
         };
         let elem_addr = Self::bounds_checked_elem_addr(
             builder,
@@ -1997,6 +2009,40 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder
             .ins()
             .load(cl_elem_ty, MemFlags::new(), elem_addr, 0))
+    }
+
+    /// Where an index projection at `position` of `place`, reached at
+    /// `value`, finds its collection's header: read before the loop when the
+    /// projection is the first of a place rooted at a collection recorded
+    /// stable over the block being translated, at `value` otherwise.
+    pub(crate) fn collection_base(
+        builder: &mut FunctionBuilder,
+        place: &Place,
+        position: usize,
+        value: Value,
+        type_ctx: &TypeCtx,
+    ) -> CollectionBase {
+        let hoisted = (position == 0)
+            .then(|| type_ctx.stable_headers.hoisted(builder, place.local))
+            .flatten();
+        hoisted.map_or(CollectionBase::Address(value), CollectionBase::Hoisted)
+    }
+
+    /// The data pointer and length an index into `base` reads: the ones
+    /// read before the loop, or loaded now with the slot-size check.
+    fn element_header_of(
+        builder: &mut FunctionBuilder,
+        base: CollectionBase,
+        base_type: &Type,
+        stride: Option<i64>,
+        ptr_type: cl_types::Type,
+    ) -> ElementHeader {
+        match base {
+            CollectionBase::Address(address) => {
+                Self::load_element_header(builder, address, base_type, stride, ptr_type)
+            }
+            CollectionBase::Hoisted(header) => header,
+        }
     }
 
     /// Read element `index` of the tuple held as its bytes at `base`: a
@@ -2019,44 +2065,6 @@ impl<'a> FunctionTranslator<'a> {
             ),
             FieldRepr::Value(_) | FieldRepr::OptionTag => address,
         })
-    }
-
-    /// Trap unless the collection at `base` was allocated with slots of exactly
-    /// `stride` bytes.
-    ///
-    /// An inline element is addressed at its stride. A collection whose slots are
-    /// any other size would be read and written at the wrong offsets — handing
-    /// back bytes that belong to a neighbouring element, or lie past the end of
-    /// the buffer — so the program stops instead of reading them.
-    fn trap_unless_slots_match_stride(
-        builder: &mut FunctionBuilder,
-        base: Value,
-        base_type: &Type,
-        stride: i64,
-        ptr_type: cl_types::Type,
-    ) {
-        let Some(offset) = Self::slot_size_offset(base_type, ptr_type.bytes() as i32) else {
-            return;
-        };
-        let slot_size = builder.ins().load(ptr_type, MemFlags::new(), base, offset);
-        let mismatch = builder.ins().icmp_imm(
-            cranelift_codegen::ir::condcodes::IntCC::NotEqual,
-            slot_size,
-            stride,
-        );
-        builder.ins().trapnz(mismatch, INLINE_STRIDE_TRAP_CODE);
-    }
-
-    /// Offset of the slot-size field in the runtime header of an array or list:
-    /// `MiriArray { data, elem_count, elem_size, .. }` and
-    /// `MiriList { data, len, capacity, elem_size, .. }`. Neither a map nor a set
-    /// is addressed by index, so neither has a slot size to check.
-    fn slot_size_offset(base_type: &Type, ptr_size: i32) -> Option<i32> {
-        match base_type.kind.as_builtin_collection()? {
-            BuiltinCollectionKind::Array => Some(2 * ptr_size),
-            BuiltinCollectionKind::List => Some(3 * ptr_size),
-            BuiltinCollectionKind::Map | BuiltinCollectionKind::Set => None,
-        }
     }
 
     /// Emit a runtime bounds-check (`idx_val < len_val`) that traps on failure
@@ -2099,14 +2107,13 @@ impl<'a> FunctionTranslator<'a> {
     pub(crate) fn translate_collection_index_write(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        base_addr: Value,
+        base: CollectionBase,
         idx_val: Value,
         value: Value,
         base_type: &Type,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
 
         // No element type ⇒ assume pointer-sized addressing (managed collections
         // hold pointers; this matches the historical silent fallback but is now
@@ -2125,41 +2132,17 @@ impl<'a> FunctionTranslator<'a> {
         };
         let elem_size = inline.unwrap_or(cl_elem_ty.bytes() as i64);
 
-        if inline.is_some() {
-            Self::trap_unless_slots_match_stride(
-                builder, base_addr, base_type, elem_size, ptr_type,
-            );
-        }
-
-        // Read data pointer from offset 0
-        let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), base_addr, 0);
-
-        // Read length from offset ptr_size
-        let len_val = builder
-            .ins()
-            .load(ptr_type, MemFlags::new(), base_addr, ptr_size);
-
-        // Runtime bounds check
-        let oob = builder.ins().icmp(
-            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        let stride = inline.map(|_| elem_size);
+        let header = Self::element_header_of(builder, base, base_type, stride, ptr_type);
+        let elem_addr = Self::bounds_checked_elem_addr(
+            builder,
+            ctx,
+            header.data,
             idx_val,
-            len_val,
-        );
-
-        let panic_block = builder.create_block();
-        let cont_block = builder.create_block();
-        builder.ins().brif(oob, panic_block, &[], cont_block, &[]);
-
-        builder.switch_to_block(panic_block);
-        Self::call_rt_array_panic_oob(builder, ctx, idx_val, len_val)?;
-        builder.ins().trap(TrapCode::unwrap_user(1));
-
-        builder.switch_to_block(cont_block);
-
-        // Compute element address
-        let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
-        let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-        let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
+            header.len,
+            elem_size,
+            ptr_type,
+        )?;
         match (inline, elem_type_kind) {
             (Some(_), Some(elem_kind)) => {
                 // Copy the element's bytes inline; `value` is the source
@@ -2178,10 +2161,6 @@ impl<'a> FunctionTranslator<'a> {
                 builder.ins().store(MemFlags::new(), value, elem_addr, 0);
             }
         }
-
-        builder.seal_block(panic_block);
-        builder.seal_block(cont_block);
-
         Ok(())
     }
 

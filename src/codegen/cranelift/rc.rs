@@ -2148,6 +2148,7 @@ impl<'a> FunctionTranslator<'a> {
             open_params: &open_params,
             bound_params: &no_bound_params,
             values: &ValueLocals::none(),
+            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
 
         if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts) {
@@ -2346,6 +2347,7 @@ impl<'a> FunctionTranslator<'a> {
             open_params: &element.open_params,
             bound_params: &element.bound_params,
             values: &ValueLocals::none(),
+            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
 
         Self::emit_decref_value(&mut builder, &mut module_ctx, &element.kind, ptr, &type_ctx)?;
@@ -2752,6 +2754,7 @@ mod drop_thunk_tests {
             open_params: &open_params,
             bound_params: &bound_params,
             values: &ValueLocals::none(),
+            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
         FunctionTranslator::drop_thunk(name, args, &type_ctx)
     }
@@ -2794,6 +2797,7 @@ mod drop_thunk_tests {
             open_params: &open_params,
             bound_params: &bound_params,
             values: &ValueLocals::none(),
+            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
         FunctionTranslator::drop_thunk(name, args, &type_ctx)
     }

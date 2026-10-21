@@ -42,6 +42,9 @@ fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
         values: Box::leak(Box::new(
             miri::codegen::cranelift::value_locals::ValueLocals::none(),
         )),
+        stable_headers: Box::leak(Box::new(
+            miri::codegen::cranelift::stable_headers::StableHeaders::none(),
+        )),
     }
 }
 
