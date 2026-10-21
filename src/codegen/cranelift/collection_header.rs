@@ -152,6 +152,9 @@ pub(crate) enum CollectionBase {
     /// The data pointer and length of a collection whose header was read
     /// before the loop the access is in.
     Hoisted(ElementHeader),
+    /// A hoisted header, with the index proven below its length and
+    /// non-negative (`Body::in_bounds`), so the access needs no bounds check.
+    Proven(ElementHeader),
 }
 
 impl CollectionBase {
@@ -159,10 +162,20 @@ impl CollectionBase {
     pub(crate) fn address(self, base_type: &Type) -> Result<Value, CodegenError> {
         match self {
             CollectionBase::Address(address) => Ok(address),
-            CollectionBase::Hoisted(_) => Err(CodegenError::Internal(format!(
-                "a `{}` is indexed through a header read before the loop, but it keeps none",
-                base_type.kind
-            ))),
+            CollectionBase::Hoisted(_) | CollectionBase::Proven(_) => {
+                Err(CodegenError::Internal(format!(
+                    "a `{}` is indexed through a header read before the loop, but it keeps none",
+                    base_type.kind
+                )))
+            }
+        }
+    }
+
+    /// Whether an access through this base compares its index to the length.
+    pub(crate) fn needs_bounds_check(self) -> bool {
+        match self {
+            CollectionBase::Address(_) | CollectionBase::Hoisted(_) => true,
+            CollectionBase::Proven(_) => false,
         }
     }
 }

@@ -142,3 +142,26 @@ fn test_a_pair_loop_writing_through_a_list_of_structs_reads_its_header_once_per_
     // before the second loop, rather than at each of their accesses.
     assert_eq!(header_loads_at(&clif, 24), 2, "{clif}");
 }
+
+#[test]
+fn test_a_pair_loop_guarded_by_the_length_compares_no_index_to_it() {
+    let clif = clif_of(NBODY_SHAPED, "step");
+    assert_eq!(
+        clif.matches("icmp.i64 uge").count() + clif.matches("icmp uge").count(),
+        0,
+        "an index the guard proves is still compared:\n{clif}"
+    );
+    assert!(
+        clif.contains("sadd_overflow"),
+        "the induction step no longer traps on overflow:\n{clif}"
+    );
+}
+
+#[test]
+fn test_a_loop_guarded_by_less_or_equal_keeps_its_bounds_check() {
+    let clif = clif_of(SIEVE_SHAPED, "count_primes");
+    assert!(
+        clif.contains("icmp.i64 uge") || clif.contains("icmp uge"),
+        "`m <= n` proves nothing, yet the check is gone:\n{clif}"
+    );
+}

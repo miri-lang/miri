@@ -1963,8 +1963,10 @@ impl Pipeline {
         // argument as the value it is, and every CPU backend takes it as an
         // address and a byte count.
         for (name, body) in &mut mir_bodies {
+            let before = mir::optimization::in_bounds::statement_counts(body);
             mir::element_abi::pass_elements_by_address(body)
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
+            mir::optimization::in_bounds::forget_changed_blocks(body, &before);
         }
         match opts.cpu_backend {
             CpuBackend::Cranelift => {
@@ -2731,6 +2733,7 @@ impl Pipeline {
         for (_name, body) in &mut bodies {
             mir::optimization::elide_unshare_checks(body);
             mir::optimization::stable_collections::record_stable_collections(body);
+            mir::optimization::in_bounds::record_in_bounds(body);
         }
 
         // Check RC invariants, cross-residency readback fencing and optional
@@ -3147,6 +3150,7 @@ impl Pipeline {
             ));
             violations.extend(mir::verify::verify_bound_names(body));
             violations.extend(mir::verify::verify_stable_collections(body));
+            violations.extend(mir::verify::verify_in_bounds(body));
             if !violations.is_empty() {
                 functions_with_violations += 1;
             }

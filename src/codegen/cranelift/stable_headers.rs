@@ -46,7 +46,11 @@ pub struct StableHeaders {
     hoisted: Vec<HoistedHeader>,
     /// The record covering each block's accesses to each collection.
     covering: HashMap<(usize, Local), usize>,
+    /// The accesses `Body::in_bounds` proves: block, statement, collection
+    /// and index.
+    proven: HashSet<(usize, usize, Local, Local)>,
     current_block: Cell<Option<usize>>,
+    current_statement: Cell<usize>,
 }
 
 impl StableHeaders {
@@ -63,7 +67,19 @@ impl StableHeaders {
         body: &Body,
         ptr_type: cl_types::Type,
     ) -> Result<Self, CodegenError> {
-        let mut headers = Self::default();
+        let mut headers = Self {
+            proven: (body.in_bounds.iter())
+                .map(|proof| {
+                    (
+                        proof.block.0,
+                        proof.statement_index,
+                        proof.collection,
+                        proof.index,
+                    )
+                })
+                .collect(),
+            ..Self::default()
+        };
         let mut widest: HashMap<(usize, Local), usize> = HashMap::new();
         for (index, record) in body.stable_collections.iter().enumerate() {
             check_preheader_dominates(body, record)?;
@@ -88,8 +104,25 @@ impl StableHeaders {
     }
 
     /// Note that the MIR block `block` is being translated.
-    pub(crate) fn enter_block(&self, block: usize) {
+    pub fn enter_block(&self, block: usize) {
         self.current_block.set(Some(block));
+        self.current_statement.set(0);
+    }
+
+    /// Note that the statement at `position` of the current block — the
+    /// terminator when `position` is the number of statements — is being
+    /// translated.
+    pub(crate) fn enter_statement(&self, position: usize) {
+        self.current_statement.set(position);
+    }
+
+    /// Whether `collection[index]`, at the statement being translated, is
+    /// proven in bounds.
+    pub fn is_proven(&self, collection: Local, index: Local) -> bool {
+        self.current_block.get().is_some_and(|block| {
+            let at = (block, self.current_statement.get(), collection, index);
+            self.proven.contains(&at)
+        })
     }
 
     /// The header of the collection `local` holds, read before the loop the

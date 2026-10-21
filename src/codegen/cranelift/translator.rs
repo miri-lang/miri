@@ -400,9 +400,13 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             type_ctx.stable_headers.enter_block(idx);
-            for stmt in &block_data.statements {
+            for (position, stmt) in block_data.statements.iter().enumerate() {
+                type_ctx.stable_headers.enter_statement(position);
                 Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
+            type_ctx
+                .stable_headers
+                .enter_statement(block_data.statements.len());
             Self::read_stable_headers(builder, idx, locals, type_ctx)?;
             if let Some(ref terminator) = block_data.terminator {
                 Self::translate_terminator(
@@ -1991,15 +1995,11 @@ impl<'a> FunctionTranslator<'a> {
             let header = Self::element_header_of(builder, base, base_type, stride, ptr_type);
             (header.len, header.data)
         };
-        let elem_addr = Self::bounds_checked_elem_addr(
-            builder,
-            ctx,
-            fields_base,
-            idx_val,
-            len_val,
-            elem_size,
-            ptr_type,
-        )?;
+        let fields = ElementHeader {
+            data: fields_base,
+            len: len_val,
+        };
+        let elem_addr = Self::element_address(builder, ctx, base, fields, idx_val, elem_size)?;
         // Inline element: the projection chain consumes the address directly, so
         // it stays valid only while the collection holds the slot. A caller that
         // keeps the element past that has to copy its components out first.
@@ -2025,7 +2025,18 @@ impl<'a> FunctionTranslator<'a> {
         let hoisted = (position == 0)
             .then(|| type_ctx.stable_headers.hoisted(builder, place.local))
             .flatten();
-        hoisted.map_or(CollectionBase::Address(value), CollectionBase::Hoisted)
+        let Some(header) = hoisted else {
+            return CollectionBase::Address(value);
+        };
+        let is_proven = matches!(
+            place.projection.first(),
+            Some(PlaceElem::Index(index)) if type_ctx.stable_headers.is_proven(place.local, *index)
+        );
+        if is_proven {
+            CollectionBase::Proven(header)
+        } else {
+            CollectionBase::Hoisted(header)
+        }
     }
 
     /// The data pointer and length an index into `base` reads: the ones
@@ -2041,7 +2052,7 @@ impl<'a> FunctionTranslator<'a> {
             CollectionBase::Address(address) => {
                 Self::load_element_header(builder, address, base_type, stride, ptr_type)
             }
-            CollectionBase::Hoisted(header) => header,
+            CollectionBase::Hoisted(header) | CollectionBase::Proven(header) => header,
         }
     }
 
@@ -2065,6 +2076,33 @@ impl<'a> FunctionTranslator<'a> {
             ),
             FieldRepr::Value(_) | FieldRepr::OptionTag => address,
         })
+    }
+
+    /// The address of element `index` of the collection `header` describes,
+    /// checked against its length unless `base` carries a proof the index is
+    /// in bounds.
+    fn element_address(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        base: CollectionBase,
+        header: ElementHeader,
+        index: Value,
+        elem_size: i64,
+    ) -> Result<Value, CodegenError> {
+        let ptr_type = builder.func.dfg.value_type(header.data);
+        if base.needs_bounds_check() {
+            return Self::bounds_checked_elem_addr(
+                builder,
+                ctx,
+                header.data,
+                index,
+                header.len,
+                elem_size,
+                ptr_type,
+            );
+        }
+        let byte_offset = builder.ins().imul_imm(index, elem_size);
+        Ok(builder.ins().iadd(header.data, byte_offset))
     }
 
     /// Emit a runtime bounds-check (`idx_val < len_val`) that traps on failure
@@ -2134,15 +2172,7 @@ impl<'a> FunctionTranslator<'a> {
 
         let stride = inline.map(|_| elem_size);
         let header = Self::element_header_of(builder, base, base_type, stride, ptr_type);
-        let elem_addr = Self::bounds_checked_elem_addr(
-            builder,
-            ctx,
-            header.data,
-            idx_val,
-            header.len,
-            elem_size,
-            ptr_type,
-        )?;
+        let elem_addr = Self::element_address(builder, ctx, base, header, idx_val, elem_size)?;
         match (inline, elem_type_kind) {
             (Some(_), Some(elem_kind)) => {
                 // Copy the element's bytes inline; `value` is the source

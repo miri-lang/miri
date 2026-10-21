@@ -20,6 +20,7 @@ pub mod membership;
 pub mod methods;
 pub mod optional_elements;
 pub mod optional_results;
+pub mod proven_indices;
 pub mod rc;
 pub mod shared_bodies;
 pub mod transformable;

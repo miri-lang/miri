@@ -23,16 +23,16 @@ use miri::mir::{
 use miri::pipeline::Pipeline;
 use miri::runtime_fns::rt;
 
-const LIST: Local = Local(1);
-const INDEX: Local = Local(2);
-const LENGTH: Local = Local(3);
-const BELOW: Local = Local(4);
-const ELEMENT: Local = Local(5);
-const SPARE_LIST: Local = Local(6);
-const SPARE: Local = Local(7);
+pub(crate) const LIST: Local = Local(1);
+pub(crate) const INDEX: Local = Local(2);
+pub(crate) const LENGTH: Local = Local(3);
+pub(crate) const BELOW: Local = Local(4);
+pub(crate) const ELEMENT: Local = Local(5);
+pub(crate) const SPARE_LIST: Local = Local(6);
+pub(crate) const SPARE: Local = Local(7);
 
-const LOOP_HEADER: usize = 1;
-const LOOP_BODY: usize = 2;
+pub(crate) const LOOP_HEADER: usize = 1;
+pub(crate) const LOOP_BODY: usize = 2;
 
 pub(crate) fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
@@ -47,7 +47,7 @@ pub(crate) fn list_of(element: TypeKind) -> Type {
     ty(TypeKind::List(Box::new(element)))
 }
 
-fn int(value: i64) -> Operand {
+pub(crate) fn int(value: i64) -> Operand {
     Operand::Constant(Box::new(Constant {
         span: Span::default(),
         ty: ty(TypeKind::Int),
@@ -55,18 +55,18 @@ fn int(value: i64) -> Operand {
     }))
 }
 
-fn statement(kind: StatementKind) -> Statement {
+pub(crate) fn statement(kind: StatementKind) -> Statement {
     Statement {
         kind,
         span: Span::default(),
     }
 }
 
-fn assign(place: Place, rvalue: Rvalue) -> Statement {
+pub(crate) fn assign(place: Place, rvalue: Rvalue) -> Statement {
     statement(StatementKind::Assign(place, rvalue))
 }
 
-fn terminator(kind: TerminatorKind) -> Terminator {
+pub(crate) fn terminator(kind: TerminatorKind) -> Terminator {
     Terminator::new(kind, Span::default())
 }
 
@@ -76,7 +76,7 @@ fn goto(target: usize) -> Terminator {
     })
 }
 
-fn indexed(local: Local) -> Place {
+pub(crate) fn indexed(local: Local) -> Place {
     Place {
         local,
         projection: vec![PlaceElem::Index(INDEX)],
@@ -149,7 +149,12 @@ fn records_of(mut body: Body) -> Vec<StableCollection> {
     body.stable_collections
 }
 
-fn call(func: Operand, args: Vec<Operand>, destination: Local, target: usize) -> Terminator {
+pub(crate) fn call(
+    func: Operand,
+    args: Vec<Operand>,
+    destination: Local,
+    target: usize,
+) -> Terminator {
     terminator(TerminatorKind::Call {
         func,
         args,

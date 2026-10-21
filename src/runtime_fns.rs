@@ -754,6 +754,16 @@ pub fn returns_unshared(name: &str) -> bool {
     )
 }
 
+/// Whether `name` hands back a collection with exactly as many elements as
+/// the one it is given: a copy-on-write entry point or a clone of an array or
+/// a list. A length known of its argument holds of its result.
+pub fn preserves_length(name: &str) -> bool {
+    matches!(
+        name,
+        rt::LIST_COW | rt::ARRAY_COW | rt::LIST_CLONE | rt::ARRAY_CLONE
+    )
+}
+
 /// Whether a call to `name` leaves the header of every collection as it found
 /// it: the data pointer, the length and the slot size.
 ///

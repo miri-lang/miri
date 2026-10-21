@@ -30,6 +30,8 @@
 //! answered. [`stable_collections::record_stable_collections`] runs last, and
 //! records each array or list a loop leaves the header of unchanged, so code
 //! generation reads that header once before the loop.
+//! [`in_bounds::record_in_bounds`] runs after it, and records each access a
+//! loop guard proves in bounds, which code generation emits unchecked.
 //!
 //! # Usage
 //!
@@ -46,6 +48,7 @@
 pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
+pub mod in_bounds;
 pub mod index_numbering;
 pub mod local_borrows;
 pub mod loop_unsharing;

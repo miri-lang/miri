@@ -108,6 +108,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
 mod bound_names;
+mod in_bounds;
 mod local_borrows;
 mod optional_representation;
 mod optional_slots;
@@ -115,6 +116,7 @@ mod stable_collections;
 mod value_representation;
 
 pub use bound_names::verify_bound_names;
+pub use in_bounds::verify_in_bounds;
 pub use local_borrows::verify_local_borrows;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
