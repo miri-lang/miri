@@ -36,6 +36,12 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Iterable<T>, 
     runtime "core" fn miri_rt_list_reserve(l Self, capacity int)
     runtime "core" fn miri_rt_list_reverse(l Self)
     runtime "core" fn miri_rt_list_sort(l Self)
+    // TODO: spell this parameter `Self` like its siblings once a `Self`
+    // argument stops leaking. Handed a `List<T>` local other than `self`, the
+    // shared generic body lowers the argument as `IncRef(_4); _16 = move _4 as
+    // List`, and nothing releases the reference that cast takes, so every
+    // sort leaks its list.
+    runtime "core" fn miri_rt_list_sort_by(l List<T>, f fn(T, T) int)
     runtime "core" fn miri_rt_list_clone(l Self) List<T>
 
     /// Returns the number of elements in the list.
@@ -150,6 +156,22 @@ public class List<T> implements Equatable, Hashable, Queryable<T>, Iterable<T>, 
     /// Sorts the list in ascending order.
     public fn sort()
         miri_rt_list_sort(self)
+
+    /// Returns a new sorted List using `f` as a comparator.
+    /// `f(a, b)` must return negative if a < b, zero if a == b, positive if a > b.
+    /// The sort is stable: elements `f` calls equal keep their order. It is a
+    /// bottom-up merge sort run by the runtime over a copy of the list, so it
+    /// calls `f` at most n·⌈log₂ n⌉ + n times and leaves this list as it was.
+    public fn sorted_by(f fn(T, T) int) [T]
+        var result = List<T>()
+        let n = self.length()
+        result.reserve(n)
+        var i = 0
+        while i < n
+            result.push(self.element_at(i))
+            i += 1
+        miri_rt_list_sort_by(result, f)
+        return result
 
     /// Reverses the list in place.
     public fn reverse()

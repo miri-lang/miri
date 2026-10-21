@@ -62,6 +62,7 @@ pub mod gpu_for_captures;
 pub mod helpers;
 pub mod imports;
 pub mod returns;
+pub mod runtime_closures;
 pub mod type_definitions;
 pub mod variables;
 
@@ -520,6 +521,7 @@ impl TypeChecker {
         if let Some(rt_expr) = return_type_expr {
             self.resolve_type_expression(rt_expr, context);
         }
+        self.check_runtime_closure_params(name, params);
     }
 
     fn check_intrinsic_fn_decl(

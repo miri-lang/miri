@@ -1085,3 +1085,102 @@ fn main()
          'Tagged' to hold it as one",
     );
 }
+
+#[test]
+fn test_a_class_overrides_a_trait_default_taking_a_function_of_its_parameter() {
+    // The override is the method a direct call and a call through the trait
+    // both reach.
+    assert_runs_with_output(
+        r#"
+trait Sorter<T>
+    fn by(_f fn(T, T) int) int: 0
+
+class Holder<T> implements Sorter<T>
+    var x T
+
+    fn by(f fn(T, T) int) int: f(self.x, self.x) + 1
+
+fn ask(s Sorter<int>) int: s.by(fn(a int, b int) int: a - b)
+
+fn main()
+    let h = Holder<int>(x: 3)
+    println(f"{h.by(fn(a int, b int) int: a - b)} {ask(h)}")
+"#,
+        "1 1",
+    );
+}
+
+#[test]
+fn test_an_override_taking_a_function_of_other_types_does_not_match_the_trait() {
+    assert_compiler_error(
+        r#"
+trait Sorter<T>
+    fn by(_f fn(T, T) int) int: 0
+
+class Holder<T> implements Sorter<T>
+    var x T
+
+    fn by(_f fn(T, T) bool) int: 1
+
+fn main()
+    let h = Holder<int>(x: 3)
+    println(f"{h.x}")
+"#,
+        "Method 'by' in class 'Holder' does not match trait 'Sorter' signature",
+    );
+}
+
+/// A trait `Shaped<T>` whose one default takes `param` and gives `ret`, and a
+/// class overriding it with `override_param` and `override_ret`. A result of
+/// `int` is answered by `0`; any other is a function of `T`, answered by the
+/// identity.
+fn override_program(param: &str, ret: &str, override_param: &str, override_ret: &str) -> String {
+    let answer = |ret: &str| if ret == "int" { "0" } else { "fn(v T) T: v" };
+    let (default_answer, override_answer) = (answer(ret), answer(override_ret));
+    format!(
+        r#"
+use system.collections.list
+
+trait Shaped<T>
+    fn shape(_f {param}) {ret}: {default_answer}
+
+class Holder<T> implements Shaped<T>
+    var x T
+
+    fn shape(_f {override_param}) {override_ret}: {override_answer}
+
+fn main()
+    let h = Holder<int>(x: 3)
+    println(f"{{h.x}}")
+"#
+    )
+}
+
+#[test]
+fn test_overrides_taking_functions_of_nested_parameter_types_match_the_trait() {
+    for (param, ret) in [
+        ("fn(List<T>) int", "int"),
+        ("fn(T?) T", "int"),
+        ("fn(fn(T) int) int", "int"),
+        ("fn((T, T)) int", "int"),
+        ("[fn(T) int]", "int"),
+        ("int", "fn(T) T"),
+    ] {
+        assert_runs_with_output(&override_program(param, ret, param, ret), "3");
+    }
+}
+
+#[test]
+fn test_overrides_whose_function_types_differ_inside_do_not_match_the_trait() {
+    for (param, override_param) in [
+        ("fn(T, T) int", "fn(T) int"),
+        ("fn(T) int", "fn(T) bool"),
+        ("fn(List<T>) int", "fn(List<int>) int"),
+        ("fn(fn(T) int) int", "fn(fn(T) bool) int"),
+    ] {
+        assert_compiler_error(
+            &override_program(param, "int", override_param, "int"),
+            "Method 'shape' in class 'Holder' does not match trait 'Shaped' signature",
+        );
+    }
+}

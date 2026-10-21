@@ -27,8 +27,13 @@
 //!              | "$fnref" id args "." target           the thunk of a function reference
 //!              | "$nested" id args "." identifier      a nested function
 //!              | "$dtor." closure                      a closure's capture destructor
+//!              | "$trampoline" ( "$" passing )* "." result
+//!                                                      a closure trampoline
 //! item        := identifier args
 //! args        := ( "$" token )*
+//! passing     := word | "addr"
+//! result      := word | "void"
+//! word        := "i8" | "i16" | "i32" | "i64" | "i128" | "f32" | "f64" | "ptr"
 //! ```
 //!
 //! For example `miri.pick$int` is `pick<int>` and `miri.pick__int` a function
@@ -108,10 +113,12 @@
 
 mod table;
 pub(crate) mod token;
+mod trampoline;
 mod wgsl;
 mod written;
 
 pub use table::{Claim, ClaimRefusal, Namespace, SymbolCollision, SymbolTable};
+pub use trampoline::{TrampolineArgument, TrampolineShape, TrampolineWord};
 
 use std::borrow::Cow;
 use std::fmt::{self, Write};
@@ -152,6 +159,9 @@ const NESTED_FUNCTION_MARKER: &str = "nested";
 
 /// Marks the destructor releasing a closure's captures.
 const DESTRUCTOR_MARKER: &str = "dtor";
+
+/// Marks the trampoline a runtime function calls a closure through.
+const TRAMPOLINE_MARKER: &str = "trampoline";
 
 /// The name the program's entry point is linked under.
 const ENTRY_NAME: &str = "main";
@@ -256,6 +266,7 @@ enum SymbolKind {
         subject: ThunkSubject,
     },
     ClosureDestructor(String),
+    ClosureTrampoline(TrampolineShape),
     KernelDatum {
         kernel: String,
         datum: KernelDatum,
@@ -407,6 +418,31 @@ impl Symbol {
         Self::of(SymbolKind::ClosureDestructor(closure.to_string()))
     }
 
+    /// The trampoline a runtime function calls a closure of the shape
+    /// `shape` through.
+    pub fn closure_trampoline(shape: TrampolineShape) -> Self {
+        Self::of(SymbolKind::ClosureTrampoline(shape))
+    }
+
+    /// The shape of the closure trampoline this symbol names; `None` for any
+    /// other symbol.
+    pub fn trampoline_shape(&self) -> Option<&TrampolineShape> {
+        match &self.kind {
+            SymbolKind::ClosureTrampoline(shape) => Some(shape),
+            SymbolKind::Function { .. }
+            | SymbolKind::Method { .. }
+            | SymbolKind::Vtable { .. }
+            | SymbolKind::Closure { .. }
+            | SymbolKind::GpuKernel { .. }
+            | SymbolKind::Runtime(_)
+            | SymbolKind::Entry
+            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => None,
+        }
+    }
+
     /// The `datum` emitted for the GPU kernel whose WGSL entry point is
     /// `kernel`.
     pub fn kernel_datum(kernel: &str, datum: KernelDatum) -> Self {
@@ -476,6 +512,7 @@ impl Symbol {
             | SymbolKind::Runtime(_)
             | SymbolKind::Entry
             | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => false,
         }
@@ -507,6 +544,7 @@ impl Symbol {
             | SymbolKind::Entry
             | SymbolKind::TypeThunk { .. }
             | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => None,
         }
@@ -549,6 +587,7 @@ impl Symbol {
                 ..
             }
             | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => (&[], None),
         };
@@ -579,7 +618,8 @@ impl fmt::Display for Symbol {
             | SymbolKind::Vtable { .. }
             | SymbolKind::Closure { .. }
             | SymbolKind::TypeThunk { .. }
-            | SymbolKind::ClosureDestructor(_) => {
+            | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::ClosureTrampoline(_) => {
                 write_root(f, self.module())?;
                 write_residency(f, &self.residency)?;
                 f.write_char(SEGMENT_SEPARATOR)?;
@@ -627,6 +667,10 @@ fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Resul
         SymbolKind::TypeThunk { kind, subject } => write_thunk(f, *kind, subject),
         SymbolKind::ClosureDestructor(closure) => {
             write!(f, "{MARKER}{DESTRUCTOR_MARKER}{SEGMENT_SEPARATOR}{closure}")
+        }
+        SymbolKind::ClosureTrampoline(shape) => {
+            write!(f, "{MARKER}{TRAMPOLINE_MARKER}")?;
+            shape.write_tokens(f, "$", ".")
         }
         SymbolKind::Runtime(_)
         | SymbolKind::Entry

@@ -268,42 +268,17 @@ fn collect_runtime_info(
     }
 
     let all_stmts = program.body.iter().chain(imported_stmts.iter());
+    for declaration in runtime_declarations(all_stmts) {
+        required_runtimes.insert(declaration.kind.clone());
 
-    for stmt in all_stmts {
-        match &stmt.node {
-            StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) => {
-                required_runtimes.insert(runtime_kind.clone());
-
-                #[cfg(feature = "cranelift")]
-                if let Some(ptr_ty) = ptr_ty {
-                    imports.push(runtime_import(name, params, return_type.as_deref(), ptr_ty));
-                }
-            }
-            // Walk class bodies to collect required runtimes for linking and imports.
-            StatementKind::Class(class_data) => {
-                for class_stmt in &class_data.body {
-                    if let StatementKind::RuntimeFunctionDeclaration(
-                        runtime_kind,
-                        name,
-                        params,
-                        return_type,
-                    ) = &class_stmt.node
-                    {
-                        required_runtimes.insert(runtime_kind.clone());
-
-                        #[cfg(feature = "cranelift")]
-                        if let Some(ptr_ty) = ptr_ty {
-                            imports.push(runtime_import(
-                                name,
-                                params,
-                                return_type.as_deref(),
-                                ptr_ty,
-                            ));
-                        }
-                    }
-                }
-            }
-            _ => {}
+        #[cfg(feature = "cranelift")]
+        if let Some(ptr_ty) = ptr_ty {
+            imports.push(runtime_import(
+                declaration.name,
+                declaration.params,
+                declaration.return_type,
+                ptr_ty,
+            ));
         }
     }
 
@@ -314,12 +289,55 @@ fn collect_runtime_info(
     }
 }
 
+/// One `runtime` function declaration.
+struct RuntimeDeclaration<'s> {
+    kind: &'s RuntimeKind,
+    name: &'s str,
+    params: &'s [crate::ast::common::Parameter],
+    return_type: Option<&'s crate::ast::expression::Expression>,
+}
+
+/// Every `runtime` function declared among `stmts`, at the top level or in
+/// the body of a class.
+fn runtime_declarations<'s>(
+    stmts: impl Iterator<Item = &'s Statement>,
+) -> impl Iterator<Item = RuntimeDeclaration<'s>> {
+    stmts
+        .flat_map(|stmt| std::iter::once(stmt).chain(class_body(stmt)))
+        .filter_map(|stmt| {
+            let StatementKind::RuntimeFunctionDeclaration(kind, name, params, return_type) =
+                &stmt.node
+            else {
+                return None;
+            };
+            Some(RuntimeDeclaration {
+                kind,
+                name,
+                params,
+                return_type: return_type.as_deref(),
+            })
+        })
+}
+
+/// The statements of `stmt`'s body when it declares a class; none otherwise.
+fn class_body(stmt: &Statement) -> &[Statement] {
+    if let StatementKind::Class(class_data) = &stmt.node {
+        &class_data.body
+    } else {
+        &[]
+    }
+}
+
 /// The external declaration of the runtime entry point `name`, from the
 /// parameters and return type its Miri declaration spells.
 ///
-/// An element parameter is declared as the address and byte count it is
-/// passed as, and an element result as the storage it is written into; see
-/// [`crate::runtime_fns::element_abi_params`].
+/// Each parameter is declared as [`crate::runtime_fns::param_abi`] says it
+/// travels — an element as the address and byte count it is passed as, a
+/// closure as itself and the address of the trampoline it is called through —
+/// and an element result as the storage it is written into; see
+/// [`crate::runtime_fns::abi_params`]. A parameter whose type is not written
+/// as a type is declared as a pointer, so no later parameter moves out of the
+/// position the call passes it in.
 #[cfg(feature = "cranelift")]
 fn runtime_import(
     name: &str,
@@ -332,11 +350,11 @@ fn runtime_import(
 
     let declared: Vec<_> = params
         .iter()
-        .filter_map(|p| resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty)))
+        .map(|p| resolve_type_name(&p.typ).map_or(ptr_ty, |t| translate_type(&t, ptr_ty)))
         .collect();
     crate::codegen::cranelift::RuntimeImport {
         name: name.to_string(),
-        param_types: crate::runtime_fns::element_abi_params(name, &declared, ptr_ty),
+        param_types: crate::runtime_fns::abi_params(name, &declared, ptr_ty),
         return_type: return_type
             .filter(|_| !crate::runtime_fns::returns_element_value(name))
             .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))),
@@ -1958,13 +1976,16 @@ impl Pipeline {
         mut mir_bodies: Vec<(String, mir::Body)>,
         opts: &BuildOptions,
     ) -> Result<ObjectCode, CompilerError> {
-        // Spell the element ABI at the hand-off: reference counting,
-        // verification and every MIR reader before this point see an element
-        // argument as the value it is, and every CPU backend takes it as an
-        // address and a byte count.
+        // Spell the element and closure ABIs at the hand-off: reference
+        // counting, verification and every MIR reader before this point see an
+        // element or a closure argument as the value it is, and every CPU
+        // backend takes an element as an address and a byte count, and a
+        // closure as itself and the trampoline the runtime calls it through.
         for (name, body) in &mut mir_bodies {
             let before = mir::optimization::in_bounds::statement_counts(body);
             mir::element_abi::pass_elements_by_address(body)
+                .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
+            mir::closure_abi::pass_closures_with_trampolines(body)
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
             mir::optimization::in_bounds::forget_changed_blocks(body, &before);
         }

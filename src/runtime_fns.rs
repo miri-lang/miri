@@ -133,6 +133,7 @@ pub mod rt {
     pub const LIST_RESERVE: &str = "miri_rt_list_reserve";
     pub const LIST_REVERSE: &str = "miri_rt_list_reverse";
     pub const LIST_SORT: &str = "miri_rt_list_sort";
+    pub const LIST_SORT_BY: &str = "miri_rt_list_sort_by";
     pub const LIST_IS_EMPTY: &str = "miri_rt_list_is_empty";
     pub const LIST_CLONE: &str = "miri_rt_list_clone";
     /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
@@ -459,6 +460,7 @@ pub mod rt {
         LIST_RESERVE,
         LIST_REVERSE,
         LIST_SORT,
+        LIST_SORT_BY,
         LIST_IS_EMPTY,
         LIST_CLONE,
         LIST_COW,
@@ -791,7 +793,7 @@ pub fn leaves_collection_headers_unchanged(name: &str) -> bool {
 ///
 /// The address-taking is spelled in MIR, by `mir::element_abi`, after
 /// reference counting has read the calls in this form; the runtime import is
-/// declared with the expanded parameters by [`element_abi_params`]. Both the
+/// declared with the expanded parameters by [`abi_params`]. Both the
 /// storing entry points and the lookups are listed, because a lookup that
 /// reads an element differently from the store it must match is exactly the
 /// mismatch this prevents. Positions naming an index or a size are not listed;
@@ -835,23 +837,139 @@ pub fn element_roles(name: &str) -> &'static [(usize, ElementRole)] {
     }
 }
 
+/// What a runtime entry point that calls a Miri closure promises about the
+/// call: how many arguments it passes, and where they come from. The closure
+/// always answers in a pointer-sized `int`, which the runtime reads the sign
+/// of.
+///
+/// The runtime calls a closure through a trampoline the compiler generates
+/// for the closure's parameter types (see `mir::closure_abi`), handing it the
+/// address of each argument's bytes. Those addresses are element slots of a
+/// collection argument, so a closure's parameters must be read exactly as
+/// that collection holds its elements; a declaration that promises any other
+/// shape is refused where it is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClosureContract {
+    /// How many arguments the runtime calls the closure with.
+    pub arity: usize,
+    /// The parameter position of the collection whose elements each argument
+    /// is; `None` for a closure the runtime calls with none.
+    pub elements_of: Option<usize>,
+}
+
+/// The contract of the closure parameter `position` of the runtime entry
+/// point `name`; `None` when the runtime calls no closure through it.
+pub fn closure_contract(name: &str, position: usize) -> Option<ClosureContract> {
+    match (name, position) {
+        (rt::LIST_SORT_BY, 1) => Some(ClosureContract {
+            arity: 2,
+            elements_of: Some(0),
+        }),
+        // Frees the closure without ever calling it.
+        (rt::SIMULATE_CLOSURE_OVER_RELEASE, 0) => Some(ClosureContract {
+            arity: 0,
+            elements_of: None,
+        }),
+        _ => None,
+    }
+}
+
+/// Parameter positions of `name` that carry a closure, each described by
+/// [`closure_contract`].
+pub fn closure_positions(name: &str) -> &'static [usize] {
+    match name {
+        rt::LIST_SORT_BY => &[1],
+        rt::SIMULATE_CLOSURE_OVER_RELEASE => &[0],
+        _ => &[],
+    }
+}
+
+/// How one declared parameter of a runtime entry point crosses into the
+/// runtime: the one place this is decided, which the runtime import, the
+/// element ABI and the closure ABI all read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeParamAbi {
+    /// One word, as the parameter is declared.
+    Word,
+    /// The address of an element's bytes and their count (see
+    /// [`element_positions`]).
+    Element,
+    /// The closure and the address of the trampoline the runtime calls it
+    /// through (see [`closure_contract`]).
+    Closure(ClosureContract),
+}
+
+impl RuntimeParamAbi {
+    /// How many arguments the parameter travels as.
+    pub fn words(self) -> usize {
+        match self {
+            RuntimeParamAbi::Word => 1,
+            RuntimeParamAbi::Element | RuntimeParamAbi::Closure(_) => 2,
+        }
+    }
+}
+
+/// How the declared parameter `position` of `name` crosses into the runtime.
+pub fn param_abi(name: &str, position: usize) -> RuntimeParamAbi {
+    if element_positions(name).contains(&position) {
+        return RuntimeParamAbi::Element;
+    }
+    match closure_contract(name, position) {
+        Some(contract) => RuntimeParamAbi::Closure(contract),
+        None => RuntimeParamAbi::Word,
+    }
+}
+
+/// The parameters of runtime entry points, as the passes that spell their
+/// ABI in MIR read them. [`RuntimeSurface`] is the runtime library's own.
+pub trait RuntimeParamTable {
+    /// How the declared parameter `position` of `name` crosses into the
+    /// runtime.
+    fn param_abi(&self, name: &str, position: usize) -> RuntimeParamAbi;
+
+    /// The declared parameter positions of `name` that carry a closure, in
+    /// ascending order.
+    fn closure_positions(&self, name: &str) -> &[usize];
+
+    /// Where the declared parameter `position` of `name` sits among the
+    /// arguments the entry point is called with: after every word each
+    /// earlier parameter travels as.
+    fn argument_index(&self, name: &str, position: usize) -> usize {
+        (0..position)
+            .map(|earlier| self.param_abi(name, earlier).words())
+            .sum()
+    }
+}
+
+/// The runtime library's entry points, as this module lists them.
+pub struct RuntimeSurface;
+
+impl RuntimeParamTable for RuntimeSurface {
+    fn param_abi(&self, name: &str, position: usize) -> RuntimeParamAbi {
+        param_abi(name, position)
+    }
+
+    fn closure_positions(&self, name: &str) -> &[usize] {
+        closure_positions(name)
+    }
+}
+
 /// The parameter list the runtime entry point `name` really takes, given the
 /// one its Miri declaration spells.
 ///
-/// Each element position (see [`element_positions`]) becomes an address and a
-/// byte count, both pointer-sized, and an entry point that hands an element
-/// back (see [`returns_element_value`]) takes the same pair for the storage it
-/// writes, after every other parameter. Every other parameter is kept as
-/// declared.
-pub fn element_abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> Vec<T> {
-    let positions = element_positions(name);
-    let mut params = Vec::with_capacity(declared.len() + positions.len() + 2);
-    for (index, param) in declared.iter().enumerate() {
-        if positions.contains(&index) {
-            params.push(pointer.clone());
-            params.push(pointer.clone());
-        } else {
-            params.push(param.clone());
+/// Each parameter travels as [`param_abi`] says: an element or a closure as two
+/// pointer-sized words, any other as declared. An entry point that hands an
+/// element back (see [`returns_element_value`]) takes an address and a byte
+/// count for the storage it writes, after every other parameter.
+pub fn abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> Vec<T> {
+    let mut params = Vec::with_capacity(declared.len() * 2 + 2);
+    for (position, param) in declared.iter().enumerate() {
+        match param_abi(name, position) {
+            RuntimeParamAbi::Word => params.push(param.clone()),
+            RuntimeParamAbi::Element | RuntimeParamAbi::Closure(_) => {
+                params.push(pointer.clone());
+                params.push(pointer.clone());
+            }
         }
     }
     if returns_element_value(name) {

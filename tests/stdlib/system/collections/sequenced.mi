@@ -2,8 +2,9 @@
 // Copyright (c) Viacheslav Shynkarenko
 //
 // Tests for `Sequenced<T>` defaults: take, skip, sorted_by, unique, reversed,
-// zip, enumerate. Exercised via List.
+// zip, enumerate. Exercised via List, and `sorted_by` via an Array too.
 
+use system.collections.array
 use system.collections.list
 use system.collections.tuple
 use system.testing
@@ -88,6 +89,15 @@ fn test_sorted_by_handles_empty_and_single_lists()
     let one = List([7]).sorted_by(fn(a int, b int) int: a - b)
     assert_eq(one.length(), 1)
     assert_eq(one.get(0), 7)
+
+fn test_sorted_by_on_an_array_returns_a_sorted_list()
+    let fixed = [5, 3, 8, 1, 3]
+    let sorted = fixed.sorted_by(fn(a int, b int) int: a - b)
+    assert_eq(sorted.length(), 5)
+    assert_eq(sorted.get(0), 1)
+    assert_eq(sorted.get(1), 3)
+    assert_eq(sorted.get(4), 8)
+    assert_eq(fixed.element_at(0), 5, "the array is left as it was")
 
 fn test_sorted_by_leaves_the_receiver_alone()
     let xs = List([3, 1, 2])

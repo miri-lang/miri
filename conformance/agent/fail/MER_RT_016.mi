@@ -1,0 +1,17 @@
+// expect: MER_RT_016
+// command: run
+// summary: Triggers MER_RT_016: a comparator grows the list the runtime is sorting with it.
+use system.collections.list
+
+runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
+
+class Log
+    var l List<int>
+
+fn noted(log Log, a int, b int) int
+    log.l.push(a)
+    return a - b
+
+fn main()
+    let log = Log(l: List([3, 1, 2]))
+    miri_rt_list_sort_by(log.l, fn(a int, b int) int: noted(log, a, b))

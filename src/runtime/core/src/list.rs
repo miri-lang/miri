@@ -14,6 +14,19 @@ use crate::element_bytes::{fits_slot, require_fits_slot, write_slot};
 use crate::element_order::ElementOrder;
 use crate::rc::{alloc_with_rc, free_with_rc};
 
+/// The trampoline compiled code hands the runtime to call a two-parameter
+/// Miri closure through: the closure, the address of each argument's bytes,
+/// and the address the closure's result is stored at, at its own width.
+pub type ClosureCall2 = unsafe extern "C" fn(*mut u8, *const u8, *const u8, *mut u8);
+
+/// The storage of a list taken out of it while the runtime works on its
+/// elements apart from the list.
+struct DetachedStorage {
+    data: *mut u8,
+    len: usize,
+    capacity: usize,
+}
+
 /// A type-erased dynamic array.
 ///
 /// Stores elements as contiguous bytes. The element size is provided
@@ -101,6 +114,33 @@ impl MiriList {
     /// from a container whose elements must sort alike.
     pub(crate) fn set_element_order(&mut self, order: ElementOrder) {
         self.elem_order = order;
+    }
+
+    /// Take the list's storage out of it, leaving it empty and holding none.
+    fn detach_storage(&mut self) -> DetachedStorage {
+        let storage = DetachedStorage {
+            data: self.data,
+            len: self.len,
+            capacity: self.capacity,
+        };
+        self.data = ptr::null_mut();
+        self.len = 0;
+        self.capacity = 0;
+        storage
+    }
+
+    /// Give back the storage [`Self::detach_storage`] took. A list that holds
+    /// storage or elements of its own again keeps them, and the answer is
+    /// `false`: what it was given meanwhile cannot be merged with what it
+    /// held.
+    fn reattach_storage(&mut self, storage: DetachedStorage) -> bool {
+        if !self.data.is_null() || self.len != 0 {
+            return false;
+        }
+        self.data = storage.data;
+        self.len = storage.len;
+        self.capacity = storage.capacity;
+        true
     }
 
     /// Returns the number of elements.
@@ -1046,6 +1086,62 @@ pub mod ffi {
         }
         let list = &mut *ptr;
         crate::element_order::sort_elements(list.data, list.len, list.elem_size, list.elem_order);
+    }
+
+    /// Sorts the list in place by a Miri comparator closure: stable, and
+    /// ordered by the sign of what the closure answers for two elements.
+    ///
+    /// `call` is the trampoline the compiler generates for the closure's
+    /// parameter types: it is handed the closure, the address of each
+    /// element's bytes and the address of a result slot, which is zeroed
+    /// before every call and read back as an `isize`. Nothing is counted: the
+    /// closure borrows the elements it is shown.
+    ///
+    /// The closure runs Miri code, which may reach this list. So the list's
+    /// storage is taken out of it for the length of the sort, leaving it empty,
+    /// and the sort holds a reference to it of its own: a closure that reads
+    /// the list sees no elements, and none can free it under the sort. A
+    /// closure that writes the list finds it shared and writes a copy, which
+    /// replaces it where the program holds it. When the sort ends with a list
+    /// nothing but the sort holds any longer — the program changed or
+    /// replaced it — or with one holding storage of its own again, the sorted
+    /// elements could reach no one, and the program stops with `MER_RT_016`
+    /// rather than drop them unseen.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_sort_by(
+        ptr: *mut MiriList,
+        closure: *mut u8,
+        call: Option<ClosureCall2>,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        let Some(call) = call else {
+            return;
+        };
+        if ptr.is_null() {
+            return;
+        }
+        crate::rc::incref(ptr as *mut u8);
+        let elem_size = (*ptr).elem_size;
+        let storage = (*ptr).detach_storage();
+        crate::element_order::sort_elements_by(
+            storage.data,
+            storage.len,
+            elem_size,
+            |left, right| {
+                let mut answer: isize = 0;
+                call(closure, left, right, &mut answer as *mut isize as *mut u8);
+                answer.cmp(&0)
+            },
+        );
+        let is_still_held = crate::rc::miri_rt_rc_is_shared(ptr as *const u8);
+        if !(*ptr).reattach_storage(storage) || !is_still_held {
+            crate::trap::trap(
+                crate::trap::code::LIST_CHANGED_WHILE_SORTED,
+                "the list was changed by the closure it was being sorted with",
+            );
+        }
+        miri_rt_list_decref_element(ptr as *mut u8);
     }
 
     /// Reverses the list in place.

@@ -23,5 +23,6 @@ pub mod optional_results;
 pub mod proven_indices;
 pub mod rc;
 pub mod shared_bodies;
+pub mod sorted_by;
 pub mod transformable;
 pub mod wide_scalar_elements;

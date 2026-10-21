@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod closure;
+pub mod closure_trampolines;
 pub mod collection_header;
 pub mod dealloc;
 pub mod determinism;

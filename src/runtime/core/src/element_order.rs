@@ -216,6 +216,299 @@ pub(crate) unsafe fn sort_elements(
     std::ptr::copy_nonoverlapping(sorted.as_ptr(), data, total);
 }
 
+/// The longest run the merge sort orders by insertion before it starts merging.
+const MAX_INSERTION_RUN: usize = 32;
+
+/// Sorts `len` elements of `elem_size` bytes each, in place, by `cmp`.
+///
+/// A stable, bottom-up merge sort: runs of 16 to 32 elements are ordered by
+/// binary insertion, then merged pairwise between the elements and one scratch
+/// buffer of the same size — two runs of equal length from both ends at once —
+/// and two runs already in order are copied rather than merged. It asks `cmp`
+/// at most n·⌈log₂ n⌉ + n times for a comparator that is an order. An element is only
+/// moved, never dropped or cloned.
+///
+/// `cmp(a, b)` answers how the element at `a` orders against the one at `b`.
+/// Of two elements, the later is placed first only when `cmp` calls it `Less`
+/// than the earlier, which is what keeps equal elements in their order. A
+/// comparator that is not a total order still yields a permutation of the
+/// elements: the sort never reads outside them and never panics. When the
+/// scratch buffer cannot be allocated, the elements are sorted by binary
+/// insertion alone, which needs none.
+///
+/// # Safety
+///
+/// `data` must point at `len * elem_size` initialized, writable bytes that
+/// nothing else reads or writes while the sort runs, `cmp` included.
+pub(crate) unsafe fn sort_elements_by(
+    data: *mut u8,
+    len: usize,
+    elem_size: usize,
+    mut cmp: impl FnMut(*const u8, *const u8) -> Ordering,
+) {
+    if data.is_null() || len < 2 || elem_size == 0 {
+        return;
+    }
+    let Some(total) = len.checked_mul(elem_size) else {
+        return;
+    };
+    let elements = Elements {
+        base: data,
+        size: elem_size,
+    };
+    let Some(mut scratch) = total.checked_add(elem_size).and_then(scratch_buffer) else {
+        insertion_sort_alone(elements, len, &mut cmp);
+        return;
+    };
+    let spare = scratch.as_mut_ptr() as *mut u8;
+    let run = insertion_run(len);
+    let mut start = 0;
+    while start < len {
+        let count = run.min(len - start);
+        insertion_sort(elements.offset(start), count, spare.add(total), &mut cmp);
+        start += count;
+    }
+    let mut source = elements;
+    let mut target = Elements {
+        base: spare,
+        size: elem_size,
+    };
+    let mut width = run;
+    while width < len {
+        merge_pass(source, target, len, width, &mut cmp);
+        std::mem::swap(&mut source, &mut target);
+        width = width.saturating_mul(2);
+    }
+    if source.base != data {
+        std::ptr::copy_nonoverlapping(source.base, data, total);
+    }
+}
+
+/// Uninitialized room for `bytes` bytes, aligned for any element a list
+/// holds, or `None` when it cannot be allocated.
+fn scratch_buffer(bytes: usize) -> Option<Vec<u128>> {
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(bytes.div_ceil(std::mem::size_of::<u128>()))
+        .ok()?;
+    Some(buffer)
+}
+
+/// A run of elements of one size, starting at `base`.
+#[derive(Clone, Copy)]
+struct Elements {
+    base: *mut u8,
+    size: usize,
+}
+
+impl Elements {
+    /// The address of element `index`.
+    unsafe fn at(self, index: usize) -> *mut u8 {
+        self.base.add(index * self.size)
+    }
+
+    /// The elements from `index` on.
+    unsafe fn offset(self, index: usize) -> Self {
+        Self {
+            base: self.at(index),
+            size: self.size,
+        }
+    }
+
+    /// Copy `count` elements from `from` here into `to` in `target`.
+    unsafe fn copy_to(self, from: usize, target: Elements, to: usize, count: usize) {
+        std::ptr::copy_nonoverlapping(self.at(from), target.at(to), count * self.size);
+    }
+
+    /// Copy the element at `from` here into `to` in `target`.
+    #[inline(always)]
+    unsafe fn copy_one_to(self, from: usize, target: Elements, to: usize) {
+        copy_element(self.at(from), target.at(to), self.size);
+    }
+}
+
+/// Copy one element of `size` bytes from `from` to `to`, which do not overlap.
+///
+/// The sort moves one element at a time, so the common widths are copied at a
+/// length known here, as a load and a store rather than a call.
+#[inline(always)]
+unsafe fn copy_element(from: *const u8, to: *mut u8, size: usize) {
+    match size {
+        8 => std::ptr::copy_nonoverlapping(from, to, 8),
+        16 => std::ptr::copy_nonoverlapping(from, to, 16),
+        4 => std::ptr::copy_nonoverlapping(from, to, 4),
+        other => std::ptr::copy_nonoverlapping(from, to, other),
+    }
+}
+
+/// How many elements each run ordered by insertion holds: between 16 and 32
+/// for any length of 32 or more, chosen so the number of runs is a power of
+/// two or just under one and every merge pass pairs runs of like length.
+fn insertion_run(len: usize) -> usize {
+    let mut remaining = len;
+    let mut carry = 0;
+    while remaining >= MAX_INSERTION_RUN {
+        carry |= remaining & 1;
+        remaining >>= 1;
+    }
+    remaining + carry
+}
+
+/// Orders `count` elements in place by binary insertion, through the
+/// element-sized buffer `spare`. Each element is placed after every earlier one
+/// `cmp` does not call greater, so equal elements keep their order. The
+/// elements it passes move up one at a time: a run is short, and a load and a
+/// store each cost less than a call to move them all.
+unsafe fn insertion_sort(
+    elements: Elements,
+    count: usize,
+    spare: *mut u8,
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) {
+    for index in 1..count {
+        let element = elements.at(index);
+        let low = insertion_point(elements, index, cmp);
+        if low < index {
+            let size = elements.size;
+            copy_element(element, spare, size);
+            for passed in (low..index).rev() {
+                elements.copy_one_to(passed, elements, passed + 1);
+            }
+            copy_element(spare, elements.at(low), size);
+        }
+    }
+}
+
+/// Where the element at `index` goes among the ordered elements before it:
+/// after every one `cmp` does not call it `Less` than.
+unsafe fn insertion_point(
+    elements: Elements,
+    index: usize,
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) -> usize {
+    let element = elements.at(index);
+    let (mut low, mut high) = (0, index);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if cmp(element, elements.at(middle)) == Ordering::Less {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    low
+}
+
+/// Orders `len` elements by binary insertion alone, rotating each into place a
+/// byte at a time so no buffer is needed: the fallback when the scratch buffer
+/// cannot be allocated.
+unsafe fn insertion_sort_alone(
+    elements: Elements,
+    len: usize,
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) {
+    for index in 1..len {
+        let low = insertion_point(elements, index, cmp);
+        let moved = (index + 1 - low) * elements.size;
+        std::slice::from_raw_parts_mut(elements.at(low), moved).rotate_right(elements.size);
+    }
+}
+
+/// Merge each pair of adjacent `width`-element runs of `source` into `target`.
+unsafe fn merge_pass(
+    source: Elements,
+    target: Elements,
+    len: usize,
+    width: usize,
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) {
+    let mut low = 0;
+    while low < len {
+        let middle = low.saturating_add(width).min(len);
+        let high = middle.saturating_add(width).min(len);
+        merge_runs(source, target, (low, middle, high), cmp);
+        low = high;
+    }
+}
+
+/// Merge the ordered runs `low..middle` and `middle..high` of `source` into
+/// the same positions of `target`. Two runs already in order are copied whole.
+unsafe fn merge_runs(
+    source: Elements,
+    target: Elements,
+    (low, middle, high): (usize, usize, usize),
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) {
+    if middle == high || cmp(source.at(middle), source.at(middle - 1)) != Ordering::Less {
+        source.copy_to(low, target, low, high - low);
+        return;
+    }
+    let runs = (low, middle, high);
+    if middle - low == high - middle && merge_from_both_ends(source, target, runs, cmp) {
+        return;
+    }
+    merge_from_the_front(source, target, runs, cmp);
+}
+
+/// Merge the ordered runs `low..middle` and `middle..high` of `source` into
+/// `target`, smallest first.
+unsafe fn merge_from_the_front(
+    source: Elements,
+    target: Elements,
+    (low, middle, high): (usize, usize, usize),
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) {
+    let (mut left, mut right, mut out) = (low, middle, low);
+    while left < middle && right < high {
+        // Chosen without a branch on the answer, which on unsorted input is
+        // as likely one way as the other and would be mispredicted half the
+        // time.
+        let takes_right = cmp(source.at(right), source.at(left)) == Ordering::Less;
+        let take = if takes_right { right } else { left };
+        source.copy_one_to(take, target, out);
+        right += usize::from(takes_right);
+        left += usize::from(!takes_right);
+        out += 1;
+    }
+    source.copy_to(left, target, out, middle - left);
+    source.copy_to(right, target, out + middle - left, high - right);
+}
+
+/// Merge the ordered runs `low..middle` and `middle..high` of `source`, of
+/// equal length, into `target` from both ends at once: each step places the
+/// smallest element left at the front and the greatest at the back, two
+/// comparisons that do not wait on each other.
+///
+/// Each end takes half the elements, so with runs of equal length neither
+/// runs out before the ends meet, and no index leaves its run. Returns whether
+/// the ends met exactly, which they do for every comparator that is an order;
+/// when they did not, `target` holds no permutation and the caller merges
+/// again from the front.
+unsafe fn merge_from_both_ends(
+    source: Elements,
+    target: Elements,
+    (low, middle, high): (usize, usize, usize),
+    cmp: &mut impl FnMut(*const u8, *const u8) -> Ordering,
+) -> bool {
+    let (mut left, mut right, mut out) = (low, middle, low);
+    let (mut left_back, mut right_back, mut out_back) = (middle - 1, high - 1, high - 1);
+    for _ in 0..(high - low) / 2 {
+        let takes_right = cmp(source.at(right), source.at(left)) == Ordering::Less;
+        source.copy_one_to(if takes_right { right } else { left }, target, out);
+        right += usize::from(takes_right);
+        left += usize::from(!takes_right);
+        out += 1;
+
+        let takes_left = cmp(source.at(right_back), source.at(left_back)) == Ordering::Less;
+        let back = if takes_left { left_back } else { right_back };
+        source.copy_one_to(back, target, out_back);
+        left_back = left_back.wrapping_sub(usize::from(takes_left));
+        right_back = right_back.wrapping_sub(usize::from(!takes_left));
+        out_back = out_back.wrapping_sub(1);
+    }
+    left == left_back.wrapping_add(1) && right == right_back.wrapping_add(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,5 +692,119 @@ mod tests {
             sort_elements(elements.as_mut_ptr() as *mut u8, 2, 8, ordered_by(99));
         }
         assert_eq!(elements, vec![-5, 5]);
+    }
+
+    /// Sorts `pairs` by their first field through `sort_elements_by`, counting
+    /// the comparisons it asks for.
+    fn sort_pairs_by_key(pairs: &mut [(i64, i64)]) -> usize {
+        let mut asked = 0usize;
+        unsafe {
+            sort_elements_by(
+                pairs.as_mut_ptr() as *mut u8,
+                pairs.len(),
+                std::mem::size_of::<(i64, i64)>(),
+                |left, right| {
+                    asked += 1;
+                    let left = (left as *const (i64, i64)).read();
+                    let right = (right as *const (i64, i64)).read();
+                    left.0.cmp(&right.0)
+                },
+            );
+        }
+        asked
+    }
+
+    /// A deterministic scramble of `0..n`, keyed into `keys` buckets, each
+    /// pair carrying its original position as its second field.
+    fn scrambled_pairs(n: usize, keys: i64) -> Vec<(i64, i64)> {
+        (0..n as i64)
+            .map(|i| (((i * 7919) + 13) % (n as i64).max(1) % keys, i))
+            .collect()
+    }
+
+    #[test]
+    fn sorting_by_a_comparator_keeps_equal_elements_in_their_order() {
+        for n in [3usize, 17, 33, 100, 1000, 4097] {
+            let mut pairs = scrambled_pairs(n, 7);
+            sort_pairs_by_key(&mut pairs);
+            for window in pairs.windows(2) {
+                assert!(window[0].0 <= window[1].0, "{n}: {window:?} out of order");
+                if window[0].0 == window[1].0 {
+                    assert!(window[0].1 < window[1].1, "{n}: {window:?} reordered");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sorting_by_a_comparator_handles_short_and_odd_lengths() {
+        for n in [0usize, 1, 2, 5, 31, 33, 63, 65, 999] {
+            let mut pairs: Vec<(i64, i64)> = (0..n as i64).rev().map(|i| (i, i)).collect();
+            sort_pairs_by_key(&mut pairs);
+            let expected: Vec<(i64, i64)> = (0..n as i64).map(|i| (i, i)).collect();
+            assert_eq!(pairs, expected, "length {n}");
+        }
+        unsafe {
+            sort_elements_by(std::ptr::null_mut(), 4, 8, |_, _| Ordering::Less);
+        }
+    }
+
+    #[test]
+    fn sorting_by_a_comparator_asks_at_most_n_log_n_plus_n_times() {
+        for n in [2usize, 10, 100, 1000, 1 << 12, 5000] {
+            let bound = n * (n as f64).log2().ceil() as usize + n;
+            let mut scrambled = scrambled_pairs(n, n as i64);
+            let mut descending: Vec<(i64, i64)> = (0..n as i64).rev().map(|i| (i, i)).collect();
+            let mut ascending: Vec<(i64, i64)> = (0..n as i64).map(|i| (i, i)).collect();
+            for pairs in [&mut scrambled, &mut descending, &mut ascending] {
+                let asked = sort_pairs_by_key(pairs);
+                assert!(asked <= bound, "{asked} comparisons for {n} elements");
+            }
+        }
+    }
+
+    #[test]
+    fn a_comparator_that_is_not_an_order_still_yields_a_permutation() {
+        for n in [2usize, 7, 40, 1000] {
+            let mut pairs: Vec<(i64, i64)> = (0..n as i64).map(|i| (i, i)).collect();
+            let mut flip = 0u32;
+            unsafe {
+                sort_elements_by(
+                    pairs.as_mut_ptr() as *mut u8,
+                    n,
+                    std::mem::size_of::<(i64, i64)>(),
+                    |_, _| {
+                        flip = flip.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                        match flip % 3 {
+                            0 => Ordering::Less,
+                            1 => Ordering::Equal,
+                            _ => Ordering::Greater,
+                        }
+                    },
+                );
+            }
+            let mut seen: Vec<i64> = pairs.iter().map(|pair| pair.1).collect();
+            seen.sort_unstable();
+            assert_eq!(seen, (0..n as i64).collect::<Vec<_>>(), "length {n}");
+        }
+    }
+
+    #[test]
+    fn sorting_without_a_scratch_buffer_is_stable_too() {
+        let mut pairs = scrambled_pairs(300, 5);
+        let elements = Elements {
+            base: pairs.as_mut_ptr() as *mut u8,
+            size: std::mem::size_of::<(i64, i64)>(),
+        };
+        unsafe {
+            insertion_sort_alone(elements, pairs.len(), &mut |left, right| {
+                let left = (left as *const (i64, i64)).read();
+                let right = (right as *const (i64, i64)).read();
+                left.0.cmp(&right.0)
+            });
+        }
+        assert!(pairs
+            .windows(2)
+            .all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1)));
     }
 }

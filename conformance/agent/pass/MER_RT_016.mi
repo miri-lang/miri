@@ -1,0 +1,15 @@
+// summary: Accepted counterpart of MER_RT_016: sorted_by sorts a copy, so a comparator may grow the receiver.
+// expect-stdout: 1 true
+use system.collections.list
+
+class Log
+    var l List<int>
+
+fn noted(log Log, a int, b int) int
+    log.l.push(a)
+    return a - b
+
+fn main()
+    let log = Log(l: List([3, 1, 2]))
+    let sorted = log.l.sorted_by(fn(a int, b int) int: noted(log, a, b))
+    println(f"{sorted[0]} {log.l.length() > 3}")

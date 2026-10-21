@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod closures;
 pub mod declaration;
 pub mod io;
 pub mod memory;

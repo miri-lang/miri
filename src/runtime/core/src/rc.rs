@@ -345,8 +345,15 @@ pub extern "C" fn miri_rt_release_check(ptr: *mut u8) {
 /// For testing only. `closure` must be a live closure payload compiled code
 /// allocated, or null. Without the heap guard the later release is a genuine
 /// use after free.
+///
+/// Like every runtime parameter of a function type, the closure arrives with
+/// the address of the trampoline it would be called through, which this one
+/// never calls.
 #[no_mangle]
-pub unsafe extern "C" fn miri_rt_test_simulate_closure_over_release(closure: *mut u8) {
+pub unsafe extern "C" fn miri_rt_test_simulate_closure_over_release(
+    closure: *mut u8,
+    _trampoline: *const u8,
+) {
     if closure.is_null() {
         return;
     }

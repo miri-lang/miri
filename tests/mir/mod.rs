@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod backend;
 pub mod body;
 pub mod class;
+pub mod closure_abi;
 pub mod lowering;
 pub mod operand;
 pub mod optimization;

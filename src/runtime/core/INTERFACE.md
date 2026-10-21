@@ -69,6 +69,31 @@ value, and a comparator that replaces that reading for elements whose bytes are
 a reference. Codegen registers both from the element type; `clone` and every
 list copied from an array keep them.
 
+`miri_rt_list_sort_by(list, closure, trampoline)` sorts by a Miri comparator
+instead: a stable bottom-up merge sort (`element_order::sort_elements_by`) that
+calls `trampoline(closure, &a, &b, &result)` for each pair. Like every runtime
+parameter of a function type, the closure arrives with the address of the
+trampoline the compiler generated for its parameter types (`list::ClosureCall2`
+for two of them). The callback contract, which the compiler holds every
+declaration and every call to (`runtime_fns::closure_contract`):
+
+- `&a` and `&b` are the addresses of two element slots of `list`, read by the
+  trampoline exactly as the list holds its elements;
+- `result` is a zeroed `isize` the closure's `int` answer is stored into at its
+  own width; the sort orders by its sign;
+- nothing is counted: the closure borrows the elements it is shown.
+
+The closure may reach the list. For the length of the sort the list's storage
+is taken out of it, leaving it empty, and the sort holds a reference of its
+own, so a read sees no elements and no release frees the list under the sort.
+A write finds the list shared and writes a copy, which replaces it where the
+program holds it; a sort that ends with a list nothing else holds any longer,
+or one that holds storage of its own again, traps with `MER_RT_016`.
+
+A trap raised inside the comparator under the test runner, which catches an
+assertion by `siglongjmp`, unwinds over the sort's frames: the scratch buffer
+and the sort's own reference to the list are leaked, and the list stays empty.
+
 #### MiriSet (`set.rs`)
 
 ```

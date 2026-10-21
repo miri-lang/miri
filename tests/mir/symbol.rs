@@ -7,7 +7,8 @@ use miri::error::syntax::Span;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::symbol::{
     Claim, ClaimRefusal, ClosureKind, GpuKernelKind, KernelDatum, Namespace, StringLiteralPart,
-    Symbol, SymbolCollision, SymbolTable, ThunkKind,
+    Symbol, SymbolCollision, SymbolTable, ThunkKind, TrampolineArgument, TrampolineShape,
+    TrampolineWord,
 };
 use miri::type_checker::ModuleId;
 
@@ -1016,4 +1017,92 @@ fn only_a_runtime_function_has_a_runtime_name() {
         None
     );
     assert_eq!(Symbol::entry().runtime_name(), None);
+}
+
+/// A trampoline taking `arguments` and storing `result`.
+fn trampoline(arguments: &[TrampolineArgument], result: Option<TrampolineWord>) -> Symbol {
+    Symbol::closure_trampoline(TrampolineShape {
+        arguments: arguments.to_vec(),
+        result,
+    })
+}
+
+#[test]
+fn a_trampoline_spells_each_argument_and_its_result_after_its_marker() {
+    let words = [
+        (TrampolineWord::I8, "i8"),
+        (TrampolineWord::I16, "i16"),
+        (TrampolineWord::I32, "i32"),
+        (TrampolineWord::I64, "i64"),
+        (TrampolineWord::I128, "i128"),
+        (TrampolineWord::F32, "f32"),
+        (TrampolineWord::F64, "f64"),
+        (TrampolineWord::Pointer, "ptr"),
+    ];
+    for (word, token) in words {
+        let symbol = trampoline(
+            &[TrampolineArgument::Word(word), TrampolineArgument::Address],
+            Some(word),
+        );
+        assert_eq!(
+            symbol.link_name(),
+            format!("miri.$trampoline${token}$addr.{token}")
+        );
+    }
+    assert_eq!(trampoline(&[], None).link_name(), "miri.$trampoline.void");
+}
+
+#[test]
+fn trampolines_of_different_shapes_never_share_a_link_name() {
+    use TrampolineArgument::{Address, Word};
+    use TrampolineWord::{Pointer, I64};
+    let shapes = [
+        trampoline(&[], None),
+        trampoline(&[], Some(Pointer)),
+        trampoline(&[Address], None),
+        trampoline(&[Address], Some(Pointer)),
+        trampoline(&[Address, Address], Some(Pointer)),
+        trampoline(&[Word(Pointer), Word(Pointer)], Some(Pointer)),
+        trampoline(&[Word(I64), Word(Pointer)], Some(Pointer)),
+        trampoline(&[Word(Pointer), Word(I64)], Some(Pointer)),
+        trampoline(&[Word(Pointer)], Some(I64)),
+    ];
+    let names: std::collections::HashSet<String> = shapes.iter().map(Symbol::link_name).collect();
+    assert_eq!(names.len(), shapes.len(), "{names:?}");
+    let mut table = SymbolTable::default();
+    for symbol in &shapes {
+        assert_eq!(table.claim(symbol), Ok(Claim::New));
+    }
+}
+
+#[test]
+fn a_trampoline_symbol_gives_back_its_shape_and_no_other_symbol_has_one() {
+    let shape = TrampolineShape {
+        arguments: vec![TrampolineArgument::Address],
+        result: Some(TrampolineWord::Pointer),
+    };
+    let symbol = Symbol::closure_trampoline(shape.clone());
+    assert_eq!(symbol.trampoline_shape(), Some(&shape));
+    assert!(!symbol.is_runtime());
+    assert_eq!(symbol.runtime_name(), None);
+    assert_eq!(
+        Symbol::runtime("miri_rt_list_sort_by").trampoline_shape(),
+        None
+    );
+    assert_eq!(
+        symbol.written().to_string(),
+        "the closure trampoline `(addr) -> ptr`"
+    );
+}
+
+#[test]
+fn a_trampoline_s_identifier_spelling_starts_with_the_module_prefix_and_its_mark() {
+    let symbol = trampoline(
+        &[
+            TrampolineArgument::Word(TrampolineWord::I32),
+            TrampolineArgument::Address,
+        ],
+        Some(TrampolineWord::Pointer),
+    );
+    assert_eq!(symbol.wgsl_name(), "m__c_i32_addr__ptr");
 }

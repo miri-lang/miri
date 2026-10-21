@@ -102,6 +102,17 @@ fn test_sort_ascending()
         assert(sortable.get(i - 1) <= sortable.get(i), "sorted is monotonic")
         i += 1
 
+fn test_sorted_by_orders_a_copy_and_keeps_ties_in_order()
+    let words = List(["pear", "fig", "kiwi", "banana", "plum"])
+    let by_length = words.sorted_by(fn(a String, b String) int: a.length() - b.length())
+    assert_eq(by_length.length(), 5)
+    assert_eq(by_length.get(0), "fig")
+    assert_eq(by_length.get(1), "pear", "ties keep their order")
+    assert_eq(by_length.get(2), "kiwi")
+    assert_eq(by_length.get(3), "plum")
+    assert_eq(by_length.get(4), "banana")
+    assert_eq(words.get(0), "pear", "the receiver is left as it was")
+
 fn test_clone_is_independent()
     var src = List([1, 2, 3])
     let dup = src.clone()

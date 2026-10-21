@@ -39,6 +39,8 @@ pub(crate) mod code {
     /// A heap block released twice, written after its release, or released
     /// at a size larger than it was allocated at.
     pub(crate) const HEAP_CORRUPTED: &str = "MER_RT_015";
+    /// A list changed by the closure the runtime was sorting it with.
+    pub(crate) const LIST_CHANGED_WHILE_SORTED: &str = "MER_RT_016";
 }
 
 /// Report a runtime fault under `code` and end the process.

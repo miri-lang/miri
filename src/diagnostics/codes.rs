@@ -1288,7 +1288,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (15 codes: 001-015)
+    // RT — Runtime traps and assertion failures (16 codes: 001-016)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1391,6 +1391,13 @@ diagnostics!(
     "015",
     RtHeapCorrupted,
     "Heap Corruption",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    "RT",
+    "016",
+    RtListChangedWhileSorted,
+    "List Changed While Sorted",
     Severity::Error,
     false,
     FixSafety::LocalEdit,

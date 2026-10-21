@@ -73,6 +73,11 @@ fn write_written_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Res
         SymbolKind::ClosureDestructor(closure) => {
             write!(f, "the capture destructor of `{closure}`")
         }
+        SymbolKind::ClosureTrampoline(shape) => {
+            f.write_str("the closure trampoline `")?;
+            shape.write_written(f)?;
+            f.write_str("`")
+        }
         SymbolKind::KernelDatum { kernel, datum } => match datum {
             KernelDatum::Wgsl => write!(f, "the WGSL source of kernel `{kernel}`"),
             KernelDatum::Name => write!(f, "the entry-point name of kernel `{kernel}`"),

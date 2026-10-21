@@ -171,6 +171,49 @@ fn test_list_sort_already_sorted() {
     }
 }
 
+/// A closure trampoline over `(key, id)` pairs: orders by key, and records in
+/// the closure's word how many times it was called.
+unsafe extern "C" fn by_key_counting(
+    closure: *mut u8,
+    left: *const u8,
+    right: *const u8,
+    result: *mut u8,
+) {
+    *(closure as *mut usize) += 1;
+    let left = (left as *const (i64, i64)).read();
+    let right = (right as *const (i64, i64)).read();
+    assert_eq!(*(result as *const isize), 0, "the result slot is zeroed");
+    *(result as *mut isize) = (left.0 - right.0) as isize;
+}
+
+#[test]
+fn test_list_sort_by_orders_through_the_closure_and_keeps_ties_in_order() {
+    unsafe {
+        let pair = std::mem::size_of::<(i64, i64)>();
+        let list = miri_rt_list_new(pair);
+        // Past one insertion run, so the sort merges at least once.
+        let n = 70usize;
+        let elements: Vec<(i64, i64)> = (0..n as i64).map(|i| ((i * 7) % 5, i)).collect();
+        for element in &elements {
+            ffi::miri_rt_list_push(list, element as *const (i64, i64) as *const u8, pair);
+        }
+        let mut calls = 0usize;
+        let closure = &mut calls as *mut usize as *mut u8;
+        miri_rt_list_sort_by(list, closure, Some(by_key_counting));
+        let sorted: Vec<(i64, i64)> = (0..n)
+            .map(|i| (miri_rt_list_get(list, i) as *const (i64, i64)).read())
+            .collect();
+        let mut expected = elements.clone();
+        expected.sort_by_key(|element| element.0);
+        assert_eq!(sorted, expected, "ordered by key, ties in their order");
+        assert_eq!(miri_rt_list_len(list), n, "the storage is given back");
+        assert!(calls > 0);
+        miri_rt_list_sort_by(std::ptr::null_mut(), closure, Some(by_key_counting));
+        miri_rt_list_sort_by(list, closure, None);
+        miri_rt_list_free(list);
+    }
+}
+
 #[test]
 fn test_list_sort_single_element() {
     unsafe {

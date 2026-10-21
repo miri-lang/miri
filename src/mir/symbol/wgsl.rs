@@ -24,6 +24,7 @@
 //!               | length name       (name holds `__`)
 //! method    = "m__t" length owner length name
 //!           | "m__q" length "_" token length name
+//! trampoline = "m__c" { "_" passing } "__" result
 //! length    = decimal length of what follows, no leading zero
 //! ```
 //!
@@ -44,7 +45,8 @@
 //! This is injective up to argument tokens. Only `program` spellings lack the
 //! `m__` prefix, and a `program` name holds no `__`, so its first `__` begins
 //! its argument tokens. After the prefix, `escaped` continues with `0`,
-//! `method` with `t`, or with `q` for an owner a module keeps private, and
+//! `method` with `t`, or with `q` for an owner a module keeps private,
+//! `trampoline` with `c`, and
 //! `imported` with the first digit of a non-empty identifier's length, never
 //! `0`. An identifier never begins with a digit, so each length ends where
 //! what it counts begins, and the one length counting a token, which does
@@ -76,6 +78,11 @@ const MODULE_PREFIX: &str = "m__";
 /// Follows [`MODULE_PREFIX`] in the spelling of a method; a module path
 /// identifier's length never begins with a letter.
 const METHOD_MARK: &str = "t";
+
+/// Follows [`MODULE_PREFIX`] in the spelling of a closure trampoline. No GPU
+/// body hands a closure to the runtime, so this spelling is never declared in
+/// a WGSL module; it is spelled by the same rules all the same.
+const TRAMPOLINE_MARK: &str = "c";
 
 /// Follows [`MODULE_PREFIX`] in the spelling of a method of a type a module
 /// keeps private.
@@ -137,6 +144,11 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             write_thunk_subject(f, subject)
         }
         SymbolKind::ClosureDestructor(closure) => write!(f, "__dtor_{closure}"),
+        SymbolKind::ClosureTrampoline(shape) => {
+            f.write_str(MODULE_PREFIX)?;
+            f.write_str(TRAMPOLINE_MARK)?;
+            shape.write_tokens(f, "_", "__")
+        }
         SymbolKind::KernelDatum { kernel, datum } => write_kernel_datum(f, kernel, *datum),
         SymbolKind::StringLiteral { index, part } => write_string_literal(f, *index, *part),
     }

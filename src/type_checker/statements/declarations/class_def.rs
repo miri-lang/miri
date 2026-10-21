@@ -905,18 +905,21 @@ impl TypeChecker {
         }
 
         // Resolve all parameter and return types once, for both validation and MethodInfo building
+        let class_parameters = class_parameter_types(class_generics);
         let param_types: Vec<(String, Type)> = decl
             .explicit_params()
             .iter()
             .map(|p| {
+                let resolved = self.resolve_type_expression(&p.typ, context);
                 (
                     p.name.clone(),
-                    self.resolve_type_expression(&p.typ, context),
+                    self.with_class_parameters_inside_functions(resolved, &class_parameters),
                 )
             })
             .collect();
         let return_ty = if let Some(rt_expr) = &decl.return_type {
-            self.resolve_type_expression(rt_expr, context)
+            let resolved = self.resolve_type_expression(rt_expr, context);
+            self.with_class_parameters_inside_functions(resolved, &class_parameters)
         } else {
             make_type(TypeKind::Void)
         };
@@ -1001,6 +1004,7 @@ impl TypeChecker {
             .global_scope
             .insert(rt_name.to_string(), info.clone());
         context.define(rt_name.to_string(), info);
+        self.check_runtime_closure_params(rt_name, params);
     }
 
     /// Register an intrinsic function declaration in class scope
@@ -1692,6 +1696,25 @@ impl TypeChecker {
 
 /// The class whose declaration is being checked, before it is registered: its
 /// name, the class it extends, and the methods it declares itself.
+/// Each of a class's type parameters by name, as the type a use of the name
+/// resolves to.
+fn class_parameter_types(
+    class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
+) -> HashMap<String, Type> {
+    class_generics
+        .into_iter()
+        .flatten()
+        .map(|generic| {
+            let parameter = TypeKind::Generic(
+                generic.name.clone(),
+                generic.constraint.clone().map(Box::new),
+                generic.kind,
+            );
+            (generic.name.clone(), make_type(parameter))
+        })
+        .collect()
+}
+
 struct ClassLineage<'a> {
     name: &'a str,
     base_name: Option<&'a str>,
@@ -1699,6 +1722,74 @@ struct ClassLineage<'a> {
 }
 
 impl TypeChecker {
+    /// `ty`, a resolved method signature type, with every name of a class
+    /// type parameter written inside a function type it holds read as that
+    /// parameter.
+    ///
+    /// Resolving a function type keeps the types inside it as written, so a
+    /// class's `T` inside `fn(List<T>) int` is the name `T` there, where the
+    /// trait method it overrides, substituted at the class's arguments, holds
+    /// the parameter itself. A method declares no type parameter of a class's
+    /// name (see `refuse_shadowed_class_parameters`), so every such name inside
+    /// the signature is the class's. Types holding no function type are left
+    /// as resolved.
+    fn with_class_parameters_inside_functions(
+        &self,
+        ty: Type,
+        class_parameters: &HashMap<String, Type>,
+    ) -> Type {
+        if class_parameters.is_empty() || !self.holds_function_type(&ty) {
+            return ty;
+        }
+        self.substitute_type(&ty, class_parameters)
+    }
+
+    /// Whether `ty` is a function type or holds one among its type arguments,
+    /// at any depth.
+    fn holds_function_type(&self, ty: &Type) -> bool {
+        let holds = |expr: &Expression| {
+            self.extract_type_from_expression(expr)
+                .is_ok_and(|inner| self.holds_function_type(&inner))
+        };
+        match &ty.kind {
+            TypeKind::Function(_) => true,
+            TypeKind::Custom(_, Some(args)) => args.iter().any(holds),
+            TypeKind::List(inner) | TypeKind::Set(inner) | TypeKind::Array(inner, _) => {
+                holds(inner)
+            }
+            TypeKind::Map(key, value) | TypeKind::Result(key, value) => holds(key) || holds(value),
+            TypeKind::Tuple(elements) => elements.iter().any(holds),
+            TypeKind::Option(inner) => self.holds_function_type(inner),
+            TypeKind::Custom(_, None)
+            | TypeKind::Linear(_)
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Int
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Float
+            | TypeKind::Boolean
+            | TypeKind::Void
+            | TypeKind::String
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Future(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Error
+            | TypeKind::OneOf(_) => false,
+        }
+    }
+
     /// The declaration of `method_name` the class inherits from the nearest
     /// class it extends that declares one.
     fn inherited_method(&self, lineage: &ClassLineage, method_name: &str) -> Option<MethodInfo> {

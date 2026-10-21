@@ -7,6 +7,7 @@
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
 pub(crate) mod closure;
+mod closure_trampolines;
 pub mod collection_header;
 mod element_method_thunks;
 mod gpu_launch;
@@ -294,6 +295,12 @@ impl Backend for CraneliftBackend {
                 )
             })
             .collect();
+        closure_trampolines::generate_closure_trampolines(
+            &mut module,
+            &mut ctx,
+            &isa,
+            &cpu_bodies,
+        )?;
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
         let mut string_literals = BTreeMap::new();

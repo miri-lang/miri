@@ -17,6 +17,7 @@ pub mod analysis;
 pub mod backend;
 pub mod block;
 pub mod body;
+pub mod closure_abi;
 pub mod declaration;
 pub mod dispatch;
 pub mod element_abi;
