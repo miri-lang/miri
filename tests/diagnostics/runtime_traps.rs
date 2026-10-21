@@ -170,3 +170,53 @@ fn test_every_code_the_runtime_names_is_a_registered_runtime_code() {
     }
     assert!(seen > 0, "no runtime code was found to check");
 }
+
+#[test]
+fn test_a_double_free_the_heap_guard_catches_is_reported_as_heap_corruption() {
+    // With the guard on, it sees the second release before the runtime's own
+    // check does and ends the program with its detailed report. The fault is
+    // the same one, so the envelope has to name the same code either way.
+    let mut file = NamedTempFile::new().expect("a temporary file");
+    write!(
+        file,
+        "use system.testing\n\nfn main()\n    simulate_double_free()\n"
+    )
+    .expect("the source is written");
+    let path = file.path().to_str().expect("the path is UTF-8");
+
+    let output = miri_cmd()
+        .env("MIRI_HEAP_GUARD", "1")
+        .arg("run")
+        .arg(path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("miri runs");
+    let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
+    let envelope: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|_| panic!("not JSON: {}", stdout));
+
+    assert_eq!(
+        envelope["ok"], false,
+        "the guarded run reports ok true: {}",
+        stdout
+    );
+    assert_eq!(
+        envelope["diagnostics"][0]["code"], "MER_RT_015",
+        "the guard's double free is not reported as heap corruption: {}",
+        stdout
+    );
+    assert!(
+        envelope["stderrTail"]
+            .as_str()
+            .is_some_and(|tail| tail.contains("MIRI_HEAP_GUARD: double-free detected")),
+        "the guard's own report is missing: {}",
+        stdout
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a fault the guard catches should exit like any trap: {}",
+        stdout
+    );
+}

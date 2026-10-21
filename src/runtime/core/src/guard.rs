@@ -11,6 +11,7 @@
 
 use crate::block_cache::BLOCK_ALIGN;
 use crate::rc::RC_HEADER_SIZE;
+use crate::trap::{code, trap};
 use std::alloc::{dealloc, Layout};
 use std::collections::HashMap;
 use std::panic::Location;
@@ -770,10 +771,11 @@ pub fn report_and_abort(verdict: FreeVerdict, payload_ptr: usize) -> ! {
 
     let msg = format_fatal_report(verdict, record, violation, Location::caller());
 
-    unsafe {
-        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
-        libc::_exit(99);
-    }
+    // Both verdicts that reach here are the fault the runtime's own check
+    // reports as heap corruption; the guard only sees it first, so it leaves
+    // by the same door under the same code, with its fuller report as the
+    // message.
+    trap(code::HEAP_CORRUPTED, msg.trim_end())
 }
 
 /// Builds the diagnostic for a use-after-free or corrupted header detected at intrinsic entry.
