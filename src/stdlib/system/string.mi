@@ -179,6 +179,37 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     public fn split(separator String) [String]
         return miri_rt_string_split(self, separator)
 
+    /// The pieces `split(separator)` would return, one at a time.
+    ///
+    /// The pieces are found as they are read rather than built into a list up
+    /// front, so walking the pieces of a large text holds one piece at a time.
+    /// Reading them in order costs one pass over the text, plus one to count
+    /// them the first time `length()` is asked. Each piece read is a new string.
+    ///
+    /// Example:
+    ///     for field in "a,,b".pieces(",")   // "a", "", "b"
+    ///         println(field)
+    public fn pieces(separator String) StringPieces
+        return StringPieces(source: self, separator: separator, is_lines: false)
+
+    /// The lines of the string, one at a time.
+    ///
+    /// A line ends at `"\n"`, and a `"\r"` just before that `"\n"` is dropped,
+    /// so `"\r\n"` endings read like `"\n"` ones. The final `"\n"` ends the
+    /// last line rather than starting an empty one, and an empty string has no
+    /// lines. This differs from `split("\n")` in exactly those three places:
+    /// `"a\n"` gives one line but splits into `["a", ""]`; `"a\r\nb"` gives
+    /// `"a"` but splits into `"a\r"`; `""` gives no lines but splits into `[""]`.
+    /// A `"\r"` anywhere else stays part of its line.
+    ///
+    /// Lines are found as they are read, as with `pieces`.
+    ///
+    /// Example:
+    ///     "one\r\ntwo\n".lines()   // "one", "two"
+    ///     "a\n\nb".lines()         // "a", "", "b"
+    public fn lines() StringPieces
+        return StringPieces(source: self, separator: "\n", is_lines: true)
+
     /// Joins the elements of a list with this string as the separator.
     ///
     /// This is the inverse of split. The receiver is the separator (Python-style).
@@ -289,3 +320,78 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     public fn clone() String
         return miri_rt_string_clone(self)
 
+/// The pieces of a string between the occurrences of a separator, or its
+/// lines, read one at a time: what `String.pieces` and `String.lines` return.
+///
+/// Holds the string it reads and the place of the last piece read, so reading
+/// the pieces in order resumes where the previous one ended and walks the text
+/// once. Reading an earlier piece walks again from the start. The number of
+/// pieces is counted the first time `length()` is asked and remembered.
+///
+/// An index outside `0 <= index < length()` stops the program with the
+/// index-out-of-bounds error list indexing reports.
+///
+/// Example:
+///     let fields = "x=1;y=2".pieces(";")
+///     println(fields.element_at(1))   // y=2
+///     println(f"{fields.length()}")   // 2
+public class StringPieces implements Iterable<String>
+    private var source String
+    private var separator String
+    /// The separator's byte length: how far the next piece starts past the
+    /// end of the last.
+    private var step int
+    private var is_lines bool
+    /// The number of pieces, or -1 until it is first asked for.
+    private var count int
+    /// The index of the next piece in order, and the byte where it starts.
+    private var cursor_index int
+    private var cursor_byte int
+
+    runtime "core" fn miri_rt_string_piece_count(s String, separator String) int
+    runtime "core" fn miri_rt_string_line_count(s String) int
+    runtime "core" fn miri_rt_string_piece_end(s String, separator String, start int) int
+    runtime "core" fn miri_rt_string_slice_bytes(s String, start int, end int) String
+    runtime "core" fn miri_rt_string_line_text(s String, start int, end int) String
+    runtime "core" fn miri_rt_string_piece_index(index int, count int) int
+
+    fn init(source String, separator String, is_lines bool)
+        self.source = source
+        self.step = separator.size()
+        self.separator = separator
+        self.is_lines = is_lines
+        self.count = -1
+        self.cursor_index = 0
+        self.cursor_byte = 0
+
+    /// How many pieces there are.
+    public fn length() int
+        if self.count < 0
+            if self.is_lines
+                self.count = miri_rt_string_line_count(self.source)
+            else
+                self.count = miri_rt_string_piece_count(self.source, self.separator)
+        self.count
+
+    /// The piece at `index`, as a new string.
+    ///
+    /// This enables for-loop iteration: `for line in text.lines()`.
+    public fn element_at(index int) String
+        let wanted = miri_rt_string_piece_index(index, self.length())
+        if wanted < self.cursor_index
+            self.cursor_index = 0
+            self.cursor_byte = 0
+        while self.cursor_index < wanted
+            self.cursor_byte = self.end_of_piece() + self.step
+            self.cursor_index += 1
+        let start = self.cursor_byte
+        let end = self.end_of_piece()
+        self.cursor_byte = end + self.step
+        self.cursor_index = wanted + 1
+        if self.is_lines
+            return miri_rt_string_line_text(self.source, start, end)
+        miri_rt_string_slice_bytes(self.source, start, end)
+
+    /// The byte where the piece starting at the cursor ends.
+    private fn end_of_piece() int
+        miri_rt_string_piece_end(self.source, self.separator, self.cursor_byte)

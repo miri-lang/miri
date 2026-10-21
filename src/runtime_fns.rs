@@ -288,6 +288,12 @@ pub mod rt {
     pub const STRING_REPEAT: &str = "miri_rt_string_repeat";
     pub const STRING_CHAR_AT: &str = "miri_rt_string_char_at";
     pub const STRING_SPLIT: &str = "miri_rt_string_split";
+    pub const STRING_PIECE_COUNT: &str = "miri_rt_string_piece_count";
+    pub const STRING_LINE_COUNT: &str = "miri_rt_string_line_count";
+    pub const STRING_PIECE_END: &str = "miri_rt_string_piece_end";
+    pub const STRING_SLICE_BYTES: &str = "miri_rt_string_slice_bytes";
+    pub const STRING_LINE_TEXT: &str = "miri_rt_string_line_text";
+    pub const STRING_PIECE_INDEX: &str = "miri_rt_string_piece_index";
     pub const STRING_JOIN: &str = "miri_rt_string_join";
     pub const STRING_PARSE_INT: &str = "miri_rt_string_parse_int";
     pub const STRING_PARSE_INT_STATUS: &str = "miri_rt_string_parse_int_status";
@@ -573,6 +579,12 @@ pub mod rt {
         STRING_REPEAT,
         STRING_CHAR_AT,
         STRING_SPLIT,
+        STRING_PIECE_COUNT,
+        STRING_LINE_COUNT,
+        STRING_PIECE_END,
+        STRING_SLICE_BYTES,
+        STRING_LINE_TEXT,
+        STRING_PIECE_INDEX,
         STRING_JOIN,
         STRING_PARSE_INT,
         STRING_PARSE_INT_STATUS,

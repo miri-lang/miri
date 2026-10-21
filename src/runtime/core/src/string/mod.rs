@@ -21,6 +21,7 @@ mod core;
 mod format_spec;
 mod inspection;
 mod operations;
+mod pieces;
 mod transformation;
 
 pub use core::{MiriString, StringStorage};
@@ -181,5 +182,6 @@ pub mod ffi {
     pub use super::format_spec::*;
     pub use super::inspection::*;
     pub use super::operations::*;
+    pub use super::pieces::*;
     pub use super::transformation::*;
 }

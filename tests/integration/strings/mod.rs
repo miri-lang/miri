@@ -10,6 +10,7 @@ pub mod errors;
 pub mod integration;
 pub mod interpolation;
 pub mod methods;
+pub mod pieces;
 pub mod rc;
 pub mod storage;
 pub mod unicode;

@@ -262,6 +262,33 @@ A spec that cannot format its value is refused at compile time (MER_TYP_082).
 
 A string's characters are fixed when it is built: `s[0] = "x"` is refused (MER_TYP_042). Build a new string — with `replace`, slicing or an f-string — and assign it to a `var`.
 
+### Pieces and lines
+
+`s.split(sep)` returns a `[String]` of every piece between the occurrences of
+`sep`. `s.pieces(sep)` gives the same pieces one at a time, and `s.lines()` the
+lines; neither builds a list, so walking a large text holds one piece at a time.
+
+```miri
+for line in text.lines()
+    for field in line.pieces(",")
+        println(field)
+```
+
+- `pieces(sep)` yields exactly what `split(sep)` returns: empty pieces are kept,
+  a text without `sep` is one piece, `""` is one empty piece, and an empty
+  `sep` yields the characters (none for `""`).
+- `lines()` ends a line at `"\n"` and drops one `"\r"` just before it. The final
+  `"\n"` ends the last line rather than starting an empty one, and `""` has no
+  lines. It differs from `split("\n")` in exactly those places: `"a\n"` is one
+  line but splits into `["a", ""]`, `"a\r\nb"` gives `"a"` where `split` gives
+  `"a\r"`, and `""` has no lines where `split` gives `[""]`. A `"\r"` not
+  followed by `"\n"` stays in its line.
+- Both are `Iterable<String>`: `length()` counts the pieces once and remembers
+  the count, and `element_at(i)` builds piece `i` as a new string. Reading in
+  order resumes from the previous piece, so a `for` loop walks the text once;
+  reading an earlier piece walks again from the start. An index outside
+  `0 <= i < length()` is an index-out-of-bounds error at run time.
+
 ---
 
 ## Structs
