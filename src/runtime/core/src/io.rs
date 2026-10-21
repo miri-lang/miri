@@ -165,7 +165,7 @@ pub mod ffi {
         #[cfg(not(windows))]
         const LINE_END: &str = "\n";
 
-        crate::string::into_raw_ptr(MiriString::from_str(LINE_END))
+        crate::string::new_string(LINE_END)
     }
 
     /// Reports an explicit `panic` as MER_RT_012 and ends the process.

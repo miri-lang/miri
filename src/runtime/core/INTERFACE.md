@@ -90,17 +90,31 @@ Open-addressing hash map. `key_kind`: `0` = value type (int/float/bool, compared
 raw bytes), `1` = string type (dereferences `MiriString` pointer for hash/compare).
 `val_drop_fn`, when non-zero, is called on each removed value pointer to decrement its RC.
 
-### Non-RC heap types
-
 #### MiriString (`string/core.rs`)
 
 ```
-[data: *mut u8][len: usize][capacity: usize]
+[RC: usize][data: *mut u8][len: usize][capacity: usize][ascii: u8][storage: u8][block_room: u8][padding]
+          [inline bytes: block_room]
 ```
 
-`MiriString` does **not** have an RC header. It is Box-allocated by the runtime and freed
-via `miri_rt_string_free`. The pointer stored in a Miri variable points directly to the
-`MiriString` struct.
+Compiled code reads `len` one word into the payload, and writes every string
+literal with this layout: an immortal RC, `capacity` equal to `len`, and the rest
+of the `ascii` word zeroed. `storage` says where the bytes live and what freeing
+the string releases:
+
+| `storage` | Bytes | Released by `miri_rt_string_free` |
+|-----------|-------|------------------------------------|
+| `0` unowned | static data such as a literal's | never |
+| `1` heap | a `miri_alloc` buffer of `capacity` bytes (null when empty) | the buffer, then the block |
+| `2` inline | `capacity` bytes right after the header, in the same block | the block |
+
+A string of up to `INLINE_CAPACITY` bytes (216 on a 64-bit target) is made inline,
+so the whole block — RC word, header and bytes — fits the block cache's largest
+class and costs one cached block and no data buffer. `block_room` records how many
+bytes the block holds past the header; the block is always released at the header
+size plus `block_room`, which stays right after an append has moved inline bytes
+into a heap buffer. An append to a string that is not heap-backed first copies its
+bytes into a heap buffer of its own.
 
 ---
 

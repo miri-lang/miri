@@ -181,6 +181,28 @@ fn test_slot_size_sits_where_compiled_code_reads_it() {
 /// The width of a value word, the payload every word-sized test element has.
 const W: usize = std::mem::size_of::<usize>();
 
+/// Compiled code reads a string's length one word in, and writes each string
+/// literal as `[RC][data][len][capacity][ascii]` with the rest of the ascii
+/// word zeroed (`build_miri_string_struct_bytes` in the Cranelift backend,
+/// whose test pins the same offsets). The storage kind and the block's inline
+/// room sit in that zeroed rest, so a literal reads as unowned with no room.
+#[test]
+fn test_string_header_sits_where_compiled_code_reads_and_writes_it() {
+    use miri_runtime_core::string::{MiriString, StringStorage};
+    use std::mem::{offset_of, size_of};
+
+    assert_eq!(offset_of!(MiriString, data), 0);
+    assert_eq!(offset_of!(MiriString, len), W);
+    assert_eq!(offset_of!(MiriString, capacity), 2 * W);
+    assert_eq!(offset_of!(MiriString, ascii), 3 * W);
+    assert_eq!(offset_of!(MiriString, storage), 3 * W + 1);
+    assert_eq!(offset_of!(MiriString, block_room), 3 * W + 2);
+    assert_eq!(size_of::<MiriString>(), 4 * W);
+    assert_eq!(StringStorage::Unowned as u8, 0);
+    assert_eq!(StringStorage::Heap as u8, 1);
+    assert_eq!(StringStorage::Inline as u8, 2);
+}
+
 #[test]
 fn test_list_element_ffi_abi() {
     unsafe {

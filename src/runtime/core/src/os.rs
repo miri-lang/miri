@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
 
 use crate::guard;
-use crate::string::{into_raw_ptr, MiriString};
+use crate::string::{new_string, MiriString};
 
 /// Global lock to synchronize environment variable access (`std::env::var`, `std::env::set_var`)
 /// across threads to prevent data races and UB/segfaults in C/POSIX env manipulation.
@@ -109,7 +109,7 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_env_get(name: *const MiriString) -> *mut MiriString {
         if name.is_null() {
             set_env_status(0, String::new());
-            return into_raw_ptr(MiriString::from_str(""));
+            return new_string("");
         }
 
         // Defense in depth: validate managed pointer on FFI entry under MIRI_HEAP_GUARD
@@ -119,7 +119,7 @@ pub mod ffi {
         set_env_status(0, String::new());
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let value = std::env::var(name_str).unwrap_or_default();
-        into_raw_ptr(MiriString::from_str(&value))
+        new_string(&value)
     }
 
     /// Sets an environment variable and returns whether an existing value was replaced.
@@ -217,7 +217,7 @@ pub mod ffi {
             );
         }
 
-        into_raw_ptr(MiriString::from_str(&args[index as usize]))
+        new_string(&args[index as usize])
     }
 
     /// Returns the platform name (e.g. "macos", "linux", "windows").
@@ -229,7 +229,7 @@ pub mod ffi {
     #[no_mangle]
     pub extern "C" fn miri_rt_platform() -> *mut MiriString {
         let platform = std::env::consts::OS;
-        into_raw_ptr(MiriString::from_str(platform))
+        new_string(platform)
     }
 
     /// Returns the status code of the last environment operation.
@@ -251,6 +251,6 @@ pub mod ffi {
     /// Always safe; thread-local storage access only.
     #[no_mangle]
     pub extern "C" fn miri_rt_env_error_message() -> *mut MiriString {
-        ENV_ERROR_MESSAGE.with(|m| into_raw_ptr(MiriString::from_str(&m.borrow())))
+        ENV_ERROR_MESSAGE.with(|m| new_string(&m.borrow()))
     }
 }

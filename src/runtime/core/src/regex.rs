@@ -129,7 +129,7 @@ pub extern "C" fn miri_rt_regex_compile_status() -> i64 {
 #[no_mangle]
 pub extern "C" fn miri_rt_regex_compile_message() -> *mut MiriString {
     REGEX_STATE.with(|state| match state.borrow().compile_message.as_ref() {
-        Some(msg) => crate::string::into_raw_ptr(MiriString::from_str(msg)),
+        Some(msg) => crate::string::new_string(msg),
         None => std::ptr::null_mut(),
     })
 }
@@ -350,7 +350,7 @@ pub unsafe extern "C" fn miri_rt_regex_replace(
     guard::guard_check(replacement as *mut u8);
     if handle < 0 {
         let text_str = if text.is_null() { "" } else { (*text).as_str() };
-        return crate::string::into_raw_ptr(MiriString::from_str(text_str));
+        return crate::string::new_string(text_str);
     }
 
     let text_str = if text.is_null() { "" } else { (*text).as_str() };
@@ -363,12 +363,12 @@ pub unsafe extern "C" fn miri_rt_regex_replace(
     REGEX_STATE.with(|state| {
         let s = state.borrow();
         if handle >= s.slab.len() as i64 {
-            return crate::string::into_raw_ptr(MiriString::from_str(text_str));
+            return crate::string::new_string(text_str);
         }
         let result = s.slab[handle as usize]
             .replace_all(text_str, regex::NoExpand(repl_str))
             .into_owned();
-        crate::string::into_raw_ptr(MiriString::from_str(&result))
+        crate::string::new_string(&result)
     })
 }
 

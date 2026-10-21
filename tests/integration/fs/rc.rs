@@ -85,3 +85,39 @@ fn main()
     );
     assert_runs(&code);
 }
+
+/// Removing entries from a directory listing releases each name as a string,
+/// whatever bytes the name holds.
+#[test]
+fn test_removing_listed_directory_entries_releases_them() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    for name in [
+        "AAAAAAAAAAAAAAAAAAAAAAAA",
+        "BBBBBBBBBBBBBBBBBBBBBBBB",
+        "CCCCCCCCCCCCCCCCCCCCCCCC",
+    ] {
+        std::fs::write(temp_dir.path().join(name), "").expect("write an entry");
+    }
+    let path = temp_dir.path().to_string_lossy().to_string();
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+use system.collections.list
+
+fn main()
+    let fs = Fs()
+    match fs.list_dir("{}")
+        Result.Ok(entries)
+            var names = entries
+            names.remove_at(0)
+            println(f"{{names.length()}} {{names[0].length()}}")
+            names.clear()
+            println(f"{{names.length()}}")
+        Result.Err(e): println("error")
+"#,
+        path
+    );
+    assert_heap_guard_output(&code, "2 24\n0");
+    assert_runs_with_output(&code, "2 24\n0");
+}

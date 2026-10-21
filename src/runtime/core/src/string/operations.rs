@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 
-use super::{into_raw_ptr, MiriString};
+use super::{new_string, new_string_of_ascii, MiriString};
 use crate::guard;
 use crate::list::{push_word, MiriList};
 
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn miri_rt_string_split(
         for ch in s_str.chars() {
             let mut buf = [0u8; 4];
             let char_str = ch.encode_utf8(&mut buf);
-            let char_string = into_raw_ptr(MiriString::from_str(char_str));
+            let char_string = new_string(char_str);
             if !char_string.is_null() {
                 push_word(list, char_string as usize);
             }
@@ -87,10 +87,7 @@ pub unsafe extern "C" fn miri_rt_string_split(
         // Every piece of an ASCII string is ASCII, so none is scanned again.
         let ascii = s.is_null() || (*s).ascii;
         let push_piece = |part: &str| {
-            let part_string = into_raw_ptr(MiriString::from_str_of_ascii(
-                part,
-                ascii || part.is_ascii(),
-            ));
+            let part_string = new_string_of_ascii(part, ascii || part.is_ascii());
             if !part_string.is_null() {
                 push_word(list, part_string as usize);
             }
@@ -110,10 +107,10 @@ pub unsafe extern "C" fn miri_rt_string_split(
         }
     }
 
-    // Set up drop function so removed elements are DecRef'd
+    // Every element is a string: one removed from the list is released as one.
     crate::miri_rt_list_set_elem_drop_fn(
         list,
-        crate::miri_rt_list_decref_element as *const () as usize,
+        super::constructors::miri_rt_string_decref_element as *const () as usize,
     );
 
     list
@@ -142,12 +139,12 @@ pub unsafe extern "C" fn miri_rt_string_join(
     };
 
     if parts.is_null() {
-        return into_raw_ptr(MiriString::from_str(""));
+        return new_string("");
     }
 
     let parts_list = &*parts;
     if parts_list.is_empty() {
-        return into_raw_ptr(MiriString::from_str(""));
+        return new_string("");
     }
 
     // Read all strings from the list and collect into a Vec
@@ -167,11 +164,11 @@ pub unsafe extern "C" fn miri_rt_string_join(
     }
 
     if parts_vec.is_empty() {
-        return into_raw_ptr(MiriString::from_str(""));
+        return new_string("");
     }
 
     let joined = parts_vec.join(sep_str);
-    into_raw_ptr(MiriString::from_str(&joined))
+    new_string(&joined)
 }
 
 /// Parses a string as an integer.

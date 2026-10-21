@@ -7,7 +7,9 @@
 //! The caller is responsible for freeing the returned pointer via
 //! [`super::miri_rt_string_free`].
 
-use super::{into_raw_ptr, miri_rt_string_new, MiriString};
+use super::{
+    alloc_string, miri_rt_string_new, new_string, new_string_of_ascii, MiriString, StringStorage,
+};
 use crate::guard;
 use std::fmt::Write;
 
@@ -38,12 +40,13 @@ pub unsafe extern "C" fn miri_rt_string_concat(
         None => return miri_rt_string_new(),
     };
 
-    // SAFETY: `total_len > 0` (at least one side is non-empty) and alignment 1 is valid.
-    let data = crate::alloc::miri_alloc(total_len, 1);
-    if data.is_null() {
+    let is_ascii = |side: *const MiriString| side.is_null() || (*side).ascii;
+    // SAFETY: both sides' bytes are copied in below, filling all `total_len`.
+    let joined = alloc_string(total_len, is_ascii(left) && is_ascii(right));
+    if joined.is_null() {
         return miri_rt_string_new();
     }
-
+    let data = (*joined).data;
     if left_len > 0 {
         // SAFETY: `left` is non-null (implied by `left_len > 0`), its `data` points to
         // `left_len` bytes. `data` has `total_len >= left_len` bytes. No overlap.
@@ -53,14 +56,7 @@ pub unsafe extern "C" fn miri_rt_string_concat(
         // SAFETY: Same reasoning; destination starts at `data + left_len`.
         std::ptr::copy_nonoverlapping((*right).data, data.add(left_len), right_len);
     }
-
-    let is_ascii = |side: *const MiriString| side.is_null() || (*side).ascii;
-    into_raw_ptr(MiriString {
-        data,
-        len: total_len,
-        capacity: total_len,
-        ascii: is_ascii(left) && is_ascii(right),
-    })
+    joined
 }
 
 /// Appends `right` to `left` and returns the result, taking over the caller's
@@ -172,7 +168,7 @@ impl std::fmt::Write for DecimalDigits {
 /// null; `bytes` is valid UTF-8 and lies outside `left`'s buffer.
 unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
     if left.is_null() {
-        return into_raw_ptr(MiriString::from_str(std::str::from_utf8_unchecked(bytes)));
+        return new_string(std::str::from_utf8_unchecked(bytes));
     }
     let count = (left as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
     if *count as isize != 1 {
@@ -189,7 +185,7 @@ unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
     let Some(total) = string.len.checked_add(bytes.len()) else {
         return left;
     };
-    if total > string.capacity && !grow(string, total) {
+    if !has_room_for(string, total) && !grow(string, total) {
         return left;
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), string.data.add(string.len), bytes.len());
@@ -201,29 +197,67 @@ unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
 
 /// A new string holding the text of `left` followed by `bytes`.
 unsafe fn joined_copy(left: &MiriString, bytes: &[u8]) -> *mut MiriString {
-    let mut text = String::with_capacity(left.len + bytes.len());
-    text.push_str(left.as_str());
-    text.push_str(std::str::from_utf8_unchecked(bytes));
-    into_raw_ptr(MiriString::from_str(&text))
+    let Some(total) = left.len.checked_add(bytes.len()) else {
+        return miri_rt_string_new();
+    };
+    // SAFETY: both parts are copied in below, filling all `total` bytes.
+    let joined = alloc_string(total, left.ascii && bytes.is_ascii());
+    if joined.is_null() || total == 0 {
+        return joined;
+    }
+    let data = (*joined).data;
+    std::ptr::copy_nonoverlapping(left.as_str().as_ptr(), data, left.len);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.add(left.len), bytes.len());
+    joined
 }
 
-/// Grows the buffer of `string` to hold at least `needed` bytes, doubling its
-/// capacity so repeated appends are amortised. Returns false, leaving the
-/// string as it was, when the memory cannot be had.
+/// True when `total` bytes fit the bytes `string` may write in place: its
+/// own heap buffer, or the room its block holds for inline bytes. Bytes the
+/// string does not own are never written.
+fn has_room_for(string: &MiriString, total: usize) -> bool {
+    match string.storage {
+        StringStorage::Heap | StringStorage::Inline => total <= string.capacity,
+        StringStorage::Unowned => false,
+    }
+}
+
+/// Gives `string` a heap buffer of at least `needed` bytes, doubling its
+/// capacity so repeated appends are amortised, and keeping its text. Returns
+/// false, leaving the string as it was, when the memory cannot be had.
 unsafe fn grow(string: &mut MiriString, needed: usize) -> bool {
     let doubled = string.capacity.saturating_mul(2);
     let capacity = needed.max(doubled).max(16);
-    let data = if string.data.is_null() || string.capacity == 0 {
-        crate::alloc::miri_alloc(capacity, 1)
-    } else {
-        crate::alloc::miri_realloc(string.data, string.capacity, 1, capacity)
+    let data = match string.storage {
+        StringStorage::Heap if string.data.is_null() || string.capacity == 0 => {
+            crate::alloc::miri_alloc(capacity, 1)
+        }
+        StringStorage::Heap => {
+            crate::alloc::miri_realloc(string.data, string.capacity, 1, capacity)
+        }
+        // Bytes in the header's block, or bytes the string does not own,
+        // cannot be resized: copy them into a buffer of the string's own.
+        StringStorage::Inline | StringStorage::Unowned => copy_to_heap_buffer(string, capacity),
     };
     if data.is_null() {
         return false;
     }
     string.data = data;
     string.capacity = capacity;
+    string.storage = StringStorage::Heap;
     true
+}
+
+/// A new heap buffer of `capacity` bytes starting with the text of `string`,
+/// or null when the memory cannot be had.
+unsafe fn copy_to_heap_buffer(string: &MiriString, capacity: usize) -> *mut u8 {
+    // SAFETY: `capacity` is at least 16, and alignment 1 is always valid.
+    let data = crate::alloc::miri_alloc(capacity, 1);
+    if !data.is_null() && string.len > 0 {
+        // SAFETY: `string.data` holds `len` bytes and `data` has room for
+        // `capacity >= len`; a fresh buffer does not overlap them.
+        std::ptr::copy_nonoverlapping(string.data, data, string.len);
+    }
+    data
 }
 
 /// Converts a string to lowercase (Unicode-aware).
@@ -305,11 +339,11 @@ pub unsafe extern "C" fn miri_rt_string_replace(
     let to_val = if to.is_null() { "" } else { (*to).as_str() };
 
     if from_val.is_empty() {
-        return into_raw_ptr(MiriString::from_str(str_val));
+        return new_string(str_val);
     }
 
     let replaced = str_val.replace(from_val, to_val);
-    into_raw_ptr(MiriString::from_str(&replaced))
+    new_string(&replaced)
 }
 
 /// Returns the characters `[start, end)` of a string, counted the way
@@ -352,7 +386,8 @@ pub unsafe extern "C" fn miri_rt_string_substring(
             ),
         )
     };
-    into_raw_ptr(MiriString::from_str(&string.as_str()[from..to]))
+    let piece = &string.as_str()[from..to];
+    new_string_of_ascii(piece, string.ascii || piece.is_ascii())
 }
 
 /// Returns the character at the given Unicode scalar index as a single-character string.
@@ -377,7 +412,7 @@ pub unsafe extern "C" fn miri_rt_string_char_at(
         Some(ch) => {
             let mut buf = [0u8; 4];
             let char_str = ch.encode_utf8(&mut buf);
-            into_raw_ptr(MiriString::from_str(char_str))
+            new_string(char_str)
         }
         None => miri_rt_string_new(),
     }
@@ -405,7 +440,7 @@ pub unsafe extern "C" fn miri_rt_string_repeat(
         return miri_rt_string_new();
     }
     let repeated = s.repeat(count);
-    into_raw_ptr(MiriString::from_str(&repeated))
+    new_string(&repeated)
 }
 
 /// Applies a transformation that produces an owned `String` from a `&str`.
@@ -419,7 +454,7 @@ unsafe fn transform_str(ptr: *const MiriString, transform: fn(&str) -> String) -
         return miri_rt_string_new();
     }
     let result = transform((*ptr).as_str());
-    into_raw_ptr(MiriString::from_str(&result))
+    new_string(&result)
 }
 
 /// Applies a transformation that returns a `&str` slice of the original.
@@ -436,7 +471,7 @@ unsafe fn transform_str_ref(
         return miri_rt_string_new();
     }
     let result = transform((*ptr).as_str());
-    into_raw_ptr(MiriString::from_str(result))
+    new_string_of_ascii(result, (*ptr).ascii || result.is_ascii())
 }
 
 /// Creates a string from a Unicode scalar value (code point).
@@ -456,7 +491,7 @@ pub extern "C" fn miri_rt_string_from_code_point(code: isize) -> *mut MiriString
     if let Some(ch) = char::from_u32(code as u32) {
         let mut buf = [0u8; 4];
         let encoded = ch.encode_utf8(&mut buf);
-        into_raw_ptr(MiriString::from_str(encoded))
+        new_string(encoded)
     } else {
         miri_rt_string_new()
     }
@@ -465,6 +500,7 @@ pub extern "C" fn miri_rt_string_from_code_point(code: isize) -> *mut MiriString
 #[cfg(test)]
 mod tests {
     use super::super::constructors::miri_rt_string_free;
+    use super::super::into_raw_ptr;
     use super::*;
     use crate::rc::balance_guard;
 

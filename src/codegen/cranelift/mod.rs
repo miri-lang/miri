@@ -1097,3 +1097,43 @@ pub(crate) fn fieldwise_value_identity(
     let encoding = structural_elements::structural_thunk_symbol(kind)?;
     Some((encoding, layout))
 }
+
+#[cfg(test)]
+mod string_literal_tests {
+    use super::CraneliftBackend;
+
+    /// The word at `index` of a literal laid out for `ptr_size`-byte words.
+    fn word(bytes: &[u8], index: usize, ptr_size: usize) -> u64 {
+        let word = &bytes[index * ptr_size..(index + 1) * ptr_size];
+        if ptr_size == 4 {
+            u64::from(u32::from_ne_bytes([word[0], word[1], word[2], word[3]]))
+        } else {
+            u64::from_ne_bytes([
+                word[0], word[1], word[2], word[3], word[4], word[5], word[6], word[7],
+            ])
+        }
+    }
+
+    /// A literal is `[RC][data][len][capacity][ascii]`, matching the runtime's
+    /// string header one word past the RC word. The rest of the ascii word is
+    /// zero: the runtime reads its first byte past the flag as the storage
+    /// kind, where zero means bytes the string does not own, and its second as
+    /// the block's inline room, where zero means none.
+    #[test]
+    fn literal_layout_matches_the_runtime_string_header() {
+        for ptr_size in [4usize, 8] {
+            let bytes = CraneliftBackend::build_miri_string_struct_bytes(5, true, ptr_size as u32);
+            assert_eq!(bytes.len(), 5 * ptr_size);
+            assert_eq!(word(&bytes, 0, ptr_size), 1u64 << (8 * ptr_size - 1));
+            assert_eq!(word(&bytes, 1, ptr_size), 0, "data is a relocation");
+            assert_eq!(word(&bytes, 2, ptr_size), 5, "len");
+            assert_eq!(word(&bytes, 3, ptr_size), 5, "capacity");
+            let ascii_word = &bytes[4 * ptr_size..];
+            assert_eq!(ascii_word[0], 1, "ascii");
+            assert!(
+                ascii_word[1..].iter().all(|&byte| byte == 0),
+                "storage kind and inline room must be zero"
+            );
+        }
+    }
+}

@@ -29,13 +29,11 @@ fn main():
     let s = "hello world"
     println(f"String: {s}")
 "#;
-    // The formatted string creates a new MiriString struct via alloc_with_rc,
-    // which increments rc=1. The string data ("hello world") is then allocated
-    // as raw storage, incrementing raw=1. The string literal "hello world" is
-    // compile-time constant and allocates nothing. The f-string interpolation
-    // creates the MiriString and its data buffer.
-    // Total: rc=1 (struct) + raw=1 (data) = 2 allocations.
-    assert_allocation_count(code, 2);
+    // The formatted string "String: hello world" is short enough to keep its
+    // bytes in the same RC block as its header, so building it is one
+    // alloc_with_rc (rc=1) and no raw data buffer. The string literal
+    // "hello world" is compile-time constant and allocates nothing.
+    assert_allocation_count(code, 1);
 }
 
 #[test]

@@ -6,7 +6,7 @@
 //! These functions are called from compiled Miri code during formatted string
 //! interpolation (e.g., `"value is {x}"` where `x` is an `Int`, `Float`, or `Bool`).
 
-use super::{into_raw_ptr, MiriString};
+use super::{new_string, MiriString};
 
 /// Converts a 64-bit signed integer to its decimal string representation.
 ///
@@ -17,7 +17,7 @@ use super::{into_raw_ptr, MiriString};
 #[no_mangle]
 pub extern "C" fn miri_rt_int_to_string(value: i64) -> *mut MiriString {
     let s = value.to_string();
-    into_raw_ptr(MiriString::from_str(&s))
+    new_string(&s)
 }
 
 /// Converts a 128-bit signed integer to its decimal string representation.
@@ -34,7 +34,7 @@ pub extern "C" fn miri_rt_int_to_string(value: i64) -> *mut MiriString {
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_i128_to_string(value_ptr: *const i128) -> *mut MiriString {
     let s = value_ptr.read_unaligned().to_string();
-    into_raw_ptr(MiriString::from_str(&s))
+    new_string(&s)
 }
 
 /// Converts a 128-bit unsigned integer to its decimal string representation.
@@ -50,7 +50,7 @@ pub unsafe extern "C" fn miri_rt_i128_to_string(value_ptr: *const i128) -> *mut 
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_u128_to_string(value_ptr: *const u128) -> *mut MiriString {
     let s = value_ptr.read_unaligned().to_string();
-    into_raw_ptr(MiriString::from_str(&s))
+    new_string(&s)
 }
 
 /// Converts a 64-bit unsigned integer to its decimal string representation.
@@ -62,7 +62,7 @@ pub unsafe extern "C" fn miri_rt_u128_to_string(value_ptr: *const u128) -> *mut 
 #[no_mangle]
 pub extern "C" fn miri_rt_uint_to_string(value: u64) -> *mut MiriString {
     let s = value.to_string();
-    into_raw_ptr(MiriString::from_str(&s))
+    new_string(&s)
 }
 
 /// Converts a 64-bit float to its string representation.
@@ -77,7 +77,7 @@ pub extern "C" fn miri_rt_float_to_string(value: f64) -> *mut MiriString {
     } else {
         value.to_string()
     };
-    into_raw_ptr(MiriString::from_str(&s))
+    new_string(&s)
 }
 
 /// Converts a 32-bit float to its string representation.
@@ -93,7 +93,7 @@ pub extern "C" fn miri_rt_f32_to_string(value: f32) -> *mut MiriString {
     } else {
         value.to_string()
     };
-    into_raw_ptr(MiriString::from_str(&s))
+    new_string(&s)
 }
 
 /// Converts a boolean value to `"true"` or `"false"`.
@@ -102,5 +102,5 @@ pub extern "C" fn miri_rt_f32_to_string(value: f32) -> *mut MiriString {
 #[no_mangle]
 pub extern "C" fn miri_rt_bool_to_string(value: i64) -> *mut MiriString {
     let s = if value != 0 { "true" } else { "false" };
-    into_raw_ptr(MiriString::from_str(s))
+    new_string(s)
 }

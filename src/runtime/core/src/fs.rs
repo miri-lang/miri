@@ -31,7 +31,7 @@ use std::io;
 use std::path::Path;
 
 use crate::guard;
-use crate::string::{into_raw_ptr, MiriString};
+use crate::string::{new_string, MiriString};
 
 thread_local! {
     /// Thread-local status code for the last filesystem operation.
@@ -105,7 +105,7 @@ pub mod ffi {
     pub extern "C" fn miri_rt_fs_error_message() -> *mut MiriString {
         FS_ERROR_MESSAGE.with(|m| {
             let msg = m.borrow().clone();
-            into_raw_ptr(MiriString::from_str(&msg))
+            new_string(&msg)
         })
     }
 
@@ -161,7 +161,7 @@ pub mod ffi {
 
         if path.is_null() {
             set_status(6, "null path pointer".to_string());
-            return into_raw_ptr(MiriString::from_str(""));
+            return new_string("");
         }
 
         let path_str = (*path).as_str();
@@ -169,24 +169,24 @@ pub mod ffi {
         // Reject path traversal attempts containing '..'
         if is_path_traversal(path_str) {
             set_status(2, path_str.to_string());
-            return into_raw_ptr(MiriString::from_str(""));
+            return new_string("");
         }
 
         // Check if it's a directory
         if is_dir(path_str) {
             set_status(4, path_str.to_string());
-            return into_raw_ptr(MiriString::from_str(""));
+            return new_string("");
         }
 
         match fs::read_to_string(path_str) {
             Ok(contents) => {
                 set_status(0, String::new());
-                into_raw_ptr(MiriString::from_str(&contents))
+                new_string(&contents)
             }
             Err(e) => {
                 let (code, msg) = map_io_error(&e, path_str, true);
                 set_status(code, msg);
-                into_raw_ptr(MiriString::from_str(""))
+                new_string("")
             }
         }
     }
@@ -382,7 +382,7 @@ pub mod ffi {
                     let Ok(name) = entry.file_name().into_string() else {
                         continue;
                     };
-                    let name_str = into_raw_ptr(MiriString::from_str(&name));
+                    let name_str = new_string(&name);
                     if !name_str.is_null() {
                         // The string is freshly allocated at RC=1 and
                         // handed to the list, so that count *is* the
@@ -391,10 +391,11 @@ pub mod ffi {
                         crate::list::push_word(list, name_str as usize);
                     }
                 }
-                // Set elem_drop_fn so removed elements are DecRef'd
+                // Every entry is a string: one removed from the list is
+                // released as one.
                 crate::miri_rt_list_set_elem_drop_fn(
                     list,
-                    crate::miri_rt_list_decref_element as *const () as usize,
+                    crate::string::miri_rt_string_decref_element as *const () as usize,
                 );
                 set_status(0, String::new());
             }
@@ -543,15 +544,15 @@ pub mod ffi {
             Ok(path_buf) => {
                 if let Some(path_str) = path_buf.to_str() {
                     set_status(0, String::new());
-                    into_raw_ptr(MiriString::from_str(path_str))
+                    new_string(path_str)
                 } else {
                     set_status(6, "path contains invalid UTF-8".to_string());
-                    into_raw_ptr(MiriString::from_str(""))
+                    new_string("")
                 }
             }
             Err(e) => {
                 set_status(6, e.to_string());
-                into_raw_ptr(MiriString::from_str(""))
+                new_string("")
             }
         }
     }
@@ -581,9 +582,9 @@ mod tests {
     #[test]
     fn test_fs_path_traversal_rejection() {
         unsafe {
-            let relative_parent = into_raw_ptr(MiriString::from_str("../secret.txt"));
-            let win_relative_parent = into_raw_ptr(MiriString::from_str("..\\secret.txt"));
-            let content = into_raw_ptr(MiriString::from_str("data"));
+            let relative_parent = new_string("../secret.txt");
+            let win_relative_parent = new_string("..\\secret.txt");
+            let content = new_string("data");
 
             // miri_rt_fs_exists
             assert_eq!(miri_rt_fs_exists(relative_parent), 0);
@@ -637,5 +638,35 @@ mod tests {
             miri_rt_string_free(win_relative_parent);
             miri_rt_string_free(content);
         }
+    }
+
+    /// Clearing the list of a directory's entries releases each name as a
+    /// string. A name's own bytes sit where a list header keeps its element
+    /// release function, so releasing a name as a list would call through
+    /// bytes the filename chose.
+    #[test]
+    fn test_clearing_a_listed_directory_releases_names_as_strings() {
+        let dir = std::env::temp_dir().join(format!("miri-list-dir-{}", std::process::id()));
+        assert!(
+            std::fs::create_dir_all(&dir).is_ok(),
+            "create the directory"
+        );
+        for name in ["AAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBB"] {
+            assert!(std::fs::write(dir.join(name), "").is_ok(), "write an entry");
+        }
+        unsafe {
+            let path = new_string(&dir.to_string_lossy());
+            let list = miri_rt_fs_list_dir(path);
+            assert_eq!(miri_rt_fs_status(), 0);
+            assert_eq!(crate::miri_rt_list_len(list), 2);
+            crate::miri_rt_list_clear(list);
+            assert_eq!(crate::miri_rt_list_len(list), 0);
+            crate::miri_rt_list_free(list);
+            miri_rt_string_free(path);
+        }
+        assert!(
+            std::fs::remove_dir_all(&dir).is_ok(),
+            "remove the directory"
+        );
     }
 }

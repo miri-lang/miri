@@ -7,7 +7,7 @@
 //! arguments are already in range; each function still clamps them, because a
 //! runtime entry point must not trust the values it is handed.
 
-use super::{into_raw_ptr, miri_rt_string_new, MiriString};
+use super::{miri_rt_string_new, new_string, MiriString};
 use crate::guard;
 
 /// The widest field and the most decimals a spec may ask for. The compiler
@@ -20,7 +20,7 @@ const MAX_PRECISION: usize = 100;
 #[no_mangle]
 pub extern "C" fn miri_rt_format_fixed(value: f64, precision: i64) -> *mut MiriString {
     let precision = precision.clamp(0, MAX_PRECISION as i64) as usize;
-    into_raw_ptr(MiriString::from_str(&format!("{value:.precision$}")))
+    new_string(&format!("{value:.precision$}"))
 }
 
 /// Writes the integer `value` in `radix` (2, 8, 10 or 16), its sign before
@@ -50,7 +50,7 @@ pub extern "C" fn miri_rt_format_radix(
     } else {
         digits
     };
-    into_raw_ptr(MiriString::from_str(&text))
+    new_string(&text)
 }
 
 /// Pads `text` to `width` characters with `fill`.
@@ -80,13 +80,7 @@ pub unsafe extern "C" fn miri_rt_format_pad(
         .ok()
         .and_then(char::from_u32)
         .unwrap_or(' ');
-    into_raw_ptr(MiriString::from_str(&padded(
-        text,
-        width,
-        align,
-        fill,
-        zero != 0,
-    )))
+    new_string(&padded(text, width, align, fill, zero != 0))
 }
 
 fn padded(text: &str, width: usize, align: i64, fill: char, zero: bool) -> String {

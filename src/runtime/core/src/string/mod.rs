@@ -23,11 +23,24 @@ mod inspection;
 mod operations;
 mod transformation;
 
-pub use core::MiriString;
+pub use core::{MiriString, StringStorage};
 
 // Re-export all FFI functions at module level for backward-compatible access
 // via `miri_runtime_core::string::miri_rt_string_*`.
 pub use ffi::*;
+
+/// The most bytes a string keeps in its header's own block.
+///
+/// The block holds the RC word, the header and the bytes, and this is the
+/// room left in the largest block the per-thread block cache keeps: 216 bytes
+/// on a 64-bit target (256 - 8 - 32), 236 on a 32-bit one (256 - 4 - 16).
+/// Every inline string therefore comes from, and goes back to, the cache. It
+/// is stored in a header's `block_room` byte, so it must fit a `u8`.
+pub const INLINE_CAPACITY: usize = crate::block_cache::LARGEST_CACHED_BLOCK
+    - crate::rc::RC_HEADER_SIZE
+    - std::mem::size_of::<MiriString>();
+
+const _: () = assert!(INLINE_CAPACITY <= u8::MAX as usize);
 
 /// Heap-allocates a [`MiriString`] into an RC block (`[RC=1][payload]`) and
 /// returns a pointer to the payload.
@@ -51,6 +64,92 @@ pub(crate) fn into_raw_ptr(s: MiriString) -> *mut MiriString {
     // bytes; this write sets every field.
     unsafe { std::ptr::write(ptr, s) };
     ptr
+}
+
+/// A new string holding `text`, with RC = 1: inline in its header's block
+/// when it fits [`INLINE_CAPACITY`], in a heap buffer otherwise.
+///
+/// Returns null if an allocation fails.
+pub(crate) fn new_string(text: &str) -> *mut MiriString {
+    new_string_of_ascii(text, text.is_ascii())
+}
+
+/// As [`new_string`], for text already known to be ASCII or not, so it is not
+/// scanned again.
+pub(crate) fn new_string_of_ascii(text: &str, ascii: bool) -> *mut MiriString {
+    // SAFETY: the string has room for `text.len()` bytes, and `text` lies
+    // outside the block just allocated.
+    unsafe {
+        let string = alloc_string(text.len(), ascii);
+        if !string.is_null() && !text.is_empty() {
+            std::ptr::copy_nonoverlapping(text.as_ptr(), (*string).data, text.len());
+        }
+        string
+    }
+}
+
+/// A new string of `len` bytes, with RC = 1, whose bytes are left for the
+/// caller to write: inline when `len` fits [`INLINE_CAPACITY`], in a heap
+/// buffer otherwise, and with no buffer at all when `len` is zero.
+///
+/// Returns null if an allocation fails.
+///
+/// # Safety
+/// The caller writes all `len` bytes, as valid UTF-8 that is ASCII exactly
+/// when `ascii` says so, before the string is read.
+pub(crate) unsafe fn alloc_string(len: usize, ascii: bool) -> *mut MiriString {
+    if len == 0 {
+        return into_raw_ptr(MiriString::new());
+    }
+    if len <= INLINE_CAPACITY {
+        return alloc_inline(len, ascii);
+    }
+    // SAFETY: `len` is non-zero and alignment 1 is always valid.
+    let data = crate::alloc::miri_alloc(len, 1);
+    if data.is_null() {
+        return std::ptr::null_mut();
+    }
+    into_raw_ptr(MiriString {
+        data,
+        len,
+        capacity: len,
+        ascii,
+        storage: StringStorage::Heap,
+        block_room: 0,
+    })
+}
+
+/// Allocates one block holding the RC word, a header and `len` bytes after
+/// it, and writes the header in place with `data` pointing at those bytes.
+///
+/// The header is built in its block rather than moved there: its `data`
+/// points into the block, so a header built anywhere else would point at the
+/// wrong place once moved.
+///
+/// # Safety
+/// `len` is between 1 and [`INLINE_CAPACITY`]; the caller writes the bytes as
+/// for [`alloc_string`].
+unsafe fn alloc_inline(len: usize, ascii: bool) -> *mut MiriString {
+    debug_assert!((1..=INLINE_CAPACITY).contains(&len));
+    let header_size = std::mem::size_of::<MiriString>();
+    let string = crate::rc::alloc_with_rc(header_size + len) as *mut MiriString;
+    if string.is_null() {
+        return string;
+    }
+    // SAFETY: the block holds `header_size + len` writable bytes, aligned for
+    // a header; this write sets every field.
+    std::ptr::write(
+        string,
+        MiriString {
+            data: (string as *mut u8).add(header_size),
+            len,
+            capacity: len,
+            ascii,
+            storage: StringStorage::Inline,
+            block_room: len as u8,
+        },
+    );
+    string
 }
 
 /// Converts a Rust `bool` into the FFI representation used by Miri (0 or 1).
@@ -81,5 +180,6 @@ pub mod ffi {
     pub use super::conversion::*;
     pub use super::format_spec::*;
     pub use super::inspection::*;
+    pub use super::operations::*;
     pub use super::transformation::*;
 }

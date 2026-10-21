@@ -70,7 +70,7 @@ fn main()
     println(f\"{kept.x} {e.x}\")
 ",
         "1.0 99.0",
-        7,
+        5,
     );
 }
 
@@ -242,7 +242,7 @@ fn main()
 ",
         ),
         "2.0 1.0 50.0",
-        8,
+        5,
     );
 }
 
@@ -267,7 +267,7 @@ fn main()
 ",
         ),
         "line 1.0 4.0",
-        8,
+        5,
     );
 }
 
@@ -293,7 +293,7 @@ fn main()
 ",
         ),
         "10.0 4.0",
-        9,
+        7,
     );
 }
 
@@ -602,7 +602,7 @@ fn main()
         ),
         "true false true 9.0 2.0 2 4.0",
         // A `P?` is held as its bytes like `P`: no optional is boxed.
-        16,
+        10,
     );
 }
 

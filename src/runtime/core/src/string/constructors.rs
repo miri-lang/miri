@@ -3,7 +3,7 @@
 
 //! FFI functions for creating, cloning, and freeing `MiriString` values.
 
-use super::{into_raw_ptr, MiriString};
+use super::{into_raw_ptr, new_string, new_string_of_ascii, MiriString};
 use crate::guard;
 use std::{slice, str};
 
@@ -37,7 +37,7 @@ pub unsafe extern "C" fn miri_rt_string_from_raw(data: *const u8, len: usize) ->
         Err(_) => return miri_rt_string_new(),
     };
 
-    into_raw_ptr(MiriString::from_str(s))
+    new_string(s)
 }
 
 /// Frees a `MiriString` previously allocated by this runtime.
@@ -55,12 +55,19 @@ pub unsafe extern "C" fn miri_rt_string_from_raw(data: *const u8, len: usize) ->
 // reports them with both free sites.
 pub unsafe extern "C" fn miri_rt_string_free(ptr: *mut MiriString) {
     if !ptr.is_null() {
-        // Run the MiriString destructor to free the inner data buffer.
+        debug_assert!(
+            (*ptr).is_in_place(),
+            "an inline string was moved out of its block"
+        );
+        let block_payload_size = (*ptr).block_payload_size();
+        // Run the MiriString destructor: it frees a heap buffer and forgets
+        // the character positions remembered for this address, which a new
+        // string may be given once the block is released.
         // SAFETY: `ptr` is non-null and points to a valid, live MiriString.
         std::ptr::drop_in_place(ptr);
-        // Free the RC block (`[RC][MiriString payload]`).
-        // SAFETY: `ptr` was returned by `alloc_with_rc` in `into_raw_ptr`.
-        crate::rc::free_with_rc(ptr as *mut u8, std::mem::size_of::<MiriString>());
+        // Free the RC block (`[RC][MiriString header][inline bytes]`).
+        // SAFETY: `ptr` was returned by `alloc_with_rc` at this payload size.
+        crate::rc::free_with_rc(ptr as *mut u8, block_payload_size);
     }
 }
 
@@ -103,6 +110,5 @@ pub unsafe extern "C" fn miri_rt_string_clone(ptr: *const MiriString) -> *mut Mi
         return miri_rt_string_new();
     }
     // SAFETY: Caller guarantees `ptr` is valid and contains UTF-8.
-    let s = (*ptr).as_str();
-    into_raw_ptr(MiriString::from_str(s))
+    new_string_of_ascii((*ptr).as_str(), (*ptr).ascii)
 }
