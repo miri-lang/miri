@@ -808,10 +808,12 @@ fn emit_loop_increment(
     header_bb: crate::mir::BasicBlock,
     span: &Span,
 ) {
+    let one_lit = crate::ast::literal::IntegerLiteral::from_type_kind(&idx_ty.kind, 1)
+        .unwrap_or(crate::ast::literal::IntegerLiteral::I64(1));
     let one = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: idx_ty.clone(),
-        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(1)),
+        literal: crate::ast::literal::Literal::Integer(one_lit),
     }));
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
@@ -852,10 +854,12 @@ fn lower_for_over_iterable(
     let idx_ty = Type::new(TypeKind::Int, *span);
     let idx_var = ctx.push_temp(idx_ty.clone(), *span);
 
+    let zero_lit = crate::ast::literal::IntegerLiteral::from_type_kind(&idx_ty.kind, 0)
+        .unwrap_or(crate::ast::literal::IntegerLiteral::I64(0));
     let zero = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: idx_ty.clone(),
-        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(0)),
+        literal: crate::ast::literal::Literal::Integer(zero_lit),
     }));
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(Place::new(idx_var), Rvalue::Use(zero)),
@@ -976,8 +980,10 @@ pub fn lower_for(
         // 1. Initialize loop variable
         // Assumed single declaration for now
         let decl = &decls[0];
-        let loop_var_ty = Type::new(TypeKind::Int, *span); // Assuming Int for range
-                                                           // Provide the name so push_local can decide to strip it or not based on is_release
+        let loop_var_ty = ctx
+            .recorded_type(start.id)
+            .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
+        // Provide the name so push_local can decide to strip it or not based on is_release
         let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), *span);
         let start_op = lower_expression(ctx, start, None)?;
 
@@ -1272,10 +1278,12 @@ pub(crate) fn emit_range_step(ctx: &mut LoweringContext, step: RangeStep, span: 
         ));
         ctx.set_current_block(advance_bb);
     }
+    let one_lit = crate::ast::literal::IntegerLiteral::from_type_kind(&step.loop_var_ty.kind, 1)
+        .unwrap_or(crate::ast::literal::IntegerLiteral::I64(1));
     let one = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: step.loop_var_ty,
-        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(1)),
+        literal: crate::ast::literal::Literal::Integer(one_lit),
     }));
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(

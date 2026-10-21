@@ -77,3 +77,30 @@ fn main()
         "2",
     );
 }
+
+#[test]
+fn test_range_typed_integer_loops() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn sum_u64(r Range<u64>) u64
+    var total u64 = 0
+    for i in r
+        total = total + i
+    total
+
+fn main()
+    let start u64 = 1
+    let end u64 = 4
+    let r = start..end
+    println(f"{sum_u64(r)}")
+
+    var direct_sum u64 = 0
+    for i in (1 as u64)..(4 as u64)
+        direct_sum = direct_sum + i
+    println(f"{direct_sum}")
+"#,
+        "6\n6",
+    );
+}
