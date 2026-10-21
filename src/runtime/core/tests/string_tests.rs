@@ -1100,3 +1100,64 @@ fn test_clearing_a_split_list_releases_its_pieces_as_strings() {
         miri_rt_string_free(text);
     }
 }
+
+/// `index_of_any` of `text` for `chars` from character `start`, freeing both.
+unsafe fn index_of_any(text: &str, chars: &str, start: isize) -> isize {
+    let haystack = make_str(text);
+    let set = make_str(chars);
+    let found = miri_rt_string_index_of_any(haystack, set, start);
+    miri_rt_string_free(haystack);
+    miri_rt_string_free(set);
+    found
+}
+
+#[test]
+fn test_ffi_index_of_any_scans_ascii_text() {
+    unsafe {
+        assert_eq!(index_of_any("abcde", "a", 0), 0);
+        assert_eq!(index_of_any("abcde", "xdc", 0), 2);
+        assert_eq!(index_of_any("abcde", "e", 0), 4);
+        assert_eq!(index_of_any("abcde", "xyz", 0), -1);
+        assert_eq!(index_of_any("a,b,c", ",", 2), 3);
+        assert_eq!(index_of_any("a,b,c", ",", 5), -1);
+        assert_eq!(index_of_any("a,b,c", ",", 99), -1);
+    }
+}
+
+#[test]
+fn test_ffi_index_of_any_counts_characters_in_multibyte_text() {
+    unsafe {
+        assert_eq!(index_of_any("héllo, wörld", ",", 0), 5);
+        assert_eq!(index_of_any("héllo, wörld", "ö", 0), 8);
+        assert_eq!(index_of_any("🦀🦀x🦀y", "xy", 3), 4);
+        assert_eq!(index_of_any("日本語のテキスト", "トキ", 5), 5);
+        assert_eq!(index_of_any("ééé", "é", 3), -1);
+        assert_eq!(index_of_any("abcd", "é🦀", 0), -1);
+        assert_eq!(index_of_any("abc🦀d", "🦀", 0), 3);
+    }
+}
+
+#[test]
+fn test_ffi_index_of_any_with_nothing_to_find_or_a_bad_start_is_minus_one() {
+    unsafe {
+        assert_eq!(index_of_any("abc", "", 0), -1);
+        assert_eq!(index_of_any("abc", "a", -1), -1);
+        assert_eq!(index_of_any("héllo", "l", isize::MIN), -1);
+        let text = make_str("abc");
+        assert_eq!(miri_rt_string_index_of_any(text, ptr::null(), 0), -1);
+        assert_eq!(miri_rt_string_index_of_any(ptr::null(), text, 0), -1);
+        miri_rt_string_free(text);
+    }
+}
+
+#[test]
+fn test_ffi_index_of_any_finds_every_control_character() {
+    unsafe {
+        let controls: String = (0u8..32).map(char::from).collect();
+        for code in 0u8..32 {
+            let text = format!("plain é text{}tail", char::from(code));
+            assert_eq!(index_of_any(&text, &controls, 0), 12, "code {code}");
+        }
+        assert_eq!(index_of_any("no controls here", &controls, 0), -1);
+    }
+}

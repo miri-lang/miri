@@ -210,6 +210,24 @@ fn test_position_counts_lines()
     assert_eq(failure_position("[\n  1,\n  ?\n]"), "3:3",
         "the column restarts at each newline")
 
+fn test_control_character_after_a_long_run_reports_its_own_position()
+    let control = String.from_code_point(1) ?? ""
+    let run = "aé" * 50
+    assert_eq(failure_kind("[\n  \"" + run + "\t\"]"), "UnexpectedCharacter")
+    assert_eq(failure_position("[\n  \"" + run + "\t\"]"), "2:104",
+        "the column counts every character of the run")
+    assert_eq(failure_position("\"" + ("a" * 50) + "\\n" + ("b" * 50) + control + "\""), "1:104",
+        "a run after an escape keeps counting columns")
+    assert_eq(failure_position("\"" + run + "\n\""), "1:102",
+        "a newline inside a string is the control character it fails on")
+
+fn test_unterminated_string_after_a_long_run_reports_its_opening_quote()
+    let run = "aé" * 150
+    assert_eq(failure_kind("[\n  \"" + run), "UnterminatedString")
+    assert_eq(failure_position("[\n  \"" + run), "2:3")
+    assert_eq(failure_position("{\"k\": \"" + ("x" * 300) + "\\n" + ("y" * 50)), "1:7",
+        "a run after an escape still reports the opening quote")
+
 fn test_invalid_number_reports_the_lexeme_read_so_far()
     assert_eq(invalid_number("-"), "-@1:1", "a lone minus sign")
     assert_eq(invalid_number("01"), "0@1:1", "a leading zero followed by a digit")
@@ -285,6 +303,8 @@ fn main()
     test_bad_escape_is_rejected()
     test_structural_errors_are_rejected()
     test_position_counts_lines()
+    test_control_character_after_a_long_run_reports_its_own_position()
+    test_unterminated_string_after_a_long_run_reports_its_opening_quote()
     test_deep_nesting_is_bounded()
     test_plain_runs_between_escapes_decode_whole()
     test_serialization_keeps_runs_and_escapes_in_place()

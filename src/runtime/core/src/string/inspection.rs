@@ -192,3 +192,67 @@ pub unsafe extern "C" fn miri_rt_string_code_at(ptr: *const MiriString, index: i
         None => -1,
     }
 }
+
+/// Returns the CHARACTER index of the first character of `ptr`, at or after
+/// character `start`, that is one of the characters of `chars`.
+///
+/// Returns -1 when there is none: `chars` is empty, `start` is negative or at
+/// or past the end, or either pointer is null.
+///
+/// A set of ASCII characters is matched byte by byte, which is sound in any
+/// text: every byte of a multi-byte UTF-8 character is 0x80 or above, so it
+/// never equals an ASCII byte. The start is turned into a byte offset, and the
+/// match back into a character index, by the remembered character positions,
+/// so a run of searches moving forward through one text steps over each
+/// character once in total.
+///
+/// # Safety
+/// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_index_of_any(
+    ptr: *const MiriString,
+    chars: *const MiriString,
+    start: isize,
+) -> isize {
+    guard::guard_check(ptr as *mut u8);
+    guard::guard_check(chars as *mut u8);
+    if ptr.is_null() || chars.is_null() || start < 0 {
+        return -1;
+    }
+    let (text, set) = (&*ptr, &*chars);
+    let Some(from) = super::char_index::char_byte_offset(text, start as usize) else {
+        return -1;
+    };
+    let rest = text.as_str().get(from..).unwrap_or("");
+    let found = if set.ascii {
+        position_of_ascii_set(rest.as_bytes(), set.as_str().as_bytes())
+    } else {
+        position_of_char_set(rest, set.as_str())
+    };
+    match found {
+        Some(offset) => super::char_index::char_index_of_byte(text, from + offset) as isize,
+        None => -1,
+    }
+}
+
+/// The byte offset of the first byte of `text` that is one of the ASCII bytes
+/// of `set`.
+fn position_of_ascii_set(text: &[u8], set: &[u8]) -> Option<usize> {
+    if let [only] = set {
+        return text.iter().position(|byte| byte == only);
+    }
+    let members = set
+        .iter()
+        .fold(0u128, |members, &byte| members | (1u128 << (byte & 0x7f)));
+    text.iter()
+        .position(|&byte| byte < 0x80 && (members >> byte) & 1 == 1)
+}
+
+/// The byte offset of the first character of `text` that is a character of
+/// `set`.
+fn position_of_char_set(text: &str, set: &str) -> Option<usize> {
+    text.char_indices()
+        .find(|&(_, ch)| set.contains(ch))
+        .map(|(offset, _)| offset)
+}

@@ -289,6 +289,21 @@ for line in text.lines()
   reading an earlier piece walks again from the start. An index outside
   `0 <= i < length()` is an index-out-of-bounds error at run time.
 
+### Finding characters
+
+`s.index_of_any(chars, start)` returns the character index of the first
+character at or after `start` that is one of the characters of `chars`, or
+`None`. A negative `start`, one at or past `length()`, or an empty `chars`
+finds nothing rather than stopping the program, as `code_at` does. Resuming
+from the last match plus one walks the text once in total.
+
+```miri
+let entry = "key=value; next"
+entry.index_of_any("=;", 0)   // Some(3)
+entry.index_of_any("=;", 4)   // Some(9)
+"café!".index_of_any("!", 0)  // Some(4): a position counts characters
+```
+
 ---
 
 ## Structs

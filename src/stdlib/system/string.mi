@@ -44,6 +44,7 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     runtime "core" fn miri_rt_string_parse_float_status() int
     runtime "core" fn miri_rt_string_next_char_boundary(s String, byte_pos int) int
     runtime "core" fn miri_rt_string_code_at(s String, index int) int
+    runtime "core" fn miri_rt_string_index_of_any(s String, chars String, start int) int
     runtime "core" fn miri_rt_string_from_code_point(code int) String
 
     // Constructors
@@ -119,6 +120,29 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     /// Returns true if this string ends with the given suffix.
     public fn ends_with(suffix String) bool
         return miri_rt_string_ends_with(self, suffix)
+
+    /// Returns the character index of the first character at or after `start`
+    /// that is one of the characters of `chars`, or None if there is none.
+    ///
+    /// Indices are CHARACTER indices, as in `code_at()` and `substring()`. Like
+    /// `code_at()`, an index outside the text is not an error: a negative
+    /// `start`, or one at or past `length()`, returns None, as does an empty
+    /// `chars`. A search that resumes from the last match plus one walks the
+    /// text once in total.
+    ///
+    /// Example:
+    ///     "key=value; next".index_of_any("=;", 0) → Some(3)
+    ///     "key=value; next".index_of_any("=;", 4) → Some(9)
+    ///     "café au lait".index_of_any(" ", 0) → Some(4)
+    ///     "café".index_of_any("é", 0) → Some(3)
+    ///     "hello".index_of_any("xyz", 0) → None
+    ///     "hello".index_of_any("h", -1) → None
+    public fn index_of_any(chars String, start int) int?
+        let index = miri_rt_string_index_of_any(self, chars, start)
+        if index < 0
+            None
+        else
+            Some(index)
 
     /// Returns true if this string is equal to another string.
     public fn equals(other String) bool

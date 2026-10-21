@@ -97,8 +97,9 @@ fn main()
 - **Quotes inside f-string braces** must be the other quote character:
   `f"{m['a']}"`. The same quote ends the string (MER_LEX_012).
 - **Positions count characters**, in `length()`, `substring`, `element_at`,
-  `code_at` and regex matches alike; only `size()` counts bytes. A `substring`
-  range outside the text stops the program (or fails to compile, if constant).
+  `code_at`, `index_of_any` and regex matches alike; only `size()` counts
+  bytes. A `substring` range outside the text stops the program (or fails to
+  compile, if constant).
 - **Integer overflow stops the program** (`MER_RT_003`) instead of wrapping.
   Where wrapping is meant — a hash, a checksum — write `wrapping_add`,
   `wrapping_sub` or `wrapping_mul` from `system.math`.

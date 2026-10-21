@@ -320,6 +320,7 @@ fn test_every_position_the_string_api_takes_or_gives_is_in_characters() {
         (&string, "substring"),
         (&string, "element_at"),
         (&string, "code_at"),
+        (&string, "index_of_any"),
         (&text, "start"),
         (&text, "end"),
     ] {
