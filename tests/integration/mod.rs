@@ -23,6 +23,7 @@ pub mod generics;
 pub mod gpu;
 pub mod hygiene;
 pub mod implicit_imports;
+pub mod json;
 pub mod lambdas;
 pub mod linker;
 pub mod list;

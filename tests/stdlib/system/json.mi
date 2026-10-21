@@ -53,6 +53,16 @@ fn failure_kind(source String) String
                 JsonError.DepthExceeded(_, _): "DepthExceeded"
                 default: "unknown"
 
+/// The lexeme an `InvalidNumber` failure reports, with its position, as
+/// `lexeme@line:column`, or the failure kind for any other outcome.
+fn invalid_number(source String) String
+    match Json.parse(source)
+        Result.Ok(_): "ok"
+        Result.Err(reason)
+            match reason
+                JsonError.InvalidNumber(lexeme, line, column): f"{lexeme}@{line}:{column}"
+                default: failure_kind(source)
+
 fn member_text(document Json, key String) String
     match document.get(key)
         Some(member): member.to_string()
@@ -200,6 +210,38 @@ fn test_position_counts_lines()
     assert_eq(failure_position("[\n  1,\n  ?\n]"), "3:3",
         "the column restarts at each newline")
 
+fn test_invalid_number_reports_the_lexeme_read_so_far()
+    assert_eq(invalid_number("-"), "-@1:1", "a lone minus sign")
+    assert_eq(invalid_number("01"), "0@1:1", "a leading zero followed by a digit")
+    assert_eq(invalid_number("1."), "1.@1:1", "a point with no fraction digits")
+    assert_eq(invalid_number("[1.]"), "1.@1:2", "the position is where the number starts")
+    assert_eq(invalid_number("1.e5"), "1.@1:1", "an exponent does not rescue a missing fraction")
+    assert_eq(invalid_number("1e"), "1e@1:1", "an exponent marker with no digits")
+    assert_eq(invalid_number("1e+"), "1e+@1:1", "an exponent sign with no digits")
+    assert_eq(invalid_number("-x"), "-@1:1", "a minus sign followed by a letter")
+    assert_eq(invalid_number("[0, -1.5E-3, 2.25e+]"), "2.25e+@1:14",
+        "a well-formed number before the bad one does not leak into its lexeme")
+
+fn test_strings_decode_around_their_escapes()
+    assert_eq(parsed("\"plain run\"").as_string() ?? "", "plain run", "no escape")
+    assert_eq(parsed("\"mid\\ndle\"").as_string() ?? "", "mid\ndle", "an escape in the middle")
+    assert_eq(parsed("\"end\\t\"").as_string() ?? "", "end\t", "an escape at the end")
+    assert_eq(parsed("\"\\n\\t\\\"\"").as_string() ?? "", "\n\t\"", "only escapes")
+    assert_eq(parsed("\"caf\\u00e9\"").as_string() ?? "", "café", "a unicode escape")
+    assert_eq(parsed("\"café ñ €\"").as_string() ?? "", "café ñ €", "a non-ASCII literal")
+    assert_eq(parsed("\"\"").as_string() ?? "absent", "", "an empty string")
+
+fn test_documents_round_trip_byte_for_byte()
+    assert_eq(round_trip("[[],{},[[]],[{}]]"), "[[],{},[[]],[{}]]", "empty containers")
+    assert_eq(round_trip("{\"a\":[{\"b\":[1,[2,{\"c\":[]}]]}]}"),
+        "{\"a\":[{\"b\":[1,[2,{\"c\":[]}]]}]}", "nested arrays and objects")
+    assert_eq(round_trip("[\"q\\\"q\",\"s\\\\s\",\"t\\tt\",\"n\\nn\"]"),
+        "[\"q\\\"q\",\"s\\\\s\",\"t\\tt\",\"n\\nn\"]", "quote, backslash, tab and newline")
+    assert_eq(round_trip("\"\\u0000\\u0001\\u001f\\b\\f\\r\""), "\"\\u0000\\u0001\\u001f\\b\\f\\r\"",
+        "control characters keep their escapes")
+    assert_eq(round_trip("\"\\u00e9\""), "\"é\"", "an escaped printable scalar is written as itself")
+    assert_eq(round_trip("{\"k\\\"ey\":\"\"}"), "{\"k\\\"ey\":\"\"}", "an escaped key and an empty value")
+
 fn nested_source(depth int, open String, close String) String
     var out = ""
     var index = 0
@@ -244,6 +286,11 @@ fn main()
     test_structural_errors_are_rejected()
     test_position_counts_lines()
     test_deep_nesting_is_bounded()
+    test_plain_runs_between_escapes_decode_whole()
+    test_serialization_keeps_runs_and_escapes_in_place()
+    test_invalid_number_reports_the_lexeme_read_so_far()
+    test_strings_decode_around_their_escapes()
+    test_documents_round_trip_byte_for_byte()
     println("system.json: OK")
 
 fn test_plain_runs_between_escapes_decode_whole()
@@ -257,4 +304,4 @@ fn test_serialization_keeps_runs_and_escapes_in_place()
     assert_eq(Json.Text("plain text").to_string(), "\"plain text\"")
     assert_eq(Json.Text("a\"b\\c\nd").to_string(), "\"a\\\"b\\\\c\\nd\"")
     assert_eq(Json.Text("\"edge\"").to_string(), "\"\\\"edge\\\"\"")
-    assert_eq(Json.Text("ñ€\u{1}").to_string(), "\"ñ€\\u0001\"")
+    assert_eq(Json.Text("ñ€" + (String.from_code_point(1) ?? "")).to_string(), "\"ñ€\\u0001\"")

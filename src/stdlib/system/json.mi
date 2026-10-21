@@ -108,12 +108,6 @@ class JsonParser
     public fn text_since(start int) String
         self.source.substring(start, self.position)
 
-    /// Consumes the current character and returns it.
-    public fn take() String
-        let current = self.peek()
-        self.advance()
-        String.from_code_point(current) ?? ""
-
     /// Moves past spaces, tabs, carriage returns and newlines.
     public fn skip_whitespace()
         var scanning = true
@@ -194,13 +188,9 @@ public enum Json
     /// Example:
     ///     println(Json.Array(List([Json.Bool(true), Json.Null])).to_string())
     public fn to_string() String
-        match self
-            Json.Null: "null"
-            Json.Bool(flag): Json.boolean_text(flag)
-            Json.Number(lexeme): lexeme
-            Json.Text(text): Json.quoted(text)
-            Json.Array(items): Json.array_text(items)
-            Json.Object(fields): Json.object_text(fields)
+        let writer = JsonWriter()
+        writer.value(self)
+        writer.written()
 
     /// The text of a string value, or None for any other kind.
     ///
@@ -422,8 +412,10 @@ public enum Json
         let open_column = parser.column_number()
         parser.advance()
         var out = ""
+        var escaped = false
         // Plain characters are taken as one run, ending at an escape or the
-        // closing quote, rather than one string each.
+        // closing quote, rather than one string each. A string with no escape
+        // is that single run.
         var run = parser.offset()
         var reading = true
         while reading
@@ -432,12 +424,17 @@ public enum Json
                 parser.fail(JsonError.UnterminatedString(open_line, open_column))
                 return None
             if current == 34
-                out = out + parser.text_since(run)
+                let tail = parser.text_since(run)
                 parser.advance()
+                if escaped
+                    out = out + tail
+                else
+                    out = tail
                 reading = false
             else
                 if current == 92
                     out = out + parser.text_since(run)
+                    escaped = true
                     match Json.escape_sequence(parser)
                         Some(piece)
                             out = out + piece
@@ -541,134 +538,65 @@ public enum Json
             index = index + 1
         Some(value)
 
+    /// Reads a number, taking its lexeme as one slice of the source once the
+    /// last digit is passed. A malformed number reports the text read so far.
     private static fn number_value(parser JsonParser) Json?
         let line = parser.line_number()
         let column = parser.column_number()
-        var lexeme = ""
+        let begin = parser.offset()
         if parser.peek() == 45
-            lexeme = lexeme + parser.take()
+            parser.advance()
         let leading = parser.peek()
         if Json.is_digit(leading) == false
-            parser.fail(JsonError.InvalidNumber(lexeme, line, column))
-            return None
+            return Json.invalid_number(parser, begin, line, column)
+        parser.advance()
         if leading == 48
-            lexeme = lexeme + parser.take()
             if Json.is_digit(parser.peek())
-                parser.fail(JsonError.InvalidNumber(lexeme, line, column))
-                return None
+                return Json.invalid_number(parser, begin, line, column)
         else
-            while Json.is_digit(parser.peek())
-                lexeme = lexeme + parser.take()
-        match Json.fraction(parser, lexeme, line, column)
-            Some(with_fraction): Json.number_exponent(parser, with_fraction, line, column)
-            None: None
+            Json.skip_digits(parser)
+        if Json.fraction(parser) == false
+            return Json.invalid_number(parser, begin, line, column)
+        if Json.exponent(parser) == false
+            return Json.invalid_number(parser, begin, line, column)
+        Some(Json.Number(parser.text_since(begin)))
 
-    private static fn number_exponent(parser JsonParser, lexeme String, line int, column int) Json?
-        match Json.exponent(parser, lexeme, line, column)
-            Some(complete): Some(Json.Number(complete))
-            None: None
-
-    private static fn fraction(parser JsonParser, lexeme String, line int, column int) String?
+    /// Moves past an optional fraction, reporting false when the point is not
+    /// followed by a digit.
+    private static fn fraction(parser JsonParser) bool
         if parser.peek() != 46
-            return Some(lexeme)
-        var out = lexeme + parser.take()
-        if Json.is_digit(parser.peek()) == false
-            parser.fail(JsonError.InvalidNumber(out, line, column))
-            return None
-        while Json.is_digit(parser.peek())
-            out = out + parser.take()
-        Some(out)
+            return true
+        parser.advance()
+        Json.digits(parser)
 
-    private static fn exponent(parser JsonParser, lexeme String, line int, column int) String?
+    /// Moves past an optional exponent, reporting false when the marker and
+    /// its sign are not followed by a digit.
+    private static fn exponent(parser JsonParser) bool
         let marker = parser.peek()
         if marker != 101 and marker != 69
-            return Some(lexeme)
-        var out = lexeme + parser.take()
+            return true
+        parser.advance()
         if parser.peek() == 43 or parser.peek() == 45
-            out = out + parser.take()
+            parser.advance()
+        Json.digits(parser)
+
+    /// Moves past one or more digits, reporting false when there is none.
+    private static fn digits(parser JsonParser) bool
         if Json.is_digit(parser.peek()) == false
-            parser.fail(JsonError.InvalidNumber(out, line, column))
-            return None
+            return false
+        Json.skip_digits(parser)
+        true
+
+    private static fn skip_digits(parser JsonParser)
         while Json.is_digit(parser.peek())
-            out = out + parser.take()
-        Some(out)
+            parser.advance()
 
-    private static fn boolean_text(flag bool) String
-        if flag
-            return "true"
-        "false"
-
-    private static fn array_text(items [Json]) String
-        var out = "["
-        var index = 0
-        while index < items.length()
-            if index > 0
-                out = out + ","
-            out = out + items.element_at(index).to_string()
-            index = index + 1
-        out + "]"
-
-    private static fn object_text(fields {String: Json}) String
-        var out = "{"
-        var written = 0
-        for key in fields
-            if written > 0
-                out = out + ","
-            out = out + Json.quoted(key) + ":"
-            match fields.get(key)
-                Some(member)
-                    out = out + member.to_string()
-                None
-                    out = out + "null"
-            written = written + 1
-        out + "}"
-
-    private static fn quoted(text String) String
-        var out = "\""
-        // Characters that need no escape are appended as one run.
-        var run = 0
-        var index = 0
-        let length = text.length()
-        while index < length
-            let code = text.code_at(index) ?? 0
-            if code == 34 or code == 92 or code < 32
-                out = out + text.substring(run, index) + Json.escaped_character(code)
-                run = index + 1
-            index = index + 1
-        out + text.substring(run, length) + "\""
-
-    private static fn escaped_character(code int) String
-        if code == 34
-            return "\\\""
-        if code == 92
-            return "\\\\"
-        if code == 10
-            return "\\n"
-        if code == 13
-            return "\\r"
-        if code == 9
-            return "\\t"
-        if code == 8
-            return "\\b"
-        if code == 12
-            return "\\f"
-        if code < 32
-            return "\\u" + Json.unit_digits(code)
-        String.from_code_point(code) ?? ""
+    private static fn invalid_number(parser JsonParser, begin int, line int, column int) Json?
+        parser.fail(JsonError.InvalidNumber(parser.text_since(begin), line, column))
+        None
 
     private static fn unit_text(code int) String
-        "u" + Json.unit_digits(code)
-
-    private static fn unit_digits(code int) String
-        let first = Json.hex_digit((code / 4096) % 16)
-        let second = Json.hex_digit((code / 256) % 16)
-        let third = Json.hex_digit((code / 16) % 16)
-        first + second + third + Json.hex_digit(code % 16)
-
-    private static fn hex_digit(value int) String
-        if value < 10
-            return String.from_code_point(48 + value) ?? "0"
-        String.from_code_point(87 + value) ?? "0"
+        "u" + unit_digits(code)
 
     private static fn describe(code int) String
         if code < 0
@@ -694,3 +622,114 @@ public enum Json
 
     private static fn is_surrogate(code int) bool
         code >= 55296 and code <= 57343
+
+/// Serializes a value into one text that grows as each piece is written.
+private class JsonWriter
+    private var text String
+
+    fn init()
+        self.text = ""
+
+    /// Everything written so far.
+    public fn written() String
+        self.text
+
+    public fn value(node Json)
+        match node
+            Json.Null: self.write("null")
+            Json.Bool(flag): self.write(JsonWriter.boolean_text(flag))
+            Json.Number(lexeme): self.write(lexeme)
+            Json.Text(text): self.quoted(text)
+            Json.Array(items): self.array(items)
+            Json.Object(fields): self.object(fields)
+
+    private fn array(items [Json])
+        self.write("[")
+        var index = 0
+        while index < items.length()
+            if index > 0
+                self.write(",")
+            self.value(items.element_at(index))
+            index = index + 1
+        self.write("]")
+
+    private fn object(fields {String: Json})
+        self.write("{")
+        var written = 0
+        for key, member in fields
+            if written > 0
+                self.write(",")
+            self.quoted(key)
+            self.write(":")
+            self.value(member)
+            written = written + 1
+        self.write("}")
+
+    /// Writes `text` as a JSON string. Characters that need no escape are
+    /// written as one run, so text with no escape is written whole.
+    private fn quoted(text String)
+        self.write("\"")
+        var run = 0
+        var index = 0
+        let length = text.length()
+        while index < length
+            let code = text.code_at(index) ?? 0
+            if code == 34 or code == 92 or code < 32
+                if index > run
+                    self.write(text.substring(run, index))
+                self.write(JsonWriter.escaped_character(code))
+                run = index + 1
+            index = index + 1
+        if run == 0
+            self.write(text)
+        else
+            if run < length
+                self.write(text.substring(run, length))
+        self.write("\"")
+
+    // TODO: an append to a field (`self.text = self.text + piece`) copies the
+    // whole text rather than growing it in place, which makes serialization
+    // quadratic. Appending to a local grows in place, so the text is moved
+    // into one, grown, and moved back. Once field-targeted string appends grow
+    // in place, this becomes `self.text += piece`.
+    private fn write(piece String)
+        var held = self.text
+        self.text = ""
+        held = held + piece
+        self.text = held
+
+    private static fn boolean_text(flag bool) String
+        if flag
+            return "true"
+        "false"
+
+    private static fn escaped_character(code int) String
+        if code == 34
+            return "\\\""
+        if code == 92
+            return "\\\\"
+        if code == 10
+            return "\\n"
+        if code == 13
+            return "\\r"
+        if code == 9
+            return "\\t"
+        if code == 8
+            return "\\b"
+        if code == 12
+            return "\\f"
+        if code < 32
+            return "\\u" + unit_digits(code)
+        String.from_code_point(code) ?? ""
+
+/// The four lowercase hex digits of a UTF-16 code unit.
+private fn unit_digits(code int) String
+    let first = hex_digit((code / 4096) % 16)
+    let second = hex_digit((code / 256) % 16)
+    let third = hex_digit((code / 16) % 16)
+    first + second + third + hex_digit(code % 16)
+
+private fn hex_digit(value int) String
+    if value < 10
+        return String.from_code_point(48 + value) ?? "0"
+    String.from_code_point(87 + value) ?? "0"
