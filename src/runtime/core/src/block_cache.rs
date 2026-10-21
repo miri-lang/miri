@@ -639,6 +639,12 @@ pub mod ffi {
         if base.is_null() {
             return;
         }
+        // TODO: a parked block's first word is its free-list link, not a size,
+        // so releasing one twice through here reads a pointer as its size and
+        // hands it to the system allocator instead of trapping. Compiled code
+        // cannot reach this (it decrements the count in the second word first,
+        // and the parked marker never reaches zero), but a runtime caller could;
+        // checking `is_already_parked` before reading the size would close it.
         // SAFETY: a live block's first word holds the size it was allocated at.
         unsafe {
             let size = base.cast::<usize>().read();
