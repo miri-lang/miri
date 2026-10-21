@@ -34,7 +34,7 @@ use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
 
-/// User trap code raised on heap allocation failure (malloc returning null).
+/// User trap code raised on heap allocation failure (the runtime returning null).
 ///
 /// Built via `TrapCode::unwrap_user`, a `const fn` whose invalid-code branch
 /// fails to compile rather than panic at run time — so this constant is
@@ -819,7 +819,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Build a non-collection aggregate (Tuple / Struct / Class / Enum / Option /
-    /// FormattedString). Lays out fields, heap-allocates with `[malloc_ptr][RC][payload]`
+    /// FormattedString). Lays out fields, heap-allocates with `[size][RC][payload]`
     /// header, and writes operand values into payload slots.
     fn build_struct_like_aggregate(
         builder: &mut FunctionBuilder,
@@ -1401,9 +1401,9 @@ impl<'a> FunctionTranslator<'a> {
         Ok((field_offsets, total_size))
     }
 
-    /// Heap-allocate `[malloc_ptr][RC][payload]` for an aggregate, traps on OOM,
+    /// Heap-allocate `[size][RC][payload]` for an aggregate, traps on OOM,
     /// and returns the payload pointer (past the 2-slot header). RC is initialized
-    /// to 1.
+    /// to 1; the runtime wrote the size word.
     pub(crate) fn alloc_aggregate_payload(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1412,17 +1412,16 @@ impl<'a> FunctionTranslator<'a> {
         payload_size: u32,
     ) -> Result<Value, CodegenError> {
         let header_size = 2 * ptr_size as u32;
-        let alloc_size = builder
-            .ins()
-            .iconst(ptr_type, (payload_size + header_size) as i64);
-        let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
+        let block_size = payload_size.checked_add(header_size).ok_or_else(|| {
+            CodegenError::Internal("aggregate block size overflows its layout".to_string())
+        })?;
+        let alloc_size = builder.ins().iconst(ptr_type, i64::from(block_size));
+        let raw_ptr = Self::call_rt_block_alloc(builder, ctx, alloc_size)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(IntCC::Equal, raw_ptr, null);
         builder.ins().trapnz(is_null, OOM_TRAP_CODE);
 
-        // Store real malloc pointer at offset 0
-        builder.ins().store(MemFlags::new(), raw_ptr, raw_ptr, 0);
         // Store RC = 1 at offset ptr_size
         let one = builder.ins().iconst(ptr_type, 1);
         builder.ins().store(MemFlags::new(), one, raw_ptr, ptr_size);
@@ -2207,7 +2206,7 @@ impl<'a> FunctionTranslator<'a> {
     }
     /// Translate a closure aggregate into a heap-allocated closure struct.
     ///
-    /// Layout: [raw_ptr(=malloc_ptr)][RC=1][fn_ptr][dtor_ptr], then the
+    /// Layout: [size][RC=1][fn_ptr][dtor_ptr], then the
     /// captures where [`CaptureLayout`] places them.
     /// The returned value is `payload_ptr` = `raw_ptr + 2*ptr_size`.
     fn translate_closure_aggregate(
@@ -2274,10 +2273,9 @@ impl<'a> FunctionTranslator<'a> {
         Ok(payload_ptr)
     }
 
-    /// Heap-allocate `[malloc_ptr][RC]` followed by a `payload_bytes` payload
-    /// (`fn_ptr`, `dtor_ptr`, then the captures). Initializes RC = 1 and stores
-    /// the malloc pointer at offset 0 so `free()` can recover the original
-    /// allocation. Records the alloc with `miri_rt_closure_alloc_track` so the
+    /// Heap-allocate `[size][RC]` followed by a `payload_bytes` payload
+    /// (`fn_ptr`, `dtor_ptr`, then the captures). Initializes RC = 1; the
+    /// runtime wrote the size word its release reads back. Records the alloc with `miri_rt_closure_alloc_track` so the
     /// leak detector sees it. Returns `payload_ptr = raw_ptr + 2*ptr_size`.
     fn alloc_closure_payload(
         builder: &mut FunctionBuilder,
@@ -2288,7 +2286,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let total_size = 2 * ptr_size + payload_bytes;
         let size_val = builder.ins().iconst(ptr_type, total_size);
-        let raw_ptr = Self::call_libc_malloc(builder, ctx, size_val)?;
+        let raw_ptr = Self::call_rt_block_alloc(builder, ctx, size_val)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(IntCC::Equal, raw_ptr, null);
@@ -2296,7 +2294,6 @@ impl<'a> FunctionTranslator<'a> {
 
         Self::call_rt_closure_alloc_track(builder, ctx)?;
 
-        builder.ins().store(MemFlags::new(), raw_ptr, raw_ptr, 0);
         let one = builder.ins().iconst(ptr_type, 1);
         builder
             .ins()

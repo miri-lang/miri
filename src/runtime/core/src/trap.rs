@@ -36,6 +36,9 @@ pub(crate) mod code {
     /// A method reached at an instance of its class the compiler withheld it
     /// at, because its obligations were not checked there.
     pub(crate) const METHOD_NOT_CHECKED: &str = "MER_RT_014";
+    /// A heap block released twice, written after its release, or released
+    /// at a size larger than it was allocated at.
+    pub(crate) const HEAP_CORRUPTED: &str = "MER_RT_015";
 }
 
 /// Report a runtime fault under `code` and end the process.

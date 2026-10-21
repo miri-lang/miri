@@ -518,13 +518,17 @@ pub mod ffi {
             return ptr::null_mut();
         }
         let list = payload as *mut MiriList;
-        (*list).data = ptr::null_mut();
-        (*list).len = 0;
-        (*list).capacity = 0;
-        (*list).elem_size = elem_size;
-        (*list).elem_drop_fn = 0;
-        (*list).elem_clone_fn = 0;
-        (*list).elem_order = ElementOrder::SIGNED;
+        // The block may be one a released value left behind: every field is
+        // written, never left to the allocator.
+        list.write(MiriList {
+            data: ptr::null_mut(),
+            len: 0,
+            capacity: 0,
+            elem_size,
+            elem_drop_fn: 0,
+            elem_clone_fn: 0,
+            elem_order: ElementOrder::SIGNED,
+        });
         list
     }
 

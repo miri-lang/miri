@@ -63,6 +63,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_RT_006 | Triggers MER_RT_006: a stack overflow from unbounded recursion causes a segmentation fault. |
 | MER_RT_011 | Triggers MER_RT_011: an index past the end of a fixed-size array at run time. |
 | MER_RT_012 | Triggers MER_RT_012: the program calls panic and stops where it stands. |
+| MER_RT_015 | Triggers MER_RT_015: a test helper releases one heap block twice. |
 | MER_TAR_002 | Triggers MER_TAR_002: Unsupported Operation in GPU Code. |
 | MER_TAR_005 | Triggers MER_TAR_005: Invalid GPU Parallel Construct. |
 | MER_TAR_006 | Triggers MER_TAR_006: GPU Residency Violation. |
@@ -193,6 +194,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_RT_006 | Accepted counterpart of MER_RT_006: bounded recursion completes without stack overflow. |
 | MER_RT_011 | Accepted counterpart of MER_RT_011: an index inside the array reads its element. |
 | MER_RT_012 | Accepted counterpart of MER_RT_012: the guarded case never reaches the panic. |
+| MER_RT_015 | Accepted counterpart of MER_RT_015: every value is released once, by reference counting. |
 | MER_TAR_002 | Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire. |
 | MER_TAR_005 | Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire. |
 | MER_TYP_002 | Correct type in variable initialization - string assigned to string |

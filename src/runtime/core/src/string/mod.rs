@@ -47,7 +47,8 @@ pub(crate) fn into_raw_ptr(s: MiriString) -> *mut MiriString {
         return std::ptr::null_mut();
     }
     // Move `s` into the RC block without running its Drop impl.
-    // SAFETY: `ptr` is non-null, aligned, and points to `payload_size` zeroed bytes.
+    // SAFETY: `ptr` is non-null, aligned, and points to `payload_size` writable
+    // bytes; this write sets every field.
     unsafe { std::ptr::write(ptr, s) };
     ptr
 }

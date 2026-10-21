@@ -25,6 +25,7 @@
 pub mod alloc;
 pub mod alloc_count;
 pub mod array;
+pub mod block_cache;
 pub mod element_bytes;
 pub mod element_identity;
 pub mod element_order;
@@ -65,6 +66,7 @@ pub use string::MiriString;
 // This preserves `crate::miri_rt_list_new()` style calls used in array.rs and tests.
 pub use alloc::ffi::*;
 pub use array::ffi::*;
+pub use block_cache::ffi::*;
 pub use fs::ffi::*;
 pub use hash::ffi::*;
 pub use int128::ffi::*;

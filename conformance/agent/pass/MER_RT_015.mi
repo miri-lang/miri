@@ -1,0 +1,10 @@
+// summary: Accepted counterpart of MER_RT_015: every value is released once, by reference counting.
+// expect-stdout: 3
+use system.collections.list
+
+fn main()
+    var items = List<int>()
+    items.push(1)
+    items.push(2)
+    items.push(3)
+    println(f"{items.length()}")

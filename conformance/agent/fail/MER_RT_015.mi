@@ -1,0 +1,7 @@
+// expect: MER_RT_015
+// command: run
+// summary: Triggers MER_RT_015: a test helper releases one heap block twice.
+use system.testing
+
+fn main()
+    simulate_double_free()

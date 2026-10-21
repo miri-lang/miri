@@ -29,7 +29,7 @@ pub const RUNTIME_SYMBOL_PREFIX: &str = "miri_rt_";
 
 pub mod rt {
     // Closure
-    /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure malloc, not in stdlib.
+    /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure allocation, not in stdlib.
     pub const CLOSURE_ALLOC_TRACK: &str = "miri_rt_closure_alloc_track";
     /// Compiler-internal: decrements CLOSURE_ALLOC_BALANCE on closure free, not in stdlib.
     pub const CLOSURE_FREE_TRACK: &str = "miri_rt_closure_free_track";
@@ -45,12 +45,20 @@ pub mod rt {
     /// instance, a tuple, an option — outright, so the release compiled code
     /// makes afterwards is a double release the heap guard must report.
     pub const SIMULATE_INLINE_OVER_RELEASE: &str = "miri_rt_test_simulate_inline_over_release";
-    /// Compiler-internal: registers an inline `malloc` with the heap guard, not
-    /// in stdlib. Covers class instances, tuples, Options, enum payloads and
-    /// closure environments, which codegen allocates without the runtime.
+    /// Compiler-internal: allocates the block of a value compiled code lays
+    /// out itself — a class instance, a tuple, an Option, an enum payload, a
+    /// closure environment — not in stdlib. The block's first word holds its
+    /// size; the rest is unspecified.
+    pub const BLOCK_ALLOC: &str = "miri_rt_block_alloc";
+    /// Compiler-internal: releases a block [`BLOCK_ALLOC`] returned, not in
+    /// stdlib.
+    pub const BLOCK_FREE: &str = "miri_rt_block_free";
+    /// Compiler-internal: registers an inline allocation with the heap guard,
+    /// not in stdlib. Covers class instances, tuples, Options, enum payloads
+    /// and closure environments, which codegen lays out itself.
     pub const CLASS_ALLOC_TRACK: &str = "miri_rt_class_alloc_track";
-    /// Compiler-internal: witnesses an inline `free` for the heap guard, not in
-    /// stdlib. Paired with [`CLASS_ALLOC_TRACK`].
+    /// Compiler-internal: witnesses an inline release for the heap guard, not
+    /// in stdlib. Paired with [`CLASS_ALLOC_TRACK`].
     pub const CLASS_FREE_TRACK: &str = "miri_rt_class_free_track";
     /// Compiler-internal: lets the heap guard see an inline release before it
     /// reads the released block, not in stdlib. Paired with [`CLASS_FREE_TRACK`].
@@ -403,6 +411,8 @@ pub mod rt {
         SIMULATE_DOUBLE_FREE,
         SIMULATE_CLOSURE_OVER_RELEASE,
         SIMULATE_INLINE_OVER_RELEASE,
+        BLOCK_ALLOC,
+        BLOCK_FREE,
         CLASS_ALLOC_TRACK,
         CLASS_FREE_TRACK,
         RELEASE_CHECK,

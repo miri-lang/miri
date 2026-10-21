@@ -1855,7 +1855,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Calls `miri_rt_closure_alloc_track()` to record a closure malloc in
+    /// Calls `miri_rt_closure_alloc_track()` to record a closure allocation in
     /// `CLOSURE_ALLOC_BALANCE`. Must be matched by `call_rt_closure_free_track`.
     pub(crate) fn call_rt_closure_alloc_track(
         builder: &mut FunctionBuilder,
@@ -2210,13 +2210,16 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Helper to call libc malloc, caching the FuncId across invocations.
+    /// Allocates a `size`-byte block through the runtime, caching the FuncId
+    /// across invocations. The runtime records the size in the block's first
+    /// word; every other byte is unspecified, so the caller stores all of them
+    /// it reads.
     ///
     /// Every inline heap allocation compiled code makes — class instances,
     /// tuples, `Option`s, enum payloads, closure environments — funnels through
     /// here, so registering the result with the heap guard at this one point
     /// covers them all and cannot be missed by a future caller.
-    pub(crate) fn call_libc_malloc(
+    pub(crate) fn call_rt_block_alloc(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         size: Value,
@@ -2227,7 +2230,7 @@ impl<'a> FunctionTranslator<'a> {
             ctx.module,
             &mut ctx.cached_funcs,
             CallSite {
-                name: "malloc",
+                name: rt::BLOCK_ALLOC,
                 param_types: &[pt],
                 return_types: &[pt],
                 args: &[size],
@@ -2325,7 +2328,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Calls `miri_rt_class_alloc_track(ptr)` to register an inline `malloc`
+    /// Calls `miri_rt_class_alloc_track(ptr)` to register an inline allocation
     /// with the heap guard.
     pub(crate) fn call_rt_class_alloc_track(
         builder: &mut FunctionBuilder,
@@ -2418,31 +2421,25 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Helper to call libc free, caching the FuncId across invocations.
+    /// Releases an inline block through the runtime, caching the FuncId
+    /// across invocations.
     ///
-    /// `header_ptr` points to the RC header (payload - ptr_size). The real
-    /// malloc pointer is stored at (header_ptr - ptr_size) by
-    /// `alloc_aggregate_payload`, and is loaded here so that `free()` receives
-    /// the original allocation.
-    pub(crate) fn call_libc_free(
+    /// `header_ptr` points to the RC header (payload - ptr_size); the block
+    /// [`Self::call_rt_block_alloc`] returned starts one word before it.
+    pub(crate) fn call_rt_block_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         header_ptr: Value,
     ) -> Result<(), CodegenError> {
         let ptr_type = builder.func.dfg.value_type(header_ptr);
         let ptr_size = ptr_type.bytes() as i64;
-
-        // The real malloc pointer is stored at (header_ptr - ptr_size).
-        let malloc_ptr_slot = builder.ins().iadd_imm(header_ptr, -ptr_size);
-        let real_ptr = builder
-            .ins()
-            .load(ptr_type, MemFlags::new(), malloc_ptr_slot, 0);
+        let base = builder.ins().iadd_imm(header_ptr, -ptr_size);
 
         // Every inline release funnels through here, so the guard witnesses the
         // free at one point rather than at each `emit_drop_*` arm. It is keyed
-        // on the same allocation base the matching `malloc` reported.
+        // on the same allocation base the matching allocation reported.
         Self::emit_tracked(builder, ctx, |builder, ctx| {
-            Self::call_rt_class_free_track(builder, ctx, real_ptr)
+            Self::call_rt_class_free_track(builder, ctx, base)
         })?;
 
         Self::call_cached_func(
@@ -2450,10 +2447,10 @@ impl<'a> FunctionTranslator<'a> {
             ctx.module,
             &mut ctx.cached_funcs,
             CallSite {
-                name: "free",
+                name: rt::BLOCK_FREE,
                 param_types: &[ptr_type],
                 return_types: &[],
-                args: &[real_ptr],
+                args: &[base],
             },
         )?;
         Ok(())

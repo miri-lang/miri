@@ -12,7 +12,8 @@
 //! - Raw: raw allocations (string data, etc.)
 //!
 //! Counters are monotonic and never decremented. At exit, prints the total
-//! allocation count and breakdown by kind to stderr.
+//! allocation count and breakdown by kind to stderr, then how many of those
+//! allocations were served by a block the block cache handed out again.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -28,6 +29,11 @@ static BUFFER_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Global counter for raw memory allocations (string data, etc.).
 static RAW_ALLOC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Global counter for small blocks handed out again from the block cache
+/// rather than taken from the system. Not an allocation kind of its own: each
+/// such block is also counted under its kind.
+static REUSED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Increments the RC allocation counter.
 #[inline]
@@ -51,6 +57,12 @@ pub fn increment_buffer_count() {
 #[inline]
 pub fn increment_raw_count() {
     RAW_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increments the counter of blocks the block cache handed out again.
+#[inline]
+pub fn increment_reused_count() {
+    REUSED_BLOCK_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Read the current RC allocation count (for testing).
@@ -92,9 +104,11 @@ pub fn report_at_exit() {
     let raw = RAW_ALLOC_COUNT.load(Ordering::Relaxed);
     let total = rc + inline + buffers + raw;
 
+    let reused = REUSED_BLOCK_COUNT.load(Ordering::Relaxed);
     let msg = format!(
-        "MIRI_ALLOC_COUNT: {} allocation(s) (rc={} inline={} buffers={} raw={})\n",
-        total, rc, inline, buffers, raw
+        "MIRI_ALLOC_COUNT: {} allocation(s) (rc={} inline={} buffers={} raw={})\n\
+         MIRI_ALLOC_REUSED: {} block(s) handed out again from released ones\n",
+        total, rc, inline, buffers, raw, reused
     );
 
     unsafe {

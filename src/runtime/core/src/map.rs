@@ -573,20 +573,25 @@ pub mod ffi {
             return ptr::null_mut();
         }
         let map = payload as *mut MiriMap;
-        (*map).states = ptr::null_mut();
-        (*map).keys = ptr::null_mut();
-        (*map).values = ptr::null_mut();
-        (*map).len = 0;
-        (*map).capacity = 0;
-        (*map).key_size = key_size;
-        (*map).value_size = value_size;
-        (*map).key_identity = ElementIdentity::BYTES;
-        (*map).key_identity.set_kind(key_kind);
-        (*map).val_drop_fn = 0;
-        (*map).key_drop_fn = 0;
-        (*map).val_clone_fn = 0;
-        (*map).layout_changed();
-        std::ptr::write(&raw mut (*map).last_found, Cell::new(None));
+        let mut key_identity = ElementIdentity::BYTES;
+        key_identity.set_kind(key_kind);
+        // The block may be one a released value left behind: every field is
+        // written, never left to the allocator.
+        map.write(MiriMap {
+            states: ptr::null_mut(),
+            keys: ptr::null_mut(),
+            values: ptr::null_mut(),
+            len: 0,
+            capacity: 0,
+            key_size,
+            value_size,
+            key_identity,
+            val_drop_fn: 0,
+            key_drop_fn: 0,
+            val_clone_fn: 0,
+            cursor: SlotCursor::default(),
+            last_found: Cell::new(None),
+        });
         map
     }
 

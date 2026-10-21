@@ -114,6 +114,27 @@ via `miri_rt_string_free`. The pointer stored in a Miri variable points directly
   ownership.
 - When RC drops to zero, the type's `_free` function is responsible for freeing the
   internal buffers and then the `[RC][payload]` block.
+- Small blocks — up to 256 bytes, both `[RC][payload]` blocks and the blocks
+  compiled code lays out itself — come from a per-thread cache of released blocks
+  (`block_cache`) in front of the system allocator. A block it hands out holds
+  whatever its previous owner left there, so every constructor writes all of its
+  fields. While `MIRI_HEAP_GUARD=1` is set the cache is bypassed, so the guard sees
+  every block go back to the system.
+- A parked block's first word links it to the next and its second holds a
+  fixed sentinel no live block holds there. Releasing a block that already carries it (a double
+  release), or taking one whose sentinel changed (a write after release), traps
+  with `MER_RT_015` in every build.
+- **Poison mode.** In a build without `--release`, while `MIRI_LEAK_CHECK`,
+  `MIRI_ALLOC_COUNT` or `MIRI_RC_STATS` is asked for or `MallocScribble` is set
+  — so in every test run — the cache also fills each released block past those
+  two words with `0xDD`, holds it back behind 64 others of its class, checks the
+  fill when the block is handed out (a difference traps with `MER_RT_015`), fills
+  every handed-out block with `0xAA`, and refuses a release that names a size
+  class larger than the block the system gave. A release build is never
+  poisoned.
+- Parked memory is per thread, at most 16 MiB each, so a process can hold its
+  thread count times that. `MIRI_ALLOC_COUNT` also prints
+  `MIRI_ALLOC_REUSED: <n> block(s) handed out again from released ones`.
 
 ---
 
@@ -126,6 +147,7 @@ at module level are private and may change without notice.
 | Module       | `pub mod ffi` location      | Key symbols                                        |
 |--------------|-----------------------------|----------------------------------------------------|
 | `alloc`      | `alloc::ffi`                | `miri_alloc`, `miri_alloc_zeroed`, `miri_realloc`, `miri_free` |
+| `block_cache`| `block_cache::ffi`          | `miri_rt_block_alloc`, `miri_rt_block_free`        |
 | `array`      | `array::ffi`                | `miri_rt_array_new`, `miri_rt_array_free`, `miri_rt_array_len`, … |
 | `list`       | `list::ffi`                 | `miri_rt_list_new`, `miri_rt_list_free`, `miri_rt_list_len`, … |
 | `set`        | `set::ffi`                  | `miri_rt_set_new`, `miri_rt_set_free`, `miri_rt_set_len`, … |

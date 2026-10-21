@@ -16,7 +16,7 @@ fn main():
     println("class created")
 "#;
     // Class instances are allocated inline (not RC tracked via the RC module).
-    // The Point(x: 10, y: 20) constructor allocates the struct via libc::malloc,
+    // The Point(x: 10, y: 20) constructor allocates the struct via miri_rt_block_alloc,
     // which codegen tracks via miri_rt_class_alloc_track, incrementing the inline counter once.
     // The println call uses string literals which are compile-time constants and allocate nothing.
     assert_allocation_count(code, 1);

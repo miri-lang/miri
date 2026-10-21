@@ -1288,7 +1288,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (14 codes: 001-014)
+    // RT — Runtime traps and assertion failures (15 codes: 001-015)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1384,6 +1384,13 @@ diagnostics!(
     "014",
     RtMethodNotChecked,
     "Method Not Checked at Instance",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    "RT",
+    "015",
+    RtHeapCorrupted,
+    "Heap Corruption",
     Severity::Error,
     false,
     FixSafety::LocalEdit,

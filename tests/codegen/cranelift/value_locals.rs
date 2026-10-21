@@ -23,6 +23,7 @@ use miri::mir::{
     AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Constant, ExecutionModel, Local,
     LocalDecl, Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
+use miri::runtime_fns::rt;
 use miri::type_checker::context::{StructDefinition, TypeDefinition};
 use miri::type_checker::ModuleId;
 use std::collections::HashMap;
@@ -284,7 +285,7 @@ fn a_value_is_built_copied_passed_and_returned_by_its_bytes() {
     ];
     let (object, listing) = compile(&named).expect("the program compiles and verifies");
     assert!(
-        !listing.contains("malloc"),
+        !listing.contains(rt::BLOCK_ALLOC),
         "a value held as its bytes allocates nothing:\n{listing}"
     );
     assert_eq!(run(&object), 55);
@@ -429,7 +430,7 @@ fn an_optional_is_built_tested_and_opened_by_its_bytes() {
     let named = [(Symbol::entry().link_name(), &main)];
     let (object, listing) = compile(&named).expect("the program compiles and verifies");
     assert!(
-        !listing.contains("malloc"),
+        !listing.contains(rt::BLOCK_ALLOC),
         "an optional held as its bytes allocates nothing:\n{listing}"
     );
     assert_eq!(run(&object), 17);

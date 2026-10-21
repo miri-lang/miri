@@ -290,15 +290,19 @@ pub mod ffi {
             return ptr::null_mut();
         }
         let set = payload as *mut MiriSet;
-        (*set).data = ptr::null_mut();
-        (*set).len = 0;
-        (*set).states = ptr::null_mut();
-        (*set).capacity = 0;
-        (*set).elem_size = elem_size;
-        (*set).elem_drop_fn = 0;
-        (*set).elem_clone_fn = 0;
-        (*set).elem_identity = ElementIdentity::BYTES;
-        (*set).cursor.forget();
+        // The block may be one a released value left behind: every field is
+        // written, never left to the allocator.
+        set.write(MiriSet {
+            data: ptr::null_mut(),
+            len: 0,
+            states: ptr::null_mut(),
+            capacity: 0,
+            elem_size,
+            elem_drop_fn: 0,
+            elem_clone_fn: 0,
+            elem_identity: ElementIdentity::BYTES,
+            cursor: SlotCursor::default(),
+        });
         set
     }
 

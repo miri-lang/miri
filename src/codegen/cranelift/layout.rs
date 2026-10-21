@@ -548,7 +548,7 @@ pub fn class_payload_layout(
     ptr_ty: CraneliftType,
 ) -> PayloadLayout {
     let ptr_size = ptr_ty.bytes() as i32;
-    // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr][field0][field1]...
+    // Class layout: [header: 16 bytes (block size + RC)][vtable_ptr][field0][field1]...
     // Offset 0 holds the vtable pointer — null for a class without a vtable —
     // on every class, not only one that dispatches: a body compiled for a base
     // runs on instances of every class extending it, and a subclass that

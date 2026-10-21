@@ -103,6 +103,28 @@ pub mod ffi {
     use crate::list::MiriList;
     use std::ptr;
 
+    /// The buffer of `elem_count` elements of `elem_size` bytes, zeroed, or null
+    /// when either is zero, the size overflows or the system has no memory.
+    ///
+    /// It stays zeroed: an array exists at its full length from the start, so
+    /// its drop, its comparison and its reads can see an element before
+    /// compiled code stores one there.
+    unsafe fn zeroed_element_buffer(elem_count: usize, elem_size: usize) -> *mut u8 {
+        if elem_count == 0 || elem_size == 0 {
+            return ptr::null_mut();
+        }
+        let Some(total) = elem_count.checked_mul(elem_size) else {
+            return ptr::null_mut();
+        };
+        let Ok(layout) = Layout::from_size_align(total, 8) else {
+            return ptr::null_mut();
+        };
+        let data = alloc_zeroed(layout);
+        crate::guard::guard_alloc_raw(data, crate::guard::AllocKind::Buffer);
+        crate::alloc_count::increment_buffer_count();
+        data
+    }
+
     /// Creates a new fixed-size array with the given element count and size.
     ///
     /// Allocates `[RC=1][MiriArray fields]`. All data elements are zeroed.
@@ -118,46 +140,17 @@ pub mod ffi {
         }
 
         let arr = payload as *mut MiriArray;
-
-        if elem_count > 0 && elem_size > 0 {
-            let total = match elem_count.checked_mul(elem_size) {
-                Some(t) => t,
-                None => {
-                    (*arr).data = ptr::null_mut();
-                    (*arr).elem_count = 0;
-                    (*arr).elem_size = elem_size;
-                    (*arr).elem_drop_fn = 0;
-                    (*arr).elem_clone_fn = 0;
-                    (*arr).elem_order = ElementOrder::SIGNED;
-                    return arr;
-                }
-            };
-            let layout = match Layout::from_size_align(total, 8) {
-                Ok(l) => l,
-                Err(_) => {
-                    (*arr).data = ptr::null_mut();
-                    (*arr).elem_count = 0;
-                    (*arr).elem_size = elem_size;
-                    (*arr).elem_drop_fn = 0;
-                    (*arr).elem_clone_fn = 0;
-                    (*arr).elem_order = ElementOrder::SIGNED;
-                    return arr;
-                }
-            };
-            let data = alloc_zeroed(layout);
-            crate::guard::guard_alloc_raw(data, crate::guard::AllocKind::Buffer);
-            crate::alloc_count::increment_buffer_count();
-            (*arr).data = data;
-            (*arr).elem_count = if data.is_null() { 0 } else { elem_count };
-        } else {
-            (*arr).data = ptr::null_mut();
-            (*arr).elem_count = 0;
-        }
-        (*arr).elem_size = elem_size;
-        (*arr).elem_drop_fn = 0;
-        (*arr).elem_clone_fn = 0;
-        (*arr).elem_order = ElementOrder::SIGNED;
-
+        let data = zeroed_element_buffer(elem_count, elem_size);
+        // The block may be one a released value left behind: every field is
+        // written, never left to the allocator.
+        arr.write(MiriArray {
+            data,
+            elem_count: if data.is_null() { 0 } else { elem_count },
+            elem_size,
+            elem_drop_fn: 0,
+            elem_clone_fn: 0,
+            elem_order: ElementOrder::SIGNED,
+        });
         arr
     }
 

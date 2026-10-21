@@ -9,6 +9,7 @@
 //!
 //! Zero overhead when disabled (single atomic bool load on each hook).
 
+use crate::block_cache::BLOCK_ALIGN;
 use crate::rc::RC_HEADER_SIZE;
 use std::alloc::{dealloc, Layout};
 use std::collections::HashMap;
@@ -196,7 +197,7 @@ impl GuardState {
             Some(s) => s,
             None => return,
         };
-        let layout = match Layout::from_size_align(full_size, 8) {
+        let layout = match Layout::from_size_align(full_size, BLOCK_ALIGN) {
             Ok(l) => l,
             Err(_) => return,
         };
@@ -457,7 +458,7 @@ impl GuardState {
 }
 
 /// Distance from the base of a block compiled code allocates to the payload
-/// it hands out: the base lays out `[malloc pointer][RC][payload]`.
+/// it hands out: the base lays out `[size][RC][payload]`.
 pub const INLINE_PAYLOAD_OFFSET: usize = 2 * std::mem::size_of::<usize>();
 
 /// Guard enabled flag, cached from environment variable.
@@ -465,7 +466,7 @@ static GUARD_ENABLED: AtomicBool = AtomicBool::new(false);
 static GUARD_ENABLED_INIT: std::sync::Once = std::sync::Once::new();
 
 /// Returns whether the guard is enabled (checked via cached atomic bool).
-fn is_guard_enabled() -> bool {
+pub(crate) fn is_guard_enabled() -> bool {
     if crate::handler_config::checks_compiled_out() {
         return false;
     }
@@ -858,7 +859,7 @@ pub fn report_touch_and_abort(verdict: TouchVerdict, payload_ptr: usize) -> ! {
 ///
 /// Attribution here is coarser than for a runtime allocation: the recorded site
 /// is the tracking intrinsic, not the Miri source that constructed the value,
-/// because codegen emits the malloc inline with no site information. The kind
+/// because codegen emits the allocation inline with no site information. The kind
 /// still distinguishes these blocks in the leak report.
 #[track_caller]
 pub fn guard_alloc_raw(ptr: *mut u8, kind: AllocKind) {
@@ -1057,7 +1058,7 @@ mod tests {
     /// legitimately poison, and returns its payload pointer with the layout
     /// needed to release it.
     fn alloc_block(payload_size: usize) -> (usize, Layout) {
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + payload_size, 8)
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + payload_size, BLOCK_ALIGN)
             .unwrap_or_else(|_| std::process::abort());
         let base = unsafe { alloc(layout) };
         assert!(!base.is_null(), "test block allocation failed");
@@ -1203,7 +1204,7 @@ mod tests {
         let site = Location::caller();
 
         // Allocate real memory for the payload to poison.
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1244,7 +1245,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1268,7 +1269,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1297,7 +1298,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1328,7 +1329,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1353,7 +1354,7 @@ mod tests {
 
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
 
         // First allocation
         let base_ptr1 = unsafe { alloc(layout) };
@@ -1382,7 +1383,7 @@ mod tests {
 
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
 
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
@@ -1562,7 +1563,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1589,7 +1590,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1617,7 +1618,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 
@@ -1646,7 +1647,7 @@ mod tests {
         const PAYLOAD_SIZE: usize = 64;
         let site = Location::caller();
 
-        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, 8).unwrap();
+        let layout = Layout::from_size_align(RC_HEADER_SIZE + PAYLOAD_SIZE, BLOCK_ALIGN).unwrap();
         let base_ptr = unsafe { alloc(layout) };
         let payload_ptr = (base_ptr as usize) + RC_HEADER_SIZE;
 

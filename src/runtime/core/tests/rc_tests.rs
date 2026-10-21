@@ -11,7 +11,12 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 /// delta.
 static BALANCE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+/// Takes [`BALANCE_LOCK`] with tracking on: the runtime counts nothing once it
+/// has settled that nothing observes the program, which is what its load-time
+/// hook decides for a test process run with no check asked for.
 fn lock_balance() -> MutexGuard<'static, ()> {
+    miri_runtime_core::guard::miri_rt_tracking_state
+        .store(miri_runtime_core::guard::TRACKING_ON, Ordering::Relaxed);
     BALANCE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()

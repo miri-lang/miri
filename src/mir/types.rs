@@ -81,7 +81,7 @@ pub enum MirType {
     Vector(String),
 
     /// A heap-allocated closure (function value with a captured environment).
-    /// Closure structs are RC-managed: [malloc_ptr][RC][fn_ptr][cap0][cap1]...
+    /// Closure structs are RC-managed: [size][RC][fn_ptr][cap0][cap1]...
     /// The closure local holds `payload_ptr` (the word past the RC header).
     Function,
 

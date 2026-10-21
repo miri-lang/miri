@@ -4,7 +4,7 @@
 //! A named function read as a value.
 //!
 //! Every function-typed value in Miri is a closure struct — the layout
-//! `[malloc_ptr][RC][fn_ptr][cap0]...` that [`super::lambda_expr`] builds — and a
+//! `[size][RC][fn_ptr][cap0]...` that [`super::lambda_expr`] builds — and a
 //! call through such a value loads `fn_ptr` from the payload, then passes the
 //! payload back as an implicit first argument. A named function is a bare symbol
 //! with neither a payload nor a leading environment parameter, so it cannot be

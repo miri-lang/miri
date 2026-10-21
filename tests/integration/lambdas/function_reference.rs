@@ -3,7 +3,7 @@
 
 //! A named function used where a function value is expected.
 //!
-//! A lambda is a closure struct — `[malloc][RC][fn_ptr][captures...]` — and a
+//! A lambda is a closure struct — `[size][RC][fn_ptr][captures...]` — and a
 //! call through a function-typed value loads `fn_ptr` from that payload and
 //! passes the payload back as an implicit first argument. A bare function name
 //! has no such payload, so every one of these spellings used to reach the

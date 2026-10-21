@@ -13,7 +13,6 @@
 //! When the `MIRI_LEAK_CHECK` environment variable is set to `1`, a global
 //! allocation counter tracks alloc/free pairs and reports leaks at exit.
 
-use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use crate::guard::{guard_alloc, guard_free, report_and_abort, AllocKind, FreeVerdict};
@@ -28,14 +27,23 @@ static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
 /// Global counter for closure heap allocations.
 ///
-/// Closures use `libc::malloc` directly (not `alloc_with_rc`) because their layout
-/// has an extra `malloc_ptr` header word. This separate counter lets the leak-check
+/// Closures are allocated by compiled code (not `alloc_with_rc`) because their
+/// layout has an extra size header word. This separate counter lets the leak-check
 /// atexit handler catch closure-only leaks that `RC_ALLOC_BALANCE` would miss.
 pub static CLOSURE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
-/// Registers an `atexit` handler for exit reporting on first allocation.
+/// Nothing to do where the runtime registers its exit handlers from a
+/// load-time initialiser (see `alloc_count`): they are in place before compiled
+/// code first allocates, so allocation pays nothing for them.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[inline(always)]
+fn ensure_exit_handler_registered() {}
+
+/// Registers an `atexit` handler for exit reporting on first allocation, on a
+/// platform with no load-time initialiser to do it.
 /// Called once on first RC allocation, closure allocation, or inline allocation.
 /// Ensures both alloc-count and leak-check handlers are registered as needed.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn ensure_exit_handler_registered() {
     use std::sync::Once;
     static INIT: Once = Once::new();
@@ -46,6 +54,15 @@ fn ensure_exit_handler_registered() {
         // Ensure leak-check handler is registered if enabled.
         crate::handler_config::ensure_leak_check_handler_registered();
     });
+}
+
+/// Whether allocations and releases are counted: always, except once the
+/// runtime has settled that nothing observes them. The state moves away from
+/// unsettled once, so a block counted on allocation is counted on release
+/// whenever a leak check can read the balance.
+#[inline]
+fn is_counted() -> bool {
+    crate::guard::miri_rt_tracking_state.load(Ordering::Relaxed) != crate::guard::TRACKING_OFF
 }
 
 /// Called at process exit to report any leaked allocations.
@@ -87,6 +104,10 @@ pub(crate) fn report_leak_check_at_exit() {
 
 /// Allocates `[RC=1][payload]` and returns a pointer to the payload.
 ///
+/// The payload's bytes are unspecified — a small block is often one a
+/// released value left behind — so the caller writes every byte it later
+/// reads.
+///
 /// `#[track_caller]` so the heap guard records the *calling intrinsic's*
 /// `file:line` (e.g. `list.rs:403`) rather than this function's own location.
 /// Without it every allocation in the program shares one site and the guard's
@@ -100,16 +121,10 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     ensure_exit_handler_registered();
 
     // Security Invariant: Use checked_add to prevent integer overflow when computing total layout size
-    let total_size = match RC_HEADER_SIZE.checked_add(payload_size) {
-        Some(s) => s,
-        None => return std::ptr::null_mut(),
+    let Some(total_size) = RC_HEADER_SIZE.checked_add(payload_size) else {
+        return std::ptr::null_mut();
     };
-    let layout = match Layout::from_size_align(total_size, 8) {
-        Ok(l) => l,
-        Err(_) => return std::ptr::null_mut(),
-    };
-
-    let base = alloc_zeroed(layout);
+    let base = crate::block_cache::alloc_block(total_size);
     if base.is_null() {
         return std::ptr::null_mut();
     }
@@ -117,8 +132,10 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     // Set RC = 1
     *(base as *mut usize) = 1;
 
-    RC_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
-    crate::alloc_count::increment_rc_count();
+    if is_counted() {
+        RC_ALLOC_BALANCE.fetch_add(1, Ordering::Relaxed);
+        crate::alloc_count::increment_rc_count();
+    }
 
     let payload_ptr = base.add(RC_HEADER_SIZE);
 
@@ -200,8 +217,9 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
         report_and_abort(verdict, payload_ptr as usize);
     }
 
-    // Always decrement the balance counter.
-    RC_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
+    if is_counted() {
+        RC_ALLOC_BALANCE.fetch_sub(1, Ordering::Relaxed);
+    }
 
     // Only deallocate if the guard didn't quarantine the block.
     if verdict == FreeVerdict::Quarantine {
@@ -210,24 +228,19 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     }
 
     // Guard is disabled, returned DeallocNow, or the block was untracked.
-    // Deallocate immediately.
+    // Release it now.
     let base = payload_ptr.sub(RC_HEADER_SIZE);
     // Security Invariant: Use checked_add to prevent integer overflow when re-constructing total layout size
-    let total_size = match RC_HEADER_SIZE.checked_add(payload_size) {
-        Some(s) => s,
-        None => return,
+    let Some(total_size) = RC_HEADER_SIZE.checked_add(payload_size) else {
+        return;
     };
-    let layout = match Layout::from_size_align(total_size, 8) {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    dealloc(base, layout);
+    crate::block_cache::release_block(base, total_size);
 }
 
 /// Records that a closure heap allocation has been made.
 ///
-/// Called by compiled Miri code immediately after `libc::malloc` allocates a
-/// closure struct. Registers the `atexit` leak-check handler on the first call.
+/// Called by compiled Miri code immediately after `miri_rt_block_alloc`
+/// allocates a closure struct. Registers the `atexit` leak-check handler on the first call.
 ///
 /// # Safety
 /// Must be matched by exactly one call to `miri_rt_closure_free_track` when the
@@ -235,7 +248,9 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_closure_alloc_track() {
     ensure_exit_handler_registered();
-    CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+    if is_counted() {
+        CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Records that a closure heap allocation has been freed.
@@ -247,7 +262,9 @@ pub unsafe extern "C" fn miri_rt_closure_alloc_track() {
 /// Must be called exactly once per matching `miri_rt_closure_alloc_track` call.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_closure_free_track() {
-    CLOSURE_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
+    if is_counted() {
+        CLOSURE_ALLOC_BALANCE.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// Simulates a closure memory leak for testing the MIRI_LEAK_CHECK detector.
@@ -262,27 +279,27 @@ pub unsafe extern "C" fn miri_rt_closure_free_track() {
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
     ensure_exit_handler_registered();
-    CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+    CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Records a raw `libc::malloc` made by compiled code with the heap guard.
+/// Records a block compiled code allocated itself with the heap guard.
 ///
 /// Class instances, tuples, `Option`s, enum payloads and closure environments
 /// are allocated inline by codegen rather than through [`alloc_with_rc`], so
 /// they never reach the guard's shadow table on their own. Codegen emits a call
-/// to this right after the malloc, mirroring the existing
+/// to this right after `miri_rt_block_alloc`, mirroring the existing
 /// `miri_rt_closure_alloc_track` pattern.
 ///
-/// `ptr` is the raw allocation base, which is also what `free` later receives —
-/// keeping both sides of the pair keyed identically.
+/// `ptr` is the allocation base, which is also what `miri_rt_block_free` later
+/// receives — keeping both sides of the pair keyed identically.
 ///
 /// # Safety
-/// `ptr` must be the pointer just returned by `malloc`, or null.
+/// `ptr` must be the pointer just returned by `miri_rt_block_alloc`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
     crate::guard::resolve_tracking_state();
     ensure_exit_handler_registered();
-    // Codegen emits this before its own null check, so a failed malloc arrives
+    // Codegen emits this before its own null check, so a failed allocation arrives
     // here as null and must be ignored rather than recorded.
     if !ptr.is_null() {
         crate::alloc_count::increment_inline_count();
@@ -290,14 +307,15 @@ pub unsafe extern "C" fn miri_rt_class_alloc_track(ptr: *mut u8) {
     crate::guard::guard_alloc_raw(ptr, AllocKind::Class);
 }
 
-/// Records that compiled code is about to `libc::free` a raw allocation.
+/// Records that compiled code is about to release a block it allocated itself.
 ///
 /// The counterpart to [`miri_rt_class_alloc_track`]. Codegen frees the memory
 /// itself, so unlike the runtime's own release path this block cannot be
 /// quarantined; the guard still detects a double free and attributes the leak.
 ///
 /// # Safety
-/// `ptr` must be the allocation base about to be passed to `free`, or null.
+/// `ptr` must be the allocation base about to be passed to `miri_rt_block_free`,
+/// or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_class_free_track(ptr: *mut u8) {
     crate::guard::resolve_tracking_state();
@@ -341,7 +359,7 @@ pub unsafe extern "C" fn miri_rt_test_simulate_closure_over_release(closure: *mu
 /// prove the heap guard reports the release compiled code makes afterwards.
 ///
 /// Nothing the block holds is released: this stands in for the defect, not for
-/// a correct drop. The block's layout is `[malloc pointer][RC][payload]`, so its
+/// a correct drop. The block's layout is `[size][RC][payload]`, so its
 /// base sits [`crate::guard::INLINE_PAYLOAD_OFFSET`] below `payload`.
 ///
 /// # Safety
@@ -355,7 +373,7 @@ pub unsafe extern "C" fn miri_rt_test_simulate_inline_over_release(payload: *mut
     }
     let base = payload.sub(crate::guard::INLINE_PAYLOAD_OFFSET);
     miri_rt_class_free_track(base);
-    libc::free(base as *mut libc::c_void);
+    crate::block_cache::ffi::miri_rt_block_free(base);
 }
 
 /// Frees the same allocation twice, to verify the heap guard's double-free trap.
@@ -396,7 +414,11 @@ pub(crate) static BALANCE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(())
 /// Acquires [`BALANCE_LOCK`], recovering the guard when an earlier panicking
 /// test poisoned it: one test failing must not cascade into the others.
 #[cfg(test)]
+///
+/// It also turns tracking on for the test process, so the balance a test reads
+/// is counted: the load-time hook settles it to off when no check is asked for.
 pub(crate) fn balance_guard() -> std::sync::MutexGuard<'static, ()> {
+    crate::guard::miri_rt_tracking_state.store(crate::guard::TRACKING_ON, Ordering::Relaxed);
     BALANCE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

@@ -30,6 +30,7 @@ pub mod owned_parameters;
 pub mod rc_elision;
 pub mod rc_stats;
 pub mod reassignment;
+pub mod recycled_blocks;
 pub mod reference_cycles;
 pub mod release_by_runtime_class;
 pub mod stored_closures;

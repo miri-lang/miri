@@ -944,7 +944,7 @@ impl<'a> FunctionTranslator<'a> {
         } else if matches!(kind, TypeKind::Function(_)) {
             Self::emit_drop_closure(builder, ctx, ptr, header_ptr, type_ctx)
         } else {
-            Self::call_libc_free(builder, ctx, header_ptr)
+            Self::call_rt_block_free(builder, ctx, header_ptr)
         }
     }
 
@@ -1064,7 +1064,7 @@ impl<'a> FunctionTranslator<'a> {
             let field_ptr = builder.ins().load(ptr_type, MemFlags::new(), ptr, offset);
             Self::emit_decref_value(builder, ctx, &field_kind, field_ptr, type_ctx)?;
         }
-        Self::call_libc_free(builder, ctx, header_ptr)
+        Self::call_rt_block_free(builder, ctx, header_ptr)
     }
 
     /// DecRef a boxed Option's inner value (when managed), then free the box.
@@ -1085,7 +1085,7 @@ impl<'a> FunctionTranslator<'a> {
             let inner_ptr = builder.ins().load(cl_inner_ty, MemFlags::new(), ptr, 0);
             Self::emit_decref_value(builder, ctx, &inner.kind, inner_ptr, type_ctx)?;
         }
-        Self::call_libc_free(builder, ctx, header_ptr)
+        Self::call_rt_block_free(builder, ctx, header_ptr)
     }
 
     /// Drop a custom struct/class/enum or trait value.
@@ -1112,7 +1112,7 @@ impl<'a> FunctionTranslator<'a> {
         let is_trait = matches!(definitions.get(name), Some(TypeDefinition::Trait(_)));
         Self::emit_release_by_runtime_class(builder, ctx, ptr, type_ctx.ptr_type, |builder, ctx| {
             if is_trait {
-                Self::call_libc_free(builder, ctx, header_ptr)
+                Self::call_rt_block_free(builder, ctx, header_ptr)
             } else {
                 Self::emit_drop_custom_static(
                     builder, ctx, name, type_args, ptr, header_ptr, type_ctx,
@@ -1207,9 +1207,9 @@ impl<'a> FunctionTranslator<'a> {
                     type_ctx,
                 )?;
             }
-            Self::call_libc_free(builder, ctx, header_ptr)
+            Self::call_rt_block_free(builder, ctx, header_ptr)
         } else {
-            Self::call_libc_free(builder, ctx, header_ptr)
+            Self::call_rt_block_free(builder, ctx, header_ptr)
         }
     }
 
@@ -1533,7 +1533,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(after_dtor);
         builder.seal_block(after_dtor);
         Self::call_rt_closure_free_track(builder, ctx)?;
-        Self::call_libc_free(builder, ctx, header_ptr)
+        Self::call_rt_block_free(builder, ctx, header_ptr)
     }
 
     /// Emits DecRef calls for all managed fields of a struct, class, or enum.
@@ -2180,7 +2180,7 @@ impl<'a> FunctionTranslator<'a> {
         )?;
 
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
-        Self::call_libc_free(&mut builder, &mut module_ctx, header_ptr)?;
+        Self::call_rt_block_free(&mut builder, &mut module_ctx, header_ptr)?;
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
@@ -2428,7 +2428,7 @@ impl<'a> FunctionTranslator<'a> {
         let static_release =
             |builder: &mut FunctionBuilder, module_ctx: &mut ModuleCtx| match drop_thunk {
                 Some(thunk) => Self::call_type_drop(builder, module_ctx.module, thunk, sig, ptr),
-                None => Self::call_libc_free(builder, module_ctx, header_ptr),
+                None => Self::call_rt_block_free(builder, module_ctx, header_ptr),
             };
         match release {
             Release::Exact => static_release(&mut builder, &mut module_ctx)?,

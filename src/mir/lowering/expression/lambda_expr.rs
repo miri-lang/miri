@@ -5,7 +5,7 @@
 //!
 //! All lambdas — capturing or not — are lowered to **closure structs**, and so
 //! is a function declared inside another function's body.
-//! A closure struct is a heap allocation: [malloc_ptr][RC][fn_ptr][cap0][cap1]...
+//! A closure struct is a heap allocation: [size][RC][fn_ptr][cap0][cap1]...
 //! The lambda variable holds `payload_ptr` (past the 2-word header).
 //!
 //! Lambda body calling convention:
