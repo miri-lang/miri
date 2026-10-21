@@ -17,7 +17,7 @@ use miri::mir::terminator::TerminatorKind;
 use miri::mir::{Local, LocalDecl, Operand, Place, Statement};
 use miri::pipeline::Pipeline;
 use miri::type_checker::ModuleId;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Lower `source` to MIR, run Perceus, run RC elision, and return all bodies.
 fn get_elided_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
@@ -505,6 +505,52 @@ fn test_elision_fires_without_decref_in_range() {
         1,
         "only the Assign should remain after elision"
     );
+}
+
+/// A local a borrowed local reads from keeps the retain that funds it: the
+/// borrow relies on that reference, and eliding it would leave the local
+/// sharing its source's value uncounted.
+#[test]
+fn test_elision_keeps_the_pair_funding_a_local_a_borrow_reads_from() {
+    let src = Local(1);
+    let dest = Local(2);
+    let mut body = miri::mir::Body::new(0, span(), miri::mir::ExecutionModel::Cpu);
+    for decl in make_local_decls_string(4) {
+        body.new_local(decl);
+    }
+    body.basic_blocks.push(make_block(vec![
+        make_incref(src),
+        make_assign(dest, src),
+        make_decref(dest),
+    ]));
+    body.borrowed_locals = HashMap::from([(Local(3), vec![dest])]);
+
+    elide_rc(&mut body);
+
+    assert_eq!(body.basic_blocks[0].statements.len(), 3, "the pair is kept");
+}
+
+/// A pair copying a borrowed local is kept: the copy's retain is its only
+/// reference, since the borrow's value goes when its owner changes, with no
+/// release of the borrow for the elision to see.
+#[test]
+fn test_elision_keeps_the_pair_copying_a_borrowed_local() {
+    let src = Local(1);
+    let dest = Local(2);
+    let mut body = miri::mir::Body::new(0, span(), miri::mir::ExecutionModel::Cpu);
+    for decl in make_local_decls_string(4) {
+        body.new_local(decl);
+    }
+    body.basic_blocks.push(make_block(vec![
+        make_incref(src),
+        make_assign(dest, src),
+        make_decref(dest),
+    ]));
+    body.borrowed_locals = HashMap::from([(src, vec![Local(3)])]);
+
+    elide_rc(&mut body);
+
+    assert_eq!(body.basic_blocks[0].statements.len(), 3, "the pair is kept");
 }
 
 mod owned_transfers {

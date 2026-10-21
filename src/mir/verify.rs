@@ -108,11 +108,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
 mod bound_names;
+mod local_borrows;
 mod optional_representation;
 mod optional_slots;
 mod value_representation;
 
 pub use bound_names::verify_bound_names;
+pub use local_borrows::verify_local_borrows;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
 pub use value_representation::{verify_value_call_classes, verify_value_representation};
@@ -258,7 +260,9 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     }
 
     let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
-    let tracked = collect_tracked_locals(body, &env_captures);
+    let (borrows, borrow_violations) = local_borrows::held_borrows(body);
+    violations.extend(borrow_violations);
+    let tracked = collect_tracked_locals(body, &env_captures, &borrows);
     let managed_params = collect_managed_param_locals(body);
     let reachable = reachable_block_indices(body);
 
@@ -507,16 +511,22 @@ fn callee_violation(body: &Body, kind: &TerminatorKind) -> Option<VerificationVi
 }
 
 /// Locals whose ownership this function is responsible for: managed, not the
-/// return slot, not a borrowed parameter, and not an environment capture — a
+/// return slot, not a borrowed parameter, not an environment capture — a
 /// closure's captures are released by its destructor, not by the body that
-/// reads them. A parameter the body takes over is tracked like a local of its
-/// own, holding the one reference its caller funded.
-fn collect_tracked_locals(body: &Body, env_captures: &HashSet<Local>) -> Vec<Local> {
+/// reads them — and not a local borrowing from a place the body owns, which
+/// holds no reference of its own. A parameter the body takes over is tracked
+/// like a local of its own, holding the one reference its caller funded.
+fn collect_tracked_locals(
+    body: &Body,
+    env_captures: &HashSet<Local>,
+    borrows: &HashSet<Local>,
+) -> Vec<Local> {
     (0..body.local_decls.len())
         .map(Local)
         .filter(|&local| {
             (local.0 > body.arg_count || body.is_owned_param(local))
                 && !env_captures.contains(&local)
+                && !borrows.contains(&local)
                 && body.is_counted_local(local)
         })
         .collect()

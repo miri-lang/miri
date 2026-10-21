@@ -8,7 +8,7 @@
 use crate::utils::miri_run_with_env_multiple;
 
 /// The report line `MIRI_RC_STATS` printed.
-fn rc_stats(code: &str, extra: &[(&str, &str)]) -> String {
+pub(super) fn rc_stats(code: &str, extra: &[(&str, &str)]) -> String {
     let mut env = vec![("MIRI_RC_STATS", "1")];
     env.extend_from_slice(extra);
     let result = miri_run_with_env_multiple(code, &env);

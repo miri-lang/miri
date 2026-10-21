@@ -12,6 +12,7 @@
 //! because the verifier is right is distinguishable from one passing because the
 //! verifier reports nothing at all.
 
+mod local_borrows;
 mod optional_representation;
 mod value_representation;
 

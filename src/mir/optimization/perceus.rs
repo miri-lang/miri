@@ -27,9 +27,9 @@ pub struct Perceus;
 /// Metadata context for the Perceus optimization pass.
 /// Holds immutable references to necessary fields of `Body` to satisfy the borrow checker
 /// while iterating over `basic_blocks` mutably.
-struct PerceusContext<'a> {
-    local_decls: &'a [crate::mir::LocalDecl],
-    rc_classifier: &'a RcClassifier,
+pub(super) struct PerceusContext<'a> {
+    pub(super) local_decls: &'a [crate::mir::LocalDecl],
+    pub(super) rc_classifier: &'a RcClassifier,
     field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     class_type_params: &'a std::collections::HashMap<String, Vec<String>>,
     type_params: &'a std::collections::HashSet<String>,
@@ -43,7 +43,21 @@ struct PerceusContext<'a> {
     borrowed: &'a BorrowedLocals,
 }
 
-impl PerceusContext<'_> {
+impl<'a> PerceusContext<'a> {
+    /// The context of `body`, reading `borrowed` for what it does not own.
+    fn of(body: &'a Body, borrowed: &'a BorrowedLocals) -> Self {
+        PerceusContext {
+            local_decls: &body.local_decls,
+            rc_classifier: &body.rc_classifier,
+            field_types: &body.field_types,
+            class_type_params: &body.class_type_params,
+            type_params: &body.type_params,
+            open_params: &body.open_params,
+            closure_capture_types: &body.closure_capture_types,
+            borrowed,
+        }
+    }
+
     /// Whether a value of `kind`, written in the body, is reference counted.
     fn is_counted(&self, kind: &TypeKind) -> bool {
         self.rc_classifier.is_counted(kind, self.type_params)
@@ -67,6 +81,10 @@ impl PerceusContext<'_> {
 /// A capture the body assigns is not borrowed. Its value is replaced by one the
 /// body owns, so it takes its own reference on entry and is then released like
 /// any other local — see [`Perceus::retain_written_captures`].
+///
+/// A local that reads a value out of a place the body owns, while nothing
+/// changes that place, borrows it from that place the way a parameter borrows
+/// from its caller (see [`super::local_borrows`]).
 struct BorrowedLocals {
     arg_count: usize,
     read_only_captures: std::collections::HashSet<crate::mir::Local>,
@@ -77,6 +95,8 @@ struct BorrowedLocals {
     written_back: std::collections::HashSet<crate::mir::Local>,
     /// The parameters the body takes over, in parameter order.
     owned_params: Vec<bool>,
+    /// The locals that borrow from a place the body owns.
+    reads: std::collections::HashSet<crate::mir::Local>,
 }
 
 /// The locals `body` assigns, or makes a direct call's destination: the
@@ -125,13 +145,14 @@ impl BorrowedLocals {
                 .filter(|local| !written.contains(local))
                 .collect(),
             written_back: crate::mir::body::written_back_out_params(body),
+            reads: std::collections::HashSet::new(),
         }
     }
 
     fn contains(&self, local: crate::mir::Local) -> bool {
         let is_borrowed_param = (1..=self.arg_count).contains(&local.0)
             && !self.owned_params.get(local.0 - 1).copied().unwrap_or(false);
-        is_borrowed_param || self.read_only_captures.contains(&local)
+        is_borrowed_param || self.read_only_captures.contains(&local) || self.reads.contains(&local)
     }
 }
 
@@ -152,8 +173,18 @@ impl OptimizationPass for Perceus {
         // stored in the closure struct.  This works for both local and cross-function
         // closures and eliminates the double-free that would occur if both the
         // destructor and Perceus decremented the same capture on drop.
-        let borrowed = BorrowedLocals::of(body);
-        let managed_locals = self.identify_managed_locals(body, &borrowed);
+        let mut borrowed = BorrowedLocals::of(body);
+        let mut managed_locals = self.identify_managed_locals(body, &borrowed);
+        let borrows = super::local_borrows::infer_local_borrows(
+            body,
+            &PerceusContext::of(body, &borrowed),
+            &managed_locals,
+        );
+        for local in borrows.keys() {
+            managed_locals.remove(local);
+            borrowed.reads.insert(*local);
+        }
+        body.borrowed_locals = borrows;
         let mut changed = self.retain_written_captures(body, &managed_locals);
 
         // Step 2: Iterate through every block of code and inject RC instructions.
@@ -306,9 +337,11 @@ impl Perceus {
         };
         let mut changed = false;
 
-        // 1. If we are copying a managed value, we must increment its reference count.
+        // 1. If we are copying a managed value, we must increment its reference
+        // count — unless the destination borrows it from the place it reads.
         if let Some(place) = get_copy_source_place(rvalue) {
-            if self.should_incref_source(ctx, &place, lhs, managed_locals) {
+            let borrows = lhs.projection.is_empty() && ctx.borrowed.reads.contains(&lhs.local);
+            if !borrows && self.should_incref_source(ctx, &place, lhs, managed_locals) {
                 new_stmts.push(Statement {
                     kind: StatementKind::IncRef(place),
                     span: stmt.span,
@@ -401,7 +434,7 @@ impl Perceus {
     }
 
     /// Determines if a source value being copied needs an IncRef.
-    fn should_incref_source(
+    pub(super) fn should_incref_source(
         &self,
         ctx: &PerceusContext,
         source: &Place,
@@ -617,7 +650,7 @@ fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
 }
 
 /// The declared type of what `place` reaches; see [`PlaceTypes::declared`].
-fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option<Type> {
+pub(super) fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option<Type> {
     PlaceTypes {
         local_decls: ctx.local_decls,
         field_types: ctx.field_types,

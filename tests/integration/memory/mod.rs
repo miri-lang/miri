@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod aliasing;
+pub mod borrowed_locals;
 pub mod classes;
 pub mod cloneable;
 pub mod closures;

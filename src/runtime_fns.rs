@@ -679,6 +679,57 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
     }
 }
 
+/// Whether the runtime entry point `name` only reads the argument at
+/// `position`: it neither writes nor releases anything reached through it,
+/// and keeps no reference to it past the call.
+///
+/// An allow-list: an entry point not named here is taken to write what it is
+/// handed, as every mutating collection entry point does to its receiver in
+/// place (`push`, `pop`, `set`, `remove`, `clear`, …). A string append
+/// writes its receiver at position 0 and only reads what it appends.
+/// `map_get_checked` is listed although, for an inline value, it hands back an
+/// uncounted address into the entry the map still owns: the call itself only
+/// reads, and that address is valid only until the map is next written, the
+/// same contract its result has without any borrow involved.
+pub fn only_reads_argument(name: &str, position: usize) -> bool {
+    match name {
+        rt::ARRAY_LEN
+        | rt::TUPLE_LEN
+        | rt::LIST_LEN
+        | rt::LIST_IS_EMPTY
+        | rt::MAP_LEN
+        | rt::MAP_IS_EMPTY
+        | rt::MAP_GET
+        | rt::MAP_GET_CHECKED
+        | rt::MAP_CONTAINS_KEY
+        | rt::MAP_KEY_AT
+        | rt::MAP_VALUE_AT
+        | rt::SET_LEN
+        | rt::SET_IS_EMPTY
+        | rt::SET_CONTAINS
+        | rt::SET_ELEMENT_AT
+        | rt::ARRAY_CLONE
+        | rt::LIST_CLONE
+        | rt::MAP_CLONE
+        | rt::SET_CLONE
+        | rt::STRING_LEN
+        | rt::STRING_CHAR_COUNT
+        | rt::STRING_IS_EMPTY
+        | rt::STRING_CONCAT
+        | rt::STRING_CLONE
+        | rt::STRING_EQUALS
+        | rt::STRING_HASH
+        | rt::STRING_COMPARE
+        | rt::STRING_CONTAINS
+        | rt::STRING_STARTS_WITH
+        | rt::STRING_ENDS_WITH
+        | rt::HASH_COMBINE
+        | rt::FLOAT_HASH => true,
+        rt::STRING_APPEND | rt::STRING_APPEND_INT | rt::STRING_APPEND_UINT => position > 0,
+        _ => false,
+    }
+}
+
 /// Whether `name` is the copy-on-write entry point of a built-in collection:
 /// it hands back its argument when its count is 1, and otherwise — shared, or
 /// immortal — a copy only the caller holds, releasing its hold on a shared

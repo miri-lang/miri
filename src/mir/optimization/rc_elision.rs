@@ -71,12 +71,19 @@ impl OptimizationPass for RcElision {
             basic_blocks,
             has_drop_types,
             local_decls,
+            borrowed_locals,
             ..
         } = body;
 
+        let lenders: HashSet<Local> = borrowed_locals.values().flatten().copied().collect();
+        let borrows: HashSet<Local> = borrowed_locals.keys().copied().collect();
+        let kept = KeptPairs {
+            lenders: &lenders,
+            borrows: &borrows,
+        };
         let mut any_changed = false;
         for block in basic_blocks.iter_mut() {
-            if elide_block(block, has_drop_types, local_decls) {
+            if elide_block_keeping(block, has_drop_types, local_decls, kept) {
                 any_changed = true;
             }
         }
@@ -95,6 +102,35 @@ pub fn elide_block(
     block: &mut crate::mir::block::BasicBlockData,
     has_drop_types: &HashSet<String>,
     local_decls: &[crate::mir::LocalDecl],
+) -> bool {
+    let none = HashSet::new();
+    let kept = KeptPairs {
+        lenders: &none,
+        borrows: &none,
+    };
+    elide_block_keeping(block, has_drop_types, local_decls, kept)
+}
+
+/// The pairs RC elision keeps for the borrowed locals of a body
+/// ([`Body::borrowed_locals`]).
+#[derive(Clone, Copy)]
+struct KeptPairs<'a> {
+    /// The locals some borrow relies on to keep what it holds alive. Copied
+    /// into without a count, one would share its source's value, and a write
+    /// to the source could free what the borrow holds.
+    lenders: &'a HashSet<Local>,
+    /// The borrowed locals. A pair copying one assumes the copy's source
+    /// holds its value until it is released, but a borrow's value goes when
+    /// its owner changes, with no release of the borrow to see.
+    borrows: &'a HashSet<Local>,
+}
+
+/// [`elide_block`], keeping every pair `kept` names.
+fn elide_block_keeping(
+    block: &mut crate::mir::block::BasicBlockData,
+    has_drop_types: &HashSet<String>,
+    local_decls: &[crate::mir::LocalDecl],
+    kept: KeptPairs,
 ) -> bool {
     let stmts = &block.statements;
     let n = stmts.len();
@@ -115,29 +151,16 @@ pub fn elide_block(
             continue;
         }
 
-        let src_local = match &stmts[i].kind {
-            StatementKind::IncRef(p) if p.projection.is_empty() => p.local,
-            _ => continue,
+        let Some((src_local, dest_local)) = retained_copy(stmts, i) else {
+            continue;
         };
 
-        // Next statement must be Assign(dest, Use(Copy(src))) — no projections.
-        let dest_local = match &stmts[i + 1].kind {
-            StatementKind::Assign(dest, rvalue) if dest.projection.is_empty() => {
-                if let Some(src_place) = copy_source(rvalue) {
-                    if src_place.local == src_local && src_place.projection.is_empty() {
-                        dest.local
-                    } else {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-            _ => continue,
-        };
-
-        // src's type must not carry a user-defined destructor.
-        if type_has_destructor(src_local, local_decls, has_drop_types) {
+        // src's type must not carry a user-defined destructor, a borrow must
+        // not rely on dest's reference, and src must hold its own.
+        if type_has_destructor(src_local, local_decls, has_drop_types)
+            || kept.lenders.contains(&dest_local)
+            || kept.borrows.contains(&src_local)
+        {
             continue;
         }
 
@@ -170,6 +193,23 @@ pub fn elide_block(
         .collect();
 
     true
+}
+
+/// The source and destination of the whole-local copy at `i + 1` when the
+/// statement at `i` retains its source for it: `IncRef(src)` followed by
+/// `dest = Copy(src)`, neither projected.
+fn retained_copy(stmts: &[Statement], i: usize) -> Option<(Local, Local)> {
+    let StatementKind::IncRef(retained) = &stmts.get(i)?.kind else {
+        return None;
+    };
+    let StatementKind::Assign(dest, rvalue) = &stmts.get(i + 1)?.kind else {
+        return None;
+    };
+    let source = copy_source(rvalue)?;
+    let is_whole_copy = retained.projection.is_empty()
+        && dest.projection.is_empty()
+        && *source == Place::new(retained.local);
+    is_whole_copy.then_some((retained.local, dest.local))
 }
 
 /// Cancel each retain funding an owned argument against the caller's release
@@ -276,11 +316,12 @@ fn passes_an_owned_argument(body: &Body) -> bool {
 }
 
 /// Whether `local` is one the body owns and Perceus releases, whose last
-/// release runs no drop hook.
+/// release runs no drop hook. A borrowed local is never released.
 fn is_released_by_body(body: &Body, local: Local) -> bool {
     let decl = &body.local_decls[local.0];
     local.0 > body.arg_count
         && !body.env_capture_locals.contains(&local)
+        && !body.borrowed_locals.contains_key(&local)
         && decl.device_handle.is_none()
         && body.is_counted_local(local)
         && !type_has_destructor(local, &body.local_decls, &body.has_drop_types)

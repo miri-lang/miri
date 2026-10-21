@@ -21,7 +21,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
 use miri::mir::lowering::lower_function;
-use miri::mir::optimization::insert_rc;
+use miri::mir::optimization::{count_rc_ops, insert_rc};
 use miri::mir::rc::RcClassifier;
 use miri::mir::type_facts::{ClassDefinition, GenericDefinition};
 use miri::mir::verify::verify_body;
@@ -1187,5 +1187,213 @@ fn probe() String
         )),
         "the element read out of the tuple must be retained: {:?}",
         all_statements(&body)
+    );
+}
+
+/// The local of `body` named `name`.
+fn local_named(body: &Body, name: &str) -> Local {
+    let index = body
+        .local_decls
+        .iter()
+        .position(|decl| decl.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no local named `{name}`"));
+    Local(index)
+}
+
+/// The local `body` defines by copying something out of `owner` through
+/// `step`.
+fn read_out_of(body: &Body, owner: Local, step: fn(&PlaceElem) -> bool) -> Local {
+    all_statements(body)
+        .into_iter()
+        .find_map(|kind| match kind {
+            StatementKind::Assign(dest, Rvalue::Use(Operand::Copy(source)))
+                if source.local == owner && source.projection.first().is_some_and(step) =>
+            {
+                Some(dest.local)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("nothing is read out of {owner}"))
+}
+
+/// Whether the read defining `local` is retained — an `IncRef` of the place
+/// it copies right before it — and how many times `local` is released.
+fn retain_and_releases(body: &Body, local: Local) -> (bool, usize) {
+    let statements = all_statements(body);
+    let retained = statements.windows(2).any(|pair| match pair {
+        [StatementKind::IncRef(retained), StatementKind::Assign(dest, Rvalue::Use(Operand::Copy(source)))] => {
+            dest.local == local && retained == source
+        }
+        _ => false,
+    });
+    (retained, count_rc_ops(body, local).1)
+}
+
+fn is_index(elem: &PlaceElem) -> bool {
+    matches!(elem, PlaceElem::Index(_))
+}
+
+fn is_field(elem: &PlaceElem) -> bool {
+    matches!(elem, PlaceElem::Field(_))
+}
+
+const BOX_CLASS: &str = r#"
+use system.collections.list
+
+class Box
+    var v int
+
+    fn init(v int)
+        self.v = v
+"#;
+
+/// A loop variable over a list the body owns, which the loop leaves alone,
+/// borrows each element: it is neither retained nor released.
+#[test]
+fn test_a_loop_variable_over_a_local_list_borrows_its_element() {
+    let source = format!(
+        "{BOX_CLASS}
+fn total() int
+    let xs = List([Box(1), Box(2)])
+    var t = 0
+    for s in xs
+        t = t + s.v
+    t
+"
+    );
+    let body = lowered_with_rc(&source, "total");
+    let s = local_named(&body, "s");
+    assert_eq!(count_rc_ops(&body, s), (0, 0));
+    assert_eq!(retain_and_releases(&body, s), (false, 0));
+    assert!(body.borrowed_locals.contains_key(&s));
+}
+
+/// A match subject read out of a list the body owns borrows the element.
+#[test]
+fn test_a_match_subject_read_out_of_a_local_list_borrows_it() {
+    let source = r#"
+use system.collections.list
+
+enum Instr
+    Add(int)
+    Halt
+
+fn run() int
+    let code = List([Instr.Add(3), Instr.Halt])
+    var acc = 0
+    var pc = 0
+    while pc < 2
+        match code[pc]
+            Instr.Add(v): acc = acc + v
+            Instr.Halt: acc = acc + 1
+        pc += 1
+    acc
+"#;
+    let body = lowered_with_rc(source, "run");
+    let subject = read_out_of(&body, local_named(&body, "code"), is_index);
+    assert_eq!(count_rc_ops(&body, subject), (0, 0));
+    assert_eq!(retain_and_releases(&body, subject), (false, 0));
+}
+
+/// A list a parameter holds may be emptied through another name — here
+/// `h.wipe()` clears it — so an element read out of it keeps its reference.
+#[test]
+fn test_an_element_of_a_parameter_list_keeps_its_reference() {
+    let source = format!(
+        "{BOX_CLASS}
+class Holder
+    var items [Box]
+
+    fn init(items [Box])
+        self.items = items
+
+    fn wipe()
+        self.items.clear()
+
+fn probe(h Holder, xs [Box]) int
+    let x = xs[0]
+    h.wipe()
+    x.v
+"
+    );
+    let body = lowered_with_rc(&source, "probe");
+    assert_eq!(
+        retain_and_releases(&body, local_named(&body, "x")),
+        (true, 1)
+    );
+    assert!(body.borrowed_locals.is_empty());
+}
+
+/// A method can clear a class field it is never shown naming, so a value read
+/// out of one keeps its reference.
+#[test]
+fn test_a_value_read_out_of_a_class_field_keeps_its_reference() {
+    let source = r#"
+class Node
+    var left Node?
+    var v int
+
+    fn init(left Node?, v int)
+        self.left = left
+        self.v = v
+
+    fn cut()
+        self.left = None
+
+fn probe() int
+    let node = Node(Node(None, 7), 1)
+    match node.left
+        Some(l)
+            node.cut()
+            l.v
+        None: 0
+"#;
+    let body = lowered_with_rc(source, "probe");
+    let subject = read_out_of(&body, local_named(&body, "node"), is_field);
+    assert_eq!(retain_and_releases(&body, subject), (true, 1));
+}
+
+/// `row.push` asks whether `row` is shared before it writes; a borrowed `row`
+/// would answer no and write into `grid`'s element, so it keeps its reference.
+#[test]
+fn test_an_element_written_through_keeps_its_reference() {
+    let source = r#"
+use system.collections.list
+
+fn grow() int
+    var grid = List([List([1, 2]), List([3])])
+    let row = grid[0]
+    row.push(9)
+    row.length()
+"#;
+    let body = lowered_with_rc(source, "grow");
+    assert_eq!(
+        retain_and_releases(&body, local_named(&body, "row")),
+        (true, 1)
+    );
+}
+
+/// A callee writes a parameter in place when nothing else holds it, so a row
+/// lent to `grow` keeps its reference: a borrowed row would share
+/// `grid[0]`'s count, and `grow` would push into `grid[0]`.
+#[test]
+fn test_an_element_lent_to_a_callee_keeps_its_reference() {
+    let source = r#"
+use system.collections.list
+
+fn grow(r [int]) int
+    r.push(9)
+    r.length()
+
+fn t() int
+    var grid = List([List([1, 2]), List([3])])
+    let row = grid[0]
+    let n = grow(row)
+    n + grid[0].length()
+"#;
+    let body = lowered_with_rc(source, "t");
+    assert_eq!(
+        retain_and_releases(&body, local_named(&body, "row")),
+        (true, 1)
     );
 }

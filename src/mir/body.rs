@@ -94,6 +94,15 @@ pub struct Body {
     /// reference for it and this body releases it. Empty means every parameter
     /// is borrowed. Decided by `crate::mir::optimization::owned_params`.
     pub owned_params: Vec<bool>,
+    /// The locals that borrow a value from a place the body owns, each with
+    /// every local whose value keeps what it holds alive: the roots its
+    /// definitions read from and, for a borrow read out of another borrowed
+    /// local, that local's owners in turn. A borrowed local holds no reference
+    /// of its own, so it is neither retained when it reads nor released when
+    /// its storage ends. Decided by Perceus
+    /// (`crate::mir::optimization::local_borrows`); the verifier checks each
+    /// entry again against the body.
+    pub borrowed_locals: HashMap<Local, Vec<Local>>,
     /// Which parameters (indexed 1..=arg_count) the body actually writes.
     /// `param_written[i-1] == true` means parameter `_i` is written by this body.
     /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
@@ -211,6 +220,7 @@ impl Body {
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
             owned_params: Vec::new(),
+            borrowed_locals: HashMap::new(),
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
