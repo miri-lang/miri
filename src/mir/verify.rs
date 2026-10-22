@@ -113,6 +113,7 @@ mod local_borrows;
 mod optional_representation;
 mod optional_slots;
 mod stable_collections;
+mod value_arguments;
 mod value_representation;
 
 pub use bound_names::verify_bound_names;
@@ -121,6 +122,7 @@ pub use local_borrows::verify_local_borrows;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
 pub use stable_collections::verify_stable_collections;
+pub use value_arguments::verify_value_arguments;
 pub use value_representation::{verify_value_call_classes, verify_value_representation};
 
 /// Largest delta the domain represents; past it a local is reported rather than

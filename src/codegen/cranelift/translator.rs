@@ -15,12 +15,13 @@ use crate::codegen::cranelift::source_points::{SourcePoint, SourcePoints};
 use crate::codegen::cranelift::stable_headers::StableHeaders;
 use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_abi::body_signature;
-use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, ValueLocals};
+use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, value_slot, ValueLocals};
 use crate::error::syntax::Span;
 use crate::error::{CodegenError, SourceId};
 use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::{TypeDefinition, TypeFacts};
+use crate::mir::value_arguments::written_value_params;
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
 use crate::runtime_fns::rt;
 
@@ -357,8 +358,10 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// A result held as its bytes arrives first, as the address of the
     /// caller's slot, and becomes `_0`'s `Variable`. A value parameter is the
-    /// address of its bytes, and so is a value `out` parameter: it is written
-    /// in place, with nothing to write back.
+    /// address of the caller's own bytes, rebound to a copy on entry when the
+    /// body writes it ([`Self::copy_written_value_params`]); a value `out`
+    /// parameter is that address too, written in place with nothing to write
+    /// back.
     fn setup_entry_params(
         builder: &mut FunctionBuilder,
         entry: &EntryBinding,
@@ -396,6 +399,39 @@ impl<'a> FunctionTranslator<'a> {
         out_param_ptr_vars
     }
 
+    /// Copy each value parameter `body` writes into a slot of its own and
+    /// bind the parameter to the copy. A value parameter arrives as the
+    /// address of the caller's own bytes, which the callee only reads.
+    fn copy_written_value_params(
+        builder: &mut FunctionBuilder,
+        body: &Body,
+        locals: &HashMap<Local, Variable>,
+        values: &ValueLocals,
+        ptr_type: cl_types::Type,
+    ) -> Result<(), CodegenError> {
+        let written = written_value_params(body);
+        let params = (1..=body.arg_count)
+            .map(Local)
+            .filter(|local| written.contains(local));
+        for local in params {
+            let layout = values.layout(local).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "the written value parameter {local} has no value layout to copy"
+                ))
+            })?;
+            let var = *locals.get(&local).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "the written value parameter {local} has no variable"
+                ))
+            })?;
+            let incoming = builder.use_var(var);
+            let copy = value_slot(builder, layout, ptr_type);
+            copy_value(builder, incoming, copy, layout);
+            builder.def_var(var, copy);
+        }
+        Ok(())
+    }
+
     /// Lower MIR statements + terminator for every basic block. Block 0 also
     /// runs the deferred scalar-out-param load and closure-capture extraction
     /// (must happen after `switch_to_block` per Cranelift's block-state rules).
@@ -417,6 +453,7 @@ impl<'a> FunctionTranslator<'a> {
 
             if idx == 0 {
                 Self::define_value_slots(builder, body, locals, type_ctx.values, ptr_type);
+                Self::copy_written_value_params(builder, body, locals, type_ctx.values, ptr_type)?;
                 Self::load_scalar_out_params(builder, body, locals, out_param_ptr_vars, ptr_type);
                 if !body.env_capture_locals.is_empty() {
                     Self::load_closure_captures(builder, body, locals, ptr_type);

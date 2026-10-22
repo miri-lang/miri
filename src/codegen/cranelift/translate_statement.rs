@@ -1075,10 +1075,15 @@ impl<'a> FunctionTranslator<'a> {
 
         for (i, arg) in operands.args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
-            if let Some(layout) = type_ctx.values.operand_value(arg)? {
+            if type_ctx.values.operand_value(arg)?.is_some() {
                 let mode = arg_mode(operands.arg_modes, i);
-                let address =
-                    Self::value_argument(builder, val, layout, mode, is_runtime, type_ctx)?;
+                let address = Self::value_argument(val, mode, is_runtime)?;
+                Self::refuse_exposed_value_argument(
+                    i,
+                    operands.args,
+                    operands.arg_modes,
+                    operands.destination,
+                )?;
                 call.values.push(address);
                 call.passings.push(Passing::ByAddress);
                 continue;

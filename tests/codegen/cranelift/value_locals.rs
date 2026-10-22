@@ -435,3 +435,92 @@ fn an_optional_is_built_tested_and_opened_by_its_bytes() {
     );
     assert_eq!(run(&object), 17);
 }
+
+/// `fn bump(p P) int` writes its own parameter: `p.x += 1`, then returns
+/// `p.x`.
+fn bump() -> Body {
+    let statements = vec![
+        assign(field(1, 0), binary(BinOp::Add, copy(field(1, 0)), int(1))),
+        assign(place(0), Rvalue::Use(copy(field(1, 0)))),
+    ];
+    body_of(
+        &[TypeKind::Int, point()],
+        1,
+        vec![block(statements, TerminatorKind::Return)],
+    )
+}
+
+/// `main` exits with `10 * bump(a) + a.x` where `a = make(3, 2.5)`: 43 holds
+/// only when `bump` wrote a copy of `a` rather than the caller's bytes.
+fn bump_main() -> Body {
+    let total = vec![
+        assign(place(3), binary(BinOp::Mul, copy(place(2)), int(10))),
+        assign(
+            place(0),
+            binary(BinOp::Add, copy(place(3)), copy(field(1, 0))),
+        ),
+    ];
+    body_of(
+        &[TypeKind::Int, point(), TypeKind::Int, TypeKind::Int],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                call(function("make"), vec![int(3), float(2.5)], 1, 1),
+            ),
+            block(
+                Vec::new(),
+                call(function("bump"), vec![copy(place(1))], 2, 2),
+            ),
+            block(total, TerminatorKind::Return),
+        ],
+    )
+}
+
+#[test]
+fn a_callee_writing_its_value_parameter_leaves_the_callers_bytes_alone() {
+    let (make, bump, main) = (make(), bump(), bump_main());
+    let named = [
+        (function("make").link_name(), &make),
+        (function("bump").link_name(), &bump),
+        (Symbol::entry().link_name(), &main),
+    ];
+    let (object, _) = compile(&named).expect("the program compiles and verifies");
+    assert_eq!(run(&object), 43);
+}
+
+/// `main` calls `p = shift(p)` straight into the local it passes, as no
+/// lowered body does: the value-argument pass would have copied `p` first.
+fn aliased_shift_main() -> Body {
+    let read = vec![assign(place(0), Rvalue::Use(copy(field(1, 0))))];
+    body_of(
+        &[TypeKind::Int, point()],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                call(function("make"), vec![int(3), float(2.5)], 1, 1),
+            ),
+            block(
+                Vec::new(),
+                call(function("shift"), vec![copy(place(1))], 1, 2),
+            ),
+            block(read, TerminatorKind::Return),
+        ],
+    )
+}
+
+#[test]
+fn a_value_argument_aliased_with_the_calls_destination_is_refused() {
+    let (make, shift, main) = (make(), shift(), aliased_shift_main());
+    let named = [
+        (function("make").link_name(), &make),
+        (function("shift").link_name(), &shift),
+        (Symbol::entry().link_name(), &main),
+    ];
+    let error = compile(&named).expect_err("the aliased value argument is refused");
+    assert!(
+        error.contains("is aliased with what the call writes"),
+        "{error}"
+    );
+}

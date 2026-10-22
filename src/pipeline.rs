@@ -2864,10 +2864,11 @@ impl Pipeline {
             mir::residency::insert_readbacks(body);
         }
 
-        // Hand every call a value held as its bytes from a whole local, so
-        // no callee reads one through an address inside its holder.
+        // Hand every call a value held as its bytes from a whole local the
+        // call does not also write, so no callee reads bytes that change
+        // under it.
         for (_symbol, body) in &mut lowered {
-            mir::value_arguments::copy_projected_value_arguments(body);
+            mir::value_arguments::copy_value_arguments(body);
         }
         mir::optional_conformance::conform_optional_operands(&mut lowered);
 
@@ -3316,6 +3317,7 @@ impl Pipeline {
                 body,
                 result.type_checker.type_definitions(),
             ));
+            violations.extend(mir::verify::verify_value_arguments(body));
             violations.extend(mir::verify::verify_bound_names(body));
             violations.extend(mir::verify::verify_stable_collections(body));
             violations.extend(mir::verify::verify_in_bounds(body));

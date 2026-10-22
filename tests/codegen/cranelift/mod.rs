@@ -20,5 +20,6 @@ pub mod translate_statement;
 pub mod translator;
 pub mod types;
 pub mod value_abi;
+pub mod value_arguments;
 pub mod value_locals;
 pub mod wide_scalar_abi;

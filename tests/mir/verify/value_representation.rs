@@ -396,40 +396,6 @@ fn value_call_mismatch_is_flagged_as_every_program_is_classified() {
     );
 }
 
-#[test]
-fn value_argument_read_from_inside_its_holder_is_flagged() {
-    let mut locals = kinds();
-    locals.push(tuple(vec![pair(), TypeKind::String]));
-    let holder_local = locals.len() - 1;
-    let call = |arg: Operand| TerminatorKind::Call {
-        func: Operand::function(callee_symbol(), span()),
-        args: vec![arg],
-        arg_modes: Vec::new(),
-        arg_handles: Vec::new(),
-        destination: place(0),
-        target: Some(BasicBlock(1)),
-    };
-    let projected = body_of(
-        &locals,
-        0,
-        vec![
-            block(Vec::new(), call(Operand::Copy(field(holder_local, 0)))),
-            ret_block(Vec::new()),
-        ],
-    );
-    let text = messages(&verify_value_representation(&projected, &definitions()));
-    assert!(
-        text.contains("argument 0") && text.contains("whole local"),
-        "{text}"
-    );
-    let whole = body_of(
-        &locals,
-        0,
-        vec![block(Vec::new(), call(copy(1))), ret_block(Vec::new())],
-    );
-    assert_clean(&whole);
-}
-
 /// A body whose classifier was never set reads the type table it is handed
 /// no differently: a tuple of scalars and an `int?` are still held as their
 /// bytes, and meeting a counted word still raises a finding.

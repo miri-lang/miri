@@ -29,7 +29,6 @@ use crate::mir::rvalue::{AggregateKind, Rvalue};
 use crate::mir::statement::StatementKind;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::TerminatorKind;
-use crate::mir::value_arguments::projected_value_arguments;
 use crate::mir::{Body, Local, Operand, Place};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::value_class::{value_class, LayoutScope, ValueClass, WordRole};
@@ -49,51 +48,10 @@ pub fn verify_value_representation(
         return Vec::new();
     }
     let rule = Representations::new(body, definitions);
-    let mut violations: Vec<VerificationViolation> = body
-        .basic_blocks
+    body.basic_blocks
         .iter()
         .flat_map(|block| &block.statements)
         .flat_map(|statement| rule.statement_violations(&statement.kind))
-        .collect();
-    violations.extend(projected_argument_violations(body));
-    violations
-}
-
-/// Every value argument a call takes through a projection rather than from
-/// a whole local: its address would point inside its holder, which the
-/// callee may write or free while it reads.
-fn projected_argument_violations(body: &Body) -> Vec<VerificationViolation> {
-    (0..body.basic_blocks.len())
-        .flat_map(|block| {
-            let Some(
-                TerminatorKind::Call {
-                    args, destination, ..
-                }
-                | TerminatorKind::VirtualCall {
-                    args, destination, ..
-                },
-            ) = body.basic_blocks[block]
-                .terminator
-                .as_ref()
-                .map(|terminator| &terminator.kind)
-            else {
-                return Vec::new();
-            };
-            projected_value_arguments(body, block)
-                .into_iter()
-                .filter_map(|position| {
-                    Some(VerificationViolation {
-                        local: destination.local,
-                        local_name: local_display_name(body, destination.local),
-                        message: format!(
-                            "argument {position}, `{}`, a value held as its bytes, is passed \
-                             by address from inside its holder rather than from a whole local",
-                            args.get(position)?
-                        ),
-                    })
-                })
-                .collect()
-        })
         .collect()
 }
 

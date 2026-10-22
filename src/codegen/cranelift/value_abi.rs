@@ -9,9 +9,10 @@
 //! cannot disagree about where a value goes. A runtime function keeps the C
 //! signature its declaration spells, and is not built here.
 //!
-//! - A bitwise value held as its bytes is passed as the address of a copy the
-//!   caller made, which the callee only reads. The copy keeps a callee from
-//!   seeing a write the caller makes through another argument.
+//! - A bitwise value held as its bytes is passed as the address of the
+//!   caller's own bytes, which the callee only reads. MIR hands the call a
+//!   copy wherever the call itself could write those bytes, and a callee that
+//!   writes such a parameter copies it on entry.
 //! - A result of such a value travels through a hidden leading parameter: the
 //!   address of the caller's slot, which the callee writes. The callee returns
 //!   nothing in registers.
@@ -20,12 +21,13 @@
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::codegen::cranelift::translator::{FunctionTranslator, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
-use crate::codegen::cranelift::value_locals::{copy_value, value_layout, value_slot, ValueLocals};
+use crate::codegen::cranelift::value_locals::{value_layout, ValueLocals};
 use crate::error::CodegenError;
 use crate::mir::body::written_back_out_params;
 use crate::mir::instantiation::type_argument;
-use crate::mir::type_facts::ValueLayout;
-use crate::mir::{ArgMode, Body, Local, Place};
+use crate::mir::terminator::arg_mode;
+use crate::mir::value_arguments::{argument_place, call_written_roots};
+use crate::mir::{ArgMode, Body, Local, Operand, Place};
 use cranelift_codegen::ir::{types as cl_types, AbiParam, Signature, Value};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, Variable};
@@ -119,17 +121,22 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// The address a value argument held as its bytes at `address` is passed
-    /// as: an `out` argument is the caller's own bytes, which the callee
-    /// writes in place; any other is a copy the caller makes for the call.
+    /// as: the caller's own bytes, which an `out` argument's callee writes in
+    /// place and any other callee only reads.
     ///
-    /// A runtime function takes no such value, and passing one is refused.
+    /// MIR guarantees a non-`out` value argument is a whole local that the
+    /// call writes neither as its destination nor as an `out` argument
+    /// ([`Self::refuse_exposed_value_argument`] holds the call to it), and a
+    /// callee that writes a parameter copies it first (`written_value_params`).
+    /// Closures capture by value, so no other path reaches these bytes during
+    /// the call.
+    ///
+    /// A runtime function takes no such value, and a value is never handed
+    /// over owned, since only a counted local is: either is refused.
     pub(crate) fn value_argument(
-        builder: &mut FunctionBuilder,
         address: Value,
-        layout: &ValueLayout,
         mode: ArgMode,
         is_runtime: bool,
-        type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         if is_runtime {
             return Err(CodegenError::Internal(
@@ -137,13 +144,45 @@ impl<'a> FunctionTranslator<'a> {
             ));
         }
         match mode {
-            ArgMode::Out => Ok(address),
-            ArgMode::Borrowed | ArgMode::Owned => {
-                let copy = value_slot(builder, layout, type_ctx.ptr_type);
-                copy_value(builder, address, copy, layout);
-                Ok(copy)
-            }
+            ArgMode::Out | ArgMode::Borrowed => Ok(address),
+            ArgMode::Owned => Err(CodegenError::Internal(
+                "a value held as its bytes is passed owned, which only a counted local is"
+                    .to_string(),
+            )),
         }
+    }
+}
+
+impl<'a> FunctionTranslator<'a> {
+    /// Refuse argument `position` of a call taking `args` under `arg_modes`
+    /// into `destination` when it is a non-`out` value argument whose bytes
+    /// the call could change under its callee: one read from inside its
+    /// holder, or from a local the call writes as its destination or through
+    /// an `out` argument. The value-argument pass copies every such argument
+    /// first, so reaching one here is a compiler bug.
+    pub(crate) fn refuse_exposed_value_argument(
+        position: usize,
+        args: &[Operand],
+        arg_modes: &[ArgMode],
+        destination: &Place,
+    ) -> Result<(), CodegenError> {
+        if arg_mode(arg_modes, position) == ArgMode::Out {
+            return Ok(());
+        }
+        let Some(place) = args.get(position).and_then(argument_place) else {
+            return Ok(());
+        };
+        let problem = if !place.projection.is_empty() {
+            "reaches the call from inside its holder"
+        } else if call_written_roots(args, arg_modes, destination).any(|root| root == place.local) {
+            "is aliased with what the call writes"
+        } else {
+            return Ok(());
+        };
+        Err(CodegenError::Internal(format!(
+            "the value argument `{place}` {problem}; the value-argument pass should have \
+             copied it"
+        )))
     }
 }
 

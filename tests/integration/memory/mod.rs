@@ -38,3 +38,4 @@ pub mod stored_closures;
 pub mod temporaries;
 pub mod trait_coercion;
 pub mod use_after_move;
+pub mod value_arguments;

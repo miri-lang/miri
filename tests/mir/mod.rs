@@ -21,4 +21,6 @@ pub mod symbol;
 pub mod terminator;
 pub mod type_facts;
 pub mod utils;
+pub mod value_arguments;
+pub mod value_bodies;
 pub mod verify;
