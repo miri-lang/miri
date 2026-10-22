@@ -395,3 +395,88 @@ fn test_const_fold_u128_operations() {
         panic!("Expected constant assignment for shr, got {:?}", stmt6.kind);
     }
 }
+
+#[test]
+fn test_const_fold_u64_addition_with_i32_literal() {
+    let mut body = create_test_body();
+    // _1 = 100_u64
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U64, Span::default()),
+        Span::default(),
+    ));
+    // _2 = 1 (constant with ty=U64 but literal=I32, as formerly produced by emit_range_step)
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U64, Span::default()),
+        Span::default(),
+    ));
+    // _3 = _1 + _2
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U64, Span::default()),
+        Span::default(),
+    ));
+
+    let mut bb0 = BasicBlockData::new(None);
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U64, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U64(100)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(2)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U64, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::I32(1)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(3)),
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Box::new(Operand::Copy(Place::new(Local(1)))),
+                Box::new(Operand::Copy(Place::new(Local(2)))),
+            ),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.terminator = Some(Terminator {
+        kind: TerminatorKind::Return,
+        span: Span::default(),
+    });
+
+    body.basic_blocks.push(bb0);
+
+    let mut pass = ConstantPropagation;
+    let changed = pass.run(&mut body);
+
+    assert!(changed);
+
+    let bb0 = &body.basic_blocks[0];
+
+    // Check _3 result has U64 literal matching its type, NOT I32
+    let stmt2 = &bb0.statements[2];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt2.kind {
+        assert_eq!(c.ty.kind, TypeKind::U64);
+        if let Literal::Integer(IntegerLiteral::U64(val)) = c.literal {
+            assert_eq!(val, 101);
+        } else {
+            panic!("Expected U64 literal matching c.ty, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment, got {:?}", stmt2.kind);
+    }
+}

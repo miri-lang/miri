@@ -79,3 +79,8 @@
 **Bug:** Compound assignments `x /= -0` or `x %= -0` were accepted during type-checking without error, whereas binary division `x / -0` or `x % -0` correctly reported `Division by zero` at compile time.
 **Root cause:** `check_division_by_zero_assignment` (`src/type_checker/expressions/binary.rs`) only checked for bare `Literal` expressions on the right-hand side (`if let ExpressionKind::Literal(lit) = &rhs.node`), missing literals wrapped in unary operators (`UnaryOp::Negate` / `UnaryOp::Plus`).
 **Lesson:** Compile-time literal inspection helpers must account for unary wrapper nodes (`-0`, `+0`, `-0.0`, `+0.0`) across all checking sites. Extract a shared helper function (`is_zero_expression`) to ensure uniform validation between normal binary operators and compound assignment operators.
+
+## 2026-09-30 - [Loop step constant literal mismatch with variable integer type]
+**Bug:** For-loops over non-`i32`/non-default-`int` ranges (e.g. `u64`, `u128`, `u8`) generated `Constant` values in MIR with mismatched `literal` variants (`IntegerLiteral::I32(1)` or `I32(0)`), causing `ConstantPropagation::is_unsigned` to misclassify constant signedness based on `c.literal` rather than `c.ty`.
+**Root cause:** In `src/mir/lowering/loops.rs`, `emit_range_step`, `emit_loop_increment`, and `lower_for_over_iterable` hardcoded `IntegerLiteral::I32` when constructing `Operand::Constant`, regardless of the loop variable or counter type (`idx_ty` or `step.loop_var_ty`).
+**Lesson:** When emitting MIR `Constant` values in lowering, integer literal variants must always be derived using `IntegerLiteral::from_type_kind(&ty.kind, val)` so that the AST `IntegerLiteral` variant matches `Constant.ty`.
