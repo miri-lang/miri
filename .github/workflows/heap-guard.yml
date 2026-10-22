@@ -62,4 +62,17 @@ jobs:
       - name: Run the suite under the heap guard
         env:
           MIRI_HEAP_GUARD: "1"
-        run: make test
+        run: |
+          make runtimes
+          cargo test -- --test-threads=8
+
+      # The runtimes' own unit tests call the allocator in-process, where the
+      # guard switches the block cache off for the whole process; the tests
+      # that pin the cache's behaviour assume it is on, and the guard's own
+      # effect on the cache is tested in a child process that sets the
+      # variable itself. So they run without the job-wide guard.
+      - name: Run the runtimes' own tests
+        run: |
+          for rt in src/runtime/*/Cargo.toml; do
+            cargo test --manifest-path "$rt"
+          done
