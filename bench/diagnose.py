@@ -13,7 +13,9 @@ For each lost cell it writes `diagnosis/<workload>-<size>/` beside the run:
   Linux; elsewhere the reason they are unavailable);
 - `profile.<language>.txt`, `folded.<language>.txt`, `flamegraph.<language>.svg`
   and `top.<language>.json`: a sampled profile of a hot run, its stacks folded,
-  drawn, and its top self-time symbols;
+  drawn, and its top self-time symbols. Miri is sampled from its `--profile`
+  build, which keeps a frame pointer in every function so the profiler sees
+  every caller; the counters stay on the release build that was timed;
 - `miri.mir` and `miri.clif`: what the compiler made of the Miri port, and
   `hot.clif` and `hot.asm`: the CLIF and machine code of its hottest functions;
 - `runtime.json`: the Miri runtime's allocation counts;
@@ -32,6 +34,7 @@ import re
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import run
@@ -59,21 +62,46 @@ def lost_cells(summary, only):
 # Building the ports, with the compiler's listings for Miri.
 
 
+@dataclass
+class Ports:
+    """The builds of one workload's ports. `timed` is each language's release
+    build, the one the counters run; `sampled` is the build the profiler
+    samples, the same build except Miri's, or a status string when that build
+    failed. `listing` is where Miri's MIR and CLIF listings were written."""
+
+    timed: dict
+    sampled: dict
+    listing: Path
+
+
 def build_ports(ctx, workload, work_dir):
-    """Each language's built port, keyed by language; Miri's build also writes
-    its MIR and CLIF listings beside the executable."""
-    built = {}
+    """Each language's built port, timed and sampled; Miri's listing build
+    also writes its MIR and CLIF listings beside the executable."""
+    timed = {}
     for language in LANGUAGES:
         src = workload.port(language)
         if not src.is_file() or workload.blocked(language):
             continue
         result = run.build(ctx, workload.name, language, src, "default")
         if isinstance(result, run.Built):
-            built[language] = result
+            timed[language] = result
+    sampled = dict(timed)
+    if "miri" in timed:
+        sampled["miri"] = profile_build(ctx, workload.name, workload.port("miri"))
     miri_out = ctx.work_dir / "bin" / f"{workload.name}.listing"
     words = [str(ctx.miri), "build", "--release", "--opt-level", "3", "--emit", "mir", "--emit", "clif", "-o", str(miri_out), str(workload.port("miri"))]
     subprocess.run(words, env=ctx.build_env("miri"), cwd=work_dir, capture_output=True, check=False)
-    return built, miri_out
+    return Ports(timed, sampled, miri_out)
+
+
+def profile_build(ctx, workload_name, src):
+    """The Miri port built for the profiler: the charter's build line with
+    `--profile` in place of `--release`, which is the same release code with a
+    frame pointer kept in every function, the runtime's included. Returns how
+    to run it, or a status string."""
+    words = ctx.charter["languages"]["miri"]["build"].split()
+    line = " ".join("--profile" if word == "--release" else word for word in words)
+    return run.build_with_line(ctx, "miri", line, src, ctx.work_dir / "bin" / f"{workload_name}.miri.profile")
 
 
 # Hardware counters.
@@ -307,11 +335,14 @@ def diagnosis_markdown(workload, size, summary, tops, counter_data, runtime):
 def diagnose_cell(ctx, summary, workload, size, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = run.input_file(ctx, workload, size)
-    built, miri_listing = build_ports(ctx, workload, ctx.work_dir)
+    ports = build_ports(ctx, workload, ctx.work_dir)
     env = run.child_environment(ctx.work_dir)
-    (out_dir / "counters.json").write_text(json.dumps(counter_data := counters(built, input_path, env), indent=1) + "\n")
+    (out_dir / "counters.json").write_text(json.dumps(counter_data := counters(ports.timed, input_path, env), indent=1) + "\n")
     tops = {}
-    for language, port in built.items():
+    for language, port in ports.sampled.items():
+        if not isinstance(port, run.Built):
+            (out_dir / f"profile.{language}.txt").write_text(f"unavailable: the profile build of the port: {port}\n")
+            continue
         profile = sample_profile(port, input_path, env, ctx.work_dir)
         if profile is None:
             (out_dir / f"profile.{language}.txt").write_text("unavailable: no sampling profiler on this machine\n")
@@ -322,8 +353,8 @@ def diagnose_cell(ctx, summary, workload, size, out_dir):
         (out_dir / f"folded.{language}.txt").write_text("".join(f"{k} {v}\n" for k, v in sorted(folded.items())))
         (out_dir / f"flamegraph.{language}.svg").write_text(flamegraph_svg(folded, f"{workload.name} {size} {language}"))
         (out_dir / f"top.{language}.json").write_text(json.dumps(tops[language], indent=1) + "\n")
-    copy_listings(miri_listing, out_dir, hot_miri_functions(tops.get("miri", [])))
-    runtime = runtime_counts(ctx, workload, input_path) if "miri" in built else {}
+    copy_listings(ports.listing, out_dir, hot_miri_functions(tops.get("miri", [])))
+    runtime = runtime_counts(ctx, workload, input_path) if "miri" in ports.timed else {}
     (out_dir / "runtime.json").write_text(json.dumps(runtime, indent=1) + "\n")
     (out_dir / "DIAGNOSIS.md").write_text(diagnosis_markdown(workload, size, summary, tops, counter_data, runtime))
 

@@ -2,16 +2,21 @@
 # Copyright (c) Viacheslav Shynkarenko
 
 """Unit tests for bench/diagnose.py: reading a sampled profile, folding it,
-ranking its symbols, drawing it, and choosing the cells to diagnose."""
+ranking its symbols, drawing it, choosing the cells to diagnose, and which
+build of each port each step runs."""
 
 import sys
+import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 import xml.dom.minidom
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "bench"))
 
 import diagnose  # noqa: E402
+import run  # noqa: E402
 
 # The shape of macOS `sample` output: a call graph whose depth is its
 # indentation, each line a sample count and a frame.
@@ -88,6 +93,90 @@ class SelectionTest(unittest.TestCase):
         values = diagnose.perf_values("2000,,cycles,1,100.00,,\n3000,,instructions,1,100.00,,\n")
         self.assertEqual(values["cycles"], 2000)
         self.assertAlmostEqual(values["ipc"], 1.5)
+
+
+class BuildChoiceTest(unittest.TestCase):
+    """The sampled profile of the Miri port comes from its `--profile` build,
+    which keeps frame pointers; the counters and timing stay on the release
+    build the published numbers come from."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self.scratch.cleanup)
+        work = Path(self.scratch.name)
+        self.ctx = SimpleNamespace(
+            work_dir=work,
+            miri=Path("miri"),
+            charter={"languages": {"miri": {"build": "miri build --release --opt-level 3 -o {out} {src}"}}},
+            build_env=lambda language: {},
+        )
+        self.workload = SimpleNamespace(name="nbody", manifest={}, port=lambda language: work / f"nbody.{language}", blocked=lambda language: False)
+        for language in diagnose.LANGUAGES:
+            self.workload.port(language).write_text("")
+
+    def release(self, ctx, workload_name, language, src, variant):
+        return run.Built(language, [f"{language}-release"], None)
+
+    def built_ports(self):
+        lines = []
+
+        def profile(ctx, language, line, src, out):
+            lines.append(line)
+            return run.Built(language, [f"{language}-profile"], None)
+
+        with mock.patch.object(run, "build", self.release), mock.patch.object(run, "build_with_line", profile), mock.patch.object(diagnose.subprocess, "run"):
+            ports = diagnose.build_ports(self.ctx, self.workload, self.ctx.work_dir)
+        return ports, lines
+
+    def test_the_miri_port_is_sampled_from_its_profile_build(self):
+        ports, lines = self.built_ports()
+        self.assertEqual(lines, ["miri build --profile --opt-level 3 -o {out} {src}"])
+        self.assertEqual(ports.sampled["miri"].run_words, ["miri-profile"])
+        self.assertEqual(ports.timed["miri"].run_words, ["miri-release"])
+
+    def test_the_other_ports_are_sampled_from_their_one_build(self):
+        ports, _ = self.built_ports()
+        for language in ("c", "rust"):
+            self.assertIs(ports.sampled[language], ports.timed[language])
+
+    def test_a_failed_profile_build_is_named_in_place_of_the_profile(self):
+        with mock.patch.object(run, "build", self.release), mock.patch.object(run, "build_with_line", return_value="build-failed"), mock.patch.object(diagnose.subprocess, "run"):
+            ports = diagnose.build_ports(self.ctx, self.workload, self.ctx.work_dir)
+        self.assertEqual(ports.sampled["miri"], "build-failed")
+        self.assertEqual(ports.timed["miri"].run_words, ["miri-release"])
+
+    def test_counters_run_the_release_build_and_sampling_the_profile_build(self):
+        ports, _ = self.built_ports()
+        sampled = []
+        out_dir = self.ctx.work_dir / "out"
+        summary = {"cells": []}
+        with (
+            mock.patch.object(diagnose, "build_ports", return_value=ports),
+            mock.patch.object(diagnose, "counters", return_value={}) as counted,
+            mock.patch.object(diagnose, "sample_profile", side_effect=lambda port, *rest: sampled.append(port.run_words[0])),
+            mock.patch.object(diagnose, "runtime_counts", return_value={}),
+            mock.patch.object(diagnose, "copy_listings"),
+            mock.patch.object(run, "input_file", return_value=Path("input")),
+        ):
+            diagnose.diagnose_cell(self.ctx, summary, self.workload, "s", out_dir)
+        self.assertEqual({language: port.run_words[0] for language, port in counted.call_args.args[0].items()}, {"miri": "miri-release", "c": "c-release", "rust": "rust-release"})
+        self.assertEqual(sampled, ["miri-profile", "c-release", "rust-release"])
+
+    def test_a_failed_profile_build_is_reported_in_the_bundle(self):
+        timed = {"miri": run.Built("miri", ["miri-release"], None)}
+        ports = diagnose.Ports(timed, {"miri": "build-failed"}, self.ctx.work_dir / "listing")
+        out_dir = self.ctx.work_dir / "out"
+        with (
+            mock.patch.object(diagnose, "build_ports", return_value=ports),
+            mock.patch.object(diagnose, "counters", return_value={}),
+            mock.patch.object(diagnose, "sample_profile") as sampler,
+            mock.patch.object(diagnose, "runtime_counts", return_value={}),
+            mock.patch.object(diagnose, "copy_listings"),
+            mock.patch.object(run, "input_file", return_value=Path("input")),
+        ):
+            diagnose.diagnose_cell(self.ctx, {"cells": []}, self.workload, "s", out_dir)
+        sampler.assert_not_called()
+        self.assertEqual((out_dir / "profile.miri.txt").read_text(), "unavailable: the profile build of the port: build-failed\n")
 
 
 if __name__ == "__main__":
