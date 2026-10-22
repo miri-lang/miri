@@ -62,4 +62,5 @@ jobs:
       - name: Run the program corpus at opt level 3
         env:
           MIRI_OPT_LEVEL: "3"
-        run: cargo test --test mod -- --test-threads=8 integration:: stdlib:: e2e::
+        run: |
+          cargo test --test mod -- --test-threads=8 integration:: stdlib:: e2e::
