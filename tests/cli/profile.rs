@@ -57,9 +57,14 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// The program's executable, run with `MIRI_PROFILE_OUT` as `record` asks.
 fn run(executable: &Path, record: Option<&Path>) -> std::process::Output {
     let mut command = Command::new(executable);
+    // A profile build is a release build, which notes on stderr that it
+    // ignores the runtime checks; a job that arms them for the whole suite
+    // must not reach these runs, whose stderr is asserted empty.
     command
         .env_remove("MIRI_PROFILE_OUT")
-        .env_remove("MIRI_PROFILE_HZ");
+        .env_remove("MIRI_PROFILE_HZ")
+        .env_remove("MIRI_HEAP_GUARD")
+        .env_remove("MIRI_LEAK_CHECK");
     if let Some(record) = record {
         command.env("MIRI_PROFILE_OUT", record);
     }
