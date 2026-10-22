@@ -34,7 +34,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `MIRI_OPT_LEVEL=<0-3>` in the test process's environment builds every
 /// program the suite runs or builds at that level, so the whole corpus can
 /// prove optimized code keeps every reference-counting and runtime invariant.
-/// Unset, programs build at the compiler's default level.
+/// Unset, programs build at the compiler's default level, 0, which neither
+/// optimizes nor inlines; every level from 1 up does both. The nightly
+/// `opt-level-3.yml` workflow runs the program corpus at level 3:
+///
+/// ```text
+/// MIRI_OPT_LEVEL=3 cargo test --test mod -- integration:: stdlib:: e2e::
+/// ```
 fn forced_opt_level_args(command: &str) -> Vec<String> {
     match std::env::var("MIRI_OPT_LEVEL") {
         Ok(level) if command == "run" || command == "build" => {

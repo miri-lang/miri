@@ -12,9 +12,11 @@ pub mod collection_header;
 mod element_method_thunks;
 mod gpu_launch;
 mod inline_optionals;
+mod inliner;
 pub mod layout;
 mod predicates;
 mod rc;
+mod source_points;
 pub mod stable_headers;
 pub mod structural_elements;
 pub mod translate_rvalue;
@@ -44,6 +46,7 @@ use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use source_points::SourcePoints;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
@@ -124,36 +127,148 @@ pub struct CraneliftOptions {
     /// the entry point hand it to the runtime's sampler. Only a profile build
     /// asks for it.
     pub profile_table: bool,
+    /// Whether small, loop-free user functions are inlined into their
+    /// callers. An optimizing build asks for it.
+    pub inline: bool,
 }
 
 /// What `compile` returns about each user function beside its code, as the
 /// options ask for.
+///
+/// Each entry carries the position of its function among the user functions,
+/// so the reports list the functions in that order whatever order they are
+/// defined in.
 struct FunctionReports {
     /// Each function's CLIF after Cranelift optimized it.
-    ir_listing: Option<String>,
+    ir_listing: Option<Vec<(usize, String)>>,
     /// Where each function's code came from.
-    code_map: Option<Vec<FunctionCodeMap>>,
+    code_map: Option<Vec<(usize, FunctionCodeMap)>>,
     /// Each function's id and code size, for the profile function table.
-    profile_functions: Option<Vec<(cranelift_module::FuncId, u32)>>,
+    profile_functions: Option<Vec<(usize, ProfiledFunction)>>,
+}
+
+/// A user function's id and code size, as the profile function table lists
+/// it.
+type ProfiledFunction = (cranelift_module::FuncId, u32);
+
+/// The reports on every user function, each listing the functions in the
+/// order they were handed to the backend.
+struct FinishedReports {
+    ir_listing: Option<String>,
+    code_map: Vec<FunctionCodeMap>,
+    profile_functions: Option<Vec<ProfiledFunction>>,
 }
 
 impl FunctionReports {
     /// The reports `options` ask for, each empty.
     fn asked_by(options: &CraneliftOptions) -> Self {
         Self {
-            ir_listing: options.ir_listing.then(String::new),
+            ir_listing: options.ir_listing.then(Vec::new),
             code_map: options.code_map.then(Vec::new),
             profile_functions: options.profile_table.then(Vec::new),
         }
     }
+
+    /// Every report, its entries put in the functions' order.
+    fn finish(self) -> FinishedReports {
+        FinishedReports {
+            ir_listing: self.ir_listing.map(|listing| in_order(listing).concat()),
+            code_map: self.code_map.map(in_order).unwrap_or_default(),
+            profile_functions: self.profile_functions.map(in_order),
+        }
+    }
 }
 
-/// One user function handed to `compile_function`.
+/// `entries` sorted by the position each carries, without the positions.
+fn in_order<T>(mut entries: Vec<(usize, T)>) -> Vec<T> {
+    entries.sort_by_key(|&(position, _)| position);
+    entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// What translating a user function reads and adds to beside its body: the
+/// module it declares into, the target, the string literal pool and the
+/// GPU kernels a launch refers to.
+struct TranslationEnv<'e> {
+    module: &'e mut ObjectModule,
+    isa: &'e Arc<dyn TargetIsa>,
+    string_literals: &'e mut BTreeMap<String, usize>,
+    kernel_registry: &'e HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
+}
+
+/// One user function handed to `translate_function`, and how its code is
+/// emitted; whether it is the entry point is settled from its name.
 struct FunctionUnit<'b> {
     name: &'b str,
     body: &'b Body,
-    runtime_checks: RuntimeChecks,
-    profile_table: Option<ProfileTable>,
+    emission: Emission,
+}
+
+/// How `options` ask every user function's code to be emitted, before
+/// the entry point is told apart from the rest.
+fn function_emission(options: &CraneliftOptions, profile_table: Option<ProfileTable>) -> Emission {
+    Emission {
+        runtime_checks: if options.runtime_checks {
+            RuntimeChecks::Observable
+        } else {
+            RuntimeChecks::CompiledOut
+        },
+        is_entry: false,
+        source_locations: options.code_map,
+        profile_table,
+    }
+}
+
+/// The bodies of `bodies` that run on the CPU, in order.
+fn cpu_bodies<'b>(bodies: &[(&'b str, &'b Body)]) -> Vec<(&'b str, &'b Body)> {
+    bodies
+        .iter()
+        .copied()
+        .filter(|(_, b)| {
+            !matches!(
+                b.execution_model,
+                crate::mir::ExecutionModel::GpuKernel | crate::mir::ExecutionModel::GpuDevice
+            )
+        })
+        .collect()
+}
+
+/// The namespace `cranelift-module` names a declared function in.
+const FUNCTION_NAMESPACE: u32 = 0;
+
+/// The namespace `cranelift-module` names a declared data object in.
+const DATA_NAMESPACE: u32 = 1;
+
+/// The user name `name` refers to in `func`'s table of external names.
+fn user_name<'f>(
+    func: &'f cranelift_codegen::ir::Function,
+    name: &cranelift_codegen::ir::ExternalName,
+) -> Option<&'f cranelift_codegen::ir::UserExternalName> {
+    let cranelift_codegen::ir::ExternalName::User(user) = name else {
+        return None;
+    };
+    func.params.user_named_funcs().get(*user)
+}
+
+/// The module function `name` refers to in `func`, `None` for a data
+/// object or a name the module did not declare.
+fn user_function_id(
+    func: &cranelift_codegen::ir::Function,
+    name: &cranelift_codegen::ir::ExternalName,
+) -> Option<cranelift_module::FuncId> {
+    user_name(func, name)
+        .filter(|user| user.namespace == FUNCTION_NAMESPACE)
+        .map(|user| cranelift_module::FuncId::from_u32(user.index))
+}
+
+/// One user function translated to CLIF and not yet defined.
+struct TranslatedFunction<'b> {
+    name: &'b str,
+    id: cranelift_module::FuncId,
+    function: cranelift_codegen::ir::Function,
+    /// The places the function's instructions' locations index.
+    source_points: SourcePoints,
+    /// Whether the function is the program's entry point.
+    is_entry: bool,
 }
 
 /// Optimization levels for Cranelift.
@@ -213,6 +328,7 @@ impl Default for CraneliftOptions {
             preserve_frame_pointers: false,
             code_map: false,
             profile_table: false,
+            inline: false,
         }
     }
 }
@@ -333,16 +449,7 @@ impl Backend for CraneliftBackend {
             bodies,
             &self.device_helpers,
         )?;
-        let cpu_bodies: Vec<(&str, &Body)> = bodies
-            .iter()
-            .copied()
-            .filter(|(_, b)| {
-                !matches!(
-                    b.execution_model,
-                    crate::mir::ExecutionModel::GpuKernel | crate::mir::ExecutionModel::GpuDevice
-                )
-            })
-            .collect();
+        let cpu_bodies = cpu_bodies(bodies);
         closure_trampolines::generate_closure_trampolines(
             &mut module,
             &mut ctx,
@@ -352,49 +459,26 @@ impl Backend for CraneliftBackend {
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
         let mut string_literals = BTreeMap::new();
-        let mut reports = FunctionReports::asked_by(options);
-        let runtime_checks = if options.runtime_checks {
-            RuntimeChecks::Observable
-        } else {
-            RuntimeChecks::CompiledOut
-        };
         let profile_table = options
             .profile_table
             .then(|| Self::declare_profile_table(&mut module, cpu_bodies.len()))
             .transpose()?;
-        for (name, body) in &cpu_bodies {
-            self.compile_function(
-                &mut module,
-                &mut ctx,
-                FunctionUnit {
-                    name,
-                    body,
-                    runtime_checks,
-                    profile_table,
-                },
-                &isa,
-                &mut string_literals,
-                &kernel_registry,
-                &mut reports,
-            )?;
+        let mut env = TranslationEnv {
+            module: &mut module,
+            isa: &isa,
+            string_literals: &mut string_literals,
+            kernel_registry: &kernel_registry,
+        };
+        let emission = function_emission(options, profile_table);
+        let mut reports = FunctionReports::asked_by(options);
+        if options.inline {
+            self.compile_inlining(&mut env, &mut ctx, &cpu_bodies, emission, &mut reports)?;
+        } else {
+            self.compile_each(&mut env, &mut ctx, &cpu_bodies, emission, &mut reports)?;
         }
+        let reports = reports.finish();
 
-        let vtables = crate::mir::dispatch::constructed_vtable_symbols(
-            cpu_bodies.iter().map(|(_, body)| *body),
-            self.facts.definitions(),
-        );
-        FunctionTranslator::generate_vtables(
-            &mut module,
-            isa.pointer_type(),
-            &self.facts,
-            vtables.iter().map(|(symbol, drop)| {
-                (
-                    symbol.as_str(),
-                    drop.as_str(),
-                    self.facts.vtable_fills().slots(symbol),
-                )
-            }),
-        )?;
+        self.define_vtables(&mut module, &isa, &cpu_bodies)?;
         Self::define_string_literals(&mut module, &isa, string_literals)?;
         if let (Some(table), Some(functions)) = (profile_table, &reports.profile_functions) {
             Self::define_profile_table(&mut module, &isa, table, functions)?;
@@ -405,7 +489,7 @@ impl Backend for CraneliftBackend {
             bytes: object,
             format: ArtifactFormat::ObjectFile,
             ir_listing: reports.ir_listing,
-            code_map: reports.code_map.unwrap_or_default(),
+            code_map: reports.code_map,
         })
     }
 
@@ -599,7 +683,8 @@ impl CraneliftBackend {
         Ok(ProfileTable { data, count })
     }
 
-    /// Define the profile function table: per function, in compile order, a
+    /// Define the profile function table: per function, in the order the
+    /// backend was handed the functions, a
     /// pointer-sized relocation to its first instruction and its code size
     /// as a 32-bit word after it, each entry padded to two pointers — the
     /// `ProfileFunction` layout the runtime reads.
@@ -620,7 +705,10 @@ impl CraneliftBackend {
         description.define(bytes.into_boxed_slice());
         for (index, &(func_id, _)) in functions.iter().enumerate() {
             let function = module.declare_func_in_data(func_id, &mut description);
-            description.write_function_addr((index * entry) as u32, function);
+            let offset = u32::try_from(index * entry).map_err(|_| {
+                CodegenError::Module("the profile function table is too large".to_string())
+            })?;
+            description.write_function_addr(offset, function);
         }
         module
             .define_data(table.data, &description)
@@ -722,91 +810,150 @@ impl CraneliftBackend {
             .map_err(|e| CodegenError::Emit(e.to_string()))
     }
 
-    /// Compile a single MIR function body to Cranelift IR.
-    ///
-    /// # Arguments
-    /// * `module` - The ObjectModule being built.
-    /// * `ctx` - The Cranelift Context for this function.
-    /// * `unit` - The function's symbol name, its MIR body, and whether its
-    ///   code keeps the runtime's checking hooks.
-    /// * `isa` - The TargetIsa for code generation.
-    /// * `string_literals` - A map to collect and deduplicate string literals found in the function.
-    /// * `reports` - Receives what the options ask to be returned about the function.
-    #[allow(clippy::too_many_arguments)]
-    fn compile_function(
+    /// Translate, define and drop each of `bodies` in turn, so no more than
+    /// one function's IR is held at a time.
+    fn compile_each(
         &self,
-        module: &mut ObjectModule,
+        env: &mut TranslationEnv<'_>,
         ctx: &mut Context,
-        unit: FunctionUnit<'_>,
-        isa: &Arc<dyn TargetIsa>,
-        string_literals: &mut BTreeMap<String, usize>,
-        kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
+        bodies: &[(&str, &Body)],
+        emission: Emission,
         reports: &mut FunctionReports,
     ) -> Result<(), CodegenError> {
+        for (position, &(name, body)) in bodies.iter().enumerate() {
+            let unit = FunctionUnit {
+                name,
+                body,
+                emission,
+            };
+            let translated = self.translate_function(env, unit)?;
+            Self::define_translated(env.module, ctx, position, translated, reports)?;
+        }
+        Ok(())
+    }
+
+    /// Translate every one of `bodies`, inline small functions into their
+    /// callers, and define each function once it has been inlined into.
+    fn compile_inlining(
+        &self,
+        env: &mut TranslationEnv<'_>,
+        ctx: &mut Context,
+        bodies: &[(&str, &Body)],
+        emission: Emission,
+        reports: &mut FunctionReports,
+    ) -> Result<(), CodegenError> {
+        let translated = bodies
+            .iter()
+            .map(|&(name, body)| {
+                let unit = FunctionUnit {
+                    name,
+                    body,
+                    emission,
+                };
+                self.translate_function(env, unit)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let module = &mut *env.module;
+        inliner::inline_and_define(translated, &**env.isa, |position, function| {
+            Self::define_translated(module, ctx, position, function, reports)
+        })
+    }
+
+    /// Translate a single MIR function body to Cranelift IR and declare it.
+    fn translate_function<'b>(
+        &self,
+        env: &mut TranslationEnv<'_>,
+        unit: FunctionUnit<'b>,
+    ) -> Result<TranslatedFunction<'b>, CodegenError> {
         let FunctionUnit {
             name,
             body,
-            runtime_checks,
-            profile_table,
+            emission,
         } = unit;
-        // Create function translator
-        let mut translator = FunctionTranslator::new(isa, body, &self.facts);
-
-        // Translate MIR to Cranelift IR
+        let mut translator = FunctionTranslator::new(env.isa, body, &self.facts);
         // Every executable's entry point is linked under this one name, a
         // script's synthesized `main` included.
+        let is_entry = name == Symbol::entry().link_name();
         let emission = Emission {
-            runtime_checks,
-            is_entry: name == Symbol::entry().link_name(),
-            source_locations: reports.code_map.is_some(),
-            profile_table,
+            is_entry,
+            ..emission
         };
         translator
-            .translate(body, module, string_literals, kernel_registry, emission)
+            .translate(
+                body,
+                env.module,
+                env.string_literals,
+                env.kernel_registry,
+                emission,
+            )
             .map_err(|e| CodegenError::translation(name, e.to_string()))?;
-
-        // Get the function signature and declare it
         let sig = translator.signature().clone();
-        let function = translator.into_function();
-        let func_id = module
+        let (function, source_points) = translator.into_parts();
+        let id = env
+            .module
             .declare_function(name, Linkage::Export, &sig)
             .map_err(|e| CodegenError::declare_function(name, e.to_string()))?;
+        Ok(TranslatedFunction {
+            name,
+            id,
+            function,
+            source_points,
+            is_entry,
+        })
+    }
 
-        // Set the function in context
+    /// Define a translated function, the `position`-th user function, and
+    /// report on it as `reports` ask.
+    fn define_translated(
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        position: usize,
+        translated: TranslatedFunction<'_>,
+        reports: &mut FunctionReports,
+    ) -> Result<(), CodegenError> {
+        let TranslatedFunction {
+            name,
+            id,
+            function,
+            source_points,
+            is_entry: _,
+        } = translated;
         ctx.func = function;
-
-        // Define the function
-        crate::codegen::cranelift::define_function(module, func_id, ctx)
+        crate::codegen::cranelift::define_function(module, id, ctx)
             .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
         if let Some(code_map) = reports.code_map.as_mut() {
-            code_map.push(Self::function_code_map(name, body, ctx)?);
+            code_map.push((
+                position,
+                Self::function_code_map(name, ctx, &source_points)?,
+            ));
         }
         if let Some(functions) = reports.profile_functions.as_mut() {
             let size = ctx
                 .compiled_code()
                 .map_or(0, |code| code.code_info().total_size);
-            functions.push((func_id, size));
+            functions.push((position, (id, size)));
         }
         if let Some(listing) = reports.ir_listing.as_mut() {
-            listing.push_str(&format!(
-                "; {name}\n{}{}\n",
-                ctx.func.display(),
-                Self::listing_references(&ctx.func, module.declarations())
+            listing.push((
+                position,
+                format!(
+                    "; {name}\n{}{}\n",
+                    ctx.func.display(),
+                    Self::listing_references(&ctx.func, module.declarations())
+                ),
             ));
         }
-
-        // Clear context for next function
         ctx.clear();
-
         Ok(())
     }
 
-    /// Where the code `ctx` holds for the function `name`, compiled from
-    /// `body`, came from: every run Cranelift recorded a source offset for.
+    /// Where the code `ctx` holds for the function `name` came from: every
+    /// run Cranelift recorded a location for, read off `source_points`, with
+    /// the calls it was inlined through.
     fn function_code_map(
         name: &str,
-        body: &Body,
         ctx: &Context,
+        source_points: &SourcePoints,
     ) -> Result<FunctionCodeMap, CodegenError> {
         let compiled = ctx.compiled_code().ok_or_else(|| {
             CodegenError::define_function(name, "no compiled code to map to source")
@@ -815,19 +962,47 @@ impl CraneliftBackend {
             .buffer
             .get_srclocs_sorted()
             .iter()
-            .filter(|run| !run.loc.is_default())
-            .map(|run| CodeRange {
-                start: run.start,
-                end: run.end,
-                source_offset: run.loc.bits(),
+            .filter_map(|run| {
+                let point = source_points.point_at(run.loc)?;
+                Some(CodeRange {
+                    start: run.start,
+                    end: run.end,
+                    source: point.source,
+                    source_offset: point.offset,
+                    inlined_at: source_points.call_chain(point),
+                })
             })
             .collect();
         Ok(FunctionCodeMap {
             symbol: name.to_string(),
             code_size: compiled.code_info().total_size,
-            source: body.source,
             ranges,
         })
+    }
+
+    /// Define every vtable the CPU bodies construct.
+    fn define_vtables(
+        &self,
+        module: &mut ObjectModule,
+        isa: &Arc<dyn TargetIsa>,
+        cpu_bodies: &[(&str, &Body)],
+    ) -> Result<(), CodegenError> {
+        let vtables = crate::mir::dispatch::constructed_vtable_symbols(
+            cpu_bodies.iter().map(|(_, body)| *body),
+            self.facts.definitions(),
+        );
+        FunctionTranslator::generate_vtables(
+            module,
+            isa.pointer_type(),
+            &self.facts,
+            vtables.iter().map(|(symbol, drop)| {
+                (
+                    symbol.as_str(),
+                    drop.as_str(),
+                    self.facts.vtable_fills().slots(symbol),
+                )
+            }),
+        )
     }
 
     /// One comment line per function and symbol `func` refers to, naming it: the
@@ -839,26 +1014,13 @@ impl CraneliftBackend {
     ) -> String {
         use cranelift_codegen::ir::{ExternalName, GlobalValueData};
         let declared_name = |external: &ExternalName| -> Option<String> {
-            let ExternalName::User(user) = external else {
-                return None;
-            };
-            let name = &func.params.user_named_funcs()[*user];
-            match name.namespace {
-                0 => {
-                    let id = cranelift_module::FuncId::from_u32(name.index);
-                    Some(
-                        declarations
-                            .get_function_decl(id)
-                            .linkage_name(id)
-                            .into_owned(),
-                    )
-                }
-                1 => {
-                    let id = cranelift_module::DataId::from_u32(name.index);
-                    Some(declarations.get_data_decl(id).linkage_name(id).into_owned())
-                }
-                _ => None,
+            if let Some(id) = user_function_id(func, external) {
+                let decl = declarations.get_function_decl(id);
+                return Some(decl.linkage_name(id).into_owned());
             }
+            let data = user_name(func, external).filter(|user| user.namespace == DATA_NAMESPACE)?;
+            let id = cranelift_module::DataId::from_u32(data.index);
+            Some(declarations.get_data_decl(id).linkage_name(id).into_owned())
         };
         let mut out = String::new();
         for (func_ref, data) in func.dfg.ext_funcs.iter() {
@@ -1223,17 +1385,9 @@ fn call_runtime_directly(
     func: &mut cranelift_codegen::ir::Function,
     declarations: &cranelift_module::ModuleDeclarations,
 ) {
-    use cranelift_codegen::ir::ExternalName;
     let runtime: Vec<cranelift_codegen::ir::FuncRef> = (func.dfg.ext_funcs.iter())
         .filter_map(|(func_ref, data)| {
-            let ExternalName::User(user) = &data.name else {
-                return None;
-            };
-            let name = &func.params.user_named_funcs()[*user];
-            if name.namespace != 0 {
-                return None;
-            }
-            let id = cranelift_module::FuncId::from_u32(name.index);
+            let id = user_function_id(func, &data.name)?;
             let decl = declarations.get_function_decl(id);
             let is_runtime = decl.linkage == Linkage::Import
                 && decl

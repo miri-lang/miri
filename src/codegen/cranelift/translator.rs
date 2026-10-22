@@ -11,12 +11,13 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::collection_header::{CollectionBase, ElementHeader};
 use crate::codegen::cranelift::layout;
+use crate::codegen::cranelift::source_points::{SourcePoint, SourcePoints};
 use crate::codegen::cranelift::stable_headers::StableHeaders;
 use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_abi::body_signature;
 use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, ValueLocals};
 use crate::error::syntax::Span;
-use crate::error::CodegenError;
+use crate::error::{CodegenError, SourceId};
 use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::{TypeDefinition, TypeFacts};
@@ -25,7 +26,7 @@ use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{
-    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, SourceLoc, TrapCode, Value,
+    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, TrapCode, Value,
 };
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -41,7 +42,8 @@ use std::sync::Arc;
 ///
 /// The translator is constructed once per function, builds the Cranelift IR via
 /// [`translate`](Self::translate), and then consumed via
-/// [`into_function`](Self::into_function) to yield the built [`Function`].
+/// [`into_parts`](Self::into_parts) to yield the built [`Function`] and the
+/// source points its instructions' locations index.
 pub struct FunctionTranslator<'a> {
     /// The Cranelift function being built.
     func: Function,
@@ -59,6 +61,9 @@ pub struct FunctionTranslator<'a> {
     /// routes through to reach the per-instantiation `miri.Box$String.$drop`
     /// thunk that releases the concrete managed field.
     pub(crate) facts: &'a TypeFacts,
+    /// Where the built function's instructions came from, when its
+    /// translation was asked for source locations.
+    source_points: Option<SourcePoints>,
 }
 
 /// Context for module-level resources during translation.
@@ -70,9 +75,6 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) module: &'a mut ObjectModule,
     /// Whether the code being emitted carries the runtime's checking hooks.
     pub(crate) runtime_checks: RuntimeChecks,
-    /// Whether each statement's instructions record the source offset its
-    /// span starts at.
-    pub(crate) source_locations: bool,
     pub(crate) string_literals: &'a mut BTreeMap<String, usize>,
     pub(crate) cached_funcs: HashMap<&'static str, cranelift_module::FuncId>,
     /// The per-type thunks (`miri.T.$decref` and the like) already declared in
@@ -196,7 +198,6 @@ pub(crate) fn empty_module_ctx<'a>(
     ModuleCtx {
         module,
         runtime_checks: RuntimeChecks::Observable,
-        source_locations: false,
         string_literals,
         cached_funcs: HashMap::new(),
         thunk_funcs: HashMap::new(),
@@ -259,6 +260,7 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
             local_types,
             facts,
+            source_points: None,
         }
     }
     /// Translate a MIR function body to Cranelift IR, emitted as `emission`
@@ -273,6 +275,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;
         let values = ValueLocals::of(body)?;
+        self.source_points = emission.source_locations.then(SourcePoints::default);
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
 
         let (locals, blocks) = Self::declare_locals_and_blocks(&mut builder, body, self.ptr_type);
@@ -286,7 +289,6 @@ impl<'a> FunctionTranslator<'a> {
 
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
         module_ctx.runtime_checks = emission.runtime_checks;
-        module_ctx.source_locations = emission.source_locations;
         if emission.is_entry && emission.runtime_checks == RuntimeChecks::CompiledOut {
             Self::call_rt_checks_compiled_out(&mut builder, &mut module_ctx)?;
         }
@@ -314,7 +316,7 @@ impl<'a> FunctionTranslator<'a> {
             &blocks,
             &out_param_ptr_vars,
             &type_ctx,
-            self.ptr_type,
+            self.source_points.as_mut(),
         )?;
 
         builder.seal_all_blocks();
@@ -406,8 +408,9 @@ impl<'a> FunctionTranslator<'a> {
         blocks: &HashMap<BasicBlock, Block>,
         out_param_ptr_vars: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
-        ptr_type: cl_types::Type,
+        mut source_points: Option<&mut SourcePoints>,
     ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
         for (idx, block_data) in body.basic_blocks.iter().enumerate() {
             let block = blocks[&BasicBlock(idx)];
             builder.switch_to_block(block);
@@ -423,7 +426,12 @@ impl<'a> FunctionTranslator<'a> {
             type_ctx.stable_headers.enter_block(idx);
             for (position, stmt) in block_data.statements.iter().enumerate() {
                 type_ctx.stable_headers.enter_statement(position);
-                Self::mark_source(builder, module_ctx, stmt.span);
+                Self::mark_source(
+                    builder,
+                    source_points.as_deref_mut(),
+                    body.source,
+                    stmt.span,
+                );
                 Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
             type_ctx
@@ -431,7 +439,12 @@ impl<'a> FunctionTranslator<'a> {
                 .enter_statement(block_data.statements.len());
             Self::read_stable_headers(builder, idx, locals, type_ctx)?;
             if let Some(ref terminator) = block_data.terminator {
-                Self::mark_source(builder, module_ctx, terminator.span);
+                Self::mark_source(
+                    builder,
+                    source_points.as_deref_mut(),
+                    body.source,
+                    terminator.span,
+                );
                 Self::translate_terminator(
                     builder, module_ctx, terminator, body, locals, blocks, type_ctx,
                 )?;
@@ -440,19 +453,32 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Record `span`'s start as the source of the instructions built next,
-    /// when the module asks for source locations. A span covering no text
-    /// was synthesized rather than written, so the instructions keep the
+    /// Record `span`'s start in `source` as where the instructions built
+    /// next came from, when `source_points` records them. A span
+    /// covering no text was synthesized rather than written, and a body with
+    /// no source was synthesized whole, so the instructions keep the
     /// location of the statement before them.
-    fn mark_source(builder: &mut FunctionBuilder, module_ctx: &ModuleCtx, span: Span) {
-        if !module_ctx.source_locations || span.is_empty() {
+    fn mark_source(
+        builder: &mut FunctionBuilder,
+        source_points: Option<&mut SourcePoints>,
+        source: Option<SourceId>,
+        span: Span,
+    ) {
+        if span.is_empty() {
             return;
         }
+        let (Some(points), Some(source)) = (source_points, source) else {
+            return;
+        };
         let Ok(offset) = u32::try_from(span.start) else {
             return;
         };
-        let location = SourceLoc::new(offset);
-        if !location.is_default() {
+        let point = SourcePoint {
+            source,
+            offset,
+            inlined_at: None,
+        };
+        if let Some(location) = points.location_of(point) {
             builder.set_srcloc(location);
         }
     }
@@ -512,9 +538,10 @@ impl<'a> FunctionTranslator<'a> {
     pub fn signature(&self) -> &Signature {
         &self.func.signature
     }
-    /// Consume the translator and return the built function.
-    pub fn into_function(self) -> Function {
-        self.func
+    /// Consume the translator and return the built function with the table
+    /// of source points its instructions' locations index.
+    pub(crate) fn into_parts(self) -> (Function, SourcePoints) {
+        (self.func, self.source_points.unwrap_or_default())
     }
     /// Build the function signature from the MIR body.
     pub(crate) fn build_signature(&mut self, body: &Body) -> Result<(), CodegenError> {

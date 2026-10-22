@@ -6,11 +6,12 @@
 //! profiler to attribute a sampled address to a line.
 //!
 //! ```text
-//! miri-lines 1
+//! miri-lines 2
 //! file 0 prog.mi
 //! file 1 system/math.mi
 //! fn 0 miri.mix_all size=212
 //!   24 40 0:8
+//!   40 64 1:60 <- 0:8
 //! ```
 //!
 //! After the version line comes the file table, one `file <index> <name>`
@@ -22,18 +23,23 @@
 //! where any of them sits on the machine that built it. A control character
 //! or a backslash in a name is written as its Rust escape (`\n`, `\\`), so
 //! a name is always one line. Then one `fn <index> <link symbol>
-//! size=<bytes>` line per function, in the order they were compiled, each
+//! size=<bytes>` line per function, in the order the backend was handed them, each
 //! followed by its runs as `<start> <end> <file>:<line>`: byte offsets from
 //! the function's first byte, sorted, a run reaching the next one on the same
-//! line merged into it. A function the compiler synthesized with no source
-//! lists no runs. Lines are 1-based and count `\n` bytes, as diagnostics do.
+//! line, inlined through the same calls, merged into it. Code inlined into
+//! the function from another one lists, after its own line, each call it was
+//! inlined through as ` <- <file>:<line>`, innermost first: the line calling
+//! the function the code was written in, then the line calling the function
+//! that call was written in, out to a line of the function itself. A
+//! function the compiler synthesized with no source lists no runs. Lines are
+//! 1-based and count `\n` bytes, as diagnostics do.
 
 use crate::codegen::FunctionCodeMap;
 use crate::error::{CompilerError, SourceId};
 use std::fmt;
 
 /// The version the first line of a line map names.
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 /// The name the file table gives a program the build was handed as text,
 /// with no file of its own.
@@ -49,7 +55,7 @@ pub(crate) struct SourceFile<'s> {
 pub(crate) struct LineMap<'m> {
     /// Every source, indexed by [`SourceId`].
     files: &'m [SourceFile<'m>],
-    /// Every compiled function, in the order it was compiled.
+    /// Every compiled function, in the order the backend was handed it.
     functions: &'m [FunctionCodeMap],
 }
 
@@ -108,7 +114,11 @@ impl fmt::Display for LineMap<'_> {
                 function.symbol, function.code_size
             )?;
             for run in line_runs(function, &lines) {
-                writeln!(f, "  {} {} {}:{}", run.start, run.end, run.file, run.line)?;
+                write!(f, "  {} {} {}:{}", run.start, run.end, run.file, run.line)?;
+                for (file, line) in &run.inlined_at {
+                    write!(f, " <- {file}:{line}")?;
+                }
+                writeln!(f)?;
             }
         }
         Ok(())
@@ -116,36 +126,50 @@ impl fmt::Display for LineMap<'_> {
 }
 
 /// A run of a function's code generated from one source line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LineRun {
     start: u32,
     end: u32,
     file: SourceId,
     line: usize,
+    /// The lines of the calls the run was inlined through, innermost first.
+    inlined_at: Vec<(SourceId, usize)>,
 }
 
-/// The runs of `function`'s code, each on the line its source offset falls
-/// on, adjacent runs on one line merged. An offset past the end of the
-/// function's file names no line of it and is left out.
+/// The runs of `function`'s code, each on the line of its own file its
+/// source offset falls on, adjacent runs on one line of one file inlined
+/// through the same calls merged. An offset past the end of its file names
+/// no line of it: a run at one is left out, and so is a call site at one.
 fn line_runs(function: &FunctionCodeMap, lines: &[LineIndex]) -> Vec<LineRun> {
-    let Some(file) = function.source else {
-        return Vec::new();
-    };
-    let Some(index) = lines.get(file.index()) else {
-        return Vec::new();
+    let line_of = |source: SourceId, offset: u32| {
+        lines
+            .get(source.index())
+            .and_then(|index| index.line_of(offset as usize))
     };
     let mut runs: Vec<LineRun> = Vec::with_capacity(function.ranges.len());
     for range in &function.ranges {
-        let Some(line) = index.line_of(range.source_offset as usize) else {
+        let file = range.source;
+        let Some(line) = line_of(file, range.source_offset) else {
             continue;
         };
+        let inlined_at: Vec<(SourceId, usize)> = (range.inlined_at.iter())
+            .filter_map(|call| Some((call.source, line_of(call.source, call.offset)?)))
+            .collect();
         match runs.last_mut() {
-            Some(last) if last.end == range.start && last.line == line => last.end = range.end,
+            Some(last)
+                if last.end == range.start
+                    && last.file == file
+                    && last.line == line
+                    && last.inlined_at == inlined_at =>
+            {
+                last.end = range.end
+            }
             _ => runs.push(LineRun {
                 start: range.start,
                 end: range.end,
                 file,
                 line,
+                inlined_at,
             }),
         }
     }
@@ -189,7 +213,7 @@ impl LineIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::CodeRange;
+    use crate::codegen::{CodeRange, SourcePosition};
 
     #[test]
     fn the_first_line_is_line_one_and_a_newline_ends_its_line() {
@@ -238,7 +262,9 @@ mod tests {
         CodeRange {
             start,
             end,
+            source: SourceId::PROGRAM,
             source_offset,
+            inlined_at: Vec::new(),
         }
     }
 
@@ -258,7 +284,6 @@ mod tests {
             FunctionCodeMap {
                 symbol: "miri.f".to_string(),
                 code_size: 40,
-                source: Some(SourceId::PROGRAM),
                 ranges: vec![
                     range(0, 4, 0),
                     range(4, 8, 3),
@@ -270,14 +295,13 @@ mod tests {
             FunctionCodeMap {
                 symbol: "miri.$synthesized".to_string(),
                 code_size: 8,
-                source: None,
-                ranges: vec![range(0, 8, 0)],
+                ranges: Vec::new(),
             },
         ];
         let map = LineMap::new(&files, &functions).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             map.to_string(),
-            "miri-lines 1\n\
+            "miri-lines 2\n\
              file 0 prog.mi\n\
              file 1 system/math.mi\n\
              fn 0 miri.f size=40\n  \
@@ -288,11 +312,98 @@ mod tests {
         );
     }
 
+    /// Code inlined from a function of another file is listed on that
+    /// file's line, and a run of one file never merges into an adjacent run
+    /// of another on a line of the same number.
+    #[test]
+    fn a_run_names_its_own_file() {
+        let files = [
+            SourceFile {
+                name: "prog.mi",
+                text: "fn f()\n    1\n",
+            },
+            SourceFile {
+                name: "system/math.mi",
+                text: "a\nb\n",
+            },
+        ];
+        let library = SourceId::new(1);
+        let inlined = |start, end, source_offset| CodeRange {
+            source: library,
+            ..range(start, end, source_offset)
+        };
+        let functions = [FunctionCodeMap {
+            symbol: "miri.f".to_string(),
+            code_size: 16,
+            ranges: vec![
+                range(0, 4, 0),
+                inlined(4, 8, 0),
+                inlined(8, 12, 2),
+                range(12, 16, 11),
+            ],
+        }];
+        let map = LineMap::new(&files, &functions).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            map.to_string(),
+            "miri-lines 2\n\
+             file 0 prog.mi\n\
+             file 1 system/math.mi\n\
+             fn 0 miri.f size=16\n  \
+             0 4 0:1\n  \
+             4 8 1:1\n  \
+             8 12 1:2\n  \
+             12 16 0:2\n"
+        );
+    }
+
+    /// Code inlined through a chain of calls lists each call site after
+    /// its own line, innermost first, and two runs on one line merge only
+    /// when they were inlined through the same calls.
+    #[test]
+    fn a_run_lists_the_call_sites_it_was_inlined_through() {
+        let files = [
+            SourceFile {
+                name: "prog.mi",
+                text: "fn f()\n    1\n",
+            },
+            SourceFile {
+                name: "system/math.mi",
+                text: "a\nb\n",
+            },
+        ];
+        let library = SourceId::new(1);
+        let at = |source, offset| SourcePosition { source, offset };
+        let inlined = |start, end, source_offset, inlined_at| CodeRange {
+            source: library,
+            inlined_at,
+            ..range(start, end, source_offset)
+        };
+        let functions = [FunctionCodeMap {
+            symbol: "miri.f".to_string(),
+            code_size: 16,
+            ranges: vec![
+                inlined(0, 4, 0, vec![at(library, 2), at(SourceId::PROGRAM, 7)]),
+                inlined(4, 8, 0, vec![at(library, 2), at(SourceId::PROGRAM, 8)]),
+                inlined(8, 12, 0, vec![at(SourceId::PROGRAM, 0)]),
+                inlined(12, 16, 0, vec![at(SourceId::PROGRAM, 0)]),
+            ],
+        }];
+        let map = LineMap::new(&files, &functions).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            map.to_string(),
+            "miri-lines 2\n\
+             file 0 prog.mi\n\
+             file 1 system/math.mi\n\
+             fn 0 miri.f size=16\n  \
+             0 8 1:1 <- 1:2 <- 0:2\n  \
+             8 16 1:1 <- 0:1\n"
+        );
+    }
+
     fn function(symbol: &str) -> FunctionCodeMap {
         FunctionCodeMap {
             symbol: symbol.to_string(),
             code_size: 4,
-            source: Some(SourceId::PROGRAM),
             ranges: Vec::new(),
         }
     }
@@ -307,7 +418,7 @@ mod tests {
         let map = LineMap::new(&files, &functions).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             map.to_string(),
-            "miri-lines 1\nfile 0 a\\nfile 9 b\\\\c.mi\nfn 0 main size=4\n"
+            "miri-lines 2\nfile 0 a\\nfile 9 b\\\\c.mi\nfn 0 main size=4\n"
         );
     }
 

@@ -55,35 +55,51 @@ pub struct CompiledArtifact {
     /// asked for a listing.
     pub ir_listing: Option<String>,
     /// Where each compiled function's code came from, in the order the
-    /// functions were compiled, when the backend's options asked for it.
+    /// backend was handed the functions, when the backend's options asked
+    /// for it.
     /// Empty otherwise.
     pub code_map: Vec<FunctionCodeMap>,
 }
 
-/// The source offsets one compiled function's machine code was generated
-/// from.
+/// The places in the source one compiled function's machine code was
+/// generated from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCodeMap {
     /// The function's link symbol.
     pub symbol: String,
     /// The size of the function's machine code, in bytes.
     pub code_size: u32,
-    /// The file the offsets of `ranges` index, as the body recorded it.
-    pub source: Option<SourceId>,
     /// The function's code that came from a known place, ordered by offset
-    /// and not overlapping.
+    /// and not overlapping. Code inlined from another function names the
+    /// file that function was written in.
     pub ranges: Vec<CodeRange>,
 }
 
-/// A run of machine code generated from one place in the source.
+/// A place in the source: a file and a byte offset into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourcePosition {
+    /// The file.
+    pub source: SourceId,
+    /// The byte offset into `source`.
+    pub offset: u32,
+}
+
+/// A run of machine code generated from one place in the source.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeRange {
     /// The first byte of the run, from the start of the function.
     pub start: u32,
     /// The byte after the last byte of the run, from the start of the function.
     pub end: u32,
-    /// The byte offset into the source file the run was generated from.
+    /// The file the run was generated from.
+    pub source: SourceId,
+    /// The byte offset into `source` the run was generated from.
     pub source_offset: u32,
+    /// The calls the run's code was inlined through, innermost first: where
+    /// the function written at `source` was called, then where the function
+    /// holding that call was called, and so on. Empty for code that was not
+    /// inlined.
+    pub inlined_at: Vec<SourcePosition>,
 }
 
 impl CompiledArtifact {

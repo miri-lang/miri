@@ -33,19 +33,21 @@ pub(crate) struct Attribution {
 impl Attribution {
     /// Charge every stack of `record` against `table`: its first frame's line
     /// gets the samples as its own, or, outside any line, its function does;
-    /// every distinct line in the stack gets them inclusively.
+    /// every distinct line in the stack gets them inclusively, the lines of
+    /// the calls a frame's code was inlined through among them.
     pub(crate) fn of(record: &ProfileRecord, table: &LineTable) -> Self {
         let mut attribution = Self::default();
         let mut seen: HashSet<SourceLine> = HashSet::new();
         for stack in &record.stacks {
             // The counts come from a file; every total saturates.
             attribution.samples = attribution.samples.saturating_add(stack.count);
-            let lines: Vec<Option<SourceLine>> = stack
+            let lines: Vec<&[SourceLine]> = stack
                 .frames
                 .iter()
-                .map(|frame| line_of(frame, table))
+                .map(|frame| lines_of(frame, table))
                 .collect();
-            match (lines.first().copied().flatten(), stack.frames.first()) {
+            let own = lines.first().and_then(|lines| lines.first()).copied();
+            match (own, stack.frames.first()) {
                 (Some(line), _) => {
                     let samples = attribution.lines.entry(line).or_default();
                     samples.own = samples.own.saturating_add(stack.count);
@@ -58,7 +60,7 @@ impl Attribution {
                 (None, None) => {}
             }
             seen.clear();
-            for line in lines.into_iter().flatten() {
+            for &line in lines.into_iter().flatten() {
                 if seen.insert(line) {
                     let samples = attribution.lines.entry(line).or_default();
                     samples.inclusive = samples.inclusive.saturating_add(stack.count);
@@ -69,11 +71,12 @@ impl Attribution {
     }
 }
 
-/// The source line `frame` falls on, if any.
-fn line_of(frame: &RecordedFrame, table: &LineTable) -> Option<SourceLine> {
+/// The source line `frame` falls on followed by the lines of the calls its
+/// code was inlined through; empty outside any line.
+fn lines_of<'t>(frame: &RecordedFrame, table: &'t LineTable) -> &'t [SourceLine] {
     match frame {
-        RecordedFrame::Function { index, offset } => table.line_at(*index, *offset),
-        RecordedFrame::Other { .. } => None,
+        RecordedFrame::Function { index, offset } => table.lines_at(*index, *offset),
+        RecordedFrame::Other { .. } => &[],
     }
 }
 
@@ -202,8 +205,8 @@ pub(crate) fn render(profile: &JsonProfile) -> String {
 mod tests {
     use super::*;
 
-    const MAP: &str = "miri-lines 1\nfile 0 prog.mi\nfile 1 system/math.mi\n\
-                       fn 0 miri.spin size=64\n  0 8 0:3\n  8 40 0:8\n\
+    const MAP: &str = "miri-lines 2\nfile 0 prog.mi\nfile 1 system/math.mi\n\
+                       fn 0 miri.spin size=64\n  0 8 0:3\n  8 40 0:8\n  40 56 1:12 <- 0:8\n\
                        fn 1 miri$math.hash size=32\n  0 32 1:12\n\
                        fn 2 miri.$thunk size=8\n";
 
@@ -241,6 +244,24 @@ mod tests {
         assert_eq!((caller.self_samples, caller.inclusive_samples), (1, 4));
         assert_eq!(caller.inclusive_share, 1.0);
         assert_eq!(caller.text.as_deref(), Some("line 8"));
+    }
+
+    /// Code inlined into the sampled function holds its own line's self
+    /// time, and the line it was inlined at holds the time inclusively,
+    /// once however often the stack names it.
+    #[test]
+    fn inlined_code_charges_the_line_it_was_inlined_at_inclusively() {
+        let charged = attribution("miri-profile 1\nhz 1\n3 f0+44\n2 f0+44 f0+10\n");
+        let profile = shaped(&charged, 10);
+        let library = &profile.lines[0];
+        assert_eq!(
+            (library.path.as_str(), library.line),
+            ("system/math.mi", 12)
+        );
+        assert_eq!((library.self_samples, library.inclusive_samples), (5, 5));
+        let caller = &profile.lines[1];
+        assert_eq!((caller.path.as_str(), caller.line), ("prog.mi", 8));
+        assert_eq!((caller.self_samples, caller.inclusive_samples), (0, 5));
     }
 
     #[test]

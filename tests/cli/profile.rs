@@ -155,8 +155,34 @@ fn test_profile_binary_writes_its_record_where_the_variable_says() {
     assert!(!record.contains('/'), "the record names a path:\n{record}");
 }
 
-/// A program whose loop calls a library function on line 7.
+/// A program whose loop calls a library method on line 9. The method holds a
+/// loop of its own, which keeps an optimized build from inlining it, so the
+/// call stays a call a stack walk passes through.
 const LIBRARY_LOOP: &str = r#"use system.io
+use system.collections.list
+
+fn mix_all(n int) int
+    let values = List([3, 1, 4, 1, 5, 9, 2, 6])
+    var acc = 0
+    var i = 0
+    while i < n
+        acc = (acc + (values.sum() ?? 0) + i) % 1000003
+        i += 1
+    acc
+
+fn main()
+    println(f"{mix_all(40000000)}")
+"#;
+
+/// The line of `LIBRARY_LOOP` that calls into the library.
+const LIBRARY_CALL_LINE: usize = 9;
+
+/// The library file the method `LIBRARY_LOOP` calls is written in.
+const LIBRARY_FILE: &str = "system/collections/foldable.mi";
+
+/// A program whose loop calls, on line 8, a library function small enough
+/// for an optimized build to inline into the loop.
+const INLINED_LIBRARY_LOOP: &str = r#"use system.io
 use system.math
 
 fn mix_all(n int) u32
@@ -170,9 +196,6 @@ fn mix_all(n int) u32
 fn main()
     println(f"{mix_all(40000000)}")
 "#;
-
-/// The line of `LIBRARY_LOOP` that calls into the library.
-const LIBRARY_CALL_LINE: usize = 8;
 
 /// Write `source` as `prog.mi` in `dir` and run `miri profile` on it with
 /// `flags`, from `dir`.
@@ -270,27 +293,42 @@ fn test_profile_reports_the_hot_line_first() {
     assert!(typed.profile.is_some());
 }
 
-/// Time spent in a library function is charged to the library's own line
-/// as self time, and to the line calling it inclusively.
-#[test]
-fn test_profile_charges_library_time_to_the_library_and_its_caller() {
+/// Profile `source` and check the time spent in `library` is charged to
+/// the library's own lines as self time, and to `call_line` of the program
+/// inclusively.
+fn assert_library_time_reaches_its_caller(source: &str, library: &str, call_line: usize) {
     let dir = tempfile::tempdir().unwrap();
-    let envelope = profile_envelope(dir.path(), LIBRARY_LOOP, &["--top", "100"]);
+    let envelope = profile_envelope(dir.path(), source, &["--top", "100"]);
     assert_eq!(envelope["ok"], true, "{envelope:#}");
     let lines = envelope["profile"]["lines"].as_array().unwrap();
     let library_self: u64 = lines
         .iter()
-        .filter(|entry| entry["path"] == "system/math.mi")
+        .filter(|entry| entry["path"] == library)
         .map(|entry| entry["selfSamples"].as_u64().unwrap())
         .sum();
     assert!(library_self > 0, "no time in the library: {envelope:#}");
-    let caller = reported_line(&envelope, "prog.mi", LIBRARY_CALL_LINE)
+    let caller = reported_line(&envelope, "prog.mi", call_line)
         .unwrap_or_else(|| panic!("the calling line is not reported: {envelope:#}"));
     let inclusive = caller["inclusiveSamples"].as_u64().unwrap();
     assert!(
         inclusive >= library_self,
         "the caller's inclusive time {inclusive} misses the library's {library_self}"
     );
+}
+
+/// Time spent in a library function inlined into its caller is charged to
+/// the library's own line as self time, and to the line calling it
+/// inclusively, as if the call had stayed a call.
+#[test]
+fn test_profile_charges_inlined_library_time_to_the_library_and_its_caller() {
+    assert_library_time_reaches_its_caller(INLINED_LIBRARY_LOOP, "system/math.mi", 8);
+}
+
+/// Time spent in a library method the caller calls is charged to the
+/// library's own line as self time, and to the line calling it inclusively.
+#[test]
+fn test_profile_charges_library_time_to_the_library_and_its_caller() {
+    assert_library_time_reaches_its_caller(LIBRARY_LOOP, LIBRARY_FILE, LIBRARY_CALL_LINE);
 }
 
 /// In the pretty form the program's own output comes through unchanged and

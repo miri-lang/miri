@@ -44,12 +44,16 @@ tempfile = "3.24.0"
 thiserror = "2.0.17"
 walkdir = "2.5.0"
 
-# Cranelift backend (default)
-cranelift-codegen = { version = "0.127.1", optional = true }
-cranelift-frontend = { version = "0.127.1", optional = true }
-cranelift-module = { version = "0.127.1", optional = true }
-cranelift-object = { version = "0.127.1", optional = true }
-cranelift-native = { version = "0.127.1", optional = true }
+# Cranelift backend (default). Pinned exactly: restoring source locations
+# after inlining relies on `cranelift-codegen`'s inliner numbering the blocks
+# it copies from a callee in the callee's block order and copying each
+# block's instructions in layout order. A unit test of the inliner fails if
+# an upgrade changes that.
+cranelift-codegen = { version = "=0.127.1", optional = true }
+cranelift-frontend = { version = "=0.127.1", optional = true }
+cranelift-module = { version = "=0.127.1", optional = true }
+cranelift-object = { version = "=0.127.1", optional = true }
+cranelift-native = { version = "=0.127.1", optional = true }
 target-lexicon = { version = "0.13", optional = true }
 
 # LLVM backend (optional, requires LLVM installation)
@@ -71,7 +75,7 @@ naga = { version = "29.0", features = ["wgsl-in", "spv-out", "hlsl-out"] }
 # then only ever exercised by whichever machine happens to run the suite. Naming
 # both backends here keeps that difference under test everywhere; the feature
 # rides on the test profile alone, so the shipped compiler still carries one.
-cranelift-codegen = { version = "0.127.1", features = ["x86", "arm64"] }
+cranelift-codegen = { version = "=0.127.1", features = ["x86", "arm64"] }
 
 # The single integration test binary. Every suite entry point names it
 # (`cargo test --test mod`), so it is declared rather than discovered.

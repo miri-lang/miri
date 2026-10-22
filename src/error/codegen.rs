@@ -132,6 +132,16 @@ impl CodegenError {
         }
     }
 
+    /// Create the error inlining callees into the function `name` reports.
+    /// It is the compiler's own failure, reported as an internal one.
+    pub fn inlining(name: impl Into<String>, details: impl Into<String>) -> Self {
+        CodegenError::Internal(format!(
+            "inlining into '{}' failed: {}",
+            name.into(),
+            details.into()
+        ))
+    }
+
     /// Create a Translation error.
     pub fn translation(name: impl Into<String>, details: impl Into<String>) -> Self {
         CodegenError::Translation {

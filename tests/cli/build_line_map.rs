@@ -24,12 +24,29 @@ fn main()
 /// The line of `HASH_LOOP` its loop body is written on.
 const HOT_LINE: usize = 8;
 
-/// One range of a function's code, with the file and line it came from.
+/// One range of a function's code, with the file and line it came from and
+/// the file and line of each call it was inlined through, innermost first.
 struct MappedRange {
     start: u32,
     end: u32,
     file: usize,
     line: usize,
+    inlined_at: Vec<(usize, usize)>,
+}
+
+/// A `<file>:<line>` location of a line map.
+fn location(text: &str) -> (usize, usize) {
+    let (file, line) = text.split_once(':').unwrap();
+    (file.parse().unwrap(), line.parse().unwrap())
+}
+
+/// The 1-based line of `source` that contains `needle`.
+fn line_of(source: &str, needle: &str) -> usize {
+    source
+        .lines()
+        .position(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no line contains {needle:?}"))
+        + 1
 }
 
 /// One function of a line map: its link symbol, its code size and its ranges.
@@ -48,7 +65,7 @@ struct LineMap {
 impl LineMap {
     fn parse(text: &str) -> Self {
         let mut lines = text.lines();
-        assert_eq!(lines.next(), Some("miri-lines 1"), "no header:\n{text}");
+        assert_eq!(lines.next(), Some("miri-lines 2"), "no header:\n{text}");
         let mut map = Self {
             files: Vec::new(),
             functions: Vec::new(),
@@ -76,13 +93,21 @@ impl LineMap {
                     ranges: Vec::new(),
                 });
             }
-            [start, end, location] if line.starts_with("  ") => {
-                let (file, line) = location.split_once(':').unwrap();
+            [start, end, own, frames @ ..] if line.starts_with("  ") => {
+                let (file, line) = location(own);
+                let inlined_at = frames
+                    .chunks(2)
+                    .map(|frame| match frame {
+                        ["<-", at] => location(at),
+                        _ => panic!("unexpected call site {frame:?} in:\n{text}"),
+                    })
+                    .collect();
                 self.functions.last_mut().unwrap().ranges.push(MappedRange {
                     start: start.parse().unwrap(),
                     end: end.parse().unwrap(),
-                    file: file.parse().unwrap(),
-                    line: line.parse().unwrap(),
+                    file,
+                    line,
+                    inlined_at,
                 });
             }
             _ => panic!("unexpected line {line:?} in:\n{text}"),
@@ -339,7 +364,9 @@ fn build_padded_program(dir: &Path) -> (String, LineMap) {
 
 /// A default argument written in a module is evaluated in the caller's
 /// code, which maps to the caller's own lines: never to a line of the
-/// caller's file read off an offset into the module.
+/// caller's file read off an offset into the module. The module's functions
+/// an optimized build inlines into the caller map to the module's file and
+/// are not read here.
 #[test]
 fn test_default_argument_code_maps_to_the_calling_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -356,11 +383,24 @@ fn test_default_argument_code_maps_to_the_calling_line() {
         .find(|function| function.symbol == "main")
         .unwrap();
     let program_file = map.file_index("prog.mi");
-    for range in &main.ranges {
+    let own: Vec<&MappedRange> = (main.ranges.iter())
+        .filter(|range| range.file == program_file)
+        .collect();
+    assert!(!own.is_empty(), "main maps no code to prog.mi:\n{text}");
+    for range in own {
         assert!(
-            range.file == program_file && range.line >= main_line,
+            range.line >= main_line,
             "main maps code to {}:{} outside its own lines:\n{text}",
             range.file,
+            range.line
+        );
+    }
+    let module = map.file_index("local:util/strings.mi");
+    let module_lines = STRINGS_MODULE.lines().count();
+    for range in main.ranges.iter().filter(|range| range.file == module) {
+        assert!(
+            range.line <= module_lines,
+            "main maps code to strings.mi:{} past the module's last line:\n{text}",
             range.line
         );
     }
@@ -416,7 +456,9 @@ fn test_program_outside_the_working_directory_is_named_by_its_file() {
 
 /// A program class implementing a library trait, and a library class
 /// instantiated at a program type: the trait's default method and the
-/// class's method map to the library files that declare them.
+/// class's method map to the library files that declare them. The default
+/// method's calls into the program class's own methods, which an optimized
+/// build inlines, map to the lines those methods are written on.
 const LIBRARY_INSTANCES: &str = r#"use system.io
 use system.collections.list
 use system.collections.queryable
@@ -459,13 +501,163 @@ fn test_library_defaults_and_instances_map_to_the_library() {
     );
     let (text, map) = read_line_map(&executable);
     let first = map.function_naming(&["Bag", "first"]);
+    let queryable = map.file_index("system/collections/queryable.mi");
+    let list = map.file_index("system/collections/list.mi");
+    let program = map.file_index("prog.mi");
+    let bag_methods = [
+        line_of(LIBRARY_INSTANCES, "return self.items.length()"),
+        line_of(LIBRARY_INSTANCES, "return self.items.element_at(index)"),
+    ];
     assert!(
-        map.maps_only_into(first, "system/collections/queryable.mi"),
+        first.ranges.iter().any(|range| range.file == queryable),
         "Bag.first:\n{text}"
     );
+    for range in &first.ranges {
+        assert!(
+            range.file == queryable
+                || range.file == list
+                || (range.file == program && bag_methods.contains(&range.line)),
+            "Bag.first maps code to {}:{}:\n{text}",
+            range.file,
+            range.line
+        );
+    }
     let remove = map.function_naming(&["List", "Point", "remove"]);
     assert!(
         map.maps_only_into(remove, "system/collections/list.mi"),
         "List<Point>.remove:\n{text}"
+    );
+}
+
+/// A loop calling a function of the program's own and one of the library's,
+/// each small enough for an optimized build to inline.
+const INLINED_CALLS: &str = r#"use system.io
+use system.math
+
+fn scramble(v u32) u32
+    v ^ (v / 16 as u32)
+
+fn mix_all(n int) u32
+    var acc = 0 as u32
+    var i = 0
+    while i < n
+        acc = acc ^ hash_u32(scramble(i as u32))
+        i += 1
+    acc
+
+fn main()
+    println(f"{mix_all(1000)}")
+"#;
+
+/// Code inlined into a caller maps to the file and line the callee was
+/// written on: a helper of the program's own to its line, and a library
+/// function to the library file's lines, never to a line of the caller's
+/// file read off an offset into the library's.
+#[test]
+fn test_inlined_code_maps_to_its_callee_file_and_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let executable = build_files(
+        dir.path(),
+        &[("prog.mi", INLINED_CALLS)],
+        &["--release", "--emit", "lines"],
+    );
+    let (text, map) = read_line_map(&executable);
+    let program = map.file_index("prog.mi");
+    let math = map.file_index("system/math.mi");
+    let library = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/stdlib/system/math.mi"),
+    )
+    .unwrap();
+    let hash_lines = library
+        .lines()
+        .position(|line| line.starts_with("public fn hash_u32"))
+        .map(|index| index + 1..=index + 8)
+        .unwrap();
+    let scramble_line = line_of(INLINED_CALLS, "v ^ (v / 16 as u32)");
+    let mix_all_lines = line_of(INLINED_CALLS, "fn mix_all")..line_of(INLINED_CALLS, "fn main()");
+    let call_line = line_of(INLINED_CALLS, "hash_u32(scramble(");
+    let mix_all = map.function("mix_all");
+    for range in &mix_all.ranges {
+        let line = range.line;
+        let inlined = range.file == math || line == scramble_line;
+        assert!(
+            (range.file == program && (line == scramble_line || mix_all_lines.contains(&line)))
+                || (range.file == math && hash_lines.contains(&line)),
+            "mix_all maps code to {}:{line}:\n{text}",
+            range.file
+        );
+        let expected: Vec<(usize, usize)> = if inlined {
+            vec![(program, call_line)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            range.inlined_at, expected,
+            "mix_all's code at {}:{line} names the wrong calls:\n{text}",
+            range.file
+        );
+    }
+    assert!(
+        mix_all
+            .ranges
+            .iter()
+            .any(|range| range.file == program && range.line == scramble_line),
+        "no code of mix_all maps to the inlined helper's line:\n{text}"
+    );
+    assert!(
+        mix_all.ranges.iter().any(|range| range.file == math),
+        "no code of mix_all maps to the inlined library function:\n{text}"
+    );
+}
+
+/// A leaf inlined into a helper that is itself inlined into a loop.
+const NESTED_CALLS: &str = r#"use system.io
+
+fn leaf(v int) int
+    v * 3 + 1
+
+fn middle(v int) int
+    leaf(v) + 2
+
+fn outer(n int) int
+    var acc = 0
+    var i = 0
+    while i < n
+        acc = (acc + middle(i)) % 1000003
+        i += 1
+    acc
+
+fn main()
+    println(f"{outer(1000)}")
+"#;
+
+/// Code inlined through two calls lists both, innermost first: the leaf's
+/// line inlined at the helper's call of it, inlined at the loop's call of
+/// the helper.
+#[test]
+fn test_code_inlined_through_two_calls_lists_both_call_sites() {
+    let dir = tempfile::tempdir().unwrap();
+    let executable = build_files(
+        dir.path(),
+        &[("prog.mi", NESTED_CALLS)],
+        &["--release", "--emit", "lines"],
+    );
+    let (text, map) = read_line_map(&executable);
+    let program = map.file_index("prog.mi");
+    let leaf_line = line_of(NESTED_CALLS, "v * 3 + 1");
+    let leaf_call = line_of(NESTED_CALLS, "leaf(v) + 2");
+    let middle_call = line_of(NESTED_CALLS, "acc + middle(i)");
+    let outer = map.function("outer");
+    assert!(
+        outer.ranges.iter().any(|range| range.file == program
+            && range.line == leaf_line
+            && range.inlined_at == vec![(program, leaf_call), (program, middle_call)]),
+        "no code of outer maps to the leaf inlined through both calls:\n{text}"
+    );
+    assert!(
+        outer.ranges.iter().any(|range| range.file == program
+            && range.line == leaf_call
+            && range.inlined_at == vec![(program, middle_call)]),
+        "no code of outer maps to the helper inlined at the loop:\n{text}"
     );
 }

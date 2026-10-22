@@ -16,7 +16,7 @@ All diagnostic codes follow the format `MER_<AREA>_<NUM>`, where AREA is a two-l
 
 ## Profiling
 
-`miri profile <input>` builds the input as `--profile` builds it, runs it while the runtime samples its CPU time, and lists the source lines with the most samples, each with its self share, its inclusive share and its text, then the functions outside any source line, such as the runtime's. A program built with `--profile` samples itself when `MIRI_PROFILE_OUT` names a file to write its record to, at `MIRI_PROFILE_HZ` samples a second (1000 by default); without the variable it installs nothing. Sampling runs on macOS and Linux, on aarch64 and x86-64; elsewhere the command reports `MER_BLD_027`. A run too short to sample reports `MER_BLD_028`, and one that died `MER_BLD_029`.
+`miri profile <input>` builds the input as `--profile` builds it, runs it while the runtime samples its CPU time, and lists the source lines with the most samples, each with its self share, its inclusive share and its text, then the functions outside any source line, such as the runtime's. Code an optimized build inlined into its caller is charged to the line it was written on, and inclusively to every line it was inlined through, as if each call had stayed a call. A program built with `--profile` samples itself when `MIRI_PROFILE_OUT` names a file to write its record to, at `MIRI_PROFILE_HZ` samples a second (1000 by default); without the variable it installs nothing. Sampling runs on macOS and Linux, on aarch64 and x86-64; elsewhere the command reports `MER_BLD_027`. A run too short to sample reports `MER_BLD_028`, and one that died `MER_BLD_029`.
 
 ## Machine-Readable Output
 

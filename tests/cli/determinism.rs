@@ -96,6 +96,50 @@ fn test_determinism_check_passes_on_a_profile_line_map() {
         .stdout(predicates::str::contains("Determinism check passed"));
 }
 
+/// Helpers an optimized build inlines: two reaching string literals, one
+/// of the library's, and one inlined into another.
+const INLINED_HELPERS: &str = r#"
+use system.io
+use system.math
+
+fn greeting() String
+    "hello"
+
+fn label(n int) String
+    f"n={n}"
+
+fn leaf(v u32) u32
+    v ^ (v / 16 as u32)
+
+fn mix(v u32) u32
+    hash_u32(leaf(v))
+
+fn main()
+    var acc = 0 as u32
+    var i = 0
+    while i < 100
+        acc = acc ^ mix(i as u32)
+        i += 1
+    println(f"{greeting()} {label(3)} {acc}")
+"#;
+
+/// A build that inlines comes out the same every time, with and without
+/// the line map a profile build writes.
+#[test]
+fn test_determinism_check_passes_with_inlined_helpers() {
+    let file = create_test_file(INLINED_HELPERS);
+    for flags in [&["--release"][..], &["--profile"]] {
+        miri_cmd()
+            .arg("determinism")
+            .arg("check")
+            .arg(file.path())
+            .args(flags)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("Determinism check passed"));
+    }
+}
+
 #[test]
 fn test_determinism_check_json_format_pass() {
     let file = create_test_file(HELLO_WORLD);

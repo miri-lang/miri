@@ -1,0 +1,65 @@
+name: Optimized suite
+
+# The suite builds its programs unoptimized unless the test process sets
+# MIRI_OPT_LEVEL, and only optimized builds inline small functions into
+# their callers. This job runs the program corpus at level 3, the level
+# `--release` builds at, with the harness's reference-counting verifier on as
+# always, so an inlining or optimization defect fails the test whose program
+# it breaks. It runs nightly rather than on every PR, like the heap guard: it
+# rebuilds every program of the corpus at the slower optimizing level.
+on:
+  schedule:
+    - cron: "0 2 * * *" # 02:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  opt-level-3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      # Always test the current tip of `main`, not the commit that triggered the
+      # run, so a fix already merged shows up on a manual re-run instead of
+      # waiting for the next cron.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install LLVM/Clang 21.1.8 (apt.llvm.org)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release software-properties-common ca-certificates
+
+          wget -O- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+
+          sudo apt-get update
+
+          CANDIDATE="$(apt-cache madison clang-21 | awk '{print $3}' | head -n1)"
+          echo "$CANDIDATE" | grep -q '21\.1\.8'
+
+          sudo apt-get install -y \
+            clang-21="$CANDIDATE" \
+            llvm-21="$CANDIDATE" \
+            llvm-21-dev="$CANDIDATE" \
+            libclang-21-dev="$CANDIDATE" \
+            libpolly-21-dev="$CANDIDATE"
+
+      - name: Build the runtimes
+        run: make runtimes
+
+      - name: Run the program corpus at opt level 3
+        env:
+          MIRI_OPT_LEVEL: "3"
+        run: cargo test --test mod -- --test-threads=8 integration:: stdlib:: e2e::

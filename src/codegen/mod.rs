@@ -16,6 +16,7 @@ pub mod wgsl;
 
 pub use backend::{
     ArtifactFormat, Backend, BuildTarget, CodeRange, CompiledArtifact, CpuBackend, FunctionCodeMap,
+    SourcePosition,
 };
 pub use cranelift::CraneliftBackend;
 pub use llvm::LlvmBackend;

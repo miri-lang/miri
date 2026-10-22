@@ -2198,6 +2198,7 @@ impl Pipeline {
                 preserve_frame_pointers: opts.preserve_frame_pointers,
                 code_map: opts.emit.contains(&Listing::Lines),
                 profile_table: opts.preserve_frame_pointers,
+                inline: opts.opt_level > 0,
                 ..Default::default()
             };
             let artifact = backend
