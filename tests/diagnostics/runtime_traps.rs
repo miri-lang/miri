@@ -155,7 +155,18 @@ fn test_every_code_the_runtime_names_is_a_registered_runtime_code() {
     // reader as a diagnostic naming nothing.
     let mut seen = 0;
     for (path, text) in runtime_core_sources() {
-        for start in text.match_indices("MER_").map(|(at, _)| at) {
+        // A code starts a word: `ITIMER_PROF` holds the letters and names none.
+        let starts_a_word = |at: usize| {
+            text[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+        };
+        for start in text
+            .match_indices("MER_")
+            .map(|(at, _)| at)
+            .filter(|&at| starts_a_word(at))
+        {
             let name: String = text[start..]
                 .chars()
                 .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')

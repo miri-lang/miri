@@ -83,6 +83,10 @@ pub mod rt {
     /// which carries none of the hooks above, not in stdlib. The runtime then
     /// keeps its own checks off to match and says so if one was asked for.
     pub const CHECKS_COMPILED_OUT: &str = "miri_rt_checks_compiled_out";
+    /// Compiler-internal: called once at the entry point of a profile build,
+    /// with the table of its compiled functions, not in stdlib. The runtime
+    /// starts sampling when the environment asks for a profile.
+    pub const PROFILE_INIT: &str = "miri_rt_profile_init";
     /// Compiler-internal: answers whether a managed object has more than one
     /// reference, not in stdlib. Asked before a write into a struct, or into a
     /// collection reached through a field, so the write copies a shared value
@@ -429,6 +433,7 @@ pub mod rt {
         RC_STATS_COW_COPY,
         TRACKING_STATE,
         CHECKS_COMPILED_OUT,
+        PROFILE_INIT,
         RC_IS_SHARED,
         // Array
         ARRAY_NEW,

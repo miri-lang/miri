@@ -252,6 +252,7 @@ fn test_compile_with_all_opt_levels() {
             runtime_checks: true,
             preserve_frame_pointers: false,
             code_map: false,
+            profile_table: false,
         };
         let artifact = backend
             .compile(&[], &options)
@@ -275,6 +276,7 @@ fn test_compile_with_pic_disabled() {
         runtime_checks: true,
         preserve_frame_pointers: false,
         code_map: false,
+        profile_table: false,
     };
     let artifact = backend
         .compile(&[], &options)

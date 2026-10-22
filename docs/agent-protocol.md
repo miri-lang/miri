@@ -64,10 +64,10 @@ near either bound.
 and edits source; the served methods are `initialize`, `check`, `explain`,
 `fixApply`, `view`, `patch` and `skillsGet`, and none of them
 produces an artifact or a program's output. There is no `run`, `build`, `test`,
-`fmt` or `determinism` method, and none is reserved for a later build.
+`profile`, `fmt` or `determinism` method, and none is reserved for a later build.
 
 An integration that has to execute what it compiled shells out to `miri run`,
-`miri build` or `miri test`. Those commands accept `--format json` and print
+`miri build`, `miri test` or `miri profile`. Those commands accept `--format json` and print
 the same envelope this session returns, so a client parses one shape either
 way. What it costs is the process start-up this session exists to avoid —
 around 10ms per call — which is why the split falls where it does: the loop an
@@ -114,6 +114,7 @@ not serve, or omitted a parameter.
 | `patch` | the edits validated and were applied | 0 / 1 | `patch` |
 | `explain` | the code is registered | 0 / 1 | `explain` |
 | `determinism` | the artifacts are byte-identical | 0 / 1 | *command line only* |
+| `profile` | the program ran to completion **and** left samples to report, carried in `profile` (a trap, a signal or a run too short to sample makes it false) | the program's own status; 1 when it could not be profiled | *command line only* |
 | `skill` | the operation completed | 0 / 1 | `skillsGet` |
 
 **An apply that wrote nothing over an error nothing can repair reports `ok: false`,** carrying `MER_BLD_020` alongside the errors that stood. A file whose only diagnostics are warnings had nothing to repair and reports the success it is.

@@ -146,6 +146,39 @@ pub enum Commands {
         program_args: Vec<String>,
     },
 
+    /// Profile a Miri program: run it sampled, and report its hottest lines
+    ///
+    /// Builds the program as `--profile` does, runs it with `program args`
+    /// while the runtime samples its CPU time, and charges each sample to
+    /// the source line it was taken on (self time) and to every line of its
+    /// stack (inclusive time). The program's own output passes through; the
+    /// report follows it on stderr, or, with `--format json`, goes into the
+    /// envelope's `profile` member. Runs on macOS and Linux, on aarch64 and
+    /// x86-64.
+    Profile {
+        /// Path to the Miri source file to profile
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// How many lines, and runtime functions, the report lists
+        #[arg(long, value_name = "N", default_value_t = crate::cli::profile::DEFAULT_TOP)]
+        top: usize,
+
+        /// Samples per second of CPU time (1-10000). The kernel may deliver
+        /// fewer: macOS caps its profiling timer near 100-150 Hz
+        #[arg(long, value_name = "RATE", default_value_t = crate::cli::profile::DEFAULT_HZ,
+              value_parser = clap::value_parser!(u32).range(1..=crate::cli::profile::MAX_HZ as i64))]
+        hz: u32,
+
+        /// Output format (pretty or JSON)
+        #[arg(long, value_enum, default_value_t = Format::Pretty)]
+        format: Format,
+
+        /// Arguments to pass to the program
+        #[arg(last = true)]
+        program_args: Vec<String>,
+    },
+
     /// Build a Miri source file
     Build {
         /// Path to the Miri source file to build
@@ -295,7 +328,7 @@ pub enum Commands {
     /// EXECUTING A PROGRAM. This session type-checks, explains, repairs, reads
     /// and edits source. It does not run, build or test a program, and no
     /// method will: an integration that has to execute what it compiled shells
-    /// out to `miri run`, `miri build` or `miri test`.
+    /// out to `miri run`, `miri build`, `miri test` or `miri profile`.
     ///
     /// The whole protocol, with a worked example per method, is in
     /// docs/agent-protocol.md.

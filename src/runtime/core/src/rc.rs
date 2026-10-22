@@ -93,6 +93,9 @@ pub(crate) fn report_leak_check_at_exit() {
         } else {
             format!("MIRI_LEAK_CHECK: leaked {cl_balance} closure allocation(s)\n")
         };
+        // `_exit` below skips the profiler's atexit handler too; a leak
+        // leaves the heap sound enough to write its record.
+        crate::profile::finish();
         unsafe {
             libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
             // Use _exit to bypass atexit handlers — calling std::process::exit here

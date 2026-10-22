@@ -2345,7 +2345,7 @@ fn test_a_program_cannot_be_run_over_the_protocol_and_the_help_text_says_so() {
         .filter_map(Value::as_str)
         .collect();
 
-    for command in ["run", "build", "test", "fmt", "determinism"] {
+    for command in ["run", "build", "test", "profile", "fmt", "determinism"] {
         assert!(
             !named.contains(&command),
             "`{command}` is not served and not reserved, got {named:?}"
@@ -2361,6 +2361,11 @@ fn test_a_program_cannot_be_run_over_the_protocol_and_the_help_text_says_so() {
     assert!(
         help.contains("shells out"),
         "and should say what to do instead, got:\n{help}"
+    );
+    assert!(
+        help.contains("`miri profile`"),
+        "profiling runs the program too, so the help names it among the commands to shell \
+         out to, got:\n{help}"
     );
 }
 

@@ -194,6 +194,7 @@ at module level are private and may change without notice.
 | `io`         | `io::ffi`                   | `miri_rt_print`, `miri_rt_println`, `miri_rt_eprint`, `miri_rt_eprintln`, `miri_rt_get_line_end` |
 | `string`     | `string::ffi`               | `miri_rt_string_new`, `miri_rt_string_free`, `miri_rt_string_len`, … |
 | `time`       | `time::ffi`                 | `miri_rt_nanotime`, `miri_rt_sleep_nanos`         |
+| `profile`    | `profile::ffi`              | `miri_rt_profile_init` (called by a `--profile` build's entry point, not declared in stdlib) |
 | `tuple`      | `tuple::ffi`                | `miri_rt_tuple_len`                                |
 
 All symbols are also re-exported at the crate root via `pub use {module}::ffi::*` in
@@ -202,6 +203,27 @@ resolve correctly.
 
 The `rc` module contains only internal helpers (`alloc_with_rc`, `free_with_rc`,
 `RC_HEADER_SIZE`) and does **not** expose a `pub mod ffi`.
+
+### The profiler (`profile`)
+
+`miri_rt_profile_init(table, count)` is called once by the entry point of a
+`--profile` build, with the build's own function table. Like every runtime
+symbol it trusts its arguments: `table` must point to `count` readable entries
+(or be null with a count of zero), and nothing checks them. It installs nothing
+unless `MIRI_PROFILE_OUT` is set.
+
+The `SIGPROF` handler runs on the stack of the thread it interrupts: it is
+installed without `SA_ONSTACK`, and its frame array (512 bytes) and the walk's
+locals sit there, below the interrupted frame. On Linux the timer signals the
+main thread alone (`SIGEV_THREAD_ID`), so no other thread is interrupted. On macOS
+`setitimer(ITIMER_PROF)` is process-wide and the kernel may deliver the signal
+to any thread, a GPU driver's included; such a sample records its instruction
+alone, and the system call it interrupts is restarted (`SA_RESTART`). A
+profiled GPU run can be perturbed by the signals either way.
+
+The record is written at exit, from the `atexit` hook, `exit`, a runtime trap,
+or a leak report that ends the process, but not after the heap guard finds the
+heap corrupted, since writing it allocates.
 
 ---
 

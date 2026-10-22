@@ -68,6 +68,9 @@ pub struct DiagnosticsEnvelope {
     /// What the run's GPU work cost (run command, programs that used the GPU).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu: Option<JsonGpuTelemetry>,
+    /// Where a profiled run spent its time (profile command only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<JsonProfile>,
 }
 
 impl DiagnosticsEnvelope {
@@ -94,6 +97,7 @@ impl DiagnosticsEnvelope {
             skills: None,
             codes: None,
             gpu: None,
+            profile: None,
         }
     }
 
@@ -176,6 +180,75 @@ impl DiagnosticsEnvelope {
         self.gpu = Some(gpu);
         self
     }
+
+    /// Set where a profiled run spent its time.
+    pub fn with_profile(mut self, profile: JsonProfile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+}
+
+/// Where a profiled run spent its time, as samples of CPU time.
+///
+/// A sample is charged to the line its interrupted instruction was compiled
+/// from as self time, and to every distinct line of its stack as inclusive
+/// time, so a line calling a hot function holds that function's time
+/// inclusively. A sample interrupted outside any source line — in the
+/// runtime, the C library, or code the compiler synthesized — is charged to
+/// the function it was in, under `runtime`. Shares are fractions of
+/// `samples`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonProfile {
+    /// The samples asked for per second of CPU time.
+    pub hz: u32,
+    /// The samples kept, which every share is a fraction of.
+    pub samples: u64,
+    /// The samples taken but not kept, for want of room in the buffer.
+    pub dropped: u64,
+    /// The samples kept but left out of the shares: their stacks were first
+    /// seen after the most distinct stacks the runtime's record lists.
+    pub truncated: u64,
+    /// The lines with the most self time, most first.
+    pub lines: Vec<JsonProfileLine>,
+    /// The functions outside any source line with the most self time, most
+    /// first.
+    pub runtime: Vec<JsonProfileFunction>,
+}
+
+/// One source line's share of a profiled run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonProfileLine {
+    /// The file, as the build's line map names it: the program by its file
+    /// name, a library module by its file under the library root, a module
+    /// of the program's own marked `local:`. Never an absolute path.
+    pub path: String,
+    /// The line, 1-based.
+    pub line: usize,
+    /// The samples interrupted on this line.
+    pub self_samples: u64,
+    /// The samples with this line anywhere in their stack.
+    pub inclusive_samples: u64,
+    /// `selfSamples` as a fraction of the run's samples.
+    pub self_share: f64,
+    /// `inclusiveSamples` as a fraction of the run's samples.
+    pub inclusive_share: f64,
+    /// The line's source text, when the file could be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// One function's self time in a profiled run, outside any source line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonProfileFunction {
+    /// The function's symbol, or `(unknown)` when the loader names none.
+    pub symbol: String,
+    /// The samples interrupted in this function.
+    pub self_samples: u64,
+    /// `selfSamples` as a fraction of the run's samples.
+    pub self_share: f64,
 }
 
 /// What a run's GPU work cost, in the residency operations the cost model is
@@ -314,6 +387,7 @@ pub enum JsonCommand {
     Fmt,
     Determinism,
     Skill,
+    Profile,
 }
 
 /// A single diagnostic (error, warning, or note).

@@ -136,7 +136,7 @@ This is the one loop the compiler's documentation recommends; everything else de
 
 1. **miri check** — `miri check myfile.mi --format json`. Each diagnostic has a `code`, a `help` and, where one exists, a `repair` with its edits. A diagnostic without a `repair` is one you edit yourself.
 2. **Edit** — `miri fix myfile.mi --apply --yes` writes every recorded repair in one call. Everything else is an ordinary edit; in a file already in canonical layout, `miri patch myfile.mi --replace-in-fn name --old text --new text` makes a scoped edit and re-checks before anything reaches disk.
-3. **miri test** / **miri run** — `miri test --dir <DIR>`, `miri run myfile.mi`; both take `--format json`. Only a run finds a fault the frontend cannot see. Anything you time runs optimized: `miri run myfile.mi --release`; without the flag the program is compiled unoptimized.
+3. **miri test** / **miri run** — `miri test --dir <DIR>`, `miri run myfile.mi`; both take `--format json`. Only a run finds a fault the frontend cannot see. Anything you time runs optimized: `miri run myfile.mi --release`; without the flag the program is compiled unoptimized. To see which lines a slow program spends its time on, `miri profile myfile.mi --format json` runs it sampled and lists its hottest `file:line`s, most self time first.
 
 The auto-applicable repairs are:
 - `add-import`: Import a name that resolves in exactly one module.

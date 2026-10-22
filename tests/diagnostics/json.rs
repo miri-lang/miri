@@ -80,6 +80,7 @@ mod tests {
             skills: None,
             codes: None,
             gpu: None,
+            profile: None,
         };
 
         let json_str = serde_json::to_string(&envelope).expect("serialize");

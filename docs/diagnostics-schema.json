@@ -15,7 +15,7 @@
     },
     "command": {
       "type": "string",
-      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', 'view', 'patch', or 'skill'.",
+      "description": "The command that produced this envelope: 'check', 'build', 'run', 'test', 'explain', 'fix', 'determinism', 'view', 'patch', 'skill', or 'profile'.",
       "enum": [
         "check",
         "build",
@@ -26,7 +26,8 @@
         "determinism",
         "view",
         "patch",
-        "skill"
+        "skill",
+        "profile"
       ]
     },
     "diagnostics": {
@@ -151,6 +152,14 @@
       ],
       "description": "What the run's GPU work cost (run command only). Absent for a program that never reached the GPU runtime, which is what distinguishes no GPU work from GPU work that cost nothing.",
       "$ref": "#/$defs/JsonGpuTelemetry"
+    },
+    "profile": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Where a profiled run spent its CPU time (profile command only). Absent when the run left no samples to report, which a diagnostic then explains.",
+      "$ref": "#/$defs/JsonProfile"
     }
   },
   "required": [
@@ -848,6 +857,118 @@
         "uploads",
         "launches",
         "readbacks"
+      ]
+    },
+    "JsonProfile": {
+      "type": "object",
+      "description": "Where a profiled run spent its time, as samples of CPU time. A sample is charged to the line its interrupted instruction was compiled from as self time, and to every distinct line of its stack as inclusive time. A sample interrupted outside any source line is charged to the function it was in, under runtime. Shares are fractions of samples.",
+      "properties": {
+        "hz": {
+          "type": "integer",
+          "description": "The samples asked for per second of CPU time. The kernel may deliver fewer."
+        },
+        "samples": {
+          "type": "integer",
+          "description": "The samples kept, which every share is a fraction of."
+        },
+        "dropped": {
+          "type": "integer",
+          "description": "The samples taken but not kept, for want of room in the runtime's buffer."
+        },
+        "truncated": {
+          "type": "integer",
+          "description": "The samples kept but left out of the shares: their stacks were first seen after the most distinct stacks the runtime's record lists (65536)."
+        },
+        "lines": {
+          "type": "array",
+          "description": "The lines with the most self time, most first, then by inclusive time; at most --top of them.",
+          "items": {
+            "$ref": "#/$defs/JsonProfileLine"
+          }
+        },
+        "runtime": {
+          "type": "array",
+          "description": "The functions outside any source line with the most self time, most first; at most --top of them.",
+          "items": {
+            "$ref": "#/$defs/JsonProfileFunction"
+          }
+        }
+      },
+      "required": [
+        "hz",
+        "samples",
+        "dropped",
+        "truncated",
+        "lines",
+        "runtime"
+      ]
+    },
+    "JsonProfileLine": {
+      "type": "object",
+      "description": "One source line's share of a profiled run.",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The file as the build's line map names it: the program by its file name, a library module by its file under the library root (system/json.mi), a module of the program's own marked local: (local:util/strings.mi). Never an absolute path."
+        },
+        "line": {
+          "type": "integer",
+          "description": "The line, 1-based."
+        },
+        "selfSamples": {
+          "type": "integer",
+          "description": "The samples interrupted on this line."
+        },
+        "inclusiveSamples": {
+          "type": "integer",
+          "description": "The samples with this line anywhere in their stack, each counted once."
+        },
+        "selfShare": {
+          "type": "number",
+          "description": "selfSamples as a fraction of samples."
+        },
+        "inclusiveShare": {
+          "type": "number",
+          "description": "inclusiveSamples as a fraction of samples."
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The line's source text, when the file could be read. Absent otherwise."
+        }
+      },
+      "required": [
+        "path",
+        "line",
+        "selfSamples",
+        "inclusiveSamples",
+        "selfShare",
+        "inclusiveShare"
+      ]
+    },
+    "JsonProfileFunction": {
+      "type": "object",
+      "description": "One function's self time in a profiled run, outside any source line: the runtime, the C library, or code the compiler synthesized.",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "description": "The function's symbol, or (unknown) when the loader names none."
+        },
+        "selfSamples": {
+          "type": "integer",
+          "description": "The samples interrupted in this function."
+        },
+        "selfShare": {
+          "type": "number",
+          "description": "selfSamples as a fraction of samples."
+        }
+      },
+      "required": [
+        "symbol",
+        "selfSamples",
+        "selfShare"
       ]
     }
   }

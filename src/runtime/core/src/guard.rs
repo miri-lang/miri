@@ -589,6 +589,9 @@ extern "C" fn leak_report_at_exit() {
     if msg.is_empty() {
         return;
     }
+    // `_exit` skips the atexit handlers still to run, the profiler's among
+    // them; a leak leaves the heap sound enough to write its record.
+    crate::profile::finish();
 
     unsafe {
         libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
@@ -850,6 +853,8 @@ pub fn report_touch_and_abort(verdict: TouchVerdict, payload_ptr: usize) -> ! {
     };
 
     let msg = format_touch_report(verdict, record, Location::caller());
+    // No profile record here: writing one allocates, and the heap has just
+    // been found touched after release, so it is not trusted with that.
 
     unsafe {
         libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());

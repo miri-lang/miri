@@ -191,6 +191,25 @@ fn run_command(cli: Cli) -> Result<()> {
                 }
             },
             Commands::Skill(cmd) => skill_command(cmd, cli.color),
+            Commands::Profile {
+                path,
+                top,
+                hz,
+                format,
+                program_args,
+            } => {
+                let request = miri::cli::profile::ProfileRequest {
+                    path: &path,
+                    program_args: &program_args,
+                    settings: miri::cli::profile::ProfileSettings { top, hz },
+                    verify_mir: cli.verify_mir,
+                };
+                let status = miri::cli::profile::run(&request, format, cli.color);
+                if status != 0 {
+                    std::process::exit(status);
+                }
+                Ok(())
+            }
         },
         None => {
             Cli::command().print_help()?;
@@ -309,8 +328,8 @@ fn run_file(
 /// raised follow whatever ended the run, and never make it fail.
 fn report_run(result: &RunCaptureResult, notices: Vec<JsonDiagnostic>, elapsed_ms: u64) -> i32 {
     let (exit_code, signal, trap_code) = (result.exit_code, result.signal, result.trap_code);
-    let (stdout_tail, stdout_truncated) = tail_output(&result.stdout, 8192);
-    let (stderr_tail, stderr_truncated) = tail_output(&result.stderr, 8192);
+    let (stdout_tail, stdout_truncated) = miri::cli::output_tail(&result.stdout, 8192);
+    let (stderr_tail, stderr_truncated) = miri::cli::output_tail(&result.stderr, 8192);
 
     // Compute the final exit code: if killed by signal, use 128 + signal; otherwise use the status code.
     // If there's no status code and no signal, NO_EXIT_STATUS (-1) reports as 255.
@@ -405,37 +424,6 @@ fn trap_diagnostic(code: DiagnosticCode) -> JsonDiagnostic {
 /// reports that stand-in rather than a number the program chose: a program
 /// that exits with -1 is reported as 255, so the two cannot be confused.
 const NO_EXIT_STATUS: i32 = -1;
-
-/// Extract the last N bytes of a UTF-8 string, truncating on char boundaries.
-/// Returns (tail_string, was_truncated).
-fn tail_output(bytes: &[u8], max_len: usize) -> (String, bool) {
-    if bytes.len() <= max_len {
-        (String::from_utf8_lossy(bytes).into_owned(), false)
-    } else {
-        // Start from the end and walk backwards to find a char boundary
-        let start = bytes.len() - max_len;
-        // Align to the next valid char boundary
-        let mut aligned_start = start;
-        while aligned_start < bytes.len() && !is_char_boundary(bytes, aligned_start) {
-            aligned_start += 1;
-        }
-        let tail = &bytes[aligned_start..];
-        (String::from_utf8_lossy(tail).into_owned(), true)
-    }
-}
-
-/// Check if a byte position is a UTF-8 character boundary.
-fn is_char_boundary(bytes: &[u8], pos: usize) -> bool {
-    if pos > bytes.len() {
-        return false;
-    }
-    if pos == 0 || pos == bytes.len() {
-        return true;
-    }
-    // UTF-8 continuation bytes have the form 10xxxxxx
-    // A char boundary is where a byte does NOT have the 10xxxxxx pattern
-    (bytes[pos] & 0xc0) != 0x80
-}
 
 fn build_file(
     path: PathBuf,

@@ -257,6 +257,26 @@ fn build_exemplar_envelope() -> DiagnosticsEnvelope {
             launches: 2,
             readbacks: 1,
         }),
+        profile: Some(miri::diagnostics::json::JsonProfile {
+            hz: 1000,
+            samples: 120,
+            dropped: 0,
+            truncated: 0,
+            lines: vec![miri::diagnostics::json::JsonProfileLine {
+                path: "prog.mi".to_string(),
+                line: 8,
+                self_samples: 90,
+                inclusive_samples: 100,
+                self_share: 0.75,
+                inclusive_share: 0.8333,
+                text: Some("    total += i".to_string()),
+            }],
+            runtime: vec![miri::diagnostics::json::JsonProfileFunction {
+                symbol: "miri_rt_list_push".to_string(),
+                self_samples: 12,
+                self_share: 0.1,
+            }],
+        }),
     }
 }
 

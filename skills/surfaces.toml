@@ -22,6 +22,7 @@ commands = [
     "miri explain",
     "miri fix",
     "miri patch",
+    "miri profile",
     "miri run",
     "miri test",
     "miri view",

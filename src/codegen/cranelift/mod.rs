@@ -50,8 +50,11 @@ use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
 
 pub use translator::FunctionTranslator;
-use translator::{Emission, RuntimeChecks};
+use translator::{Emission, ProfileTable, RuntimeChecks};
 pub use types::translate_type;
+
+/// The symbol a profile build defines its function table under.
+pub const PROFILE_FUNCTIONS_SYMBOL: &str = "miri_profile_functions";
 
 /// Describes a runtime function to be declared as an external import.
 ///
@@ -116,6 +119,11 @@ pub struct CraneliftOptions {
     /// each run of every user function's code was generated from. Recording
     /// the offsets leaves the machine code unchanged.
     pub code_map: bool,
+    /// Whether to define `miri_profile_functions`, the address and code size
+    /// of every user function in the order the code map lists them, and have
+    /// the entry point hand it to the runtime's sampler. Only a profile build
+    /// asks for it.
+    pub profile_table: bool,
 }
 
 /// What `compile` returns about each user function beside its code, as the
@@ -125,6 +133,8 @@ struct FunctionReports {
     ir_listing: Option<String>,
     /// Where each function's code came from.
     code_map: Option<Vec<FunctionCodeMap>>,
+    /// Each function's id and code size, for the profile function table.
+    profile_functions: Option<Vec<(cranelift_module::FuncId, u32)>>,
 }
 
 impl FunctionReports {
@@ -133,6 +143,7 @@ impl FunctionReports {
         Self {
             ir_listing: options.ir_listing.then(String::new),
             code_map: options.code_map.then(Vec::new),
+            profile_functions: options.profile_table.then(Vec::new),
         }
     }
 }
@@ -142,6 +153,7 @@ struct FunctionUnit<'b> {
     name: &'b str,
     body: &'b Body,
     runtime_checks: RuntimeChecks,
+    profile_table: Option<ProfileTable>,
 }
 
 /// Optimization levels for Cranelift.
@@ -200,6 +212,7 @@ impl Default for CraneliftOptions {
             runtime_checks: true,
             preserve_frame_pointers: false,
             code_map: false,
+            profile_table: false,
         }
     }
 }
@@ -345,6 +358,10 @@ impl Backend for CraneliftBackend {
         } else {
             RuntimeChecks::CompiledOut
         };
+        let profile_table = options
+            .profile_table
+            .then(|| Self::declare_profile_table(&mut module, cpu_bodies.len()))
+            .transpose()?;
         for (name, body) in &cpu_bodies {
             self.compile_function(
                 &mut module,
@@ -353,6 +370,7 @@ impl Backend for CraneliftBackend {
                     name,
                     body,
                     runtime_checks,
+                    profile_table,
                 },
                 &isa,
                 &mut string_literals,
@@ -378,6 +396,9 @@ impl Backend for CraneliftBackend {
             }),
         )?;
         Self::define_string_literals(&mut module, &isa, string_literals)?;
+        if let (Some(table), Some(functions)) = (profile_table, &reports.profile_functions) {
+            Self::define_profile_table(&mut module, &isa, table, functions)?;
+        }
         let object = self.finalize_object(module)?;
 
         Ok(CompiledArtifact {
@@ -566,6 +587,46 @@ impl CraneliftBackend {
         Ok(())
     }
 
+    /// Declare the profile function table, to be defined once every function
+    /// listed in it has been compiled and its size is known.
+    fn declare_profile_table(
+        module: &mut ObjectModule,
+        count: usize,
+    ) -> Result<ProfileTable, CodegenError> {
+        let data = module
+            .declare_data(PROFILE_FUNCTIONS_SYMBOL, Linkage::Export, false, false)
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
+        Ok(ProfileTable { data, count })
+    }
+
+    /// Define the profile function table: per function, in compile order, a
+    /// pointer-sized relocation to its first instruction and its code size
+    /// as a 32-bit word after it, each entry padded to two pointers — the
+    /// `ProfileFunction` layout the runtime reads.
+    fn define_profile_table(
+        module: &mut ObjectModule,
+        isa: &Arc<dyn TargetIsa>,
+        table: ProfileTable,
+        functions: &[(cranelift_module::FuncId, u32)],
+    ) -> Result<(), CodegenError> {
+        let pointer = isa.pointer_type().bytes() as usize;
+        let entry = 2 * pointer;
+        let mut bytes = vec![0u8; entry * functions.len()];
+        for (slot, (_, size)) in bytes.chunks_exact_mut(entry).zip(functions) {
+            slot[pointer..pointer + 4].copy_from_slice(&size.to_ne_bytes());
+        }
+        let mut description = DataDescription::new();
+        description.set_align(pointer as u64);
+        description.define(bytes.into_boxed_slice());
+        for (index, &(func_id, _)) in functions.iter().enumerate() {
+            let function = module.declare_func_in_data(func_id, &mut description);
+            description.write_function_addr((index * entry) as u32, function);
+        }
+        module
+            .define_data(table.data, &description)
+            .map_err(|e| CodegenError::Module(e.to_string()))
+    }
+
     /// Emit the byte data + MiriString struct for the `index`-th string literal.
     fn define_one_string_literal(
         module: &mut ObjectModule,
@@ -686,6 +747,7 @@ impl CraneliftBackend {
             name,
             body,
             runtime_checks,
+            profile_table,
         } = unit;
         // Create function translator
         let mut translator = FunctionTranslator::new(isa, body, &self.facts);
@@ -697,6 +759,7 @@ impl CraneliftBackend {
             runtime_checks,
             is_entry: name == Symbol::entry().link_name(),
             source_locations: reports.code_map.is_some(),
+            profile_table,
         };
         translator
             .translate(body, module, string_literals, kernel_registry, emission)
@@ -717,6 +780,12 @@ impl CraneliftBackend {
             .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
         if let Some(code_map) = reports.code_map.as_mut() {
             code_map.push(Self::function_code_map(name, body, ctx)?);
+        }
+        if let Some(functions) = reports.profile_functions.as_mut() {
+            let size = ctx
+                .compiled_code()
+                .map_or(0, |code| code.code_info().total_size);
+            functions.push((func_id, size));
         }
         if let Some(listing) = reports.ir_listing.as_mut() {
             listing.push_str(&format!(

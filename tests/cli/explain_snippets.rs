@@ -243,9 +243,17 @@ const VERIFIED_BY_COMMAND: &[(&str, &str, &[&str])] = &[
         &["--fn", "Inventory.total_value", "--around", "float"],
     ),
     ("MER_BLD_025", "test", &[]),
+    ("MER_BLD_028", "profile", &[]),
+    ("MER_BLD_029", "profile", &[]),
     ("MER_TAR_010", "build", &["--target", "web-gpu"]),
     ("MER_CG_007", "build", &["--cpu-backend", "llvm"]),
 ];
+
+/// Codes whose `Before` example is verified through another command only on
+/// a host that cannot do what the command asks: `miri profile` has a sampler
+/// on macOS and Linux, on aarch64 and x86-64, and refuses everywhere else.
+const VERIFIED_BY_COMMAND_ON_UNPROFILED_HOST: &[(&str, &str, &[&str])] =
+    &[("MER_BLD_027", "profile", &[])];
 
 /// Codes whose `Before` example is verified through `miri fix`, with the
 /// flags that ask it to apply.
@@ -498,13 +506,28 @@ fn verified_on_host() -> impl Iterator<Item = (&'static str, Surface)> {
     let fixed = VERIFIED_BY_FIX
         .iter()
         .map(|(wire, flags)| (*wire, Surface::Fix(flags)));
-    checked.chain(run).chain(commanded).chain(fixed)
+    let unprofiled = VERIFIED_BY_COMMAND_ON_UNPROFILED_HOST
+        .iter()
+        .filter(|_| !miri::cli::profile::HOST_HAS_SAMPLER)
+        .map(|(wire, command, flags)| (*wire, Surface::Command(command, flags)));
+    checked
+        .chain(run)
+        .chain(commanded)
+        .chain(fixed)
+        .chain(unprofiled)
 }
 
 /// Every code whose documented example some gate verifies, on any machine.
 fn verified_anywhere() -> impl Iterator<Item = &'static str> {
     let on_gpu = VERIFIED_BY_RUN_ON_GPU.iter().copied();
-    verified_on_host().map(|(wire, _)| wire).chain(on_gpu)
+    let unprofiled = VERIFIED_BY_COMMAND_ON_UNPROFILED_HOST
+        .iter()
+        .map(|(wire, _, _)| *wire)
+        .filter(|_| miri::cli::profile::HOST_HAS_SAMPLER);
+    verified_on_host()
+        .map(|(wire, _)| wire)
+        .chain(on_gpu)
+        .chain(unprofiled)
 }
 
 /// Check if a message matches one of the documented shapes.

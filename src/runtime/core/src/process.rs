@@ -22,6 +22,8 @@ pub mod ffi {
         use std::io::Write;
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
+        // A profiled run writes its record here, as `atexit` would have.
+        crate::profile::finish();
 
         // Exit without running atexit handlers
         // SAFETY: This function never returns, so the divergence is guaranteed.

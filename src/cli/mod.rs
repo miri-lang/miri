@@ -12,6 +12,7 @@ pub mod explain;
 pub mod fix;
 pub mod fmt;
 pub mod patch;
+pub mod profile;
 pub mod resolve;
 pub mod separator_hint;
 pub mod skill;
@@ -30,6 +31,24 @@ use crate::diagnostics::json::DiagnosticsEnvelope;
 pub fn serialize_envelope(envelope: &DiagnosticsEnvelope) -> String {
     serde_json::to_string_pretty(envelope)
         .unwrap_or_else(|error| format!("{{\"error\":\"could not serialize: {}\"}}", error))
+}
+
+/// The last `max_len` bytes of a program's output as text, cut on a
+/// character boundary, and whether anything was cut.
+pub fn output_tail(bytes: &[u8], max_len: usize) -> (String, bool) {
+    if bytes.len() <= max_len {
+        return (String::from_utf8_lossy(bytes).into_owned(), false);
+    }
+    // A UTF-8 continuation byte has the form 10xxxxxx; the tail starts at
+    // the first byte after the cut that is not one.
+    let start = bytes.len() - max_len;
+    let aligned = (start..bytes.len())
+        .find(|&position| bytes[position] & 0xc0 != 0x80)
+        .unwrap_or(bytes.len());
+    (
+        String::from_utf8_lossy(&bytes[aligned..]).into_owned(),
+        true,
+    )
 }
 
 /// Make an arbitrary argument safe to echo to a terminal.

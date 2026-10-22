@@ -568,6 +568,22 @@ pub struct GpuProgram {
     pub device_helpers: HashSet<Symbol>,
 }
 
+/// The name `run` builds the program it executes under, inside its work
+/// directory.
+pub const RUN_EXECUTABLE_NAME: &str = "program";
+
+/// Where and how a run builds and starts its program, beyond the codegen
+/// mode the pipeline holds.
+#[derive(Debug)]
+pub struct RunSetup<'d> {
+    /// The directory the program is built and run in.
+    pub work_dir: &'d Path,
+    /// The intermediate forms the build writes beside the program.
+    pub emit: Vec<Listing>,
+    /// Variables set for the program on top of the ones the compiler sets.
+    pub environment: Vec<(&'static str, std::ffi::OsString)>,
+}
+
 /// Options controlling the build process.
 #[derive(Debug, Default)]
 pub struct BuildOptions {
@@ -1807,11 +1823,31 @@ impl Pipeline {
                 ))))
             }
         };
-        let executable_path = temp_dir.path().join("program");
-        let built = self.build_reported(source, &self.run_build_options(&executable_path));
+        let setup = RunSetup {
+            work_dir: temp_dir.path(),
+            emit: Vec::new(),
+            environment: Vec::new(),
+        };
+        self.run_in_reported(source, program_args, &setup)
+    }
+
+    /// Compile and execute the source as [`Self::run_reported`] does, but
+    /// in `setup.work_dir`, which the caller owns and may read afterwards:
+    /// the program is built there as [`RUN_EXECUTABLE_NAME`], with the forms
+    /// `setup.emit` names beside it, and starts with `setup.environment` on
+    /// top of the compiler's own.
+    pub fn run_in_reported(
+        &self,
+        source: &str,
+        program_args: &[String],
+        setup: &RunSetup<'_>,
+    ) -> Reported<RunCaptureResult> {
+        let executable_path = setup.work_dir.join(RUN_EXECUTABLE_NAME);
+        let options = self.run_build_options(&executable_path, setup.emit.clone());
+        let built = self.build_reported(source, &options);
         let outcome = built
             .outcome
-            .and_then(|_| Self::execute(temp_dir.path(), &executable_path, program_args));
+            .and_then(|_| Self::execute(setup, &executable_path, program_args));
         Reported {
             outcome,
             notices: built.notices,
@@ -1819,7 +1855,7 @@ impl Pipeline {
     }
 
     /// How `run` builds the program it executes.
-    fn run_build_options(&self, executable_path: &Path) -> BuildOptions {
+    fn run_build_options(&self, executable_path: &Path, emit: Vec<Listing>) -> BuildOptions {
         BuildOptions {
             out_path: Some(executable_path.to_path_buf()),
             release: self.run_codegen.release,
@@ -1828,17 +1864,18 @@ impl Pipeline {
             cpu_backend: CpuBackend::Cranelift,
             target: BuildTarget::Native,
             emit_native_host: false,
-            emit: Vec::new(),
+            emit,
         }
     }
 
-    /// Execute the program built at `executable_path` inside `work_dir`,
-    /// capturing what it printed and how it ended.
+    /// Execute the program built at `executable_path` inside the setup's
+    /// work directory, capturing what it printed and how it ended.
     fn execute(
-        work_dir: &Path,
+        setup: &RunSetup<'_>,
         executable_path: &Path,
         program_args: &[String],
     ) -> Result<RunCaptureResult, CompilerError> {
+        let work_dir = setup.work_dir;
         let trap_report_path = work_dir.join("trap");
         let gpu_report_path = work_dir.join("gpu_telemetry");
 
@@ -1860,6 +1897,7 @@ impl Pipeline {
             .args(program_args)
             .env("MIRI_TRAP_REPORT_PATH", &trap_report_path)
             .env("MIRI_GPU_TELEMETRY_PATH", &gpu_report_path)
+            .envs(setup.environment.iter().map(|(name, value)| (name, value)))
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
@@ -2159,6 +2197,7 @@ impl Pipeline {
                 runtime_checks: !opts.release,
                 preserve_frame_pointers: opts.preserve_frame_pointers,
                 code_map: opts.emit.contains(&Listing::Lines),
+                profile_table: opts.preserve_frame_pointers,
                 ..Default::default()
             };
             let artifact = backend

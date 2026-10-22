@@ -407,10 +407,26 @@ fn test_profile_builds_the_release_code_with_frame_pointers() {
 
     let profile = build(&["--profile", "--emit", "clif"]);
     let release = build(&["--release", "--emit", "clif", "--emit", "lines"]);
-    assert!(
-        read(&profile, ".clif") == read(&release, ".clif"),
-        "--profile did not build the release code"
-    );
+    let profile_listing = String::from_utf8(read(&profile, ".clif")).unwrap();
+    let release_listing = String::from_utf8(read(&release, ".clif")).unwrap();
+    let functions = listed_functions(&release_listing);
+    assert_eq!(functions, listed_functions(&profile_listing));
+    // The entry point alone differs: a profile build's hands the runtime's
+    // sampler its function table first.
+    for function in functions.iter().filter(|name| **name != "main") {
+        assert!(
+            clif_function(&profile_listing, function) == clif_function(&release_listing, function),
+            "--profile did not build the release code of {function}"
+        );
+    }
+    let (_, profile_main) = clif_function(&profile_listing, "main");
+    let (_, release_main) = clif_function(&release_listing, "main");
+    assert!(profile_main
+        .values()
+        .any(|name| *name == "miri_rt_profile_init"));
+    assert!(!release_main
+        .values()
+        .any(|name| *name == "miri_rt_profile_init"));
     if cfg!(target_arch = "aarch64") {
         assert!(
             read(&profile, ".o") != read(&release, ".o"),

@@ -167,13 +167,23 @@ pub(crate) enum RuntimeChecks {
 
 /// How a user function's code is emitted beyond its MIR: whether it keeps the
 /// runtime's checking hooks, whether it is the program's entry point, which
-/// is where a build that leaves them out says so to the runtime, and whether
-/// its instructions record the source offset they were generated from.
+/// is where a build that leaves them out says so to the runtime and where a
+/// profile build hands the runtime its function table, and whether its
+/// instructions record the source offset they were generated from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Emission {
     pub(crate) runtime_checks: RuntimeChecks,
     pub(crate) is_entry: bool,
     pub(crate) source_locations: bool,
+    pub(crate) profile_table: Option<ProfileTable>,
+}
+
+/// The table of compiled functions a profile build defines for the runtime's
+/// sampler: its data object, and how many functions it lists.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProfileTable {
+    pub(crate) data: cranelift_module::DataId,
+    pub(crate) count: usize,
 }
 
 /// Build an empty `ModuleCtx` with an unpopulated FuncId cache.
@@ -279,6 +289,9 @@ impl<'a> FunctionTranslator<'a> {
         module_ctx.source_locations = emission.source_locations;
         if emission.is_entry && emission.runtime_checks == RuntimeChecks::CompiledOut {
             Self::call_rt_checks_compiled_out(&mut builder, &mut module_ctx)?;
+        }
+        if let Some(table) = emission.profile_table.filter(|_| emission.is_entry) {
+            Self::call_rt_profile_init(&mut builder, &mut module_ctx, table, self.ptr_type)?;
         }
         let stable_headers = StableHeaders::declare(&mut builder, body, self.ptr_type)?;
         let type_ctx = TypeCtx {
@@ -2359,6 +2372,31 @@ impl<'a> FunctionTranslator<'a> {
                 param_types: &[],
                 return_types: &[],
                 args: &[],
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Calls `miri_rt_profile_init(table, count)`, handing the runtime's
+    /// sampler the profile build's function table.
+    fn call_rt_profile_init(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        table: ProfileTable,
+        ptr_type: cl_types::Type,
+    ) -> Result<(), CodegenError> {
+        let global = ctx.module.declare_data_in_func(table.data, builder.func);
+        let address = builder.ins().symbol_value(ptr_type, global);
+        let count = builder.ins().iconst(ptr_type, table.count as i64);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::PROFILE_INIT,
+                param_types: &[ptr_type, ptr_type],
+                return_types: &[],
+                args: &[address, count],
             },
         )?;
         Ok(())

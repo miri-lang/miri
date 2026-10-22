@@ -54,6 +54,12 @@ pub(crate) fn trap(code: &str, message: &str) -> ! {
 
     eprintln!("Runtime error: {}", message);
     write_trap_report(code);
+    // A profiled run keeps the samples it took up to the trap. Writing them
+    // allocates, which a heap the guard has just found corrupted cannot be
+    // trusted with, so that one trap leaves no record.
+    if code != code::HEAP_CORRUPTED {
+        crate::profile::finish();
+    }
     let _ = std::io::stderr().flush();
     unsafe { libc::_exit(1) }
 }

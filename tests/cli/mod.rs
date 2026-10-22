@@ -18,6 +18,7 @@ pub mod fmt;
 pub mod help;
 pub mod json_envelope;
 pub mod patch;
+pub mod profile;
 pub mod run;
 pub mod skill;
 pub mod test_cmd;
