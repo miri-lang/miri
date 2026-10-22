@@ -246,8 +246,14 @@ def listing_sections(text, marker):
     return sections
 
 
+# A Miri function's link name: `miri.` before a function of the program's own
+# module, `miri$` before the path of any other module's, the standard library's
+# included. The runtime's `miri_rt_` symbols are neither.
+MIRI_FUNCTION_PREFIXES = ("miri.", "miri$")
+
+
 def hot_miri_functions(top):
-    return [entry["symbol"] for entry in top if entry["symbol"].startswith("miri.")][:HOT_FUNCTIONS]
+    return [entry["symbol"] for entry in top if entry["symbol"].startswith(MIRI_FUNCTION_PREFIXES)][:HOT_FUNCTIONS]
 
 
 def disassembly(binary, symbols):

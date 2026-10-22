@@ -10,7 +10,7 @@ use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillComma
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonGpuTelemetry};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::to_json;
-use miri::pipeline::{BuildOptions, Pipeline, Reported, RunCaptureResult};
+use miri::pipeline::{BuildOptions, CodegenMode, Pipeline, Reported, RunCaptureResult};
 
 pub fn main() -> Result<()> {
     let cli = Cli::try_parse().unwrap_or_else(|error| {
@@ -45,13 +45,14 @@ fn run_command(cli: Cli) -> Result<()> {
             Commands::Run {
                 path,
                 release,
+                profile,
                 opt_level,
                 format,
                 program_args,
             } => run_file(
                 path,
                 program_args,
-                (release, BuildOptions::resolve_opt_level(release, opt_level)),
+                CodegenMode::from_flags(release, profile, opt_level),
                 format,
                 cli.verbose,
                 cli.verify_mir,
@@ -61,28 +62,34 @@ fn run_command(cli: Cli) -> Result<()> {
                 path,
                 out,
                 release,
+                profile,
                 opt_level,
                 cpu_backend,
                 target,
                 emit,
                 format,
-            } => build_file(
-                path,
-                BuildOptions {
-                    out_path: out,
-                    release,
-                    opt_level: BuildOptions::resolve_opt_level(release, opt_level),
-                    cpu_backend,
-                    target,
-                    // The CLI emits the native host binary alongside a web-gpu
-                    // bundle; the flag is a no-op for the native target.
-                    emit_native_host: true,
-                    emit,
-                },
-                format,
-                cli.verify_mir,
-                cli.color,
-            ),
+            } => {
+                let codegen = CodegenMode::from_flags(release, profile, opt_level);
+                build_file(
+                    path,
+                    BuildOptions {
+                        out_path: out,
+                        release: codegen.release,
+                        opt_level: codegen.opt_level,
+                        preserve_frame_pointers: codegen.preserve_frame_pointers,
+                        cpu_backend,
+                        target,
+                        // The CLI emits the native host binary alongside a
+                        // web-gpu bundle; the flag is a no-op for the native
+                        // target.
+                        emit_native_host: true,
+                        emit,
+                    },
+                    format,
+                    cli.verify_mir,
+                    cli.color,
+                )
+            }
             Commands::Check { path, format } => check_file(path, format, cli.verify_mir, cli.color),
             Commands::Dev { path, format } => dev_watch(path, format, cli.verify_mir, cli.color),
             Commands::Agent {} => serve_agent(cli.color),
@@ -158,25 +165,30 @@ fn run_command(cli: Cli) -> Result<()> {
                 DeterminismCommand::Check {
                     path,
                     release,
+                    profile,
                     opt_level,
                     cpu_backend,
                     target,
                     format,
-                } => check_determinism(
-                    path,
-                    BuildOptions {
-                        out_path: None,
-                        release,
-                        opt_level: BuildOptions::resolve_opt_level(release, opt_level),
-                        cpu_backend,
-                        target,
-                        emit_native_host: true,
-                        emit: Vec::new(),
-                    },
-                    format,
-                    cli.verify_mir,
-                    cli.color,
-                ),
+                } => {
+                    let codegen = CodegenMode::from_flags(release, profile, opt_level);
+                    check_determinism(
+                        path,
+                        BuildOptions {
+                            out_path: None,
+                            release: codegen.release,
+                            opt_level: codegen.opt_level,
+                            preserve_frame_pointers: codegen.preserve_frame_pointers,
+                            cpu_backend,
+                            target,
+                            emit_native_host: true,
+                            emit: Vec::new(),
+                        },
+                        format,
+                        cli.verify_mir,
+                        cli.color,
+                    )
+                }
             },
             Commands::Skill(cmd) => skill_command(cmd, cli.color),
         },
@@ -190,7 +202,7 @@ fn run_command(cli: Cli) -> Result<()> {
 fn run_file(
     path: PathBuf,
     program_args: Vec<String>,
-    (release, opt_level): (bool, u8),
+    codegen: CodegenMode,
     format: Format,
     _verbose: u8,
     verify_mir: bool,
@@ -204,7 +216,7 @@ fn run_file(
 
     let mut pipeline = Pipeline::new()
         .with_verify_mir(verify_mir)
-        .with_run_optimization(release, opt_level);
+        .with_run_codegen(codegen);
     // Canonicalize first so that a bare filename like "main.mi" resolves to an
     // absolute path whose parent is the working directory, not an empty path.
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());

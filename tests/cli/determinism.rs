@@ -58,12 +58,14 @@ fn test_determinism_check_with_multiple_strings() {
         .stdout(predicates::str::contains("Determinism check passed"));
 }
 
-/// Optimized builds are as reproducible as unoptimized ones, at every level.
+/// Optimized builds are as reproducible as unoptimized ones, at every level
+/// and with the frame pointers a profile build keeps.
 #[test]
 fn test_determinism_check_passes_at_every_opt_level() {
     let file = create_test_file(MULTI_LITERAL);
     for flags in [
         &["--release"][..],
+        &["--profile"],
         &["--opt-level", "1"],
         &["--opt-level", "2"],
         &["--opt-level", "3"],

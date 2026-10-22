@@ -21,6 +21,18 @@ TEST_THREADS ?= 8
 # earlier runtime would be swallowed and the recipe would report success. Every
 # per-runtime command in this file is followed by `|| exit 1` to fail the recipe
 # on the first broken runtime.
+#
+# The core runtime is built a second time with frame pointers, into
+# `target/frame-pointers`, and only `miri build --profile` links that copy: a
+# profiler that walks frame pointers (`perf record --call-graph fp`, macOS
+# `sample`) then follows a sample taken inside the runtime back to the Miri
+# code that called it, while every other build keeps the runtime it is
+# measured with. Flags already in RUSTFLAGS are kept for both builds. The
+# runtimes listed here must be the ones `RuntimeKind::has_frame_pointer_build`
+# names in src/ast/common.rs.
+FRAME_POINTER_RUNTIMES := src/runtime/core
+FRAME_POINTER_RUSTFLAGS := $(strip $(RUSTFLAGS) -C force-frame-pointers=yes)
+
 runtimes:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
@@ -28,6 +40,10 @@ runtimes:
 			cargo build --release --manifest-path "$$rt/Cargo.toml" || exit 1; \
 		done; \
 	fi
+	@for rt in $(FRAME_POINTER_RUNTIMES); do \
+		echo "Building $$rt with frame pointers (the staticlib --profile links)"; \
+		RUSTFLAGS="$(FRAME_POINTER_RUSTFLAGS)" cargo build --release --manifest-path "$$rt/Cargo.toml" --target-dir "$$rt/target/frame-pointers" || exit 1; \
+	done
 
 build: runtimes
 	cargo build

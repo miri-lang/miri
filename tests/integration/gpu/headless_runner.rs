@@ -86,6 +86,7 @@ fn build_bundle(source: &str) -> PathBuf {
         out_path: Some(dir.clone()),
         release: false,
         opt_level: 0,
+        preserve_frame_pointers: false,
         cpu_backend: Default::default(),
         // Bundle-only: this smoke validates the emitted JS, not a native link.
         emit_native_host: false,

@@ -47,6 +47,7 @@ fn build_demo_manifest(demo_path: &str) -> serde_json::Value {
         out_path: Some(temp_base.clone()),
         release: false,
         opt_level: 0,
+        preserve_frame_pointers: false,
         cpu_backend: Default::default(),
         // Bundle-only: this gate validates emitted WGSL, not a native link.
         emit_native_host: false,

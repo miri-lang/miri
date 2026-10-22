@@ -51,6 +51,11 @@ class ProfileTest(unittest.TestCase):
         self.assertAlmostEqual(sum(t["share"] for t in top), 1.0)
         self.assertEqual(diagnose.hot_miri_functions(top), ["miri.advance", "miri.read_input", "miri.kernel"])
 
+    def test_a_function_of_an_imported_module_is_a_miri_function(self):
+        names = ["miri$system$json.JsonWriter.write_string", "miri_rt_rc_is_shared", "miri.advance", "memmove"]
+        top = [{"symbol": name, "share": 0.25} for name in names]
+        self.assertEqual(diagnose.hot_miri_functions(top), ["miri$system$json.JsonWriter.write_string", "miri.advance"])
+
     def test_the_flamegraph_is_well_formed_svg(self):
         svg = diagnose.flamegraph_svg(self.folded, "nbody s miri")
         document = xml.dom.minidom.parseString(svg)

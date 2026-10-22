@@ -94,6 +94,7 @@ pub fn compile_with_harness(
         out_path: Some(executable.clone()),
         release: false,
         opt_level: 0,
+        preserve_frame_pointers: false,
         cpu_backend: CpuBackend::Cranelift,
         target: BuildTarget::Native,
         emit_native_host: false,

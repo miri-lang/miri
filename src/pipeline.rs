@@ -580,6 +580,9 @@ pub struct BuildOptions {
     /// Optimization level (0-3): 0 emits unoptimized code, 1-3 optimize for
     /// speed.
     pub opt_level: u8,
+    /// Whether every function keeps a frame-pointer record, leaf functions
+    /// included, so a profiler that walks frame pointers sees every caller.
+    pub preserve_frame_pointers: bool,
     /// Which CPU backend to use for code generation.
     pub cpu_backend: CpuBackend,
     /// Target environment for the produced artifact.
@@ -649,6 +652,53 @@ impl BuildOptions {
     }
 }
 
+/// How a build generates code: the part of [`BuildOptions`] the command
+/// line's `--release`, `--profile` and `--opt-level` flags select.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CodegenMode {
+    /// Release mode, as [`BuildOptions::release`].
+    pub release: bool,
+    /// Optimization level, as [`BuildOptions::opt_level`].
+    pub opt_level: u8,
+    /// Frame pointers in every function, as
+    /// [`BuildOptions::preserve_frame_pointers`].
+    pub preserve_frame_pointers: bool,
+}
+
+impl CodegenMode {
+    /// The mode the flags select. `profile` builds what `release` builds and
+    /// keeps a frame pointer in every function; an explicit optimization level
+    /// wins over either.
+    pub fn from_flags(release: bool, profile: bool, opt_level: Option<u8>) -> Self {
+        let release = release || profile;
+        Self {
+            release,
+            opt_level: BuildOptions::resolve_opt_level(release, opt_level),
+            preserve_frame_pointers: profile,
+        }
+    }
+}
+
+/// Which build of a runtime's static library a program links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBuild {
+    /// The library every build but a profile build links.
+    Standard,
+    /// The library built with frame pointers, for a runtime that has one.
+    FramePointers,
+}
+
+impl RuntimeBuild {
+    /// The build a program made with `opts` links.
+    fn for_options(opts: &BuildOptions) -> Self {
+        if opts.preserve_frame_pointers {
+            Self::FramePointers
+        } else {
+            Self::Standard
+        }
+    }
+}
+
 /// Orchestrates the full compilation pipeline from source to executable.
 pub struct Pipeline {
     /// Directory of the entry-point source file.  When set, the type checker
@@ -659,10 +709,8 @@ pub struct Pipeline {
     source_path: Option<String>,
     /// Whether to run the MIR verification pass after RC insertion.
     verify_mir: bool,
-    /// Whether `run` builds the program it executes in release mode.
-    run_release: bool,
-    /// The optimization level `run` builds the program it executes at.
-    run_opt_level: u8,
+    /// How `run` generates the code of the program it executes.
+    run_codegen: CodegenMode,
 }
 
 impl Default for Pipeline {
@@ -1530,8 +1578,7 @@ impl Pipeline {
             source_dir: None,
             source_path: None,
             verify_mir: false,
-            run_release: false,
-            run_opt_level: 0,
+            run_codegen: CodegenMode::default(),
         }
     }
 
@@ -1555,11 +1602,9 @@ impl Pipeline {
         self
     }
 
-    /// Configure how `run` builds the program it executes: in release mode or
-    /// not, and at which optimization level.
-    pub fn with_run_optimization(mut self, release: bool, opt_level: u8) -> Self {
-        self.run_release = release;
-        self.run_opt_level = opt_level;
+    /// Configure how `run` generates the code of the program it executes.
+    pub fn with_run_codegen(mut self, codegen: CodegenMode) -> Self {
+        self.run_codegen = codegen;
         self
     }
 
@@ -1758,8 +1803,9 @@ impl Pipeline {
     fn run_build_options(&self, executable_path: &Path) -> BuildOptions {
         BuildOptions {
             out_path: Some(executable_path.to_path_buf()),
-            release: self.run_release,
-            opt_level: self.run_opt_level,
+            release: self.run_codegen.release,
+            opt_level: self.run_codegen.opt_level,
+            preserve_frame_pointers: self.run_codegen.preserve_frame_pointers,
             cpu_backend: CpuBackend::Cranelift,
             target: BuildTarget::Native,
             emit_native_host: false,
@@ -1936,7 +1982,12 @@ impl Pipeline {
         // intermediate `.o` file.
         let object_path = out_path.with_extension("o");
         fs::write(&object_path, &object.bytes)?;
-        self.link_executable(&object_path, &out_path, &object.required_runtimes)?;
+        self.link_executable(
+            &object_path,
+            &out_path,
+            &object.required_runtimes,
+            RuntimeBuild::for_options(opts),
+        )?;
         if let Some(text) = mir_text {
             write_listing(&out_path, Listing::Mir, &text)?;
         }
@@ -2053,6 +2104,7 @@ impl Pipeline {
                 opt_level: OptLevel::for_level(opts.opt_level),
                 ir_listing: opts.emit.contains(&Listing::Clif),
                 runtime_checks: !opts.release,
+                preserve_frame_pointers: opts.preserve_frame_pointers,
                 ..Default::default()
             };
             let artifact = backend
@@ -4108,6 +4160,7 @@ impl Pipeline {
         object_path: &PathBuf,
         output_path: &PathBuf,
         required_runtimes: &BTreeSet<RuntimeKind>,
+        runtime_build: RuntimeBuild,
     ) -> Result<(), CompilerError> {
         let linker_path = resolve_linker()?;
         let linker_path_display = linker_path.display().to_string();
@@ -4119,7 +4172,14 @@ impl Pipeline {
 
         // Link required runtime libraries
         for runtime in required_runtimes {
-            let lib_dir = runtime_library_dir(runtime)?;
+            let lib_dir = match runtime_build {
+                RuntimeBuild::FramePointers if runtime.has_frame_pointer_build() => {
+                    frame_pointer_library_dir(runtime)?
+                }
+                RuntimeBuild::FramePointers | RuntimeBuild::Standard => {
+                    runtime_library_dir(runtime)?
+                }
+            };
             cmd.arg(format!("-L{}", lib_dir.display()));
             cmd.arg(format!("-l{}", runtime.library_name()));
             for arg in runtime.extra_link_args() {
@@ -4508,6 +4568,73 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
         "Could not find runtime library '{}'. Set MIRI_RUNTIME_DIR or build the runtime with `cargo build --release`.",
         runtime.library_name()
     )))
+}
+
+/// The directory under a runtime's `target` that `make runtimes` builds its
+/// frame-pointer copy into.
+const FRAME_POINTER_TARGET: &str = "frame-pointers";
+
+/// Resolve the directory holding a runtime's static library built with frame
+/// pointers, `src/runtime/<name>/target/frame-pointers/release`, searched for
+/// as [`runtime_library_dir`] searches for the standard one: up from the
+/// compiler binary, then under the working directory. `MIRI_RUNTIME_DIR` names
+/// the standard libraries and is not consulted. A missing library, or one
+/// older than the standard library built beside it, is an error rather than a
+/// reason to link the standard one or stale code.
+fn frame_pointer_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> {
+    let target = Path::new("src")
+        .join("runtime")
+        .join(runtime.name())
+        .join("target");
+    let library = format!("lib{}.a", runtime.library_name());
+    let frame_pointer_dir = |target: &Path| target.join(FRAME_POINTER_TARGET).join("release");
+    let exe = std::env::current_exe()
+        .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))
+        .ok();
+    let roots = exe.iter().flat_map(|exe| exe.ancestors().skip(1));
+    let found = roots
+        .chain(std::iter::once(Path::new("")))
+        .map(|root| root.join(&target))
+        .find(|candidate| frame_pointer_dir(candidate).join(&library).is_file())
+        .ok_or_else(|| {
+            frame_pointer_library_error(
+                runtime,
+                format!(
+                    "Run `make runtimes` to build it into {}.",
+                    frame_pointer_dir(&target).display()
+                ),
+            )
+        })?;
+    let dir = frame_pointer_dir(&found);
+    if is_older(&dir.join(&library), &found.join("release").join(&library)) {
+        return Err(frame_pointer_library_error(
+            runtime,
+            format!(
+                "The copy in {} is older than the standard runtime beside it; run `make runtimes` \
+                 to rebuild it.",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(dir)
+}
+
+/// The error a profile build reports when the frame-pointer copy of `runtime`
+/// cannot be linked, followed by `remedy`.
+fn frame_pointer_library_error(runtime: &RuntimeKind, remedy: String) -> CompilerError {
+    CompilerError::Codegen(format!(
+        "Could not link runtime library '{}' built with frame pointers, which a --profile \
+         build links. {}",
+        runtime.library_name(),
+        remedy
+    ))
+}
+
+/// Whether `file` was modified before `other`. A file whose time cannot be
+/// read is not called older.
+fn is_older(file: &Path, other: &Path) -> bool {
+    let modified = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
+    matches!((modified(file), modified(other)), (Some(file), Some(other)) if file < other)
 }
 
 /// Longest GPU telemetry report the runtime can legitimately leave: five

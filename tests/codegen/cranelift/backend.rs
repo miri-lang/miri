@@ -250,6 +250,7 @@ fn test_compile_with_all_opt_levels() {
             pic: true,
             ir_listing: false,
             runtime_checks: true,
+            preserve_frame_pointers: false,
         };
         let artifact = backend
             .compile(&[], &options)
@@ -271,6 +272,7 @@ fn test_compile_with_pic_disabled() {
         pic: false,
         ir_listing: false,
         runtime_checks: true,
+        preserve_frame_pointers: false,
     };
     let artifact = backend
         .compile(&[], &options)

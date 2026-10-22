@@ -389,6 +389,35 @@ fn test_release_implies_opt_level_3_unless_a_level_is_given() {
     );
 }
 
+/// `--profile` builds the code `--release` builds, down to the backend's IR,
+/// and keeps a frame pointer in every function: AArch64 otherwise leaves the
+/// frame out of a leaf such as `classify`, so there the object code differs.
+#[test]
+fn test_profile_builds_the_release_code_with_frame_pointers() {
+    let source = create_test_file(TIGHT_LOOP);
+    let out_dir = tempfile::tempdir().unwrap();
+    let build = |flags: &[&str]| build_with_flags(&source, out_dir.path(), flags);
+    let read = |path: &std::path::Path, extension: &str| {
+        let mut file = path.as_os_str().to_owned();
+        file.push(extension);
+        std::fs::read(file).unwrap()
+    };
+
+    let profile = build(&["--profile", "--emit", "clif"]);
+    let release = build(&["--release", "--emit", "clif"]);
+    assert!(
+        read(&profile, ".clif") == read(&release, ".clif"),
+        "--profile did not build the release code"
+    );
+    if cfg!(target_arch = "aarch64") {
+        assert!(
+            read(&profile, ".o") != read(&release, ".o"),
+            "--profile left the frame out of the AArch64 leaf"
+        );
+    }
+    timed_run(&profile);
+}
+
 /// The optimized build of a tight loop is measurably faster than the
 /// unoptimized one. The bound is a generous ratio rather than a time: this runs
 /// beside the rest of the suite on a loaded machine, so the two builds are run
@@ -864,6 +893,225 @@ fn test_a_released_script_run_names_the_checks_it_cannot_run() {
         String::from_utf8_lossy(&run.stdout)
     );
     assert!(stderr.contains(GUARD_AND_LEAK_IGNORED), "stderr: {stderr}");
+}
+
+/// `miri run --profile` builds in release mode, so a check asked for is
+/// reported as compiled out.
+#[test]
+fn test_a_profiled_script_run_leaves_the_runtime_checks_out() {
+    let source = create_test_file(HELLO_WORLD_SCRIPT);
+    let run = miri_cmd()
+        .arg("run")
+        .arg(source.path())
+        .arg("--profile")
+        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "profiled script failed: {stderr}");
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("Hello from script!"),
+        "stdout: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    assert!(stderr.contains(GUARD_AND_LEAK_IGNORED), "stderr: {stderr}");
+}
+
+/// A program reaching `miri_rt_hash_combine`, a runtime function that makes
+/// no calls: Rust leaves the frame out of it unless the runtime is built with
+/// frame pointers, so its first instructions say which runtime was linked.
+const HASH_COMBINE: &str = r#"use system.io
+use system.ops
+
+println(f"{hash_combine(1, 2)}")
+"#;
+
+/// The first two instructions of `name` in the executable at `path`, as
+/// `objdump` disassembles them, or `None` when `objdump` is not installed.
+fn first_instructions(path: &std::path::Path, name: &str) -> Option<[String; 2]> {
+    let listing = Command::new("objdump").arg("-d").arg(path).output().ok()?;
+    let text = String::from_utf8_lossy(&listing.stdout);
+    let headers = [format!("<{name}>:"), format!("<_{name}>:")];
+    let mut lines = text.lines();
+    lines
+        .find(|line| headers.iter().any(|header| line.ends_with(header.as_str())))
+        .unwrap_or_else(|| panic!("the executable should define {name}"));
+    let mut instructions = lines
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string);
+    let first = instructions.next().unwrap_or_default();
+    let second = instructions.next().unwrap_or_default();
+    Some([first, second])
+}
+
+/// Whether two disassembled instructions set up a frame record: `stp x29,
+/// x30, ...` then `mov x29, sp` on AArch64, `push %rbp` then `mov %rsp,%rbp`
+/// on x86-64.
+fn is_frame_setup([first, second]: &[String; 2]) -> bool {
+    let second = second.replace(' ', "");
+    if cfg!(target_arch = "aarch64") {
+        first.contains("stp") && first.contains("x29, x30") && second.contains("x29,sp")
+    } else {
+        first.contains("push")
+            && first.contains("%rbp")
+            && second.contains("mov")
+            && second.contains("%rsp,%rbp")
+    }
+}
+
+/// `--profile` links the core runtime built with frame pointers. On AArch64,
+/// where rustc leaves the frame out of a function that makes no calls, the
+/// `--release` build is also checked to link the standard runtime; on x86-64
+/// rustc may push `rbp` there as an ordinary callee-saved register, so only
+/// the profile build's full frame setup is checked.
+#[test]
+fn test_only_a_profile_build_links_the_frame_pointer_runtime() {
+    let source = create_test_file(HASH_COMBINE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let prologue = |flags: &[&str]| {
+        let exe = build_with_flags(&source, out_dir.path(), flags);
+        first_instructions(&exe, "miri_rt_hash_combine")
+    };
+    let Some(profile) = prologue(&["--profile"]) else {
+        println!("skipping: objdump is not on PATH, so the linked runtime was not inspected");
+        return;
+    };
+    assert!(
+        is_frame_setup(&profile),
+        "--profile linked a runtime without frame pointers: {profile:?}"
+    );
+    if cfg!(target_arch = "aarch64") {
+        let release = prologue(&["--release"]).expect("objdump ran for the profile build");
+        assert!(
+            !is_frame_setup(&release),
+            "--release linked the frame-pointer runtime: {release:?}"
+        );
+    }
+}
+
+/// A compiler with no frame-pointer runtime beside it refuses a profile build
+/// and says how to make one, rather than linking the runtime without frame
+/// pointers; a release build from the same place still links.
+#[test]
+fn test_a_profile_build_without_the_frame_pointer_runtime_is_refused() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bin_dir = tempfile::tempdir().unwrap();
+    let compiler = bin_dir.path().join("miri");
+    std::fs::copy(assert_cmd::cargo_bin!("miri"), &compiler).unwrap();
+    let source = create_test_file(HASH_COMBINE);
+    let build = |flag: &str| {
+        Command::new(&compiler)
+            .arg("build")
+            .arg(source.path())
+            .arg("--out")
+            .arg(bin_dir.path().join(flag.trim_start_matches('-')))
+            .arg(flag)
+            .current_dir(bin_dir.path())
+            .env(
+                "MIRI_RUNTIME_DIR",
+                manifest.join("src/runtime/core/target/release"),
+            )
+            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"))
+            .output()
+            .unwrap()
+    };
+
+    let release = build("--release");
+    assert!(
+        release.status.success(),
+        "{}",
+        String::from_utf8_lossy(&release.stderr)
+    );
+    let profile = build("--profile");
+    let stderr = String::from_utf8_lossy(&profile.stderr);
+    assert!(!profile.status.success(), "the profile build linked");
+    assert!(
+        stderr.contains("frame pointers") && stderr.contains("make runtimes"),
+        "stderr: {stderr}"
+    );
+}
+
+/// A copy of the compiler in a temporary directory that also holds
+/// `src/runtime/core/target`, where the compiler looks for its runtimes.
+struct RuntimeLayout {
+    root: tempfile::TempDir,
+    compiler: std::path::PathBuf,
+}
+
+impl RuntimeLayout {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let compiler = bin.join("miri");
+        std::fs::copy(assert_cmd::cargo_bin!("miri"), &compiler).unwrap();
+        RuntimeLayout { root, compiler }
+    }
+
+    /// Create `src/runtime/core/target/<relative>`, holding the core
+    /// staticlib when `library` is given, written with that modification time.
+    fn runtime_dir(&self, relative: &str, library: Option<std::time::SystemTime>) {
+        let dir = self
+            .root
+            .path()
+            .join("src/runtime/core/target")
+            .join(relative);
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(modified) = library {
+            let file = std::fs::File::create(dir.join("libmiri_runtime_core.a")).unwrap();
+            file.set_modified(modified).unwrap();
+        }
+    }
+
+    /// The stderr of a `--profile` build of `source`, which must fail.
+    fn refused_profile_build(&self, source: &NamedTempFile) -> String {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let output = Command::new(&self.compiler)
+            .arg("build")
+            .arg(source.path())
+            .arg("--out")
+            .arg(self.root.path().join("profiled"))
+            .arg("--profile")
+            .current_dir(self.root.path())
+            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "the profile build linked");
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    }
+}
+
+/// A frame-pointer directory with no staticlib in it is reported as a missing
+/// runtime, with the command that builds it, before the linker is run.
+#[test]
+fn test_a_frame_pointer_directory_without_its_library_is_refused() {
+    let layout = RuntimeLayout::new();
+    layout.runtime_dir("frame-pointers/release", None);
+    let stderr = layout.refused_profile_build(&create_test_file(HASH_COMBINE));
+    assert!(
+        stderr.contains("frame pointers") && stderr.contains("make runtimes"),
+        "stderr: {stderr}"
+    );
+    assert!(!stderr.contains("Linker failed"), "stderr: {stderr}");
+}
+
+/// A frame-pointer copy older than the standard runtime beside it is stale
+/// code, so a profile build refuses it rather than profiling the old runtime.
+#[test]
+fn test_a_frame_pointer_library_older_than_the_standard_one_is_refused() {
+    let layout = RuntimeLayout::new();
+    let now = std::time::SystemTime::now();
+    layout.runtime_dir(
+        "frame-pointers/release",
+        Some(now - std::time::Duration::from_secs(3600)),
+    );
+    layout.runtime_dir("release", Some(now));
+    let stderr = layout.refused_profile_build(&create_test_file(HASH_COMBINE));
+    assert!(
+        stderr.contains("older than the standard runtime") && stderr.contains("make runtimes"),
+        "stderr: {stderr}"
+    );
 }
 
 const STRIDED_WRITES: &str = r#"

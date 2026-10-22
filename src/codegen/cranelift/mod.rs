@@ -104,6 +104,12 @@ pub struct CraneliftOptions {
     /// each behind a test of the runtime's tracking state. A release build
     /// leaves them out.
     pub runtime_checks: bool,
+    /// Whether every function sets up a frame-pointer record, leaf functions
+    /// included, so a sampling profiler walking frame pointers sees each
+    /// caller. Without it AArch64 leaves the frame out of a leaf that makes
+    /// no calls and uses no stack, and the leaf's caller drops out of the
+    /// recorded stack.
+    pub preserve_frame_pointers: bool,
 }
 
 /// One user function handed to `compile_function`.
@@ -138,6 +144,26 @@ impl OptLevel {
             Self::Speed
         }
     }
+
+    /// The value Cranelift's `opt_level` setting takes for this tier.
+    fn setting_value(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Speed => "speed",
+            Self::SpeedAndSize => "speed_and_size",
+        }
+    }
+}
+
+impl CraneliftOptions {
+    /// Whether these options select the same Cranelift flags as the defaults,
+    /// which the backend's cached target ISA was built with.
+    fn uses_default_isa(&self) -> bool {
+        let defaults = Self::default();
+        self.opt_level == defaults.opt_level
+            && self.pic == defaults.pic
+            && self.preserve_frame_pointers == defaults.preserve_frame_pointers
+    }
 }
 
 impl Default for CraneliftOptions {
@@ -147,6 +173,7 @@ impl Default for CraneliftOptions {
             pic: true,
             ir_listing: false,
             runtime_checks: true,
+            preserve_frame_pointers: false,
         }
     }
 }
@@ -172,25 +199,7 @@ impl CraneliftBackend {
 
     /// Create a new Cranelift backend for a specific target.
     pub fn for_target(target: Triple) -> Result<Self, CodegenError> {
-        let mut settings_builder = settings::builder();
-
-        settings_builder
-            .set("opt_level", "none")
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
-
-        settings_builder
-            .set("is_pic", "true")
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
-
-        enable_wide_scalar_abi(&mut settings_builder)
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
-
-        let flags = settings::Flags::new(settings_builder);
-
-        let isa = cranelift_codegen::isa::lookup(target)
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
-            .finish(flags)
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
+        let isa = build_isa(target, &CraneliftOptions::default())?;
 
         Ok(Self {
             isa,
@@ -375,6 +384,44 @@ fn enable_wide_scalar_abi(builder: &mut settings::Builder) -> Result<(), String>
         .map_err(|e| e.to_string())
 }
 
+/// The target ISA `options` ask Cranelift for on `target`.
+fn build_isa(
+    target: Triple,
+    options: &CraneliftOptions,
+) -> Result<Arc<dyn TargetIsa>, CodegenError> {
+    let flags = isa_flags(options).map_err(CodegenError::TargetIsa)?;
+    cranelift_codegen::isa::lookup(target)
+        .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
+        .finish(flags)
+        .map_err(|e| CodegenError::TargetIsa(e.to_string()))
+}
+
+/// The shared Cranelift flags `options` select.
+fn isa_flags(options: &CraneliftOptions) -> Result<settings::Flags, String> {
+    let mut builder = settings::builder();
+    let requested = [
+        ("opt_level", options.opt_level.setting_value()),
+        ("is_pic", flag_value(options.pic)),
+        (
+            "preserve_frame_pointers",
+            flag_value(options.preserve_frame_pointers),
+        ),
+    ];
+    for (name, value) in requested {
+        builder.set(name, value).map_err(|e| e.to_string())?;
+    }
+    enable_wide_scalar_abi(&mut builder)?;
+    Ok(settings::Flags::new(builder))
+}
+
+fn flag_value(enabled: bool) -> &'static str {
+    if enabled {
+        "true"
+    } else {
+        "false"
+    }
+}
+
 /// The environment variable that opts a failing build into a backend IR dump.
 const DUMP_IR_ENV: &str = "MIRI_DUMP_BACKEND_IR";
 
@@ -395,33 +442,13 @@ fn define_failure_details(error: &impl fmt::Display, ctx: &Context) -> String {
 }
 
 impl CraneliftBackend {
-    /// Resolve the target ISA. Reuses the cached default ISA when options match
-    /// defaults; otherwise rebuilds with the requested opt-level/PIC flags.
+    /// Resolve the target ISA. Reuses the cached default ISA when the options
+    /// ask for the same flags; otherwise builds one with the requested flags.
     fn resolve_isa(&self, options: &CraneliftOptions) -> Result<Arc<dyn TargetIsa>, CodegenError> {
-        let is_default = options.opt_level == OptLevel::None && options.pic;
-        if is_default {
+        if options.uses_default_isa() {
             return Ok(self.isa.clone());
         }
-        let mut settings_builder = settings::builder();
-        let opt_level_str = match options.opt_level {
-            OptLevel::None => "none",
-            OptLevel::Speed => "speed",
-            OptLevel::SpeedAndSize => "speed_and_size",
-        };
-        settings_builder
-            .set("opt_level", opt_level_str)
-            .map_err(|e| CodegenError::Module(e.to_string()))?;
-        if options.pic {
-            settings_builder
-                .set("is_pic", "true")
-                .map_err(|e| CodegenError::Module(e.to_string()))?;
-        }
-        enable_wide_scalar_abi(&mut settings_builder).map_err(CodegenError::Module)?;
-        let flags = settings::Flags::new(settings_builder);
-        cranelift_codegen::isa::lookup(self.isa.triple().clone())
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
-            .finish(flags)
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))
+        build_isa(self.isa.triple().clone(), options)
     }
 
     /// Create the `ObjectModule` + per-function `Context` used to build the

@@ -284,6 +284,7 @@ fn options_for_run(directory: &Path, basename: &str, opts: &BuildOptions) -> Bui
         out_path: Some(directory.join(basename)),
         release: opts.release,
         opt_level: opts.opt_level,
+        preserve_frame_pointers: opts.preserve_frame_pointers,
         cpu_backend: opts.cpu_backend,
         target: opts.target,
         emit_native_host: opts.emit_native_host,

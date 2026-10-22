@@ -8,6 +8,7 @@ pub mod collection_header;
 pub mod dealloc;
 pub mod determinism;
 pub mod drop_thunk_boundary;
+pub mod frame_pointers;
 pub mod layout;
 pub mod optional_layout;
 pub mod predicates;

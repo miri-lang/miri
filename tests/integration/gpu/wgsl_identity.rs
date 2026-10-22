@@ -109,6 +109,7 @@ fn canonical_manifest(source: &str) -> serde_json::Value {
         out_path: Some(out.clone()),
         release: false,
         opt_level: 0,
+        preserve_frame_pointers: false,
         cpu_backend: Default::default(),
         emit_native_host: false,
         emit: Vec::new(),

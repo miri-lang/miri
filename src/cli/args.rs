@@ -126,6 +126,12 @@ pub enum Commands {
         #[arg(long)]
         release: bool,
 
+        /// Build for a profiler: release code, as `--release`, keeping a frame
+        /// pointer in every function so a profiler that walks frame pointers
+        /// sees every caller
+        #[arg(long)]
+        profile: bool,
+
         /// Optimization level (0-3): 0 does not optimize, 1-3 optimize for
         /// speed. Defaults to 3 with `--release` and 0 without
         #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(0..=3))]
@@ -155,6 +161,12 @@ pub enum Commands {
         /// for anything you time
         #[arg(long)]
         release: bool,
+
+        /// Build for a profiler: release code, as `--release`, keeping a frame
+        /// pointer in every function so a profiler that walks frame pointers
+        /// sees every caller
+        #[arg(long)]
+        profile: bool,
 
         /// Optimization level (0-3): 0 does not optimize, 1-3 optimize for
         /// speed. Defaults to 3 with `--release` and 0 without
@@ -533,6 +545,12 @@ pub enum DeterminismCommand {
         /// for anything you time
         #[arg(long)]
         release: bool,
+
+        /// Build for a profiler: release code, as `--release`, keeping a frame
+        /// pointer in every function so a profiler that walks frame pointers
+        /// sees every caller
+        #[arg(long)]
+        profile: bool,
 
         /// Optimization level (0-3): 0 does not optimize, 1-3 optimize for
         /// speed. Defaults to 3 with `--release` and 0 without

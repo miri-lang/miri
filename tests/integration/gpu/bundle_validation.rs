@@ -41,6 +41,7 @@ fn build_bundle_to_tempdir(source: &str) -> PathBuf {
         out_path: Some(temp_base.clone()),
         release: false,
         opt_level: 0,
+        preserve_frame_pointers: false,
         cpu_backend: Default::default(),
         // Bundle-only: this test validates the manifest/WGSL, not a native link.
         emit_native_host: false,

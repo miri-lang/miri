@@ -4,7 +4,7 @@
 use miri::ast::statement::StatementKind;
 use miri::error::diagnostic::Diagnostic;
 use miri::error::{CompilerError, Span, TypeError};
-use miri::pipeline::{program_uses_gpu, BuildOptions, Pipeline};
+use miri::pipeline::{program_uses_gpu, BuildOptions, CodegenMode, Pipeline};
 
 fn detects_gpu(source: &str) -> bool {
     let pipeline = Pipeline::new();
@@ -436,4 +436,27 @@ fn test_resolve_opt_level_prefers_the_explicit_level() {
     assert_eq!(BuildOptions::resolve_opt_level(true, None), 3);
     assert_eq!(BuildOptions::resolve_opt_level(true, Some(0)), 0);
     assert_eq!(BuildOptions::resolve_opt_level(false, Some(2)), 2);
+}
+
+/// `--profile` builds release code at release's level and keeps frame
+/// pointers; `--release` alone keeps none; an explicit level still wins.
+#[test]
+fn test_profile_selects_release_code_with_frame_pointers() {
+    let mode = |release, profile, level| CodegenMode::from_flags(release, profile, level);
+    let profiled = CodegenMode {
+        release: true,
+        opt_level: 3,
+        preserve_frame_pointers: true,
+    };
+    assert_eq!(mode(false, true, None), profiled);
+    assert_eq!(mode(true, true, None), profiled);
+    assert_eq!(
+        mode(true, false, None),
+        CodegenMode {
+            preserve_frame_pointers: false,
+            ..profiled
+        }
+    );
+    assert_eq!(mode(false, true, Some(1)).opt_level, 1);
+    assert_eq!(mode(false, false, None), CodegenMode::default());
 }

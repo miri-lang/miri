@@ -130,6 +130,16 @@ impl RuntimeKind {
         }
     }
 
+    /// Whether `make runtimes` also builds this runtime with frame pointers,
+    /// into `target/frame-pointers`, for a profile build to link. The GPU
+    /// runtime is built once, without them.
+    pub fn has_frame_pointer_build(&self) -> bool {
+        match self {
+            Self::Core => true,
+            Self::Gpu => false,
+        }
+    }
+
     /// Extra linker arguments required by a runtime's transitive
     /// dependencies. Kept on the enum rather than in `pipeline.rs` so
     /// that adding a new runtime does not force a pipeline edit.
