@@ -689,16 +689,21 @@ impl<'source> Lexer<'source> {
     /// Removes and returns the pending comments whose position matches
     /// `leading`, preserving the order of both what is taken and what stays.
     fn take_comments(&mut self, leading: bool) -> Vec<BufferedComment> {
+        // Fast path: when no comments are buffered (the overwhelmingly common case during parsing),
+        // return an empty vector without performing any heap allocations.
+        if self.pending_comments.is_empty() {
+            return Vec::new();
+        }
+
+        let pending = std::mem::take(&mut self.pending_comments);
         let mut taken = Vec::new();
-        let mut kept = Vec::new();
-        for comment in self.pending_comments.drain(..) {
+        for comment in pending {
             if comment.is_leading == leading {
                 taken.push(comment);
             } else {
-                kept.push(comment);
+                self.pending_comments.push(comment);
             }
         }
-        self.pending_comments = kept;
         taken
     }
 }
