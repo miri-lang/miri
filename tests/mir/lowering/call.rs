@@ -156,3 +156,43 @@ fn test_runtime_call_names_its_runtime_symbol() {
         "expected a call to the runtime's set insertion through its symbol, got {targets:?}"
     );
 }
+
+/// The lowered body of `function` in `program`, built with the standard
+/// library as `miri build --emit mir` writes it.
+fn emitted_function_mir(program: &str, function: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("prog.mi");
+    std::fs::write(&source, program).unwrap();
+    let out = dir.path().join("prog");
+    crate::utils::miri_cmd()
+        .arg("build")
+        .arg(&source)
+        .arg("--out")
+        .arg(&out)
+        .args(["--emit", "mir"])
+        .assert()
+        .success();
+    let mir = std::fs::read_to_string(dir.path().join("prog.mir")).unwrap();
+    let header = format!("fn {function}\n");
+    let start = mir
+        .find(&header)
+        .unwrap_or_else(|| panic!("no `{function}` in:\n{mir}"));
+    let body = &mir[start + header.len()..];
+    let end = body.find("\nfn ").unwrap_or(body.len());
+    body[..end].to_string()
+}
+
+/// A `String` method hands `self` to a runtime function declared to take a
+/// `String`: the class's own name and the built-in type are one type, so the
+/// receiver is passed as it is, with no cast and no reference taken for it.
+#[test]
+fn test_a_string_receiver_reaches_a_runtime_string_parameter_as_it_is() {
+    let body = emitted_function_mir(
+        "use system.io\nlet s = \"hello\"\nprintln(f\"{s.code_at(1) ?? 0}\")\n",
+        "miri.String.code_at",
+    );
+    assert!(
+        !body.contains("IncRef(_1)") && !body.contains(" as String"),
+        "code_at retains or re-spells its receiver:\n{body}"
+    );
+}

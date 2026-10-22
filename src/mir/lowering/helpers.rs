@@ -555,11 +555,24 @@ fn option_depth(ty: &MirType) -> usize {
 /// `Array<int, 3>` and `Array<int, SIZE>` are one array; `List(T)` and
 /// `List(Custom("T"))` are one list. Coercing between them would hand the same
 /// object a second holder while both holders still get released, so the pair is
-/// passed through untouched instead.
+/// passed through untouched instead. So are a built-in type and the class
+/// spelled by its name: `self` in a `String` method is the `String` a runtime
+/// function declares.
 pub fn spellings_of_one_value(from_ty: &Type, to_ty: &Type) -> bool {
-    let from = MirType::from_type_kind(&from_ty.kind);
-    let to = MirType::from_type_kind(&to_ty.kind);
+    let from = MirType::from_type_kind(&primitive_spelling(&from_ty.kind));
+    let to = MirType::from_type_kind(&primitive_spelling(&to_ty.kind));
     from == to || mir_types_structurally_match(&from, &to)
+}
+
+/// The built-in type a class name with no type arguments spells, or `kind`
+/// itself.
+fn primitive_spelling(kind: &TypeKind) -> TypeKind {
+    match kind {
+        TypeKind::Custom(name, None) => {
+            crate::ast::types::primitive_type_kind(name).unwrap_or_else(|| kind.clone())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Whether coercing `op_ty` into `target_ty` builds a `Some` around the value: a
