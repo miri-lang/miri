@@ -78,6 +78,61 @@ fn main()
     println(f"{sum_to(10)}")
 "#;
 
+/// A small render loop calling five small vector helpers, two of which
+/// call the others: the shape of a per-pixel kernel.
+const VECTOR_KERNEL: &str = r#"use system.io
+use system.math
+
+struct Vec3
+    x float
+    y float
+    z float
+
+struct Sphere
+    center Vec3
+    radius float
+
+fn sub(a Vec3, b Vec3) Vec3: Vec3(x: a.x - b.x, y: a.y - b.y, z: a.z - b.z)
+fn scale(a Vec3, k float) Vec3: Vec3(x: a.x * k, y: a.y * k, z: a.z * k)
+fn dot(a Vec3, b Vec3) float: a.x * b.x + a.y * b.y + a.z * b.z
+fn normalize(a Vec3) Vec3: scale(a, 1.0 / sqrt(dot(a, a)))
+
+fn hit(sphere Sphere, direction Vec3) float
+    let oc = scale(sphere.center, -1.0)
+    let b = dot(oc, direction)
+    let c = dot(oc, oc) - sphere.radius * sphere.radius
+    let discriminant = b * b - c
+    if discriminant < 0.0
+        return -1.0
+    -b - sqrt(discriminant)
+
+fn kernel(n int) int
+    let spheres = [Sphere(center: Vec3(x: 0.0, y: 0.0, z: 3.0), radius: 1.0), Sphere(center: Vec3(x: 1.0, y: 0.5, z: 4.0), radius: 0.5)]
+    let light = normalize(Vec3(x: 1.0, y: 1.0, z: -1.0))
+    var hash = 0
+    var py = 0
+    while py < n
+        var px = 0
+        while px < n
+            let direction = normalize(Vec3(x: (px as float) / (n as float) - 0.5, y: 0.5 - (py as float) / (n as float), z: 1.0))
+            var nearest = 1000000.0
+            var shade = 0
+            for sphere in spheres
+                let t = hit(sphere, direction)
+                if t > 0.0 and t < nearest
+                    nearest = t
+                    let normal = normalize(sub(scale(direction, t), sphere.center))
+                    let lambert = dot(normal, light)
+                    shade = if lambert > 0.0: (lambert * 255.0) as int else: 0
+            hash = (hash * 31 + shade) % 1000000007
+            px += 1
+        py += 1
+    hash
+
+fn main()
+    println(f"{kernel(40)}")
+"#;
+
 /// Write `source` into `dir` and build it with `flags`, returning the
 /// executable's path.
 fn build(dir: &Path, source: &str, flags: &[&str]) -> PathBuf {
@@ -267,4 +322,27 @@ fn opt_level_1_inlines_a_tiny_helper_too() {
         "the helper was not inlined at opt level 1:\n{optimized}"
     );
     assert_eq!(build_and_run(TINY_HELPER, &["--opt-level", "1"]), "100\n");
+}
+
+/// The helpers a per-pixel kernel calls on every pixel and sphere, one of
+/// them calling the others, are inlined into it once value arguments are read
+/// in place, and the inlined kernel computes what the unoptimized one does.
+#[test]
+fn a_render_kernel_inlines_its_per_pixel_helpers() {
+    let optimized = listing(VECTOR_KERNEL, "3");
+    for helper in ["normalize", "hit", "dot", "sub"] {
+        assert!(
+            !calls(&optimized, "miri.kernel", &format!("miri.{helper}")),
+            "the kernel still calls {helper}:\n{}",
+            function_text(&optimized, "miri.kernel")
+        );
+    }
+    assert_eq!(
+        build_and_run(VECTOR_KERNEL, &["--opt-level", "3"]),
+        "123496526\n"
+    );
+    assert_eq!(
+        build_and_run(VECTOR_KERNEL, &["--opt-level", "0"]),
+        "123496526\n"
+    );
 }
