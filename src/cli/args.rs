@@ -164,7 +164,7 @@ pub enum Commands {
 
         /// Build for a profiler: release code, as `--release`, keeping a frame
         /// pointer in every function so a profiler that walks frame pointers
-        /// sees every caller
+        /// sees every caller, and writing the line map `--emit lines` writes
         #[arg(long)]
         profile: bool,
 
@@ -184,7 +184,8 @@ pub enum Commands {
         target: BuildTarget,
 
         /// Also write an intermediate form beside the executable, as
-        /// `<out>.mir` or `<out>.clif`; repeat for both
+        /// `<out>.mir`, `<out>.clif` or `<out>.lines`, the source line each
+        /// run of machine code came from; repeat for more than one
         #[arg(long, value_enum, value_name = "FORM")]
         emit: Vec<Listing>,
 
@@ -548,7 +549,7 @@ pub enum DeterminismCommand {
 
         /// Build for a profiler: release code, as `--release`, keeping a frame
         /// pointer in every function so a profiler that walks frame pointers
-        /// sees every caller
+        /// sees every caller, and writing the line map `--emit lines` writes
         #[arg(long)]
         profile: bool,
 

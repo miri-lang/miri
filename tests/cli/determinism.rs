@@ -81,6 +81,21 @@ fn test_determinism_check_passes_at_every_opt_level() {
     }
 }
 
+/// The line map a profile build writes beside its executable, naming a
+/// library module and the program's own functions, is reproducible too.
+#[test]
+fn test_determinism_check_passes_on_a_profile_line_map() {
+    let file = create_test_file(crate::cli::build_line_map::HASH_LOOP);
+    miri_cmd()
+        .arg("determinism")
+        .arg("check")
+        .arg(file.path())
+        .arg("--profile")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Determinism check passed"));
+}
+
 #[test]
 fn test_determinism_check_json_format_pass() {
     let file = create_test_file(HELLO_WORLD);

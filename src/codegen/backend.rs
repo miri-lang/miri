@@ -7,6 +7,7 @@
 //! enabling support for multiple backends (Cranelift, LLVM, GPU backends).
 //! It also defines the selection enums `CpuBackend` and `BuildTarget` for CLI integration.
 
+use crate::error::SourceId;
 use crate::mir::Body;
 use std::error::Error;
 use std::fmt::Debug;
@@ -53,6 +54,36 @@ pub struct CompiledArtifact {
     /// The backend's own IR of every function it compiled, when its options
     /// asked for a listing.
     pub ir_listing: Option<String>,
+    /// Where each compiled function's code came from, in the order the
+    /// functions were compiled, when the backend's options asked for it.
+    /// Empty otherwise.
+    pub code_map: Vec<FunctionCodeMap>,
+}
+
+/// The source offsets one compiled function's machine code was generated
+/// from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionCodeMap {
+    /// The function's link symbol.
+    pub symbol: String,
+    /// The size of the function's machine code, in bytes.
+    pub code_size: u32,
+    /// The file the offsets of `ranges` index, as the body recorded it.
+    pub source: Option<SourceId>,
+    /// The function's code that came from a known place, ordered by offset
+    /// and not overlapping.
+    pub ranges: Vec<CodeRange>,
+}
+
+/// A run of machine code generated from one place in the source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodeRange {
+    /// The first byte of the run, from the start of the function.
+    pub start: u32,
+    /// The byte after the last byte of the run, from the start of the function.
+    pub end: u32,
+    /// The byte offset into the source file the run was generated from.
+    pub source_offset: u32,
 }
 
 impl CompiledArtifact {
@@ -62,6 +93,7 @@ impl CompiledArtifact {
             bytes,
             format,
             ir_listing: None,
+            code_map: Vec::new(),
         }
     }
 

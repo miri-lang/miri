@@ -392,6 +392,8 @@ fn test_release_implies_opt_level_3_unless_a_level_is_given() {
 /// `--profile` builds the code `--release` builds, down to the backend's IR,
 /// and keeps a frame pointer in every function: AArch64 otherwise leaves the
 /// frame out of a leaf such as `classify`, so there the object code differs.
+/// A profile build writes its line map, whose source locations the IR
+/// listing shows, so the release build it is held to writes one too.
 #[test]
 fn test_profile_builds_the_release_code_with_frame_pointers() {
     let source = create_test_file(TIGHT_LOOP);
@@ -404,7 +406,7 @@ fn test_profile_builds_the_release_code_with_frame_pointers() {
     };
 
     let profile = build(&["--profile", "--emit", "clif"]);
-    let release = build(&["--release", "--emit", "clif"]);
+    let release = build(&["--release", "--emit", "clif", "--emit", "lines"]);
     assert!(
         read(&profile, ".clif") == read(&release, ".clif"),
         "--profile did not build the release code"

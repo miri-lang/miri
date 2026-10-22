@@ -7,6 +7,7 @@
 //! loading state, circular import detection, module visibility tracking, and
 //! module-level metadata for the type checker.
 
+use crate::error::SourceId;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +16,23 @@ use std::sync::Arc;
 /// `use` loads is named by the path that `use` wrote, whose segments are
 /// identifiers, so no loaded module can be named this.
 pub(crate) const PROGRAM_MODULE: &str = "<program>";
+
+/// The file one imported module was read from.
+#[derive(Debug)]
+pub struct ModuleSource {
+    /// The source this file is numbered as.
+    pub id: SourceId,
+    /// The module the file was loaded as.
+    pub module: crate::type_checker::ModuleId,
+    /// The module's file relative to the root it was found under, as a
+    /// listing names it: `system/json.mi` for `system.json`, and
+    /// `local:util/strings.mi` for `local.util.strings`.
+    pub name: String,
+    /// Where the file was read from, as diagnostics name it.
+    pub path: String,
+    /// The file's text, which the module's spans index.
+    pub text: String,
+}
 
 /// Tracks module loading state, visibility, and metadata.
 ///
@@ -71,10 +89,17 @@ pub struct ModuleLoader {
     /// this set as overwritable and remove the name on full registration.
     pub pre_registered_types: HashSet<String>,
     /// The file every function declared in an imported module was read from,
-    /// as (file_path, source_text), keyed by the declaration's statement id.
-    /// A span is an offset into the file that holds it, so a diagnostic raised
-    /// on an imported body after checking is rendered against this file.
-    pub declaration_sources: HashMap<usize, Arc<(String, String)>>,
+    /// keyed by the declaration's statement id. A span is an offset into the
+    /// file that holds it, so a diagnostic raised on an imported body after
+    /// checking is rendered against this file.
+    pub declaration_sources: HashMap<usize, Arc<ModuleSource>>,
+    /// Every imported module's file, in the order loading finished, which is
+    /// the order of their [`SourceId`]s.
+    pub imported_sources: Vec<Arc<ModuleSource>>,
+    /// Every function the program's own file declares, its types' methods
+    /// included, by statement id: the declarations whose spans index the
+    /// program's file.
+    pub program_declarations: HashSet<usize>,
     /// For each imported module, the identity each type it keeps private is
     /// registered under, by the name the module writes it as. A name written
     /// in that module resolves here before anywhere else.
@@ -116,6 +141,8 @@ impl ModuleLoader {
             module_symbols: HashMap::new(),
             pre_registered_types: HashSet::new(),
             declaration_sources: HashMap::new(),
+            imported_sources: Vec::new(),
+            program_declarations: HashSet::new(),
             private_type_identities: HashMap::new(),
             qualified_type_names: HashMap::new(),
             qualified_name_recorded: false,

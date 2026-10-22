@@ -232,6 +232,7 @@ fn closure_context<'a>(
     // NOTE: all param locals (1, 2, ...) are allocated via push_param, NOT new_local,
     // so the LoweringContext sees them as proper parameters.
     let mut lambda_ctx = LoweringContext::new(lambda_body, ctx.type_checker, ctx.is_release);
+    lambda_ctx.read_source_like(ctx);
     // Inherit the compilation-wide kernel-name allocator so a kernel lowered
     // inside the lambda body stays deterministic and collision-free.
     lambda_ctx.use_compilation_ids(ctx.compilation_ids.clone());

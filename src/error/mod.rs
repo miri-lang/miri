@@ -13,6 +13,7 @@ pub mod foreign_syntax;
 pub mod format;
 pub mod lowering;
 pub mod runtime;
+pub mod source;
 pub mod syntax;
 pub mod type_error;
 
@@ -26,5 +27,6 @@ pub use format::{
 };
 pub use lowering::{LoweringError, LoweringErrorKind};
 pub use runtime::RuntimeError;
+pub use source::SourceId;
 pub use syntax::{find_line_info, Span, SyntaxError, SyntaxErrorKind, SyntaxErrors};
 pub use type_error::{TypeError, TypeErrorKind};

@@ -15,6 +15,7 @@ use crate::codegen::cranelift::stable_headers::StableHeaders;
 use crate::codegen::cranelift::types::translate_type;
 use crate::codegen::cranelift::value_abi::body_signature;
 use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, ValueLocals};
+use crate::error::syntax::Span;
 use crate::error::CodegenError;
 use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
@@ -24,7 +25,7 @@ use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{
-    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, TrapCode, Value,
+    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, SourceLoc, TrapCode, Value,
 };
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -69,6 +70,9 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) module: &'a mut ObjectModule,
     /// Whether the code being emitted carries the runtime's checking hooks.
     pub(crate) runtime_checks: RuntimeChecks,
+    /// Whether each statement's instructions record the source offset its
+    /// span starts at.
+    pub(crate) source_locations: bool,
     pub(crate) string_literals: &'a mut BTreeMap<String, usize>,
     pub(crate) cached_funcs: HashMap<&'static str, cranelift_module::FuncId>,
     /// The per-type thunks (`miri.T.$decref` and the like) already declared in
@@ -162,12 +166,14 @@ pub(crate) enum RuntimeChecks {
 }
 
 /// How a user function's code is emitted beyond its MIR: whether it keeps the
-/// runtime's checking hooks, and whether it is the program's entry point, which
-/// is where a build that leaves them out says so to the runtime.
+/// runtime's checking hooks, whether it is the program's entry point, which
+/// is where a build that leaves them out says so to the runtime, and whether
+/// its instructions record the source offset they were generated from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Emission {
     pub(crate) runtime_checks: RuntimeChecks,
     pub(crate) is_entry: bool,
+    pub(crate) source_locations: bool,
 }
 
 /// Build an empty `ModuleCtx` with an unpopulated FuncId cache.
@@ -180,6 +186,7 @@ pub(crate) fn empty_module_ctx<'a>(
     ModuleCtx {
         module,
         runtime_checks: RuntimeChecks::Observable,
+        source_locations: false,
         string_literals,
         cached_funcs: HashMap::new(),
         thunk_funcs: HashMap::new(),
@@ -269,6 +276,7 @@ impl<'a> FunctionTranslator<'a> {
 
         let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
         module_ctx.runtime_checks = emission.runtime_checks;
+        module_ctx.source_locations = emission.source_locations;
         if emission.is_entry && emission.runtime_checks == RuntimeChecks::CompiledOut {
             Self::call_rt_checks_compiled_out(&mut builder, &mut module_ctx)?;
         }
@@ -402,6 +410,7 @@ impl<'a> FunctionTranslator<'a> {
             type_ctx.stable_headers.enter_block(idx);
             for (position, stmt) in block_data.statements.iter().enumerate() {
                 type_ctx.stable_headers.enter_statement(position);
+                Self::mark_source(builder, module_ctx, stmt.span);
                 Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
             type_ctx
@@ -409,12 +418,30 @@ impl<'a> FunctionTranslator<'a> {
                 .enter_statement(block_data.statements.len());
             Self::read_stable_headers(builder, idx, locals, type_ctx)?;
             if let Some(ref terminator) = block_data.terminator {
+                Self::mark_source(builder, module_ctx, terminator.span);
                 Self::translate_terminator(
                     builder, module_ctx, terminator, body, locals, blocks, type_ctx,
                 )?;
             }
         }
         Ok(())
+    }
+
+    /// Record `span`'s start as the source of the instructions built next,
+    /// when the module asks for source locations. A span covering no text
+    /// was synthesized rather than written, so the instructions keep the
+    /// location of the statement before them.
+    fn mark_source(builder: &mut FunctionBuilder, module_ctx: &ModuleCtx, span: Span) {
+        if !module_ctx.source_locations || span.is_empty() {
+            return;
+        }
+        let Ok(offset) = u32::try_from(span.start) else {
+            return;
+        };
+        let location = SourceLoc::new(offset);
+        if !location.is_default() {
+            builder.set_srcloc(location);
+        }
     }
 
     /// Load initial scalar `out` param values from their caller-provided

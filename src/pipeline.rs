@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+mod line_map;
+
 use crate::ast::common::RuntimeKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
@@ -11,7 +13,7 @@ use crate::ast::statement::{
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
 use crate::codegen::Backend;
-use crate::codegen::{BuildTarget, CpuBackend};
+use crate::codegen::{BuildTarget, CpuBackend, FunctionCodeMap};
 use crate::diagnostics::codes::DiagnosticCode;
 use crate::error::compiler::CompilerError;
 use crate::error::diagnostic::Diagnostic;
@@ -607,6 +609,9 @@ pub enum Listing {
     /// The Cranelift IR of every function, as Cranelift left it after
     /// optimizing.
     Clif,
+    /// The source line each run of every function's machine code was
+    /// generated from, for a profiler to read; see [`line_map`].
+    Lines,
 }
 
 impl Listing {
@@ -615,7 +620,18 @@ impl Listing {
         match self {
             Listing::Mir => "mir",
             Listing::Clif => "clif",
+            Listing::Lines => "lines",
         }
+    }
+
+    /// The forms a build made in `codegen` mode writes when `requested`
+    /// were asked for: those, and for a profile build its line map, which
+    /// the profiler attributing its samples to lines reads.
+    pub fn written_by(mut requested: Vec<Listing>, codegen: CodegenMode) -> Vec<Listing> {
+        if codegen.preserve_frame_pointers && !requested.contains(&Listing::Lines) {
+            requested.push(Listing::Lines);
+        }
+        requested
     }
 }
 
@@ -625,6 +641,9 @@ struct ObjectCode {
     required_runtimes: BTreeSet<RuntimeKind>,
     /// The backend's IR listing, when the build asked for one.
     clif: Option<String>,
+    /// Where each function's code came from, when the build asked for its
+    /// line map; empty otherwise.
+    code_map: Vec<FunctionCodeMap>,
 }
 
 /// The MIR of every body, as `Listing::Mir` writes it.
@@ -1994,7 +2013,40 @@ impl Pipeline {
         if let Some(text) = object.clif {
             write_listing(&out_path, Listing::Clif, &text)?;
         }
+        if opts.emit.contains(&Listing::Lines) {
+            let text = self.line_map_listing(pipeline_result, &object.code_map)?;
+            write_listing(&out_path, Listing::Lines, &text)?;
+        }
         Ok(out_path)
+    }
+
+    /// The line map of `code_map`, read against the program's file and every
+    /// module it imported.
+    fn line_map_listing(
+        &self,
+        pipeline_result: &PipelineResult,
+        code_map: &[FunctionCodeMap],
+    ) -> Result<String, CompilerError> {
+        let type_checker = &pipeline_result.type_checker;
+        let program = line_map::SourceFile {
+            name: self
+                .source_path()
+                .and_then(|path| Path::new(path).file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or(line_map::UNNAMED_PROGRAM),
+            text: type_checker.entry_source.as_deref().unwrap_or_default(),
+        };
+        let files: Vec<line_map::SourceFile> = std::iter::once(program)
+            .chain(
+                type_checker
+                    .imported_sources()
+                    .map(|module| line_map::SourceFile {
+                        name: &module.name,
+                        text: &module.text,
+                    }),
+            )
+            .collect();
+        Ok(line_map::LineMap::new(&files, code_map)?.to_string())
     }
 
     /// The directory the build works in and the executable's path: `out`
@@ -2068,6 +2120,7 @@ impl Pipeline {
                     bytes: artifact.bytes,
                     required_runtimes: runtime_info.required_runtimes,
                     clif: None,
+                    code_map: artifact.code_map,
                 })
             }
         }
@@ -2105,6 +2158,7 @@ impl Pipeline {
                 ir_listing: opts.emit.contains(&Listing::Clif),
                 runtime_checks: !opts.release,
                 preserve_frame_pointers: opts.preserve_frame_pointers,
+                code_map: opts.emit.contains(&Listing::Lines),
                 ..Default::default()
             };
             let artifact = backend
@@ -2114,6 +2168,7 @@ impl Pipeline {
                 bytes: artifact.bytes,
                 required_runtimes: runtime_info.required_runtimes,
                 clif: artifact.ir_listing,
+                code_map: artifact.code_map,
             })
         }
         #[cfg(not(feature = "cranelift"))]

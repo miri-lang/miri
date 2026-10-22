@@ -82,6 +82,7 @@ use context::{Context, SymbolInfo, TypeDefinition};
 use diagnostics::DiagnosticCollector;
 use function_analysis::FunctionAnalysis;
 use module_loader::ModuleLoader;
+pub use module_loader::ModuleSource;
 use type_table::TypeTable;
 
 pub use gpu_buffer_init::GpuBufferInit;
@@ -429,23 +430,43 @@ impl TypeChecker {
         self.fn_analysis.declaring_modules.get(&statement_id)
     }
 
-    /// The (file_path, source_text) of the imported file that declares the
-    /// function `statement_id`. `None` for the program's own functions, whose
-    /// spans index the program's file.
-    /// The file and text the declaration `statement_id` was read from, when
-    /// an imported module declared it, borrowed for as long as the checker.
-    pub fn declaration_source_text(&self, statement_id: usize) -> Option<(&str, &str)> {
+    /// The imported file that declares the function `statement_id`. `None`
+    /// for the program's own functions, whose spans index the program's file.
+    pub fn declaration_module_source(&self, statement_id: usize) -> Option<&ModuleSource> {
         self.modules
             .declaration_sources
             .get(&statement_id)
-            .map(|source| (source.0.as_str(), source.1.as_str()))
+            .map(AsRef::as_ref)
     }
 
+    /// The (file_path, source_text) of the imported file that declares the
+    /// function `statement_id`, as [`Self::declaration_module_source`] finds it.
     pub fn declaration_source(&self, statement_id: usize) -> Option<(String, String)> {
+        self.declaration_module_source(statement_id)
+            .map(|source| (source.path.clone(), source.text.clone()))
+    }
+
+    /// The file the module `module` was loaded from, when it is an imported
+    /// module this check loaded.
+    pub fn module_source(&self, module: &ModuleId) -> Option<&ModuleSource> {
         self.modules
-            .declaration_sources
-            .get(&statement_id)
-            .map(|source| source.as_ref().clone())
+            .imported_sources
+            .iter()
+            .map(AsRef::as_ref)
+            .find(|source| source.module == *module)
+    }
+
+    /// Whether the program's own file declares the function `statement_id`:
+    /// a function or method written there, or the `main` a script's
+    /// top-level statements were wrapped in.
+    pub fn declares_in_program(&self, statement_id: usize) -> bool {
+        self.modules.program_declarations.contains(&statement_id)
+            || self.script_main == Some(statement_id)
+    }
+
+    /// Every imported module's file, in [`crate::error::SourceId`] order from 1.
+    pub fn imported_sources(&self) -> impl Iterator<Item = &ModuleSource> {
+        self.modules.imported_sources.iter().map(AsRef::as_ref)
     }
 
     /// Record the callee the identifier expression `expr_id`, written as
@@ -605,6 +626,7 @@ impl TypeChecker {
         self.load_prelude(&mut context);
 
         self.record_declaring_modules(ModuleId::Program, program);
+        self.record_program_declarations(program);
         self.run_pass_collect_type_shells(program);
         self.load_shadowable_prelude(&mut context);
         self.run_pass_collect_type_aliases(program, &mut context);

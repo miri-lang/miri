@@ -406,7 +406,8 @@ fn lower_call_arguments(
     };
     let param_names = callee_parameter_names(ctx, callee_id);
     let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names)?;
-    fill_default_args(ctx, &mut arg_slots, &param_types)?;
+    let call = CallSite { callee_id, span };
+    fill_default_args(ctx, &mut arg_slots, &param_types, call)?;
     operands_in_parameter_order(arg_slots, span)
 }
 
@@ -1941,6 +1942,7 @@ fn fill_default_args(
     ctx: &mut LoweringContext,
     slots: &mut Vec<Option<Operand>>,
     param_types: &Option<Vec<crate::ast::common::Parameter>>,
+    call: CallSite,
 ) -> Result<(), LoweringError> {
     let Some(params) = param_types else {
         return Ok(());
@@ -1950,11 +1952,91 @@ fn fill_default_args(
             continue;
         }
         if let Some(default_expr) = &param.default_value {
-            let default_op = lower_expression(ctx, default_expr, None)?;
+            let default_op = lower_default_argument(ctx, default_expr, call)?;
             place_at_parameter(slots, position, default_op);
         }
     }
     Ok(())
+}
+
+/// A call that may give an omitted parameter its default: the expression
+/// naming the callee and where the call is written.
+#[derive(Clone, Copy)]
+struct CallSite {
+    callee_id: usize,
+    span: Span,
+}
+
+/// Lower the default `default_expr` of a parameter of the callee `call`
+/// names, at that call.
+///
+/// The expression is written in the callee's file, so it is lowered
+/// reading spans against that file: a location it bakes in, or a closure it
+/// holds, names the callee's file. What it adds to the calling body runs at
+/// the call, so when the callee's file is another one those statements are
+/// placed at the call, keeping every span of the body an offset into the
+/// body's own file.
+fn lower_default_argument(
+    ctx: &mut LoweringContext,
+    default_expr: &Expression,
+    call: CallSite,
+) -> Result<Operand, LoweringError> {
+    let callee_file = ctx
+        .type_checker
+        .declared_callee(call.callee_id)
+        .and_then(|callee| ctx.module_file(&callee.module));
+    let Some(callee_file) = callee_file.filter(|file| file.id != ctx.body.source) else {
+        return lower_expression(ctx, default_expr, None);
+    };
+    let start = EmissionPoint::of(ctx);
+    let caller_file = ctx.read_source_file(callee_file);
+    let lowered = lower_expression(ctx, default_expr, None);
+    ctx.read_source_file(caller_file);
+    start.place_emitted_code_at(ctx, call.span);
+    lowered
+}
+
+/// Where lowering appends the next statement of a body: the current block,
+/// its statement count and the number of blocks.
+struct EmissionPoint {
+    block: usize,
+    statement: usize,
+    blocks: usize,
+}
+
+impl EmissionPoint {
+    fn of(ctx: &LoweringContext) -> Self {
+        let block = ctx.current_block.0;
+        Self {
+            block,
+            statement: ctx
+                .body
+                .basic_blocks
+                .get(block)
+                .map_or(0, |data| data.statements.len()),
+            blocks: ctx.body.basic_blocks.len(),
+        }
+    }
+
+    /// Give every statement and terminator lowered since this point `span`.
+    fn place_emitted_code_at(&self, ctx: &mut LoweringContext, span: Span) {
+        let blocks = ctx.body.basic_blocks.iter_mut().enumerate();
+        for (index, data) in
+            blocks.filter(|(index, _)| *index == self.block || *index >= self.blocks)
+        {
+            let first = if index == self.block {
+                self.statement
+            } else {
+                0
+            };
+            for statement in data.statements.iter_mut().skip(first) {
+                statement.span = span;
+            }
+            if let Some(terminator) = data.terminator.as_mut() {
+                terminator.span = span;
+            }
+        }
+    }
 }
 
 /// Whether a call to the function `callee` names carries the implicit

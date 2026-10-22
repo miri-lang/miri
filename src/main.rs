@@ -10,7 +10,7 @@ use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillComma
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonGpuTelemetry};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::to_json;
-use miri::pipeline::{BuildOptions, CodegenMode, Pipeline, Reported, RunCaptureResult};
+use miri::pipeline::{BuildOptions, CodegenMode, Listing, Pipeline, Reported, RunCaptureResult};
 
 pub fn main() -> Result<()> {
     let cli = Cli::try_parse().unwrap_or_else(|error| {
@@ -83,7 +83,7 @@ fn run_command(cli: Cli) -> Result<()> {
                         // web-gpu bundle; the flag is a no-op for the native
                         // target.
                         emit_native_host: true,
-                        emit,
+                        emit: Listing::written_by(emit, codegen),
                     },
                     format,
                     cli.verify_mir,
@@ -182,7 +182,7 @@ fn run_command(cli: Cli) -> Result<()> {
                             cpu_backend,
                             target,
                             emit_native_host: true,
-                            emit: Vec::new(),
+                            emit: Listing::written_by(Vec::new(), codegen),
                         },
                         format,
                         cli.verify_mir,

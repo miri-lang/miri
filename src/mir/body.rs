@@ -3,6 +3,7 @@
 
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
+use crate::error::SourceId;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::place::{Local, Place};
@@ -37,6 +38,10 @@ pub struct Body {
     pub arg_count: usize,
     /// The span of the entire function body.
     pub span: Span,
+    /// The file this body's spans index. `None` for a body the compiler
+    /// synthesizes with no source text of its own, such as the equality and
+    /// hash a container compares its elements with.
+    pub source: Option<SourceId>,
     /// The execution model for this function (CPU, GPU kernel, etc.)
     pub execution_model: ExecutionModel,
     /// Backend-specific metadata. None for CPU functions.
@@ -271,6 +276,7 @@ impl Body {
             local_decls: Vec::with_capacity(arg_count + 16),
             arg_count,
             span,
+            source: None,
             execution_model,
             backend_metadata: None,
             rc_classifier: RcClassifier::default(),

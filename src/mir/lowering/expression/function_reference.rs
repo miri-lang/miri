@@ -215,6 +215,7 @@ fn build_forwarding_thunk(
     body.new_local(LocalDecl::new(ret_ty, span));
 
     let mut thunk_ctx = LoweringContext::new(body, ctx.type_checker, ctx.is_release);
+    thunk_ctx.read_source_like(ctx);
     thunk_ctx.use_compilation_ids(ctx.compilation_ids.clone());
     // Read against the enclosing body's parameters, as a lambda's body is.
     thunk_ctx.body.type_params = ctx.body.type_params.clone();

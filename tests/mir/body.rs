@@ -61,3 +61,33 @@ fn test_written_locals_counts_statement_and_terminator_writes() {
     locals.sort_unstable();
     assert_eq!(locals, vec![1, 2, 4]);
 }
+
+/// A kernel lowered out of a `gpu forall` inside an imported module's
+/// function records the module's file, as the function holding it does.
+#[test]
+fn test_a_kernel_lowered_in_a_module_records_the_module_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("kernels.mi"),
+        "use system.gpu\nuse system.collections.array\n\npublic fn fill()\n    gpu var dst = [0, 0, 0, 0]\n    gpu forall i in 0..4\n        dst[i] = i\n",
+    )
+    .unwrap();
+    let bodies = miri::pipeline::Pipeline::new()
+        .with_source_dir(dir.path().to_path_buf())
+        .get_gpu_mir_bodies("use local.kernels\n\nfn main()\n    fill()\n")
+        .unwrap();
+    let names: Vec<&str> = bodies.iter().map(|(name, _)| name.as_str()).collect();
+    let source_of = |wanted: &dyn Fn(&str, &Body) -> bool| {
+        bodies
+            .iter()
+            .find(|(name, body)| wanted(name, body))
+            .map(|(_, body)| body.source)
+            .unwrap_or_else(|| panic!("no such body among {names:?}"))
+    };
+    let fill = source_of(&|name, _| name.ends_with(".fill"));
+    let kernel = source_of(&|_, body| body.execution_model == ExecutionModel::GpuKernel);
+    let main = source_of(&|name, _| name == "main");
+    assert_eq!(main, Some(miri::error::SourceId::PROGRAM));
+    assert!(fill.is_some() && fill != main, "fill records {fill:?}");
+    assert_eq!(kernel, fill);
+}

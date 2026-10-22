@@ -4,7 +4,7 @@
 use miri::ast::statement::StatementKind;
 use miri::error::diagnostic::Diagnostic;
 use miri::error::{CompilerError, Span, TypeError};
-use miri::pipeline::{program_uses_gpu, BuildOptions, CodegenMode, Pipeline};
+use miri::pipeline::{program_uses_gpu, BuildOptions, CodegenMode, Listing, Pipeline};
 
 fn detects_gpu(source: &str) -> bool {
     let pipeline = Pipeline::new();
@@ -459,4 +459,25 @@ fn test_profile_selects_release_code_with_frame_pointers() {
     );
     assert_eq!(mode(false, true, Some(1)).opt_level, 1);
     assert_eq!(mode(false, false, None), CodegenMode::default());
+}
+
+/// A profile build writes its line map whether or not it was asked for, once;
+/// any other build writes what was asked.
+#[test]
+fn listing_written_by_adds_the_line_map_to_a_profile_build_only() {
+    let profile = CodegenMode::from_flags(false, true, None);
+    let release = CodegenMode::from_flags(true, false, None);
+    assert_eq!(
+        Listing::written_by(vec![Listing::Mir], profile),
+        vec![Listing::Mir, Listing::Lines]
+    );
+    assert_eq!(
+        Listing::written_by(vec![Listing::Lines], profile),
+        vec![Listing::Lines]
+    );
+    assert_eq!(
+        Listing::written_by(vec![Listing::Clif], release),
+        vec![Listing::Clif]
+    );
+    assert!(Listing::written_by(Vec::new(), release).is_empty());
 }

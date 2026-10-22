@@ -27,7 +27,9 @@ pub mod value_locals;
 mod vtable;
 
 use crate::ast::types::{BuiltinCollectionKind, TypeKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
-use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
+use crate::codegen::backend::{
+    ArtifactFormat, Backend, CodeRange, CompiledArtifact, FunctionCodeMap,
+};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::error::CodegenError;
 use crate::mir::option_layout::{LayoutScope, OptionalLayers};
@@ -110,6 +112,29 @@ pub struct CraneliftOptions {
     /// no calls and uses no stack, and the leaf's caller drops out of the
     /// recorded stack.
     pub preserve_frame_pointers: bool,
+    /// Whether to return, in the artifact's `code_map`, the source offset
+    /// each run of every user function's code was generated from. Recording
+    /// the offsets leaves the machine code unchanged.
+    pub code_map: bool,
+}
+
+/// What `compile` returns about each user function beside its code, as the
+/// options ask for.
+struct FunctionReports {
+    /// Each function's CLIF after Cranelift optimized it.
+    ir_listing: Option<String>,
+    /// Where each function's code came from.
+    code_map: Option<Vec<FunctionCodeMap>>,
+}
+
+impl FunctionReports {
+    /// The reports `options` ask for, each empty.
+    fn asked_by(options: &CraneliftOptions) -> Self {
+        Self {
+            ir_listing: options.ir_listing.then(String::new),
+            code_map: options.code_map.then(Vec::new),
+        }
+    }
 }
 
 /// One user function handed to `compile_function`.
@@ -174,6 +199,7 @@ impl Default for CraneliftOptions {
             ir_listing: false,
             runtime_checks: true,
             preserve_frame_pointers: false,
+            code_map: false,
         }
     }
 }
@@ -313,7 +339,7 @@ impl Backend for CraneliftBackend {
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
         let mut string_literals = BTreeMap::new();
-        let mut listing = options.ir_listing.then(String::new);
+        let mut reports = FunctionReports::asked_by(options);
         let runtime_checks = if options.runtime_checks {
             RuntimeChecks::Observable
         } else {
@@ -331,7 +357,7 @@ impl Backend for CraneliftBackend {
                 &isa,
                 &mut string_literals,
                 &kernel_registry,
-                listing.as_mut(),
+                &mut reports,
             )?;
         }
 
@@ -357,7 +383,8 @@ impl Backend for CraneliftBackend {
         Ok(CompiledArtifact {
             bytes: object,
             format: ArtifactFormat::ObjectFile,
-            ir_listing: listing,
+            ir_listing: reports.ir_listing,
+            code_map: reports.code_map.unwrap_or_default(),
         })
     }
 
@@ -643,7 +670,7 @@ impl CraneliftBackend {
     ///   code keeps the runtime's checking hooks.
     /// * `isa` - The TargetIsa for code generation.
     /// * `string_literals` - A map to collect and deduplicate string literals found in the function.
-    /// * `listing` - When given, receives the function's CLIF after Cranelift optimized it.
+    /// * `reports` - Receives what the options ask to be returned about the function.
     #[allow(clippy::too_many_arguments)]
     fn compile_function(
         &self,
@@ -653,7 +680,7 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
         string_literals: &mut BTreeMap<String, usize>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
-        listing: Option<&mut String>,
+        reports: &mut FunctionReports,
     ) -> Result<(), CodegenError> {
         let FunctionUnit {
             name,
@@ -669,6 +696,7 @@ impl CraneliftBackend {
         let emission = Emission {
             runtime_checks,
             is_entry: name == Symbol::entry().link_name(),
+            source_locations: reports.code_map.is_some(),
         };
         translator
             .translate(body, module, string_literals, kernel_registry, emission)
@@ -687,7 +715,10 @@ impl CraneliftBackend {
         // Define the function
         crate::codegen::cranelift::define_function(module, func_id, ctx)
             .map_err(|e| CodegenError::define_function(name, define_failure_details(&e, ctx)))?;
-        if let Some(listing) = listing {
+        if let Some(code_map) = reports.code_map.as_mut() {
+            code_map.push(Self::function_code_map(name, body, ctx)?);
+        }
+        if let Some(listing) = reports.ir_listing.as_mut() {
             listing.push_str(&format!(
                 "; {name}\n{}{}\n",
                 ctx.func.display(),
@@ -699,6 +730,35 @@ impl CraneliftBackend {
         ctx.clear();
 
         Ok(())
+    }
+
+    /// Where the code `ctx` holds for the function `name`, compiled from
+    /// `body`, came from: every run Cranelift recorded a source offset for.
+    fn function_code_map(
+        name: &str,
+        body: &Body,
+        ctx: &Context,
+    ) -> Result<FunctionCodeMap, CodegenError> {
+        let compiled = ctx.compiled_code().ok_or_else(|| {
+            CodegenError::define_function(name, "no compiled code to map to source")
+        })?;
+        let ranges = compiled
+            .buffer
+            .get_srclocs_sorted()
+            .iter()
+            .filter(|run| !run.loc.is_default())
+            .map(|run| CodeRange {
+                start: run.start,
+                end: run.end,
+                source_offset: run.loc.bits(),
+            })
+            .collect();
+        Ok(FunctionCodeMap {
+            symbol: name.to_string(),
+            code_size: compiled.code_info().total_size,
+            source: body.source,
+            ranges,
+        })
     }
 
     /// One comment line per function and symbol `func` refers to, naming it: the

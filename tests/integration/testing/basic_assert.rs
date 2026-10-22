@@ -151,3 +151,46 @@ fn main()
         "aliased check",
     );
 }
+
+/// An assertion written inside a closure of an imported module reports the
+/// module's file and the closure's line, not the program's.
+#[test]
+fn test_assert_inside_an_imported_closure_reports_the_module_line() {
+    let result = crate::utils::miri_run_project(&[
+        (
+            "main.mi",
+            "use local.checks\n\nfn main()\n    check_all(3)\n",
+        ),
+        (
+            "checks.mi",
+            "use system.testing\n\npublic fn check_all(n int)\n    let check = fn()\n        assert(n > 100, \"inner check\")\n        return\n    check()\n",
+        ),
+    ]);
+    let output = result.output();
+    assert!(!result.success, "the assertion did not fail:\n{output}");
+    assert!(output.contains("inner check"), "{output}");
+    assert!(
+        output.contains("checks.mi:5"),
+        "the closure's assertion is not reported at checks.mi:5:\n{output}"
+    );
+}
+
+/// An assertion inside a closure written as a module function's default
+/// argument reports the module's file and line, though the default is
+/// lowered into the program's call.
+#[test]
+fn test_assert_inside_an_imported_default_argument_reports_the_module_line() {
+    let result = crate::utils::miri_run_project(&[
+        ("main.mi", "use local.checks\n\nfn main()\n    run_check()\n"),
+        (
+            "checks.mi",
+            "use system.testing\n\npublic fn run_check(check fn() = fn(): assert(1 == 2, \"default check\"))\n    check()\n",
+        ),
+    ]);
+    let output = result.output();
+    assert!(!result.success, "the assertion did not fail:\n{output}");
+    assert!(
+        output.contains("checks.mi:3:"),
+        "the default's assertion is not reported at checks.mi:3:\n{output}"
+    );
+}

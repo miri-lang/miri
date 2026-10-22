@@ -119,6 +119,35 @@ pub struct LoweringContext<'a> {
     pub compilation_ids: SharedCompilationIds,
 }
 
+/// A source file as lowering reads spans against it: the number the body
+/// records, the path diagnostics name and the text lines are counted in.
+#[derive(Debug, Clone, Copy)]
+pub struct SourceFile<'a> {
+    pub id: Option<crate::error::SourceId>,
+    pub path: Option<&'a str>,
+    pub text: Option<&'a str>,
+}
+
+impl<'a> SourceFile<'a> {
+    /// The program's own file.
+    fn of_program(checker: &'a crate::type_checker::TypeChecker) -> Self {
+        Self {
+            id: Some(crate::error::SourceId::PROGRAM),
+            path: checker.entry_source_path.as_deref(),
+            text: checker.entry_source.as_deref(),
+        }
+    }
+
+    /// The file an imported module was read from.
+    fn of_module(module: &'a crate::type_checker::ModuleSource) -> Self {
+        Self {
+            id: Some(module.id),
+            path: Some(&module.path),
+            text: Some(&module.text),
+        }
+    }
+}
+
 impl<'a> LoweringContext<'a> {
     /// Allocates the next device handle of this compilation.
     ///
@@ -182,6 +211,7 @@ impl<'a> LoweringContext<'a> {
     /// instantiation, not at the parameter, which no device type represents.
     pub fn for_kernel(kernel: Body, parent: &LoweringContext<'a>) -> Self {
         let mut ctx = Self::new(kernel, parent.type_checker, parent.is_release);
+        ctx.read_source_like(parent);
         ctx.generic_subs = parent.generic_subs.clone();
         ctx.self_type = parent.self_type.clone();
         ctx
@@ -350,15 +380,82 @@ impl<'a> LoweringContext<'a> {
             .index_for(ast_id, &instantiation)
     }
 
-    /// Read spans against the file that declares `declaration` when an
-    /// imported module declared it, so a location baked into the body — an
-    /// assertion's line, a runtime error's place — names that file and line
-    /// rather than an offset into the program's own file.
-    pub fn read_source_of(&mut self, declaration: &crate::ast::statement::Statement) {
-        if let Some((path, text)) = self.type_checker.declaration_source_text(declaration.id) {
-            self.source_path = Some(path);
-            self.source = Some(text);
+    /// Read spans against the file that declares `declaration`, so a
+    /// location baked into the body — an assertion's line, a runtime error's
+    /// place — names that file and line, and the body records which file
+    /// that is.
+    ///
+    /// A declaration the type checker recorded in no file is refused: its
+    /// spans would be read against a file they do not index.
+    pub fn read_source_of(
+        &mut self,
+        declaration: &crate::ast::statement::Statement,
+    ) -> Result<(), LoweringError> {
+        let source = self.declaring_file(declaration)?;
+        self.read_source_file(source);
+        Ok(())
+    }
+
+    /// The file the type checker recorded `declaration` in.
+    fn declaring_file(
+        &self,
+        declaration: &crate::ast::statement::Statement,
+    ) -> Result<SourceFile<'a>, LoweringError> {
+        let checker = self.type_checker;
+        if let Some(module) = checker.declaration_module_source(declaration.id) {
+            return Ok(SourceFile::of_module(module));
         }
+        if checker.declares_in_program(declaration.id) {
+            return Ok(SourceFile::of_program(checker));
+        }
+        Err(LoweringError::internal(
+            crate::diagnostics::DiagnosticCode::MirValidationFailed,
+            format!(
+                "the declaration of statement {} was recorded in no source file",
+                declaration.id
+            ),
+            declaration.span,
+        ))
+    }
+
+    /// The file a module declaring something is written in, or `None` for a
+    /// module this compilation did not load.
+    pub fn module_file(&self, module: &crate::type_checker::ModuleId) -> Option<SourceFile<'a>> {
+        match module {
+            crate::type_checker::ModuleId::Program => {
+                Some(SourceFile::of_program(self.type_checker))
+            }
+            crate::type_checker::ModuleId::Imported(_) => self
+                .type_checker
+                .module_source(module)
+                .map(SourceFile::of_module),
+        }
+    }
+
+    /// The file this context reads spans against.
+    pub fn source_file(&self) -> SourceFile<'a> {
+        SourceFile {
+            id: self.body.source,
+            path: self.source_path,
+            text: self.source,
+        }
+    }
+
+    /// Read spans against `source` from here on, returning the file they
+    /// were read against before.
+    pub fn read_source_file(&mut self, source: SourceFile<'a>) -> SourceFile<'a> {
+        let previous = self.source_file();
+        self.body.source = source.id;
+        self.source_path = source.path;
+        self.source = source.text;
+        previous
+    }
+
+    /// Read spans against the file `parent` reads them against: a closure, a
+    /// function-reference thunk or a kernel written inside a body is written
+    /// in that body's file.
+    pub fn read_source_like(&mut self, parent: &LoweringContext<'a>) {
+        self.read_source_file(parent.source_file());
     }
 
     /// Compute a 1-based line number for the given byte offset within
@@ -402,17 +499,6 @@ impl<'a> LoweringContext<'a> {
 
         // Column is offset from the line start, 1-indexed
         (byte_offset - line_start) + 1
-    }
-
-    /// Format a span as a `"path:line"` (or `":line"` if no path is known)
-    /// human-readable location string, suitable for embedding in runtime
-    /// diagnostic messages.
-    pub fn format_span_location(&self, span: crate::error::syntax::Span) -> String {
-        let line = self.line_of(span.start);
-        match self.source_path {
-            Some(p) => format!("{}:{}", p, line),
-            None => format!(":{}", line),
-        }
     }
 
     /// Enter a new loop context
@@ -908,5 +994,35 @@ impl<'a> LoweringContext<'a> {
                 Some((name.clone(), params))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::LoweringContext;
+    use crate::ast::statement::{Statement, StatementKind, StatementTrivia};
+    use crate::error::syntax::Span;
+    use crate::mir::{Body, ExecutionModel};
+    use crate::type_checker::TypeChecker;
+
+    #[test]
+    fn a_declaration_recorded_in_no_file_is_refused() {
+        let checker = TypeChecker::new();
+        let body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+        let mut ctx = LoweringContext::new(body, &checker, false);
+        let unrecorded = Statement {
+            id: usize::MAX,
+            node: StatementKind::Break,
+            span: Span::new(3, 8),
+            trivia: StatementTrivia::default(),
+        };
+        let refusal = ctx.read_source_of(&unrecorded).err().map(|e| e.to_string());
+        assert!(
+            refusal
+                .as_deref()
+                .is_some_and(|message| message.contains("recorded in no source file")),
+            "{refusal:?}"
+        );
+        assert_eq!(ctx.body.source, None);
     }
 }

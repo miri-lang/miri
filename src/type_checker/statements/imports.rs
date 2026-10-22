@@ -42,9 +42,11 @@
 use crate::ast::*;
 use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::error::syntax::Span;
+use crate::error::SourceId;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
+use crate::type_checker::module_loader::ModuleSource;
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -505,7 +507,7 @@ impl TypeChecker {
         }
 
         self.modules.current_source_override = old_source_override;
-        self.record_declaration_sources(file_path, source, module_ast);
+        self.record_declaration_sources(path_str, file_path, source, module_ast);
         self.record_module_symbols(path_str);
         self.record_module_declared_names(path_str, module_ast);
         self.register_module_alias(path_str, alias);
@@ -517,15 +519,26 @@ impl TypeChecker {
         self.modules.current_module = old_module;
     }
 
-    /// Records `module` as the module each top-level function of
-    /// `module_ast` is declared in, which the symbol its body is compiled
-    /// under carries.
     /// Remembers `file_path` as the file of every function the module declares,
     /// its types' methods included, so a lowering diagnostic raised on one of
     /// their bodies is rendered against the file its span indexes.
-    fn record_declaration_sources(&mut self, file_path: &Path, source: &str, module_ast: &Program) {
-        let file =
-            std::sync::Arc::new((file_path.to_string_lossy().to_string(), source.to_string()));
+    fn record_declaration_sources(
+        &mut self,
+        path_str: &str,
+        file_path: &Path,
+        source: &str,
+        module_ast: &Program,
+    ) {
+        let file = std::sync::Arc::new(ModuleSource {
+            id: SourceId::new(self.modules.imported_sources.len() + 1),
+            module: crate::type_checker::ModuleId::imported(path_str),
+            name: module_listing_name(path_str),
+            path: file_path.to_string_lossy().to_string(),
+            text: source.to_string(),
+        });
+        self.modules
+            .imported_sources
+            .push(std::sync::Arc::clone(&file));
         let mut ids = Vec::new();
         collect_function_declarations(&module_ast.body, &mut ids);
         for id in ids {
@@ -535,6 +548,17 @@ impl TypeChecker {
         }
     }
 
+    /// Remembers every function the program's own file declares, its types'
+    /// methods included, as a declaration whose spans index that file.
+    pub(crate) fn record_program_declarations(&mut self, program: &Program) {
+        let mut ids = Vec::new();
+        collect_function_declarations(&program.body, &mut ids);
+        self.modules.program_declarations.extend(ids);
+    }
+
+    /// Records `module` as the module each top-level function of
+    /// `module_ast` is declared in, which the symbol its body is compiled
+    /// under carries.
     pub(crate) fn record_declaring_modules(
         &mut self,
         module: crate::type_checker::ModuleId,
@@ -1414,12 +1438,11 @@ pub fn module_search_locations(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| current_dir.clone());
 
-    if let Some(rest) = path_str.strip_prefix("local.") {
-        let relative_path = rest.replace('.', "/") + ".mi";
+    let relative_path = module_file_name(path_str);
+    if path_str.starts_with("local.") {
         return vec![(project_root.clone(), project_root.join(&relative_path))];
     }
 
-    let relative_path = path_str.replace('.', "/") + ".mi";
     let mut locations: Vec<(PathBuf, PathBuf)> = stdlib_roots()
         .into_iter()
         .map(|base| {
@@ -1432,6 +1455,27 @@ pub fn module_search_locations(
     locations.push((project_root.clone(), project_root.join(&relative_path)));
     locations.push((current_dir.clone(), current_dir.join(&relative_path)));
     locations
+}
+
+/// The file a module path names, relative to the root it is searched under:
+/// `system/json.mi` for `system.json`, `util/strings.mi` for
+/// `local.util.strings`.
+pub fn module_file_name(path_str: &str) -> String {
+    let relative = path_str.strip_prefix("local.").unwrap_or(path_str);
+    relative.replace('.', "/") + ".mi"
+}
+
+/// The name a listing gives the file of the module a path names: its file
+/// under the root it is searched in, `system/json.mi`, marked `local:` for a
+/// module of the program's own, `local:util/strings.mi`, so a program module
+/// is never read as the library module of the same path.
+pub fn module_listing_name(path_str: &str) -> String {
+    let file = module_file_name(path_str);
+    if path_str.starts_with("local.") {
+        format!("local:{file}")
+    } else {
+        file
+    }
 }
 
 /// The first candidate that exists and lies inside the root that proposed it.
@@ -1723,5 +1767,37 @@ fn collect_function_declarations(stmts: &[Statement], ids: &mut Vec<usize>) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod module_name_tests {
+    use super::{module_file_name, module_listing_name};
+
+    #[test]
+    fn a_library_path_names_its_file_under_the_library_root() {
+        assert_eq!(module_file_name("system.json"), "system/json.mi");
+        assert_eq!(
+            module_file_name("system.collections.list"),
+            "system/collections/list.mi"
+        );
+    }
+
+    #[test]
+    fn a_local_path_names_its_file_under_the_program_directory() {
+        assert_eq!(module_file_name("local.util.strings"), "util/strings.mi");
+    }
+
+    #[test]
+    fn a_listing_marks_a_local_module_apart_from_a_library_one() {
+        assert_eq!(module_listing_name("system.json"), "system/json.mi");
+        assert_eq!(
+            module_listing_name("local.system.json"),
+            "local:system/json.mi"
+        );
+        assert_eq!(
+            module_listing_name("local.util.strings"),
+            "local:util/strings.mi"
+        );
     }
 }

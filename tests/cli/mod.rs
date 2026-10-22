@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod agent_docs;
 pub mod build;
+pub mod build_line_map;
 pub mod build_web_gpu;
 pub mod color;
 pub mod determinism;
