@@ -20,11 +20,12 @@
 mod cells;
 mod ssa;
 
+use super::pass_through::forward_where;
 use crate::error::CodegenError;
 use cells::Cells;
 use cranelift_codegen::flowgraph::ControlFlowGraph;
 use cranelift_codegen::ir::{
-    Block, DebugTag, Function, InstructionData, Opcode, StackSlot, StackSlotKind, Value, ValueDef,
+    Block, DebugTag, Function, Opcode, StackSlot, StackSlotKind, ValueDef,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::Context;
@@ -126,80 +127,9 @@ fn forward_carried_addresses(function: &mut Function, cfg: &ControlFlowGraph, or
 /// was.
 fn forward_round(function: &mut Function, cfg: &ControlFlowGraph, order: &[Block]) -> bool {
     let addresses = cells::addresses_in(function, order);
-    let mut forwarded = false;
-    for &block in order.iter().skip(1) {
-        for index in (0..function.dfg.num_block_params(block)).rev() {
-            let parameter = function.dfg.block_params(block)[index];
-            let Some(source) = sole_incoming(function, cfg, block, index, parameter) else {
-                continue;
-            };
-            let is_parameter = matches!(function.dfg.value_def(source), ValueDef::Param(..));
-            if addresses[source].is_none() && !is_parameter {
-                continue;
-            }
-            remove_argument(function, cfg, block, index);
-            function.dfg.remove_block_param(parameter);
-            function.dfg.change_to_alias(parameter, source);
-            forwarded = true;
-        }
-    }
-    forwarded
-}
-
-/// The one value other than `parameter` itself that every branch to
-/// `block` hands its parameter at `index`, if there is one.
-fn sole_incoming(
-    function: &Function,
-    cfg: &ControlFlowGraph,
-    block: Block,
-    index: usize,
-    parameter: Value,
-) -> Option<Value> {
-    let dfg = &function.dfg;
-    let mut sole = None;
-    for predecessor in cfg.pred_iter(block) {
-        let calls =
-            dfg.insts[predecessor.inst].branch_destination(&dfg.jump_tables, &dfg.exception_tables);
-        for call in calls
-            .iter()
-            .filter(|call| call.block(&dfg.value_lists) == block)
-        {
-            let handed = call.args(&dfg.value_lists).nth(index)?.as_value()?;
-            let handed = dfg.resolve_aliases(handed);
-            if handed == parameter {
-                continue;
-            }
-            if sole.is_some_and(|sole| sole != handed) {
-                return None;
-            }
-            sole = Some(handed);
-        }
-    }
-    sole
-}
-
-/// Remove the argument at `index` from every branch to `block`, in place,
-/// each jump table shared by several branches once. No two block calls
-/// share an argument list: the frontend and Cranelift's inliner build each
-/// afresh, and a jump table copied by the rewrite copies its calls.
-fn remove_argument(function: &mut Function, cfg: &ControlFlowGraph, block: Block, index: usize) {
-    let mut tables = BTreeSet::new();
-    for predecessor in cfg.pred_iter(block) {
-        let dfg = &mut function.dfg;
-        if let InstructionData::BranchTable { table, .. } = dfg.insts[predecessor.inst] {
-            if !tables.insert(table) {
-                continue;
-            }
-        }
-        let calls = dfg.insts[predecessor.inst]
-            .branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables);
-        for call in calls {
-            if call.block(&dfg.value_lists) != block {
-                continue;
-            }
-            call.remove(index, &mut dfg.value_lists);
-        }
-    }
+    forward_where(function, cfg, order, |function, source| {
+        addresses[source].is_some() || matches!(function.dfg.value_def(source), ValueDef::Param(..))
+    })
 }
 
 /// The cells of the slots of `function` that can be promoted, with their

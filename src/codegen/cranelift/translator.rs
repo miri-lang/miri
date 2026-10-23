@@ -11,6 +11,7 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::collection_header::{CollectionBase, ElementHeader};
 use crate::codegen::cranelift::layout;
+use crate::codegen::cranelift::pass_through::forward_pass_through_parameters;
 use crate::codegen::cranelift::source_points::{SourcePoint, SourcePoints};
 use crate::codegen::cranelift::stable_headers::StableHeaders;
 use crate::codegen::cranelift::types::translate_type;
@@ -322,6 +323,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.seal_all_blocks();
         builder.finalize(module.isa().frontend_config());
+        forward_pass_through_parameters(&mut self.func);
         Ok(())
     }
 

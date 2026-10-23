@@ -15,6 +15,7 @@ mod gpu_launch;
 mod inline_optionals;
 mod inliner;
 pub mod layout;
+mod pass_through;
 mod predicates;
 mod rc;
 mod slot_promotion;

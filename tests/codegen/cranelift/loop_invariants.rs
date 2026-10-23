@@ -27,6 +27,25 @@ fn main()
     println(f"{kernel(30)}")
 "#;
 
+/// Two nested loops whose inner body divides the outer counter by `n`, which
+/// the inner loop changes neither of.
+const OUTER_COUNTER_IN_INNER_LOOP: &str = r#"use system.io
+
+fn kernel(n int) float
+    var total = 0.0
+    var i = 0
+    while i < n
+        var j = 0
+        while j < n
+            total += (i as float) / (n as float) + (j as float)
+            j += 1
+        i += 1
+    total
+
+fn main()
+    println(f"{kernel(30)}")
+"#;
+
 /// The bits Cranelift prints for the `f64` constant 1.0.
 const ONE: &str = "0x1.0000000000000p0";
 
@@ -203,16 +222,53 @@ fn parents(loops: &[Loop]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The value the header of `inner` compares its counter with.
-fn bound_of(cfg: &Cfg, inner: &Loop) -> String {
+/// The two values the header of `inner` compares: its counter and the
+/// bound it runs to.
+fn compared_by(cfg: &Cfg, inner: &Loop) -> (String, String) {
     cfg.lines[&inner.header]
         .iter()
         .find_map(|line| {
             let (_, compare) = line.split_once(" = icmp ")?;
             let operands = compare.split(';').next()?;
-            Some(operands.rsplit(", ").next()?.trim().to_string())
+            let (left, right) = operands.split_once(", ")?;
+            let counter = left.split_whitespace().last()?;
+            Some((counter.to_string(), right.trim().to_string()))
         })
         .unwrap_or_else(|| panic!("the header {} compares nothing", inner.header))
+}
+
+/// The value the header of `inner` compares its counter with.
+fn bound_of(cfg: &Cfg, inner: &Loop) -> String {
+    compared_by(cfg, inner).1
+}
+
+/// What a build of `source` at opt level 3 prints, checked to be what the
+/// unoptimized build prints, and its kernel with the kernel's control flow
+/// graph and its inner loop, checked to sit inside the outer one.
+fn nested_kernel(source: &str) -> (String, String, Cfg, Loop) {
+    let (listing, output) = listing_and_output(source, "3");
+    let (_, unoptimized) = listing_and_output(source, "0");
+    assert_eq!(output, unoptimized);
+    let kernel = function_text(&listing, "miri.kernel").to_string();
+    let cfg = Cfg::of(&kernel);
+    let loops = natural_loops(&cfg);
+    let nesting = parents(&loops);
+    let (inner_header, outer_header) = nesting
+        .iter()
+        .next()
+        .unwrap_or_else(|| panic!("no loop is nested in another:\n{kernel}"));
+    let inner = (loops.iter())
+        .find(|candidate| candidate.header == *inner_header)
+        .unwrap()
+        .clone();
+    let outer = (loops.iter())
+        .find(|candidate| candidate.header == *outer_header)
+        .unwrap();
+    assert!(
+        inner.body.is_subset(&outer.body),
+        "the inner loop at {inner_header} is not inside the outer one at {outer_header}:\n{kernel}"
+    );
+    (output, kernel, cfg, inner)
 }
 
 /// The blocks of `cfg` holding a line `is_it` admits.
@@ -225,28 +281,9 @@ fn blocks_holding(cfg: &Cfg, is_it: impl Fn(&str) -> bool) -> BTreeSet<String> {
 
 #[test]
 fn a_value_no_loop_changes_is_computed_outside_the_inner_loop() {
-    let (listing, output) = listing_and_output(NESTED_LOOPS, "3");
-    let (_, unoptimized) = listing_and_output(NESTED_LOOPS, "0");
-    assert_eq!(output, unoptimized);
+    let (output, kernel, cfg, inner) = nested_kernel(NESTED_LOOPS);
     assert_eq!(output, "434.9999999999999\n");
-    let kernel = function_text(&listing, "miri.kernel");
-    let cfg = Cfg::of(kernel);
-    let loops = natural_loops(&cfg);
-    let nesting = parents(&loops);
-    let (inner_header, outer_header) = nesting
-        .iter()
-        .next()
-        .unwrap_or_else(|| panic!("no loop is nested in another:\n{kernel}"));
-    let inner = (loops.iter())
-        .find(|candidate| candidate.header == *inner_header)
-        .unwrap();
-    let outer = (loops.iter())
-        .find(|candidate| candidate.header == *outer_header)
-        .unwrap();
-    assert!(
-        inner.body.is_subset(&outer.body),
-        "the inner loop at {inner_header} is not inside the outer one at {outer_header}:\n{kernel}"
-    );
+    let inner = &inner;
     let bound = bound_of(&cfg, inner);
     let conversions = blocks_holding(&cfg, |line| {
         let code = line.split(';').next().unwrap().trim_end();
@@ -256,6 +293,35 @@ fn a_value_no_loop_changes_is_computed_outside_the_inner_loop() {
     for (what, holders) in [
         ("`n as float`", &conversions),
         ("`1.0 / (n as float)`", &reciprocals),
+    ] {
+        assert!(
+            holders.iter().any(|block| !inner.body.contains(block)),
+            "{what} is computed nowhere outside the inner loop:\n{kernel}"
+        );
+        let inside: Vec<&String> = holders.intersection(&inner.body).collect();
+        assert!(
+            inside.is_empty(),
+            "{what} is computed in {inside:?}, inside the inner loop:\n{kernel}"
+        );
+    }
+}
+
+/// A value computed from the outer loop's counter, which the inner loop
+/// hands back unchanged on every iteration, is computed once per outer
+/// iteration, outside the inner loop: the counter's conversion and the
+/// division by `n`.
+#[test]
+fn a_value_of_the_outer_counter_is_computed_outside_the_inner_loop() {
+    let (_, kernel, cfg, inner) = nested_kernel(OUTER_COUNTER_IN_INNER_LOOP);
+    let (inner_counter, _) = compared_by(&cfg, &inner);
+    let conversions_of_others = blocks_holding(&cfg, |line| {
+        let code = line.split(';').next().unwrap().trim_end();
+        code.contains(" = fcvt_from_sint.f64 ") && !code.ends_with(&format!(" {inner_counter}"))
+    });
+    let divisions = blocks_holding(&cfg, |line| line.contains(" = fdiv "));
+    for (what, holders) in [
+        ("`i as float`", &conversions_of_others),
+        ("`(i as float) / (n as float)`", &divisions),
     ] {
         assert!(
             holders.iter().any(|block| !inner.body.contains(block)),
