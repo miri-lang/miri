@@ -14,6 +14,7 @@ pub mod layout;
 pub mod optional_layout;
 pub mod predicates;
 pub mod rc;
+pub mod slot_promotion;
 pub mod structural_elements;
 pub mod translate_rvalue;
 pub mod translate_statement;

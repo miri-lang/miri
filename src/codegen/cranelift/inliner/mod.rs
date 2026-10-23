@@ -13,12 +13,17 @@
 //! Cranelift's inliner requires, until the last function that refers to it
 //! has been visited.
 //!
-//! What the copies need repaired afterwards is in [`repair`].
+//! What the copies need repaired afterwards is in [`repair`]. Once a
+//! function's callees are inlined into it, and before it is weighed as a
+//! candidate, its stack slots are promoted to SSA values where they can be,
+//! so a candidate's size and stack are those of the promoted body, and the
+//! repairs, which match each copy to its original by position, run before
+//! promotion removes any copied instruction.
 
 mod call_graph;
 mod repair;
 
-use super::TranslatedFunction;
+use super::{slot_promotion, TranslatedFunction};
 use crate::error::CodegenError;
 use call_graph::CallGraph;
 use cranelift_codegen::inline::{Inline, InlineCommand};
@@ -73,6 +78,7 @@ pub(super) fn inline_and_define<'b>(
                     CodegenError::Internal("the inliner visited a function twice".to_string())
                 })?;
             inliner.inline_into(&mut function, position, recursive)?;
+            slot_promotion::promote(&mut inliner.context, &mut function.function, isa)?;
             if !recursive && !function.is_entry {
                 inliner.admit(position, &function, isa)?;
             }

@@ -16,6 +16,7 @@ mod inliner;
 pub mod layout;
 mod predicates;
 mod rc;
+mod slot_promotion;
 mod source_points;
 pub mod stable_headers;
 pub mod structural_elements;
