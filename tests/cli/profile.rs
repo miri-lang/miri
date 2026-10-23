@@ -31,6 +31,15 @@ const HOT_LINE: usize = 9;
 /// The text of `HOT_LINE`.
 const HOT_TEXT: &str = "        acc = (acc * 31 + i) % modulus";
 
+/// The line of `HOT_LOOP` holding `spin`'s signature.
+fn signature_line_of_spin() -> usize {
+    HOT_LOOP
+        .lines()
+        .position(|line| line.starts_with("fn spin("))
+        .map(|index| index + 1)
+        .unwrap_or_else(|| panic!("no signature of spin in HOT_LOOP"))
+}
+
 /// The lines of `HOT_LOOP`'s loop: `var i`, the `while`, and its body.
 const LOOP_LINES: [usize; 4] = [6, 7, 8, 9];
 
@@ -269,12 +278,19 @@ fn self_share_of(list: &serde_json::Value, keep: impl Fn(&serde_json::Value) -> 
         .sum()
 }
 
-/// The line a program spends its time on is reported first, its source text
-/// beside it, and the loop it sits in holds nearly every sample: an
-/// instruction of the loop that carries no line of its own is charged to the
-/// loop line before it, not left outside every line.
+/// The loop a program spends its time in holds nearly every sample, the hot
+/// line among them with a substantial share of its own and its source text
+/// beside it, and none is charged to the function's signature: an
+/// instruction of the loop that carries no line of its own is charged to a
+/// line of the loop, not left outside every line nor given to whatever code
+/// is laid out before its block.
+///
+/// That the hot line comes first is not asserted. A timer sample lands on
+/// an instruction after the one it interrupts, and how far it skids depends
+/// on the processor: on x86-64 the samples of the divide land on the loop's
+/// head and increment about as often as on the divide's own line.
 #[test]
-fn test_profile_reports_the_hot_line_first() {
+fn test_profile_charges_the_loop_to_its_lines_and_the_hot_line_carries_its_share() {
     let dir = tempfile::tempdir().unwrap();
     // Twice the fixture's iterations: each pays for a hardware divide, so
     // the run takes about a second, long enough for a few hundred samples
@@ -283,11 +299,22 @@ fn test_profile_reports_the_hot_line_first() {
     let envelope = profile_envelope(dir.path(), &source, &["--top", "100"]);
     assert_eq!(envelope["command"], "profile", "{envelope:#}");
     assert_eq!(envelope["ok"], true, "{envelope:#}");
-    let first = &envelope["profile"]["lines"][0];
-    assert_eq!(first["path"], "prog.mi", "{envelope:#}");
-    assert_eq!(first["line"], HOT_LINE, "{envelope:#}");
-    let share = first["selfShare"].as_f64().unwrap();
-    assert!(first["inclusiveShare"].as_f64().unwrap() >= share);
+    let hot = reported_line(&envelope, "prog.mi", HOT_LINE)
+        .unwrap_or_else(|| panic!("the hot line is not reported: {envelope:#}"));
+    let share = hot["selfShare"].as_f64().unwrap();
+    assert!(
+        share >= 0.2,
+        "the hot line holds only {share}: {envelope:#}"
+    );
+    assert!(hot["inclusiveShare"].as_f64().unwrap() >= share);
+    assert_eq!(hot["text"], HOT_TEXT, "{envelope:#}");
+    let signature = signature_line_of_spin();
+    let on_signature = reported_line(&envelope, "prog.mi", signature)
+        .map_or(0, |entry| entry["selfSamples"].as_u64().unwrap());
+    assert_eq!(
+        on_signature, 0,
+        "samples are charged to `spin`'s signature on line {signature}: {envelope:#}"
+    );
     let in_loop = self_share_of(&envelope["profile"]["lines"], |entry| {
         entry["path"] == "prog.mi" && LOOP_LINES.iter().any(|&line| entry["line"] == line)
     });
@@ -297,7 +324,6 @@ fn test_profile_reports_the_hot_line_first() {
         outside < 0.1,
         "{outside} falls outside every line: {envelope:#}"
     );
-    assert_eq!(first["text"], HOT_TEXT, "{envelope:#}");
     assert!(envelope["profile"]["samples"].as_u64().unwrap() > 20);
     assert!(envelope["stdoutTail"]
         .as_str()
@@ -480,9 +506,11 @@ fn test_profile_of_a_program_that_traps_late_keeps_the_samples_it_took() {
         envelope["diagnostics"][1]["code"], "MER_RT_011",
         "{envelope:#}"
     );
-    assert_eq!(
-        envelope["profile"]["lines"][0]["line"], HOT_LINE,
-        "{envelope:#}"
+    let hot_samples = reported_line(&envelope, "prog.mi", HOT_LINE)
+        .map_or(0, |entry| entry["selfSamples"].as_u64().unwrap());
+    assert!(
+        hot_samples > 0,
+        "the hot line took no sample before the trap: {envelope:#}"
     );
 }
 
