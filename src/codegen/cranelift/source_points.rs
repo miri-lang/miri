@@ -95,11 +95,12 @@ impl SourcePoints {
 }
 
 /// The location that indexes entry `index` of a table, `None` past the last
-/// index a location can hold: the largest is the default location's, which
-/// stands for no location at all.
+/// index a location can hold. Cranelift keeps a location in 31 bits, the
+/// largest of them the default location's, which stands for no location at
+/// all, so every index below the default's is one.
 fn location_for(index: usize) -> Option<SourceLoc> {
-    let location = SourceLoc::new(u32::try_from(index).ok()?);
-    (!location.is_default()).then_some(location)
+    let bits = u32::try_from(index).ok()?;
+    (bits < SourceLoc::default().bits()).then(|| SourceLoc::new(bits))
 }
 
 #[cfg(test)]
@@ -142,8 +143,10 @@ mod tests {
     #[test]
     fn no_location_indexes_past_the_last_one_a_location_can_hold() {
         assert_eq!(location_for(0), Some(SourceLoc::new(0)));
-        let last = u32::MAX - 1;
+        let past = SourceLoc::default().bits();
+        let last = past - 1;
         assert_eq!(location_for(last as usize), Some(SourceLoc::new(last)));
+        assert_eq!(location_for(past as usize), None);
         assert_eq!(location_for(u32::MAX as usize), None);
         assert_eq!(location_for(usize::MAX), None);
     }

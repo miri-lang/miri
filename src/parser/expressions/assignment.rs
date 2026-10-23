@@ -24,17 +24,15 @@ impl<'source> Parser<'source> {
             return Ok(left);
         }
 
-        let op = match self.eat_binary_op(is_assignment_op) {
-            Ok(token) => match token.0 {
-                Token::Assign => AssignmentOp::Assign,
-                Token::AssignAdd => AssignmentOp::AssignAdd,
-                Token::AssignSub => AssignmentOp::AssignSub,
-                Token::AssignMul => AssignmentOp::AssignMul,
-                Token::AssignDiv => AssignmentOp::AssignDiv,
-                Token::AssignMod => AssignmentOp::AssignMod,
-                _ => return Err(self.error_unexpected_operator(token, "=, +=, -=, *=, /=, %=")),
-            },
-            Err(err) => return Err(err),
+        let token = self.eat_binary_op(is_assignment_op)?;
+        let op = match token.0 {
+            Token::Assign => AssignmentOp::Assign,
+            Token::AssignAdd => AssignmentOp::AssignAdd,
+            Token::AssignSub => AssignmentOp::AssignSub,
+            Token::AssignMul => AssignmentOp::AssignMul,
+            Token::AssignDiv => AssignmentOp::AssignDiv,
+            Token::AssignMod => AssignmentOp::AssignMod,
+            _ => return Err(self.error_unexpected_operator(token, "=, +=, -=, *=, /=, %=")),
         };
 
         let left = match &left.node {

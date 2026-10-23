@@ -248,13 +248,14 @@ fn copies_opcode(original: Opcode, copy: Opcode) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::cranelift::{build_isa, CraneliftOptions};
     use crate::error::SourceId;
     use cranelift_codegen::ir::{types, AbiParam, InstBuilder, Signature};
     use cranelift_codegen::isa::CallConv;
     use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 
     /// A caller whose entry block jumps to a second block holding the copy
-    /// of a one-block callee: `v + 1`, then a jump back out. The entry's
+    /// of a one-block callee: `v + v`, then a jump back out. The entry's
     /// jump carries `call_site`.
     fn caller_with_copy(call_site: SourceLoc) -> Function {
         let mut signature =
@@ -275,13 +276,15 @@ mod tests {
         builder.ins().jump(copy, &[]);
         builder.switch_to_block(copy);
         builder.set_srcloc(SourceLoc::default());
-        let sum = builder.ins().iadd_imm(value, 1);
+        let sum = builder.ins().iadd(value, value);
         builder.ins().jump(exit, &[sum.into()]);
         builder.switch_to_block(exit);
         let result = builder.block_params(exit)[0];
         builder.ins().return_(&[result]);
         builder.seal_all_blocks();
-        builder.finalize();
+        let isa = build_isa(target_lexicon::Triple::host(), &CraneliftOptions::default())
+            .unwrap_or_else(|e| panic!("the host target builds: {e}"));
+        builder.finalize(isa.frontend_config());
         function
     }
 
@@ -345,7 +348,7 @@ mod tests {
         restore_sources(
             &mut caller,
             &mut points,
-            &callee([Opcode::IaddImm, Opcode::Return]),
+            &callee([Opcode::Iadd, Opcode::Return]),
             call,
         )
         .unwrap_or_else(|e| panic!("{e}"));
@@ -385,7 +388,7 @@ mod tests {
             first_block: 7,
             call_site,
         };
-        let callee = callee([Opcode::IaddImm, Opcode::Return]);
+        let callee = callee([Opcode::Iadd, Opcode::Return]);
         assert!(restore_sources(&mut caller, &mut points, &callee, call).is_err());
     }
 

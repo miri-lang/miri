@@ -11,6 +11,7 @@ pub mod drop_thunk_boundary;
 pub mod frame_pointers;
 pub mod inliner;
 pub mod layout;
+pub mod loop_invariants;
 pub mod optional_layout;
 pub mod predicates;
 pub mod rc;

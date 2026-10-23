@@ -5,16 +5,20 @@ use crate::utils::miri_cmd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// A program that spends nearly all its time on line 8, the loop body's
-/// first statement.
+/// A program that spends most of its time on line 9, the loop body's second
+/// statement: its modulus is known only at run time, so the line carries a
+/// hardware divide and the checks for a zero divisor and an overflowing
+/// quotient, rather than a multiply by a constant the optimizer could make
+/// of a constant modulus.
 const HOT_LOOP: &str = r#"use system.io
 
 fn spin(n int) int
+    let modulus = n / 100 + 3
     var acc = 0
     var i = 0
     while i < n
         i += 1
-        acc = (acc * 31 + i) % 1000003
+        acc = (acc * 31 + i) % modulus
     acc
 
 fn main()
@@ -22,10 +26,13 @@ fn main()
 "#;
 
 /// The line of `HOT_LOOP` its time goes to.
-const HOT_LINE: usize = 8;
+const HOT_LINE: usize = 9;
+
+/// The text of `HOT_LINE`.
+const HOT_TEXT: &str = "        acc = (acc * 31 + i) % modulus";
 
 /// The lines of `HOT_LOOP`'s loop: `var i`, the `while`, and its body.
-const LOOP_LINES: [usize; 4] = [5, 6, 7, 8];
+const LOOP_LINES: [usize; 4] = [6, 7, 8, 9];
 
 /// The symbol a profile build's function table is defined under.
 const FUNCTION_TABLE: &[u8] = b"miri_profile_functions";
@@ -186,8 +193,10 @@ const LIBRARY_CALL_LINE: usize = 9;
 const LIBRARY_FILE: &str = "system/collections/foldable.mi";
 
 /// A program whose loop calls, on line 8, a library function small enough
-/// for an optimized build to inline into the loop.
-const INLINED_LIBRARY_LOOP: &str = r#"use system.io
+/// for an optimized build to inline into the loop. Inlined, an iteration takes
+/// about a nanosecond, so the loop runs for about half a second, long enough
+/// for a few hundred samples.
+pub(crate) const INLINED_LIBRARY_LOOP: &str = r#"use system.io
 use system.math
 
 fn mix_all(n int) u32
@@ -199,8 +208,15 @@ fn mix_all(n int) u32
     acc
 
 fn main()
-    println(f"{mix_all(40000000)}")
+    println(f"{mix_all(400000000)}")
 "#;
+
+/// The line of `INLINED_LIBRARY_LOOP` calling the inlined library function.
+pub(crate) const INLINED_CALL_LINE: usize = 8;
+
+/// The lines of `INLINED_LIBRARY_LOOP`'s loop: `var i`, the `while`, and its
+/// body.
+const INLINED_LOOP_LINES: [usize; 4] = [6, 7, 8, 9];
 
 /// Write `source` as `prog.mi` in `dir` and run `miri profile` on it with
 /// `flags`, from `dir`.
@@ -260,9 +276,10 @@ fn self_share_of(list: &serde_json::Value, keep: impl Fn(&serde_json::Value) -> 
 #[test]
 fn test_profile_reports_the_hot_line_first() {
     let dir = tempfile::tempdir().unwrap();
-    // Long enough for a few hundred samples from a sparse timer on a loaded
-    // machine, in under two seconds.
-    let source = HOT_LOOP.replace("spin(100000000)", "spin(400000000)");
+    // Twice the fixture's iterations: each pays for a hardware divide, so
+    // the run takes about a second, long enough for a few hundred samples
+    // from a sparse timer on a loaded machine.
+    let source = HOT_LOOP.replace("spin(100000000)", "spin(200000000)");
     let envelope = profile_envelope(dir.path(), &source, &["--top", "100"]);
     assert_eq!(envelope["command"], "profile", "{envelope:#}");
     assert_eq!(envelope["ok"], true, "{envelope:#}");
@@ -280,10 +297,7 @@ fn test_profile_reports_the_hot_line_first() {
         outside < 0.1,
         "{outside} falls outside every line: {envelope:#}"
     );
-    assert_eq!(
-        first["text"], "        acc = (acc * 31 + i) % 1000003",
-        "{envelope:#}"
-    );
+    assert_eq!(first["text"], HOT_TEXT, "{envelope:#}");
     assert!(envelope["profile"]["samples"].as_u64().unwrap() > 20);
     assert!(envelope["stdoutTail"]
         .as_str()
@@ -321,12 +335,44 @@ fn assert_library_time_reaches_its_caller(source: &str, library: &str, call_line
     );
 }
 
-/// Time spent in a library function inlined into its caller is charged to
-/// the library's own line as self time, and to the line calling it
-/// inclusively, as if the call had stayed a call.
+/// A profile of a loop with a library function inlined into it charges
+/// whatever time it gives the library's lines to the calling line as well,
+/// and keeps nearly all of it on the loop's lines.
+///
+/// Library self time is not asserted. A timer sample lands on the
+/// instruction after a branch, so the time of a run of straight-line code is
+/// charged to the code a taken branch reaches next, here the loop's head and
+/// the counter's increment; no instruction of the inlined function follows a
+/// taken branch, so the library often gets no sample at all. That the
+/// inlined code is charged to the library through line 8 is proven without
+/// sampling, by the line map
+/// (`test_profile_line_map_charges_inlined_library_code_through_its_call`).
 #[test]
-fn test_profile_charges_inlined_library_time_to_the_library_and_its_caller() {
-    assert_library_time_reaches_its_caller(INLINED_LIBRARY_LOOP, "system/math.mi", 8);
+fn test_profile_charges_inlined_library_samples_within_the_calling_loop() {
+    let dir = tempfile::tempdir().unwrap();
+    let envelope = profile_envelope(dir.path(), INLINED_LIBRARY_LOOP, &["--top", "100"]);
+    assert_eq!(envelope["ok"], true, "{envelope:#}");
+    let lines = &envelope["profile"]["lines"];
+    let library_self: u64 = (lines.as_array().unwrap().iter())
+        .filter(|entry| entry["path"] == "system/math.mi")
+        .map(|entry| entry["selfSamples"].as_u64().unwrap())
+        .sum();
+    let inclusive = reported_line(&envelope, "prog.mi", INLINED_CALL_LINE)
+        .map_or(0, |caller| caller["inclusiveSamples"].as_u64().unwrap());
+    assert!(
+        inclusive >= library_self,
+        "the calling line's inclusive {inclusive} misses the library's {library_self}: \
+         {envelope:#}"
+    );
+    let in_loop = self_share_of(lines, |entry| {
+        entry["path"] == "system/math.mi"
+            || (entry["path"] == "prog.mi"
+                && INLINED_LOOP_LINES.iter().any(|&line| entry["line"] == line))
+    });
+    assert!(
+        in_loop > 0.9,
+        "only {in_loop} of the time is in the loop: {envelope:#}"
+    );
 }
 
 /// Time spent in a library method the caller calls is charged to the
@@ -350,10 +396,7 @@ fn test_profile_passes_the_programs_output_through_then_reports_on_stderr() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains(&format!("prog.mi:{HOT_LINE}")), "{stderr}");
-    assert!(
-        stderr.contains("acc = (acc * 31 + i) % 1000003"),
-        "{stderr}"
-    );
+    assert!(stderr.contains(HOT_TEXT.trim_start()), "{stderr}");
 }
 
 /// `--top` bounds the lines reported and `--hz` sets the rate sampled at.

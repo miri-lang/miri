@@ -19,7 +19,7 @@ use cranelift_codegen::flowgraph::ControlFlowGraph;
 use cranelift_codegen::ir::immediates::{Ieee32, Ieee64};
 use cranelift_codegen::ir::{
     types, Block, BlockArg, BlockCall, Function, Inst, InstBuilder, InstructionData, JumpTable,
-    JumpTableData, MemFlags, Opcode, Type, Value, ValueDef,
+    JumpTableData, MemFlagsData, Opcode, Type, Value, ValueDef,
 };
 
 /// A set of cells, by index.
@@ -267,7 +267,6 @@ impl Rewrite<'_> {
             InstructionData::Store {
                 args: [written, _], ..
             } => written,
-            InstructionData::StackStore { arg, .. } => arg,
             _ => {
                 return Err(unexpected(
                     "a cell is written by an instruction that stores nothing",
@@ -322,9 +321,9 @@ impl Rewrite<'_> {
             (Some(bits), types::F64) => cursor.ins().f64const(Ieee64::with_bits(bits)),
             (Some(bits), types::F32) => match u32::try_from(bits) {
                 Ok(bits) => cursor.ins().f32const(Ieee32::with_bits(bits)),
-                Err(_) => cursor.ins().bitcast(ty, MemFlags::new(), value),
+                Err(_) => cursor.ins().bitcast(ty, MemFlagsData::new(), value),
             },
-            _ => cursor.ins().bitcast(ty, MemFlags::new(), value),
+            _ => cursor.ins().bitcast(ty, MemFlagsData::new(), value),
         };
         if let ValueDef::Result(inst, _) = function.dfg.value_def(converted) {
             self.conversions.push(inst);

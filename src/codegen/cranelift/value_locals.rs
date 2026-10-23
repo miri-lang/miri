@@ -28,7 +28,7 @@ use crate::error::CodegenError;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{AggregateKind, Body, Local, Operand, Place, PlaceElem, Rvalue};
 use cranelift_codegen::ir::{
-    types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Value,
+    types as cl_types, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Value,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use std::collections::HashMap;
@@ -82,7 +82,7 @@ impl<'a> FunctionTranslator<'a> {
         let base = builder.use_var(*var);
         let address = match spot.offset() {
             0 => base,
-            offset => builder.ins().iadd_imm(base, i64::from(offset)),
+            offset => builder.ins().iadd_imm_s(base, i64::from(offset)),
         };
         Ok(Some((address, spot)))
     }
@@ -98,7 +98,7 @@ impl<'a> FunctionTranslator<'a> {
             ValueSpot::Scalar { scalar, .. } => {
                 builder
                     .ins()
-                    .load(scalar_type(scalar), MemFlags::new(), address, 0)
+                    .load(scalar_type(scalar), MemFlagsData::new(), address, 0)
             }
             ValueSpot::Value { .. } => address,
         }
@@ -149,7 +149,7 @@ impl<'a> FunctionTranslator<'a> {
         let index_type = builder.func.dfg.value_type(index);
         let count = builder.ins().iconst(index_type, layout.fields.len() as i64);
         Self::trap_out_of_bounds(builder, ctx, index, count)?;
-        let elem_offset = builder.ins().imul_imm(index, i64::from(stride));
+        let elem_offset = builder.ins().imul_imm_s(index, i64::from(stride));
         Ok((builder.ins().iadd(base, elem_offset), element))
     }
 
@@ -207,7 +207,7 @@ impl<'a> FunctionTranslator<'a> {
             let (next, repr) = match elem {
                 PlaceElem::Field(index) => {
                     let field = member(layout, *index)?;
-                    let next = builder.ins().iadd_imm(address, i64::from(field.offset));
+                    let next = builder.ins().iadd_imm_s(address, i64::from(field.offset));
                     (next, &field.repr)
                 }
                 PlaceElem::Index(index) => {
@@ -228,7 +228,7 @@ impl<'a> FunctionTranslator<'a> {
             ReachedRepr::Scalar(scalar) => {
                 builder
                     .ins()
-                    .load(scalar_type(scalar), MemFlags::new(), address, 0)
+                    .load(scalar_type(scalar), MemFlagsData::new(), address, 0)
             }
             ReachedRepr::Value(_) => address,
         })
@@ -516,7 +516,7 @@ impl<'a> FunctionTranslator<'a> {
                 )
             }
             FieldRepr::Value(inner) => {
-                let dest = builder.ins().iadd_imm(address, i64::from(field.offset));
+                let dest = builder.ins().iadd_imm_s(address, i64::from(field.offset));
                 let target = ValueBuild {
                     address: dest,
                     layout: inner,
@@ -552,7 +552,9 @@ impl<'a> FunctionTranslator<'a> {
         let offset = i32::try_from(offset).map_err(|_| {
             CodegenError::Internal(format!("value member offset {offset} overflows"))
         })?;
-        builder.ins().store(MemFlags::new(), value, address, offset);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), value, address, offset);
         Ok(())
     }
 }
@@ -788,8 +790,10 @@ pub fn copy_chunks(
     chunks: impl IntoIterator<Item = (i32, cl_types::Type)>,
 ) {
     for (offset, chunk) in chunks {
-        let word = builder.ins().load(chunk, MemFlags::new(), source, offset);
-        builder.ins().store(MemFlags::new(), word, dest, offset);
+        let word = builder
+            .ins()
+            .load(chunk, MemFlagsData::new(), source, offset);
+        builder.ins().store(MemFlagsData::new(), word, dest, offset);
     }
 }
 
@@ -815,7 +819,7 @@ pub fn clear_value(builder: &mut FunctionBuilder, dest: Value, layout: &ValueLay
     for index in 0..layout.size / width {
         builder
             .ins()
-            .store(MemFlags::new(), zero, dest, (index * width) as i32);
+            .store(MemFlagsData::new(), zero, dest, (index * width) as i32);
     }
 }
 

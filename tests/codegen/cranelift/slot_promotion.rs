@@ -67,7 +67,7 @@ fn main()
 
 /// The CLIF listing a build of `source` at `opt_level` writes, and what the
 /// built program prints.
-fn listing_and_output(source: &str, opt_level: &str) -> (String, String) {
+pub(super) fn listing_and_output(source: &str, opt_level: &str) -> (String, String) {
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("prog.mi");
     std::fs::write(&program, source).unwrap();
@@ -96,7 +96,7 @@ fn listing_and_output(source: &str, opt_level: &str) -> (String, String) {
 }
 
 /// The text of the function `name` in `listing`.
-fn function_text<'a>(listing: &'a str, name: &str) -> &'a str {
+pub(super) fn function_text<'a>(listing: &'a str, name: &str) -> &'a str {
     let header = format!("; {name}\n");
     let start = listing
         .find(&header)

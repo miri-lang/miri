@@ -253,7 +253,7 @@ fn emit_element_method_body(
     builder.ins().return_(&[answer]);
 
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(module.isa().frontend_config());
     Ok(())
 }
 

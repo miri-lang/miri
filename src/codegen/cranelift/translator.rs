@@ -27,7 +27,7 @@ use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{
-    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, TrapCode, Value,
+    AbiParam, Block, Function, InstBuilder, MemFlagsData, Signature, SourceLoc, TrapCode, Value,
 };
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
@@ -276,7 +276,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;
         let values = ValueLocals::of(body)?;
-        self.source_points = emission.source_locations.then(SourcePoints::default);
+        self.start_source_points(emission.source_locations);
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
 
         let (locals, blocks) = Self::declare_locals_and_blocks(&mut builder, body, self.ptr_type);
@@ -321,7 +321,7 @@ impl<'a> FunctionTranslator<'a> {
         )?;
 
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(module.isa().frontend_config());
         Ok(())
     }
 
@@ -349,6 +349,19 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         (locals, blocks)
+    }
+
+    /// Start a table of source points when `wanted`, the function's base
+    /// location pinned at 0. Cranelift keeps each location relative to the
+    /// base, wrapped to 31 bits, and the base is otherwise the first location
+    /// set; at 0 every location's relative form is its own index, so no index
+    /// below the first one set can wrap onto the default location, which
+    /// stands for none.
+    fn start_source_points(&mut self, wanted: bool) {
+        self.source_points = wanted.then(SourcePoints::default);
+        if wanted {
+            self.func.params.ensure_base_srcloc(SourceLoc::new(0));
+        }
     }
 
     /// Bind entry-block parameters to their locals. Scalar `out` params arrive
@@ -532,7 +545,7 @@ impl<'a> FunctionTranslator<'a> {
         for (&out_local, &ptr_var) in out_param_ptr_vars {
             let ptr = builder.use_var(ptr_var);
             let val_cl_type = translate_type(&body.local_decls[out_local.0].ty, ptr_type);
-            let val = builder.ins().load(val_cl_type, MemFlags::new(), ptr, 0);
+            let val = builder.ins().load(val_cl_type, MemFlagsData::new(), ptr, 0);
             if let Some(&var) = locals.get(&out_local) {
                 builder.def_var(var, val);
             }
@@ -559,7 +572,7 @@ impl<'a> FunctionTranslator<'a> {
             // A value held as its bytes is copied out of the environment
             // into the capture's own slot.
             if let Some(value) = body.value_layout(&cap_ty.kind) {
-                let source = builder.ins().iadd_imm(env_ptr_val, i64::from(offset));
+                let source = builder.ins().iadd_imm_s(env_ptr_val, i64::from(offset));
                 let slot = builder.use_var(cap_var);
                 copy_value(builder, source, slot, &value);
                 continue;
@@ -567,7 +580,7 @@ impl<'a> FunctionTranslator<'a> {
             let cap_cl_type = translate_type(cap_ty, ptr_type);
             let cap_val = builder
                 .ins()
-                .load(cap_cl_type, MemFlags::new(), env_ptr_val, offset);
+                .load(cap_cl_type, MemFlagsData::new(), env_ptr_val, offset);
             builder.def_var(cap_var, cap_val);
         }
     }
@@ -627,7 +640,7 @@ impl<'a> FunctionTranslator<'a> {
             let read_expected = expected_ty.filter(|_| position == last);
             match proj {
                 PlaceElem::Deref => {
-                    value = builder.ins().load(ptr_type, MemFlags::new(), value, 0);
+                    value = builder.ins().load(ptr_type, MemFlagsData::new(), value, 0);
                     inline_elem = None;
                 }
                 PlaceElem::Field(idx) => {
@@ -759,7 +772,7 @@ impl<'a> FunctionTranslator<'a> {
             type_ctx.layout_scope(),
             type_ctx.ptr_type,
         )?;
-        Ok(builder.ins().iadd_imm(value, i64::from(offset)))
+        Ok(builder.ins().iadd_imm_s(value, i64::from(offset)))
     }
 
     /// Load field `idx` out of an inline vector element whose address is `value`.
@@ -777,7 +790,9 @@ impl<'a> FunctionTranslator<'a> {
         let (offset, member) =
             layout::field_layout(vec_kind, idx, type_ctx.layout_scope(), type_ctx.ptr_type)?;
         let field_ty = member_word(&member, vec_kind, idx)?;
-        Ok(builder.ins().load(field_ty, MemFlags::new(), value, offset))
+        Ok(builder
+            .ins()
+            .load(field_ty, MemFlagsData::new(), value, offset))
     }
 
     /// Load field `idx` out of the aggregate of type `owner_type` at `value`.
@@ -800,7 +815,7 @@ impl<'a> FunctionTranslator<'a> {
             let offset = (idx as i64 + 2) * ptr_type.bytes() as i64;
             return Ok(builder
                 .ins()
-                .load(ptr_type, MemFlags::new(), value, offset as i32));
+                .load(ptr_type, MemFlagsData::new(), value, offset as i32));
         }
         let (offset, member) =
             layout::field_layout(&owner_type.kind, idx, type_ctx.layout_scope(), ptr_type)?;
@@ -808,7 +823,7 @@ impl<'a> FunctionTranslator<'a> {
             layout::Member::Word(ty) => ty,
             // A value held inline in its holder is read as its address.
             layout::Member::Inline(_) => {
-                return Ok(builder.ins().iadd_imm(value, i64::from(offset)));
+                return Ok(builder.ins().iadd_imm_s(value, i64::from(offset)));
             }
         };
         if let Some(expected) = expected_ty {
@@ -817,7 +832,9 @@ impl<'a> FunctionTranslator<'a> {
                     crate::codegen::cranelift::types::translate_type_kind(&expected.kind, ptr_type);
             }
         }
-        Ok(builder.ins().load(field_ty, MemFlags::new(), value, offset))
+        Ok(builder
+            .ins()
+            .load(field_ty, MemFlagsData::new(), value, offset))
     }
 
     /// True when a field of `owner_kind` must be loaded at the destination's
@@ -989,7 +1006,7 @@ impl<'a> FunctionTranslator<'a> {
                     type_ctx.layout_scope(),
                     type_ctx.ptr_type,
                 )?;
-                Ok(builder.ins().iadd_imm(addr, i64::from(offset)))
+                Ok(builder.ins().iadd_imm_s(addr, i64::from(offset)))
             }
             Some(PlaceElem::Index(index)) => {
                 let index_var = locals.get(index).ok_or_else(|| {
@@ -1029,7 +1046,7 @@ impl<'a> FunctionTranslator<'a> {
             let reached = walk.step(proj, type_ctx)?;
             match proj {
                 PlaceElem::Deref => {
-                    addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
+                    addr = builder.ins().load(ptr_type, MemFlagsData::new(), addr, 0);
                 }
                 PlaceElem::Field(idx)
                     if Self::opens_nullable_pointer(&current_type.kind, *idx, type_ctx)? =>
@@ -1044,7 +1061,7 @@ impl<'a> FunctionTranslator<'a> {
                         type_ctx.layout_scope(),
                         ptr_type,
                     )?;
-                    addr = builder.ins().iadd_imm(addr, offset as i64);
+                    addr = builder.ins().iadd_imm_s(addr, offset as i64);
                     current_type = Self::type_after_projection(reached, &current_type);
                     // A field that owns its own allocation stores a *pointer* to
                     // it, so reaching what lives inside that field means loading
@@ -1057,7 +1074,7 @@ impl<'a> FunctionTranslator<'a> {
                     // enum's payload — is such a pointer too.
                     if crate::mir::rc::is_slot_counted(&current_type.kind, type_ctx.layout_scope())
                     {
-                        addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
+                        addr = builder.ins().load(ptr_type, MemFlagsData::new(), addr, 0);
                     }
                 }
                 PlaceElem::Index(local) => {
@@ -1141,7 +1158,7 @@ impl<'a> FunctionTranslator<'a> {
         })?;
         match last_proj {
             PlaceElem::Deref => {
-                builder.ins().store(MemFlags::new(), value, addr, 0);
+                builder.ins().store(MemFlagsData::new(), value, addr, 0);
             }
             PlaceElem::Field(idx) => {
                 if Self::opens_nullable_pointer(&current_type.kind, *idx, type_ctx)? {
@@ -1162,25 +1179,15 @@ impl<'a> FunctionTranslator<'a> {
                     // A value held inline: `value` is the address of the
                     // bytes to copy in.
                     layout::Member::Inline(value_layout) => {
-                        let dest = builder.ins().iadd_imm(addr, i64::from(offset));
+                        let dest = builder.ins().iadd_imm_s(addr, i64::from(offset));
                         copy_value(builder, value, dest, value_layout);
                         return Ok(());
                     }
                 };
-                // Storing into an inline vector component: narrow/extend the
-                // value to the component width. `arr[i].x` is typed without a
-                // concrete scalar width upstream, so an `f64` literal can reach
-                // an `f32` field; an unnarrowed store would write past it.
-                let is_vector_field = crate::ast::types::vec_type_dim(&current_type.kind).is_some();
-                let mut value = value;
-                if is_vector_field {
-                    let from_ty = builder.func.dfg.value_type(value);
-                    if from_ty != field_ty {
-                        value =
-                            Self::cast_value_with_sign(builder, value, from_ty, field_ty, false)?;
-                    }
-                }
-                builder.ins().store(MemFlags::new(), value, addr, offset);
+                let value = Self::fit_to_component(builder, value, &current_type.kind, field_ty)?;
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), value, addr, offset);
             }
             PlaceElem::Index(local) => {
                 let idx_var = locals.get(local).ok_or_else(|| {
@@ -1200,6 +1207,24 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         Ok(())
+    }
+
+    /// `value` as a field of type `field_ty` of a value of type `owner`
+    /// holds it: narrowed or extended to the component width when `owner` is
+    /// an inline vector, as it is otherwise. `arr[i].x` is typed without a
+    /// concrete scalar width upstream, so an `f64` literal can reach an `f32`
+    /// field, and an unnarrowed store would write past it.
+    fn fit_to_component(
+        builder: &mut FunctionBuilder,
+        value: Value,
+        owner: &TypeKind,
+        field_ty: cl_types::Type,
+    ) -> Result<Value, CodegenError> {
+        let from_ty = builder.func.dfg.value_type(value);
+        if crate::ast::types::vec_type_dim(owner).is_none() || from_ty == field_ty {
+            return Ok(value);
+        }
+        Self::cast_value_with_sign(builder, value, from_ty, field_ty, false)
     }
 
     /// [`Self::collection_base`] for the last projection of `place`.
@@ -2091,8 +2116,10 @@ impl<'a> FunctionTranslator<'a> {
 
         let (len_val, fields_base) = if is_tuple_type {
             let base_value = base.address(base_type)?;
-            let len = builder.ins().load(ptr_type, MemFlags::new(), base_value, 0);
-            let fields = builder.ins().iadd_imm(base_value, ptr_size as i64);
+            let len = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), base_value, 0);
+            let fields = builder.ins().iadd_imm_s(base_value, ptr_size as i64);
             (len, fields)
         } else {
             let stride = inline.map(|_| elem_size);
@@ -2112,7 +2139,7 @@ impl<'a> FunctionTranslator<'a> {
         }
         Ok(builder
             .ins()
-            .load(cl_elem_ty, MemFlags::new(), elem_addr, 0))
+            .load(cl_elem_ty, MemFlagsData::new(), elem_addr, 0))
     }
 
     /// Where an index projection at `position` of `place`, reached at
@@ -2174,7 +2201,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(match repr {
             FieldRepr::Scalar(scalar) => builder.ins().load(
                 crate::codegen::cranelift::value_locals::scalar_type(*scalar),
-                MemFlags::new(),
+                MemFlagsData::new(),
                 address,
                 0,
             ),
@@ -2205,7 +2232,7 @@ impl<'a> FunctionTranslator<'a> {
                 ptr_type,
             );
         }
-        let byte_offset = builder.ins().imul_imm(index, elem_size);
+        let byte_offset = builder.ins().imul_imm_s(index, elem_size);
         Ok(builder.ins().iadd(header.data, byte_offset))
     }
 
@@ -2285,14 +2312,18 @@ impl<'a> FunctionTranslator<'a> {
                 Self::copy_inline_element(builder, value, elem_addr, elem_kind, type_ctx)?;
             }
             (Some(_), None) | (None, None) => {
-                builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), value, elem_addr, 0);
             }
             (None, Some(elem_kind)) => {
                 // DecRef the old managed element before overwriting.
                 Self::emit_managed_elem_decref(
                     builder, ctx, elem_addr, elem_kind, ptr_type, type_ctx,
                 )?;
-                builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), value, elem_addr, 0);
             }
         }
         Ok(())
@@ -2413,8 +2444,8 @@ impl<'a> FunctionTranslator<'a> {
         let state_addr = builder.ins().symbol_value(ptr_type, state_gv);
         let state = builder
             .ins()
-            .load(cl_types::I8, MemFlags::new(), state_addr, 0);
-        Ok(builder.ins().icmp_imm(
+            .load(cl_types::I8, MemFlagsData::new(), state_addr, 0);
+        Ok(builder.ins().icmp_imm_s(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             state,
             rt::TRACKING_STATE_OFF,
@@ -2571,7 +2602,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = builder.func.dfg.value_type(header_ptr);
         let ptr_size = ptr_type.bytes() as i64;
-        let base = builder.ins().iadd_imm(header_ptr, -ptr_size);
+        let base = builder.ins().iadd_imm_s(header_ptr, -ptr_size);
 
         // Every inline release funnels through here, so the guard witnesses the
         // free at one point rather than at each `emit_drop_*` arm. It is keyed

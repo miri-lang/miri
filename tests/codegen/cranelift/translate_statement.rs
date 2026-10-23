@@ -1,73 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::types::TypeKind;
-use miri::codegen::cranelift::translator::TypeCtx;
 use miri::codegen::cranelift::FunctionTranslator;
-use miri::mir::{ArgMode, Local, Operand};
+use miri::mir::{ArgMode, Local, Operand, Place};
 
-use miri::ast::types::Type;
-use miri::error::syntax::Span;
-use miri::mir::Place;
-use std::collections::HashMap;
-
-/// No open or bound parameters: the code under test is neither a shared
-/// generic body nor one lowered for an instantiation.
-static EMPTY_OPEN_PARAMS: std::sync::OnceLock<std::collections::HashSet<String>> =
-    std::sync::OnceLock::new();
-
-fn ty(kind: TypeKind) -> Type {
-    Type::new(kind, Span::default())
-}
-
-fn local_types_for(kinds: &[TypeKind]) -> Vec<Type> {
-    kinds.iter().map(|k| ty(k.clone())).collect()
-}
-
-fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
-    static EMPTY_FACTS: std::sync::OnceLock<miri::mir::type_facts::TypeFacts> =
-        std::sync::OnceLock::new();
-    static EMPTY_CAPS: std::sync::OnceLock<HashMap<Local, Vec<Type>>> = std::sync::OnceLock::new();
-    static EMPTY_OUT: std::sync::OnceLock<HashMap<Local, cranelift_frontend::Variable>> =
-        std::sync::OnceLock::new();
-    TypeCtx {
-        local_types,
-        facts: EMPTY_FACTS.get_or_init(Default::default),
-        ptr_type: cranelift_codegen::ir::types::I64,
-        closure_capture_ast_types: EMPTY_CAPS.get_or_init(HashMap::new),
-        out_param_ptr_vars: EMPTY_OUT.get_or_init(HashMap::new),
-        open_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
-        bound_params: EMPTY_OPEN_PARAMS.get_or_init(std::collections::HashSet::new),
-        // A thunk-like context with no body: it holds no value as its bytes.
-        values: Box::leak(Box::new(
-            miri::codegen::cranelift::value_locals::ValueLocals::none(),
-        )),
-        stable_headers: Box::leak(Box::new(
-            miri::codegen::cranelift::stable_headers::StableHeaders::none(),
-        )),
-    }
-}
-
+/// An `out` argument goes through a slot whatever its type, a managed one
+/// as a scalar does, so a new value the callee assigns reaches the caller:
+/// the choice reads only the argument's mode and place.
 #[test]
 fn scalar_out_local_returns_local_for_scalar_out_arg() {
-    let locals_ty = local_types_for(&[TypeKind::Int]);
-    let refs: Vec<&Type> = locals_ty.iter().collect();
-    let type_ctx = type_ctx_with(&refs);
-    let arg = Operand::Copy(Place {
-        local: Local(0),
-        projection: Vec::new(),
-    });
-    let got = FunctionTranslator::out_local_for_arg(&[ArgMode::Out], 0, &arg);
-    assert_eq!(got, Some(Local(0)));
-}
-
-#[test]
-fn out_local_passes_a_managed_arg_through_its_slot_too() {
-    // A managed `out` argument goes through a slot as a scalar does, so a new
-    // value the callee assigns reaches the caller.
-    let locals_ty = local_types_for(&[TypeKind::String]);
-    let refs: Vec<&Type> = locals_ty.iter().collect();
-    let type_ctx = type_ctx_with(&refs);
     let arg = Operand::Copy(Place {
         local: Local(0),
         projection: Vec::new(),
@@ -78,9 +19,6 @@ fn out_local_passes_a_managed_arg_through_its_slot_too() {
 
 #[test]
 fn scalar_out_local_returns_none_when_flag_unset() {
-    let locals_ty = local_types_for(&[TypeKind::Int]);
-    let refs: Vec<&Type> = locals_ty.iter().collect();
-    let type_ctx = type_ctx_with(&refs);
     let arg = Operand::Copy(Place {
         local: Local(0),
         projection: Vec::new(),
@@ -91,9 +29,6 @@ fn scalar_out_local_returns_none_when_flag_unset() {
 
 #[test]
 fn scalar_out_local_skips_projected_places() {
-    let locals_ty = local_types_for(&[TypeKind::Int]);
-    let refs: Vec<&Type> = locals_ty.iter().collect();
-    let type_ctx = type_ctx_with(&refs);
     let arg = Operand::Copy(Place {
         local: Local(0),
         projection: vec![miri::mir::PlaceElem::Field(0)],

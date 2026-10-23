@@ -96,6 +96,12 @@ impl LineTable {
     /// to the statement before it; before the first run, in the prologue,
     /// the first run. Empty only for a function the map lists no run for.
     ///
+    /// The unlocated code heading a machine block already has a run of its
+    /// own: the backend charges it to the block's first run when it writes
+    /// the map, since a constant the optimizer re-creates at the head of a
+    /// loop block belongs to the statement it feeds, not to whatever block
+    /// is laid out before it.
+    ///
     /// The line is followed by the lines of the calls its code was inlined
     /// through, innermost first.
     pub(crate) fn lines_at(&self, index: usize, offset: u32) -> &[SourceLine] {

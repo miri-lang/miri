@@ -26,7 +26,7 @@ use crate::error::CodegenError;
 use crate::mir::option_layout::is_absent_placeholder;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{Local, Operand};
-use cranelift_codegen::ir::{types as cl_types, InstBuilder, MemFlags, Value};
+use cranelift_codegen::ir::{types as cl_types, InstBuilder, MemFlagsData, Value};
 use cranelift_frontend::{FunctionBuilder, Variable};
 use std::collections::HashMap;
 
@@ -58,7 +58,7 @@ impl FunctionTranslator<'_> {
         let address = Self::value_operand_address(builder, ctx, operand, locals, type_ctx, None)?;
         Ok(Some(builder.ins().load(
             cl_types::I8,
-            MemFlags::new(),
+            MemFlagsData::new(),
             address,
             offset,
         )))
@@ -127,19 +127,19 @@ impl FunctionTranslator<'_> {
         };
         let presence = builder.ins().load(
             cl_types::I8,
-            MemFlags::new(),
+            MemFlagsData::new(),
             source,
             from_tag.offset as i32,
         );
         builder.ins().store(
-            MemFlags::new(),
+            MemFlagsData::new(),
             presence,
             target.address,
             to_tag.offset as i32,
         );
         let payload = builder.ins().load(
             scalar_type(*from_scalar),
-            MemFlags::new(),
+            MemFlagsData::new(),
             source,
             from.offset as i32,
         );
@@ -180,10 +180,12 @@ impl FunctionTranslator<'_> {
         builder.seal_block(present);
         Self::store_tag(builder, target.address, tag, true)?;
         let pointer_type = builder.func.dfg.value_type(word);
-        let next = builder.ins().load(pointer_type, MemFlags::new(), word, 0);
+        let next = builder
+            .ins()
+            .load(pointer_type, MemFlagsData::new(), word, 0);
         let inner_address = builder
             .ins()
-            .iadd_imm(target.address, i64::from(payload.offset));
+            .iadd_imm_s(target.address, i64::from(payload.offset));
         let inner_target = ValueBuild {
             address: inner_address,
             layout: inner,
@@ -278,7 +280,7 @@ impl FunctionTranslator<'_> {
         let value = builder.ins().iconst(cl_types::I8, i64::from(is_present));
         builder
             .ins()
-            .store(MemFlags::new(), value, address, tag.offset as i32);
+            .store(MemFlagsData::new(), value, address, tag.offset as i32);
         Ok(())
     }
 }

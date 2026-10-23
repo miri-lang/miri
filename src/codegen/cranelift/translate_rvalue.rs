@@ -27,7 +27,7 @@ use crate::mir::{
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
-    types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
+    types as cl_types, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, TrapCode, Value,
 };
 use cranelift_codegen::ir::{AbiParam, Signature};
 use cranelift_frontend::{FunctionBuilder, Variable};
@@ -203,7 +203,7 @@ impl<'a> FunctionTranslator<'a> {
         let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, align as u8);
         let slot = builder.create_sized_stack_slot(slot_data);
         let addr = builder.ins().stack_addr(type_ctx.ptr_type, slot, 0);
-        builder.ins().store(MemFlags::new(), value, addr, 0);
+        builder.ins().store(MemFlagsData::new(), value, addr, 0);
         Ok(addr)
     }
 
@@ -301,7 +301,7 @@ impl<'a> FunctionTranslator<'a> {
             let Some(tag) = Self::inline_optional_tag(builder, ctx, held, locals, type_ctx)? else {
                 return Ok(None);
             };
-            return Ok(Some(builder.ins().icmp_imm(IntCC::Equal, tag, 0)));
+            return Ok(Some(builder.ins().icmp_imm_s(IntCC::Equal, tag, 0)));
         }
         let kind = Self::operand_projected_kind(lhs, type_ctx)?;
         let Some(layout) = type_ctx
@@ -352,7 +352,7 @@ impl<'a> FunctionTranslator<'a> {
             return Self::translate_binop_cmp(builder, op, lhs, rhs, false, false);
         }
         let signed = if lhs_unsigned { rhs } else { lhs };
-        let negative = builder.ins().icmp_imm(IntCC::SignedLessThan, signed, 0);
+        let negative = builder.ins().icmp_imm_s(IntCC::SignedLessThan, signed, 0);
         let as_unsigned = Self::translate_binop_cmp(builder, op, lhs, rhs, false, true);
         // A negative signed operand is below the unsigned one.
         let lhs_is_below = !lhs_unsigned;
@@ -666,19 +666,21 @@ impl<'a> FunctionTranslator<'a> {
 
         if !translated.is_empty() {
             // Read data pointer from MiriArray.data (offset 0)
-            let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), array_ptr, 0);
+            let data_ptr = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), array_ptr, 0);
             for (i, val) in translated.iter().enumerate() {
                 let offset = (i as i64) * elem_size;
                 match &inline_kind {
                     Some(kind) => {
-                        let dest = builder.ins().iadd_imm(data_ptr, offset);
+                        let dest = builder.ins().iadd_imm_s(data_ptr, offset);
                         Self::copy_inline_element(builder, *val, dest, kind, type_ctx)?;
                     }
                     None => {
                         let store_offset = Self::store_offset_i32(offset)?;
                         builder
                             .ins()
-                            .store(MemFlags::new(), *val, data_ptr, store_offset);
+                            .store(MemFlagsData::new(), *val, data_ptr, store_offset);
                     }
                 }
             }
@@ -873,13 +875,17 @@ impl<'a> FunctionTranslator<'a> {
             Self::alloc_aggregate_payload(builder, ctx, ptr_type, ptr_size, total_size)?;
         if is_tuple {
             let count = builder.ins().iconst(ptr_type, translated.len() as i64);
-            builder.ins().store(MemFlags::new(), count, payload_ptr, 0);
+            builder
+                .ins()
+                .store(MemFlagsData::new(), count, payload_ptr, 0);
         }
         if let Some(symbol) = vtable_symbol {
             Self::store_vtable_pointer(builder, ctx, &symbol, payload_ptr, ptr_type)?;
         } else if matches!(kind, AggregateKind::Class(_)) {
             let null = builder.ins().iconst(ptr_type, 0);
-            builder.ins().store(MemFlags::new(), null, payload_ptr, 0);
+            builder
+                .ins()
+                .store(MemFlagsData::new(), null, payload_ptr, 0);
         }
 
         let members = translated.into_iter().zip(&field_offsets).zip(&held);
@@ -902,13 +908,15 @@ impl<'a> FunctionTranslator<'a> {
         let store_offset = Self::store_offset_i32(i64::from(offset))?;
         match held {
             Some(layout) => {
-                let dest = builder.ins().iadd_imm(payload_ptr, i64::from(store_offset));
+                let dest = builder
+                    .ins()
+                    .iadd_imm_s(payload_ptr, i64::from(store_offset));
                 copy_value(builder, val, dest, layout);
             }
             None => {
                 builder
                     .ins()
-                    .store(MemFlags::new(), val, payload_ptr, store_offset);
+                    .store(MemFlagsData::new(), val, payload_ptr, store_offset);
             }
         }
         Ok(())
@@ -1424,9 +1432,11 @@ impl<'a> FunctionTranslator<'a> {
 
         // Store RC = 1 at offset ptr_size
         let one = builder.ins().iconst(ptr_type, 1);
-        builder.ins().store(MemFlags::new(), one, raw_ptr, ptr_size);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), one, raw_ptr, ptr_size);
 
-        Ok(builder.ins().iadd_imm(raw_ptr, header_size as i64))
+        Ok(builder.ins().iadd_imm_s(raw_ptr, header_size as i64))
     }
 
     /// Store the address of the vtable `vtable_sym` at offset 0 of `payload_ptr`.
@@ -1445,10 +1455,10 @@ impl<'a> FunctionTranslator<'a> {
         let gv = ctx
             .module
             .declare_data_in_func(vtable_data_id, builder.func);
-        let vtable_ptr = builder.ins().global_value(ptr_type, gv);
+        let vtable_ptr = builder.ins().symbol_value(ptr_type, gv);
         builder
             .ins()
-            .store(MemFlags::new(), vtable_ptr, payload_ptr, 0);
+            .store(MemFlagsData::new(), vtable_ptr, payload_ptr, 0);
         Ok(())
     }
 
@@ -1499,7 +1509,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         // Handle null pointer (empty/uninitialized)
-        let is_null = builder.ins().icmp_imm(IntCC::Equal, ptr, 0);
+        let is_null = builder.ins().icmp_imm_s(IntCC::Equal, ptr, 0);
         let null_bb = builder.create_block();
         let load_bb = builder.create_block();
         let merge_bb = builder.create_block();
@@ -1657,7 +1667,7 @@ impl<'a> FunctionTranslator<'a> {
         let min = Self::int_const_at(builder, ty, i128::MIN >> (127 - shift));
         let is_min = builder.ins().icmp(IntCC::Equal, val, min);
         Self::emit_overflow_trap_if(builder, ctx, is_min)?;
-        let sign_mask = builder.ins().sshr_imm(val, shift as i64);
+        let sign_mask = builder.ins().sshr_imm_u(val, shift as i64);
         let xor = builder.ins().bxor(val, sign_mask);
         Ok(builder.ins().isub(xor, sign_mask))
     }
@@ -2139,7 +2149,7 @@ impl<'a> FunctionTranslator<'a> {
             .map_err(|e| CodegenError::declare_function(struct_symbol.clone(), e.to_string()))?;
         let struct_gv = ctx.module.declare_data_in_func(struct_id, builder.func);
         let struct_addr = builder.ins().symbol_value(ptr_type, struct_gv);
-        Ok(builder.ins().iadd_imm(struct_addr, ptr_size as i64))
+        Ok(builder.ins().iadd_imm_s(struct_addr, ptr_size as i64))
     }
 
     /// Identifier-typed constants: for function-typed identifiers (lambdas,
@@ -2250,27 +2260,29 @@ impl<'a> FunctionTranslator<'a> {
 
         // Store fn_ptr at payload[0].
         let fn_ptr = Self::declare_closure_fn_ptr(builder, ctx, lambda_name, fn_type, type_ctx)?;
-        builder.ins().store(MemFlags::new(), fn_ptr, payload_ptr, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), fn_ptr, payload_ptr, 0);
 
         // Store destructor_ptr at payload[1].
         let dtor_val =
             Self::closure_dtor_ptr(builder, ctx, lambda_name, capture_ops, type_ctx, ptr_type)?;
         builder
             .ins()
-            .store(MemFlags::new(), dtor_val, payload_ptr, ptr_size as i32);
+            .store(MemFlagsData::new(), dtor_val, payload_ptr, ptr_size as i32);
 
         // Each capture is stored at its own type, where the body loads it; a
         // value held as its bytes is copied in whole.
         for ((val, offset), held) in capture_vals.into_iter().zip(layout.offsets).zip(&held) {
             match held {
                 Some(value) => {
-                    let dest = builder.ins().iadd_imm(payload_ptr, i64::from(offset));
+                    let dest = builder.ins().iadd_imm_s(payload_ptr, i64::from(offset));
                     copy_value(builder, val, dest, value);
                 }
                 None => {
                     builder
                         .ins()
-                        .store(MemFlags::new(), val, payload_ptr, offset);
+                        .store(MemFlagsData::new(), val, payload_ptr, offset);
                 }
             }
         }
@@ -2302,9 +2314,9 @@ impl<'a> FunctionTranslator<'a> {
         let one = builder.ins().iconst(ptr_type, 1);
         builder
             .ins()
-            .store(MemFlags::new(), one, raw_ptr, ptr_size as i32);
+            .store(MemFlagsData::new(), one, raw_ptr, ptr_size as i32);
 
-        Ok(builder.ins().iadd_imm(raw_ptr, 2 * ptr_size))
+        Ok(builder.ins().iadd_imm_s(raw_ptr, 2 * ptr_size))
     }
 
     /// Build the lambda's Cranelift signature (`env_ptr` first, then user
@@ -2497,8 +2509,8 @@ impl<'a> FunctionTranslator<'a> {
             },
         )?;
 
-        let lo = builder.ins().stack_load(cl_types::I64, slot, 0);
-        let hi = builder.ins().stack_load(cl_types::I64, slot, 8);
+        let lo = builder.ins().stack_load(ptr_type, cl_types::I64, slot, 0);
+        let hi = builder.ins().stack_load(ptr_type, cl_types::I64, slot, 8);
         Ok(builder.ins().iconcat(lo, hi))
     }
 
@@ -2578,8 +2590,8 @@ impl<'a> FunctionTranslator<'a> {
                 args: &[value, out],
             },
         )?;
-        let lo = builder.ins().stack_load(cl_types::I64, slot, 0);
-        let hi = builder.ins().stack_load(cl_types::I64, slot, 8);
+        let lo = builder.ins().stack_load(ptr_type, cl_types::I64, slot, 0);
+        let hi = builder.ins().stack_load(ptr_type, cl_types::I64, slot, 8);
         Ok(builder.ins().iconcat(lo, hi))
     }
 
@@ -3141,8 +3153,8 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Value {
         match member {
             Member::Word(ty) => {
-                let left = builder.ins().load(*ty, MemFlags::new(), lhs, offset);
-                let right = builder.ins().load(*ty, MemFlags::new(), rhs, offset);
+                let left = builder.ins().load(*ty, MemFlagsData::new(), lhs, offset);
+                let right = builder.ins().load(*ty, MemFlagsData::new(), rhs, offset);
                 if ty.is_float() {
                     builder.ins().fcmp(FloatCC::Equal, left, right)
                 } else {
@@ -3150,8 +3162,8 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
             Member::Inline(layout) => {
-                let lhs = builder.ins().iadd_imm(lhs, i64::from(offset));
-                let rhs = builder.ins().iadd_imm(rhs, i64::from(offset));
+                let lhs = builder.ins().iadd_imm_s(lhs, i64::from(offset));
+                let rhs = builder.ins().iadd_imm_s(rhs, i64::from(offset));
                 Self::held_value_equality(builder, lhs, rhs, layout, 0)
             }
         }
@@ -3195,8 +3207,8 @@ impl<'a> FunctionTranslator<'a> {
             FieldRepr::Scalar(scalar) => {
                 let ty = crate::codegen::cranelift::value_locals::scalar_type(*scalar);
                 let at = at as i32;
-                let left = builder.ins().load(ty, MemFlags::new(), lhs, at);
-                let right = builder.ins().load(ty, MemFlags::new(), rhs, at);
+                let left = builder.ins().load(ty, MemFlagsData::new(), lhs, at);
+                let right = builder.ins().load(ty, MemFlagsData::new(), rhs, at);
                 if ty.is_float() {
                     builder.ins().fcmp(FloatCC::Equal, left, right)
                 } else {
@@ -3222,10 +3234,14 @@ impl<'a> FunctionTranslator<'a> {
             return builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
         };
         let at = (offset + tag.offset) as i32;
-        let left = builder.ins().load(cl_types::I8, MemFlags::new(), lhs, at);
-        let right = builder.ins().load(cl_types::I8, MemFlags::new(), rhs, at);
+        let left = builder
+            .ins()
+            .load(cl_types::I8, MemFlagsData::new(), lhs, at);
+        let right = builder
+            .ins()
+            .load(cl_types::I8, MemFlagsData::new(), rhs, at);
         let same_presence = builder.ins().icmp(IntCC::Equal, left, right);
-        let absent = builder.ins().icmp_imm(IntCC::Equal, left, 0);
+        let absent = builder.ins().icmp_imm_s(IntCC::Equal, left, 0);
         let payloads_equal = Self::held_member_equality(builder, (lhs, rhs), payload, offset);
         let settled = builder.ins().bor(absent, payloads_equal);
         builder.ins().band(same_presence, settled)
@@ -3294,7 +3310,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             UnOp::Not => {
                 // Logical not for booleans (I8): flip 0↔1 via XOR
-                builder.ins().bxor_imm(val, 1)
+                builder.ins().bxor_imm_u(val, 1)
             }
             UnOp::BitwiseNot => {
                 // Bitwise not for integer types

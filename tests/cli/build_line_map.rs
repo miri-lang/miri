@@ -610,6 +610,56 @@ fn test_inlined_code_maps_to_its_callee_file_and_line() {
     );
 }
 
+/// Whether the CLIF of the function `name` in `listing` calls a function
+/// whose link name contains `callee`.
+fn clif_calls(listing: &str, name: &str, callee: &str) -> bool {
+    let header = format!("; {name}\n");
+    let start = listing
+        .find(&header)
+        .unwrap_or_else(|| panic!("no function {name} in:\n{listing}"))
+        + header.len();
+    let rest = &listing[start..];
+    let text = &rest[..rest.find("\n\n; ").map_or(rest.len(), |end| end + 1)];
+    let handles: Vec<&str> = (text.lines())
+        .filter_map(|line| line.strip_prefix("; ")?.split_once(" = "))
+        .filter(|(_, target)| target.contains(callee))
+        .map(|(handle, _)| handle)
+        .collect();
+    handles.iter().any(|handle| {
+        text.lines()
+            .any(|line| line.contains(&format!("call {handle}(")))
+    })
+}
+
+/// The profiled program with a library function inlined into its loop: its
+/// line map charges the inlined code to the library's lines, as inlined
+/// through the calling line, which a profile reads its samples through. The
+/// call is checked to be inlined, so the test fails if inlining stops.
+#[test]
+fn test_profile_line_map_charges_inlined_library_code_through_its_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let executable = build_files(
+        dir.path(),
+        &[("prog.mi", super::profile::INLINED_LIBRARY_LOOP)],
+        &["--profile", "--emit", "lines", "--emit", "clif"],
+    );
+    let listing = std::fs::read_to_string(sibling(&executable, ".clif")).unwrap();
+    assert!(
+        !clif_calls(&listing, "miri.mix_all", "hash_u32"),
+        "hash_u32 is called, not inlined:\n{listing}"
+    );
+    let (text, map) = read_line_map(&executable);
+    let program = map.file_index("prog.mi");
+    let math = map.file_index("system/math.mi");
+    let call_site = (program, super::profile::INLINED_CALL_LINE);
+    let mix_all = map.function("mix_all");
+    assert!(
+        (mix_all.ranges.iter()).any(|range| range.file == math && range.inlined_at == [call_site]),
+        "no code of mix_all maps to system/math.mi inlined at prog.mi:{}:\n{text}",
+        call_site.1
+    );
+}
+
 /// A leaf inlined into a helper that is itself inlined into a loop.
 const NESTED_CALLS: &str = r#"use system.io
 

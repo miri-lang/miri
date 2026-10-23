@@ -19,7 +19,7 @@ use crate::error::CodegenError;
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{InstBuilder, MemFlags, TrapCode, Value};
+use cranelift_codegen::ir::{InstBuilder, MemFlagsData, TrapCode, Value};
 use cranelift_frontend::FunctionBuilder;
 
 /// User trap code raised when a collection that stores its elements inline was
@@ -56,7 +56,9 @@ impl FunctionTranslator<'_> {
         offset: i32,
         ptr_type: cl_types::Type,
     ) -> Value {
-        builder.ins().load(ptr_type, MemFlags::new(), base, offset)
+        builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), base, offset)
     }
 
     /// Load the data pointer and the element count of the array or list at
@@ -102,7 +104,7 @@ impl FunctionTranslator<'_> {
             return;
         };
         let slot_size = Self::load_header_word(builder, base, offset, ptr_type);
-        let mismatch = builder.ins().icmp_imm(IntCC::NotEqual, slot_size, stride);
+        let mismatch = builder.ins().icmp_imm_s(IntCC::NotEqual, slot_size, stride);
         Self::trap_cold_if(builder, mismatch);
     }
 
@@ -110,7 +112,7 @@ impl FunctionTranslator<'_> {
     /// and continue in a fresh block otherwise.
     ///
     /// The branch goes to a block that jumps to the trap rather than to the
-    /// trap itself: Cranelift's legalizer rewrites a branch to a block holding
+    /// trap itself: Cranelift's optimizer rewrites a branch to a block holding
     /// nothing but a trap into the conditional trap this avoids.
     fn trap_cold_if(builder: &mut FunctionBuilder, condition: Value) {
         let cold_block = builder.create_block();

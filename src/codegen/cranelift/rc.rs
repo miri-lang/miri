@@ -25,7 +25,7 @@ use crate::mir::type_facts::{EnumDefinition, TypeDefinition, ValueLayout};
 use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, Value};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature, Value};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
@@ -792,10 +792,10 @@ impl<'a> FunctionTranslator<'a> {
         let state_addr = builder.ins().iadd(states, i);
         let state_i8 = builder
             .ins()
-            .load(cl_types::I8, MemFlags::new(), state_addr, 0);
+            .load(cl_types::I8, MemFlagsData::new(), state_addr, 0);
         let state = builder.ins().uextend(ptr_type, state_i8);
-        let occupied_bit = builder.ins().band_imm(state, 0x80);
-        let is_occupied = builder.ins().icmp_imm(
+        let occupied_bit = builder.ins().band_imm_u(state, 0x80);
+        let is_occupied = builder.ins().icmp_imm_s(
             cranelift_codegen::ir::condcodes::IntCC::NotEqual,
             occupied_bit,
             0,
@@ -807,16 +807,18 @@ impl<'a> FunctionTranslator<'a> {
         // DecRef the value in this slot
         builder.switch_to_block(decref_block);
         builder.seal_block(decref_block);
-        let byte_offset = builder.ins().imul_imm(i, ptr_size);
+        let byte_offset = builder.ins().imul_imm_s(i, ptr_size);
         let val_addr = builder.ins().iadd(values, byte_offset);
-        let val_ptr = builder.ins().load(ptr_type, MemFlags::new(), val_addr, 0);
+        let val_ptr = builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), val_addr, 0);
         Self::emit_decref_value(builder, ctx, val_kind, val_ptr, type_ctx)?;
         builder.ins().jump(increment_block, &[]);
 
         // Increment i and loop back
         builder.switch_to_block(increment_block);
         builder.seal_block(increment_block);
-        let next_i = builder.ins().iadd_imm(i, 1);
+        let next_i = builder.ins().iadd_imm_s(i, 1);
         let next_i_arg = cranelift_codegen::ir::BlockArg::Value(next_i);
         builder.ins().jump(loop_header, &[next_i_arg]);
 
@@ -869,12 +871,14 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(loop_body);
         builder.seal_block(loop_body); // only predecessor: loop_header
 
-        let byte_offset = builder.ins().imul_imm(i, ptr_size);
+        let byte_offset = builder.ins().imul_imm_s(i, ptr_size);
         let elem_addr = builder.ins().iadd(data, byte_offset);
-        let elem_ptr = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+        let elem_ptr = builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), elem_addr, 0);
         Self::emit_decref_value(builder, ctx, inner_kind, elem_ptr, type_ctx)?;
 
-        let next_i = builder.ins().iadd_imm(i, 1);
+        let next_i = builder.ins().iadd_imm_s(i, 1);
         let next_i_arg = cranelift_codegen::ir::BlockArg::Value(next_i);
         builder.ins().jump(loop_header, &[next_i_arg]);
 
@@ -962,13 +966,15 @@ impl<'a> FunctionTranslator<'a> {
                 if is_element_counted(&val_ty.kind, type_ctx.layout_scope()) {
                     let ptr_type = type_ctx.ptr_type;
                     let ptr_size = ptr_type.bytes() as i32;
-                    let states = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
-                    let values = builder
-                        .ins()
-                        .load(ptr_type, MemFlags::new(), ptr, 2 * ptr_size);
-                    let capacity = builder
-                        .ins()
-                        .load(ptr_type, MemFlags::new(), ptr, 4 * ptr_size);
+                    let states = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
+                    let values =
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlagsData::new(), ptr, 2 * ptr_size);
+                    let capacity =
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlagsData::new(), ptr, 4 * ptr_size);
                     Self::emit_map_managed_values_drop_loop(
                         builder,
                         ctx,
@@ -1002,8 +1008,10 @@ impl<'a> FunctionTranslator<'a> {
                 if is_element_counted(&inner_ty.kind, type_ctx.layout_scope()) {
                     let ptr_type = type_ctx.ptr_type;
                     let ptr_size = ptr_type.bytes() as i32;
-                    let data = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
-                    let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
+                    let data = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
+                    let len = builder
+                        .ins()
+                        .load(ptr_type, MemFlagsData::new(), ptr, ptr_size);
                     Self::emit_managed_elements_drop_loop(
                         builder,
                         ctx,
@@ -1019,7 +1027,7 @@ impl<'a> FunctionTranslator<'a> {
                         let zero = builder.ins().iconst(ptr_type, 0);
                         builder
                             .ins()
-                            .store(MemFlags::new(), zero, ptr, 3 * ptr_size);
+                            .store(MemFlagsData::new(), zero, ptr, 3 * ptr_size);
                     }
                 }
             }
@@ -1061,7 +1069,9 @@ impl<'a> FunctionTranslator<'a> {
             })
             .collect::<Result<Vec<(i32, TypeKind)>, CodegenError>>()?;
         for (offset, field_kind) in managed_fields {
-            let field_ptr = builder.ins().load(ptr_type, MemFlags::new(), ptr, offset);
+            let field_ptr = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), ptr, offset);
             Self::emit_decref_value(builder, ctx, &field_kind, field_ptr, type_ctx)?;
         }
         Self::call_rt_block_free(builder, ctx, header_ptr)
@@ -1082,7 +1092,7 @@ impl<'a> FunctionTranslator<'a> {
             let ptr_type = type_ctx.ptr_type;
             let cl_inner_ty =
                 crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
-            let inner_ptr = builder.ins().load(cl_inner_ty, MemFlags::new(), ptr, 0);
+            let inner_ptr = builder.ins().load(cl_inner_ty, MemFlagsData::new(), ptr, 0);
             Self::emit_decref_value(builder, ctx, &inner.kind, inner_ptr, type_ctx)?;
         }
         Self::call_rt_block_free(builder, ctx, header_ptr)
@@ -1130,7 +1140,7 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         static_release: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<(), CodegenError>,
     ) -> Result<(), CodegenError> {
-        let vtable = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
+        let vtable = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
         let has_vtable_block = builder.create_block();
         let static_block = builder.create_block();
         let done_block = builder.create_block();
@@ -1143,7 +1153,7 @@ impl<'a> FunctionTranslator<'a> {
         let slot_offset = (crate::mir::dispatch::DROP_SLOT * ptr_type.bytes() as usize) as i32;
         let drop_fn = builder
             .ins()
-            .load(ptr_type, MemFlags::new(), vtable, slot_offset);
+            .load(ptr_type, MemFlagsData::new(), vtable, slot_offset);
         let mut signature = Signature::new(builder.func.signature.call_conv);
         signature.params.push(AbiParam::new(ptr_type));
         let signature_ref = builder.import_signature(signature);
@@ -1509,7 +1519,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes() as i64;
         let dtor_ptr = builder
             .ins()
-            .load(ptr_type, MemFlags::new(), ptr, ptr_size as i32);
+            .load(ptr_type, MemFlagsData::new(), ptr, ptr_size as i32);
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
@@ -1667,7 +1677,7 @@ impl<'a> FunctionTranslator<'a> {
                 layout::field_layout(&custom_kind, *field_idx, type_ctx.layout_scope(), ptr_type)?;
             let field_ptr = builder
                 .ins()
-                .load(ptr_type, MemFlags::new(), payload_ptr, offset);
+                .load(ptr_type, MemFlagsData::new(), payload_ptr, offset);
             Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
         }
         Ok(())
@@ -1697,7 +1707,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let disc = builder
             .ins()
-            .load(ptr_type, MemFlags::new(), payload_ptr, 0);
+            .load(ptr_type, MemFlagsData::new(), payload_ptr, 0);
         // The drop thunk carries the instantiation as types; the layout
         // authority reads it as the type-argument expressions a construction
         // site carries, so both sides resolve payloads by the same rule.
@@ -1809,7 +1819,7 @@ impl<'a> FunctionTranslator<'a> {
             let field_ptr =
                 builder
                     .ins()
-                    .load(ptr_type, MemFlags::new(), payload_ptr, field_offset);
+                    .load(ptr_type, MemFlagsData::new(), payload_ptr, field_offset);
             Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
         }
         builder.ins().jump(merge_block, &[]);
@@ -1851,7 +1861,9 @@ impl<'a> FunctionTranslator<'a> {
             ElementShape::UserClass(_) | ElementShape::Other => None,
         };
         if let Some(name) = builtin_decref {
-            let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+            let old_val = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), elem_addr, 0);
             Self::call_cached_func(
                 builder,
                 ctx.module,
@@ -1887,7 +1899,9 @@ impl<'a> FunctionTranslator<'a> {
                 per_instantiation.iter().flatten(),
             )
             .link_name();
-            let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+            let old_val = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), elem_addr, 0);
             let func_id = match ctx.thunk_funcs.get(&decref_name) {
                 Some(func_id) => *func_id,
                 None => {
@@ -1915,7 +1929,9 @@ impl<'a> FunctionTranslator<'a> {
         // are heap-allocated with an RC header. Route through the inline
         // decref-and-drop emitter so nested managed payloads are released.
         if is_element_counted(elem_type_kind, type_ctx.layout_scope()) {
-            let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+            let old_val = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), elem_addr, 0);
             Self::emit_decref_value(builder, ctx, elem_type_kind, old_val, type_ctx)?;
         }
         Ok(())
@@ -1972,16 +1988,16 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(rc_block);
         Self::emit_release_check(builder, ctx, ptr)?;
 
-        let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
+        let header_ptr = builder.ins().iadd_imm_s(ptr, -ptr_size);
         let rc = builder.ins().load(
             ptr_type,
-            cranelift_codegen::ir::MemFlags::new(),
+            cranelift_codegen::ir::MemFlagsData::new(),
             header_ptr,
             0,
         );
 
         // Skip immortal objects (RC < 0)
-        let is_immortal = builder.ins().icmp_imm(
+        let is_immortal = builder.ins().icmp_imm_s(
             cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
             rc,
             0,
@@ -1992,9 +2008,9 @@ impl<'a> FunctionTranslator<'a> {
             .brif(is_immortal, merge_block, &[], dec_block, &[]);
 
         builder.switch_to_block(dec_block);
-        let new_rc = builder.ins().iadd_imm(rc, -1);
+        let new_rc = builder.ins().iadd_imm_s(rc, -1);
         builder.ins().store(
-            cranelift_codegen::ir::MemFlags::new(),
+            cranelift_codegen::ir::MemFlagsData::new(),
             new_rc,
             header_ptr,
             0,
@@ -2156,11 +2172,11 @@ impl<'a> FunctionTranslator<'a> {
             // but a body that reads it as a whole value (`match self`) retains
             // and releases it, and that release would drop it again from
             // inside its own hook. Marked immortal, both leave it alone.
-            let header_ptr = builder.ins().iadd_imm(ptr, -i64::from(ptr_type.bytes()));
+            let header_ptr = builder.ins().iadd_imm_s(ptr, -i64::from(ptr_type.bytes()));
             let immortal = builder.ins().iconst(ptr_type, -1);
             builder
                 .ins()
-                .store(MemFlags::new(), immortal, header_ptr, 0);
+                .store(MemFlagsData::new(), immortal, header_ptr, 0);
             Self::call_user_drop_hook(
                 &mut builder,
                 &mut module_ctx,
@@ -2180,12 +2196,12 @@ impl<'a> FunctionTranslator<'a> {
             &type_ctx,
         )?;
 
-        let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
+        let header_ptr = builder.ins().iadd_imm_s(ptr, -ptr_size);
         Self::call_rt_block_free(&mut builder, &mut module_ctx, header_ptr)?;
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(module.isa().frontend_config());
         Ok(())
     }
 
@@ -2353,7 +2369,7 @@ impl<'a> FunctionTranslator<'a> {
         Self::emit_decref_value(&mut builder, &mut module_ctx, &element.kind, ptr, &type_ctx)?;
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(module.isa().frontend_config());
         Ok(())
     }
 
@@ -2397,9 +2413,11 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(rc_block);
         builder.seal_block(rc_block);
         Self::emit_release_check(&mut builder, &mut module_ctx, ptr)?;
-        let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
-        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
-        let is_immortal = builder.ins().icmp_imm(
+        let header_ptr = builder.ins().iadd_imm_s(ptr, -ptr_size);
+        let rc = builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), header_ptr, 0);
+        let is_immortal = builder.ins().icmp_imm_s(
             cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
             rc,
             0,
@@ -2412,8 +2430,10 @@ impl<'a> FunctionTranslator<'a> {
         // Decrement RC; branch to `__drop` thunk when it reaches zero.
         builder.switch_to_block(dec_block);
         builder.seal_block(dec_block);
-        let new_rc = builder.ins().iadd_imm(rc, -1);
-        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+        let new_rc = builder.ins().iadd_imm_s(rc, -1);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), new_rc, header_ptr, 0);
         let zero = builder.ins().iconst(ptr_type, 0);
         let is_zero =
             builder
@@ -2447,7 +2467,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(merge_block);
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(module.isa().frontend_config());
         Ok(())
     }
 
@@ -2603,7 +2623,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().return_(&[result]);
 
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(module.isa().frontend_config());
         Ok(())
     }
 

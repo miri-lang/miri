@@ -8,7 +8,7 @@ use super::super::{build_isa, CraneliftOptions, OptLevel};
 use super::*;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
-    types, AbiParam, Block, ExtFuncData, ExternalName, InstBuilder, JumpTableData, MemFlags,
+    types, AbiParam, Block, ExtFuncData, ExternalName, InstBuilder, JumpTableData, MemFlagsData,
     Opcode, Signature, SourceLoc, StackSlot, StackSlotData, Type, UserExternalName, UserFuncName,
     UserStackMapEntry, Value, ValueDef,
 };
@@ -52,7 +52,7 @@ fn function(
     builder.switch_to_block(entry);
     body(&mut builder, entry);
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(host_isa().frontend_config());
     function
 }
 
@@ -91,11 +91,11 @@ fn three_field_value() -> Function {
             let offset = 8 * field as i32;
             builder
                 .ins()
-                .store(MemFlags::new(), argument, address, offset);
+                .store(MemFlagsData::new(), argument, address, offset);
         }
-        let x = builder.ins().load(float, MemFlags::new(), address, 0);
-        let y = builder.ins().load(float, MemFlags::new(), address, 8);
-        let z = builder.ins().load(float, MemFlags::new(), address, 16);
+        let x = builder.ins().load(float, MemFlagsData::new(), address, 0);
+        let y = builder.ins().load(float, MemFlagsData::new(), address, 8);
+        let z = builder.ins().load(float, MemFlagsData::new(), address, 16);
         let sum = builder.ins().fadd(x, y);
         let sum = builder.ins().fadd(sum, z);
         builder.ins().return_(&[sum]);
@@ -111,8 +111,12 @@ fn stored_through(
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = address(builder, value, argument);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
-        let read = builder.ins().load(types::I64, MemFlags::new(), address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     })
 }
@@ -125,12 +129,12 @@ fn a_value_built_and_read_field_by_field_is_promoted_cell_by_cell() {
 
 #[test]
 fn an_address_offset_by_an_added_constant_reaches_the_cell_it_names() {
-    let mut legalized = stored_through(|builder, value, _| {
+    let mut added = stored_through(|builder, value, _| {
         let base = builder.ins().stack_addr(types::I64, value, 0);
         let zero = builder.ins().iconst(types::I64, 0);
         builder.ins().iadd(base, zero)
     });
-    assert_eq!(promoted(&mut legalized), Promotion { slots: 1, cells: 1 });
+    assert_eq!(promoted(&mut added), Promotion { slots: 1, cells: 1 });
     let mut swapped = stored_through(|builder, value, _| {
         let base = builder.ins().stack_addr(types::I64, value, 4);
         let back = builder.ins().iconst(types::I64, -4);
@@ -144,8 +148,8 @@ fn a_slot_named_by_stack_load_and_stack_store_is_promoted() {
     let mut function = function(&[types::I64], &[types::I64], |builder, entry| {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 0);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion { slots: 1, cells: 1 });
@@ -167,9 +171,13 @@ fn escaping(escape: impl FnOnce(&mut FunctionBuilder<'_>, Value)) -> Function {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
         escape(builder, address);
-        let read = builder.ins().load(types::I64, MemFlags::new(), address, 0);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     })
 }
@@ -185,6 +193,7 @@ fn a_slot_whose_address_is_passed_to_a_call_is_kept() {
             name: ExternalName::User(name),
             signature,
             colocated: false,
+            patchable: false,
         });
         builder.ins().call(callee, &[address]);
     });
@@ -196,7 +205,7 @@ fn a_slot_whose_address_is_stored_as_data_is_kept_and_the_slot_holding_it_is_pro
     let mut holder = None;
     let mut function = escaping(|builder, address| {
         let slot = slot(builder, 8);
-        builder.ins().stack_store(address, slot, 0);
+        builder.ins().stack_store(types::I64, address, slot, 0);
         holder = Some(slot);
     });
     let holder = holder.unwrap_or_else(|| panic!("the holder was built"));
@@ -237,9 +246,15 @@ fn a_slot_read_whole_after_being_written_in_halves_is_kept() {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 4);
-        let read = builder.ins().load(types::I64, MemFlags::new(), address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 4);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion::default());
@@ -252,7 +267,7 @@ fn a_slot_accessed_past_its_end_is_kept() {
     assert_eq!(promoted(&mut past_end), Promotion::default());
     let mut before_start = stored_through(|builder, value, _| {
         let base = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().iadd_imm(base, -8)
+        builder.ins().iadd_imm_s(base, -8)
     });
     assert_eq!(promoted(&mut before_start), Promotion::default());
 }
@@ -263,10 +278,12 @@ fn a_slot_read_by_an_extending_load_is_kept() {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
         let read = builder
             .ins()
-            .uload8(types::I64, MemFlags::new(), address, 0);
+            .uload8(types::I64, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion::default());
@@ -278,8 +295,12 @@ fn a_slot_written_by_a_truncating_store_is_kept() {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().istore8(MemFlags::new(), argument, address, 0);
-        let read = builder.ins().load(types::I8, MemFlags::new(), address, 0);
+        builder
+            .ins()
+            .istore8(MemFlagsData::new(), argument, address, 0);
+        let read = builder
+            .ins()
+            .load(types::I8, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion::default());
@@ -291,9 +312,11 @@ fn a_slot_accessed_with_an_explicit_byte_order_is_kept() {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        let big = MemFlags::new().with_endianness(cranelift_codegen::ir::Endianness::Big);
+        let big = MemFlagsData::new().with_endianness(cranelift_codegen::ir::Endianness::Big);
         builder.ins().store(big, argument, address, 0);
-        let read = builder.ins().load(types::I64, MemFlags::new(), address, 0);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion::default());
@@ -309,15 +332,9 @@ fn count(function: &Function, opcode: Opcode) -> usize {
 
 /// Whether `function` reaches memory or a slot's address at all.
 fn touches_memory(function: &Function) -> bool {
-    [
-        Opcode::Load,
-        Opcode::Store,
-        Opcode::StackLoad,
-        Opcode::StackStore,
-        Opcode::StackAddr,
-    ]
-    .into_iter()
-    .any(|opcode| count(function, opcode) != 0)
+    [Opcode::Load, Opcode::Store, Opcode::StackAddr]
+        .into_iter()
+        .any(|opcode| count(function, opcode) != 0)
 }
 
 fn slot_sizes(function: &Function) -> Vec<u32> {
@@ -370,11 +387,11 @@ fn diamond() -> (Function, Block) {
         for (arm, index) in [(then_arm, 1), (else_arm, 2)] {
             builder.switch_to_block(arm);
             let argument = param(builder, entry, index);
-            builder.ins().stack_store(argument, value, 0);
+            builder.ins().stack_store(types::I64, argument, value, 0);
             builder.ins().jump(after, &[]);
         }
         builder.switch_to_block(after);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
         join = Some(after);
     });
@@ -410,10 +427,10 @@ fn a_cell_written_on_one_arm_only_and_read_after_the_join_is_kept() {
         builder.ins().brif(condition, arm, &[], after, &[]);
         builder.switch_to_block(arm);
         let argument = param(builder, entry, 1);
-        builder.ins().stack_store(argument, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
         builder.ins().jump(after, &[]);
         builder.switch_to_block(after);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
     });
     let before = function.display().to_string();
@@ -425,9 +442,9 @@ fn a_cell_written_on_one_arm_only_and_read_after_the_join_is_kept() {
 fn a_cell_read_before_it_is_written_is_kept() {
     let mut function = function(&[types::I64], &[types::I64], |builder, entry| {
         let value = slot(builder, 8);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
         builder.ins().return_(&[read]);
     });
     let before = function.display().to_string();
@@ -446,16 +463,16 @@ fn a_cell_written_in_a_loop_body_reaches_its_header_along_the_back_edge() {
             builder.create_block(),
         );
         let zero = builder.ins().iconst(types::I64, 0);
-        builder.ins().stack_store(zero, counter, 0);
+        builder.ins().stack_store(types::I64, zero, counter, 0);
         builder.ins().jump(top, &[]);
         builder.switch_to_block(top);
-        let count = builder.ins().stack_load(types::I64, counter, 0);
+        let count = builder.ins().stack_load(types::I64, types::I64, counter, 0);
         let limit = param(builder, entry, 0);
         let more = builder.ins().icmp(IntCC::SignedLessThan, count, limit);
         builder.ins().brif(more, body, &[], exit, &[]);
         builder.switch_to_block(body);
-        let next = builder.ins().iadd_imm(count, 1);
-        builder.ins().stack_store(next, counter, 0);
+        let next = builder.ins().iadd_imm_s(count, 1);
+        builder.ins().stack_store(types::I64, next, counter, 0);
         builder.ins().jump(top, &[]);
         builder.switch_to_block(exit);
         builder.ins().return_(&[count]);
@@ -478,8 +495,8 @@ fn a_float_written_and_read_back_as_an_integer_costs_one_bitcast() {
     let mut function = function(&[types::F64], &[types::I64], |builder, entry| {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 0);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion { slots: 1, cells: 1 });
@@ -492,10 +509,10 @@ fn a_float_copied_through_an_integer_cell_needs_no_bitcast() {
     let mut function = function(&[types::F64], &[types::F64], |builder, entry| {
         let (first, second) = (slot(builder, 8), slot(builder, 8));
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, first, 0);
-        let word = builder.ins().stack_load(types::I64, first, 0);
-        builder.ins().stack_store(word, second, 0);
-        let read = builder.ins().stack_load(types::F64, second, 0);
+        builder.ins().stack_store(types::I64, argument, first, 0);
+        let word = builder.ins().stack_load(types::I64, types::I64, first, 0);
+        builder.ins().stack_store(types::I64, word, second, 0);
+        let read = builder.ins().stack_load(types::I64, types::F64, second, 0);
         builder.ins().return_(&[read]);
     });
     let argument = function.dfg.block_params(entry_of(&function))[0];
@@ -518,8 +535,8 @@ fn an_integer_zero_written_to_a_float_cell_becomes_a_float_constant() {
     let mut function = function(&[], &[types::F64], |builder, _| {
         let value = slot(builder, 8);
         let zero = builder.ins().iconst(types::I64, 0);
-        builder.ins().stack_store(zero, value, 0);
-        let read = builder.ins().stack_load(types::F64, value, 0);
+        builder.ins().stack_store(types::I64, zero, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::F64, value, 0);
         builder.ins().return_(&[read]);
     });
     promoted(&mut function);
@@ -534,9 +551,9 @@ fn a_bitcast_takes_the_source_location_of_the_access_it_replaces() {
     let mut function = function(&[types::F64], &[types::I64], |builder, entry| {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
         builder.set_srcloc(at);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.set_srcloc(SourceLoc::default());
         builder.ins().return_(&[read]);
     });
@@ -581,11 +598,11 @@ fn branch_tables_sharing_a_jump_table_each_hand_their_own_values() {
         for (arm, index) in [(left, 1), (right, 2)] {
             builder.switch_to_block(arm);
             let argument = param(builder, entry, index);
-            builder.ins().stack_store(argument, value, 0);
+            builder.ins().stack_store(types::I64, argument, value, 0);
             builder.ins().br_table(selector, table);
         }
         builder.switch_to_block(after);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
         join = Some(after);
     });
@@ -661,10 +678,10 @@ fn a_loop_with_two_latches_hands_its_header_each_latchs_value() {
             let (top, body, first, second, exit) =
                 (blocks[0], blocks[1], blocks[2], blocks[3], blocks[4]);
             let zero = builder.ins().iconst(types::I64, 0);
-            builder.ins().stack_store(zero, counter, 0);
+            builder.ins().stack_store(types::I64, zero, counter, 0);
             builder.ins().jump(top, &[]);
             builder.switch_to_block(top);
-            let count = builder.ins().stack_load(types::I64, counter, 0);
+            let count = builder.ins().stack_load(types::I64, types::I64, counter, 0);
             let limit = param(builder, entry, 0);
             let more = builder.ins().icmp(IntCC::SignedLessThan, count, limit);
             builder.ins().brif(more, body, &[], exit, &[]);
@@ -674,13 +691,13 @@ fn a_loop_with_two_latches_hands_its_header_each_latchs_value() {
             let mut steps = Vec::new();
             for (latch, step) in [(first, 1), (second, 2)] {
                 builder.switch_to_block(latch);
-                let next = builder.ins().iadd_imm(count, step);
-                builder.ins().stack_store(next, counter, 0);
+                let next = builder.ins().iadd_imm_s(count, step);
+                builder.ins().stack_store(types::I64, next, counter, 0);
                 builder.ins().jump(top, &[]);
                 steps.push(next);
             }
             builder.switch_to_block(exit);
-            let last = builder.ins().stack_load(types::I64, counter, 0);
+            let last = builder.ins().stack_load(types::I64, types::I64, counter, 0);
             builder.ins().return_(&[last]);
             built = Some((blocks, entry, zero, steps));
         },
@@ -714,37 +731,37 @@ fn nested_loops_take_a_parameter_for_each_cell_live_into_their_headers() {
         );
         let limit = param(builder, entry, 0);
         let zero = builder.ins().iconst(types::I64, 0);
-        builder.ins().stack_store(zero, state, i);
-        builder.ins().stack_store(zero, state, sum);
+        builder.ins().stack_store(types::I64, zero, state, i);
+        builder.ins().stack_store(types::I64, zero, state, sum);
         builder.ins().jump(outer, &[]);
         builder.switch_to_block(outer);
-        let row = builder.ins().stack_load(types::I64, state, i);
+        let row = builder.ins().stack_load(types::I64, types::I64, state, i);
         let more_rows = builder.ins().icmp(IntCC::SignedLessThan, row, limit);
         builder.ins().brif(more_rows, inner_start, &[], exit, &[]);
         builder.switch_to_block(inner_start);
         let zero = builder.ins().iconst(types::I64, 0);
-        builder.ins().stack_store(zero, state, j);
+        builder.ins().stack_store(types::I64, zero, state, j);
         builder.ins().jump(inner, &[]);
         builder.switch_to_block(inner);
-        let column = builder.ins().stack_load(types::I64, state, j);
+        let column = builder.ins().stack_load(types::I64, types::I64, state, j);
         let more_columns = builder.ins().icmp(IntCC::SignedLessThan, column, limit);
         builder
             .ins()
             .brif(more_columns, inner_body, &[], outer_latch, &[]);
         builder.switch_to_block(inner_body);
-        let total = builder.ins().stack_load(types::I64, state, sum);
+        let total = builder.ins().stack_load(types::I64, types::I64, state, sum);
         let total = builder.ins().iadd(total, column);
-        builder.ins().stack_store(total, state, sum);
-        let column = builder.ins().iadd_imm(column, 1);
-        builder.ins().stack_store(column, state, j);
+        builder.ins().stack_store(types::I64, total, state, sum);
+        let column = builder.ins().iadd_imm_s(column, 1);
+        builder.ins().stack_store(types::I64, column, state, j);
         builder.ins().jump(inner, &[]);
         builder.switch_to_block(outer_latch);
-        let row = builder.ins().stack_load(types::I64, state, i);
-        let row = builder.ins().iadd_imm(row, 1);
-        builder.ins().stack_store(row, state, i);
+        let row = builder.ins().stack_load(types::I64, types::I64, state, i);
+        let row = builder.ins().iadd_imm_s(row, 1);
+        builder.ins().stack_store(types::I64, row, state, i);
         builder.ins().jump(outer, &[]);
         builder.switch_to_block(exit);
-        let total = builder.ins().stack_load(types::I64, state, sum);
+        let total = builder.ins().stack_load(types::I64, types::I64, state, sum);
         builder.ins().return_(&[total]);
         headers = Some((outer, inner));
     });
@@ -762,15 +779,15 @@ fn a_critical_edge_hands_the_value_its_source_block_wrote() {
         let value = slot(builder, 8);
         let (other, join) = (builder.create_block(), builder.create_block());
         let first = param(builder, entry, 1);
-        builder.ins().stack_store(first, value, 0);
+        builder.ins().stack_store(types::I64, first, value, 0);
         let condition = param(builder, entry, 0);
         builder.ins().brif(condition, join, &[], other, &[]);
         builder.switch_to_block(other);
         let second = param(builder, entry, 2);
-        builder.ins().stack_store(second, value, 0);
+        builder.ins().stack_store(types::I64, second, value, 0);
         builder.ins().jump(join, &[]);
         builder.switch_to_block(join);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
         built = Some((entry, other, join, first, second));
     });
@@ -786,11 +803,11 @@ fn a_branch_to_one_block_on_both_arms_counts_as_one_predecessor() {
         let value = slot(builder, 8);
         let next = builder.create_block();
         let argument = param(builder, entry, 1);
-        builder.ins().stack_store(argument, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
         let condition = param(builder, entry, 0);
         builder.ins().brif(condition, next, &[], next, &[]);
         builder.switch_to_block(next);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
     });
     let argument = function.dfg.block_params(entry_of(&function))[1];
@@ -817,15 +834,15 @@ fn a_branch_to_one_block_on_both_arms_hands_the_value_on_each_arm() {
         builder.ins().brif(condition, left, &[], right, &[]);
         builder.switch_to_block(left);
         let first = param(builder, entry, 2);
-        builder.ins().stack_store(first, value, 0);
+        builder.ins().stack_store(types::I64, first, value, 0);
         let again = param(builder, entry, 1);
         builder.ins().brif(again, join, &[], join, &[]);
         builder.switch_to_block(right);
         let second = param(builder, entry, 3);
-        builder.ins().stack_store(second, value, 0);
+        builder.ins().stack_store(types::I64, second, value, 0);
         builder.ins().jump(join, &[]);
         builder.switch_to_block(join);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
         built = Some((left, right, join, first, second));
     });
@@ -856,13 +873,13 @@ fn a_join_with_parameters_of_its_own_takes_the_cells_after_them() {
         for (arm, index, tag) in [(left, 1, 10), (right, 2, 20)] {
             builder.switch_to_block(arm);
             let argument = param(builder, entry, index);
-            builder.ins().stack_store(argument, value, 0);
+            builder.ins().stack_store(types::I64, argument, value, 0);
             let tag = builder.ins().iconst(types::I64, tag);
             builder.ins().jump(join, &[tag.into()]);
             handed.push((arm, vec![tag, argument]));
         }
         builder.switch_to_block(join);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         let sum = builder.ins().iadd(own, read);
         builder.ins().return_(&[sum]);
         built = Some((join, own, handed));
@@ -886,7 +903,7 @@ fn a_branch_table_hands_each_of_its_edges_the_value_its_block_wrote() {
         builder.ins().brif(condition, table_block, &[], other, &[]);
         builder.switch_to_block(table_block);
         let first = param(builder, entry, 1);
-        builder.ins().stack_store(first, value, 0);
+        builder.ins().stack_store(types::I64, first, value, 0);
         let default = builder.func.dfg.block_call(join, &[]);
         let entries: Vec<_> = [join, single, join]
             .into_iter()
@@ -897,11 +914,11 @@ fn a_branch_table_hands_each_of_its_edges_the_value_its_block_wrote() {
         builder.ins().br_table(selector, table);
         builder.switch_to_block(other);
         let second = param(builder, entry, 2);
-        builder.ins().stack_store(second, value, 0);
+        builder.ins().stack_store(types::I64, second, value, 0);
         builder.ins().jump(join, &[]);
         for target in [join, single] {
             builder.switch_to_block(target);
-            let read = builder.ins().stack_load(types::I64, value, 0);
+            let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
             builder.ins().return_(&[read]);
         }
         built = Some((table_block, other, join, single, first, second));
@@ -932,11 +949,15 @@ fn kept_slot_before_promoted_one() -> Function {
         let kept = slot(builder, 16);
         let promoted_slot = slot(builder, 8);
         let argument = param(builder, entry, 0);
-        let early = builder.ins().stack_load(types::I64, kept, 0);
-        builder.ins().stack_store(argument, kept, 0);
-        builder.ins().stack_store(early, kept, 8);
-        builder.ins().stack_store(argument, promoted_slot, 0);
-        let read = builder.ins().stack_load(types::I64, promoted_slot, 0);
+        let early = builder.ins().stack_load(types::I64, types::I64, kept, 0);
+        builder.ins().stack_store(types::I64, argument, kept, 0);
+        builder.ins().stack_store(types::I64, early, kept, 8);
+        builder
+            .ins()
+            .stack_store(types::I64, argument, promoted_slot, 0);
+        let read = builder
+            .ins()
+            .stack_load(types::I64, types::I64, promoted_slot, 0);
         builder.ins().return_(&[read]);
     })
 }
@@ -947,8 +968,8 @@ fn a_slot_kept_for_a_read_before_its_write_leaves_a_later_slot_promoted() {
     let argument = function.dfg.block_params(entry_of(&function))[0];
     assert_eq!(promoted(&mut function), Promotion { slots: 1, cells: 1 });
     assert_eq!(slot_sizes(&function), vec![16, 0], "{function}");
-    assert_eq!(count(&function, Opcode::StackLoad), 1, "{function}");
-    assert_eq!(count(&function, Opcode::StackStore), 2, "{function}");
+    assert_eq!(count(&function, Opcode::Load), 1, "{function}");
+    assert_eq!(count(&function, Opcode::Store), 2, "{function}");
     assert_eq!(returned(&function), argument, "{function}");
 }
 
@@ -961,17 +982,21 @@ fn a_slot_kept_for_overlapping_accesses_leaves_a_later_slot_promoted() {
             let kept = slot(builder, 8);
             let promoted_slot = slot(builder, 8);
             let half = param(builder, entry, 0);
-            builder.ins().stack_store(half, kept, 0);
-            builder.ins().stack_store(half, kept, 4);
-            let whole = builder.ins().stack_load(types::I64, kept, 0);
-            builder.ins().stack_store(whole, promoted_slot, 0);
-            let read = builder.ins().stack_load(types::I64, promoted_slot, 0);
+            builder.ins().stack_store(types::I64, half, kept, 0);
+            builder.ins().stack_store(types::I64, half, kept, 4);
+            let whole = builder.ins().stack_load(types::I64, types::I64, kept, 0);
+            builder
+                .ins()
+                .stack_store(types::I64, whole, promoted_slot, 0);
+            let read = builder
+                .ins()
+                .stack_load(types::I64, types::I64, promoted_slot, 0);
             builder.ins().return_(&[read]);
         },
     );
     assert_eq!(promoted(&mut function), Promotion { slots: 1, cells: 1 });
     assert_eq!(slot_sizes(&function), vec![8, 0], "{function}");
-    assert_eq!(count(&function, Opcode::StackLoad), 1, "{function}");
+    assert_eq!(count(&function, Opcode::Load), 1, "{function}");
 }
 
 #[test]
@@ -989,8 +1014,8 @@ fn read_where_unreachable(dead: impl FnOnce(&mut FunctionBuilder<'_>, StackSlot)
     function(&[types::I64], &[types::I64], |builder, entry| {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 0);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
         dead(builder, value);
     })
@@ -1001,15 +1026,15 @@ fn a_cell_read_in_an_unreachable_block_is_promoted_where_it_is_reached() {
     let mut single = read_where_unreachable(|builder, value| {
         let dead = builder.create_block();
         builder.switch_to_block(dead);
-        let read = builder.ins().stack_load(types::I64, value, 0);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
         builder.ins().return_(&[read]);
     });
     let mut cycle = read_where_unreachable(|builder, value| {
         let (first, second) = (builder.create_block(), builder.create_block());
         for (block, next) in [(first, second), (second, first)] {
             builder.switch_to_block(block);
-            let read = builder.ins().stack_load(types::I64, value, 0);
-            builder.ins().stack_store(read, value, 0);
+            let read = builder.ins().stack_load(types::I64, types::I64, value, 0);
+            builder.ins().stack_store(types::I64, read, value, 0);
             builder.ins().jump(next, &[]);
         }
     });
@@ -1026,8 +1051,8 @@ fn reinterpreted(from: Type, to: Type) -> Function {
     function(&[from], &[to], |builder, entry| {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 0);
-        let read = builder.ins().stack_load(to, value, 0);
+        builder.ins().stack_store(types::I64, argument, value, 0);
+        let read = builder.ins().stack_load(types::I64, to, value, 0);
         builder.ins().return_(&[read]);
     })
 }
@@ -1060,19 +1085,19 @@ fn a_cell_read_and_written_at_two_types_crosses_a_back_edge_as_the_float() {
                 builder.create_block(),
             );
             let start = param(builder, entry, 0);
-            builder.ins().stack_store(start, value, 0);
+            builder.ins().stack_store(types::I64, start, value, 0);
             builder.ins().jump(top, &[]);
             builder.switch_to_block(top);
-            let bits = builder.ins().stack_load(types::I64, value, 0);
+            let bits = builder.ins().stack_load(types::I64, types::I64, value, 0);
             let limit = param(builder, entry, 1);
             let more = builder.ins().icmp(IntCC::SignedLessThan, bits, limit);
             builder.ins().brif(more, body, &[], exit, &[]);
             builder.switch_to_block(body);
-            let next = builder.ins().iadd_imm(bits, 1);
-            builder.ins().stack_store(next, value, 0);
+            let next = builder.ins().iadd_imm_s(bits, 1);
+            builder.ins().stack_store(types::I64, next, value, 0);
             builder.ins().jump(top, &[]);
             builder.switch_to_block(exit);
-            let read = builder.ins().stack_load(types::F64, value, 0);
+            let read = builder.ins().stack_load(types::I64, types::F64, value, 0);
             builder.ins().return_(&[read]);
             header = Some(top);
         },
@@ -1092,7 +1117,9 @@ fn a_slot_whose_address_is_returned_is_kept() {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
         builder.ins().return_(&[address]);
     });
     assert_eq!(promoted(&mut function), Promotion::default());
@@ -1106,6 +1133,7 @@ fn imported_callee(builder: &mut FunctionBuilder<'_>) -> cranelift_codegen::ir::
         name: ExternalName::User(name),
         signature,
         colocated: false,
+        patchable: false,
     })
 }
 
@@ -1126,13 +1154,15 @@ fn a_slot_whose_address_any_other_instruction_uses_is_kept() {
         }),
         ("an offset address passed to a call", |builder, address| {
             let callee = imported_callee(builder);
-            let field = builder.ins().iadd_imm(address, 4);
+            let field = builder.ins().iadd_imm_s(address, 4);
             builder.ins().call(callee, &[field]);
         }),
         (
             "a store of the address through itself",
             |builder, address| {
-                builder.ins().store(MemFlags::new(), address, address, 0);
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), address, address, 0);
             },
         ),
         ("a call whose stack map names the slot", |builder, _| {
@@ -1168,32 +1198,36 @@ fn a_slot_accessed_atomically_or_at_another_width_is_kept() {
         ("atomic_load", |builder, address| {
             builder
                 .ins()
-                .atomic_load(types::I64, MemFlags::new(), address);
+                .atomic_load(types::I64, MemFlagsData::new(), address);
         }),
         ("atomic_store", |builder, address| {
             let zero = builder.ins().iconst(types::I64, 0);
-            builder.ins().atomic_store(MemFlags::new(), zero, address);
+            builder
+                .ins()
+                .atomic_store(MemFlagsData::new(), zero, address);
         }),
         ("atomic_rmw", |builder, address| {
             let one = builder.ins().iconst(types::I64, 1);
             let add = cranelift_codegen::ir::AtomicRmwOp::Add;
             builder
                 .ins()
-                .atomic_rmw(types::I64, MemFlags::new(), add, address, one);
+                .atomic_rmw(types::I64, MemFlagsData::new(), add, address, one);
         }),
         ("sload8", |builder, address| {
             builder
                 .ins()
-                .sload8(types::I64, MemFlags::new(), address, 0);
+                .sload8(types::I64, MemFlagsData::new(), address, 0);
         }),
         ("uload16", |builder, address| {
             builder
                 .ins()
-                .uload16(types::I64, MemFlags::new(), address, 0);
+                .uload16(types::I64, MemFlagsData::new(), address, 0);
         }),
         ("istore16", |builder, address| {
             let zero = builder.ins().iconst(types::I64, 0);
-            builder.ins().istore16(MemFlags::new(), zero, address, 0);
+            builder
+                .ins()
+                .istore16(MemFlagsData::new(), zero, address, 0);
         }),
     ];
     for (name, escape) in escapes {
@@ -1214,7 +1248,7 @@ fn a_slot_whose_address_is_stored_through_another_slots_address_is_kept() {
         let holder_address = builder.ins().stack_addr(types::I64, holder, 0);
         builder
             .ins()
-            .store(MemFlags::new(), address, holder_address, 0);
+            .store(MemFlagsData::new(), address, holder_address, 0);
         held = Some(holder);
     });
     let holder = held.unwrap_or_else(|| panic!("built"));
@@ -1255,8 +1289,8 @@ fn a_cell_past_the_start_of_its_slot_is_promoted_alone() {
     let mut function = function(&[types::I64], &[types::I64], |builder, entry| {
         let value = slot(builder, 16);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, value, 8);
-        let read = builder.ins().stack_load(types::I64, value, 8);
+        builder.ins().stack_store(types::I64, argument, value, 8);
+        let read = builder.ins().stack_load(types::I64, types::I64, value, 8);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion { slots: 1, cells: 1 });
@@ -1269,8 +1303,8 @@ fn a_cell_of_a_wide_integer_or_a_vector_is_promoted() {
         let mut function = function(&[ty], &[ty], |builder, entry| {
             let value = slot(builder, size);
             let argument = param(builder, entry, 0);
-            builder.ins().stack_store(argument, value, 0);
-            let read = builder.ins().stack_load(ty, value, 0);
+            builder.ins().stack_store(types::I64, argument, value, 0);
+            let read = builder.ins().stack_load(types::I64, ty, value, 0);
             builder.ins().return_(&[read]);
         });
         assert_eq!(
@@ -1287,8 +1321,8 @@ fn a_cell_of_a_half_or_quad_precision_float_is_kept() {
         let mut function = function(&[ty], &[ty], |builder, entry| {
             let value = slot(builder, size);
             let argument = param(builder, entry, 0);
-            builder.ins().stack_store(argument, value, 0);
-            let read = builder.ins().stack_load(ty, value, 0);
+            builder.ins().stack_store(types::I64, argument, value, 0);
+            let read = builder.ins().stack_load(types::I64, ty, value, 0);
             builder.ins().return_(&[read]);
         });
         let isa = host_isa();
@@ -1321,20 +1355,24 @@ fn many_cells_over_many_blocks(cells: u32, blocks: usize) -> Function {
         let small = slot(builder, 8);
         let large = slot(builder, cells * 8);
         let argument = param(builder, entry, 0);
-        builder.ins().stack_store(argument, small, 0);
+        builder.ins().stack_store(types::I64, argument, small, 0);
         for cell in 0..cells {
             let offset = i32::try_from(cell * 8).unwrap_or_else(|e| panic!("{e}"));
-            builder.ins().stack_store(argument, large, offset);
+            builder
+                .ins()
+                .stack_store(types::I64, argument, large, offset);
         }
         for _ in 0..blocks {
             let next = builder.create_block();
             builder.ins().jump(next, &[]);
             builder.switch_to_block(next);
         }
-        let mut total = builder.ins().stack_load(types::I64, small, 0);
+        let mut total = builder.ins().stack_load(types::I64, types::I64, small, 0);
         for cell in 0..cells {
             let offset = i32::try_from(cell * 8).unwrap_or_else(|e| panic!("{e}"));
-            let read = builder.ins().stack_load(types::I64, large, offset);
+            let read = builder
+                .ins()
+                .stack_load(types::I64, types::I64, large, offset);
             total = builder.ins().bxor(total, read);
         }
         builder.ins().return_(&[total]);
@@ -1366,11 +1404,13 @@ fn address_through_headers(nested: bool) -> Function {
         );
         let address = builder.ins().stack_addr(types::I64, counter, 0);
         let start = param(builder, entry, 0);
-        builder.ins().store(MemFlags::new(), start, address, 0);
+        builder.ins().store(MemFlagsData::new(), start, address, 0);
         builder.ins().jump(top, &[address.into()]);
         let carried = builder.append_block_param(top, types::I64);
         builder.switch_to_block(top);
-        let count = builder.ins().load(types::I64, MemFlags::new(), carried, 0);
+        let count = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), carried, 0);
         let ten = builder.ins().iconst(types::I64, 10);
         let more = builder.ins().icmp(IntCC::SignedLessThan, count, ten);
         builder.ins().brif(more, body, &[], exit, &[]);
@@ -1383,11 +1423,15 @@ fn address_through_headers(nested: bool) -> Function {
             builder.switch_to_block(inner);
             latch_address = again;
         }
-        let next = builder.ins().iadd_imm(count, 1);
-        builder.ins().store(MemFlags::new(), next, latch_address, 0);
+        let next = builder.ins().iadd_imm_s(count, 1);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), next, latch_address, 0);
         builder.ins().jump(top, &[latch_address.into()]);
         builder.switch_to_block(exit);
-        let last = builder.ins().load(types::I64, MemFlags::new(), carried, 0);
+        let last = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), carried, 0);
         builder.ins().return_(&[last]);
     })
 }
@@ -1416,7 +1460,9 @@ fn a_parameter_joining_the_addresses_of_two_slots_keeps_both() {
         let mut addresses = Vec::new();
         for value in [first, second] {
             let address = builder.ins().stack_addr(types::I64, value, 0);
-            builder.ins().store(MemFlags::new(), argument, address, 0);
+            builder
+                .ins()
+                .store(MemFlagsData::new(), argument, address, 0);
             addresses.push(address);
         }
         builder.ins().brif(
@@ -1427,7 +1473,9 @@ fn a_parameter_joining_the_addresses_of_two_slots_keeps_both() {
             &[addresses[1].into()],
         );
         builder.switch_to_block(join);
-        let read = builder.ins().load(types::I64, MemFlags::new(), joined, 0);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), joined, 0);
         builder.ins().return_(&[read]);
     });
     assert_eq!(promoted(&mut function), Promotion::default(), "{function}");
@@ -1447,7 +1495,9 @@ fn an_address_handed_through_a_shared_jump_table_is_forwarded_once() {
         let tag = builder.append_block_param(join, types::I64);
         let argument = param(builder, entry, 0);
         let address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
         let seven = builder.ins().iconst(types::I64, 7);
         let selector = builder.ins().ireduce(types::I32, argument);
         builder.ins().brif(argument, left, &[], right, &[]);
@@ -1460,7 +1510,9 @@ fn an_address_handed_through_a_shared_jump_table_is_forwarded_once() {
             builder.ins().br_table(selector, table);
         }
         builder.switch_to_block(join);
-        let read = builder.ins().load(types::I64, MemFlags::new(), carried, 0);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), carried, 0);
         let sum = builder.ins().iadd(read, tag);
         builder.ins().return_(&[sum]);
     });
@@ -1482,28 +1534,32 @@ fn an_address_derived_from_a_forwarded_parameter_is_forwarded_too() {
         );
         let base = builder.ins().stack_addr(types::I64, value, 0);
         let start = param(builder, entry, 0);
-        builder.ins().store(MemFlags::new(), start, base, 8);
+        builder.ins().store(MemFlagsData::new(), start, base, 8);
         builder.ins().jump(outer, &[base.into()]);
         let carried = builder.append_block_param(outer, types::I64);
         builder.switch_to_block(outer);
-        let total = builder.ins().load(types::I64, MemFlags::new(), carried, 8);
+        let total = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), carried, 8);
         let limit = builder.ins().iconst(types::I64, 20);
         let more = builder.ins().icmp(IntCC::SignedLessThan, total, limit);
         builder.ins().brif(more, inner_start, &[], exit, &[]);
         builder.switch_to_block(inner_start);
-        let field = builder.ins().iadd_imm(carried, 8);
+        let field = builder.ins().iadd_imm_s(carried, 8);
         builder.ins().jump(inner, &[field.into()]);
         let inner_field = builder.append_block_param(inner, types::I64);
         builder.switch_to_block(inner);
         let count = builder
             .ins()
-            .load(types::I64, MemFlags::new(), inner_field, 0);
+            .load(types::I64, MemFlagsData::new(), inner_field, 0);
         let ten = builder.ins().iconst(types::I64, 10);
         let again = builder.ins().icmp(IntCC::SignedLessThan, count, ten);
         builder.ins().brif(again, latch, &[], outer_latch, &[]);
         builder.switch_to_block(latch);
-        let next = builder.ins().iadd_imm(count, 1);
-        builder.ins().store(MemFlags::new(), next, inner_field, 0);
+        let next = builder.ins().iadd_imm_s(count, 1);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), next, inner_field, 0);
         builder.ins().jump(inner, &[inner_field.into()]);
         builder.switch_to_block(outer_latch);
         builder.ins().jump(outer, &[carried.into()]);
@@ -1526,15 +1582,19 @@ fn address_down_a_chain(depth: usize) -> Function {
         let value = slot(builder, 8);
         let argument = param(builder, entry, 0);
         let mut address = builder.ins().stack_addr(types::I64, value, 0);
-        builder.ins().store(MemFlags::new(), argument, address, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), argument, address, 0);
         for _ in 0..depth {
             let next = builder.create_block();
             let parameter = builder.append_block_param(next, types::I64);
             builder.ins().jump(next, &[address.into()]);
             builder.switch_to_block(next);
-            address = builder.ins().iadd_imm(parameter, 0);
+            address = builder.ins().iadd_imm_s(parameter, 0);
         }
-        let read = builder.ins().load(types::I64, MemFlags::new(), address, 0);
+        let read = builder
+            .ins()
+            .load(types::I64, MemFlagsData::new(), address, 0);
         builder.ins().return_(&[read]);
     })
 }

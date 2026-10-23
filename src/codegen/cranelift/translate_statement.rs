@@ -23,7 +23,7 @@ use crate::mir::{
 };
 use crate::runtime_fns::{is_copy_on_write, rt};
 use cranelift_codegen::ir::{
-    condcodes::IntCC, Block, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind,
+    condcodes::IntCC, Block, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind,
     TrapCode,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
@@ -242,18 +242,22 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
 
         builder.switch_to_block(rc_block);
-        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+        let header_ptr = builder.ins().iadd_imm_s(ptr, -(ptr_size as i64));
+        let rc = builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), header_ptr, 0);
 
-        let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
+        let is_immortal = builder.ins().icmp_imm_s(IntCC::SignedLessThan, rc, 0);
         let then_block = builder.create_block();
         builder
             .ins()
             .brif(is_immortal, merge_block, &[], then_block, &[]);
 
         builder.switch_to_block(then_block);
-        let new_rc = builder.ins().iadd_imm(rc, 1);
-        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+        let new_rc = builder.ins().iadd_imm_s(rc, 1);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), new_rc, header_ptr, 0);
         Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_DUP)?;
         builder.ins().jump(merge_block, &[]);
 
@@ -307,15 +311,15 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(rc_block);
         Self::emit_release_check(builder, ctx, ptr)?;
-        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size));
+        let header_ptr = builder.ins().iadd_imm_s(ptr, -(ptr_size));
         let rc = builder.ins().load(
             ptr_type,
-            cranelift_codegen::ir::MemFlags::new(),
+            cranelift_codegen::ir::MemFlagsData::new(),
             header_ptr,
             0,
         );
 
-        let is_immortal = builder.ins().icmp_imm(
+        let is_immortal = builder.ins().icmp_imm_s(
             cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
             rc,
             0,
@@ -890,7 +894,7 @@ impl<'a> FunctionTranslator<'a> {
             let ptr = builder.use_var(ptr_var);
             if let Some(&val_var) = locals.get(&param_local) {
                 let val = builder.use_var(val_var);
-                builder.ins().store(MemFlags::new(), val, ptr, 0);
+                builder.ins().store(MemFlagsData::new(), val, ptr, 0);
             }
         }
         if let Some(&var) = locals.get(&Local(0)) {
@@ -1043,7 +1047,7 @@ impl<'a> FunctionTranslator<'a> {
         for (addr, local) in out_arg_slots {
             if let Some(&var) = locals.get(local) {
                 let local_ty = translate_type(type_ctx.local_types[local.0], ptr_type);
-                let loaded = builder.ins().load(local_ty, MemFlags::new(), *addr, 0);
+                let loaded = builder.ins().load(local_ty, MemFlagsData::new(), *addr, 0);
                 builder.def_var(var, loaded);
             }
         }
@@ -1158,7 +1162,7 @@ impl<'a> FunctionTranslator<'a> {
             bytes.trailing_zeros().min(4) as u8,
         ));
         let addr = builder.ins().stack_addr(ptr_type, slot, 0);
-        builder.ins().store(MemFlags::new(), val, addr, 0);
+        builder.ins().store(MemFlagsData::new(), val, addr, 0);
         addr
     }
 
@@ -1457,7 +1461,7 @@ impl<'a> FunctionTranslator<'a> {
             builder.switch_to_block(unobserved_block);
             builder.seal_block(unobserved_block);
         }
-        let header = MemFlags::trusted();
+        let header = MemFlagsData::trusted();
         let len = builder
             .ins()
             .load(ptr_type, header, push.list, HEADER_LEN * word);
@@ -1470,7 +1474,7 @@ impl<'a> FunctionTranslator<'a> {
         let has_room = builder.ins().icmp(IntCC::UnsignedLessThan, len, capacity);
         let fills_slot = builder
             .ins()
-            .icmp_imm(IntCC::Equal, slot, push.width.bytes() as i64);
+            .icmp_imm_s(IntCC::Equal, slot, push.width.bytes() as i64);
         let fast = builder.ins().band(has_room, fills_slot);
         builder
             .ins()
@@ -1481,13 +1485,15 @@ impl<'a> FunctionTranslator<'a> {
         let data = builder
             .ins()
             .load(ptr_type, header, push.list, HEADER_DATA * word);
-        let offset = builder.ins().imul_imm(len, push.width.bytes() as i64);
+        let offset = builder.ins().imul_imm_s(len, push.width.bytes() as i64);
         let dest = builder.ins().iadd(data, offset);
         let element = builder
             .ins()
-            .load(push.width, MemFlags::new(), push.element, 0);
-        builder.ins().store(MemFlags::trusted(), element, dest, 0);
-        let grown = builder.ins().iadd_imm(len, 1);
+            .load(push.width, MemFlagsData::new(), push.element, 0);
+        builder
+            .ins()
+            .store(MemFlagsData::trusted(), element, dest, 0);
+        let grown = builder.ins().iadd_imm_s(len, 1);
         builder
             .ins()
             .store(header, grown, push.list, HEADER_LEN * word);
@@ -1522,8 +1528,8 @@ impl<'a> FunctionTranslator<'a> {
         let header = ptr_type.bytes() as i32;
         let count = builder
             .ins()
-            .load(ptr_type, MemFlags::trusted(), ptr, -header);
-        let shared = builder.ins().icmp_imm(IntCC::NotEqual, count, 1);
+            .load(ptr_type, MemFlagsData::trusted(), ptr, -header);
+        let shared = builder.ins().icmp_imm_s(IntCC::NotEqual, count, 1);
         if answer_type == cranelift_codegen::ir::types::I8 {
             shared
         } else {
@@ -1566,7 +1572,7 @@ impl<'a> FunctionTranslator<'a> {
         let closure_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx, None)?;
         let fn_ptr = builder
             .ins()
-            .load(ptr_type, MemFlags::new(), closure_ptr, 0);
+            .load(ptr_type, MemFlagsData::new(), closure_ptr, 0);
 
         let call_conv = builder.func.signature.call_conv;
         let full_sig = call.signature(&[Passing::Word(ptr_type)], call_conv, ptr_type);
@@ -1798,11 +1804,11 @@ impl<'a> FunctionTranslator<'a> {
     ) -> cranelift_codegen::ir::Value {
         let vtable_ptr = builder
             .ins()
-            .load(ptr_type, MemFlags::new(), receiver_ptr, 0);
+            .load(ptr_type, MemFlagsData::new(), receiver_ptr, 0);
         let slot_offset = (vtable_slot as i32) * ptr_type.bytes() as i32;
         builder
             .ins()
-            .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset)
+            .load(ptr_type, MemFlagsData::new(), vtable_ptr, slot_offset)
     }
 
     /// Write the result a virtual call returns in a register back into the

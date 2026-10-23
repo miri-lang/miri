@@ -1163,13 +1163,22 @@ fn main()
     println(f"{mark(100)}")
 "#;
 
-/// Builds `STRIDED_WRITES` with `flags`, returning the executable, the blocks
-/// of `miri.mark` that call `miri_rt_list_cow`, and for each the text of every
-/// block that branches or jumps to it.
-fn copy_on_write_callers(
-    flags: &[&str],
-    out_dir: &std::path::Path,
-) -> (std::path::PathBuf, Vec<Vec<String>>, String) {
+/// What a build of `STRIDED_WRITES` shows about how `miri.mark` reaches the
+/// copy-on-write entry point.
+struct CopyOnWriteCallers {
+    /// The executable.
+    out: std::path::PathBuf,
+    /// For each block of `miri.mark` calling `miri_rt_list_cow`, the text of
+    /// every block that branches or jumps to it.
+    callers: Vec<Vec<String>>,
+    /// The values holding the address of the runtime's tracking state.
+    tracking: Vec<String>,
+    /// The whole CLIF listing.
+    listing: String,
+}
+
+/// Builds `STRIDED_WRITES` with `flags` into `out_dir`.
+fn copy_on_write_callers(flags: &[&str], out_dir: &std::path::Path) -> CopyOnWriteCallers {
     let source = create_test_file(STRIDED_WRITES);
     let out = out_dir.join("strided");
     miri_cmd()
@@ -1191,7 +1200,15 @@ fn copy_on_write_callers(
             .collect::<Vec<_>>()
     };
     let cow = handle_of("miri_rt_list_cow");
-    let tracking = handle_of("miri_rt_tracking_state");
+    // The tracking state's address, which an optimized build may compute
+    // once outside the loop, in a block other than the one testing it.
+    let symbols = handle_of("miri_rt_tracking_state");
+    let tracking: Vec<String> = (blocks.iter())
+        .flat_map(|(_, body)| body.lines())
+        .filter_map(|line| line.split_once(" = symbol_value."))
+        .filter(|(_, rest)| symbols.iter().any(|gv| rest.split(' ').nth(1) == Some(gv)))
+        .map(|(value, _)| value.to_string())
+        .collect();
     let entered_from = |label: &str| -> Vec<String> {
         blocks
             .iter()
@@ -1201,13 +1218,7 @@ fn copy_on_write_callers(
                         && l.split([' ', ',', '(']).any(|word| word == label)
                 })
             })
-            .map(|(_, body)| {
-                // Name the tracking state so a caller can tell its test apart
-                // from the count compare.
-                tracking.iter().fold(body.clone(), |text, gv| {
-                    text.replace(gv.as_str(), "TRACKING")
-                })
-            })
+            .map(|(_, body)| body.clone())
             .collect()
     };
     let callers = blocks
@@ -1215,7 +1226,52 @@ fn copy_on_write_callers(
         .filter(|(_, body)| cow.iter().any(|f| body.contains(&format!("call {f}("))))
         .map(|(label, _)| entered_from(label))
         .collect();
-    (out, callers, listing)
+    CopyOnWriteCallers {
+        out,
+        callers,
+        tracking,
+        listing,
+    }
+}
+
+/// The value `line` defines, when it is `<value> = <opcode>...` and the
+/// opcode starts with `opcode`.
+fn defined_by<'l>(line: &'l str, opcode: &str) -> Option<&'l str> {
+    let (value, rest) = line.split_once(" = ")?;
+    rest.starts_with(opcode).then_some(value)
+}
+
+/// Whether `block` tests the runtime's tracking state: loads through one of
+/// the `addresses` holding it and branches on the loaded value, directly or
+/// through a comparison of it. A block that only computes the address does
+/// not test it.
+fn tests_tracking(block: &str, addresses: &[String]) -> bool {
+    let words = |line: &str| -> Vec<String> {
+        line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let mut tested: Vec<String> = block
+        .lines()
+        .filter(|line| words(line).iter().any(|word| addresses.contains(word)))
+        .filter_map(|line| defined_by(line, "load."))
+        .map(str::to_string)
+        .collect();
+    for line in block.lines() {
+        let Some(compared) = defined_by(line, "icmp") else {
+            continue;
+        };
+        if words(line).iter().any(|word| tested.contains(word)) {
+            tested.push(compared.to_string());
+        }
+    }
+    block.lines().any(|line| {
+        line.strip_prefix("brif")
+            .and_then(|rest| rest.split_once(' '))
+            .and_then(|(_, operands)| operands.split([',', ' ']).next())
+            .is_some_and(|condition| tested.iter().any(|value| value == condition))
+    })
 }
 
 /// Whether `block` compares the count in the word before a payload with 1.
@@ -1240,7 +1296,12 @@ fn compares_the_count(block: &str) -> bool {
 #[test]
 fn test_a_list_write_reaches_the_copy_on_write_runtime_only_past_a_count_compare() {
     let out_dir = tempfile::tempdir().unwrap();
-    let (out, callers, listing) = copy_on_write_callers(&["--release"], out_dir.path());
+    let CopyOnWriteCallers {
+        out,
+        callers,
+        listing,
+        ..
+    } = copy_on_write_callers(&["--release"], out_dir.path());
     assert!(
         !callers.is_empty(),
         "the writes lost their copy-on-write call:\n{listing}"
@@ -1262,17 +1323,28 @@ fn test_a_list_write_reaches_the_copy_on_write_runtime_only_past_a_count_compare
 #[test]
 fn test_a_checked_build_reaches_copy_on_write_while_tracking() {
     let out_dir = tempfile::tempdir().unwrap();
-    let (out, callers, listing) = copy_on_write_callers(&["--opt-level", "3"], out_dir.path());
+    let CopyOnWriteCallers {
+        out,
+        callers,
+        tracking,
+        listing,
+    } = copy_on_write_callers(&["--opt-level", "3"], out_dir.path());
+    assert!(
+        !tracking.is_empty(),
+        "no value holds the tracking state's address:\n{listing}"
+    );
     assert!(
         !callers.is_empty(),
         "the writes lost their copy-on-write call:\n{listing}"
     );
     for entered_from in &callers {
         assert!(
-            entered_from.iter().any(|block| block.contains("TRACKING"))
+            entered_from
+                .iter()
+                .any(|block| tests_tracking(block, &tracking))
                 && entered_from
                     .iter()
-                    .all(|block| block.contains("TRACKING") || compares_the_count(block)),
+                    .all(|block| tests_tracking(block, &tracking) || compares_the_count(block)),
             "a copy-on-write call is reached past neither test:\n{listing}"
         );
     }

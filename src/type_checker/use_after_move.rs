@@ -1110,10 +1110,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 return Some(current);
             }
             match self.type_definitions.get(current) {
-                Some(TypeDefinition::Class(cd)) => match &cd.base_class {
-                    Some(base) => current = base.as_str(),
-                    None => return None,
-                },
+                Some(TypeDefinition::Class(cd)) => current = cd.base_class.as_deref()?,
                 None
                 | Some(TypeDefinition::Struct(_))
                 | Some(TypeDefinition::Enum(_))

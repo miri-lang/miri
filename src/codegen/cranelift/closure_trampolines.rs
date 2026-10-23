@@ -31,8 +31,8 @@ use crate::mir::symbol::{Symbol, TrampolineArgument, TrampolineShape, Trampoline
 use crate::mir::{Body, Operand, TerminatorKind};
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, UserFuncName};
-use cranelift_codegen::isa::{CallConv, TargetIsa};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature, UserFuncName};
+use cranelift_codegen::isa::{CallConv, TargetFrontendConfig, TargetIsa};
 use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
@@ -211,7 +211,8 @@ fn define_trampoline(
         UserFuncName::user(0, func_id.as_u32()),
         sig,
     );
-    emit_trampoline_body(ctx, builder_ctx, &shape, target)?;
+    let frontend = module.isa().frontend_config();
+    emit_trampoline_body(ctx, builder_ctx, &shape, target, frontend)?;
     crate::codegen::cranelift::define_function(module, func_id, ctx)
         .map_err(|e| CodegenError::define_function(name, e.to_string()))?;
     ctx.clear();
@@ -225,6 +226,7 @@ fn emit_trampoline_body(
     builder_ctx: &mut FunctionBuilderContext,
     shape: &TrampolineShape,
     target: Target,
+    frontend: TargetFrontendConfig,
 ) -> Result<(), CodegenError> {
     let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
     let entry = builder.create_block();
@@ -239,14 +241,14 @@ fn emit_trampoline_body(
     };
     let code = builder
         .ins()
-        .load(target.ptr_type, MemFlags::trusted(), closure, 0);
+        .load(target.ptr_type, MemFlagsData::trusted(), closure, 0);
     let mut call_args = vec![closure];
     for (argument, &slot) in shape.arguments.iter().zip(rest) {
         call_args.push(match argument {
             TrampolineArgument::Word(word) => {
                 builder
                     .ins()
-                    .load(word_type(*word, target), MemFlags::new(), slot, 0)
+                    .load(word_type(*word, target), MemFlagsData::new(), slot, 0)
             }
             TrampolineArgument::Address => slot,
         });
@@ -257,9 +259,9 @@ fn emit_trampoline_body(
         let answer = builder.inst_results(call).first().copied().ok_or_else(|| {
             CodegenError::Internal("a closure trampoline's call answered nothing".to_string())
         })?;
-        builder.ins().store(MemFlags::new(), answer, result, 0);
+        builder.ins().store(MemFlagsData::new(), answer, result, 0);
     }
     builder.ins().return_(&[]);
-    builder.finalize();
+    builder.finalize(frontend);
     Ok(())
 }

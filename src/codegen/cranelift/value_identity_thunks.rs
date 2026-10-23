@@ -21,7 +21,7 @@ use crate::error::CodegenError;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, Value};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature, Value};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
@@ -87,7 +87,7 @@ fn define_thunk(
     let params = builder.block_params(entry).to_vec();
     let answer = body(&mut builder, &params);
     builder.ins().return_(&[answer]);
-    builder.finalize();
+    builder.finalize(isa.frontend_config());
     crate::codegen::cranelift::define_function(module, func_id, ctx)
         .map_err(|e| CodegenError::define_function(name.to_string(), e.to_string()))?;
     ctx.clear();
@@ -157,7 +157,7 @@ fn mix_optional(
     };
     let presence = builder.ins().load(
         cl_types::I8,
-        MemFlags::new(),
+        MemFlagsData::new(),
         address,
         (offset + tag.offset) as i32,
     );
@@ -170,7 +170,7 @@ fn mix_optional(
 /// `hash` with `word` mixed into it.
 fn mix_word(builder: &mut FunctionBuilder, hash: Value, word: Value) -> Value {
     let mixed = builder.ins().bxor(hash, word);
-    builder.ins().imul_imm(mixed, HASH_MULTIPLIER)
+    builder.ins().imul_imm_s(mixed, HASH_MULTIPLIER)
 }
 
 /// The scalar at `offset` from `address`, as a 64-bit word equal for every
@@ -184,7 +184,7 @@ fn scalar_word(
     let ty = scalar_type(scalar);
     let value = builder
         .ins()
-        .load(ty, MemFlags::new(), address, offset as i32);
+        .load(ty, MemFlagsData::new(), address, offset as i32);
     match scalar {
         ScalarKind::Float(_) => {
             let wide = if ty == cl_types::F64 {
@@ -198,7 +198,7 @@ fn scalar_word(
             let number = builder.ins().fadd(wide, zero);
             builder
                 .ins()
-                .bitcast(cl_types::I64, MemFlags::new(), number)
+                .bitcast(cl_types::I64, MemFlagsData::new(), number)
         }
         ScalarKind::Signed(16) | ScalarKind::Unsigned(16) => {
             builder.ins().ireduce(cl_types::I64, value)

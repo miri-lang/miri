@@ -8,6 +8,7 @@
 
 pub(crate) mod closure;
 mod closure_trampolines;
+mod code_map;
 pub mod collection_header;
 mod element_method_thunks;
 mod gpu_launch;
@@ -539,6 +540,9 @@ fn isa_flags(options: &CraneliftOptions) -> Result<settings::Flags, String> {
             "preserve_frame_pointers",
             flag_value(options.preserve_frame_pointers),
         ),
+        // Where each machine block starts, which the code map reads; it
+        // leaves the machine code unchanged.
+        ("machine_code_cfg_info", flag_value(options.code_map)),
     ];
     for (name, value) in requested {
         builder.set(name, value).map_err(|e| e.to_string())?;
@@ -798,11 +802,12 @@ impl CraneliftBackend {
             self.target().operating_system,
             OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_)
         ) {
-            // Platform 1 = macOS. Version 0x000C0000 = 12.0.0. SDK 0 = none.
+            // macOS 12.0.0 at the least; SDK 0 = none.
+            use cranelift_object::object::macho::{Version, PLATFORM_MACOS};
             let mut info = cranelift_object::object::write::MachOBuildVersion::default();
-            info.platform = 1;
-            info.minos = 0x000C0000;
-            info.sdk = 0;
+            info.platform = PLATFORM_MACOS;
+            info.minos = Version::new(12, 0, 0);
+            info.sdk = Version(0);
             product.object.set_macho_build_version(info);
         }
 
@@ -950,7 +955,8 @@ impl CraneliftBackend {
 
     /// Where the code `ctx` holds for the function `name` came from: every
     /// run Cranelift recorded a location for, read off `source_points`, with
-    /// the calls it was inlined through.
+    /// the calls it was inlined through, and the unlocated code heading a
+    /// machine block, charged as the block's first run.
     fn function_code_map(
         name: &str,
         ctx: &Context,
@@ -959,12 +965,18 @@ impl CraneliftBackend {
         let compiled = ctx.compiled_code().ok_or_else(|| {
             CodegenError::define_function(name, "no compiled code to map to source")
         })?;
-        let ranges = compiled
-            .buffer
-            .get_srclocs_sorted()
+        let runs = compiled.buffer.get_srclocs_sorted();
+        // A compiled function's locations are absolute: compiling applies the
+        // function's base location to every one.
+        debug_assert!(
+            runs.iter().all(|run| run.loc.is_abs()),
+            "a compiled function of {name} keeps a relative source location"
+        );
+        let ranges = runs
             .iter()
             .filter_map(|run| {
-                let point = source_points.point_at(run.loc)?;
+                let loc = run.loc.is_abs().then(|| run.loc.as_abs())?;
+                let point = source_points.point_at(loc)?;
                 Some(CodeRange {
                     start: run.start,
                     end: run.end,
@@ -974,10 +986,14 @@ impl CraneliftBackend {
                 })
             })
             .collect();
+        let (block_starts, _) = compiled.get_code_bb_layout();
+        let block_starts: Vec<u32> = (block_starts.into_iter())
+            .filter_map(|start| u32::try_from(start).ok())
+            .collect();
         Ok(FunctionCodeMap {
             symbol: name.to_string(),
             code_size: compiled.code_info().total_size,
-            ranges,
+            ranges: code_map::charge_block_heads(ranges, &block_starts),
         })
     }
 

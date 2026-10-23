@@ -9,9 +9,8 @@
 //! translated in, so the same program always makes the same decisions. Each
 //! function has its candidate callees inlined into it, is weighed as a
 //! candidate itself, and is then handed back to be defined, so its IR is
-//! dropped as soon as nothing needs it. A candidate is held, legalized as
-//! Cranelift's inliner requires, until the last function that refers to it
-//! has been visited.
+//! dropped as soon as nothing needs it. A candidate is held until the last
+//! function that refers to it has been visited.
 //!
 //! What the copies need repaired afterwards is in [`repair`]. Once a
 //! function's callees are inlined into it, and before it is weighed as a
@@ -34,11 +33,10 @@ use cranelift_codegen::Context;
 use repair::{CalleeSource, CopiedCall, CopiedSymbol};
 use std::borrow::Cow;
 
-/// The most legalized instructions a callee called from several places may
-/// have.
+/// The most instructions a callee called from several places may have.
 const SMALL_CALLEE_SIZE: usize = 48;
 
-/// The most legalized instructions a callee called from one place may have.
+/// The most instructions a callee called from one place may have.
 /// Inlining it makes one copy of its body for the one call, beside the body
 /// its own definition still emits.
 const SINGLE_CALL_SITE_CALLEE_SIZE: usize = 120;
@@ -96,7 +94,7 @@ struct Inliner {
     candidates: Vec<Option<Candidate>>,
     /// How many of each function's callers are still to be visited.
     callers_left: Vec<usize>,
-    /// The one context every inlining and legalization runs in.
+    /// The one context every inlining runs in.
     context: Context,
 }
 
@@ -121,7 +119,7 @@ impl Inliner {
         isa: &dyn TargetIsa,
     ) -> Result<(), CodegenError> {
         let call_sites = self.graph.call_sites(position);
-        self.candidates[position] = Candidate::of(&mut self.context, translated, call_sites, isa)?;
+        self.candidates[position] = Candidate::of(translated, call_sites, isa)?;
         Ok(())
     }
 
@@ -180,8 +178,8 @@ impl Inliner {
     }
 }
 
-/// A function its callers may inline: its legalized body, what inlining it
-/// costs, the symbols its copies need re-declared, and its source points.
+/// A function its callers may inline: its body, what inlining it costs,
+/// the symbols its copies need re-declared, and its source points.
 struct Candidate {
     function: Function,
     size: usize,
@@ -192,40 +190,29 @@ struct Candidate {
 
 impl Candidate {
     /// `translated` as a candidate, when it is small enough for its
-    /// `call_sites`, legalizes to a valid body holding no loop and no
-    /// `global_value` instruction, and has stack slots of a size that can be
-    /// counted.
+    /// `call_sites`, is a valid body holding no loop, and has stack slots of
+    /// a size that can be counted.
     fn of(
-        context: &mut Context,
         translated: &TranslatedFunction<'_>,
         call_sites: usize,
         isa: &dyn TargetIsa,
     ) -> Result<Option<Self>, CodegenError> {
-        let limit = size_limit(call_sites);
-        if call_sites == 0 || instruction_count(&translated.function) > limit {
-            return Ok(None);
-        }
-        context.clear();
-        context.func = translated.function.clone();
-        context
-            .legalize(isa)
-            .map_err(|e| CodegenError::inlining(translated.name, e.to_string()))?;
-        let function = std::mem::replace(&mut context.func, Function::new());
-        let size = instruction_count(&function);
+        let function = &translated.function;
+        let size = instruction_count(function);
         // An unverifiable body is not inlined, and its own definition is
         // verified again, so the fault is reported there with its name.
-        let usable = size <= limit
-            && !has_back_edge(&function)
-            && !has_global_value_instruction(&function)
-            && cranelift_codegen::verify_function(&function, isa).is_ok();
-        let Some(stack) = usable.then(|| stack_size(&function)).flatten() else {
+        let usable = call_sites != 0
+            && size <= size_limit(call_sites)
+            && !has_back_edge(function)
+            && cranelift_codegen::verify_function(function, isa).is_ok();
+        let Some(stack) = usable.then(|| stack_size(function)).flatten() else {
             return Ok(None);
         };
-        let symbols = repair::copied_symbols(&function)
+        let symbols = repair::copied_symbols(function)
             .map_err(|e| CodegenError::inlining(translated.name, e))?;
         Ok(Some(Self {
-            source: CalleeSource::of(&function, &translated.source_points),
-            function,
+            source: CalleeSource::of(function, &translated.source_points),
+            function: function.clone(),
             size,
             stack,
             symbols,
@@ -233,8 +220,7 @@ impl Candidate {
     }
 }
 
-/// The most legalized instructions a callee with `call_sites` calls may
-/// have.
+/// The most instructions a callee with `call_sites` calls may have.
 fn size_limit(call_sites: usize) -> usize {
     if call_sites == 1 {
         SINGLE_CALL_SITE_CALLEE_SIZE
@@ -352,18 +338,6 @@ fn instruction_count(function: &Function) -> usize {
     (function.layout.blocks())
         .map(|block| function.layout.block_insts(block).count())
         .sum()
-}
-
-/// Whether `function` still holds a `global_value` instruction, which
-/// Cranelift refuses to inline. Legalization lowers every one Miri emits,
-/// so one left over is a body this pass does not understand.
-fn has_global_value_instruction(function: &Function) -> bool {
-    (function.layout.blocks()).any(|block| {
-        function
-            .layout
-            .block_insts(block)
-            .any(|inst| function.dfg.insts[inst].opcode() == Opcode::GlobalValue)
-    })
 }
 
 /// Whether some branch of `function` jumps back to a block it is reached

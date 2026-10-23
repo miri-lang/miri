@@ -17,7 +17,7 @@ use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
@@ -165,7 +165,7 @@ impl<'a> FunctionTranslator<'a> {
             if is_slot_counted(&cap_ty.kind, body.layout_scope()) {
                 let cap_ptr = builder
                     .ins()
-                    .load(ptr_type, MemFlags::new(), env_ptr, offset);
+                    .load(ptr_type, MemFlagsData::new(), env_ptr, offset);
                 Self::emit_decref_value(
                     &mut builder,
                     &mut module_ctx,
@@ -178,7 +178,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.ins().return_(&[]);
         builder.seal_all_blocks();
-        builder.finalize();
+        builder.finalize(module.isa().frontend_config());
         Ok(())
     }
 }

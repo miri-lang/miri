@@ -24,7 +24,7 @@ use crate::mir::symbol::{KernelDatum, Symbol};
 use crate::mir::{Body, ExecutionModel, GpuLaunchArgs, Local, Operand, Place};
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
-    condcodes::IntCC, types as cl_types, AbiParam, InstBuilder, MemFlags, StackSlotData,
+    condcodes::IntCC, types as cl_types, AbiParam, InstBuilder, MemFlagsData, StackSlotData,
     StackSlotKind, TrapCode, Value,
 };
 use cranelift_frontend::FunctionBuilder;
@@ -277,12 +277,12 @@ pub(crate) fn translate(
         };
         builder
             .ins()
-            .store(MemFlags::new(), value, slots.desc_addr, offset);
+            .store(MemFlagsData::new(), value, slots.desc_addr, offset);
     }
 
     let present_i64 = builder.ins().iconst(cl_types::I64, present as i64);
     builder.ins().store(
-        MemFlags::new(),
+        MemFlagsData::new(),
         present_i64,
         slots.desc_addr,
         desc_layout::UNIFORM_BOUND_PRESENT,
@@ -360,7 +360,7 @@ fn store_byte_array(builder: &mut FunctionBuilder, ptr_ty: cl_types::Type, bytes
         let value = builder.ins().iconst(cl_types::I8, i64::from(byte));
         builder
             .ins()
-            .store(MemFlags::new(), value, addr, offset as i32);
+            .store(MemFlagsData::new(), value, addr, offset as i32);
     }
     addr
 }
@@ -469,9 +469,12 @@ fn populate_handle_ids(
             .flatten()
             .map_or(0, |handle| handle.0);
         let id_value = builder.ins().iconst(cl_types::I64, id as i64);
-        builder
-            .ins()
-            .store(MemFlags::new(), id_value, handle_ids_addr, (i as i32) * 8);
+        builder.ins().store(
+            MemFlagsData::new(),
+            id_value,
+            handle_ids_addr,
+            (i as i32) * 8,
+        );
     }
 }
 
@@ -490,32 +493,35 @@ fn populate_capture_arrays(
         let arr_ptr = read_operand_value(builder, arg, locals, type_ctx)?;
         let data_ptr = builder.ins().load(
             ptr_ty,
-            MemFlags::new(),
+            MemFlagsData::new(),
             arr_ptr,
             miri_array_layout::DATA_OFFSET,
         );
         let elem_count = builder.ins().load(
             cl_types::I64,
-            MemFlags::new(),
+            MemFlagsData::new(),
             arr_ptr,
             miri_array_layout::ELEM_COUNT_OFFSET,
         );
         let elem_size = builder.ins().load(
             cl_types::I64,
-            MemFlags::new(),
+            MemFlagsData::new(),
             arr_ptr,
             miri_array_layout::ELEM_SIZE_OFFSET,
         );
         let byte_len = builder.ins().imul(elem_count, elem_size);
         builder.ins().store(
-            MemFlags::new(),
+            MemFlagsData::new(),
             data_ptr,
             data_ptrs_addr,
             (i as i32) * ptr_size,
         );
-        builder
-            .ins()
-            .store(MemFlags::new(), byte_len, byte_lens_addr, (i as i32) * 8);
+        builder.ins().store(
+            MemFlagsData::new(),
+            byte_len,
+            byte_lens_addr,
+            (i as i32) * 8,
+        );
     }
     Ok(())
 }
@@ -562,7 +568,7 @@ fn populate_scalar_inputs(
         let capture = read_scalar_capture(builder, op, index, locals, type_ctx)?;
         let lane = convert_scalar_to_lane(builder, module, capture)?;
         let offset = (index as u32 * SCALAR_LANE_BYTES) as i32;
-        builder.ins().store(MemFlags::new(), lane, addr, offset);
+        builder.ins().store(MemFlagsData::new(), lane, addr, offset);
     }
 
     Ok((addr, builder.ins().iconst(cl_types::I64, byte_size as i64)))
@@ -744,7 +750,7 @@ fn populate_descriptor(
     let mut store = |value: Value, offset: i32| {
         builder
             .ins()
-            .store(MemFlags::new(), value, desc_addr, offset);
+            .store(MemFlagsData::new(), value, desc_addr, offset);
     };
     store(wgsl_ptr, desc_layout::WGSL_PTR);
     store(wgsl_len, desc_layout::WGSL_LEN);
@@ -878,9 +884,15 @@ fn load_dim3_components(
     let (off_x, ty_x) = component(0)?;
     let (off_y, ty_y) = component(1)?;
     let (off_z, ty_z) = component(2)?;
-    let x = builder.ins().load(ty_x, MemFlags::new(), base_addr, off_x);
-    let y = builder.ins().load(ty_y, MemFlags::new(), base_addr, off_y);
-    let z = builder.ins().load(ty_z, MemFlags::new(), base_addr, off_z);
+    let x = builder
+        .ins()
+        .load(ty_x, MemFlagsData::new(), base_addr, off_x);
+    let y = builder
+        .ins()
+        .load(ty_y, MemFlagsData::new(), base_addr, off_y);
+    let z = builder
+        .ins()
+        .load(ty_z, MemFlagsData::new(), base_addr, off_z);
     Ok((
         saturate_to_u32(builder, x, ty_x),
         saturate_to_u32(builder, y, ty_y),

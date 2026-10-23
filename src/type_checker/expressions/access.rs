@@ -1056,7 +1056,7 @@ impl TypeChecker {
                         span,
                         format!(
                             "Consider importing '{}' to use {} methods",
-                            &modules[0], type_name
+                            modules[0], type_name
                         ),
                     );
                 } else {

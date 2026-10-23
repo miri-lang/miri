@@ -10,10 +10,10 @@ use super::*;
 use crate::error::SourceId;
 use cranelift_codegen::cursor::{Cursor, FuncCursor};
 use cranelift_codegen::ir::{
-    types, AbiParam, ExtFuncData, ExternalName, InstBuilder, MemFlags, Signature, StackSlotData,
-    StackSlotKind, UserExternalName, UserFuncName,
+    types, AbiParam, ExtFuncData, ExternalName, InstBuilder, MemFlagsData, Signature,
+    StackSlotData, StackSlotKind, UserExternalName, UserFuncName,
 };
-use cranelift_codegen::isa::CallConv;
+use cranelift_codegen::isa::{CallConv, TargetFrontendConfig};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::FuncId;
 
@@ -54,6 +54,17 @@ fn the_added_stack_is_capped_lower_for_a_recursive_caller() {
     assert!(!GrowthBudget::new(100, false).spend(1, u64::MAX));
 }
 
+/// What the host target tells a function builder.
+fn host_frontend_config() -> TargetFrontendConfig {
+    let options = CraneliftOptions {
+        opt_level: OptLevel::Speed,
+        ..CraneliftOptions::default()
+    };
+    build_isa(target_lexicon::Triple::host(), &options)
+        .unwrap_or_else(|e| panic!("the host target builds: {e}"))
+        .frontend_config()
+}
+
 fn signature(param: types::Type) -> Signature {
     let mut signature = Signature::new(CallConv::triple_default(&target_lexicon::Triple::host()));
     signature.params.push(AbiParam::new(param));
@@ -61,8 +72,8 @@ fn signature(param: types::Type) -> Signature {
     signature
 }
 
-/// `fn(i64) i64` returning its argument plus one, its two instructions on
-/// points 0 and 1 of its table.
+/// `fn(i64) i64` returning its argument plus one, its addition (an `iconst`
+/// and an `iadd`) on point 0 of its table and its return on point 1.
 fn callee() -> (Function, SourcePoints) {
     let mut points = SourcePoints::default();
     let at = |points: &mut SourcePoints, offset| {
@@ -82,11 +93,11 @@ fn callee() -> (Function, SourcePoints) {
     builder.switch_to_block(entry);
     let value = builder.block_params(entry)[0];
     builder.set_srcloc(at(&mut points, 10));
-    let sum = builder.ins().iadd_imm(value, 1);
+    let sum = builder.ins().iadd_imm_s(value, 1);
     builder.set_srcloc(at(&mut points, 20));
     builder.ins().return_(&[sum]);
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(host_frontend_config());
     (function, points)
 }
 
@@ -108,6 +119,7 @@ fn caller(param: types::Type) -> (Function, SourcePoints) {
         name: ExternalName::User(name),
         signature: declared,
         colocated: false,
+        patchable: false,
     });
     let mut context = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut function, &mut context);
@@ -123,7 +135,7 @@ fn caller(param: types::Type) -> (Function, SourcePoints) {
     let result = builder.inst_results(call)[0];
     builder.ins().return_(&[result]);
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(host_frontend_config());
     (function, points)
 }
 
@@ -226,12 +238,14 @@ fn reading_callee() -> (Function, SourcePoints) {
     builder.switch_to_block(entry);
     let address = builder.block_params(entry)[0];
     builder.set_srcloc(callee_point(&mut points, 10));
-    let value = builder.ins().load(types::I64, MemFlags::new(), address, 0);
+    let value = builder
+        .ins()
+        .load(types::I64, MemFlagsData::new(), address, 0);
     builder.set_srcloc(callee_point(&mut points, 20));
-    let sum = builder.ins().iadd_imm(value, 1);
+    let sum = builder.ins().iadd_imm_s(value, 1);
     builder.ins().return_(&[sum]);
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(host_frontend_config());
     (function, points)
 }
 
@@ -248,12 +262,12 @@ fn slot_holding_callee(size: u32) -> (Function, SourcePoints) {
     builder.append_block_params_for_function_params(entry);
     builder.switch_to_block(entry);
     let argument = builder.block_params(entry)[0];
-    builder.ins().stack_store(argument, slot, 0);
-    let value = builder.ins().stack_load(types::I64, slot, 0);
-    let sum = builder.ins().iadd_imm(value, 1);
+    builder.ins().stack_store(types::I64, argument, slot, 0);
+    let value = builder.ins().stack_load(types::I64, types::I64, slot, 0);
+    let sum = builder.ins().iadd_imm_s(value, 1);
     builder.ins().return_(&[sum]);
     builder.seal_all_blocks();
-    builder.finalize();
+    builder.finalize(host_frontend_config());
     (function, SourcePoints::default())
 }
 
@@ -270,7 +284,9 @@ fn slot_passing_caller() -> (Function, SourcePoints) {
     let argument = function.dfg.inst_args(call)[0];
     let mut cursor = FuncCursor::new(&mut function).at_inst(call);
     let address = cursor.ins().stack_addr(types::I64, slot, 0);
-    cursor.ins().store(MemFlags::new(), argument, address, 0);
+    cursor
+        .ins()
+        .store(MemFlagsData::new(), argument, address, 0);
     cursor.func.dfg.inst_args_mut(call)[0] = address;
     (function, points)
 }

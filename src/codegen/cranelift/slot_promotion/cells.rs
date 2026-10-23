@@ -5,16 +5,17 @@
 //! each slot is read and written in, and which instructions do it.
 //!
 //! An address in a slot is a `stack_addr` of it, or such an address plus a
-//! constant, by `iadd_imm` or by `iadd` with an `iconst`. A slot is
-//! promotable when every use of every address in it is one of those
-//! additions, the address operand of a plain `load` or `store` of native
-//! byte order, and when every access of it, through an address or by
-//! `stack_load` and `stack_store`, lies within the slot and either covers
-//! exactly the bytes of every access it overlaps or overlaps none.
+//! constant by `iadd` with an `iconst`. A slot is promotable when every use
+//! of every address in it is one of those additions or the address operand
+//! of a plain `load` or `store` of native byte order, and when every access
+//! of it lies within the slot and either covers exactly the bytes of every
+//! access it overlaps or overlaps none. Cranelift's `stack_load` and
+//! `stack_store` builders emit a `stack_addr` and a plain access, so those
+//! are found the same way.
 
 use cranelift_codegen::entity::SecondaryMap;
 use cranelift_codegen::ir::{
-    types, Block, Function, Inst, InstructionData, MemFlags, Opcode, StackSlot, StackSlotKind,
+    types, Block, Function, Inst, InstructionData, MemFlagsData, Opcode, StackSlot, StackSlotKind,
     Type, Value, ValueDef,
 };
 
@@ -148,11 +149,6 @@ fn address_computed(
         return Some(address);
     }
     match function.dfg.insts[inst] {
-        InstructionData::BinaryImm64 {
-            opcode: Opcode::IaddImm,
-            arg,
-            imm,
-        } => addresses[arg]?.moved(imm.bits()),
         InstructionData::Binary {
             opcode: Opcode::Iadd,
             args: [left, right],
@@ -171,7 +167,8 @@ fn is_explicit(function: &Function, slot: StackSlot) -> bool {
         .is_some_and(|data| data.kind == StackSlotKind::ExplicitSlot)
 }
 
-/// The constant `value` is defined as by an `iconst`.
+/// The constant `value` is defined as by an `iconst`, sign-extended from
+/// the width of its type.
 fn constant(function: &Function, value: Value) -> Option<i64> {
     let ValueDef::Result(inst, _) = function.dfg.value_def(value) else {
         return None;
@@ -180,7 +177,12 @@ fn constant(function: &Function, value: Value) -> Option<i64> {
         InstructionData::UnaryImm {
             opcode: Opcode::Iconst,
             imm,
-        } => Some(imm.bits()),
+        } => {
+            // An `iconst` keeps its immediate masked to its type's width, so
+            // a negative offset of a narrower type reads back sign-extended.
+            let width = function.dfg.value_type(value).bits();
+            Some(imm.sign_extend_from_width(width).bits())
+        }
         _ => None,
     }
 }
@@ -203,8 +205,8 @@ impl SlotAccess {
 
 /// What one instruction does with an address in a slot.
 enum Role {
-    /// Accesses the slot, through the address operand when it has one.
-    Accesses(StackSlot, SlotAccess, Option<Value>),
+    /// Accesses the slot through the address operand.
+    Accesses(StackSlot, SlotAccess, Value),
     /// Adds a constant to the address operand, an address in the slot.
     Offsets(Value, StackSlot),
     Other,
@@ -240,7 +242,7 @@ impl Survey {
         let address_operand = match role {
             Role::Accesses(slot, access, operand) => {
                 self.accesses[slot].push(access);
-                operand
+                Some(operand)
             }
             Role::Offsets(base, slot) => {
                 self.computed[slot].push(inst);
@@ -310,7 +312,7 @@ impl Survey {
 /// slot.
 fn stack_addr_of(function: &Function, inst: Inst) -> Option<Address> {
     match function.dfg.insts[inst] {
-        InstructionData::StackLoad {
+        InstructionData::StackAddr {
             opcode: Opcode::StackAddr,
             stack_slot,
             offset,
@@ -330,7 +332,6 @@ fn role_of(
     inst: Inst,
 ) -> Role {
     access_through_address(function, addresses, inst)
-        .or_else(|| access_by_name(function, inst))
         .unwrap_or_else(|| offset_role(function, addresses, inst))
 }
 
@@ -349,9 +350,9 @@ fn access_through_address(
             flags,
             offset,
         } => {
-            let at = through(addresses[arg], flags, offset.into())?;
+            let at = through(addresses[arg], dfg.mem_flags[flags], offset.into())?;
             let ty = dfg.value_type(result_of(function, inst)?);
-            Some(accessing(inst, at, ty, Direction::Read, Some(arg)))
+            Some(accessing(inst, at, ty, Direction::Read, arg))
         }
         InstructionData::Store {
             opcode: Opcode::Store,
@@ -359,41 +360,9 @@ fn access_through_address(
             flags,
             offset,
         } if data != arg => {
-            let at = through(addresses[arg], flags, offset.into())?;
+            let at = through(addresses[arg], dfg.mem_flags[flags], offset.into())?;
             let ty = dfg.value_type(data);
-            Some(accessing(inst, at, ty, Direction::Write, Some(arg)))
-        }
-        _ => None,
-    }
-}
-
-/// The role of `inst` when it is a `stack_load` or `stack_store`.
-fn access_by_name(function: &Function, inst: Inst) -> Option<Role> {
-    let dfg = &function.dfg;
-    match dfg.insts[inst] {
-        InstructionData::StackLoad {
-            opcode: Opcode::StackLoad,
-            stack_slot,
-            offset,
-        } => {
-            let ty = dfg.value_type(result_of(function, inst)?);
-            let at = named(stack_slot, offset.into());
-            Some(accessing(inst, at, ty, Direction::Read, None))
-        }
-        InstructionData::StackStore {
-            opcode: Opcode::StackStore,
-            arg,
-            stack_slot,
-            offset,
-        } => {
-            let at = named(stack_slot, offset.into());
-            Some(accessing(
-                inst,
-                at,
-                dfg.value_type(arg),
-                Direction::Write,
-                None,
-            ))
+            Some(accessing(inst, at, ty, Direction::Write, arg))
         }
         _ => None,
     }
@@ -408,11 +377,6 @@ fn offset_role(
 ) -> Role {
     let computed = result_of(function, inst).and_then(|result| addresses[result]);
     let base = match function.dfg.insts[inst] {
-        InstructionData::BinaryImm64 {
-            opcode: Opcode::IaddImm,
-            arg,
-            ..
-        } => arg,
         InstructionData::Binary {
             opcode: Opcode::Iadd,
             args: [left, _],
@@ -431,32 +395,19 @@ fn result_of(function: &Function, inst: Inst) -> Option<Value> {
     function.dfg.inst_results(inst).first().copied()
 }
 
-/// The byte `offset` of `slot`, as a `stack_load` or `stack_store` names it.
-fn named(slot: StackSlot, offset: i32) -> Address {
-    Address {
-        slot,
-        offset: i64::from(offset),
-    }
-}
-
 /// The byte a plain load or store through an operand holding `address`,
 /// with `flags` and `offset`, reaches, when it reaches a slot in native
 /// byte order.
-fn through(address: Option<Address>, flags: MemFlags, offset: i32) -> Option<Address> {
+fn through(address: Option<Address>, flags: MemFlagsData, offset: i32) -> Option<Address> {
     if flags.explicit_endianness().is_some() {
         return None;
     }
     address?.moved(i64::from(offset))
 }
 
-/// The role of `inst` accessing `ty` at `at` in `direction`.
-fn accessing(
-    inst: Inst,
-    at: Address,
-    ty: Type,
-    direction: Direction,
-    operand: Option<Value>,
-) -> Role {
+/// The role of `inst` accessing `ty` at `at` in `direction` through the
+/// address `operand`.
+fn accessing(inst: Inst, at: Address, ty: Type, direction: Direction, operand: Value) -> Role {
     let access = SlotAccess {
         inst,
         offset: at.offset,
