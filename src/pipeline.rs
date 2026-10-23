@@ -2864,9 +2864,9 @@ impl Pipeline {
             mir::residency::insert_readbacks(body);
         }
 
-        // Hand every call a value held as its bytes from a whole local the
-        // call does not also write, so no callee reads bytes that change
-        // under it.
+        // Hand every call a value held as its bytes from a value local the
+        // call does not also write, whole or at a fixed offset of it, so no
+        // callee reads bytes that change under it.
         for (_symbol, body) in &mut lowered {
             mir::value_arguments::copy_value_arguments(body);
         }

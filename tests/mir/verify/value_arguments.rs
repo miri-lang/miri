@@ -38,12 +38,19 @@ fn assert_flagged_until_copied(mut body: Body, fragment: &str) {
 }
 
 #[test]
-fn a_value_argument_read_from_inside_its_holder_is_flagged() {
-    let args = vec![Operand::Copy(field(3, 0))];
+fn a_value_argument_read_from_inside_a_counted_holder_is_flagged() {
+    let args = vec![Operand::Copy(field(4, 0))];
     assert_flagged_until_copied(
-        caller(call(args, Vec::new(), place(0))),
+        holder_caller(call(args, Vec::new(), place(0))),
         "from inside its holder",
     );
+}
+
+#[test]
+fn a_value_argument_read_from_inside_a_value_local_raises_nothing() {
+    let body = holder_caller(call(vec![Operand::Copy(field(3, 0))], Vec::new(), place(0)));
+    let violations = verify_value_arguments(&body);
+    assert!(violations.is_empty(), "{}", messages(&violations));
 }
 
 #[test]

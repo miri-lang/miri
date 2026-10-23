@@ -16,6 +16,7 @@ use crate::codegen::cranelift::value_abi::{call_arguments, miri_signature, CallR
 use crate::codegen::cranelift::value_locals::{copy_chunks, ValueBuild};
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
+use crate::mir::value_arguments::call_written_roots;
 use crate::mir::{
     arg_mode, AggregateKind, ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
@@ -1072,6 +1073,8 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_result(builder, operands.destination, is_runtime, locals, type_ctx)?;
         // The callee was declared with its return slot ahead of the arguments.
         let first_declared = usize::from(call.result.slot.is_some());
+        let written: Vec<Local> =
+            call_written_roots(operands.args, operands.arg_modes, operands.destination).collect();
 
         for (i, arg) in operands.args.iter().enumerate() {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx, None)?;
@@ -1079,10 +1082,11 @@ impl<'a> FunctionTranslator<'a> {
                 let mode = arg_mode(operands.arg_modes, i);
                 let address = Self::value_argument(val, mode, is_runtime)?;
                 Self::refuse_exposed_value_argument(
-                    i,
-                    operands.args,
-                    operands.arg_modes,
+                    arg,
+                    mode,
                     operands.destination,
+                    &written,
+                    type_ctx.values.body(),
                 )?;
                 call.values.push(address);
                 call.passings.push(Passing::ByAddress);

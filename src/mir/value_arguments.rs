@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Every value held as its bytes that a call takes is a whole local the call
+//! Every value held as its bytes that a call takes lies in bytes the call
 //! does not write, and every value parameter a body writes is its own copy.
 //!
 //! A value argument travels as the address of the caller's own bytes, which
@@ -10,25 +10,37 @@
 //! call, and the call takes that, whenever the caller's bytes could change
 //! while the callee reads them:
 //!
-//! - it is read through a projection — `f(c, c.p)`, `c.take(c.p)` — and so
-//!   would hand over an address inside its holder, which the callee could
-//!   write through another argument, or replace and free;
-//! - its local is the root of the call's destination — `v = f(v)` — which the
-//!   callee writes through its return slot;
+//! - its local is the root of the call's destination — `v = f(v)`,
+//!   `s.c = f(s.c)` — which the callee writes through its return slot;
 //! - its local is the root of an `out` argument of the same call —
-//!   `set(v, v)` — which the callee writes in place.
+//!   `set(v, v)`, `set(s.c, s)` — which the callee writes in place;
+//! - it is read through a projection that is not at a fixed offset of its
+//!   root value local — `f(c, c.p)` on a counted `c`, `f(t[i])` — and so
+//!   would hand over an address inside a holder the callee could write
+//!   through another argument, or replace and free, or one no offset names.
+//!
+//! A field, however deep, of a value local the call writes neither way —
+//! `len(s.center)` — sits at a fixed offset of that local's bytes, so it is
+//! passed in place. For a local of the frame those bytes are its own stack
+//! slot, which nothing else reaches during the call; for a value parameter
+//! they are bytes its caller already guarantees no one writes during this
+//! call. The one rule is [`exposure_of`], which the codegen backstop asks
+//! too.
 //!
 //! The callee's half is [`written_value_params`]: a body that writes one of
-//! its own value parameters copies it on entry, so a whole local passed
+//! its own value parameters copies it on entry, so a value local passed
 //! anywhere else needs no copy. What a call writes is one rule,
 //! [`call_written_roots`], read by both halves.
 //!
 //! A runtime entry point is spelled by the element ABI instead, and an `out`
-//! argument names the place the callee writes, so neither is copied.
+//! argument names the place the callee writes, so neither is copied. The
+//! address the element ABI takes of a value local for such a call is read or
+//! written only during that call, so it never exposes a later argument.
 
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
+use crate::mir::place::PlaceElem;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::{Body, Local, LocalDecl, Operand, Place, Rvalue, Statement, StatementKind};
@@ -54,7 +66,9 @@ pub fn copy_value_arguments(body: &mut Body) {
 /// Why a value argument cannot be passed as the caller's own bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exposure {
-    /// It is read through a projection, from inside its holder.
+    /// It is read through a projection not at a fixed offset of its root
+    /// value local: from inside a counted holder, or picked by a runtime
+    /// index.
     Projected,
     /// Its local is the root of the call's destination.
     Destination,
@@ -77,8 +91,7 @@ pub struct ExposedArgument<'a> {
 
 /// The arguments of the call ending `block` that pass a value held as its
 /// bytes, are neither handed to a runtime entry point nor written back as
-/// `out`, and are read through a projection or from a local the call itself
-/// writes, as its destination or as an `out` argument.
+/// `out`, and are exposed to the callee as [`exposure_of`] decides.
 pub fn value_arguments_needing_copy(body: &Body, block: usize) -> Vec<ExposedArgument<'_>> {
     let Some(call) = body.basic_blocks[block]
         .terminator
@@ -92,7 +105,7 @@ pub fn value_arguments_needing_copy(body: &Body, block: usize) -> Vec<ExposedArg
     let types = PlaceTypes::of(body);
     call.value_inputs()
         .filter_map(|(position, place)| {
-            let exposure = exposure_of(place, call.destination, &written)?;
+            let exposure = exposure_of(body, place, call.destination, &written)?;
             let declared = types.declared(place)?;
             body.value_layout(&declared.kind)
                 .is_some()
@@ -106,18 +119,41 @@ pub fn value_arguments_needing_copy(body: &Body, block: usize) -> Vec<ExposedArg
         .collect()
 }
 
-/// Why the bytes `place` reads could change under the callee of a call into
-/// `destination` that writes the root locals `written`, if they could.
-fn exposure_of(place: &Place, destination: &Place, written: &[Local]) -> Option<Exposure> {
-    if !place.projection.is_empty() {
-        Some(Exposure::Projected)
-    } else if place.local == destination.local {
+/// Why the bytes `place` reads could change under the callee of a call in
+/// `body` into `destination` that writes the root locals `written`, if they
+/// could.
+///
+/// A local the call writes is exposed however the argument reaches into it.
+/// Otherwise only a place not at a fixed offset of its root value local is:
+/// one inside a counted holder, which the callee could write through another
+/// argument or replace and free, or one picked by a runtime index.
+pub fn exposure_of(
+    body: &Body,
+    place: &Place,
+    destination: &Place,
+    written: &[Local],
+) -> Option<Exposure> {
+    if place.local == destination.local {
         Some(Exposure::Destination)
     } else if written.contains(&place.local) {
         Some(Exposure::Out)
+    } else if !place.projection.is_empty() && !is_at_fixed_offset_of_value_root(body, place) {
+        Some(Exposure::Projected)
     } else {
         None
     }
+}
+
+/// Whether `place` sits at a fixed offset of its root local's bytes: the
+/// root is a value held as its bytes and every step into it names a field.
+fn is_at_fixed_offset_of_value_root(body: &Body, place: &Place) -> bool {
+    body.local_decls
+        .get(place.local.0)
+        .is_some_and(|decl| body.value_layout(&decl.ty.kind).is_some())
+        && place.projection.iter().all(|elem| match elem {
+            PlaceElem::Field(_) => true,
+            PlaceElem::Deref | PlaceElem::Index(_) => false,
+        })
 }
 
 /// The root locals a call taking `args` under `arg_modes` into `destination`

@@ -10,9 +10,10 @@
 //! signature its declaration spells, and is not built here.
 //!
 //! - A bitwise value held as its bytes is passed as the address of the
-//!   caller's own bytes, which the callee only reads. MIR hands the call a
-//!   copy wherever the call itself could write those bytes, and a callee that
-//!   writes such a parameter copies it on entry.
+//!   caller's own bytes — a whole local, or a field of one at its fixed
+//!   offset — which the callee only reads. MIR hands the call a copy wherever
+//!   the call itself could write those bytes, and a callee that writes such a
+//!   parameter copies it on entry.
 //! - A result of such a value travels through a hidden leading parameter: the
 //!   address of the caller's slot, which the callee writes. The callee returns
 //!   nothing in registers.
@@ -25,8 +26,7 @@ use crate::codegen::cranelift::value_locals::{value_layout, ValueLocals};
 use crate::error::CodegenError;
 use crate::mir::body::written_back_out_params;
 use crate::mir::instantiation::type_argument;
-use crate::mir::terminator::arg_mode;
-use crate::mir::value_arguments::{argument_place, call_written_roots};
+use crate::mir::value_arguments::{argument_place, exposure_of, Exposure};
 use crate::mir::{ArgMode, Body, Local, Operand, Place};
 use cranelift_codegen::ir::{types as cl_types, AbiParam, Signature, Value};
 use cranelift_codegen::isa::CallConv;
@@ -124,12 +124,14 @@ impl<'a> FunctionTranslator<'a> {
     /// as: the caller's own bytes, which an `out` argument's callee writes in
     /// place and any other callee only reads.
     ///
-    /// MIR guarantees a non-`out` value argument is a whole local that the
-    /// call writes neither as its destination nor as an `out` argument
-    /// ([`Self::refuse_exposed_value_argument`] holds the call to it), and a
-    /// callee that writes a parameter copies it first (`written_value_params`).
-    /// Closures capture by value, so no other path reaches these bytes during
-    /// the call.
+    /// MIR guarantees a non-`out` value argument is a value local, or a field
+    /// of one, that the call writes neither as its destination nor as an
+    /// `out` argument ([`Self::refuse_exposed_value_argument`] holds the call
+    /// to it), and a callee that writes a parameter copies it first
+    /// (`written_value_params`). Closures capture by value, so no other path
+    /// reaches a local's own bytes during the call; a value parameter's bytes,
+    /// or a field of them, are ones its caller already guarantees no one
+    /// writes during this call.
     ///
     /// A runtime function takes no such value, and a value is never handed
     /// over owned, since only a counted local is: either is refused.
@@ -154,30 +156,34 @@ impl<'a> FunctionTranslator<'a> {
 }
 
 impl<'a> FunctionTranslator<'a> {
-    /// Refuse argument `position` of a call taking `args` under `arg_modes`
-    /// into `destination` when it is a non-`out` value argument whose bytes
-    /// the call could change under its callee: one read from inside its
-    /// holder, or from a local the call writes as its destination or through
-    /// an `out` argument. The value-argument pass copies every such argument
-    /// first, so reaching one here is a compiler bug.
+    /// Refuse `arg`, passed under `mode` to a call into `destination` that
+    /// writes the root locals `written`, in the code whose body is `body`,
+    /// when it is a non-`out` value argument whose bytes the call could change
+    /// under its callee, as [`exposure_of`] decides. The value-argument pass
+    /// copies every such argument first, so reaching one here is a compiler
+    /// bug.
     pub(crate) fn refuse_exposed_value_argument(
-        position: usize,
-        args: &[Operand],
-        arg_modes: &[ArgMode],
+        arg: &Operand,
+        mode: ArgMode,
         destination: &Place,
+        written: &[Local],
+        body: Option<&Body>,
     ) -> Result<(), CodegenError> {
-        if arg_mode(arg_modes, position) == ArgMode::Out {
+        if mode == ArgMode::Out {
             return Ok(());
         }
-        let Some(place) = args.get(position).and_then(argument_place) else {
+        let Some(place) = argument_place(arg) else {
             return Ok(());
         };
-        let problem = if !place.projection.is_empty() {
-            "reaches the call from inside its holder"
-        } else if call_written_roots(args, arg_modes, destination).any(|root| root == place.local) {
-            "is aliased with what the call writes"
-        } else {
-            return Ok(());
+        let body = body.ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "the value argument `{place}` is passed by code with no body of its own"
+            ))
+        })?;
+        let problem = match exposure_of(body, place, destination, written) {
+            None => return Ok(()),
+            Some(Exposure::Projected) => "reaches the call from inside its holder",
+            Some(Exposure::Destination | Exposure::Out) => "is aliased with what the call writes",
         };
         Err(CodegenError::Internal(format!(
             "the value argument `{place}` {problem}; the value-argument pass should have \

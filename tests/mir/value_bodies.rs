@@ -47,6 +47,21 @@ pub fn holder() -> TypeKind {
     TypeKind::Tuple(vec![type_expr(pair()), type_expr(TypeKind::Int)])
 }
 
+/// A counted tuple holding a [`pair`] beside a string.
+pub fn counted_holder() -> TypeKind {
+    TypeKind::Tuple(vec![type_expr(pair()), type_expr(TypeKind::String)])
+}
+
+/// A value holding two [`pair`]s, which a runtime index can pick between.
+pub fn twins() -> TypeKind {
+    TypeKind::Tuple(vec![type_expr(pair()), type_expr(pair())])
+}
+
+/// A value holding a [`holder`] and an `int`.
+pub fn nest() -> TypeKind {
+    TypeKind::Tuple(vec![type_expr(holder()), type_expr(TypeKind::Int)])
+}
+
 pub fn place(local: usize) -> Place {
     Place::new(Local(local))
 }
@@ -55,6 +70,14 @@ pub fn field(local: usize, index: usize) -> Place {
     Place {
         local: Local(local),
         projection: vec![PlaceElem::Field(index)],
+    }
+}
+
+/// `_local` reached through `projection`.
+pub fn projected(local: usize, projection: Vec<PlaceElem>) -> Place {
+    Place {
+        local: Local(local),
+        projection,
     }
 }
 
@@ -122,4 +145,25 @@ pub fn value_locals() -> Vec<TypeKind> {
 /// A caller over [`value_locals`] whose one block makes `kind`.
 pub fn caller(kind: TerminatorKind) -> Body {
     body_over(&value_locals(), 0, block(Vec::new(), kind))
+}
+
+/// The locals the projection fixtures use: `_0` to `_2` are [`pair`]s, `_3` a
+/// [`holder`], `_4` a [`counted_holder`], `_5` [`twins`], `_6` an `int` and
+/// `_7` a [`nest`].
+pub fn holder_locals() -> Vec<TypeKind> {
+    vec![
+        pair(),
+        pair(),
+        pair(),
+        holder(),
+        counted_holder(),
+        twins(),
+        TypeKind::Int,
+        nest(),
+    ]
+}
+
+/// A caller over [`holder_locals`] whose one block makes `kind`.
+pub fn holder_caller(kind: TerminatorKind) -> Body {
+    body_over(&holder_locals(), 0, block(Vec::new(), kind))
 }

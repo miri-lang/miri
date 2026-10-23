@@ -43,18 +43,36 @@ fn point() -> TypeKind {
     TypeKind::Custom("P".to_string(), None)
 }
 
-/// `struct P { x int, y float }`.
-fn definitions() -> HashMap<String, TypeDefinition> {
-    let fields = [("x", TypeKind::Int), ("y", TypeKind::Float)]
+fn holder() -> TypeKind {
+    TypeKind::Custom("H".to_string(), None)
+}
+
+/// A struct definition with the public `fields`.
+fn struct_of(fields: [(&str, TypeKind); 2]) -> TypeDefinition {
+    let fields = fields
         .into_iter()
         .map(|(name, kind)| (name.to_string(), ty(kind), MemberVisibility::Public))
         .collect();
-    let point = StructDefinition {
+    TypeDefinition::Struct(StructDefinition {
         fields,
         generics: None,
         module: String::new(),
-    };
-    HashMap::from([("P".to_string(), TypeDefinition::Struct(point))])
+    })
+}
+
+/// `struct P { x int, y float }` and `struct H { k int, p P }`, whose `p`
+/// sits at a nonzero offset.
+fn definitions() -> HashMap<String, TypeDefinition> {
+    HashMap::from([
+        (
+            "P".to_string(),
+            struct_of([("x", TypeKind::Int), ("y", TypeKind::Float)]),
+        ),
+        (
+            "H".to_string(),
+            struct_of([("k", TypeKind::Int), ("p", point())]),
+        ),
+    ])
 }
 
 fn place(local: usize) -> Place {
@@ -521,6 +539,127 @@ fn a_value_argument_aliased_with_the_calls_destination_is_refused() {
     let error = compile(&named).expect_err("the aliased value argument is refused");
     assert!(
         error.contains("is aliased with what the call writes"),
+        "{error}"
+    );
+}
+
+/// `main` exits with `10 * bump(h.p) + h.p.x` where `h = H(k: 7, p: make(3,
+/// 2.5))`: `bump` gets the address of `h.p`, eight bytes into `h`, writes its
+/// own copy, and 43 holds only when `h.p.x` is still 3. Were `h`'s first byte
+/// passed instead, `bump` would read `k` and the exit would be 83.
+fn interior_bump_main() -> Body {
+    let build = Rvalue::Aggregate(
+        AggregateKind::Struct(ty(holder())),
+        vec![int(7), copy(place(2))],
+    );
+    let inner_x = Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Field(1), PlaceElem::Field(0)],
+    };
+    let total = vec![
+        assign(place(4), binary(BinOp::Mul, copy(place(3)), int(10))),
+        assign(place(0), binary(BinOp::Add, copy(place(4)), copy(inner_x))),
+    ];
+    body_of(
+        &[
+            TypeKind::Int,
+            holder(),
+            point(),
+            TypeKind::Int,
+            TypeKind::Int,
+        ],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                call(function("make"), vec![int(3), float(2.5)], 2, 1),
+            ),
+            block(
+                vec![assign(place(1), build)],
+                call(function("bump"), vec![copy(field(1, 1))], 3, 2),
+            ),
+            block(total, TerminatorKind::Return),
+        ],
+    )
+}
+
+#[test]
+fn a_field_passed_from_inside_a_value_local_is_read_in_place() {
+    let (make, bump, main) = (make(), bump(), interior_bump_main());
+    let named = [
+        (function("make").link_name(), &make),
+        (function("bump").link_name(), &bump),
+        (Symbol::entry().link_name(), &main),
+    ];
+    let (object, _) = compile(&named).expect("the in-place field argument is accepted");
+    assert_eq!(run(&object), 43);
+}
+
+/// A tuple of two [`point`]s, which a runtime index can pick between.
+fn twin_points() -> TypeKind {
+    let member = || miri::ast::expression::Expression {
+        id: 0,
+        node: miri::ast::expression::ExpressionKind::Type(Box::new(ty(point())), false),
+        span: span(),
+    };
+    TypeKind::Tuple(vec![member(), member()])
+}
+
+/// Compile `main` calling `shift` with `arg` into `destination`, as no
+/// lowered body does, and hand back the error it is refused with.
+fn refused_shift_call(kinds: &[TypeKind], arg: Place, destination: Place) -> String {
+    let shift = shift();
+    let main = body_of(
+        kinds,
+        0,
+        vec![
+            block(
+                vec![assign(place(2), Rvalue::Use(int(1)))],
+                TerminatorKind::Call {
+                    func: Operand::function(function("shift"), span()),
+                    args: vec![copy(arg)],
+                    arg_modes: Vec::new(),
+                    arg_handles: Vec::new(),
+                    destination,
+                    target: Some(BasicBlock(1)),
+                },
+            ),
+            block(Vec::new(), TerminatorKind::Return),
+        ],
+    );
+    let named = [
+        (function("shift").link_name(), &shift),
+        (Symbol::entry().link_name(), &main),
+    ];
+    compile(&named).expect_err("the exposed value argument is refused")
+}
+
+#[test]
+fn a_field_of_the_calls_destination_reaching_codegen_uncopied_is_refused() {
+    let error = refused_shift_call(
+        &[TypeKind::Int, holder(), TypeKind::Int],
+        field(1, 1),
+        field(1, 1),
+    );
+    assert!(
+        error.contains("`_1.1` is aliased with what the call writes"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_member_picked_by_a_runtime_index_reaching_codegen_uncopied_is_refused() {
+    let picked = Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Index(Local(2))],
+    };
+    let error = refused_shift_call(
+        &[TypeKind::Int, twin_points(), TypeKind::Int, point()],
+        picked,
+        place(3),
+    );
+    assert!(
+        error.contains("reaches the call from inside its holder"),
         "{error}"
     );
 }

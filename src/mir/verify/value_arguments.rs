@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Checks that every value held as its bytes a call takes is a whole local
-//! the call does not write, and is never handed over owned.
+//! Checks that every value held as its bytes a call takes lies in bytes the
+//! call does not write, and is never handed over owned.
 //!
 //! A value argument is passed as the address of the caller's own bytes, which
-//! the callee only reads. An argument read from inside its holder, or from a
-//! local the same call writes as its destination or through an `out`
-//! argument, would let those bytes change while the callee reads them; the
-//! copy pass ([`crate::mir::value_arguments`]) hands each such argument a
-//! copy, and this rule finds one it missed. A write a callee makes to its own
-//! value parameter is not a finding: the callee copies that parameter on
-//! entry.
+//! the callee only reads. An argument read from a local the same call writes
+//! as its destination or through an `out` argument, or through a projection
+//! not at a fixed offset of its root value local, would let those bytes
+//! change while the callee reads them; the copy pass ([`crate::mir::value_arguments`])
+//! hands each such argument a copy, and this rule finds one it missed. A
+//! field of a value local the call does not write is passed in place. A
+//! write a callee makes to its own value parameter is not a finding: the
+//! callee copies that parameter on entry.
 //!
 //! Such a value has no count, so no call takes one over: an argument passed
 //! [`ArgMode::Owned`] is always a counted value.
@@ -22,8 +23,9 @@ use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::value_arguments::{argument_place, value_arguments_needing_copy, Exposure};
 use crate::mir::{Body, Place};
 
-/// Every value argument a call in `body` takes from inside its holder, or
-/// from a local the call also writes, and every one it passes owned.
+/// Every value argument a call in `body` takes from inside a holder, not at
+/// a fixed offset of its root value local, or from a local the call also
+/// writes, and every one it passes owned.
 ///
 /// A GPU body is skipped: its calls pass no value by address.
 pub fn verify_value_arguments(body: &Body) -> Vec<VerificationViolation> {
@@ -100,7 +102,7 @@ fn violation(body: &Body, position: usize, place: &Place, what: &str) -> Verific
 fn describe(exposure: Exposure) -> &'static str {
     match exposure {
         Exposure::Projected => {
-            "passed by address from inside its holder rather than from a whole local"
+            "passed by address from inside its holder, not at a fixed offset of its root value local"
         }
         Exposure::Destination => {
             "passed by address from the local the call also writes as its destination"

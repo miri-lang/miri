@@ -85,3 +85,44 @@ fn value_arguments_are_read_in_place_once_inlined() {
         "normalize moves a value argument through integer words:\n{normalize}"
     );
 }
+
+/// The shape of a ray tracer's per-pixel hit test: a sphere's centre, a
+/// field of a value parameter, handed to a helper that only reads it.
+const HIT: &str = r#"struct Vec3
+    x float
+    y float
+    z float
+
+struct Sphere
+    center Vec3
+    r float
+
+fn dot(a Vec3, b Vec3) float
+    a.x * b.x + a.y * b.y + a.z * b.z
+
+fn scale(a Vec3, k float) Vec3
+    Vec3(x: a.x * k, y: a.y * k, z: a.z * k)
+
+fn hit(sphere Sphere, d Vec3) float
+    let oc = scale(sphere.center, -1.0)
+    let b = dot(oc, d)
+    let c = dot(oc, oc) - sphere.r * sphere.r
+    b * b - c
+
+fn main()
+    let s = Sphere(center: Vec3(x: 0.0, y: 0.0, z: -3.0), r: 1.0)
+    let d = Vec3(x: 0.0, y: 0.0, z: -1.0)
+    println(f"{hit(s, d)}")
+"#;
+
+#[test]
+fn a_field_of_a_value_parameter_is_read_in_place_once_inlined() {
+    let (listing, output) = optimized_listing_and_output(HIT);
+    assert_eq!(output, "1.0\n");
+    let hit = function_text(&listing, "miri.hit");
+    let slots = hit.matches("explicit_slot").count();
+    assert_eq!(
+        slots, 1,
+        "hit holds `oc` alone, with no copy of `sphere.center`:\n{hit}"
+    );
+}

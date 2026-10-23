@@ -6,10 +6,13 @@
 
 use super::value_bodies::*;
 use miri::ast::types::TypeKind;
+use miri::mir::place::PlaceElem;
 use miri::mir::value_arguments::{
-    copy_value_arguments, value_arguments_needing_copy, written_value_params, Exposure,
+    copy_value_arguments, exposure_of, value_arguments_needing_copy, written_value_params, Exposure,
 };
-use miri::mir::{ArgMode, Local, Operand, Rvalue, StatementKind, Terminator, TerminatorKind};
+use miri::mir::{
+    ArgMode, Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+};
 use std::collections::HashSet;
 
 /// The position and reason of every argument of `kind`'s call that needs a
@@ -57,13 +60,97 @@ fn a_value_argument_whose_local_holds_an_out_argument_is_copied() {
     );
 }
 
+/// The position and reason of every argument of `kind`'s call that needs a
+/// copy, made by a caller over [`holder_locals`].
+fn holder_needing_copy(kind: TerminatorKind) -> Vec<(usize, Exposure)> {
+    let body = holder_caller(kind);
+    value_arguments_needing_copy(&body, 0)
+        .into_iter()
+        .map(|argument| (argument.position, argument.exposure))
+        .collect()
+}
+
 #[test]
-fn a_projected_value_argument_is_copied() {
+fn a_field_of_a_value_local_is_passed_in_place() {
     let args = vec![Operand::Copy(field(3, 0))];
+    assert!(holder_needing_copy(call(args, Vec::new(), place(0))).is_empty());
+}
+
+#[test]
+fn the_copy_pass_leaves_a_call_on_a_field_of_a_value_local_as_it_is() {
+    let args = vec![Operand::Copy(field(3, 0)), copy(3)];
+    let mut body = holder_caller(call(args, Vec::new(), place(0)));
+    let before = body.clone();
+    copy_value_arguments(&mut body);
+    assert_eq!(body.local_decls.len(), before.local_decls.len());
+    assert_eq!(body.basic_blocks, before.basic_blocks);
+}
+
+#[test]
+fn a_nested_field_of_a_value_local_is_passed_in_place() {
+    let inner = projected(7, vec![PlaceElem::Field(0), PlaceElem::Field(0)]);
+    let args = vec![Operand::Copy(inner)];
+    assert!(holder_needing_copy(call(args, Vec::new(), place(0))).is_empty());
+}
+
+#[test]
+fn a_field_of_a_counted_holder_is_copied() {
+    let args = vec![Operand::Copy(field(4, 0))];
     assert_eq!(
-        needing_copy(call(args, Vec::new(), place(0))),
+        holder_needing_copy(call(args, Vec::new(), place(0))),
         vec![(0, Exposure::Projected)]
     );
+}
+
+#[test]
+fn a_member_of_a_value_picked_by_a_runtime_index_is_copied() {
+    let picked = projected(5, vec![PlaceElem::Index(Local(6))]);
+    let args = vec![Operand::Copy(picked)];
+    assert_eq!(
+        holder_needing_copy(call(args, Vec::new(), place(0))),
+        vec![(0, Exposure::Projected)]
+    );
+}
+
+#[test]
+fn a_field_of_the_local_the_call_writes_as_its_destination_is_copied() {
+    let args = vec![Operand::Copy(field(3, 0))];
+    assert_eq!(
+        holder_needing_copy(call(args, Vec::new(), field(3, 0))),
+        vec![(0, Exposure::Destination)]
+    );
+}
+
+#[test]
+fn a_field_of_the_local_the_call_writes_through_out_is_copied() {
+    let modes = vec![ArgMode::Borrowed, ArgMode::Out];
+    let args = vec![Operand::Copy(field(3, 0)), copy(3)];
+    assert_eq!(
+        holder_needing_copy(call(args, modes, place(0))),
+        vec![(0, Exposure::Out)]
+    );
+}
+
+#[test]
+fn a_field_beside_its_whole_holder_is_passed_in_place() {
+    let args = vec![Operand::Copy(field(3, 0)), copy(3)];
+    assert!(holder_needing_copy(call(args, Vec::new(), place(0))).is_empty());
+}
+
+#[test]
+fn exposure_of_names_why_each_place_needs_a_copy() {
+    let body = holder_caller(goto_exit());
+    let destination = field(1, 0);
+    let written = [Local(1), Local(2)];
+    let exposure = |place: &Place| exposure_of(&body, place, &destination, &written);
+    assert_eq!(exposure(&place(3)), None);
+    assert_eq!(exposure(&field(3, 0)), None);
+    assert_eq!(exposure(&place(1)), Some(Exposure::Destination));
+    assert_eq!(exposure(&place(2)), Some(Exposure::Out));
+    assert_eq!(exposure(&field(2, 0)), Some(Exposure::Out));
+    assert_eq!(exposure(&field(4, 0)), Some(Exposure::Projected));
+    let picked = projected(5, vec![PlaceElem::Index(Local(6))]);
+    assert_eq!(exposure(&picked), Some(Exposure::Projected));
 }
 
 #[test]
