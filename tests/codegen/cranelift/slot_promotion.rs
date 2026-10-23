@@ -108,7 +108,7 @@ pub(super) fn function_text<'a>(listing: &'a str, name: &str) -> &'a str {
 }
 
 /// The sizes of the explicit stack slots `function` declares.
-fn slot_sizes(function: &str) -> Vec<u32> {
+pub(super) fn slot_sizes(function: &str) -> Vec<u32> {
     function
         .lines()
         .filter_map(|line| line.split_once("= explicit_slot "))

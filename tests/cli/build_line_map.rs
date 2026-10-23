@@ -711,3 +711,76 @@ fn test_code_inlined_through_two_calls_lists_both_call_sites() {
         "no code of outer maps to the helper inlined at the loop:\n{text}"
     );
 }
+
+/// A helper too small to afford its own callee, called from a loop large
+/// enough to afford both: the helper keeps its call, and the loop inlines the
+/// helper and then the callee the helper's copy calls.
+pub(crate) const NESTED_AFFORDED_ONLY_BY_THE_LOOP: &str = r#"use system.io
+
+fn leaf(v int) int
+    (v * 3 + 1) * (v * 5 + 2)
+
+fn middle(v int) int
+    leaf(v) + 2
+
+fn outer(n int) int
+    var acc = 0
+    var i = 0
+    while i < n
+        acc = (acc + middle(i) + i * 13 + (i % 7) * 17 + (i % 11) * 19) % 1000003
+        i += 1
+    acc
+
+fn main()
+    println(f"{outer(1000)}")
+"#;
+
+/// A callee inlined into the copy of a helper, after the helper was inlined,
+/// lists both calls, innermost first, as one inlined into the helper before
+/// the helper was copied does.
+#[test]
+fn test_a_callee_inlined_into_an_inlined_copy_lists_both_call_sites() {
+    let source = NESTED_AFFORDED_ONLY_BY_THE_LOOP;
+    let dir = tempfile::tempdir().unwrap();
+    let executable = build_files(
+        dir.path(),
+        &[("prog.mi", source)],
+        &["--release", "--emit", "lines", "--emit", "clif"],
+    );
+    let listing = std::fs::read_to_string(sibling(&executable, ".clif")).unwrap();
+    assert!(
+        clif_calls(&listing, "miri.middle", "miri.leaf"),
+        "the helper inlined its callee itself, so nothing here is nested:\n{listing}"
+    );
+    for callee in ["miri.middle", "miri.leaf"] {
+        assert!(
+            !clif_calls(&listing, "miri.outer", callee),
+            "the loop still calls {callee}:\n{listing}"
+        );
+    }
+    let (text, map) = read_line_map(&executable);
+    let program = map.file_index("prog.mi");
+    let leaf_line = line_of(source, "(v * 3 + 1)");
+    let leaf_call = line_of(source, "leaf(v) + 2");
+    let middle_call = line_of(source, "acc + middle(i)");
+    let outer = map.function("outer");
+    assert!(
+        outer.ranges.iter().any(|range| range.file == program
+            && range.line == leaf_line
+            && range.inlined_at == vec![(program, leaf_call), (program, middle_call)]),
+        "no code of outer maps to the leaf inlined through both calls:\n{text}"
+    );
+    assert!(
+        outer.ranges.iter().any(|range| range.file == program
+            && range.line == leaf_call
+            && range.inlined_at == vec![(program, middle_call)]),
+        "no code of outer maps to the helper inlined at the loop:\n{text}"
+    );
+    for range in outer.ranges.iter().filter(|range| range.line == leaf_line) {
+        assert_eq!(
+            range.inlined_at,
+            vec![(program, leaf_call), (program, middle_call)],
+            "the leaf's code names the wrong calls:\n{text}"
+        );
+    }
+}

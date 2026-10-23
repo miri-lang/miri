@@ -6,6 +6,7 @@
 //! functions holding a loop keep their calls, and inlined code that refers
 //! to a string literal or other static data still reaches the right symbol.
 
+use super::slot_promotion::slot_sizes;
 use crate::utils::miri_cmd;
 use std::path::{Path, PathBuf};
 
@@ -324,19 +325,25 @@ fn opt_level_1_inlines_a_tiny_helper_too() {
     assert_eq!(build_and_run(TINY_HELPER, &["--opt-level", "1"]), "100\n");
 }
 
-/// The helpers a per-pixel kernel calls on every pixel and sphere, one of
-/// them calling the others, are inlined into it once value arguments are read
-/// in place, and the inlined kernel computes what the unoptimized one does.
+/// The helpers a per-pixel kernel calls on every pixel and sphere, some of
+/// them calling the others, are inlined into it, the calls inside an inlined
+/// helper too, once value arguments are read in place; with no call left the
+/// kernel keeps none of its vectors on the stack, and computes what the
+/// unoptimized one does.
 #[test]
 fn a_render_kernel_inlines_its_per_pixel_helpers() {
     let optimized = listing(VECTOR_KERNEL, "3");
-    for helper in ["normalize", "hit", "dot", "sub"] {
+    let kernel = function_text(&optimized, "miri.kernel");
+    for helper in ["scale", "normalize", "hit", "dot", "sub"] {
         assert!(
             !calls(&optimized, "miri.kernel", &format!("miri.{helper}")),
-            "the kernel still calls {helper}:\n{}",
-            function_text(&optimized, "miri.kernel")
+            "the kernel still calls {helper}:\n{kernel}"
         );
     }
+    assert!(
+        slot_sizes(kernel).iter().all(|&size| size == 0),
+        "the kernel keeps a stack slot:\n{kernel}"
+    );
     assert_eq!(
         build_and_run(VECTOR_KERNEL, &["--opt-level", "3"]),
         "123496526\n"
@@ -345,4 +352,126 @@ fn a_render_kernel_inlines_its_per_pixel_helpers() {
         build_and_run(VECTOR_KERNEL, &["--opt-level", "0"]),
         "123496526\n"
     );
+}
+
+/// A call left in a small helper because the helper's own budget could not
+/// afford its callee is inlined once the helper is copied into a loop that
+/// can afford both, and the program computes what the unoptimized one does.
+#[test]
+fn a_call_inside_an_inlined_helper_is_inlined_against_the_callers_budget() {
+    let source = crate::cli::build_line_map::NESTED_AFFORDED_ONLY_BY_THE_LOOP;
+    let optimized = listing(source, "3");
+    assert!(
+        calls(&optimized, "miri.middle", "miri.leaf"),
+        "the helper inlined its callee itself, so nothing here is nested:\n{}",
+        function_text(&optimized, "miri.middle")
+    );
+    for callee in ["miri.middle", "miri.leaf"] {
+        assert!(
+            !calls(&optimized, "miri.outer", callee),
+            "the loop still calls {callee}:\n{}",
+            function_text(&optimized, "miri.outer")
+        );
+    }
+    let expected = build_and_run(source, &["--opt-level", "0"]);
+    assert_eq!(build_and_run(source, &["--opt-level", "3"]), expected);
+}
+
+/// `NESTED_AFFORDED_ONLY_BY_THE_LOOP` with a leaf too large for a callee
+/// called from several places, though small enough for one called once.
+const NESTED_LEAF_TOO_LARGE_FOR_COPIES: &str = r#"use system.io
+
+fn leaf(v int) int
+    (v * 3 + 1) * (v * 5 + 2) + (v * 7 + 3) * (v * 11 + 4)
+
+fn middle(v int) int
+    leaf(v) + 2
+
+fn outer(n int) int
+    var acc = 0
+    var i = 0
+    while i < n
+        acc = (acc + middle(i) + i * 13 + (i % 7) * 17 + (i % 11) * 19) % 1000003
+        i += 1
+    acc
+
+fn main()
+    println(f"{outer(1000)}")
+"#;
+
+/// A callee called from one place is allowed the larger size only for that
+/// one copy: a call of it inside a copy of the helper calling it, which can
+/// be copied many times, is held to the size of a callee called from several
+/// places, so a leaf over it stays a call while its helper is inlined.
+#[test]
+fn a_single_call_site_callee_reached_through_a_copy_is_held_to_the_small_limit() {
+    let source = NESTED_LEAF_TOO_LARGE_FOR_COPIES;
+    let optimized = listing(source, "3");
+    let outer = function_text(&optimized, "miri.outer");
+    assert!(
+        calls(&optimized, "miri.middle", "miri.leaf"),
+        "the helper inlined its callee itself, so nothing here is nested:\n{}",
+        function_text(&optimized, "miri.middle")
+    );
+    assert!(
+        !calls(&optimized, "miri.outer", "miri.middle"),
+        "the helper was not inlined:\n{outer}"
+    );
+    assert!(
+        calls(&optimized, "miri.outer", "miri.leaf"),
+        "the large leaf was inlined through the helper's copy:\n{outer}"
+    );
+    let expected = build_and_run(source, &["--opt-level", "0"]);
+    assert_eq!(build_and_run(source, &["--opt-level", "3"]), expected);
+}
+
+/// A helper calling a function that holds a loop and one that calls itself.
+const HELPER_OVER_A_LOOP_AND_A_RECURSION: &str = r#"use system.io
+
+fn sum_to(n int) int
+    var total = 0
+    var i = 0
+    while i < n
+        total += i
+        i += 1
+    total
+
+fn factorial(n int) int
+    if n <= 1
+        return 1
+    n * factorial(n - 1)
+
+fn helper(x int) int
+    sum_to(x % 10) + factorial(x % 5)
+
+fn main()
+    var total = 0
+    var i = 0
+    while i < 10
+        total += helper(i)
+        i += 1
+    println(f"{total}")
+"#;
+
+/// The calls a copy of an inlined helper holds are weighed as the caller's
+/// own are: a callee holding a loop or calling itself keeps its call there
+/// too.
+#[test]
+fn an_inlined_helpers_calls_of_a_loop_or_a_recursion_stay_calls() {
+    let source = HELPER_OVER_A_LOOP_AND_A_RECURSION;
+    let optimized = listing(source, "3");
+    let main = function_text(&optimized, "main");
+    assert!(
+        !calls(&optimized, "main", "miri.helper"),
+        "the helper was not inlined:\n{main}"
+    );
+    for callee in ["miri.sum_to", "miri.factorial"] {
+        assert!(
+            calls(&optimized, "main", callee),
+            "the copy's call of {callee} was inlined:\n{main}"
+        );
+    }
+    let expected = build_and_run(source, &["--opt-level", "0"]);
+    assert_eq!(expected, "188\n");
+    assert_eq!(build_and_run(source, &["--opt-level", "3"]), expected);
 }

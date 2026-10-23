@@ -9,8 +9,13 @@
 //! translated in, so the same program always makes the same decisions. Each
 //! function has its candidate callees inlined into it, is weighed as a
 //! candidate itself, and is then handed back to be defined, so its IR is
-//! dropped as soon as nothing needs it. A candidate is held until the last
-//! function that refers to it has been visited.
+//! dropped as soon as nothing needs it. A copy can hold calls of its own,
+//! those the callee kept because its own budget could not afford them, and
+//! they are weighed against what is left of the caller's budget, so a small
+//! helper's callee is inlined wherever the helper is copied into a caller
+//! that can afford both. A candidate's body is held while one of its direct
+//! callers is still to be visited or a held candidate's body still calls it,
+//! and is dropped as soon as neither is so ([`lifetimes`]).
 //!
 //! What the copies need repaired afterwards is in [`repair`]. Once a
 //! function's callees are inlined into it, and before it is weighed as a
@@ -20,6 +25,7 @@
 //! promotion removes any copied instruction.
 
 mod call_graph;
+mod lifetimes;
 mod repair;
 
 use super::{slot_promotion, TranslatedFunction};
@@ -30,6 +36,7 @@ use cranelift_codegen::ir::{FuncRef, Function, Inst, Opcode, Value};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::traversals::{Dfs, Event};
 use cranelift_codegen::Context;
+use lifetimes::Lifetimes;
 use repair::{CalleeSource, CopiedCall, CopiedSymbol};
 use std::borrow::Cow;
 
@@ -38,7 +45,9 @@ const SMALL_CALLEE_SIZE: usize = 48;
 
 /// The most instructions a callee called from one place may have.
 /// Inlining it makes one copy of its body for the one call, beside the body
-/// its own definition still emits.
+/// its own definition still emits. A call of it inside a copy of another
+/// candidate, which may be copied many times, is held to
+/// [`SMALL_CALLEE_SIZE`] instead.
 const SINGLE_CALL_SITE_CALLEE_SIZE: usize = 120;
 
 /// How many times its own size a caller may grow to by inlining.
@@ -47,6 +56,11 @@ const CALLER_GROWTH_FACTOR: usize = 4;
 /// The most instructions a caller may grow to by inlining, however small
 /// it started.
 const GROWN_CALLER_LIMIT: usize = 2000;
+
+/// The most rounds of inlining into one caller: far more than the nesting
+/// of loop-free candidates the budgets afford, so reaching it means the
+/// rounds would not settle.
+const MAX_INLINING_ROUNDS: usize = 64;
 
 /// The most bytes of stack slots inlining may add to one caller.
 const ADDED_STACK_LIMIT: u64 = 512;
@@ -92,8 +106,8 @@ struct Inliner {
     graph: CallGraph,
     /// Each function's candidate body, while some caller is still to come.
     candidates: Vec<Option<Candidate>>,
-    /// How many of each function's callers are still to be visited.
-    callers_left: Vec<usize>,
+    /// What keeps each candidate alive.
+    lifetimes: Lifetimes,
     /// The one context every inlining runs in.
     context: Context,
 }
@@ -102,7 +116,7 @@ impl Inliner {
     fn over(functions: &[TranslatedFunction<'_>]) -> Self {
         let graph = CallGraph::of(functions);
         Self {
-            callers_left: graph.distinct_callers(),
+            lifetimes: Lifetimes::new(graph.distinct_callers()),
             candidates: std::iter::repeat_with(|| None)
                 .take(functions.len())
                 .collect(),
@@ -119,27 +133,37 @@ impl Inliner {
         isa: &dyn TargetIsa,
     ) -> Result<(), CodegenError> {
         let call_sites = self.graph.call_sites(position);
-        self.candidates[position] = Candidate::of(translated, call_sites, isa)?;
+        let candidate = Candidate::of(translated, call_sites, isa)?;
+        if let Some(candidate) = &candidate {
+            debug_assert!(candidate.size > 0, "a candidate holds no instruction");
+            let calls = self.graph.called_by(&candidate.function);
+            self.lifetimes.admit(position, calls);
+        }
+        self.candidates[position] = candidate;
         Ok(())
     }
 
-    /// Count the function at `position` as visited by each of its callees,
-    /// dropping the candidate whose last caller it was.
+    /// Count the function at `position` as visited by each of its direct
+    /// callees, dropping every candidate nothing still to come can reach a
+    /// call of.
     fn release_callees_of(&mut self, position: usize) {
-        for &callee in self.graph.callees(position) {
-            if callee == position {
-                continue;
-            }
-            let left = &mut self.callers_left[callee];
-            *left = left.saturating_sub(1);
-            if *left == 0 {
-                self.candidates[callee] = None;
-            }
+        for dropped in self
+            .lifetimes
+            .visited(position, self.graph.callees(position))
+        {
+            self.candidates[dropped] = None;
         }
     }
 
     /// Inline the candidates `caller`, at `position`, calls into it and
-    /// repair what the copies carry.
+    /// repair what the copies carry, round after round: a copy can hold calls
+    /// of its own, which the next round weighs against what is left of the
+    /// caller's budget. Each round leaves the copies it makes alone, so each
+    /// is repaired whole, with the location of its call already restored,
+    /// before the calls it holds are inlined. The rounds end when one inlines
+    /// nothing; every copy spends some of the budget, and no candidate can
+    /// reach itself, so they do, and [`MAX_INLINING_ROUNDS`] stops them
+    /// with an error should that ever not hold.
     fn inline_into(
         &mut self,
         caller: &mut TranslatedFunction<'_>,
@@ -150,10 +174,34 @@ impl Inliner {
         if !(self.graph.callees(position).iter()).any(|&callee| candidates[callee].is_some()) {
             return Ok(());
         }
+        let mut budget = GrowthBudget::new(instruction_count(&caller.function), recursive);
+        for round in 0..MAX_INLINING_ROUNDS {
+            let inlined = self.inline_round(caller, &mut budget, round != 0)?;
+            if inlined.is_empty() {
+                return Ok(());
+            }
+            self.repair_copies(caller, &inlined)?;
+        }
+        Err(CodegenError::inlining(
+            caller.name,
+            format!("inlining did not settle in {MAX_INLINING_ROUNDS} rounds"),
+        ))
+    }
+
+    /// Inline into `caller` each call of a candidate it holds that `budget`
+    /// affords, the calls the copies hold left for a later round. In a round
+    /// `within_copies`, after the first, the calls weighed can sit in copies.
+    fn inline_round(
+        &mut self,
+        caller: &mut TranslatedFunction<'_>,
+        budget: &mut GrowthBudget,
+        within_copies: bool,
+    ) -> Result<Vec<InlinedCall>, CodegenError> {
         let mut hook = SmallFunctionInliner {
             graph: &self.graph,
-            candidates,
-            budget: GrowthBudget::new(instruction_count(&caller.function), recursive),
+            candidates: &self.candidates,
+            budget: *budget,
+            within_copies,
             inlined: Vec::new(),
         };
         self.context.clear();
@@ -161,7 +209,19 @@ impl Inliner {
         let inlined = self.context.inline(&mut hook);
         caller.function = std::mem::replace(&mut self.context.func, Function::new());
         inlined.map_err(|e| CodegenError::inlining(caller.name, e.to_string()))?;
-        for call in &hook.inlined {
+        *budget = hook.budget;
+        Ok(hook.inlined)
+    }
+
+    /// Repair the copies `inlined` lists in `caller`: re-declare the symbols
+    /// they refer to and restore their source locations.
+    fn repair_copies(
+        &self,
+        caller: &mut TranslatedFunction<'_>,
+        inlined: &[InlinedCall],
+    ) -> Result<(), CodegenError> {
+        let candidates = &self.candidates;
+        for call in inlined {
             let callee = candidates[call.callee]
                 .as_ref()
                 .ok_or_else(|| CodegenError::inlining(caller.name, "an inlined callee is gone"))?;
@@ -284,6 +344,10 @@ struct SmallFunctionInliner<'g> {
     graph: &'g CallGraph,
     candidates: &'g [Option<Candidate>],
     budget: GrowthBudget,
+    /// Whether the calls weighed can sit in copies of other candidates,
+    /// each of which may be copied many times, so that a callee is held to
+    /// [`SMALL_CALLEE_SIZE`] whatever its call sites.
+    within_copies: bool,
     inlined: Vec<InlinedCall>,
 }
 
@@ -314,6 +378,7 @@ impl Inline for SmallFunctionInliner<'_> {
             return InlineCommand::KeepCall;
         };
         if call_signature != Some(&candidate.function.signature)
+            || (self.within_copies && candidate.size > SMALL_CALLEE_SIZE)
             || !self.budget.spend(candidate.size, candidate.stack)
         {
             return InlineCommand::KeepCall;
@@ -326,6 +391,10 @@ impl Inline for SmallFunctionInliner<'_> {
                 call_site: caller.srcloc(call_inst),
             },
         });
+        // The calls the copy holds are left to the next round, after the copy
+        // is repaired: Cranelift would otherwise split a copy by inlining
+        // into it before it is matched to its original, and the calls in it
+        // would carry no location yet to inline them through.
         InlineCommand::Inline {
             callee: Cow::Borrowed(&candidate.function),
             visit_callee: false,

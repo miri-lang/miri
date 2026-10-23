@@ -47,20 +47,28 @@ impl CallGraph {
         callees.sort_unstable();
         callees.dedup();
         self.callees.push(callees);
-        for block in function.layout.blocks() {
-            for inst in function.layout.block_insts(block) {
-                if let InstructionData::Call {
+        for position in self.called_by(function) {
+            self.call_sites[position] += 1;
+        }
+    }
+
+    /// The user functions some `call` instruction of `function` names, in
+    /// layout order, repeats included.
+    pub fn called_by(&self, function: &Function) -> Vec<usize> {
+        (function.layout.blocks())
+            .flat_map(|block| function.layout.block_insts(block))
+            .filter_map(|inst| {
+                let InstructionData::Call {
                     opcode: Opcode::Call,
                     func_ref,
                     ..
                 } = function.dfg.insts[inst]
-                {
-                    if let Some(position) = self.position_of(function, func_ref) {
-                        self.call_sites[position] += 1;
-                    }
-                }
-            }
-        }
+                else {
+                    return None;
+                };
+                self.position_of(function, func_ref)
+            })
+            .collect()
     }
 
     /// The position of the user function `func_ref` names in `function`,
