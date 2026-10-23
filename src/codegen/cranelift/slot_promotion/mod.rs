@@ -23,10 +23,22 @@ mod ssa;
 use crate::error::CodegenError;
 use cells::Cells;
 use cranelift_codegen::flowgraph::ControlFlowGraph;
-use cranelift_codegen::ir::{Block, Function, StackSlot, StackSlotKind};
+use cranelift_codegen::ir::{
+    Block, DebugTag, Function, InstructionData, Opcode, StackSlot, StackSlotKind, Value, ValueDef,
+};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::Context;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The most cells times reachable blocks one function's promotion may
+/// track. Liveness costs a bit per cell per block on every pass over the
+/// blocks.
+const MAX_CELL_BLOCKS: usize = 300_000;
+
+/// The most rounds forwarding block parameters may take. Each round
+/// forwards the parameters whose incoming value the previous round made
+/// an address, one level of a chain of derived addresses.
+const MAX_FORWARDING_ROUNDS: usize = 32;
 
 /// What promoting one function's slots did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,13 +50,19 @@ pub(super) struct Promotion {
 }
 
 /// Promote every explicit stack slot of `function` that can be held as SSA
-/// values, running the analyses in `context`.
+/// values, running the analyses in `context`. A function that is looked at
+/// at all may change even when nothing is promoted: its aliases are
+/// resolved, its unreachable blocks removed and its block parameters that
+/// carry a slot's address forwarded, none of which changes what it does.
 pub(super) fn promote(
     context: &mut Context,
     function: &mut Function,
     isa: &dyn TargetIsa,
 ) -> Result<Promotion, CodegenError> {
-    if !has_explicit_slot(function) || !function.dfg.exception_tables.is_empty() {
+    if !has_explicit_slot(function)
+        || !function.dfg.exception_tables.is_empty()
+        || observes_its_frame(function)
+    {
         return Ok(Promotion::default());
     }
     context.clear();
@@ -54,7 +72,10 @@ pub(super) fn promote(
     promoted
 }
 
-/// Promote the slots of the function `context` holds.
+/// Promote the slots of the function `context` holds, after resolving its
+/// aliases, removing its unreachable blocks and forwarding the block
+/// parameters that carry an address, which happens whether or not a slot
+/// is then promoted.
 fn promote_in(context: &mut Context, isa: &dyn TargetIsa) -> Result<Promotion, CodegenError> {
     context.func.dfg.resolve_all_aliases();
     context.flowgraph();
@@ -64,15 +85,121 @@ fn promote_in(context: &mut Context, isa: &dyn TargetIsa) -> Result<Promotion, C
             .map_err(|e| CodegenError::Internal(format!("slot promotion: {e}")))?;
     }
     let order: Vec<Block> = context.domtree.cfg_rpo().copied().collect();
+    forward_carried_addresses(&mut context.func, &context.cfg, &order);
+    context.func.dfg.resolve_all_aliases();
     let Some((cells, liveness)) = promotable_cells(&context.func, &context.cfg, &order) else {
         return Ok(Promotion::default());
     };
     ssa::rewrite(&mut context.func, &context.cfg, &order, &cells, &liveness)?;
     empty_slots(&mut context.func, &cells);
+    context.func.dfg.resolve_all_aliases();
     Ok(Promotion {
         slots: cells.slots().len(),
         cells: cells.cells.len(),
     })
+}
+
+/// Copy-propagate block parameters toward slot addresses: replace every
+/// block parameter whose incoming values, other than itself along a back
+/// edge, are all one value that is a slot address or another block
+/// parameter, by that value. The frontend leaves a variable holding a slot's
+/// address as such a parameter in each loop header, nested headers handing
+/// each other the parameter. Every branch to the block hands it the value,
+/// so the value dominates the block and the replacement keeps the
+/// function's meaning. Only addresses and parameters are propagated: a
+/// parameter can be a link in a chain that ends at an address, while any
+/// other value cannot make a slot promotable. Each round makes the
+/// parameters it forwards plain uses of their values, so an address derived
+/// from one is an address the next round sees; the rounds stop when one
+/// forwards nothing, or after [`MAX_FORWARDING_ROUNDS`].
+fn forward_carried_addresses(function: &mut Function, cfg: &ControlFlowGraph, order: &[Block]) {
+    for _ in 0..MAX_FORWARDING_ROUNDS {
+        if !forward_round(function, cfg, order) {
+            return;
+        }
+        function.dfg.resolve_all_aliases();
+    }
+}
+
+/// Forward each parameter of `order`'s blocks whose incoming value is
+/// already known to be an address or is a parameter, returning whether any
+/// was.
+fn forward_round(function: &mut Function, cfg: &ControlFlowGraph, order: &[Block]) -> bool {
+    let addresses = cells::addresses_in(function, order);
+    let mut forwarded = false;
+    for &block in order.iter().skip(1) {
+        for index in (0..function.dfg.num_block_params(block)).rev() {
+            let parameter = function.dfg.block_params(block)[index];
+            let Some(source) = sole_incoming(function, cfg, block, index, parameter) else {
+                continue;
+            };
+            let is_parameter = matches!(function.dfg.value_def(source), ValueDef::Param(..));
+            if addresses[source].is_none() && !is_parameter {
+                continue;
+            }
+            remove_argument(function, cfg, block, index);
+            function.dfg.remove_block_param(parameter);
+            function.dfg.change_to_alias(parameter, source);
+            forwarded = true;
+        }
+    }
+    forwarded
+}
+
+/// The one value other than `parameter` itself that every branch to
+/// `block` hands its parameter at `index`, if there is one.
+fn sole_incoming(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    block: Block,
+    index: usize,
+    parameter: Value,
+) -> Option<Value> {
+    let dfg = &function.dfg;
+    let mut sole = None;
+    for predecessor in cfg.pred_iter(block) {
+        let calls =
+            dfg.insts[predecessor.inst].branch_destination(&dfg.jump_tables, &dfg.exception_tables);
+        for call in calls
+            .iter()
+            .filter(|call| call.block(&dfg.value_lists) == block)
+        {
+            let handed = call.args(&dfg.value_lists).nth(index)?.as_value()?;
+            let handed = dfg.resolve_aliases(handed);
+            if handed == parameter {
+                continue;
+            }
+            if sole.is_some_and(|sole| sole != handed) {
+                return None;
+            }
+            sole = Some(handed);
+        }
+    }
+    sole
+}
+
+/// Remove the argument at `index` from every branch to `block`, in place,
+/// each jump table shared by several branches once. No two block calls
+/// share an argument list: the frontend and Cranelift's inliner build each
+/// afresh, and a jump table copied by the rewrite copies its calls.
+fn remove_argument(function: &mut Function, cfg: &ControlFlowGraph, block: Block, index: usize) {
+    let mut tables = BTreeSet::new();
+    for predecessor in cfg.pred_iter(block) {
+        let dfg = &mut function.dfg;
+        if let InstructionData::BranchTable { table, .. } = dfg.insts[predecessor.inst] {
+            if !tables.insert(table) {
+                continue;
+            }
+        }
+        let calls = dfg.insts[predecessor.inst]
+            .branch_destination_mut(&mut dfg.jump_tables, &mut dfg.exception_tables);
+        for call in calls {
+            if call.block(&dfg.value_lists) != block {
+                continue;
+            }
+            call.remove(index, &mut dfg.value_lists);
+        }
+    }
 }
 
 /// The cells of the slots of `function` that can be promoted, with their
@@ -84,7 +211,7 @@ fn promotable_cells(
     order: &[Block],
 ) -> Option<(Cells, ssa::Liveness)> {
     let entry = *order.first()?;
-    let mut cells = cells::discover(function, order);
+    let mut cells = within_budget(cells::discover(function, order), order.len());
     let mut liveness = ssa::liveness(function, cfg, order, &cells);
     let read_unwritten: BTreeSet<StackSlot> = (liveness.live_in(entry).iter())
         .map(|cell| cells.cells[cell].slot)
@@ -94,6 +221,34 @@ fn promotable_cells(
         liveness = ssa::liveness(function, cfg, order, &cells);
     }
     (!cells.slots().is_empty()).then_some((cells, liveness))
+}
+
+/// `cells` less the slots that would take the number of cells times the
+/// `blocks` they are tracked over past [`MAX_CELL_BLOCKS`], the slots with
+/// the fewest cells kept first.
+fn within_budget(cells: Cells, blocks: usize) -> Cells {
+    let budget = MAX_CELL_BLOCKS / blocks.max(1);
+    if cells.cells.len() <= budget {
+        return cells;
+    }
+    let mut counts: BTreeMap<StackSlot, usize> = BTreeMap::new();
+    for cell in &cells.cells {
+        *counts.entry(cell.slot).or_default() += 1;
+    }
+    let mut by_size: Vec<(usize, StackSlot)> = counts
+        .into_iter()
+        .map(|(slot, count)| (count, slot))
+        .collect();
+    by_size.sort_unstable();
+    let mut spent = 0usize;
+    let over_budget: BTreeSet<StackSlot> = (by_size.into_iter())
+        .filter(|&(count, _)| {
+            spent = spent.saturating_add(count);
+            spent > budget
+        })
+        .map(|(_, slot)| slot)
+        .collect();
+    cells.without(|slot| over_budget.contains(&slot))
 }
 
 /// Remove every instruction computing an address in a promoted slot, and
@@ -114,6 +269,23 @@ fn empty_slots(function: &mut Function, cells: &Cells) {
 fn has_explicit_slot(function: &Function) -> bool {
     (function.sized_stack_slots.values())
         .any(|slot| slot.kind == StackSlotKind::ExplicitSlot && slot.size != 0)
+}
+
+/// Whether `function` reaches its own frame other than through a slot's
+/// address: by reading the frame or stack pointer, by switching stacks, or
+/// by naming a slot in a debug tag. Such a function is left as it is.
+fn observes_its_frame(function: &Function) -> bool {
+    (function.layout.blocks())
+        .flat_map(|block| function.layout.block_insts(block))
+        .any(|inst| {
+            let reaches = matches!(
+                function.dfg.insts[inst].opcode(),
+                Opcode::GetFramePointer | Opcode::GetStackPointer | Opcode::StackSwitch
+            );
+            let tags_a_slot = (function.debug_tags.get(inst).iter())
+                .any(|tag| matches!(tag, DebugTag::StackSlot(_)));
+            reaches || tags_a_slot
+        })
 }
 
 /// Whether the function `context` holds has a block its entry does not

@@ -14,8 +14,8 @@
 
 use cranelift_codegen::entity::SecondaryMap;
 use cranelift_codegen::ir::{
-    Block, Function, Inst, InstructionData, MemFlags, Opcode, StackSlot, StackSlotKind, Type,
-    Value, ValueDef,
+    types, Block, Function, Inst, InstructionData, MemFlags, Opcode, StackSlot, StackSlotKind,
+    Type, Value, ValueDef,
 };
 
 /// A run of a slot's bytes that every access reads or writes whole.
@@ -104,7 +104,7 @@ pub(super) fn discover(function: &Function, order: &[Block]) -> Cells {
 
 /// A byte of a slot, as an address names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Address {
+pub(super) struct Address {
     slot: StackSlot,
     offset: i64,
 }
@@ -121,7 +121,10 @@ impl Address {
 
 /// The addresses in a slot that each value of `function` holds, and the
 /// instruction computing each, its blocks visited in `order`.
-fn addresses_in(function: &Function, order: &[Block]) -> SecondaryMap<Value, Option<Address>> {
+pub(super) fn addresses_in(
+    function: &Function,
+    order: &[Block],
+) -> SecondaryMap<Value, Option<Address>> {
     let mut addresses: SecondaryMap<Value, Option<Address>> = SecondaryMap::new();
     for &block in order {
         for inst in function.layout.block_insts(block) {
@@ -464,9 +467,10 @@ fn accessing(
 }
 
 /// The cells `accesses` of a slot of `size` bytes fall into, each with its
-/// accesses, when every one lies within the slot, overlaps only accesses of
-/// exactly its bytes, and shares a type every other access of its cell can
-/// be converted to.
+/// accesses sorted by instruction number (the order instructions were
+/// created in, not their layout order), when every access lies within the
+/// slot, overlaps only accesses of exactly its bytes, and has a type its
+/// cell can hold and convert it to.
 fn tile(
     slot: StackSlot,
     size: i64,
@@ -504,10 +508,13 @@ fn tile(
     Some(cells)
 }
 
-/// The type a cell accessed by `members`, in instruction order, holds: the
-/// first float type among them, or else the first type, when every other
-/// type can be converted to it.
+/// The type a cell accessed by `members`, sorted by instruction number,
+/// holds: the first float type among them, or else the first type, when
+/// every type is one a cell can hold and can be converted to it.
 fn cell_type(members: &[SlotAccess]) -> Option<Type> {
+    if !members.iter().all(|member| is_holdable(member.ty)) {
+        return None;
+    }
     let first = members.first()?.ty;
     let ty = (members.iter())
         .map(|member| member.ty)
@@ -516,6 +523,25 @@ fn cell_type(members: &[SlotAccess]) -> Option<Type> {
     (members.iter())
         .all(|member| is_convertible(member.ty, ty))
         .then_some(ty)
+}
+
+/// Whether a cell can hold a value of type `ty`: an integer, an `f32` or an
+/// `f64`, or a fixed-width vector of those.
+fn is_holdable(ty: Type) -> bool {
+    let is_scalar = |ty: Type| {
+        matches!(
+            ty,
+            types::I8
+                | types::I16
+                | types::I32
+                | types::I64
+                | types::I128
+                | types::F32
+                | types::F64
+        )
+    };
+    let is_fixed_vector = ty.is_vector() && !ty.is_dynamic_vector() && ty.bits() != 0;
+    is_scalar(ty) || (is_fixed_vector && is_scalar(ty.lane_type()))
 }
 
 /// Whether a value of type `from` can stand for one of type `to` by a
