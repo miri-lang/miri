@@ -280,6 +280,167 @@ fn a_path_holding_a_newline_stays_one_framing_line() {
     assert_eq!(lines.len(), 1, "a path cannot split its own line");
 }
 
+#[test]
+fn parse_fails_on_invalid_json_syntax() {
+    let invalid_jsons = ["{", "not json", r#"{"event": "tick", "path": }"#];
+    for line in invalid_jsons {
+        assert!(
+            DevStreamLine::parse(line).is_err(),
+            "invalid JSON syntax should fail to parse: {}",
+            line
+        );
+    }
+}
+
+#[test]
+fn parse_fails_on_missing_required_framing_fields() {
+    // Missing ts or path in tick
+    let tick_missing_ts = r#"{"event":"tick","schemaVersion":1,"path":"/m.mi"}"#;
+    assert!(
+        DevStreamLine::parse(tick_missing_ts).is_err(),
+        "tick event missing 'ts' should fail to parse"
+    );
+
+    let tick_missing_path = r#"{"event":"tick","schemaVersion":1,"ts":0}"#;
+    assert!(
+        DevStreamLine::parse(tick_missing_path).is_err(),
+        "tick event missing 'path' should fail to parse"
+    );
+
+    // Missing ok or durationMs in idle
+    let idle_missing_ok = r#"{"event":"idle","durationMs":10}"#;
+    assert!(
+        DevStreamLine::parse(idle_missing_ok).is_err(),
+        "idle event missing 'ok' should fail to parse"
+    );
+
+    let idle_missing_duration = r#"{"event":"idle","ok":true}"#;
+    assert!(
+        DevStreamLine::parse(idle_missing_duration).is_err(),
+        "idle event missing 'durationMs' should fail to parse"
+    );
+}
+
+#[test]
+fn parse_fails_on_missing_required_diagnostic_fields() {
+    // Missing severity
+    let missing_severity = r#"{"message":"something went wrong"}"#;
+    assert!(
+        DevStreamLine::parse(missing_severity).is_err(),
+        "diagnostic missing 'severity' should fail to parse"
+    );
+
+    // Missing message
+    let missing_message = r#"{"severity":"error"}"#;
+    assert!(
+        DevStreamLine::parse(missing_message).is_err(),
+        "diagnostic missing 'message' should fail to parse"
+    );
+}
+
+#[test]
+fn framing_lines_and_diagnostics_support_numeric_and_empty_boundaries() {
+    // u64::MAX timestamp and duration, empty path and empty message
+    let max_tick = DevEvent::tick(u64::MAX, "");
+    let (_, parsed_tick) = round_trip(&max_tick);
+    assert_eq!(max_tick, parsed_tick);
+
+    let max_idle = DevEvent::idle(true, u64::MAX);
+    let (_, parsed_idle) = round_trip(&max_idle);
+    assert_eq!(max_idle, parsed_idle);
+
+    let empty_diag = diagnostic("");
+    let line = serde_json::to_string(&empty_diag).expect("serialization should succeed");
+    match DevStreamLine::parse(&line) {
+        Ok(DevStreamLine::Diagnostic(d)) => assert_eq!(d.message, ""),
+        other => panic!("expected Diagnostic with empty message, got {:?}", other),
+    }
+}
+
+#[test]
+fn write_event_and_write_diagnostic_propagate_io_errors() {
+    struct FailingWriter;
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "write error",
+            ))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "flush error",
+            ))
+        }
+    }
+
+    let mut writer = FailingWriter;
+    let tick = DevEvent::tick(0, "/project/main.mi");
+    assert!(
+        write_event(&mut writer, &tick).is_err(),
+        "write_event should propagate I/O write error"
+    );
+
+    let diag = diagnostic("test error");
+    assert!(
+        write_diagnostic(&mut writer, &diag).is_err(),
+        "write_diagnostic should propagate I/O write error"
+    );
+}
+
+#[test]
+fn parse_handles_diagnostic_with_full_optional_fields_and_related_notes() {
+    use miri::diagnostics::json::{JsonEdit, JsonRelated, JsonRepair};
+
+    let full_diag = JsonDiagnostic {
+        severity: "error".to_string(),
+        code: Some("MER_TYP_010".to_string()),
+        message: "mismatched types".to_string(),
+        path: Some("src/main.mi".to_string()),
+        line: Some(42),
+        column: Some(15),
+        length: Some(4),
+        expected: Some("Int".to_string()),
+        actual: Some("String".to_string()),
+        help: Some("convert string to int".to_string()),
+        fix_safety: Some("behavior-preserving".to_string()),
+        repair: Some(JsonRepair {
+            id: "fix_type".to_string(),
+            summary: "parse string as int".to_string(),
+            edits: vec![JsonEdit {
+                path: "src/main.mi".to_string(),
+                start: 100,
+                end: 105,
+                replacement: "42".to_string(),
+            }],
+        }),
+        related: vec![JsonRelated {
+            severity: "note".to_string(),
+            message: "defined here".to_string(),
+            code: None,
+            path: Some("src/main.mi".to_string()),
+            line: Some(10),
+            column: Some(1),
+        }],
+        preexisting: Some(false),
+    };
+
+    let json_str =
+        serde_json::to_string(&full_diag).expect("diagnostic serialization should succeed");
+    match DevStreamLine::parse(&json_str) {
+        Ok(DevStreamLine::Diagnostic(d)) => {
+            assert_eq!(*d, full_diag);
+            assert_eq!(d.related.len(), 1);
+            assert_eq!(d.related[0].message, "defined here");
+            assert!(d.repair.is_some());
+            assert_eq!(d.repair.as_ref().unwrap().id, "fix_type");
+        }
+        other => panic!("expected Diagnostic, got {:?}", other),
+    }
+}
+
 /// Split a written stream into lines, asserting each is one whole JSON object.
 ///
 /// This is the property a consumer reading the stream a line at a time depends
