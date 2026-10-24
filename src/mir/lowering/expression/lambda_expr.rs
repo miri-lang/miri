@@ -38,6 +38,7 @@ use crate::mir::{
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::identifier_expr::lower_self_reference_value;
 use crate::mir::lowering::helpers::{lower_as_return, resolve_type};
+use crate::mir::lowering::written_parameters::copy_written_parameters;
 use crate::mir::lowering::{apply_generic_sub, resolve_execution_model};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -187,8 +188,10 @@ fn lower_closure_body(
     let mut lambda_ctx = closure_context(ctx, closure, &ret_ty);
 
     let tentative_captures = declare_tentative_captures(ctx, &mut lambda_ctx, closure);
+    let copies = copy_written_parameters(&mut lambda_ctx, closure.params, Some(closure.body));
 
     lower_as_return(&mut lambda_ctx, closure.body, &ret_ty)?;
+    copies.close(&mut lambda_ctx, span);
 
     // Falling off the end must end the root scope's storage exactly as an
     // explicit `return` does: a capture the body assigns owns the value it last

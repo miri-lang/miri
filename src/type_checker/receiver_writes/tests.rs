@@ -327,3 +327,30 @@ fn the_standard_library_collections_write_only_through_their_writers() {
         );
     }
 }
+
+/// The methods MIR lowering intercepts by name and lowers to a write of the
+/// receiver it routes through `method_dispatch::with_mutated_receiver`, as
+/// `dispatch::try_lower_collection_intrinsic` spells them. Dispatch keeps no
+/// table of them, so they are listed here: lowering finds the parameters a
+/// body writes through `ReceiverWrites`, and an intercepted writer it does
+/// not report would reach a parameter with no copy taken on entry.
+const INTERCEPTED_WRITERS: [(&str, &str); 6] = [
+    ("List", "push"),
+    ("List", "insert"),
+    ("List", "set"),
+    ("Array", "set"),
+    ("Map", "set"),
+    ("Set", "add"),
+];
+
+#[test]
+fn every_writer_lowering_intercepts_by_name_writes_its_receiver() {
+    let programs = standard_library();
+    let statements = programs.iter().flat_map(|program| program.body.iter());
+    let writes = ReceiverWrites::of(statements, written_name);
+    for (class, method) in INTERCEPTED_WRITERS {
+        let key = (class.to_string(), method.to_string());
+        assert!(writes.analysed.contains(&key), "{class}.{method} analysed");
+        assert!(writes.writers.contains(&key), "{class}.{method} writes");
+    }
+}

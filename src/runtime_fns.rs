@@ -726,6 +726,8 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         | rt::STRING_IS_EMPTY
         | rt::STRING_CONCAT
         | rt::STRING_CLONE
+        | rt::STRING_JOIN
+        | rt::LIST_NEW_FROM_MANAGED_ARRAY
         | rt::STRING_EQUALS
         | rt::STRING_HASH
         | rt::STRING_COMPARE

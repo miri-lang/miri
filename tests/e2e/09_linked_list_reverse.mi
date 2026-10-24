@@ -11,7 +11,9 @@ use system.collections.list
 // values[i] is the data
 // nexts[i] is the index of the next node (-1 for None)
 
-fn reverse_list(nexts List<int>, head int) int
+// The links are reversed in the caller's list, so it is passed as an `out`
+// parameter: a plain parameter is the callee's own copy once it is written.
+fn reverse_list(nexts out List<int>, head int) int
     var prev = -1
     var current = head
     

@@ -37,6 +37,7 @@ pub mod reduce_gpu;
 pub mod statement;
 pub mod variable;
 pub mod vtable_demand;
+mod written_parameters;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
@@ -63,6 +64,7 @@ pub use context::LoweringContext;
 pub use expression::lower_expression;
 pub use helpers::{bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_type};
 pub use statement::lower_statement;
+use written_parameters::copy_written_parameters;
 
 /// Lower an AST function declaration to a MIR Body.
 ///
@@ -215,6 +217,8 @@ fn lower_function_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
+    let copies = copy_written_parameters(&mut ctx, params, body_stmt.as_deref());
+
     // Emit guard checks for parameters with guards
     emit_parameter_guards(&mut ctx, name, params)?;
 
@@ -222,6 +226,7 @@ fn lower_function_body(
     if let Some(body_box) = body_stmt {
         lower_as_return(&mut ctx, body_box, &ret_ty)?;
     }
+    copies.close(&mut ctx, ast_func.span);
 
     finalize_body(&mut ctx, ast_func.span)
 }
@@ -654,11 +659,14 @@ fn lower_instantiation_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
+    let copies = copy_written_parameters(&mut ctx, params, body_stmt.as_deref());
+
     emit_parameter_guards(&mut ctx, name, params)?;
 
     if let Some(body_box) = body_stmt {
         lower_as_return(&mut ctx, body_box, &ret_ty)?;
     }
+    copies.close(&mut ctx, ast_func.span);
 
     finalize_body(&mut ctx, ast_func.span)
 }
@@ -931,7 +939,8 @@ fn lower_class_method_body(
     // _1: self parameter (instance methods only; the class instance, registered in variable_map).
     // Static methods skip this slot entirely.
     if has_self {
-        ctx.push_param("self".to_string(), self_type.clone(), ast_method.span);
+        let receiver = ctx.push_param("self".to_string(), self_type.clone(), ast_method.span);
+        ctx.body.receiver = Some(receiver);
     }
 
     // Remaining explicit parameters (registered in variable_map).
@@ -959,10 +968,13 @@ fn lower_class_method_body(
     out_params.push(false);
     ctx.body.out_params = out_params;
 
+    let copies = copy_written_parameters(&mut ctx, params, body_stmt.as_deref());
+
     // Lower body
     if let Some(body_box) = body_stmt {
         lower_as_return(&mut ctx, body_box, &ret_ty)?;
     }
+    copies.close(&mut ctx, ast_method.span);
 
     finalize_body(&mut ctx, ast_method.span)
 }

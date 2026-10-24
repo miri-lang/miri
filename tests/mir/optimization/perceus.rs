@@ -1373,9 +1373,10 @@ fn grow() int
     );
 }
 
-/// A callee writes a parameter in place when nothing else holds it, so a row
-/// lent to `grow` keeps its reference: a borrowed row would share
-/// `grid[0]`'s count, and `grow` would push into `grid[0]`.
+/// A row lent to a callee keeps its reference: the callee writes a copy of
+/// the parameter it binds on entry, and that copy is unshared from the row,
+/// so a borrowed row would share `grid[0]`'s count and the copy's unsharing
+/// would read `grid[0]` as unshared and push into it.
 #[test]
 fn test_an_element_lent_to_a_callee_keeps_its_reference() {
     let source = r#"

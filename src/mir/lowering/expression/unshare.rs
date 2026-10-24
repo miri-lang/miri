@@ -17,6 +17,15 @@
 //! copied every time it is bound, wherever it is held — a frame, a field, a
 //! collection — so no second name ever holds it and it is never unshared.
 //!
+//! A parameter's value is its caller's, and the caller may hold it under more
+//! than one name, so a write never starts at a parameter: a body that writes
+//! one, or through a path starting at one, binds a copy of it on entry
+//! (`lowering::written_parameters`) and every write goes into the copy. Only a
+//! method's receiver, which the caller made the body's own before calling a
+//! writer, and an `out` parameter, which is the caller's binding itself, are
+//! written in place; reaching any other parameter here is a broken invariant,
+//! reported rather than lowered into a write the caller would see.
+//!
 //! A path may also start at a value no binding holds — a call's result, a
 //! conditional's. That value is held in a temp owning one reference for the
 //! duration of the write, made its own like any binding's value, and released
@@ -26,18 +35,19 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::place::PlaceElem;
 use crate::mir::terminator::Discriminant;
+use crate::mir::type_facts::unsharing::{is_copied_on_write, unsharing, Unsharing};
 use crate::mir::{
     AggregateKind, BasicBlock, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
     TerminatorKind,
 };
 use crate::runtime_fns::rt;
-use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::element_layout::element_layout;
 
 /// One step of the path a write reaches through, read off the expression
@@ -66,18 +76,6 @@ impl Step<'_> {
             | Step::Entry(_, _, ty) => ty,
         }
     }
-}
-
-/// How a value on a write's path is made its own before the write.
-enum Unsharing {
-    /// A struct held as a reference-counted allocation, with this many
-    /// fields: rebuilt from its fields.
-    Struct(usize),
-    /// A tuple held as a reference-counted allocation, with this many
-    /// elements: rebuilt from its elements.
-    Tuple(usize),
-    /// A built-in collection: cloned by the runtime.
-    Collection(BuiltinCollectionKind),
 }
 
 /// The temp a written path starts at when no binding holds the value, with
@@ -201,7 +199,7 @@ pub(crate) fn lower_written_entry_place(
         return Ok(None);
     }
     let mut steps = Vec::new();
-    if !collect_steps(ctx, obj, &mut steps) {
+    if !collect_steps(ctx, obj, &mut steps)? {
         return Ok(None);
     }
     let Some((mut place, temporary)) = lower_path_root(ctx, &steps)? else {
@@ -223,7 +221,7 @@ pub(crate) fn lower_written_entry_place(
                 continue;
             }
         }
-        if let Some(unsharing) = unsharing(ctx, step.ty()) {
+        if let Some(unsharing) = unsharing(&ctx.body, step.ty()) {
             emit_unshare(ctx, &place, step.ty(), unsharing, obj.span)?;
         }
     }
@@ -289,6 +287,43 @@ fn lower_temporary_root(
     Ok(TemporaryRoot::new(local, watermark))
 }
 
+/// One field or element step of a written path, read off the expression
+/// that takes it.
+pub(crate) enum PathLink<'e> {
+    /// `object.prop`, the whole expression beside it.
+    Member(&'e Expression, &'e Expression),
+    /// `collection[index]`, the whole expression beside them.
+    Index(&'e Expression, &'e Expression, &'e Expression),
+}
+
+/// The expression a written path starts at, and the field and element steps
+/// taken from it, innermost first. The one reading of a path's shape that
+/// both lowering a write ([`collect_steps`]) and finding the parameters a body
+/// writes (`lowering::written_parameters`) go through.
+pub(crate) fn path_links(expr: &Expression) -> (&Expression, Vec<PathLink<'_>>) {
+    let mut links = Vec::new();
+    let mut root = expr;
+    loop {
+        if let ExpressionKind::Member(inner, prop) = &root.node {
+            links.push(PathLink::Member(prop, root));
+            root = inner;
+        } else if let ExpressionKind::Index(collection, index) = &root.node {
+            links.push(PathLink::Index(collection, index, root));
+            root = collection;
+        } else {
+            break;
+        }
+    }
+    links.reverse();
+    (root, links)
+}
+
+/// The expression a written path starts at: `expr` with every field and
+/// element step taken off.
+pub(crate) fn path_root(expr: &Expression) -> &Expression {
+    path_links(expr).0
+}
+
 /// Reads the path `expr` names into `steps`, outermost first. False when any
 /// part of it is something a write cannot be routed through here: a binding
 /// a write may not replace, a member that is not a field, an element of a
@@ -298,35 +333,42 @@ fn collect_steps<'e>(
     ctx: &LoweringContext,
     expr: &'e Expression,
     steps: &mut Vec<Step<'e>>,
-) -> bool {
-    if let ExpressionKind::Identifier(name, _) = &expr.node {
-        return root_step(ctx, name).is_some_and(|root| {
-            steps.push(root);
-            true
-        });
-    }
-    if let ExpressionKind::Member(inner, prop) = &expr.node {
-        return collect_steps(ctx, inner, steps)
-            && field_step(ctx, steps, prop, expr).is_some_and(|step| {
-                steps.push(step);
-                true
-            });
-    }
-    if let ExpressionKind::Index(collection, index) = &expr.node {
-        let Some(step) = indexed_step(ctx, collection, index, expr) else {
-            return false;
+) -> Result<bool, LoweringError> {
+    let (root, links) = path_links(expr);
+    let Some(root) = root_of_path(ctx, root)? else {
+        return Ok(false);
+    };
+    steps.push(root);
+    for link in links {
+        let step = match link {
+            PathLink::Member(prop, member) => field_step(ctx, steps, prop, member),
+            PathLink::Index(collection, index, element) => {
+                indexed_step(ctx, collection, index, element)
+            }
         };
-        let reached = collect_steps(ctx, collection, steps);
+        let Some(step) = step else {
+            return Ok(false);
+        };
         steps.push(step);
-        return reached;
     }
-    if matches!(expr.node, ExpressionKind::Super) {
-        return false;
+    Ok(true)
+}
+
+/// The step a written path starting at `root` starts with: the binding it
+/// names, or the value no binding holds; `None` for `super`.
+fn root_of_path<'e>(
+    ctx: &LoweringContext,
+    root: &'e Expression,
+) -> Result<Option<Step<'e>>, LoweringError> {
+    if let ExpressionKind::Identifier(name, _) = &root.node {
+        return root_step(ctx, name, root.span);
     }
-    ctx.recorded_type(expr.id).is_some_and(|ty| {
-        steps.push(Step::Temporary(expr, ty));
-        true
-    })
+    if matches!(root.node, ExpressionKind::Super) {
+        return Ok(None);
+    }
+    Ok(ctx
+        .recorded_type(root.id)
+        .map(|ty| Step::Temporary(root, ty)))
 }
 
 /// The step for `collection[index]`: an element slot of a `List` or `Array`,
@@ -350,20 +392,48 @@ fn indexed_step<'e>(
 
 /// The step for the binding `name`, when a write may replace its value.
 ///
-/// A parameter's value belongs to the caller, so a binding the body only
-/// borrows is never replaced by a copy here; neither is a GPU-resident binding,
-/// whose host block mirrors a device buffer.
-fn root_step<'e>(ctx: &LoweringContext, name: &str) -> Option<Step<'e>> {
-    let local = *ctx.variable_map.get(name)?;
+/// A GPU-resident binding, whose host block mirrors a device buffer, is never
+/// replaced by a copy here, and neither is a method's receiver, which its
+/// caller made the body's own. An `out` parameter is the caller's binding
+/// itself, so its count is the caller's own and the path is unshared from it
+/// like from any binding. Any other parameter holding a value a write copies
+/// is a value the caller still holds: the body writes it only through the
+/// copy it binds on entry, so reaching one here is a write that entry missed.
+fn root_step<'e>(
+    ctx: &LoweringContext,
+    name: &str,
+    span: Span,
+) -> Result<Option<Step<'e>>, LoweringError> {
+    let Some(&local) = ctx.variable_map.get(name) else {
+        return Ok(None);
+    };
     let decl = &ctx.body.local_decls[local.0];
     if decl.device_handle.is_some() {
-        return None;
+        return Ok(None);
     }
     let is_parameter = (1..=ctx.body.arg_count).contains(&local.0);
-    if is_parameter && unsharing(ctx, &decl.ty).is_some() {
-        return None;
+    if is_parameter && is_copied_on_write(&ctx.body, &decl.ty) {
+        if ctx.body.receiver == Some(local) {
+            return Ok(None);
+        }
+        if ctx.body.is_lent_param(local) {
+            return Err(lent_parameter_write(name, span));
+        }
     }
-    Some(Step::Root(local, decl.ty.clone()))
+    Ok(Some(Step::Root(local, decl.ty.clone())))
+}
+
+/// The internal error for a write reaching the parameter `name`, whose value
+/// its caller still holds, rather than the copy the body binds on entry.
+pub(crate) fn lent_parameter_write(name: &str, span: Span) -> LoweringError {
+    LoweringError::internal(
+        DiagnosticCode::MirValidationFailed,
+        format!(
+            "a write reached the parameter `{name}` itself, whose value its caller still \
+             holds, instead of the copy of it the body binds on entry"
+        ),
+        span,
+    )
 }
 
 /// The step for field `prop` of the value the last step reached: a field of a
@@ -437,7 +507,7 @@ fn lower_entry_place(
             temporary: None,
         });
     }
-    let Some(unsharing) = unsharing(ctx, value_ty) else {
+    let Some(unsharing) = unsharing(&ctx.body, value_ty) else {
         ctx.emit_temp_drop(key_place.local, key_watermark, key.span);
         return Ok(WrittenPlace {
             place: entry,
@@ -485,38 +555,6 @@ fn lower_index_local(
     let operand = lower_expression(ctx, index, None)?;
     let operand = crate::mir::lowering::helpers::index_at_int(ctx, operand, index);
     Ok(super::index_expr::ensure_index_local(ctx, index, operand))
-}
-
-/// How a value of type `ty` is made its own before a write, or `None` when a
-/// value of that type is never shared or is shared by design.
-///
-/// A value held as its bytes is copied whenever a binding, a field, an element
-/// or a closure takes it, so no second holder of it ever exists. Any other
-/// struct is a reference-counted allocation that a copy shares, and a write
-/// copies it first. A vector is never shared either: a collection holds it
-/// inline, as its components' bytes, and a copy built for it would be stored
-/// by value and never released.
-fn unsharing(ctx: &LoweringContext, ty: &Type) -> Option<Unsharing> {
-    if let Some(kind) = ty.kind.as_builtin_collection() {
-        return Some(Unsharing::Collection(kind));
-    }
-    if crate::ast::types::vec_type_dim(&ty.kind).is_some()
-        || ctx.body.value_layout(&ty.kind).is_some()
-    {
-        return None;
-    }
-    if let TypeKind::Tuple(elements) = &ty.kind {
-        return Some(Unsharing::Tuple(elements.len()));
-    }
-    let TypeKind::Custom(name, _) = &ty.kind else {
-        return None;
-    };
-    let Some(TypeDefinition::Struct(definition)) =
-        ctx.type_checker.type_definitions().get(name.as_str())
-    else {
-        return None;
-    };
-    Some(Unsharing::Struct(definition.fields.len()))
 }
 
 /// Replaces the value at `place` with a copy of it when anything else holds it.
@@ -672,8 +710,9 @@ fn emit_aggregate_copy(
 /// over (`optimization::owned_params` declines methods, closures and every
 /// function it cannot prove has one body and plain callers) arrives here
 /// shared even when the caller never uses it again (`xs = step(xs)`), because
-/// the callee's `var x = param` takes a reference of its own, so the first
-/// write copies the whole collection and then every element it writes.
+/// the copy the callee binds on entry for a parameter it writes takes a
+/// reference of its own, so the first write copies the whole collection and
+/// then every element it writes.
 fn collection_clone_fn(kind: BuiltinCollectionKind) -> &'static str {
     match kind {
         BuiltinCollectionKind::List => rt::LIST_CLONE,

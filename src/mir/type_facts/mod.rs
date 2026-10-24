@@ -16,6 +16,7 @@
 
 mod drop_instantiations;
 mod drop_reach;
+pub mod unsharing;
 
 use crate::ast::expression::Expression;
 use crate::ast::types::Type;

@@ -15,6 +15,7 @@
 mod in_bounds;
 mod local_borrows;
 mod optional_representation;
+mod parameter_writes;
 mod stable_collections;
 mod value_arguments;
 mod value_representation;

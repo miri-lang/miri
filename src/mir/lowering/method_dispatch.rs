@@ -20,7 +20,7 @@ use crate::type_checker::value_class::LayoutScope;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
-use super::expression::unshare::{lower_written_place, TemporaryRoot};
+use super::expression::unshare::{lent_parameter_write, lower_written_place, TemporaryRoot};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::borrow::Cow;
@@ -1142,6 +1142,36 @@ fn monomorph_for_instantiation(
     Some((callee.symbol, return_ty))
 }
 
+/// The copy-on-write entry point a call of `method_name` of `class_name` on a
+/// receiver of type `obj_ty` goes through first, when the call writes a
+/// built-in collection receiver; `None` when it writes none.
+fn call_writes_receiver(
+    ctx: &LoweringContext,
+    obj_ty: &Type,
+    class_name: &str,
+    method_name: &str,
+) -> Option<&'static str> {
+    let writes_receiver =
+        (ctx.type_checker.receiver_writes).writes_receiver(class_name, method_name);
+    obj_ty
+        .kind
+        .as_builtin_collection()
+        .filter(|_| writes_receiver)
+        .and_then(cow_fn)
+}
+
+/// Whether calling `method_expr` on `obj` writes the collection `obj` names,
+/// as [`prepare_method_self`] decides it for the call.
+pub(crate) fn is_receiver_written(
+    ctx: &LoweringContext,
+    obj: &Expression,
+    method_expr: &Expression,
+) -> bool {
+    resolve_method_receiver(ctx, obj, method_expr).is_some_and(|(obj_ty, class, method)| {
+        call_writes_receiver(ctx, &obj_ty, &class, &method).is_some()
+    })
+}
+
 /// Lower the receiver, apply a CoW check when the call writes a collection
 /// receiver, and return the self operand plus the receiver temp local (for
 /// Perceus drops).
@@ -1158,14 +1188,7 @@ fn prepare_method_self(
     (class_name, method_name): (&str, &str),
     span: Span,
 ) -> Result<(Operand, Option<Local>, Option<Local>), LoweringError> {
-    let writes_receiver =
-        (ctx.type_checker.receiver_writes).writes_receiver(class_name, method_name);
-    let mutated_cow = obj_ty
-        .kind
-        .as_builtin_collection()
-        .filter(|_| writes_receiver)
-        .and_then(cow_fn);
-    if let Some(cow) = mutated_cow {
+    if let Some(cow) = call_writes_receiver(ctx, obj_ty, class_name, method_name) {
         let (self_op, temporary) = lower_mutated_receiver(ctx, obj, Some((obj_ty, cow)), span)?;
         return Ok((self_op, temporary.map(|temporary| temporary.local()), None));
     }
@@ -1278,7 +1301,7 @@ pub(super) fn lower_mutated_receiver(
         Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
     };
     let receiver = match cow {
-        Some((obj_ty, cow)) => emit_cow_check(ctx, obj_op, obj_ty, cow, span),
+        Some((obj_ty, cow)) => emit_cow_check(ctx, obj_op, obj_ty, cow, span)?,
         None => obj_op,
     };
     Ok((receiver, temporary))
@@ -1301,6 +1324,36 @@ pub(super) fn with_mutated_receiver<R>(
     Ok(written)
 }
 
+/// The local a write through `obj_op` checks for sharing first: a whole host
+/// local, not a GPU-resident binding — reference counts exist on the host
+/// only, and such a binding's host copy is detached by residency.
+///
+/// A parameter whose value its caller still holds is never checked: its
+/// count holds only the caller's references, and the write would land in the
+/// caller's value. A body writing one binds a copy of it on entry, so reaching
+/// one is a write that entry missed, reported as an internal error.
+fn cow_checked_local(
+    ctx: &LoweringContext,
+    obj_op: &Operand,
+    span: Span,
+) -> Result<Option<Local>, LoweringError> {
+    let local = match obj_op {
+        Operand::Move(place) if place.projection.is_empty() => place.local,
+        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => {
+            return Ok(None)
+        }
+    };
+    let decl = &ctx.body.local_decls[local.0];
+    if ctx.body.is_gpu() || decl.device_handle.is_some() {
+        return Ok(None);
+    }
+    if ctx.body.is_lent_param(local) {
+        let name = decl.name.as_deref().unwrap_or("?");
+        return Err(lent_parameter_write(name, span));
+    }
+    Ok(Some(local))
+}
+
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.
 ///
 /// If the receiver is a simple local variable (`Move` with no projection), emits a call to
@@ -1317,16 +1370,10 @@ pub(super) fn emit_cow_check(
     obj_ty: &Type,
     cow_fn_name: &str,
     span: Span,
-) -> Operand {
-    let self_local = match &obj_op {
-        Operand::Move(p) if p.projection.is_empty() => p.local,
-        _ => return obj_op,
+) -> Result<Operand, LoweringError> {
+    let Some(self_local) = cow_checked_local(ctx, &obj_op, span)? else {
+        return Ok(obj_op);
     };
-    // Reference counts exist on the host only: a GPU body has no count to
-    // check, and a GPU-resident binding's host copy is detached by residency.
-    if ctx.body.is_gpu() || ctx.body.local_decls[self_local.0].device_handle.is_some() {
-        return obj_op;
-    }
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
     let cow_fn = Operand::runtime(cow_fn_name, span);
     let cow_target = ctx.new_basic_block();
@@ -1349,5 +1396,5 @@ pub(super) fn emit_cow_check(
         ),
         span,
     });
-    Operand::Move(Place::new(self_local))
+    Ok(Operand::Move(Place::new(self_local)))
 }

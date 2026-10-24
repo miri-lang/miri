@@ -93,6 +93,10 @@ pub struct Body {
     /// Populated by MIR lowering from `Parameter::is_out`.
     /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
     pub out_params: Vec<bool>,
+    /// The parameter a method body is called on, `self`; `None` in any other
+    /// body. A call to a method that writes its receiver hands it one only the
+    /// caller holds, so the body writes it in place.
+    pub receiver: Option<Local>,
     /// Which parameters (indexed 1..=arg_count) the body takes over from its
     /// callers. `owned_params[i-1] == true` means parameter `_i` is passed
     /// [`crate::mir::ArgMode::Owned`] by every call: the caller funds one
@@ -288,6 +292,7 @@ impl Body {
             bound_params: HashSet::new(),
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
+            receiver: None,
             owned_params: Vec::new(),
             borrowed_locals: HashMap::new(),
             param_written: Vec::new(),
@@ -370,6 +375,23 @@ impl Body {
             .and_then(|index| self.owned_params.get(index))
             .copied()
             .unwrap_or(false)
+    }
+
+    /// Whether `local` is a parameter holding a value its caller still holds:
+    /// neither the receiver, which the caller made the body's own, nor an
+    /// `out` parameter, which is the caller's binding itself.
+    ///
+    /// Reads `out_params` by parameter index, so it relies on lowering
+    /// filling that table in parameter order; a thunk or closure body leaves
+    /// it empty, and every parameter of one reads as not `out`.
+    pub fn is_lent_param(&self, local: Local) -> bool {
+        let is_out = local
+            .0
+            .checked_sub(1)
+            .and_then(|index| self.out_params.get(index))
+            .copied()
+            .unwrap_or(false);
+        (1..=self.arg_count).contains(&local.0) && !is_out && self.receiver != Some(local)
     }
 
     /// Returns true if this function runs on a GPU.
