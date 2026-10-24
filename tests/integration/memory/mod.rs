@@ -38,5 +38,6 @@ pub mod shared_receivers;
 pub mod stored_closures;
 pub mod temporaries;
 pub mod trait_coercion;
+pub mod tuple_receivers;
 pub mod use_after_move;
 pub mod value_arguments;

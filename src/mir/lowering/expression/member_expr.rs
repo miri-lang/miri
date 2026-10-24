@@ -29,7 +29,7 @@ fn kernel_context_field(sym: &str) -> Option<&str> {
 }
 
 /// Extract integer index from an IntegerLiteral.
-fn extract_integer_index(val: &crate::ast::literal::IntegerLiteral) -> usize {
+pub(super) fn extract_integer_index(val: &crate::ast::literal::IntegerLiteral) -> usize {
     match val {
         crate::ast::literal::IntegerLiteral::I8(v) => *v as usize,
         crate::ast::literal::IntegerLiteral::I16(v) => *v as usize,

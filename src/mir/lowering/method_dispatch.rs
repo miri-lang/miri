@@ -20,6 +20,7 @@ use crate::type_checker::value_class::LayoutScope;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
+use super::expression::unshare::{lower_written_place, TemporaryRoot};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::borrow::Cow;
@@ -1164,16 +1165,12 @@ fn prepare_method_self(
         .as_builtin_collection()
         .filter(|_| writes_receiver)
         .and_then(cow_fn);
-    let (self_op, boxed) = match mutated_cow {
-        Some(cow) => (
-            lower_mutated_receiver(ctx, obj, obj_ty, Some(cow), span)?,
-            None,
-        ),
-        None => {
-            let receiver = lower_method_receiver(ctx, obj)?;
-            box_value_tuple_receiver(ctx, receiver, obj_ty, span)
-        }
-    };
+    if let Some(cow) = mutated_cow {
+        let (self_op, temporary) = lower_mutated_receiver(ctx, obj, Some((obj_ty, cow)), span)?;
+        return Ok((self_op, temporary.map(|temporary| temporary.local()), None));
+    }
+    let receiver = lower_method_receiver(ctx, obj)?;
+    let (self_op, boxed) = box_value_tuple_receiver(ctx, receiver, obj_ty, span);
     let obj_temp_local = if let Operand::Copy(ref p) = self_op {
         Some(p.local)
     } else {
@@ -1248,31 +1245,60 @@ fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_na
     is_trait || class_needs_vtable(class_name, defs)
 }
 
-/// Lowers the receiver of a call that mutates the collection `obj` names, so
-/// the call changes a collection only that receiver holds.
+/// Lowers the receiver of a write — a call or a store — into the collection
+/// `obj` names, so the write changes a collection only that receiver holds.
 ///
-/// A bare binding is lowered as it is and, when the kind has a copy-on-write
-/// entry point `cow`, checked through it. A receiver reached through a field
-/// or an element is made the program's own along its whole path first: the
-/// struct holding it may be shared with another name, and so may the
-/// collection itself.
+/// A bare binding is lowered as it is and, when `cow` names the collection's
+/// type and its copy-on-write entry point, checked through it. Any other
+/// receiver is made the program's own along its whole path first: the struct
+/// or tuple holding it may be shared with another name, and so may the
+/// collection itself, and a call's result shares whatever it was read from.
+///
+/// Returned beside the receiver is the temp holding the value its path starts
+/// at when no binding holds it; the caller releases it once the write is done,
+/// through [`with_mutated_receiver`] or on its own.
 pub(super) fn lower_mutated_receiver(
     ctx: &mut LoweringContext,
     obj: &Expression,
-    obj_ty: &Type,
-    cow: Option<&str>,
+    cow: Option<(&Type, &str)>,
     span: Span,
-) -> Result<Operand, LoweringError> {
-    if !matches!(obj.node, ExpressionKind::Identifier(..)) {
-        if let Some(place) = super::expression::unshare::lower_written_place(ctx, obj)? {
-            return Ok(Operand::Copy(place));
+) -> Result<(Operand, Option<TemporaryRoot>), LoweringError> {
+    let is_binding = matches!(obj.node, ExpressionKind::Identifier(..));
+    if !is_binding {
+        if let Some((place, temporary)) = lower_written_place(ctx, obj)? {
+            return Ok((Operand::Copy(place), temporary));
         }
     }
+    let watermark = ctx.body.local_decls.len();
     let obj_op = lower_expression(ctx, obj, None)?;
-    Ok(match cow {
-        Some(cow) => emit_cow_check(ctx, obj_op, obj_ty, cow, span),
+    let temporary = match &obj_op {
+        Operand::Copy(place) | Operand::Move(place) if !is_binding => {
+            Some(TemporaryRoot::new(place.local, watermark))
+        }
+        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
+    };
+    let receiver = match cow {
+        Some((obj_ty, cow)) => emit_cow_check(ctx, obj_op, obj_ty, cow, span),
         None => obj_op,
-    })
+    };
+    Ok((receiver, temporary))
+}
+
+/// Lowers the receiver `obj` of a write as [`lower_mutated_receiver`] does,
+/// emits the write through `write`, then releases the temp the receiver's
+/// path started at, so a write into a value no binding holds neither leaks
+/// that value nor releases it twice.
+pub(super) fn with_mutated_receiver<R>(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    cow: Option<(&Type, &str)>,
+    span: Span,
+    write: impl FnOnce(&mut LoweringContext, Operand) -> Result<R, LoweringError>,
+) -> Result<R, LoweringError> {
+    let (receiver, temporary) = lower_mutated_receiver(ctx, obj, cow, span)?;
+    let written = write(ctx, receiver)?;
+    TemporaryRoot::release(temporary, ctx, span);
+    Ok(written)
 }
 
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.

@@ -603,6 +603,14 @@ impl<'a> LoweringContext<'a> {
         self.borrowed_temps.insert(local);
     }
 
+    /// Whether `local` is a temp the expression lowered after `watermark` holds
+    /// a reference of its own in: created at or after the mark, and not a
+    /// borrow of a value another local owns. A temp an enclosing scope owns
+    /// still qualifies; that scope, not the expression, releases it.
+    pub fn is_expression_temp(&self, local: Local, watermark: usize) -> bool {
+        local.0 >= watermark && !self.borrowed_temps.contains(&local)
+    }
+
     pub fn is_owned_by_a_scope(&self, local: Local) -> bool {
         self.scope_stack
             .iter()
@@ -846,10 +854,7 @@ impl<'a> LoweringContext<'a> {
         watermark: usize,
         span: crate::error::syntax::Span,
     ) {
-        if local.0 < watermark
-            || self.borrowed_temps.contains(&local)
-            || self.is_owned_by_a_scope(local)
-        {
+        if !self.is_expression_temp(local, watermark) || self.is_owned_by_a_scope(local) {
             return;
         }
         let kind = self.body.local_decls[local.0].ty.kind.clone();

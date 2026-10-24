@@ -43,7 +43,7 @@ pub(crate) use super::method_dispatch::resolve_inherited_method;
 pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
-use super::method_dispatch::{lower_mutated_receiver, residency_specialize_call};
+use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 
 pub fn lower_call(
     ctx: &mut LoweringContext,
@@ -726,8 +726,10 @@ fn lower_list_push(
     item_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::LIST_COW), *span)?;
-    emit_list_push(ctx, obj_op, obj_ty, item_arg, span).map(Some)
+    let cow = Some((obj_ty, rt::LIST_COW));
+    with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
+        emit_list_push(ctx, obj_op, obj_ty, item_arg, span).map(Some)
+    })
 }
 
 /// Append `item_arg` to the list `obj_op` of type `obj_ty` through
@@ -989,8 +991,10 @@ fn lower_map_set(
     value_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::MAP_COW), *span)?;
-    emit_map_set(ctx, obj_op, obj_ty, key_arg, value_arg, span).map(Some)
+    let cow = Some((obj_ty, rt::MAP_COW));
+    with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
+        emit_map_set(ctx, obj_op, obj_ty, key_arg, value_arg, span).map(Some)
+    })
 }
 
 /// Store `key_arg` → `value_arg` into the map `obj_op` of type `obj_ty` through
@@ -1049,8 +1053,10 @@ fn lower_set_add(
     dest: Option<Place>,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::SET_COW), *span)?;
-    emit_set_add(ctx, obj_op, obj_ty, elem_arg, dest, span).map(Some)
+    let cow = Some((obj_ty, rt::SET_COW));
+    with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
+        emit_set_add(ctx, obj_op, obj_ty, elem_arg, dest, span).map(Some)
+    })
 }
 
 /// Add `elem_arg` to the set `obj_op` of type `obj_ty` through
@@ -1105,7 +1111,29 @@ fn lower_list_insert(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let item_watermark = ctx.body.local_decls.len();
-    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, Some(rt::LIST_COW), *span)?;
+    let cow = Some((obj_ty, rt::LIST_COW));
+    with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
+        emit_list_insert(
+            ctx,
+            obj_op,
+            obj_ty,
+            (index_arg, item_arg),
+            item_watermark,
+            span,
+        )
+    })
+}
+
+/// Insert `item_arg` at `index_arg` into the list `obj_op` of type `obj_ty`
+/// through `miri_rt_list_insert`, donating it to the list.
+fn emit_list_insert(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    obj_ty: &Type,
+    (index_arg, item_arg): (&Expression, &Expression),
+    item_watermark: usize,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
     let index_op = lower_expression(ctx, index_arg, None)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
@@ -1142,9 +1170,31 @@ fn lower_collection_set(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
-    let cow = builtin.and_then(crate::runtime_fns::cow_fn);
-    let obj_op = lower_mutated_receiver(ctx, obj, obj_ty, cow, *span)?;
-    let obj_op_src = operand_src_local(&obj_op);
+    let cow = builtin
+        .and_then(crate::runtime_fns::cow_fn)
+        .map(|cow| (obj_ty, cow));
+    with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
+        emit_collection_set(
+            ctx,
+            obj_op,
+            obj_ty,
+            (index_arg, item_arg),
+            obj_watermark,
+            span,
+        )
+    })
+}
+
+/// Store `item_arg` at `index_arg` of the list or array `obj_op` of type
+/// `obj_ty` as a direct indexed assignment.
+fn emit_collection_set(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    obj_ty: &Type,
+    (index_arg, item_arg): (&Expression, &Expression),
+    obj_watermark: usize,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
     let index_op = lower_expression(ctx, index_arg, None)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let item_op_src = operand_src_local(&item_op);
@@ -1177,9 +1227,6 @@ fn lower_collection_set(
     // and an unmanaged element type is never counted at all; both are already
     // excluded, the first by the write itself and the second by this call.
     ctx.emit_temp_drop(item_local, obj_watermark, *span);
-    if let Some(src_local) = obj_op_src {
-        ctx.emit_temp_drop(src_local, obj_watermark, *span);
-    }
     if let Some(item_src) = item_op_src {
         ctx.emit_temp_drop(item_src, obj_watermark, *span);
     }

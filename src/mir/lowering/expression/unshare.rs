@@ -16,8 +16,15 @@
 //! reached through one of its fields is. A struct or tuple held as its bytes is
 //! copied every time it is bound, wherever it is held — a frame, a field, a
 //! collection — so no second name ever holds it and it is never unshared.
+//!
+//! A path may also start at a value no binding holds — a call's result, a
+//! conditional's. That value is held in a temp owning one reference for the
+//! duration of the write, made its own like any binding's value, and released
+//! once the write is done: a write into it is not seen by anyone else, because
+//! a collection is a value.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -38,6 +45,9 @@ use crate::type_checker::element_layout::element_layout;
 enum Step<'e> {
     /// The binding the path starts at.
     Root(Local, Type),
+    /// The value the path starts at when no binding holds it: anything but a
+    /// binding, a field, an element or `super`.
+    Temporary(&'e Expression, Type),
     /// A field of the value before it, by its index in that value's layout.
     Field(usize, Type),
     /// An element of the `List` or `Array` before it.
@@ -50,6 +60,7 @@ impl Step<'_> {
     fn ty(&self) -> &Type {
         match self {
             Step::Root(_, ty)
+            | Step::Temporary(_, ty)
             | Step::Field(_, ty)
             | Step::Element(_, ty)
             | Step::Entry(_, _, ty) => ty,
@@ -62,8 +73,43 @@ enum Unsharing {
     /// A struct held as a reference-counted allocation, with this many
     /// fields: rebuilt from its fields.
     Struct(usize),
+    /// A tuple held as a reference-counted allocation, with this many
+    /// elements: rebuilt from its elements.
+    Tuple(usize),
     /// A built-in collection: cloned by the runtime.
     Collection(BuiltinCollectionKind),
+}
+
+/// The temp a written path starts at when no binding holds the value, with
+/// the mark taken before that value was lowered.
+///
+/// It holds one reference of its own for the duration of the write and gives
+/// it back once the write is done; a temp an enclosing scope owns, or one that
+/// borrows what it holds, is left to its owner.
+#[must_use]
+pub(crate) struct TemporaryRoot {
+    local: Local,
+    watermark: usize,
+}
+
+impl TemporaryRoot {
+    /// The temp `local`, lowered after `watermark`, that a receiver lowered
+    /// outside a written path landed in.
+    pub(crate) fn new(local: Local, watermark: usize) -> Self {
+        Self { local, watermark }
+    }
+
+    pub(crate) fn local(&self) -> Local {
+        self.local
+    }
+
+    /// Gives back the reference the temp `temporary` holds, if there is one,
+    /// the write into it being done.
+    pub(crate) fn release(temporary: Option<Self>, ctx: &mut LoweringContext, span: Span) {
+        if let Some(temporary) = temporary {
+            ctx.emit_temp_drop(temporary.local, temporary.watermark, span);
+        }
+    }
 }
 
 /// A map entry a write lands in that the lookup handed back as a copy.
@@ -79,39 +125,53 @@ pub(crate) struct EntryWriteBack {
     value: Place,
 }
 
-/// The place a write goes into, and the entry it has to be stored back into
-/// afterwards when the place is a copy of a map's inline value.
+/// The place a write goes into, the entry it has to be stored back into
+/// afterwards when the place is a copy of a map's inline value, and the temp
+/// the path starts at when no binding holds its value.
+#[must_use]
 pub(crate) struct WrittenPlace {
     pub place: Place,
-    pub write_back: Option<EntryWriteBack>,
+    write_back: Option<EntryWriteBack>,
+    temporary: Option<TemporaryRoot>,
+}
+
+impl WrittenPlace {
+    /// Completes the write into `obj` once it is done: stores a copied-out map
+    /// value back under its key, then releases the temp the path starts at.
+    pub(crate) fn finish(self, ctx: &mut LoweringContext, obj: &Expression) {
+        if let Some(write_back) = self.write_back {
+            store_entry_back(ctx, write_back, obj);
+        }
+        TemporaryRoot::release(self.temporary, ctx, obj.span);
+    }
 }
 
 /// Lowers `obj`, the value a write goes into, as a place every value on whose
 /// path is the program's own.
 ///
-/// Returns `None` when `obj` is not a path of bindings, fields, collection
-/// elements and map entries, leaving the caller to lower it as before. Nothing
-/// is emitted in that case: the path is read in full before any of it is
-/// lowered, so an index or key expression is never evaluated twice.
+/// Returns `None` when `obj` is not a path of fields, collection elements and
+/// map entries starting at a binding a write may replace or at a value no
+/// binding holds, leaving the caller to lower it as before. Nothing is emitted
+/// in that case: the path is read in full before any of it is lowered, so an
+/// index or key expression is never evaluated twice.
 ///
 /// For a collection receiver — what an indexed store or a mutating method
 /// writes into — the place is the collection itself, never a copy of a map's
-/// inline value, so no write-back arises; a component write calls
-/// [`lower_written_entry_place`] instead.
+/// inline value: a value held as its bytes holds nothing counted, so no
+/// collection is reached through one and no write-back arises. A component
+/// write calls [`lower_written_entry_place`] instead. The temp the path starts
+/// at, when no binding holds its value, is returned beside the place for the
+/// caller to release once the write is done.
 pub(crate) fn lower_written_place(
     ctx: &mut LoweringContext,
     obj: &Expression,
-) -> Result<Option<Place>, LoweringError> {
-    Ok(lower_written_entry_place(ctx, obj)?.map(|written| written.place))
+) -> Result<Option<(Place, Option<TemporaryRoot>)>, LoweringError> {
+    Ok(lower_written_entry_place(ctx, obj)?.map(|written| (written.place, written.temporary)))
 }
 
 /// Stores a copied-out map value back under its key once the write into it is
 /// done, the map taking the key, then releases the copy.
-pub(crate) fn store_entry_back(
-    ctx: &mut LoweringContext,
-    write_back: EntryWriteBack,
-    obj: &Expression,
-) {
+fn store_entry_back(ctx: &mut LoweringContext, write_back: EntryWriteBack, obj: &Expression) {
     let (donated_key, _) = crate::mir::lowering::dispatch::donate_operand_to_container(
         ctx,
         Operand::Copy(write_back.key.clone()),
@@ -144,14 +204,13 @@ pub(crate) fn lower_written_entry_place(
     if !collect_steps(ctx, obj, &mut steps) {
         return Ok(None);
     }
-    let Some(Step::Root(root, _)) = steps.first() else {
+    let Some((mut place, temporary)) = lower_path_root(ctx, &steps)? else {
         return Ok(None);
     };
-    let mut place = Place::new(*root);
     let mut write_back = None;
     for step in &steps {
         match step {
-            Step::Root(..) => {}
+            Step::Root(..) | Step::Temporary(..) => {}
             Step::Field(idx, _) => place.projection.push(PlaceElem::Field(*idx)),
             Step::Element(index, _) => {
                 let index_local = lower_index_local(ctx, index)?;
@@ -168,12 +227,73 @@ pub(crate) fn lower_written_entry_place(
             emit_unshare(ctx, &place, step.ty(), unsharing, obj.span)?;
         }
     }
-    Ok(Some(WrittenPlace { place, write_back }))
+    Ok(Some(WrittenPlace {
+        place,
+        write_back,
+        temporary,
+    }))
+}
+
+/// The place the path `steps` starts at — a binding, or a temp holding the
+/// value no binding holds, returned beside it — or `None` when the path starts
+/// at neither.
+fn lower_path_root(
+    ctx: &mut LoweringContext,
+    steps: &[Step],
+) -> Result<Option<(Place, Option<TemporaryRoot>)>, LoweringError> {
+    Ok(match steps.first() {
+        Some(Step::Root(root, _)) => Some((Place::new(*root), None)),
+        Some(Step::Temporary(root, ty)) => {
+            let temporary = lower_temporary_root(ctx, root, ty)?;
+            Some((Place::new(temporary.local), Some(temporary)))
+        }
+        Some(Step::Field(..) | Step::Element(..) | Step::Entry(..)) | None => None,
+    })
+}
+
+/// Lowers `root`, the value of type `ty` a written path starts at when no
+/// binding holds it, into a temp holding one reference of its own.
+///
+/// A value lowering leaves in a fresh temp that owns it — a call's result, a
+/// conditional's — is used as it is. Anything else is copied into a temp of
+/// its own, and what it was read from released at once: while both held it,
+/// the check before the write would find every such value shared and copy it.
+fn lower_temporary_root(
+    ctx: &mut LoweringContext,
+    root: &Expression,
+    ty: &Type,
+) -> Result<TemporaryRoot, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let operand = lower_expression(ctx, root, None)?;
+    let source = match &operand {
+        Operand::Copy(place) | Operand::Move(place) => Some(place),
+        Operand::Constant(_) | Operand::Function(_) => None,
+    };
+    if let Some(place) = source {
+        if place.projection.is_empty() && ctx.is_expression_temp(place.local, watermark) {
+            return Ok(TemporaryRoot::new(place.local, watermark));
+        }
+    }
+    let source = source.map(|place| place.local);
+    let local = ctx.push_temp(ty.clone(), root.span);
+    ctx.push_statement(Statement {
+        kind: StatementKind::Assign(
+            Place::new(local),
+            Rvalue::Use(crate::mir::lowering::dispatch::move_to_copy(operand)),
+        ),
+        span: root.span,
+    });
+    if let Some(source) = source {
+        ctx.emit_temp_drop(source, watermark, root.span);
+    }
+    Ok(TemporaryRoot::new(local, watermark))
 }
 
 /// Reads the path `expr` names into `steps`, outermost first. False when any
-/// part of it is something a write cannot be routed through here: anything but
-/// a binding, a field, or an element or entry of a collection.
+/// part of it is something a write cannot be routed through here: a binding
+/// a write may not replace, a member that is not a field, an element of a
+/// `Set`, or `super`. A path starting at a value no binding holds starts at a
+/// [`Step::Temporary`].
 fn collect_steps<'e>(
     ctx: &LoweringContext,
     expr: &'e Expression,
@@ -200,7 +320,13 @@ fn collect_steps<'e>(
         steps.push(step);
         return reached;
     }
-    false
+    if matches!(expr.node, ExpressionKind::Super) {
+        return false;
+    }
+    ctx.recorded_type(expr.id).is_some_and(|ty| {
+        steps.push(Step::Temporary(expr, ty));
+        true
+    })
 }
 
 /// The step for `collection[index]`: an element slot of a `List` or `Array`,
@@ -240,21 +366,28 @@ fn root_step<'e>(ctx: &LoweringContext, name: &str) -> Option<Step<'e>> {
     Some(Step::Root(local, decl.ty.clone()))
 }
 
-/// The step for field `prop` of the value the last step reached.
+/// The step for field `prop` of the value the last step reached: a field of a
+/// struct or class by its name, or an element of a tuple by its position.
 fn field_step<'e>(
     ctx: &LoweringContext,
     steps: &[Step<'e>],
     prop: &Expression,
     expr: &Expression,
 ) -> Option<Step<'e>> {
-    let TypeKind::Custom(type_name, _) = &steps.last()?.ty().kind else {
+    let base = &steps.last()?.ty().kind;
+    let idx = if let TypeKind::Custom(type_name, _) = base {
+        super::assignment_expr::resolve_member_field_index(
+            type_name,
+            prop,
+            ctx.type_checker.type_definitions(),
+        )?
+    } else if let (TypeKind::Tuple(_), ExpressionKind::Literal(Literal::Integer(position))) =
+        (base, &prop.node)
+    {
+        super::member_expr::extract_integer_index(position)
+    } else {
         return None;
     };
-    let idx = super::assignment_expr::resolve_member_field_index(
-        type_name,
-        prop,
-        ctx.type_checker.type_definitions(),
-    )?;
     Some(Step::Field(idx, ctx.recorded_type(expr.id)?))
 }
 
@@ -301,6 +434,7 @@ fn lower_entry_place(
                 key_watermark,
                 value: entry,
             }),
+            temporary: None,
         });
     }
     let Some(unsharing) = unsharing(ctx, value_ty) else {
@@ -308,6 +442,7 @@ fn lower_entry_place(
         return Ok(WrittenPlace {
             place: entry,
             write_back: None,
+            temporary: None,
         });
     };
     let join_bb = branch_when_shared(ctx, &entry, obj.span);
@@ -339,6 +474,7 @@ fn lower_entry_place(
     Ok(WrittenPlace {
         place: entry,
         write_back: None,
+        temporary: None,
     })
 }
 
@@ -364,14 +500,17 @@ fn unsharing(ctx: &LoweringContext, ty: &Type) -> Option<Unsharing> {
     if let Some(kind) = ty.kind.as_builtin_collection() {
         return Some(Unsharing::Collection(kind));
     }
-    let TypeKind::Custom(name, _) = &ty.kind else {
-        return None;
-    };
     if crate::ast::types::vec_type_dim(&ty.kind).is_some()
         || ctx.body.value_layout(&ty.kind).is_some()
     {
         return None;
     }
+    if let TypeKind::Tuple(elements) = &ty.kind {
+        return Some(Unsharing::Tuple(elements.len()));
+    }
+    let TypeKind::Custom(name, _) = &ty.kind else {
+        return None;
+    };
     let Some(TypeDefinition::Struct(definition)) =
         ctx.type_checker.type_definitions().get(name.as_str())
     else {
@@ -455,7 +594,14 @@ fn emit_copy(
     span: Span,
 ) -> Result<(), LoweringError> {
     match unsharing {
-        Unsharing::Struct(field_count) => emit_struct_copy(ctx, place, ty, field_count, copy, span),
+        Unsharing::Struct(field_count) => {
+            let kind = AggregateKind::Struct(ty.clone());
+            emit_aggregate_copy(ctx, place, kind, field_count, copy, span);
+        }
+        Unsharing::Tuple(element_count) => {
+            let kind = AggregateKind::Tuple(ty.clone());
+            emit_aggregate_copy(ctx, place, kind, element_count, copy, span);
+        }
         Unsharing::Collection(kind) => {
             let written_bb = ctx.new_basic_block();
             emit_runtime_call(
@@ -493,15 +639,16 @@ fn emit_copy_count(ctx: &mut LoweringContext, span: Span) {
     ctx.set_current_block(counted_bb);
 }
 
-/// Builds into `copy` a struct with the fields of the one at `place`.
+/// Builds into `copy` an aggregate of `kind` — a struct or a tuple — with the
+/// `field_count` fields of the one at `place`.
 ///
 /// Each managed field is retained by the aggregate, so the copy and the
 /// original each own what they hold; a value held as its bytes is copied as
 /// those bytes.
-fn emit_struct_copy(
+fn emit_aggregate_copy(
     ctx: &mut LoweringContext,
     place: &Place,
-    ty: &Type,
+    kind: AggregateKind,
     field_count: usize,
     copy: Local,
     span: Span,
@@ -514,10 +661,7 @@ fn emit_struct_copy(
         })
         .collect();
     ctx.push_statement(Statement {
-        kind: StatementKind::Assign(
-            Place::new(copy),
-            Rvalue::Aggregate(AggregateKind::Struct(ty.clone()), operands),
-        ),
+        kind: StatementKind::Assign(Place::new(copy), Rvalue::Aggregate(kind, operands)),
         span,
     });
 }

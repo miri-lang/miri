@@ -20,6 +20,7 @@ use crate::mir::lowering::dispatch::{
     lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
 };
 use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::expression::unshare::TemporaryRoot;
 use crate::mir::lowering::helpers::{
     coerce_rvalue_in, ensure_place, read_older_local_by_copy, release_coerced_source,
     resolve_arg_type, spellings_of_one_value, wrap_for_optional_slot,
@@ -389,9 +390,10 @@ fn assign_to_member(
         let lowered = lower_expression(ctx, rhs, None)?;
         let rhs_ty = resolve_arg_type(ctx, rhs, &lowered);
         let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
-        let (obj_operand, write_back) = match super::unshare::lower_written_entry_place(ctx, obj)? {
-            Some(written) => (Operand::Copy(written.place), written.write_back),
-            None => (lower_expression(ctx, obj, None)?, None),
+        let written = super::unshare::lower_written_entry_place(ctx, obj)?;
+        let obj_operand = match &written {
+            Some(written) => Operand::Copy(written.place.clone()),
+            None => lower_expression(ctx, obj, None)?,
         };
         let obj_ty = ctx
             .recorded_type(obj.id)
@@ -431,8 +433,8 @@ fn assign_to_member(
             expr,
             dest,
         )?;
-        if let Some(write_back) = write_back {
-            super::unshare::store_entry_back(ctx, write_back, obj);
+        if let Some(written) = written {
+            written.finish(ctx, obj);
         }
         Ok(stored)
     } else {
@@ -740,33 +742,25 @@ pub(crate) fn emit_map_set_call(
 /// when the collection shares its buffer.
 ///
 /// Writing through an index mutates in place, so without this a second binding
-/// to the same collection sees the write. The equivalent `set` method already
-/// goes through the same check; `Array` is fixed-size and has no CoW intrinsic,
-/// so it is left alone.
+/// to the same collection sees the write. The equivalent `set` method goes
+/// through the same receiver seam; `Array` is fixed-size and has no CoW
+/// intrinsic, so a bare `Array` binding is left alone. The temp the receiver's
+/// path starts at, if any, is returned for the caller to release once the
+/// write is done.
 fn lower_index_assign_receiver(
     ctx: &mut LoweringContext,
     obj: &Expression,
     span: crate::error::syntax::Span,
-) -> Result<Operand, LoweringError> {
-    if !matches!(obj.node, ExpressionKind::Identifier(..)) {
-        if let Some(place) = super::unshare::lower_written_place(ctx, obj)? {
-            return Ok(Operand::Copy(place));
-        }
-    }
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let Some(obj_ty) = ctx.type_checker.get_type(obj.id).cloned() else {
-        return Ok(obj_op);
-    };
-    let Some(cow_name) = obj_ty
-        .kind
-        .as_builtin_collection()
-        .and_then(crate::runtime_fns::cow_fn)
-    else {
-        return Ok(obj_op);
-    };
-    Ok(crate::mir::lowering::method_dispatch::emit_cow_check(
-        ctx, obj_op, &obj_ty, cow_name, span,
-    ))
+) -> Result<(Operand, Option<TemporaryRoot>), LoweringError> {
+    let obj_ty = ctx.type_checker.get_type(obj.id).cloned();
+    let cow = obj_ty.as_ref().and_then(|ty| {
+        let cow = ty
+            .kind
+            .as_builtin_collection()
+            .and_then(crate::runtime_fns::cow_fn)?;
+        Some((ty, cow))
+    });
+    crate::mir::lowering::method_dispatch::lower_mutated_receiver(ctx, obj, cow, span)
 }
 
 fn assign_to_index_map(
@@ -778,7 +772,7 @@ fn assign_to_index_map(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    let (obj_op, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, idx.span);
@@ -795,6 +789,7 @@ fn assign_to_index_map(
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
     }
+    TemporaryRoot::release(receiver, ctx, expr.span);
 
     let ret_val = match val {
         Operand::Move(p) => Operand::Copy(p),
@@ -840,7 +835,7 @@ fn compound_assign_to_index_map(
     let value_ty = collection_slot_type(ctx, obj_ty, MAP_VALUE_SLOT)
         .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
 
-    let obj_op = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    let (obj_op, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let key_place = ensure_place(ctx, key_op, idx.span);
@@ -874,6 +869,7 @@ fn compound_assign_to_index_map(
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
     }
+    TemporaryRoot::release(receiver, ctx, expr.span);
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
@@ -1010,15 +1006,13 @@ fn assign_to_index_array(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // A receiver that is itself an indexed read (`self.rows[r][c] = x`) lowers
-    // to a retained copy of the inner collection, held in a temp that exists
-    // only for this write. The mark taken here is what tells that temp from a
-    // receiver the program already had — a binding, or a field of one — which
-    // outlives the write and must keep its reference.
-    let receiver_watermark = ctx.body.local_decls.len();
-    let obj_operand = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    // A receiver lowered outside a written path — an indexed read the path
+    // could not be routed through — lowers to a retained copy of the inner
+    // collection, held in a temp that exists only for this write; the temp is
+    // released once the write is done. A receiver the program already had — a
+    // binding, or a field of one — outlives the write and keeps its reference.
+    let (obj_operand, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
-    let receiver_local = obj_place.local;
 
     let index_operand = lower_expression(ctx, idx, None)?;
     let index_operand = crate::mir::lowering::helpers::index_at_int(ctx, index_operand, idx);
@@ -1049,8 +1043,8 @@ fn assign_to_index_array(
     }
 
     // The write is done, so the copy taken to reach through has nothing left to
-    // do. A receiver older than the mark is the program's own and is left alone.
-    ctx.emit_temp_drop(receiver_local, receiver_watermark, expr.span);
+    // do.
+    TemporaryRoot::release(receiver, ctx, expr.span);
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
