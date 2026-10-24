@@ -43,7 +43,9 @@ use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
-use crate::runtime_fns::{is_copy_on_write, only_reads_argument, rt, taken_argument_positions};
+use crate::runtime_fns::{
+    is_copy_on_write, only_reads_argument, reads_reference_count, taken_argument_positions,
+};
 use std::collections::{HashMap, HashSet};
 
 /// How a statement or terminator reaches a local.
@@ -521,7 +523,7 @@ fn terminator_accesses(terminator: &Terminator) -> Vec<(Local, Access)> {
 fn argument_access(runtime: Option<&str>, position: usize, mode: ArgMode) -> Access {
     let checked_or_kept = runtime.is_some_and(|name| {
         is_copy_on_write(name)
-            || name == rt::RC_IS_SHARED
+            || reads_reference_count(name)
             || taken_argument_positions(name).contains(&position)
     });
     // A move handed to such an entry point is a uniqueness witness at most;

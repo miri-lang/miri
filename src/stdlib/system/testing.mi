@@ -61,6 +61,15 @@ runtime "core" fn miri_rt_test_simulate_double_free()
 public fn simulate_double_free()
     miri_rt_test_simulate_double_free()
 
+runtime "core" fn miri_rt_test_simulate_shared_receiver()
+
+/// Hands a writing method's receiver check a collection two references hold.
+///
+/// The check stops the program with MER_RT_017 before anything is released or
+/// written, in every build. Use in tests that verify the check fires.
+public fn simulate_shared_receiver()
+    miri_rt_test_simulate_shared_receiver()
+
 runtime "core" fn miri_rt_test_simulate_closure_over_release(f fn() int)
 
 /// Frees the closure `f` outright, as a spurious extra release would.

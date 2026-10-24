@@ -28,4 +28,5 @@ pub mod shared_memory;
 pub mod unary;
 pub mod variable;
 pub mod vtable_demand;
+pub mod writer_receivers;
 pub mod written_parameters;

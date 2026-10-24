@@ -111,8 +111,65 @@ fn a_parameter_copied_on_write_in_place_is_flagged_once() {
 }
 
 #[test]
-fn a_receiver_copied_on_write_in_place_raises_nothing() {
+fn a_receiver_copied_on_write_in_place_is_flagged_once() {
     let mut body = copied_in_place();
+    body.receiver = Some(Local(1));
+    let violations = verify_parameter_writes(&body);
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0].local, Local(1));
+    assert!(violations[0].message.contains("receiver"));
+}
+
+#[test]
+fn a_receiver_asked_whether_it_is_shared_is_flagged() {
+    let mut body = handing_to_runtime(
+        "miri_rt_rc_is_shared",
+        vec![Operand::Copy(Place::new(Local(1)))],
+    );
+    body.receiver = Some(Local(1));
+    assert_eq!(verify_parameter_writes(&body).len(), 1);
+}
+
+#[test]
+fn a_receiver_assigned_whole_is_flagged() {
+    let mut body = handing_to_runtime(
+        "miri_rt_list_len",
+        vec![Operand::Copy(Place::new(Local(1)))],
+    );
+    body.receiver = Some(Local(1));
+    body.basic_blocks[1].statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Copy(Place::new(Local(1)))),
+        ),
+        span: span(),
+    });
+    assert_eq!(verify_parameter_writes(&body).len(), 1);
+}
+
+#[test]
+fn a_receiver_checked_unique_and_written_in_place_raises_nothing() {
+    for (name, args) in [
+        (
+            "miri_rt_receiver_unique",
+            vec![Operand::Copy(Place::new(Local(1)))],
+        ),
+        (
+            "miri_rt_list_push",
+            vec![Operand::Move(Place::new(Local(1))), int_constant()],
+        ),
+    ] {
+        let mut body = handing_to_runtime(name, args);
+        body.receiver = Some(Local(1));
+        assert!(verify_parameter_writes(&body).is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn a_field_of_a_receiver_copied_on_write_raises_nothing() {
+    let mut field = Place::new(Local(1));
+    field.projection.push(miri::mir::PlaceElem::Field(0));
+    let mut body = handing_to_runtime("miri_rt_rc_is_shared", vec![Operand::Copy(field)]);
     body.receiver = Some(Local(1));
     assert!(verify_parameter_writes(&body).is_empty());
 }

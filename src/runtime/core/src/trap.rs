@@ -41,6 +41,8 @@ pub(crate) mod code {
     pub(crate) const HEAP_CORRUPTED: &str = "MER_RT_015";
     /// A list changed by the closure the runtime was sorting it with.
     pub(crate) const LIST_CHANGED_WHILE_SORTED: &str = "MER_RT_016";
+    /// A writing method handed a receiver something else still holds.
+    pub(crate) const RECEIVER_SHARED: &str = "MER_RT_017";
 }
 
 /// Report a runtime fault under `code` and end the process.

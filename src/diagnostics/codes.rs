@@ -1288,7 +1288,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (16 codes: 001-016)
+    // RT — Runtime traps and assertion failures (17 codes: 001-017)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1398,6 +1398,13 @@ diagnostics!(
     "016",
     RtListChangedWhileSorted,
     "List Changed While Sorted",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
+    "RT",
+    "017",
+    RtReceiverShared,
+    "Receiver Arrived Shared",
     Severity::Error,
     false,
     FixSafety::LocalEdit,

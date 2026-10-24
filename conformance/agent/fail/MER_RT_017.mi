@@ -1,0 +1,7 @@
+// expect: MER_RT_017
+// command: run
+// summary: Triggers MER_RT_017: a test helper hands a writing method's check a receiver two references hold.
+use system.testing
+
+fn main()
+    simulate_shared_receiver()

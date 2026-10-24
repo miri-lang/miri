@@ -38,6 +38,9 @@ pub mod rt {
     /// Test-only: frees one allocation twice to verify the heap guard's
     /// double-free trap.
     pub const SIMULATE_DOUBLE_FREE: &str = "miri_rt_test_simulate_double_free";
+    /// Test-only: hands the receiver uniqueness check a block two references
+    /// hold, to verify it stops the program.
+    pub const SIMULATE_SHARED_RECEIVER: &str = "miri_rt_test_simulate_shared_receiver";
     /// Test-only: frees a closure outright so the release compiled code makes
     /// afterwards is a double release the heap guard must report.
     pub const SIMULATE_CLOSURE_OVER_RELEASE: &str = "miri_rt_test_simulate_closure_over_release";
@@ -92,6 +95,12 @@ pub mod rt {
     /// collection reached through a field, so the write copies a shared value
     /// first instead of changing it under every other name that holds it.
     pub const RC_IS_SHARED: &str = "miri_rt_rc_is_shared";
+    /// Compiler-internal: stops the program unless the collection receiver of
+    /// a method that writes it is held by that call alone, not in stdlib.
+    /// Asked where the method would otherwise copy its receiver on write: the
+    /// caller made the receiver the method's own before calling it, so a
+    /// copy would release a reference the method never held.
+    pub const RECEIVER_UNIQUE: &str = "miri_rt_receiver_unique";
 
     // Array
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
@@ -421,6 +430,7 @@ pub mod rt {
         CLOSURE_FREE_TRACK,
         CLOSURE_SIMULATE_LEAK,
         SIMULATE_DOUBLE_FREE,
+        SIMULATE_SHARED_RECEIVER,
         SIMULATE_CLOSURE_OVER_RELEASE,
         SIMULATE_INLINE_OVER_RELEASE,
         BLOCK_ALLOC,
@@ -435,6 +445,7 @@ pub mod rt {
         CHECKS_COMPILED_OUT,
         PROFILE_INIT,
         RC_IS_SHARED,
+        RECEIVER_UNIQUE,
         // Array
         ARRAY_NEW,
         ARRAY_FREE,
@@ -735,7 +746,8 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         | rt::STRING_STARTS_WITH
         | rt::STRING_ENDS_WITH
         | rt::HASH_COMBINE
-        | rt::FLOAT_HASH => true,
+        | rt::FLOAT_HASH
+        | rt::RECEIVER_UNIQUE => true,
         rt::STRING_APPEND | rt::STRING_APPEND_INT | rt::STRING_APPEND_UINT => position > 0,
         _ => false,
     }
@@ -750,6 +762,14 @@ pub fn is_copy_on_write(name: &str) -> bool {
         name,
         rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW
     )
+}
+
+/// Whether `name` reads the count of the value it is handed: asks whether
+/// it is shared, or stops the program unless the call holds it alone. Either
+/// answers for whoever's count the value carries, so a value borrowed from
+/// another holder is never handed to one.
+pub fn reads_reference_count(name: &str) -> bool {
+    matches!(name, rt::RC_IS_SHARED | rt::RECEIVER_UNIQUE)
 }
 
 /// Whether `name` hands back a value nothing else holds: a block it has just
@@ -785,7 +805,11 @@ pub fn preserves_length(name: &str) -> bool {
 pub fn leaves_collection_headers_unchanged(name: &str) -> bool {
     matches!(
         name,
-        rt::RC_IS_SHARED | rt::RC_STATS_DUP | rt::RC_STATS_FREE | rt::RC_STATS_COW_COPY
+        rt::RC_IS_SHARED
+            | rt::RECEIVER_UNIQUE
+            | rt::RC_STATS_DUP
+            | rt::RC_STATS_FREE
+            | rt::RC_STATS_COW_COPY
     )
 }
 

@@ -11,7 +11,7 @@ use crate::error::syntax::Span;
 use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
-use crate::runtime_fns::cow_fn;
+use crate::runtime_fns::{cow_fn, rt};
 use crate::type_checker::context::{
     class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
     TypeDefinition,
@@ -1145,6 +1145,13 @@ fn monomorph_for_instantiation(
 /// The copy-on-write entry point a call of `method_name` of `class_name` on a
 /// receiver of type `obj_ty` goes through first, when the call writes a
 /// built-in collection receiver; `None` when it writes none.
+///
+/// TODO: a call through a trait or a type parameter is decided by the static
+/// receiver type, which is not a built-in collection, so it gets no
+/// copy-on-write here. No trait a collection implements declares a method
+/// that writes its receiver today; once one does, a collection reaching it
+/// shared stops the program at the method's receiver check (`MER_RT_017`)
+/// rather than being unshared by the caller.
 fn call_writes_receiver(
     ctx: &LoweringContext,
     obj_ty: &Type,
@@ -1364,6 +1371,8 @@ fn cow_checked_local(
 /// `Assign` (not `Reassign`) is used for the write-back so Perceus does not DecRef the old
 /// value; `Move` is used for the cow_result so Perceus does not IncRef it. No `StorageDead` is
 /// emitted for the cow_result temp — its ownership is transferred to self_local.
+///
+/// The body's own receiver is checked instead of copied ([`emit_receiver_unique_check`]).
 pub(super) fn emit_cow_check(
     ctx: &mut LoweringContext,
     obj_op: Operand,
@@ -1374,6 +1383,10 @@ pub(super) fn emit_cow_check(
     let Some(self_local) = cow_checked_local(ctx, &obj_op, span)? else {
         return Ok(obj_op);
     };
+    if ctx.body.receiver == Some(self_local) {
+        emit_receiver_unique_check(ctx, self_local, span);
+        return Ok(obj_op);
+    }
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
     let cow_fn = Operand::runtime(cow_fn_name, span);
     let cow_target = ctx.new_basic_block();
@@ -1397,4 +1410,32 @@ pub(super) fn emit_cow_check(
         span,
     });
     Ok(Operand::Move(Place::new(self_local)))
+}
+
+/// Checks that the body's own receiver, about to be written, is held by this
+/// call alone, and stops the program when it is not.
+///
+/// A caller makes a collection the method's own before calling a method that
+/// writes it, so the receiver's count is 1 on entry, and a write through it
+/// keeps it so. A copy-on-write call would release the reference it replaces,
+/// which on a receiver is a reference the method never held: a caller that
+/// skipped making it unique would then lose the value under its own name.
+/// The check only reads the receiver, so nothing is redefined; it is a call
+/// of its own rather than a sharing question, which the passes that answer
+/// or hoist those questions would remove.
+fn emit_receiver_unique_check(ctx: &mut LoweringContext, receiver: Local, span: Span) {
+    let checked = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    let target = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: Operand::runtime(rt::RECEIVER_UNIQUE, span),
+            args: vec![Operand::Copy(Place::new(receiver))],
+            arg_modes: Vec::new(),
+            arg_handles: Vec::new(),
+            destination: Place::new(checked),
+            target: Some(target),
+        },
+        span,
+    ));
+    ctx.set_current_block(target);
 }

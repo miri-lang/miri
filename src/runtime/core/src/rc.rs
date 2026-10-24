@@ -194,6 +194,36 @@ pub unsafe extern "C" fn miri_rt_rc_is_shared(ptr: *const u8) -> bool {
     rc != 1
 }
 
+/// Stops the program unless the receiver a writing method was handed is held
+/// by that call alone.
+///
+/// A method that writes its collection receiver is called on a collection its
+/// caller made the method's own first, so its count is 1. The method checks
+/// this where it would otherwise copy the receiver on write: a copy would
+/// release a reference the method never held, and a write in place would
+/// land in a value another name still holds. A count other than 1, an
+/// immortal one included, is a caller that skipped that step, reported as
+/// `MER_RT_017` in every build. Nothing is released or written. A null
+/// pointer is held by no one.
+///
+/// # Safety
+/// `ptr` must be null or point to the payload of a block whose RC word sits
+/// immediately before it.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_receiver_unique(ptr: *const u8) {
+    if ptr.is_null() {
+        return;
+    }
+    crate::guard::guard_check(ptr as *mut u8);
+    let rc = *((ptr as usize - RC_HEADER_SIZE) as *const usize) as isize;
+    if rc != 1 {
+        crate::trap::trap(
+            crate::trap::code::RECEIVER_SHARED,
+            "a method that writes its receiver was handed one something else still holds",
+        );
+    }
+}
+
 /// Frees the `[RC][payload]` block given a pointer to the payload.
 ///
 /// `#[track_caller]` for the same reason as [`alloc_with_rc`]: the guard records
@@ -406,6 +436,23 @@ pub unsafe extern "C" fn miri_rt_test_simulate_double_free() {
     }
     free_with_rc(ptr, payload_size);
     free_with_rc(ptr, payload_size);
+}
+
+/// Hands a writing method's uniqueness check a receiver two references hold,
+/// to verify it stops the program with `MER_RT_017` instead of going on.
+///
+/// The block is never released: the check ends the process first.
+///
+/// # Safety
+/// This function is for testing only; it never returns.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_shared_receiver() {
+    let ptr = alloc_with_rc(32);
+    if ptr.is_null() {
+        return;
+    }
+    incref(ptr);
+    miri_rt_receiver_unique(ptr);
 }
 
 /// Serializes every test that allocates or frees through [`alloc_with_rc`] /

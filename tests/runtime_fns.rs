@@ -3,7 +3,8 @@
 
 use miri::ast::types::BuiltinCollectionKind;
 use miri::runtime_fns::{
-    cow_fn, is_copy_on_write, leaves_collection_headers_unchanged, returns_unshared, rt,
+    cow_fn, is_copy_on_write, leaves_collection_headers_unchanged, only_reads_argument,
+    preserves_length, reads_reference_count, returns_unshared, rt, taken_argument_positions,
 };
 
 #[test]
@@ -80,5 +81,23 @@ fn leaves_collection_headers_unchanged_names_only_calls_that_cannot_write_a_head
             !leaves_collection_headers_unchanged(writer),
             "{writer} may write a collection header"
         );
+    }
+}
+
+/// The receiver check reads a count and nothing else: it keeps no reference,
+/// hands nothing back and leaves every header as it was, so no pass may take
+/// it for a copy-on-write that redefines the receiver.
+#[test]
+fn the_receiver_check_only_reads_the_count_it_answers_for() {
+    assert!(reads_reference_count(rt::RECEIVER_UNIQUE));
+    assert!(reads_reference_count(rt::RC_IS_SHARED));
+    assert!(only_reads_argument(rt::RECEIVER_UNIQUE, 0));
+    assert!(leaves_collection_headers_unchanged(rt::RECEIVER_UNIQUE));
+    assert!(!is_copy_on_write(rt::RECEIVER_UNIQUE));
+    assert!(!preserves_length(rt::RECEIVER_UNIQUE));
+    assert!(!returns_unshared(rt::RECEIVER_UNIQUE));
+    assert!(taken_argument_positions(rt::RECEIVER_UNIQUE).is_empty());
+    for other in [rt::LIST_COW, rt::LIST_LEN, rt::LIST_PUSH] {
+        assert!(!reads_reference_count(other), "{other} reads no count");
     }
 }

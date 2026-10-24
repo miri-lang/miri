@@ -1244,6 +1244,9 @@ impl<'a> FunctionTranslator<'a> {
             let unique = Self::emit_inline_copy_on_write(builder, ctx, callee, &arg_values, &sig)?;
             return Self::define_call_destination(builder, locals, destination, unique);
         }
+        if callee.runtime_name() == Some(rt::RECEIVER_UNIQUE) {
+            return Self::emit_inline_receiver_unique(builder, ctx, callee, &arg_values, &sig);
+        }
         if callee.runtime_name() == Some(rt::RC_STATS_COW_COPY) {
             return Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_COW_COPY);
         }
@@ -1403,15 +1406,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(count_block);
         builder.seal_block(count_block);
-        if ctx.runtime_checks == RuntimeChecks::Observable {
-            let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
-            let unobserved_block = builder.create_block();
-            builder
-                .ins()
-                .brif(tracking_off, unobserved_block, &[], runtime_block, &[]);
-            builder.switch_to_block(unobserved_block);
-            builder.seal_block(unobserved_block);
-        }
+        Self::branch_to_runtime_while_observed(builder, ctx, runtime_block)?;
         let shared = Self::emit_count_is_shared(builder, *ptr, cranelift_codegen::ir::types::I8);
         builder
             .ins()
@@ -1425,6 +1420,74 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(join_block);
         builder.switch_to_block(join_block);
         Ok(builder.block_params(join_block)[0])
+    }
+
+    /// Checks inline that a writing method's receiver is held by the call
+    /// alone: a null pointer and a count of 1 pass without the call. Every
+    /// other count — shared, or the negative count of an immortal value —
+    /// takes the call, which stops the program. In a build that keeps the
+    /// runtime's checks, the call is also taken whenever the runtime's
+    /// tracking state does not read off, so the heap guard still validates
+    /// the receiver before the write.
+    fn emit_inline_receiver_unique(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        arg_values: &[cranelift_codegen::ir::Value],
+        sig: &Signature,
+    ) -> Result<(), CodegenError> {
+        let [ptr] = arg_values else {
+            return Err(CodegenError::Internal(format!(
+                "{} takes one pointer, got {} arguments",
+                rt::RECEIVER_UNIQUE,
+                arg_values.len()
+            )));
+        };
+        let count_block = builder.create_block();
+        let runtime_block = builder.create_block();
+        let join_block = builder.create_block();
+
+        builder.ins().brif(*ptr, count_block, &[], join_block, &[]);
+
+        builder.switch_to_block(count_block);
+        builder.seal_block(count_block);
+        Self::branch_to_runtime_while_observed(builder, ctx, runtime_block)?;
+        let shared = Self::emit_count_is_shared(builder, *ptr, cranelift_codegen::ir::types::I8);
+        builder
+            .ins()
+            .brif(shared, runtime_block, &[], join_block, &[]);
+
+        builder.switch_to_block(runtime_block);
+        builder.seal_block(runtime_block);
+        Self::call_void_pointer_runtime(builder, ctx, callee, *ptr, sig)?;
+        builder.ins().jump(join_block, &[]);
+
+        builder.seal_block(join_block);
+        builder.switch_to_block(join_block);
+        Ok(())
+    }
+
+    /// In a build that keeps the runtime's checks, branches to
+    /// `runtime_block` while the runtime's tracking state does not read off,
+    /// so the heap guard sees the block, and continues in a new current block
+    /// otherwise. A build without the checks emits nothing.
+    fn branch_to_runtime_while_observed(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        runtime_block: Block,
+    ) -> Result<(), CodegenError> {
+        match ctx.runtime_checks {
+            RuntimeChecks::CompiledOut => return Ok(()),
+            RuntimeChecks::Observable => {}
+        }
+        let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
+        let unobserved_block = builder.create_block();
+        builder
+            .ins()
+            .brif(tracking_off, unobserved_block, &[], runtime_block, &[]);
+        builder.switch_to_block(unobserved_block);
+        builder.seal_block(unobserved_block);
+        Ok(())
     }
 
     /// Appends an element to a list without the call while the list has room
@@ -1452,15 +1515,7 @@ impl<'a> FunctionTranslator<'a> {
             .brif(push.list, header_block, &[], runtime_block, &[]);
         builder.switch_to_block(header_block);
         builder.seal_block(header_block);
-        if ctx.runtime_checks == RuntimeChecks::Observable {
-            let tracking_off = Self::emit_tracking_is_off(builder, ctx)?;
-            let unobserved_block = builder.create_block();
-            builder
-                .ins()
-                .brif(tracking_off, unobserved_block, &[], runtime_block, &[]);
-            builder.switch_to_block(unobserved_block);
-            builder.seal_block(unobserved_block);
-        }
+        Self::branch_to_runtime_while_observed(builder, ctx, runtime_block)?;
         let header = MemFlagsData::trusted();
         let len = builder
             .ins()
@@ -1554,6 +1609,25 @@ impl<'a> FunctionTranslator<'a> {
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         let call = builder.ins().call(local_func, &[ptr]);
         Ok(builder.inst_results(call)[0])
+    }
+
+    /// Calls the one-pointer runtime entry point `callee`, which answers
+    /// nothing, on `ptr`.
+    fn call_void_pointer_runtime(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        ptr: cranelift_codegen::ir::Value,
+        sig: &Signature,
+    ) -> Result<(), CodegenError> {
+        let func_name = callee.link_name();
+        let func_id = ctx
+            .module
+            .declare_function(&func_name, Linkage::Import, sig)
+            .map_err(|e| CodegenError::declare_function(func_name, e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
+        Ok(())
     }
 
     /// Indirect call through a closure pointer. Loads fn_ptr from

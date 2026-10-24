@@ -1163,12 +1163,12 @@ fn main()
     println(f"{mark(100)}")
 "#;
 
-/// What a build of `STRIDED_WRITES` shows about how `miri.mark` reaches the
-/// copy-on-write entry point.
-struct CopyOnWriteCallers {
+/// What a build shows about how one function reaches one runtime entry
+/// point.
+struct RuntimeCallers {
     /// The executable.
     out: std::path::PathBuf,
-    /// For each block of `miri.mark` calling `miri_rt_list_cow`, the text of
+    /// For each block of the function calling the entry point, the text of
     /// every block that branches or jumps to it.
     callers: Vec<Vec<String>>,
     /// The values holding the address of the runtime's tracking state.
@@ -1177,9 +1177,33 @@ struct CopyOnWriteCallers {
     listing: String,
 }
 
-/// Builds `STRIDED_WRITES` with `flags` into `out_dir`.
-fn copy_on_write_callers(flags: &[&str], out_dir: &std::path::Path) -> CopyOnWriteCallers {
-    let source = create_test_file(STRIDED_WRITES);
+/// A program, the function of it a test reads and the runtime entry point
+/// that function calls.
+struct RuntimeCall {
+    source: &'static str,
+    function: &'static str,
+    runtime: &'static str,
+}
+
+/// Builds `STRIDED_WRITES` with `flags` into `out_dir`, reading how
+/// `miri.mark` reaches the copy-on-write entry point.
+fn copy_on_write_callers(flags: &[&str], out_dir: &std::path::Path) -> RuntimeCallers {
+    let call = RuntimeCall {
+        source: STRIDED_WRITES,
+        function: "miri.mark",
+        runtime: "miri_rt_list_cow",
+    };
+    runtime_callers(&call, flags, out_dir)
+}
+
+/// Builds `call`'s program with `flags` into `out_dir` and reads the blocks
+/// its function reaches the runtime entry point from.
+fn runtime_callers(
+    call: &RuntimeCall,
+    flags: &[&str],
+    out_dir: &std::path::Path,
+) -> RuntimeCallers {
+    let source = create_test_file(call.source);
     let out = out_dir.join("strided");
     miri_cmd()
         .arg("build")
@@ -1191,7 +1215,7 @@ fn copy_on_write_callers(flags: &[&str], out_dir: &std::path::Path) -> CopyOnWri
         .assert()
         .success();
     let listing = std::fs::read_to_string(out_dir.join("strided.clif")).unwrap();
-    let (blocks, names) = clif_function(&listing, "miri.mark");
+    let (blocks, names) = clif_function(&listing, call.function);
     let handle_of = |target: &str| {
         names
             .iter()
@@ -1199,7 +1223,7 @@ fn copy_on_write_callers(flags: &[&str], out_dir: &std::path::Path) -> CopyOnWri
             .map(|(handle, _)| handle.to_string())
             .collect::<Vec<_>>()
     };
-    let cow = handle_of("miri_rt_list_cow");
+    let entry = handle_of(call.runtime);
     // The tracking state's address, which an optimized build may compute
     // once outside the loop, in a block other than the one testing it.
     let symbols = handle_of("miri_rt_tracking_state");
@@ -1223,10 +1247,10 @@ fn copy_on_write_callers(flags: &[&str], out_dir: &std::path::Path) -> CopyOnWri
     };
     let callers = blocks
         .iter()
-        .filter(|(_, body)| cow.iter().any(|f| body.contains(&format!("call {f}("))))
+        .filter(|(_, body)| entry.iter().any(|f| body.contains(&format!("call {f}("))))
         .map(|(label, _)| entered_from(label))
         .collect();
-    CopyOnWriteCallers {
+    RuntimeCallers {
         out,
         callers,
         tracking,
@@ -1296,7 +1320,7 @@ fn compares_the_count(block: &str) -> bool {
 #[test]
 fn test_a_list_write_reaches_the_copy_on_write_runtime_only_past_a_count_compare() {
     let out_dir = tempfile::tempdir().unwrap();
-    let CopyOnWriteCallers {
+    let RuntimeCallers {
         out,
         callers,
         listing,
@@ -1323,7 +1347,7 @@ fn test_a_list_write_reaches_the_copy_on_write_runtime_only_past_a_count_compare
 #[test]
 fn test_a_checked_build_reaches_copy_on_write_while_tracking() {
     let out_dir = tempfile::tempdir().unwrap();
-    let CopyOnWriteCallers {
+    let RuntimeCallers {
         out,
         callers,
         tracking,
@@ -1359,6 +1383,94 @@ fn test_a_checked_build_reaches_copy_on_write_while_tracking() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "27");
+}
+
+const RESIZE: &str = r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List<int>()
+    l.resize(100, 7)
+    println(f"{l.length()} {l[99]}")
+"#;
+
+/// `List.resize` writes its own receiver, and checks first that it arrived
+/// held by the call alone. The runtime check is reached only past an inline
+/// compare of the receiver's count with 1, so a unique receiver is written
+/// without a call.
+#[test]
+fn test_a_writer_checks_its_receiver_unique_without_a_call_past_a_count_compare() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let call = RuntimeCall {
+        source: RESIZE,
+        function: "miri.List.resize",
+        runtime: "miri_rt_receiver_unique",
+    };
+    let RuntimeCallers {
+        out,
+        callers,
+        listing,
+        ..
+    } = runtime_callers(&call, &["--release"], out_dir.path());
+    assert!(
+        !callers.is_empty(),
+        "resize lost its receiver check:\n{listing}"
+    );
+    for entered_from in &callers {
+        assert!(
+            !entered_from.is_empty() && entered_from.iter().all(|block| compares_the_count(block)),
+            "the receiver check is called without the count compare:\n{listing}"
+        );
+    }
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "100 7");
+}
+
+/// In a build that keeps the runtime checks, the receiver check is also
+/// called while the runtime is tracking, so the heap guard validates the
+/// receiver before the write; it is reached from the count compare or from
+/// the test of the tracking state, and from nothing else.
+#[test]
+fn test_a_checked_build_calls_the_receiver_check_while_tracking() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let call = RuntimeCall {
+        source: RESIZE,
+        function: "miri.List.resize",
+        runtime: "miri_rt_receiver_unique",
+    };
+    let RuntimeCallers {
+        out,
+        callers,
+        tracking,
+        listing,
+    } = runtime_callers(&call, &["--opt-level", "3"], out_dir.path());
+    assert!(
+        !callers.is_empty(),
+        "resize lost its receiver check:\n{listing}"
+    );
+    for entered_from in &callers {
+        assert!(
+            entered_from
+                .iter()
+                .any(|block| tests_tracking(block, &tracking))
+                && entered_from
+                    .iter()
+                    .all(|block| tests_tracking(block, &tracking) || compares_the_count(block)),
+            "the receiver check is reached past neither test:\n{listing}"
+        );
+    }
+    let run = Command::new(&out)
+        .env("MIRI_HEAP_GUARD", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "100 7");
 }
 
 const FILL: &str = r#"

@@ -49,7 +49,7 @@ use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
 };
 use crate::runtime_fns::{
-    cow_fn, is_copy_on_write, only_reads_argument, rt, taken_argument_positions,
+    cow_fn, is_copy_on_write, only_reads_argument, reads_reference_count, taken_argument_positions,
 };
 use crate::type_checker::context::TypeDefinition;
 use std::collections::{HashMap, HashSet};
@@ -357,7 +357,7 @@ fn keeps_or_checks(func: Option<&Operand>, position: usize) -> bool {
     func.and_then(Operand::called_runtime_name)
         .is_some_and(|name| {
             is_copy_on_write(name)
-                || name == rt::RC_IS_SHARED
+                || reads_reference_count(name)
                 || taken_argument_positions(name).contains(&position)
         })
 }

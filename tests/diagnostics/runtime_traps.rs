@@ -54,8 +54,14 @@ const TRAPS: &[Trap] = &[
     Trap {
         code: "MER_RT_016",
         source: "use system.collections.list\n\nruntime \"core\" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)\n\nclass Log\n    var l List<int>\n\nfn noted(log Log, a int, b int) int\n    log.l.push(a)\n    return a - b\n\nfn main()\n    let log = Log(l: List([3, 1, 2]))\n    miri_rt_list_sort_by(log.l, fn(a int, b int) int: noted(log, a, b))\n",
+    },    Trap {
+        code: "MER_RT_017",
+        source: SHARED_RECEIVER,
     },
 ];
+
+/// A program handing a writing method a receiver something else still holds.
+const SHARED_RECEIVER: &str = "use system.testing\n\nfn main()\n    simulate_shared_receiver()\n";
 
 #[test]
 fn test_every_runtime_trap_answers_with_a_code_and_a_failed_run() {
@@ -234,4 +240,43 @@ fn test_a_double_free_the_heap_guard_catches_is_reported_as_heap_corruption() {
         "a fault the guard catches should exit like any trap: {}",
         stdout
     );
+}
+
+#[test]
+fn test_a_shared_receiver_is_reported_under_the_heap_guard_without_a_double_free() {
+    // The check reads the count and stops the program before any release, so
+    // the guard has nothing of its own to report: the envelope names the
+    // receiver, never heap corruption.
+    let mut file = NamedTempFile::new().expect("a temporary file");
+    write!(file, "{}", SHARED_RECEIVER).expect("the source is written");
+    let path = file.path().to_str().expect("the path is UTF-8");
+
+    let output = miri_cmd()
+        .env("MIRI_HEAP_GUARD", "1")
+        .arg("run")
+        .arg(path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("miri runs");
+    let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
+    let envelope: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|_| panic!("not JSON: {}", stdout));
+
+    assert_eq!(
+        envelope["ok"], false,
+        "the guarded run reports ok true: {}",
+        stdout
+    );
+    assert_eq!(
+        envelope["diagnostics"][0]["code"], "MER_RT_017",
+        "the shared receiver is not reported as such: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("double-free detected"),
+        "the check released what it only reads: {}",
+        stdout
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stdout);
 }

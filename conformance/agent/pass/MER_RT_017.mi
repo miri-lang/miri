@@ -1,0 +1,9 @@
+// summary: Accepted counterpart of MER_RT_017: a writer called on a shared list copies it first, so its receiver arrives unique.
+// expect-stdout: 5 3
+use system.collections.list
+
+fn main()
+    var items = List([1, 2, 3])
+    let alias = items
+    items.resize(5, 0)
+    println(f"{items.length()} {alias.length()}")

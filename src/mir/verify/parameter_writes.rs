@@ -19,14 +19,18 @@
 //! A method's receiver is written in place, since the caller made it the
 //! body's own before calling a method that writes it; so is an `out`
 //! parameter, the caller's binding itself, and a parameter the body takes
-//! over from its callers. A GPU body holds no count and is skipped.
+//! over from its callers. The receiver is checked for that instead
+//! (`runtime_fns::rt::RECEIVER_UNIQUE`), never copied on write, asked whether
+//! it is shared or replaced whole: each of those releases or replaces a
+//! reference the caller still counts as its own, so each is a finding. A
+//! GPU body holds no count and is skipped.
 
 use super::{local_display_name, VerificationViolation};
 use crate::mir::block::BasicBlockData;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
-use crate::mir::{Body, Local, Operand, StatementKind};
-use crate::runtime_fns::{element_positions, only_reads_argument};
+use crate::mir::{Body, Local, Operand, Place, StatementKind};
+use crate::runtime_fns::{element_positions, is_copy_on_write, only_reads_argument, rt};
 use std::collections::BTreeSet;
 
 /// Every parameter of `body` whose value its caller still holds that the
@@ -45,7 +49,77 @@ pub fn verify_parameter_writes(body: &Body) -> Vec<VerificationViolation> {
     written
         .into_iter()
         .map(|index| violation(body, Local(index)))
+        .chain(replaced_receiver(body))
         .collect()
+}
+
+/// The finding for a body that copies its own receiver on write, asks
+/// whether it is shared, or stores a whole value into it.
+fn replaced_receiver(body: &Body) -> Option<VerificationViolation> {
+    let receiver = body.receiver?;
+    let decl = body.local_decls.get(receiver.0)?;
+    if decl.device_handle.is_some() || !is_copied_on_write(body, &decl.ty) {
+        return None;
+    }
+    let whole = Place::new(receiver);
+    let is_replaced = body
+        .basic_blocks
+        .iter()
+        .any(|block| replaces_whole(block, &whole));
+    is_replaced.then(|| VerificationViolation {
+        local: receiver,
+        local_name: local_display_name(body, receiver),
+        message: "a method's receiver is copied on write, asked whether it is shared, or \
+                  replaced whole, though its caller made it the method's own; a write \
+                  through it checks that it arrived unique instead"
+            .to_string(),
+    })
+}
+
+/// Whether `block` stores into the whole of `whole`, or hands it to a
+/// copy-on-write entry point or a sharing question.
+fn replaces_whole(block: &BasicBlockData, whole: &Place) -> bool {
+    let stored = block
+        .statements
+        .iter()
+        .any(|statement| match &statement.kind {
+            StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => place == whole,
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::IncRef(_)
+            | StatementKind::DecRef(_)
+            | StatementKind::Dealloc(_)
+            | StatementKind::Nop => false,
+        });
+    stored
+        || block
+            .terminator
+            .as_ref()
+            .is_some_and(|terminator| call_replaces_whole(&terminator.kind, whole))
+}
+
+/// Whether a terminator of `kind` is a call that defines the whole of
+/// `whole`, or hands it to a copy-on-write entry point or a sharing question.
+fn call_replaces_whole(kind: &TerminatorKind, whole: &Place) -> bool {
+    let (func, args, destination) = match kind {
+        TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } => (func, args, destination),
+        TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable
+        | TerminatorKind::GpuLaunch { .. }
+        | TerminatorKind::VirtualCall { .. } => return false,
+    };
+    let is_copy_or_question = func
+        .called_runtime_name()
+        .is_some_and(|name| is_copy_on_write(name) || name == rt::RC_IS_SHARED);
+    let hands_whole = args.iter().any(|arg| arg.place() == Some(whole));
+    destination == whole || (is_copy_or_question && hands_whole)
 }
 
 /// The locals `block` assigns to or through, and those its call hands a

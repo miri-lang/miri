@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 96
+## Error fixtures (`fail/`) — 97
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -65,6 +65,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_RT_012 | Triggers MER_RT_012: the program calls panic and stops where it stands. |
 | MER_RT_015 | Triggers MER_RT_015: a test helper releases one heap block twice. |
 | MER_RT_016 | Triggers MER_RT_016: a comparator grows the list the runtime is sorting with it. |
+| MER_RT_017 | Triggers MER_RT_017: a test helper hands a writing method's check a receiver two references hold. |
 | MER_TAR_002 | Triggers MER_TAR_002: Unsupported Operation in GPU Code. |
 | MER_TAR_005 | Triggers MER_TAR_005: Invalid GPU Parallel Construct. |
 | MER_TAR_006 | Triggers MER_TAR_006: GPU Residency Violation. |
@@ -137,7 +138,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 107
+## Accepted fixtures (`pass/`) — 108
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -197,6 +198,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_RT_012 | Accepted counterpart of MER_RT_012: the guarded case never reaches the panic. |
 | MER_RT_015 | Accepted counterpart of MER_RT_015: every value is released once, by reference counting. |
 | MER_RT_016 | Accepted counterpart of MER_RT_016: sorted_by sorts a copy, so a comparator may grow the receiver. |
+| MER_RT_017 | Accepted counterpart of MER_RT_017: a writer called on a shared list copies it first, so its receiver arrives unique. |
 | MER_TAR_002 | Accepted counterpart of MER_TAR_002: Unsupported Operation in GPU Code does not fire. |
 | MER_TAR_005 | Accepted counterpart of MER_TAR_005: Invalid GPU Parallel Construct does not fire. |
 | MER_TYP_002 | Correct type in variable initialization - string assigned to string |

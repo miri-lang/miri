@@ -108,3 +108,18 @@ fn collection_clones_hand_back_blocks_nothing_else_holds() {
         assert_clone_is_unshared("array", array, miri_rt_array_clone, miri_rt_array_free);
     }
 }
+
+/// A writing method checks its receiver arrived held by its call alone. The
+/// check only reads: a receiver that passes it keeps its count, so the method
+/// owns no reference more or less than it was handed.
+#[test]
+fn a_receiver_held_once_passes_the_uniqueness_check_untouched() {
+    use miri_runtime_core::list::ffi::{miri_rt_list_free, miri_rt_list_new};
+    unsafe {
+        let list = miri_rt_list_new(8);
+        miri_rt_receiver_unique(list as *const u8);
+        assert!(!miri_rt_rc_is_shared(list as *const u8));
+        miri_rt_receiver_unique(std::ptr::null());
+        miri_rt_list_free(list);
+    }
+}

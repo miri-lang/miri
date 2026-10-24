@@ -153,6 +153,10 @@ bytes into a heap buffer of its own.
   ownership.
 - When RC drops to zero, the type's `_free` function is responsible for freeing the
   internal buffers and then the `[RC][payload]` block.
+- A method that writes its collection receiver is called on a collection the caller
+  made its own first, so the method never copies its receiver on write: it calls
+  `miri_rt_receiver_unique(receiver)`, which only reads the count and traps with
+  `MER_RT_017` in every build when it is not 1 (an immortal object included).
 - Small blocks — up to 256 bytes, both `[RC][payload]` blocks and the blocks
   compiled code lays out itself — come from a per-thread cache of released blocks
   (`block_cache`) in front of the system allocator. A block it hands out holds
