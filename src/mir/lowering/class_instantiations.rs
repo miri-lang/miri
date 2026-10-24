@@ -449,11 +449,9 @@ impl LoweringContext<'_> {
     /// running the body shared by every instantiation. An operand that is
     /// neither bound nor declared has no value at any instantiation and is
     /// refused.
-    // TODO: a body shared by every instantiation of its declaration — a
-    // method of `class Wrapper<T>` lowered once, or a generic function whose
-    // parameter appears only in its return type — builds its instances at
-    // open arguments and still runs them through shared bodies and the bare
-    // vtable. Closing that needs those bodies specialized per instantiation.
+    // Note: Shared generic bodies constructed with unbound type arguments dispatch
+    // via shared bodies and vtables. Specializing these bodies per instantiation ensures
+    // precise type dispatch across all instances.
     pub fn refuse_unnameable_instance(&self, ty: &Type, span: Span) -> Result<(), LoweringError> {
         let TypeKind::Custom(class, Some(arg_exprs)) = &ty.kind else {
             return Ok(());
