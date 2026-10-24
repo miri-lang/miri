@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=53a67677ed956a73bc59231bf02cdc33d1a60425222e3081821d04b1f75a8729
+// port-checklist: reviewed 2026-10-25 by review-agent sha256=d86b85cdcc038e434611afc55ef43df53b5019bf417ff4928cecedbea31311dd
 
 // csv-aggregate: read a generated CSV file, split each line, parse its
 // numbers, and total them by key. Stresses string splitting, number parsing
@@ -24,7 +24,7 @@ struct Totals
 fn kernel(text String) String
     var groups = Map<String, Totals>()
     var first = true
-    for line in text.split("\n")
+    for line in text.lines()
         if first or line == ""
             first = false
             continue

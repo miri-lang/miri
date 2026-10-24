@@ -8,6 +8,12 @@
 name = "k-nucleotide"
 # The compiler mechanisms the workload stresses.
 tags = ["string", "map", "alloc"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C port counts with the suite's shared chained hash table (bench/c/table.h), hashed with FNV-1a, the cheapest hash on the chart; every other port uses its standard map and that map's hash (Rust's is SipHash, slower per key and resistant to collision attacks).",
+    "At size M, with a distinct key at almost every position, the C table's one allocation per key and its pointer-chased chains cost it more than Rust's open-addressing HashMap costs Rust; the hash spreads well (chains measured near the ideal length), and C++'s node-based unordered_map pays the same cost. On this workload read Miri against Rust, not C.",
+]
 parameter = "How many bases the generated sequence holds."
 generated = true
 

@@ -80,7 +80,8 @@ dropped. It adds each cell's ratio to C (time and peak memory), to Rust (peak
 and net memory, net being the peak above the runtime floor, or `≤ floor`), and
 to Miri. It marks the Miri cells past the charter's diagnosis thresholds, and
 takes the geometric mean of each language's time ratio to C, overall and per
-feature tag, with how many workloads it covers. A cell that was not measured
+feature tag, with how many workloads it covers, and carries each measured
+workload's manifest `notes` into `port_notes`. A cell that was not measured
 (`mismatch`, `timeout`, `unsupported` …) keeps its status and never enters a
 ratio. It refuses records made under a charter other than the one on disk,
 and a run that mixes machine profiles or charter versions.

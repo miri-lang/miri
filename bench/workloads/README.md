@@ -8,7 +8,7 @@ run lines, and what is measured are in [`../CHARTER.md`](../CHARTER.md).
 |---|---|
 | `<name>.mi` | The Miri port, written as the language skill pack teaches. |
 | `<name>.c`, `.cpp`, `.rs`, `.go`, `.py`, `.ts` | The headline languages' ports. |
-| `workload.toml` | The parameter at each size (S, M, L), the checksum every port must print for it, and the mechanisms the workload stresses (`tags`). |
+| `workload.toml` | The parameter at each size (S, M, L), the checksum every port must print for it, the mechanisms the workload stresses (`tags`), and the `notes` a reader needs beside its ratios: where a reference port keeps an idiomatic handicap or advantage (charter section 3). The summary prints every note. |
 
 Beside the directories, `generate.py` writes the input of the workloads whose
 manifest says `generated = true` (wordfreq, k-nucleotide, json-roundtrip,

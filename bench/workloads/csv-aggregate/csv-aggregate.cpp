@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=d5124a42b270512504a698cf8dc774b16d3f89cd0c121130e421530cce2e695c
+// port-checklist: reviewed 2026-10-25 by review-agent sha256=77ef9c5aa5f9ad4ce83f1a485844276324f68cef3c51643b93b2092e93fc16ae
 
 // csv-aggregate: totals by key over a generated CSV file (see csv-aggregate.mi).
 
@@ -24,8 +24,8 @@ struct Totals {
     double amount = 0.0;
 };
 
-std::vector<std::string_view> split(std::string_view text, char separator) {
-    std::vector<std::string_view> parts;
+void split(std::string_view text, char separator, std::vector<std::string_view> &parts) {
+    parts.clear();
     std::size_t start = 0;
     for (std::size_t i = 0; i <= text.size(); i++) {
         if (i == text.size() || text[i] == separator) {
@@ -33,17 +33,25 @@ std::vector<std::string_view> split(std::string_view text, char separator) {
             start = i + 1;
         }
     }
-    return parts;
 }
 
 std::string kernel(const std::string &text) {
     std::unordered_map<std::string_view, Totals> groups;
-    const auto lines = split(text, '\n');
-    for (std::size_t i = 1; i < lines.size(); i++) {
-        if (lines[i].empty()) {
+    std::vector<std::string_view> fields;
+    const std::string_view all(text);
+    const std::size_t header_end = all.find('\n');
+    std::size_t start = header_end == std::string_view::npos ? all.size() : header_end + 1;
+    while (start < all.size()) {
+        std::size_t end = all.find('\n', start);
+        if (end == std::string_view::npos) {
+            end = all.size();
+        }
+        const std::string_view line = all.substr(start, end - start);
+        start = end + 1;
+        if (line.empty()) {
             continue;
         }
-        const auto fields = split(lines[i], ',');
+        split(line, ',', fields);
         Totals &t = groups[fields[0]];
         t.count += 1;
         t.quantity += std::stoll(std::string(fields[1]));

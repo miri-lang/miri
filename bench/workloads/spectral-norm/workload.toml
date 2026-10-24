@@ -8,6 +8,11 @@
 name = "spectral-norm"
 # The compiler mechanisms the workload stresses.
 tags = ["float", "call", "array-index", "loop"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "C's lead over Rust here is not vectorisation: on x86-64 the C port runs as fast with clang's vectorisers off. C and C++ index without bounds checks by language; Miri, Rust, Go, Python and TypeScript check every index, and the ratio includes that cost (charter section 4).",
+]
 parameter = "The number of rows of the matrix."
 
 # The parameters were set from the portable C build on the dev profile, not by

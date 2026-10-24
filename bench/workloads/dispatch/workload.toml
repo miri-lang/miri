@@ -8,6 +8,11 @@
 name = "dispatch"
 # The compiler mechanisms the workload stresses.
 tags = ["dispatch", "struct-method", "float", "loop"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "At size S the cold time is mostly process start-up, not the kernel; read the hot time for this workload at size S.",
+]
 parameter = "How many times the shapes' areas are summed."
 
 # The parameters were set from the portable C build on the dev profile, not by

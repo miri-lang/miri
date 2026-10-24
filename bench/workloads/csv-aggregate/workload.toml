@@ -8,6 +8,11 @@
 name = "csv-aggregate"
 # The compiler mechanisms the workload stresses.
 tags = ["string-split", "parse", "map", "string"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C port counts with the suite's shared chained hash table (bench/c/table.h), hashed with FNV-1a, the cheapest hash on the chart; every other port uses its standard map and that map's hash (Rust's is SipHash, slower per key and resistant to collision attacks).",
+]
 parameter = "How many records the generated file holds."
 generated = true
 

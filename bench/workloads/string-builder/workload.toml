@@ -8,6 +8,11 @@
 name = "string-builder"
 # The compiler mechanisms the workload stresses.
 tags = ["string", "cow", "alloc"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C port formats every piece with snprintf, the idiomatic C call, and that call is nearly all of C's time; C++ and Rust format integers directly, so C is not the fastest reference on this workload.",
+]
 parameter = "How many pieces are appended."
 
 # The parameters were set from the portable C build on the dev profile, not by

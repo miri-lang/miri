@@ -64,6 +64,11 @@
           "memory_coverage": {"type": "integer"}
         }
       }
+    },
+    "port_notes": {
+      "description": "Each measured workload's manifest notes: what a reader needs beside its ratios to read them fairly, such as a reference port's known handicap.",
+      "type": "object",
+      "additionalProperties": {"type": "array", "items": {"type": "string"}}
     }
   },
   "$defs": {

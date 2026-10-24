@@ -20,7 +20,7 @@ of this document, and the prose refers to values by key rather than restating
 them. `tests/bench/charter.rs` fails the build when the two files disagree on a
 number, a build line, a tier or a key.
 
-**Charter version: 1.**
+**Charter version: 2.**
 
 ## 1. Identity of a result
 
@@ -118,6 +118,13 @@ A Miri port follows the same list. When idiomatic Miri is slow because the
 compiler does something badly, the port stays idiomatic and the weakness is
 filed against the compiler. Rewriting the Miri port around a compiler weakness
 is forbidden: it would hide exactly what the suite exists to find.
+
+Where a port keeps a known handicap or advantage because it is the idiomatic
+form — C's `qsort` with a comparator function, C's shared hash table, a parser
+that accepts only the grammar the input uses — the workload's manifest says so
+in its `notes`, and the summary prints every note beside that workload's
+ratios. A note explains a ratio a reader would otherwise misread; it never
+stands in for fixing a port that breaks the checklist.
 
 A port changed after a result for its workload exists — a better C port
 submitted by a reader, a fix — gets a new review line and takes effect from the
@@ -373,7 +380,7 @@ checks the two files agree reads this table.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `charter_version` | `1` | The version every record carries (section 1). |
+| `charter_version` | `2` | The version every record carries (section 1). |
 | `runs.process_warmup_runs` | `2` | Discarded runs at the start of each cell. |
 | `runs.hot_warmup_iterations` | `5` | Untimed kernel iterations at the start of a hot run. |
 | `runs.hot_timed_iterations` | `5` | Timed kernel iterations in a hot run; `hot_ns` is their median. |
@@ -396,6 +403,17 @@ checks the two files agree reads this table.
 | `diagnosis.net_rss_vs_rust` | `1.5` | Ratio to Rust at which a Miri memory cell is diagnosed. |
 
 ## Changelog
+
+- **Version 2, 2026-10-25** — a port-fairness review of every reference port.
+  Added port notes (section 3): the manifests now say where a reference port
+  keeps an idiomatic handicap or advantage, and the summary prints them beside
+  the workload's ratios. Ports changed in the same review, each re-reviewed and
+  taking effect from the next run with every language of its workload re-run:
+  list-sort and wordfreq in Go (`slices` sorting instead of the reflective
+  `sort.Slice`), list-sort in TypeScript (packed arrays instead of holey
+  `new Array(n)`), csv-aggregate in C++ (lines walked in place and one field
+  vector reused, as the C port does), and csv-aggregate and wordfreq in Miri
+  (`lines()` instead of materialising every line with `split`).
 
 - **Version 1, 2026-10-15** — first version, reviewed for the objections in
   section 11 and committed before any measured run.

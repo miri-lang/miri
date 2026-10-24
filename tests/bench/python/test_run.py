@@ -203,6 +203,15 @@ class ReviewTest(unittest.TestCase):
                 self.assertIsNone(run.review_problem(workload.port(language), comment), workload.port(language))
 
 
+class PortNotesTest(unittest.TestCase):
+    def test_every_manifest_note_is_a_sentence(self):
+        for workload in run.load_workloads(None):
+            notes = workload.manifest.get("notes", [])
+            self.assertIsInstance(notes, list, workload.name)
+            for note in notes:
+                self.assertTrue(isinstance(note, str) and note.strip().endswith("."), (workload.name, note))
+
+
 class ProfileTest(unittest.TestCase):
     def test_every_profile_names_itself_and_only_publication_publishes(self):
         for name in ("dev", "ci-smoke", "publication"):

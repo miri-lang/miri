@@ -6,7 +6,7 @@
 # value it has. `tests/bench/charter.rs` fails when the two disagree on any
 # number or any build line, so neither can be changed alone.
 
-charter_version = 1
+charter_version = 2
 
 [tiers]
 subject = ["miri"]

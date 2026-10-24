@@ -8,6 +8,11 @@
 name = "closures"
 # The compiler mechanisms the workload stresses.
 tags = ["closure", "list", "alloc", "int"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C port reuses its stage buffers across rounds, where every other port builds a fresh collection per stage, so C's time and memory carry no allocation for the stages.",
+]
 parameter = "How many numbers the pipelines run over."
 
 # The parameters were set from the portable C build on the dev profile, not by

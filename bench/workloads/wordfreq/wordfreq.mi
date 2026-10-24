@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=e3de6900ca15cdcab8eb7cf0ee1e6a6d13056d219103e649eabc12f38b51c304
+// port-checklist: reviewed 2026-10-25 by review-agent sha256=aaeaac31af6dd2cf133de6c063f22b7717728801151d4645a9f1d6f60c8bbc00
 
 // wordfreq: count every word of a generated text in a map and report the ten
 // most frequent. Stresses string splitting, string-keyed map growth and
@@ -22,7 +22,7 @@ struct Entry
 /// frequent first and alphabetical among equals.
 fn kernel(text String) String
     var counts = Map<String, int>()
-    for line in text.split("\n")
+    for line in text.lines()
         for word in line.split(" ")
             if word != ""
                 counts[word] = (counts.get(word) ?? 0) + 1

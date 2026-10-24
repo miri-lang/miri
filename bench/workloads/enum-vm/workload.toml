@@ -8,6 +8,11 @@
 name = "enum-vm"
 # The compiler mechanisms the workload stresses.
 tags = ["enum-match", "int", "loop"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C++ port dispatches with std::visit over a std::variant, the idiomatic form; dispatching with a switch on index() ran several times faster in review, so the C++ ratio on this workload measures std::visit.",
+]
 parameter = "The loop count the interpreted program runs to."
 
 # The parameters were set from the portable C build on the dev profile, not by

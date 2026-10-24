@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=1e3bb2483086402032af2c3a73d355beaa604fd9ab26a7c5d353571284189113
+// port-checklist: reviewed 2026-10-25 by review-agent sha256=05f5ac7c2652fd653041d8a69e7381d022874976766ba4190a134abc6f94cb4b
 
 // list-sort: sort generated numbers, then records by key (see list-sort.mi).
 
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -28,13 +29,13 @@ func kernel(n int64) string {
 		numbers[i] = state % 1000000
 		records[i] = Record{state % 1000, i}
 	}
-	sort.Slice(numbers, func(a, b int) bool { return numbers[a] < numbers[b] })
-	byKey := append([]Record(nil), records...)
-	sort.SliceStable(byKey, func(a, b int) bool {
-		if byKey[a].key != byKey[b].key {
-			return byKey[a].key < byKey[b].key
+	slices.Sort(numbers)
+	byKey := slices.Clone(records)
+	slices.SortStableFunc(byKey, func(a, b Record) int {
+		if a.key != b.key {
+			return cmp.Compare(a.key, b.key)
 		}
-		return byKey[a].id > byKey[b].id
+		return cmp.Compare(b.id, a.id)
 	})
 	var numberHash, recordHash int64
 	for i := int64(0); i < n; i++ {

@@ -18,7 +18,7 @@ import summarize  # noqa: E402
 
 CHARTER = run.load_charter()
 HASH = "h" * 64
-MANIFESTS = {"w": {"tags": ["float"]}, "v": {"tags": ["int"]}}
+MANIFESTS = {"w": {"tags": ["float"], "notes": ["The C port formats with snprintf."]}, "v": {"tags": ["int"]}}
 
 
 def records(workload, language, walls, mode="cold", attempt=0, status="ok", rss=10_000_000):
@@ -177,6 +177,19 @@ def validate(instance, schema, root):
     if "items" in schema and isinstance(instance, list):
         for item in instance:
             validate(item, schema["items"], root)
+
+
+class PortNotesTest(unittest.TestCase):
+    def test_a_measured_workload_carries_its_manifest_notes_into_the_summary(self):
+        recs = records("w", "c", [100, 100, 100]) + records("v", "c", [100, 100, 100])
+        summary = summarize_records(recs)
+        self.assertEqual(summary["port_notes"], {"w": ["The C port formats with snprintf."]})
+        self.assertIn("- **w**: The C port formats with snprintf.", summarize.markdown(summary))
+
+    def test_a_workload_without_cells_carries_no_notes(self):
+        summary = summarize_records(records("v", "c", [100, 100, 100]))
+        self.assertEqual(summary["port_notes"], {})
+        self.assertNotIn("Port notes", summarize.markdown(summary))
 
 
 class SchemaTest(unittest.TestCase):

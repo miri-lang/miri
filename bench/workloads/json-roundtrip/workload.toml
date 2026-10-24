@@ -8,6 +8,11 @@
 name = "json-roundtrip"
 # The compiler mechanisms the workload stresses.
 tags = ["json", "string", "map", "list", "alloc"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C, C++ and Rust ports parse and write only the JSON the generator emits (objects, arrays, ASCII strings without escapes, integers, booleans and null); the Go, Python, TypeScript and Miri ports use full JSON parsers. Every port prints the same checksum, but the subset parsers do less work per byte.",
+]
 parameter = "How many records the generated document holds."
 generated = true
 

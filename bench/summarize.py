@@ -260,7 +260,15 @@ def summarize(records, charter, expected_hash, manifests, env=None):
         "provenance": env or {},
         "cells": [key_dict(key) | cell for key, cell in sorted(cells.items())],
         "aggregates": aggregates(cells, manifests),
+        "port_notes": port_notes(cells, manifests),
     }
+
+
+def port_notes(cells, manifests):
+    """Each measured workload's manifest `notes`: what a reader needs beside its
+    ratios to read them fairly, such as a reference port's known handicap."""
+    measured = sorted({key[0] for key in cells})
+    return {w: list(manifests[w]["notes"]) for w in measured if manifests.get(w, {}).get("notes")}
 
 
 def workload_manifests():
@@ -357,6 +365,9 @@ def markdown(summary):
     lines += ["", "| Language | Size | Mode | Tag | Geomean × C | Workloads |", "|---|---|---|---|---|---|"]
     for row in summary["aggregates"]:
         lines.append(f"| {row['language']} | {row['size']} | {row['mode']} | {row['tag']} | {fmt(row['geomean_vs_c'])} | {row['coverage']} |")
+    if notes := summary.get("port_notes"):
+        lines += ["", "## Port notes", ""]
+        lines += [f"- **{workload}**: {note}" for workload, items in notes.items() for note in items]
     return "\n".join(lines) + "\n"
 
 

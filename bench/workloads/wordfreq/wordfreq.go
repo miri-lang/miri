@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
-// port-checklist: reviewed 2026-10-16 by review-agent sha256=8abf2ec371d48ba54086fd4cc96f9aad810efb6087c277667f781460b40ec469
+// port-checklist: reviewed 2026-10-25 by review-agent sha256=bb96bc3fe48d12a66a9911409a32e876daa83a04c60746c08ae0caec06fe8ff0
 
 // wordfreq: count the words of a text (see wordfreq.mi).
 
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -32,11 +33,11 @@ func kernel(text string) string {
 	for word, count := range counts {
 		entries = append(entries, entry{word, count})
 	}
-	sort.Slice(entries, func(a, b int) bool {
-		if entries[a].count != entries[b].count {
-			return entries[a].count > entries[b].count
+	slices.SortFunc(entries, func(a, b entry) int {
+		if a.count != b.count {
+			return cmp.Compare(b.count, a.count)
 		}
-		return entries[a].word < entries[b].word
+		return strings.Compare(a.word, b.word)
 	})
 	top := make([]string, 0, 10)
 	for i := 0; i < 10 && i < len(entries); i++ {

@@ -8,6 +8,11 @@
 name = "list-sort"
 # The compiler mechanisms the workload stresses.
 tags = ["list", "sort", "alloc"]
+# What a reader needs beside this workload's ratios to read them fairly;
+# the summary prints every note (charter section 3).
+notes = [
+    "The C port sorts with qsort and a comparator function the compiler cannot inline, which is idiomatic C; the C++ and Rust ports sort with inlined comparisons (std::sort, sort_by) and run several times faster than C here, so on this workload read Miri against Rust, not C.",
+]
 parameter = "How many numbers are generated and sorted."
 
 # The parameters were set from the portable C build on the dev profile, not by
