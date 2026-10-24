@@ -35,6 +35,7 @@ use crate::mir::{
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::runtime_writes::{copy_forwarded_argument, RuntimeCallee};
 
 /// The local holding a body's return value, by MIR convention.
 const RETURN_LOCAL: Local = Local(0);
@@ -72,9 +73,7 @@ pub(crate) fn try_lower_function_reference(
     let fn_ty = info.ty.clone();
     let declared = super::identifier_expr::declared_name(info, name);
     let target = super::identifier_expr::global_function_symbol(ctx, expr, declared)?;
-    Ok(Some(lower_function_reference(
-        ctx, expr, expr, &target, &fn_ty, &func_data, dest,
-    )))
+    lower_function_reference(ctx, expr, expr, &target, &fn_ty, &func_data, dest).map(Some)
 }
 
 /// Lower `M.name`, a function read as a value through the module alias `M`,
@@ -112,9 +111,7 @@ pub(crate) fn try_lower_module_member_reference(
     }
     let func_data = func_data.clone();
     let target = Symbol::declared_function(&declared.module, &declared.name);
-    Ok(Some(lower_function_reference(
-        ctx, member, name, &target, &fn_ty, &func_data, dest,
-    )))
+    lower_function_reference(ctx, member, name, &target, &fn_ty, &func_data, dest).map(Some)
 }
 
 /// Build the closure value and register the thunk body it points at.
@@ -129,7 +126,7 @@ fn lower_function_reference(
     fn_ty: &Type,
     func_data: &FunctionTypeData,
     dest: Option<Place>,
-) -> Operand {
+) -> Result<Operand, LoweringError> {
     // The reference site's expression id keeps two references to the same
     // function from claiming one symbol, the way a lambda's id does.
     let thunk_symbol =
@@ -142,7 +139,7 @@ fn lower_function_reference(
         thunk_symbol.clone(),
         func_data,
         forwarded_allocator.as_ref(),
-    );
+    )?;
     ctx.lambda_bodies.push(thunk);
 
     let target = dest.unwrap_or_else(|| Place::new(ctx.push_temp(fn_ty.clone(), expr.span)));
@@ -165,7 +162,7 @@ fn lower_function_reference(
     // same local would make Perceus drop fields the new payload does not have.
     ctx.body.closure_capture_types.remove(&target.local);
 
-    Operand::Copy(target)
+    Ok(Operand::Copy(target))
 }
 
 /// The enclosing function's allocator, when the referenced function takes one
@@ -194,6 +191,11 @@ struct AllocatorCapture {
 }
 
 /// Build the thunk body: `(env_ptr, p0..pN) -> symbol(p0..pN)`.
+///
+/// A parameter a runtime entry point writes in place is forwarded as a copy
+/// the thunk makes its own (`runtime_writes::copy_forwarded_argument`),
+/// released once the call returns, so the write never reaches the caller's
+/// value.
 fn build_forwarding_thunk(
     ctx: &LoweringContext,
     expr: &Expression,
@@ -201,7 +203,7 @@ fn build_forwarding_thunk(
     thunk_symbol: Symbol,
     func_data: &FunctionTypeData,
     allocator: Option<&AllocatorCapture>,
-) -> LambdaInfo {
+) -> Result<LambdaInfo, LoweringError> {
     let span = expr.span;
     let params = &func_data.params;
     // The thunk's types are the referenced function's declared ones, in the
@@ -227,19 +229,19 @@ fn build_forwarding_thunk(
         span,
     );
 
-    let mut args = Vec::with_capacity(params.len());
-    for (index, param) in params.iter().enumerate() {
-        let param_ty = ctx.declared_type(&param.typ);
-        let local = thunk_ctx.push_param(thunk_param_name(param, index), param_ty, span);
-        args.push(Operand::Copy(Place::new(local)));
-    }
+    let func = Operand::function(symbol.clone(), span);
+    let ForwardedArguments {
+        mut args,
+        copies,
+        watermark,
+    } = forward_parameters(ctx, &mut thunk_ctx, &func, params)?;
 
     let captures = capture_allocator(&mut thunk_ctx, allocator, span, &mut args);
 
     let after_call = thunk_ctx.new_basic_block();
     thunk_ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::function(symbol.clone(), span),
+            func,
             args,
             arg_modes: params
                 .iter()
@@ -252,13 +254,16 @@ fn build_forwarding_thunk(
         span,
     ));
     thunk_ctx.set_current_block(after_call);
+    for copy in copies {
+        thunk_ctx.emit_temp_drop(copy, watermark, span);
+    }
     thunk_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
 
-    LambdaInfo {
+    Ok(LambdaInfo {
         symbol: thunk_symbol,
         body: thunk_ctx.body,
         captures,
-    }
+    })
 }
 
 /// Declare the captured allocator inside the thunk and append it to the
@@ -291,4 +296,50 @@ fn thunk_param_name(param: &Parameter, index: usize) -> String {
     } else {
         param.name.clone()
     }
+}
+
+/// The arguments a thunk hands the function it forwards to, with the copies
+/// it bound for them and the local count from before the first copy.
+struct ForwardedArguments {
+    args: Vec<Operand>,
+    copies: Vec<Local>,
+    watermark: usize,
+}
+
+/// Declares the thunk's parameters, one per parameter of `func`, and the
+/// arguments it forwards them as: each as it is, or a copy of its own where
+/// `func` is a runtime entry point writing it in place. Everything is
+/// spanned at the thunk body, the reference it is built for.
+fn forward_parameters(
+    ctx: &LoweringContext,
+    thunk_ctx: &mut LoweringContext,
+    func: &Operand,
+    params: &[Parameter],
+) -> Result<ForwardedArguments, LoweringError> {
+    let span = thunk_ctx.body.span;
+    let param_tys: Vec<Type> = params
+        .iter()
+        .map(|param| ctx.declared_type(&param.typ))
+        .collect();
+    let locals: Vec<Local> = params
+        .iter()
+        .zip(&param_tys)
+        .enumerate()
+        .map(|(index, (param, ty))| {
+            thunk_ctx.push_param(thunk_param_name(param, index), ty.clone(), span)
+        })
+        .collect();
+    let callee = RuntimeCallee::of(func, &param_tys);
+    let watermark = thunk_ctx.body.local_decls.len();
+    let mut forwarded = ForwardedArguments {
+        args: Vec::with_capacity(params.len()),
+        copies: Vec::new(),
+        watermark,
+    };
+    for (position, &local) in locals.iter().enumerate() {
+        let (arg, copy) = copy_forwarded_argument(thunk_ctx, callee, position, local, span)?;
+        forwarded.args.push(arg);
+        forwarded.copies.extend(copy);
+    }
+    Ok(forwarded)
 }

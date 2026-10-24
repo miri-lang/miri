@@ -238,6 +238,14 @@ impl ProgramBuilder<'_> {
     /// A call to `func`: it reads its callee and arguments, and stores its
     /// result into `destination`, fresh when `func` hands back a value nothing
     /// else holds.
+    ///
+    /// TODO: a place handed to a runtime entry point at a position it writes
+    /// in place is forgotten like any other argument, though the entry point
+    /// keeps nothing it writes (`runtime_fns::writes_in_place`), so the place
+    /// is as unshared after the call as before it. Keeping it would let the
+    /// copy-on-write lowering puts before `miri_rt_list_sort_by` in
+    /// `List.sorted_by` — on a list the body built and pushed to itself — be
+    /// answered here and removed; today it stays, one runtime call per sort.
     fn call(
         &mut self,
         func: &Operand,

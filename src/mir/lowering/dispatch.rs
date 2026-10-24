@@ -44,6 +44,7 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
+use super::runtime_writes::{self, RuntimeCallee};
 
 pub fn lower_call(
     ctx: &mut LoweringContext,
@@ -360,7 +361,11 @@ fn lower_aliased_function_call(
     // omitted one given its default, and every temp one built released once
     // the call has taken its own reference.
     let arg_watermark = ctx.body.local_decls.len();
-    let mut arg_ops = lower_call_arguments(ctx, signature_id, call_expr_id, args, *span)?;
+    let call = CallSite {
+        callee_id: signature_id,
+        span: *span,
+    };
+    let mut arg_ops = lower_call_arguments(ctx, call, call_expr_id, args, &func_op)?;
     if callee_takes_allocator(ctx, callee) {
         push_allocator_arg(ctx, &mut arg_ops);
     }
@@ -383,17 +388,20 @@ fn lower_aliased_function_call(
     Ok(Some(result_op))
 }
 
-/// A call's argument operands in parameter order, for the function the
-/// callee expression `callee_id` names: each lowered in written order and
-/// brought to its parameter's type, a named one placed at the parameter it
-/// names, and an omitted one given its default.
+/// A call's argument operands in parameter order, for the function `func`
+/// the callee expression `call.callee_id` names: each lowered in written
+/// order and brought to its parameter's type, a named one placed at the
+/// parameter it names, and an omitted one given its default. An argument a
+/// runtime entry point writes in place is lowered as the collection the call
+/// writes ([`runtime_writes::lower_call_argument`]).
 fn lower_call_arguments(
     ctx: &mut LoweringContext,
-    callee_id: usize,
+    call: CallSite,
     call_expr_id: usize,
     args: &[Expression],
-    span: Span,
+    func: &Operand,
 ) -> Result<Vec<Operand>, LoweringError> {
+    let CallSite { callee_id, .. } = call;
     let is_generic_call = ctx
         .type_checker
         .call_generic_mappings
@@ -405,10 +413,10 @@ fn lower_call_arguments(
         declared_parameter_types(ctx, &param_types)
     };
     let param_names = callee_parameter_names(ctx, callee_id);
-    let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names)?;
-    let call = CallSite { callee_id, span };
+    let callee = RuntimeCallee::of(func, &targets);
+    let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names, callee)?;
     fill_default_args(ctx, &mut arg_slots, &param_types, call)?;
-    operands_in_parameter_order(arg_slots, span)
+    operands_in_parameter_order(arg_slots, call.span)
 }
 
 /// Lower call arguments with plain expression lowering (no coercion).
@@ -1511,7 +1519,11 @@ fn lower_direct_call(
     apply_generic_mangling(ctx, callee, call_expr_id, &mut func_op)?;
 
     let arg_watermark = ctx.body.local_decls.len();
-    let mut arg_ops = lower_call_arguments(ctx, func.id, call_expr_id, args, *span)?;
+    let call = CallSite {
+        callee_id: func.id,
+        span: *span,
+    };
+    let mut arg_ops = lower_call_arguments(ctx, call, call_expr_id, args, &func_op)?;
 
     inject_allocator_arg(ctx, callee, &func_op, &mut arg_ops);
 
@@ -1923,12 +1935,13 @@ fn lower_and_coerce_args(
     args: &[Expression],
     targets: &[Type],
     param_names: &[String],
+    callee: Option<RuntimeCallee<'_>>,
 ) -> Result<Vec<Option<Operand>>, LoweringError> {
     let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
     let mut slots = Vec::with_capacity(args.len());
     for (position, value) in bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
-        let mut op = lower_expression(ctx, value, None)?;
+        let mut op = runtime_writes::lower_call_argument(ctx, callee, position, value)?;
 
         if let Some(target_ty) = targets.get(position) {
             op = coerce_arg_to_declared(ctx, op, value, target_ty, watermark);

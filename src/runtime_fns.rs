@@ -738,7 +738,9 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         | rt::STRING_CONCAT
         | rt::STRING_CLONE
         | rt::STRING_JOIN
+        | rt::LIST_NEW_FROM_RAW
         | rt::LIST_NEW_FROM_MANAGED_ARRAY
+        | rt::ARRAY_SLICE
         | rt::STRING_EQUALS
         | rt::STRING_HASH
         | rt::STRING_COMPARE
@@ -751,6 +753,39 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         rt::STRING_APPEND | rt::STRING_APPEND_INT | rt::STRING_APPEND_UINT => position > 0,
         _ => false,
     }
+}
+
+/// Whether `name` writes, in place, what it is handed at `position`: anything
+/// but an argument it only reads, an element it stores or looks up, a closure
+/// it calls, or the value a copy-on-write entry point or a count question is
+/// asked about.
+///
+/// It fails closed: an entry point no table classifies writes every argument
+/// it is handed, until a table says otherwise.
+///
+/// What an entry point writes in place it does not keep. The argument is lent
+/// for the call, and the runtime holds no reference to it once the call
+/// returns, so the count it found is the count it leaves: a value the caller
+/// made its own before the call is still its own after it. An argument the
+/// runtime does keep is one it takes over ([`taken_argument_positions`]), and
+/// the only one of those it also writes is a string append's receiver, which
+/// the call hands back as its result. A new entry point that stashes a value
+/// it writes would break this silently, since failing closed does not cover
+/// that direction.
+///
+/// The collection destructors (`miri_rt_list_free` and its siblings) are
+/// outside this contract. They release the block whatever its count, so they
+/// neither write in place nor take over one reference
+/// ([`taken_argument_positions`]); code generation calls them only once a
+/// count has reached zero. A program that declares and calls one itself is
+/// not supported: it is answered as a writer here, and freeing a value some
+/// other name still holds is wrong whatever is copied first.
+pub fn writes_in_place(name: &str, position: usize) -> bool {
+    !only_reads_argument(name, position)
+        && !element_positions(name).contains(&position)
+        && !closure_positions(name).contains(&position)
+        && !is_copy_on_write(name)
+        && !reads_reference_count(name)
 }
 
 /// Whether `name` is the copy-on-write entry point of a built-in collection:

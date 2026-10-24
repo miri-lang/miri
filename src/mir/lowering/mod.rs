@@ -34,6 +34,7 @@ pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;
 pub mod reduce_gpu;
+mod runtime_writes;
 pub mod statement;
 pub mod variable;
 pub mod vtable_demand;

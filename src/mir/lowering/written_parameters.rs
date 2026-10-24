@@ -8,8 +8,10 @@
 //! the value it passed, often under more than one name, so its count says
 //! nothing about whether the body may write it in place. A body that writes a
 //! parameter, or writes through a path starting at one — a field, a tuple
-//! element, a collection element, a map entry — is therefore lowered as if it
-//! began with `var <name> = <name>`: the copy takes a reference of its own, and
+//! element, a collection element, a map entry — whether by a store, a method
+//! that writes its receiver or a runtime entry point that writes what it is
+//! handed in place, is therefore lowered as if it began with
+//! `var <name> = <name>`: the copy takes a reference of its own, and
 //! every write goes through it, unsharing it first like any binding's value.
 //! The caller's value is left alone and the copy is released when the body
 //! ends, unless it is returned.
@@ -30,14 +32,19 @@ use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::pattern::MatchBranch;
 use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::types::TypeKind;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::dispatch::bind_arguments_to_parameters;
+use crate::mir::lowering::expression::identifier_expr::build_global_identifier_operand;
 use crate::mir::lowering::expression::unshare::path_root;
 use crate::mir::lowering::method_dispatch::is_receiver_written;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::{
     Local, Operand, Place, Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
 };
+use crate::runtime_fns::writes_in_place;
+use crate::type_checker::CalleeKind;
 
 /// The scope the entry copies of a body's written parameters are bound in.
 #[must_use]
@@ -271,15 +278,38 @@ impl<'b> WrittenRoots<'_, '_, 'b> {
     }
 
     /// A call of `callee` on `arguments`: a write into its receiver when it
-    /// calls a method that writes it.
+    /// calls a method that writes it, and into each argument a runtime entry
+    /// point writes in place.
     fn call(&mut self, callee: &'b Expression, arguments: &'b [Expression]) {
         if let ExpressionKind::Member(receiver, method) = &callee.node {
             if is_receiver_written(self.ctx, receiver, method) {
                 self.record(receiver);
             }
         }
+        self.runtime_writes(callee, arguments);
         self.expression(callee);
         self.expressions(arguments);
+    }
+
+    /// Records each of `arguments` the runtime entry point `callee` names
+    /// writes in place (`runtime_fns::writes_in_place`), as lowering the call
+    /// makes it the call's own; nothing when `callee` names no runtime entry
+    /// point.
+    fn runtime_writes(&mut self, callee: &Expression, arguments: &'b [Expression]) {
+        let Some(name) = runtime_entry_point(self.ctx, callee) else {
+            return;
+        };
+        let Some(TypeKind::Function(signature)) =
+            self.ctx.type_checker.get_type(callee.id).map(|ty| &ty.kind)
+        else {
+            return;
+        };
+        let parameters: Vec<&str> = signature.params.iter().map(|p| p.name.as_str()).collect();
+        for (position, argument) in bind_arguments_to_parameters(arguments, &parameters) {
+            if writes_in_place(&name, position) {
+                self.record(argument);
+            }
+        }
     }
 
     /// Records the binding the written place `place` starts at, if a binding
@@ -289,4 +319,24 @@ impl<'b> WrittenRoots<'_, '_, 'b> {
             self.names.insert(name.as_str());
         }
     }
+}
+
+/// The name of the runtime entry point `callee` calls, when it is a name a
+/// `runtime` declaration made.
+///
+/// Only a plain name is read. Lowering also routes a call through a module
+/// alias (`M.f(x)`) to the same argument seam, but a runtime declaration is
+/// never public and so never visible through an alias, which leaves the plain
+/// name the only way a body calls one.
+fn runtime_entry_point(ctx: &LoweringContext, callee: &Expression) -> Option<String> {
+    let ExpressionKind::Identifier(name, _) = &callee.node else {
+        return None;
+    };
+    if ctx.callee_kind(callee) != CalleeKind::Runtime {
+        return None;
+    }
+    build_global_identifier_operand(ctx, name, callee)
+        .ok()?
+        .called_runtime_name()
+        .map(str::to_owned)
 }

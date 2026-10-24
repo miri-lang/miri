@@ -137,3 +137,47 @@ fn main()
     let body = lowered(source, "add");
     assert_eq!(locals_named(&body, "s"), vec![Local(1)]);
 }
+
+#[test]
+fn test_a_parameter_handed_to_a_runtime_writer_is_copied_on_entry() {
+    let source = r#"
+use system.io
+use system.collections.list
+
+runtime "core" fn miri_rt_list_clear(l [int])
+
+fn empty(xs [int]) int
+    miri_rt_list_clear(xs)
+    xs.length()
+
+fn main()
+    let a = List([1, 2, 3])
+    println(f"{empty(a)} {a.length()}")
+"#;
+    let body = lowered(source, "empty");
+    assert!(
+        locals_named(&body, "xs")
+            .iter()
+            .any(|local| local.0 > body.arg_count),
+        "the body binds a copy of `xs`"
+    );
+}
+
+#[test]
+fn test_a_parameter_handed_only_to_a_runtime_reader_is_not_copied() {
+    let source = r#"
+use system.io
+use system.collections.list
+
+runtime "core" fn miri_rt_list_len(l [int]) int
+
+fn count(xs [int]) int
+    miri_rt_list_len(xs)
+
+fn main()
+    let a = List([1, 2, 3])
+    println(f"{count(a)}")
+"#;
+    let body = lowered(source, "count");
+    assert_eq!(locals_named(&body, "xs"), vec![Local(1)]);
+}

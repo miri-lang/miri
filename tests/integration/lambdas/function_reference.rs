@@ -431,3 +431,50 @@ fn a_generic_function_called_through_a_module_alias_runs() {
         "9 4",
     );
 }
+
+/// A runtime entry point that writes a list in place, taken as a value and
+/// called on a list another binding shares, writes a copy of its own: the
+/// other binding keeps every element.
+#[test]
+fn a_runtime_writer_called_as_a_value_leaves_a_shared_list_alone() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+runtime "core" fn miri_rt_list_clear(l [int])
+
+fn main()
+    var a = List([1, 2, 3])
+    let keep = a
+    let f = miri_rt_list_clear
+    f(a)
+    println(f"{keep.length()}")
+"#,
+        "3",
+    );
+}
+
+/// The same entry point handed to a function that calls it through a
+/// parameter of function type leaves the caller's shared list alone.
+#[test]
+fn a_runtime_writer_passed_as_a_function_argument_leaves_a_shared_list_alone() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+runtime "core" fn miri_rt_list_clear(l [int])
+
+fn apply(f fn([int]), xs [int])
+    f(xs)
+
+fn main()
+    var b = List([1, 2, 3])
+    let keep = b
+    apply(miri_rt_list_clear, b)
+    println(f"{keep.length()} {b.length()}")
+"#,
+        "3 3",
+    );
+}

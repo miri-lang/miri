@@ -41,6 +41,13 @@ use std::collections::HashSet;
 
 /// Runtime entry that fences outstanding device writes and copies a
 /// `gpu`-resident buffer back to its host array.
+///
+/// TODO: this entry point and [`UPLOAD_FN`] are not named in `runtime_fns`,
+/// so `runtime_fns::writes_in_place` takes them to write every argument they
+/// are handed, the host array included. The upload only reads its host array
+/// and the readback writes it in place, with no copy-on-write before it.
+/// Whether a readback into a parameter's host array keeps the caller's value
+/// unchanged, as every other write to a parameter does, is undecided.
 pub(crate) const READBACK_FN: &str = "miri_gpu_readback";
 
 /// Runtime entry that copies a host array into a `gpu`-resident binding's
