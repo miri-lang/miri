@@ -44,3 +44,4 @@ pub mod trait_coercion;
 pub mod tuple_receivers;
 pub mod use_after_move;
 pub mod value_arguments;
+pub mod written_operand_order;

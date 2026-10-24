@@ -7,6 +7,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::body::BindingResidency as MirResidency;
+use crate::mir::lowering::written_receiver::{lower_pending_receiver, PendingReceiver};
 use crate::mir::{
     Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind,
@@ -744,14 +745,15 @@ pub(crate) fn emit_map_set_call(
 /// Writing through an index mutates in place, so without this a second binding
 /// to the same collection sees the write. The equivalent `set` method goes
 /// through the same receiver seam; `Array` is fixed-size and has no CoW
-/// intrinsic, so a bare `Array` binding is left alone. The temp the receiver's
-/// path starts at, if any, is returned for the caller to release once the
-/// write is done.
-fn lower_index_assign_receiver(
+/// intrinsic, so a bare `Array` binding is left alone. The receiver is made
+/// the write's own only once the index or key is lowered, right before the
+/// store. The temp the receiver's path starts at, if any, is returned for the
+/// caller to release once the write is done.
+fn lower_index_assign_receiver<'e>(
     ctx: &mut LoweringContext,
-    obj: &Expression,
+    obj: &'e Expression,
     span: crate::error::syntax::Span,
-) -> Result<(Operand, Option<TemporaryRoot>), LoweringError> {
+) -> Result<(PendingReceiver<'e>, Option<TemporaryRoot>), LoweringError> {
     let obj_ty = ctx.type_checker.get_type(obj.id).cloned();
     let cow = obj_ty.as_ref().and_then(|ty| {
         let cow = ty
@@ -760,7 +762,7 @@ fn lower_index_assign_receiver(
             .and_then(crate::runtime_fns::cow_fn)?;
         Some((ty, cow))
     });
-    crate::mir::lowering::method_dispatch::lower_mutated_receiver(ctx, obj, cow, span)
+    lower_pending_receiver(ctx, obj, cow, span)
 }
 
 fn assign_to_index_map(
@@ -772,10 +774,11 @@ fn assign_to_index_map(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let (obj_op, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    let (pending, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, idx.span);
+    let obj_op = pending.make_own(ctx)?;
 
     // The value arrives lowered by the assignment that owns it, so it is the one
     // stored operand that never passed through `lower_stored_value`; it is read
@@ -835,23 +838,30 @@ fn compound_assign_to_index_map(
     let value_ty = collection_slot_type(ctx, obj_ty, MAP_VALUE_SLOT)
         .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
 
-    let (obj_op, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
+    // The path and the key run first, in the order they are written, then
+    // the right-hand side; the old value is read after it, from the map the
+    // path names then, as an indexed list's compound store reads it. The map
+    // is made the write's own only once the value to store is combined, right
+    // before the store, so no code — the right-hand side, an operator the
+    // combination calls — runs between that check and the store.
+    let (pending, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_watermark = ctx.body.local_decls.len();
     let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let key_place = ensure_place(ctx, key_op, idx.span);
 
+    let value_watermark = ctx.body.local_decls.len();
+    let rhs_op = lower_expression(ctx, rhs, None)?;
+    let map_read = pending.read(ctx);
     let old = emit_map_get_checked_call(
         ctx,
-        obj_op.clone(),
+        map_read,
         Operand::Copy(key_place.clone()),
         &value_ty,
         expr,
     );
-
-    let value_watermark = ctx.body.local_decls.len();
-    let rhs_op = lower_expression(ctx, rhs, None)?;
     let combined =
         combine_compound_operands(ctx, &value_ty, op, old, rhs_op, expr, value_watermark)?;
+    let obj_op = pending.make_own(ctx)?;
 
     // Combining produces a value of its own, already owning the one reference
     // the map is about to take. Donating hands that one over and releases the
@@ -1011,12 +1021,13 @@ fn assign_to_index_array(
     // collection, held in a temp that exists only for this write; the temp is
     // released once the write is done. A receiver the program already had — a
     // binding, or a field of one — outlives the write and keeps its reference.
-    let (obj_operand, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
-    let obj_place = ensure_place(ctx, obj_operand, obj.span);
+    let (pending, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
 
     let index_operand = lower_expression(ctx, idx, None)?;
     let index_operand = crate::mir::lowering::helpers::index_at_int(ctx, index_operand, idx);
     let index_local = normalize_index(ctx, index_operand, idx)?;
+    let obj_operand = pending.make_own(ctx)?;
+    let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
     let mut target_place = obj_place;
     target_place.projection.push(PlaceElem::Index(index_local));

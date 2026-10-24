@@ -9,6 +9,7 @@ use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::emit_map_set;
 use crate::mir::lowering::expression::collection_literal::{deliver, literal_target};
+use crate::mir::lowering::written_receiver::Receiver;
 use crate::mir::{AggregateKind, Operand, Place, Rvalue, Statement, StatementKind};
 
 pub(crate) fn lower_map_expr(
@@ -29,7 +30,7 @@ pub(crate) fn lower_map_expr(
     });
     for (key, value) in pairs {
         let map = Operand::Copy(target.place.clone());
-        emit_map_set(ctx, map, &target.ty, key, value, &key.span)?;
+        emit_map_set(ctx, Receiver::Ready(map), &target.ty, key, value, &key.span)?;
     }
     Ok(deliver(ctx, target.place, dest, expr))
 }

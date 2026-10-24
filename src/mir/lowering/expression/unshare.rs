@@ -144,29 +144,6 @@ impl WrittenPlace {
     }
 }
 
-/// Lowers `obj`, the value a write goes into, as a place every value on whose
-/// path is the program's own.
-///
-/// Returns `None` when `obj` is not a path of fields, collection elements and
-/// map entries starting at a binding a write may replace or at a value no
-/// binding holds, leaving the caller to lower it as before. Nothing is emitted
-/// in that case: the path is read in full before any of it is lowered, so an
-/// index or key expression is never evaluated twice.
-///
-/// For a collection receiver — what an indexed store or a mutating method
-/// writes into — the place is the collection itself, never a copy of a map's
-/// inline value: a value held as its bytes holds nothing counted, so no
-/// collection is reached through one and no write-back arises. A component
-/// write calls [`lower_written_entry_place`] instead. The temp the path starts
-/// at, when no binding holds its value, is returned beside the place for the
-/// caller to release once the write is done.
-pub(crate) fn lower_written_place(
-    ctx: &mut LoweringContext,
-    obj: &Expression,
-) -> Result<Option<(Place, Option<TemporaryRoot>)>, LoweringError> {
-    Ok(lower_written_entry_place(ctx, obj)?.map(|written| (written.place, written.temporary)))
-}
-
 /// Stores a copied-out map value back under its key once the write into it is
 /// done, the map taking the key, then releases the copy.
 fn store_entry_back(ctx: &mut LoweringContext, write_back: EntryWriteBack, obj: &Expression) {
@@ -188,12 +165,132 @@ fn store_entry_back(ctx: &mut LoweringContext, write_back: EntryWriteBack, obj: 
     ctx.emit_temp_drop(copy, copy.0, obj.span);
 }
 
-/// [`lower_written_place`], reporting the entry the place has to be stored
+/// Lowers `obj`, the value a write goes into, as a place every value on whose
+/// path is the program's own ([`lower_written_path`], then
+/// [`LoweredPath::make_own`]), reporting the entry the place has to be stored
 /// back into when it is a copy of a map's inline value.
+///
+/// Returns `None` when `obj` is not a path of fields, collection elements and
+/// map entries starting at a binding a write may replace or at a value no
+/// binding holds, leaving the caller to lower it as before. Nothing is emitted
+/// in that case: the path is read in full before any of it is lowered, so an
+/// index or key expression is never evaluated twice.
+///
+/// For a collection receiver — what an indexed store or a mutating method
+/// writes into — the place is the collection itself, never a copy of a map's
+/// inline value: a value held as its bytes holds nothing counted, so no
+/// collection is reached through one and no write-back arises.
 pub(crate) fn lower_written_entry_place(
     ctx: &mut LoweringContext,
     obj: &Expression,
 ) -> Result<Option<WrittenPlace>, LoweringError> {
+    let Some(path) = lower_written_path(ctx, obj)? else {
+        return Ok(None);
+    };
+    path.make_own(ctx, obj).map(Some)
+}
+
+/// One step of a written path once the code computing it has run: its index
+/// local or its key lowered, nothing yet checked.
+enum LoweredStep {
+    /// The value the path starts at.
+    Root(Type),
+    Field(usize, Type),
+    Element(Local, Type),
+    /// The entry of a map under a key already lowered.
+    Entry(EntryKey, Type),
+}
+
+/// A written path whose every index and key has been computed, and whose
+/// values are not yet made the program's own.
+///
+/// A write lowers its path first, then every other operand it needs, and
+/// makes the path its own ([`LoweredPath::make_own`]) only after that, right
+/// before the write: an operand computed between the check and the write
+/// could hand another name the value the check found unshared, and the write
+/// would then land in a value that name also holds.
+#[must_use]
+pub(crate) struct LoweredPath {
+    root: Place,
+    steps: Vec<LoweredStep>,
+    temporary: Option<TemporaryRoot>,
+}
+
+impl LoweredPath {
+    /// The temp the path starts at when no binding holds its value, for the
+    /// caller to release once the write is done.
+    pub(crate) fn take_temporary(&mut self) -> Option<TemporaryRoot> {
+        self.temporary.take()
+    }
+
+    /// The place the path names now, for a read: nothing on it is checked or
+    /// copied, and an entry on it is looked up as it stands.
+    pub(crate) fn read_place(&self, ctx: &mut LoweringContext, obj: &Expression) -> Place {
+        use super::assignment_expr::emit_map_get_checked_call;
+        let mut place = self.root.clone();
+        for step in &self.steps {
+            match step {
+                LoweredStep::Root(_) => {}
+                LoweredStep::Field(idx, _) => place.projection.push(PlaceElem::Field(*idx)),
+                LoweredStep::Element(index, _) => place.projection.push(PlaceElem::Index(*index)),
+                LoweredStep::Entry(key, value_ty) => {
+                    let map_op = Operand::Copy(place);
+                    let key_op = Operand::Copy(key.place.clone());
+                    let entry = emit_map_get_checked_call(ctx, map_op, key_op, value_ty, obj);
+                    place = crate::mir::lowering::helpers::ensure_place(ctx, entry, obj.span);
+                }
+            }
+        }
+        place
+    }
+
+    /// Makes every value on the path the program's own, outermost first, and
+    /// answers the place the write goes into.
+    pub(crate) fn make_own(
+        self,
+        ctx: &mut LoweringContext,
+        obj: &Expression,
+    ) -> Result<WrittenPlace, LoweringError> {
+        let mut place = self.root;
+        let mut write_back = None;
+        for step in self.steps {
+            let ty = match step {
+                LoweredStep::Root(ty) => ty,
+                LoweredStep::Field(idx, ty) => {
+                    place.projection.push(PlaceElem::Field(idx));
+                    ty
+                }
+                LoweredStep::Element(index, ty) => {
+                    place.projection.push(PlaceElem::Index(index));
+                    ty
+                }
+                LoweredStep::Entry(key, value_ty) => {
+                    let entry = own_entry_place(ctx, &place, key, &value_ty, obj)?;
+                    place = entry.place;
+                    write_back = entry.write_back;
+                    continue;
+                }
+            };
+            if let Some(unsharing) = unsharing(&ctx.body, &ty) {
+                emit_unshare(ctx, &place, &ty, unsharing, obj.span)?;
+            }
+        }
+        Ok(WrittenPlace {
+            place,
+            write_back,
+            temporary: self.temporary,
+        })
+    }
+}
+
+/// Lowers the code `obj`, the value a write goes into, computes before the
+/// write — the value its path starts at when no binding holds it, every index
+/// and every key — and checks nothing; `None` when `obj` is not a path a write
+/// is routed through here.
+pub(crate) fn lower_written_path(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+) -> Result<Option<LoweredPath>, LoweringError> {
     // Reference counts exist on the host only; a GPU body writes in place.
     if ctx.body.is_gpu() {
         return Ok(None);
@@ -202,34 +299,56 @@ pub(crate) fn lower_written_entry_place(
     if !collect_steps(ctx, obj, &mut steps)? {
         return Ok(None);
     }
-    let Some((mut place, temporary)) = lower_path_root(ctx, &steps)? else {
+    let Some((root, temporary)) = lower_path_root(ctx, &steps)? else {
         return Ok(None);
     };
-    let mut write_back = None;
-    for step in &steps {
-        match step {
-            Step::Root(..) | Step::Temporary(..) => {}
-            Step::Field(idx, _) => place.projection.push(PlaceElem::Field(*idx)),
-            Step::Element(index, _) => {
-                let index_local = lower_index_local(ctx, index)?;
-                place.projection.push(PlaceElem::Index(index_local));
-            }
-            Step::Entry(key, map_ty, value_ty) => {
-                let entry = lower_entry_place(ctx, &place, map_ty, key, value_ty, obj)?;
-                place = entry.place;
-                write_back = entry.write_back;
-                continue;
-            }
-        }
-        if let Some(unsharing) = unsharing(&ctx.body, step.ty()) {
-            emit_unshare(ctx, &place, step.ty(), unsharing, obj.span)?;
-        }
+    let mut lowered = Vec::with_capacity(steps.len());
+    for step in steps {
+        lowered.push(match step {
+            Step::Root(_, ty) | Step::Temporary(_, ty) => LoweredStep::Root(ty),
+            Step::Field(idx, ty) => LoweredStep::Field(idx, ty),
+            Step::Element(index, ty) => LoweredStep::Element(lower_index_local(ctx, index)?, ty),
+            Step::Entry(key, map_ty, value_ty) => lower_entry_key(ctx, key, map_ty, value_ty)?,
+        });
     }
-    Ok(Some(WrittenPlace {
-        place,
-        write_back,
+    Ok(Some(LoweredPath {
+        root,
+        steps: lowered,
         temporary,
     }))
+}
+
+/// The key a written path looks a map's entry up under, lowered into a
+/// place of its own.
+fn lower_entry_key(
+    ctx: &mut LoweringContext,
+    key: &Expression,
+    map_ty: Type,
+    value_ty: Type,
+) -> Result<LoweredStep, LoweringError> {
+    let key_watermark = ctx.body.local_decls.len();
+    let (key_op, key_ty) = crate::mir::lowering::dispatch::lower_stored_value(
+        ctx,
+        key,
+        &map_ty,
+        crate::mir::lowering::dispatch::ELEMENT_SLOT,
+    )?;
+    let place = crate::mir::lowering::helpers::ensure_place(ctx, key_op, key.span);
+    let key = EntryKey {
+        place,
+        ty: key_ty,
+        watermark: key_watermark,
+        span: key.span,
+    };
+    Ok(LoweredStep::Entry(key, value_ty))
+}
+
+/// The key of a map entry on a written path, already lowered.
+struct EntryKey {
+    place: Place,
+    ty: Type,
+    watermark: usize,
+    span: Span,
 }
 
 /// The place the path `steps` starts at — a binding, or a temp holding the
@@ -468,23 +587,20 @@ fn field_step<'e>(
 /// write a copy into: the lookup hands back a borrow of the entry, and an entry
 /// anything else also holds is copied and the copy stored back under the same
 /// key — the map releasing the original — before the entry is looked up again.
-fn lower_entry_place(
+fn own_entry_place(
     ctx: &mut LoweringContext,
     map: &Place,
-    map_ty: &Type,
-    key: &Expression,
+    key: EntryKey,
     value_ty: &Type,
     obj: &Expression,
 ) -> Result<WrittenPlace, LoweringError> {
     use super::assignment_expr::emit_map_get_checked_call;
-    let key_watermark = ctx.body.local_decls.len();
-    let (key_op, key_ty) = crate::mir::lowering::dispatch::lower_stored_value(
-        ctx,
-        key,
-        map_ty,
-        crate::mir::lowering::dispatch::ELEMENT_SLOT,
-    )?;
-    let key_place = crate::mir::lowering::helpers::ensure_place(ctx, key_op, key.span);
+    let EntryKey {
+        place: key_place,
+        ty: key_ty,
+        watermark: key_watermark,
+        span: key_span,
+    } = key;
     let lookup = |ctx: &mut LoweringContext| {
         let map_op = Operand::Copy(map.clone());
         let key_op = Operand::Copy(key_place.clone());
@@ -508,7 +624,7 @@ fn lower_entry_place(
         });
     }
     let Some(unsharing) = unsharing(&ctx.body, value_ty) else {
-        ctx.emit_temp_drop(key_place.local, key_watermark, key.span);
+        ctx.emit_temp_drop(key_place.local, key_watermark, key_span);
         return Ok(WrittenPlace {
             place: entry,
             write_back: None,
@@ -524,7 +640,7 @@ fn lower_entry_place(
         ctx,
         Operand::Copy(key_place.clone()),
         key_ty,
-        key.span,
+        key_span,
     );
     let copy_op = Operand::Copy(Place::new(copy));
     super::assignment_expr::emit_map_set_call(
@@ -540,7 +656,7 @@ fn lower_entry_place(
     ));
     ctx.set_current_block(join_bb);
     let entry = lookup(ctx);
-    ctx.emit_temp_drop(key_place.local, key_watermark, key.span);
+    ctx.emit_temp_drop(key_place.local, key_watermark, key_span);
     Ok(WrittenPlace {
         place: entry,
         write_back: None,

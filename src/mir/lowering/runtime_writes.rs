@@ -8,11 +8,12 @@
 //! collection it is handed at each position `runtime_fns::writes_in_place`
 //! names. That call is a write like a writing method's, so the argument is
 //! lowered the way a writing method's receiver is
-//! (`method_dispatch::lower_mutated_receiver`): a whole binding is copied on
+//! (`written_receiver::lower_pending_receiver`): a whole binding is copied on
 //! write and the copy written back into it, the body's own receiver, which its
 //! caller made the body's own, is checked to have arrived unique instead, and
 //! a field, an element or a map entry has every value on its path made the
-//! program's own first.
+//! program's own first — each only after every argument of the call is
+//! lowered, right before the call.
 //!
 //! A parameter whose value its caller still holds is never handed here: a
 //! body that hands one to a runtime writer binds a copy of it on entry
@@ -34,7 +35,8 @@ use crate::error::syntax::Span;
 use crate::mir::{Local, Operand, Place, Rvalue, Statement, StatementKind};
 use crate::runtime_fns::{cow_fn, writes_in_place};
 
-use super::method_dispatch::{emit_cow_check, lower_mutated_receiver};
+use super::method_dispatch::emit_cow_check;
+use super::written_receiver::{lower_pending_receiver, PendingReceiver};
 use super::{lower_expression, LoweringContext};
 
 /// The runtime entry point a call is made to, when it is one, with the type
@@ -62,34 +64,41 @@ impl<'c> RuntimeCallee<'c> {
     }
 }
 
+/// An argument of a call to a runtime entry point, lowered.
+pub(super) enum CallArgument<'e> {
+    /// Any argument the entry point does not write in place.
+    Lowered(Operand),
+    /// The collection the entry point writes in place, its path lowered and
+    /// not yet made the call's own ([`PendingReceiver::make_own`]).
+    Written(PendingReceiver<'e>),
+}
+
 /// Lowers `value`, the argument at `position` of a call to `callee`: as the
 /// collection the call writes when the entry point writes it in place, and
 /// as any other expression otherwise.
 ///
-/// The temp a written path starts at, when no binding holds its value, is
-/// the root of the operand returned, so it is released with the call's other
-/// argument temps once the call returns.
+/// The written collection is made the call's own only once every argument
+/// of the call is lowered, so an argument after it that hands it to another
+/// name — a closure over the same list handed to `miri_rt_list_sort_by`
+/// captures it — does so before the check, which then copies it: the runtime
+/// writes the copy, and the closure reads the list as it was.
 ///
-/// Arguments are lowered in the order they are written, so the written one
-/// is made the call's own before any argument after it is lowered. A later
-/// argument that captures it — a closure over the same list handed to
-/// `miri_rt_list_sort_by` — retains it again, and the runtime then writes a
-/// block that closure also holds and reads while the call runs: the sort
-/// detaches the list's elements, so the closure finds it empty and an index
-/// into it stops the program with an out-of-bounds error.
-pub(super) fn lower_call_argument(
+/// The temp a written path starts at, when no binding holds its value, is
+/// the root of the operand the call is handed, so it is released with the
+/// call's other argument temps once the call returns.
+pub(super) fn lower_call_argument<'e>(
     ctx: &mut LoweringContext,
     callee: Option<RuntimeCallee<'_>>,
     position: usize,
-    value: &Expression,
-) -> Result<Operand, LoweringError> {
+    value: &'e Expression,
+) -> Result<CallArgument<'e>, LoweringError> {
     let Some(written) = callee.and_then(|callee| callee.written_parameter(position)) else {
-        return lower_expression(ctx, value, None);
+        return lower_expression(ctx, value, None).map(CallArgument::Lowered);
     };
     let cow = written.kind.as_builtin_collection().and_then(cow_fn);
-    let (operand, _released_with_the_arguments) =
-        lower_mutated_receiver(ctx, value, cow.map(|cow| (written, cow)), value.span)?;
-    Ok(operand)
+    let (pending, _released_with_the_arguments) =
+        lower_pending_receiver(ctx, value, cow.map(|cow| (written, cow)), value.span)?;
+    Ok(CallArgument::Written(pending))
 }
 
 /// The operand a forwarding thunk hands `callee` at `position` for its own

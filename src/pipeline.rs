@@ -3321,6 +3321,9 @@ impl Pipeline {
             violations.extend(mir::verify::verify_bound_names(body));
             violations.extend(mir::verify::verify_stable_collections(body));
             violations.extend(mir::verify::verify_in_bounds(body));
+            // TODO: this check runs only under --verify-mir; a normal build does
+            // not check that in-place writes land on unshared collections.
+            violations.extend(mir::verify::verify_unshared_writes(body));
             if !violations.is_empty() {
                 functions_with_violations += 1;
             }

@@ -749,6 +749,8 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         | rt::STRING_ENDS_WITH
         | rt::HASH_COMBINE
         | rt::FLOAT_HASH
+        | rt::FLOAT_TO_STRING
+        | rt::F32_TO_STRING
         | rt::RECEIVER_UNIQUE => true,
         rt::STRING_APPEND | rt::STRING_APPEND_INT | rt::STRING_APPEND_UINT => position > 0,
         _ => false,

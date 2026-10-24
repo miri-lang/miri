@@ -20,7 +20,8 @@ use crate::type_checker::value_class::LayoutScope;
 
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
-use super::expression::unshare::{lent_parameter_write, lower_written_place, TemporaryRoot};
+use super::expression::unshare::{lent_parameter_write, TemporaryRoot};
+use super::written_receiver::{lower_pending_receiver, Receiver};
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::borrow::Cow;
@@ -213,7 +214,7 @@ fn resolve_in_trait_hierarchy(
 pub(super) fn emit_virtual_method_call(
     ctx: &mut LoweringContext,
     vtable_slot: usize,
-    self_op: Operand,
+    self_op: Receiver<'_>,
     user_args: &[Expression],
     method_info: &MethodInfo,
     arg_types: &[Type],
@@ -223,12 +224,8 @@ pub(super) fn emit_virtual_method_call(
     obj_watermark: usize,
     span: Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mut call_args = vec![self_op];
     let arg_watermark = ctx.body.local_decls.len();
-    call_args.extend(lower_method_args(ctx, user_args, method_info, arg_types)?);
-    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        call_args.push(Operand::Copy(Place::new(alloc_local)));
-    }
+    let call_args = method_call_args(ctx, self_op, user_args, method_info, arg_types)?;
 
     let arg_modes =
         super::dispatch::build_method_arg_modes(method_info, user_args.len(), call_args.len());
@@ -261,12 +258,32 @@ pub(super) fn emit_virtual_method_call(
     Ok(Some(op.clone()))
 }
 
+/// The operands a method call passes: its receiver, its arguments and the
+/// allocator. The arguments are lowered first and the receiver made the
+/// call's own after them, so no argument runs between the receiver's check
+/// and the call.
+fn method_call_args(
+    ctx: &mut LoweringContext,
+    receiver: Receiver<'_>,
+    user_args: &[Expression],
+    method_info: &MethodInfo,
+    arg_types: &[Type],
+) -> Result<Vec<Operand>, LoweringError> {
+    let arguments = lower_method_args(ctx, user_args, method_info, arg_types)?;
+    let mut call_args = vec![receiver.make_own(ctx)?];
+    call_args.extend(arguments);
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(alloc_local)));
+    }
+    Ok(call_args)
+}
+
 /// Emit a static method call (direct function call).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_static_method_call(
     ctx: &mut LoweringContext,
     symbol: Symbol,
-    self_op: Operand,
+    self_op: Receiver<'_>,
     user_args: &[Expression],
     method_info: &MethodInfo,
     arg_types: &[Type],
@@ -276,12 +293,8 @@ pub(super) fn emit_static_method_call(
     obj_watermark: usize,
     span: Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let mut call_args = vec![self_op];
     let arg_watermark = ctx.body.local_decls.len();
-    call_args.extend(lower_method_args(ctx, user_args, method_info, arg_types)?);
-    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        call_args.push(Operand::Copy(Place::new(alloc_local)));
-    }
+    let call_args = method_call_args(ctx, self_op, user_args, method_info, arg_types)?;
 
     let func_op = Operand::function(symbol, span);
 
@@ -530,7 +543,7 @@ fn emit_method_call(
     ctx: &mut LoweringContext,
     m: &ResolvedMethod,
     mono: Option<(Symbol, Type)>,
-    (self_op, obj_temp_local, obj_watermark): (Operand, Option<Local>, usize),
+    (self_op, obj_temp_local, obj_watermark): (Receiver<'_>, Option<Local>, usize),
     (destination, op, arg_types): (&Place, &Operand, &[Type]),
 ) -> Result<Option<Operand>, LoweringError> {
     if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
@@ -1188,16 +1201,17 @@ pub(crate) fn is_receiver_written(
 /// named here.
 ///
 /// [`ReceiverWrites`]: crate::type_checker::receiver_writes::ReceiverWrites
-fn prepare_method_self(
+fn prepare_method_self<'e>(
     ctx: &mut LoweringContext,
-    obj: &Expression,
+    obj: &'e Expression,
     obj_ty: &Type,
     (class_name, method_name): (&str, &str),
     span: Span,
-) -> Result<(Operand, Option<Local>, Option<Local>), LoweringError> {
+) -> Result<(Receiver<'e>, Option<Local>, Option<Local>), LoweringError> {
     if let Some(cow) = call_writes_receiver(ctx, obj_ty, class_name, method_name) {
-        let (self_op, temporary) = lower_mutated_receiver(ctx, obj, Some((obj_ty, cow)), span)?;
-        return Ok((self_op, temporary.map(|temporary| temporary.local()), None));
+        let (pending, temporary) = lower_pending_receiver(ctx, obj, Some((obj_ty, cow)), span)?;
+        let temporary = temporary.map(|temporary| temporary.local());
+        return Ok((Receiver::Pending(pending), temporary, None));
     }
     let receiver = lower_method_receiver(ctx, obj)?;
     let (self_op, boxed) = box_value_tuple_receiver(ctx, receiver, obj_ty, span);
@@ -1206,7 +1220,7 @@ fn prepare_method_self(
     } else {
         None
     };
-    Ok((self_op, obj_temp_local, boxed))
+    Ok((Receiver::Ready(self_op), obj_temp_local, boxed))
 }
 
 /// The receiver a tuple's methods take, for a tuple held as its bytes.
@@ -1275,58 +1289,20 @@ fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_na
     is_trait || class_needs_vtable(class_name, defs)
 }
 
-/// Lowers the receiver of a write — a call or a store — into the collection
-/// `obj` names, so the write changes a collection only that receiver holds.
-///
-/// A bare binding is lowered as it is and, when `cow` names the collection's
-/// type and its copy-on-write entry point, checked through it. Any other
-/// receiver is made the program's own along its whole path first: the struct
-/// or tuple holding it may be shared with another name, and so may the
-/// collection itself, and a call's result shares whatever it was read from.
-///
-/// Returned beside the receiver is the temp holding the value its path starts
-/// at when no binding holds it; the caller releases it once the write is done,
-/// through [`with_mutated_receiver`] or on its own.
-pub(super) fn lower_mutated_receiver(
-    ctx: &mut LoweringContext,
-    obj: &Expression,
-    cow: Option<(&Type, &str)>,
-    span: Span,
-) -> Result<(Operand, Option<TemporaryRoot>), LoweringError> {
-    let is_binding = matches!(obj.node, ExpressionKind::Identifier(..));
-    if !is_binding {
-        if let Some((place, temporary)) = lower_written_place(ctx, obj)? {
-            return Ok((Operand::Copy(place), temporary));
-        }
-    }
-    let watermark = ctx.body.local_decls.len();
-    let obj_op = lower_expression(ctx, obj, None)?;
-    let temporary = match &obj_op {
-        Operand::Copy(place) | Operand::Move(place) if !is_binding => {
-            Some(TemporaryRoot::new(place.local, watermark))
-        }
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => None,
-    };
-    let receiver = match cow {
-        Some((obj_ty, cow)) => emit_cow_check(ctx, obj_op, obj_ty, cow, span)?,
-        None => obj_op,
-    };
-    Ok((receiver, temporary))
-}
-
-/// Lowers the receiver `obj` of a write as [`lower_mutated_receiver`] does,
-/// emits the write through `write`, then releases the temp the receiver's
-/// path started at, so a write into a value no binding holds neither leaks
-/// that value nor releases it twice.
+/// Lowers the receiver `obj` of a write ([`lower_pending_receiver`]), hands it
+/// to `write` — which lowers the write's other operands, makes the receiver
+/// its own and emits the write — then releases the temp the receiver's path
+/// started at, so a write into a value no binding holds neither leaks that
+/// value nor releases it twice.
 pub(super) fn with_mutated_receiver<R>(
     ctx: &mut LoweringContext,
     obj: &Expression,
-    cow: Option<(&Type, &str)>,
+    cow: Option<(&Type, &'static str)>,
     span: Span,
-    write: impl FnOnce(&mut LoweringContext, Operand) -> Result<R, LoweringError>,
+    write: impl FnOnce(&mut LoweringContext, Receiver<'_>) -> Result<R, LoweringError>,
 ) -> Result<R, LoweringError> {
-    let (receiver, temporary) = lower_mutated_receiver(ctx, obj, cow, span)?;
-    let written = write(ctx, receiver)?;
+    let (pending, temporary) = lower_pending_receiver(ctx, obj, cow, span)?;
+    let written = write(ctx, Receiver::Pending(pending))?;
     TemporaryRoot::release(temporary, ctx, span);
     Ok(written)
 }

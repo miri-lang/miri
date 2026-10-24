@@ -185,10 +185,12 @@ fn main()
             // The temp donated to `miri_rt_list_push` reads the projected field
             // and must be declared at the field's type. Declaring it at the base
             // struct's type makes reference counting treat a plain integer as a
-            // pointer, and gives codegen a pointer slot for a scalar.
-            "let _4: int;",
-            "_4 = _1.0;",
-            "fn miri_rt_list_push(move _2, _4)",
+            // pointer, and gives codegen a pointer slot for a scalar. The item is
+            // read before the list is copied on write, so nothing runs between
+            // that check and the push.
+            "let _3: int;",
+            "_3 = _1.0;",
+            "fn miri_rt_list_push(move _2, _3)",
         ],
     );
 }

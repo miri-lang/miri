@@ -45,6 +45,7 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 // Import private helpers from specialized modules.
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 use super::runtime_writes::{self, RuntimeCallee};
+use super::written_receiver::{PendingReceiver, Receiver};
 
 pub fn lower_call(
     ctx: &mut LoweringContext,
@@ -414,8 +415,14 @@ fn lower_call_arguments(
     };
     let param_names = callee_parameter_names(ctx, callee_id);
     let callee = RuntimeCallee::of(func, &targets);
-    let mut arg_slots = lower_and_coerce_args(ctx, args, &targets, &param_names, callee)?;
+    let (mut arg_slots, written) =
+        lower_and_coerce_args(ctx, args, &targets, &param_names, callee)?;
     fill_default_args(ctx, &mut arg_slots, &param_types, call)?;
+    for argument in written {
+        let op = argument.pending.make_own(ctx)?;
+        let op = coerce_written_arg(ctx, op, argument.value, targets.get(argument.position));
+        place_at_parameter(&mut arg_slots, argument.position, op);
+    }
     operands_in_parameter_order(arg_slots, call.span)
 }
 
@@ -747,7 +754,7 @@ fn lower_list_push(
 /// [`emit_set_add`] gives.
 pub(crate) fn emit_list_push(
     ctx: &mut LoweringContext,
-    obj_op: Operand,
+    receiver: Receiver<'_>,
     obj_ty: &Type,
     item_arg: &Expression,
     span: &Span,
@@ -756,6 +763,7 @@ pub(crate) fn emit_list_push(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
+    let obj_op = receiver.make_own(ctx)?;
     let func_op = Operand::runtime(rt::LIST_PUSH, *span);
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
@@ -1012,7 +1020,7 @@ fn lower_map_set(
 /// just built one entry at a time, so both seams store an entry the same way.
 pub(crate) fn emit_map_set(
     ctx: &mut LoweringContext,
-    obj_op: Operand,
+    receiver: Receiver<'_>,
     obj_ty: &Type,
     key_arg: &Expression,
     value_arg: &Expression,
@@ -1024,6 +1032,7 @@ pub(crate) fn emit_map_set(
     let (value_op, value_ty) = lower_stored_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
     let (value_op, value_src) =
         donate_operand_to_container(ctx, value_op, value_ty, value_arg.span);
+    let obj_op = receiver.make_own(ctx)?;
 
     let func_op = Operand::runtime(rt::MAP_SET, *span);
     let target_bb = ctx.new_basic_block();
@@ -1075,7 +1084,7 @@ fn lower_set_add(
 /// built one element at a time, so both seams store an element the same way.
 pub(crate) fn emit_set_add(
     ctx: &mut LoweringContext,
-    obj_op: Operand,
+    receiver: Receiver<'_>,
     obj_ty: &Type,
     elem_arg: &Expression,
     dest: Option<Place>,
@@ -1084,6 +1093,7 @@ pub(crate) fn emit_set_add(
     let watermark = ctx.body.local_decls.len();
     let (elem_op, elem_ty) = lower_stored_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
     let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_ty, elem_arg.span);
+    let obj_op = receiver.make_own(ctx)?;
 
     // The intrinsic reports whether the element was newly inserted, so the
     // result has to land in the caller's destination when it asked for one.
@@ -1136,7 +1146,7 @@ fn lower_list_insert(
 /// through `miri_rt_list_insert`, donating it to the list.
 fn emit_list_insert(
     ctx: &mut LoweringContext,
-    obj_op: Operand,
+    receiver: Receiver<'_>,
     obj_ty: &Type,
     (index_arg, item_arg): (&Expression, &Expression),
     item_watermark: usize,
@@ -1146,6 +1156,7 @@ fn emit_list_insert(
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
+    let obj_op = receiver.make_own(ctx)?;
     let func_op = Operand::runtime(rt::LIST_INSERT, *span);
     let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
@@ -1197,7 +1208,7 @@ fn lower_collection_set(
 /// `obj_ty` as a direct indexed assignment.
 fn emit_collection_set(
     ctx: &mut LoweringContext,
-    obj_op: Operand,
+    receiver: Receiver<'_>,
     obj_ty: &Type,
     (index_arg, item_arg): (&Expression, &Expression),
     obj_watermark: usize,
@@ -1206,6 +1217,7 @@ fn emit_collection_set(
     let index_op = lower_expression(ctx, index_arg, None)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let item_op_src = operand_src_local(&item_op);
+    let obj_op = receiver.make_own(ctx)?;
 
     let alias_ty = receiver_alias_type(ctx, &obj_op, obj_ty);
     let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), alias_ty, *span);
@@ -1930,30 +1942,66 @@ pub(super) fn operands_in_parameter_order(
 /// Lower a call's written arguments in the order they are written, so their
 /// side effects happen as the source says, and place each at the parameter it
 /// binds, brought to the type that parameter is passed at.
-fn lower_and_coerce_args(
+///
+/// An argument the callee writes in place is lowered up to its check and
+/// returned beside the slots, its slot holding a placeholder, for the caller
+/// to make the call's own once every other argument is lowered.
+fn lower_and_coerce_args<'e>(
     ctx: &mut LoweringContext,
-    args: &[Expression],
+    args: &'e [Expression],
     targets: &[Type],
     param_names: &[String],
     callee: Option<RuntimeCallee<'_>>,
-) -> Result<Vec<Option<Operand>>, LoweringError> {
+) -> Result<(Vec<Option<Operand>>, Vec<WrittenArgument<'e>>), LoweringError> {
     let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
     let mut slots = Vec::with_capacity(args.len());
+    let mut written = Vec::new();
     for (position, value) in bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
-        let mut op = runtime_writes::lower_call_argument(ctx, callee, position, value)?;
-
-        if let Some(target_ty) = targets.get(position) {
-            op = coerce_arg_to_declared(ctx, op, value, target_ty, watermark);
-        }
-
-        let op = match op {
-            Operand::Move(p) => Operand::Copy(p),
-            other => other,
+        let op = match runtime_writes::lower_call_argument(ctx, callee, position, value)? {
+            runtime_writes::CallArgument::Lowered(op) => op,
+            runtime_writes::CallArgument::Written(pending) => {
+                written.push(WrittenArgument {
+                    position,
+                    value,
+                    pending,
+                });
+                place_at_parameter(&mut slots, position, void_none_operand(value.span));
+                continue;
+            }
         };
-        place_at_parameter(&mut slots, position, op);
+        let op = match targets.get(position) {
+            Some(target_ty) => coerce_arg_to_declared(ctx, op, value, target_ty, watermark),
+            None => op,
+        };
+        place_at_parameter(&mut slots, position, move_to_copy(op));
     }
-    Ok(slots)
+    Ok((slots, written))
+}
+
+/// An argument a runtime entry point writes in place, lowered up to its
+/// check: the parameter it binds, the expression written for it, and the
+/// receiver still to be made the call's own.
+struct WrittenArgument<'e> {
+    position: usize,
+    value: &'e Expression,
+    pending: PendingReceiver<'e>,
+}
+
+/// A written argument, made the call's own, brought to the type its
+/// parameter is passed at.
+fn coerce_written_arg(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    value: &Expression,
+    target: Option<&Type>,
+) -> Operand {
+    let watermark = ctx.body.local_decls.len();
+    let op = match target {
+        Some(target_ty) => coerce_arg_to_declared(ctx, op, value, target_ty, watermark),
+        None => op,
+    };
+    move_to_copy(op)
 }
 
 /// Bring a lowered argument to the type the callee declares for it.

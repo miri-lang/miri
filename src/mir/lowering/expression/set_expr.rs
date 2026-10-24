@@ -9,6 +9,7 @@ use crate::error::lowering::LoweringError;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::emit_set_add;
 use crate::mir::lowering::expression::collection_literal::{deliver, literal_target};
+use crate::mir::lowering::written_receiver::Receiver;
 use crate::mir::{AggregateKind, Operand, Place, Rvalue, Statement, StatementKind};
 
 pub(crate) fn lower_set_expr(
@@ -29,7 +30,14 @@ pub(crate) fn lower_set_expr(
     });
     for element in elements {
         let set = Operand::Copy(target.place.clone());
-        emit_set_add(ctx, set, &target.ty, element, None, &element.span)?;
+        emit_set_add(
+            ctx,
+            Receiver::Ready(set),
+            &target.ty,
+            element,
+            None,
+            &element.span,
+        )?;
     }
     Ok(deliver(ctx, target.place, dest, expr))
 }

@@ -10,6 +10,7 @@ use crate::mir::lowering::constructors::emit_empty_list;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::emit_list_push;
 use crate::mir::lowering::expression::collection_literal::{deliver, literal_target};
+use crate::mir::lowering::written_receiver::Receiver;
 use crate::mir::{Operand, Place};
 
 pub(crate) fn lower_list_expr(
@@ -24,7 +25,13 @@ pub(crate) fn lower_list_expr(
     emit_empty_list(ctx, &expr.span, &target.ty, target.place.clone());
     for element in elements {
         let list = Operand::Copy(target.place.clone());
-        emit_list_push(ctx, list, &target.ty, element, &element.span)?;
+        emit_list_push(
+            ctx,
+            Receiver::Ready(list),
+            &target.ty,
+            element,
+            &element.span,
+        )?;
     }
     Ok(deliver(ctx, target.place, dest, expr))
 }

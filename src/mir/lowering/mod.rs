@@ -39,6 +39,7 @@ pub mod statement;
 pub mod variable;
 pub mod vtable_demand;
 mod written_parameters;
+mod written_receiver;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};

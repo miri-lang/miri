@@ -114,6 +114,7 @@ mod optional_representation;
 mod optional_slots;
 mod parameter_writes;
 mod stable_collections;
+mod unshared_writes;
 mod value_arguments;
 mod value_representation;
 
@@ -124,6 +125,7 @@ pub use optional_representation::{verify_optional_call_layouts, verify_optional_
 pub use optional_slots::verify_optional_slots;
 pub use parameter_writes::verify_parameter_writes;
 pub use stable_collections::verify_stable_collections;
+pub use unshared_writes::verify_unshared_writes;
 pub use value_arguments::verify_value_arguments;
 pub use value_representation::{verify_value_call_classes, verify_value_representation};
 

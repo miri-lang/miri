@@ -171,14 +171,13 @@ fn test_a_runtime_writer_cannot_be_called_through_a_module_alias() {
     );
 }
 
-/// The list a runtime writer is handed is made the call's own before the
-/// arguments after it are lowered, so a closure argument capturing the same
-/// list holds it again while the runtime writes it. The sort detaches the
-/// list's elements for the duration of the call, so the closure finds it
-/// empty and its index stops the program cleanly.
+/// The list a runtime writer is handed is made the call's own only after
+/// the closure argument is built, so the closure, which captures the list as
+/// it was, holds it when the check runs: the check copies it, the sort writes
+/// the copy, and the closure reads its own capture throughout.
 #[test]
-fn test_a_closure_argument_capturing_the_written_list_finds_it_empty_during_the_write() {
-    assert_runtime_error(
+fn test_a_closure_argument_capturing_the_written_list_reads_it_as_it_was() {
+    assert_runs_with_output(
         r#"
 use system.io
 use system.collections.list
@@ -190,6 +189,6 @@ fn main()
     miri_rt_list_sort_by(l, fn(a int, b int) int: a - b + l[0] - l[0])
     println(f"{l[0]} {l[1]} {l[2]}")
 "#,
-        "Array index out of bounds: the len is 0 but the index is 0",
+        "1 2 3",
     );
 }
