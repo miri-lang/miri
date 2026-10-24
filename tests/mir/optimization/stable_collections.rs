@@ -8,6 +8,15 @@
 //! changes one thing about it and checks whether the list is still recorded.
 //! The programs check the same through the whole pipeline.
 
+use crate::integration::memory::loop_headers_across_calls::{
+    callee_writing_its_parameter, ALIAS_BOUND_IN_THE_LOOP, BORROWED_PARAMETER_COPIED_IN_THE_LOOP,
+    CLOSURE_IN_A_FIELD, CLOSURE_PUSHING_ITS_CAPTURE, INDEX_WRITTEN_THROUGH_OUT,
+    LIST_FROM_AN_ELEMENT_ACCESSOR, LIST_FROM_A_MAP_VALUE_ACCESSOR,
+    LIST_FROM_A_METHOD_RETURNING_A_FIELD, LOOP_OVER_A_FIELD, OUT_ARGUMENT_ALIAS,
+    OWNED_PARAMETER_TRANSFER, RECURSIVE_CALLEE, SPHERES, THROUGH_ANOTHER_BINDING,
+    THROUGH_AN_ELEMENT_POINTING_BACK, THROUGH_A_CLASS_FIELD, THROUGH_A_PASSED_CLOSURE,
+    VIRTUAL_CALL, WRITER_THROUGH_A_COUNTED_FIELD,
+};
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
@@ -16,9 +25,9 @@ use miri::mir::body::DeviceHandleId;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::symbol::Symbol;
 use miri::mir::{
-    BasicBlock, BasicBlockData, BinOp, Body, Constant, Discriminant, ExecutionModel, Local,
-    LocalDecl, Operand, Place, PlaceElem, Rvalue, StableCollection, Statement, StatementKind,
-    Terminator, TerminatorKind,
+    AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Constant, Discriminant, ExecutionModel,
+    Local, LocalDecl, Operand, Place, PlaceElem, Rvalue, StableCollection, Statement,
+    StatementKind, Terminator, TerminatorKind,
 };
 use miri::pipeline::Pipeline;
 use miri::runtime_fns::rt;
@@ -665,4 +674,303 @@ fn test_rebinding_a_value_with_a_drop_hook_in_the_loop_leaves_the_list_unrecorde
         )),
     ]);
     assert!(records_of(body).is_empty());
+}
+
+/// `loop_over_a_list` with the list a local the body builds before the loop
+/// rather than a parameter it borrows.
+pub(crate) fn loop_over_an_owned_list() -> Body {
+    let mut body = loop_over_a_list();
+    body.arg_count = 0;
+    body.basic_blocks[0].statements.insert(
+        0,
+        assign(
+            Place::new(LIST),
+            Rvalue::Aggregate(AggregateKind::List, Vec::new()),
+        ),
+    );
+    body
+}
+
+/// A call to a function of the program, handed `args`, ending the loop's step.
+pub(crate) fn program_call(args: Vec<Operand>) -> Terminator {
+    call(
+        Operand::function(Symbol::entry(), Span::default()),
+        args,
+        SPARE,
+        LOOP_HEADER,
+    )
+}
+
+#[test]
+fn test_a_call_naming_nothing_of_an_owned_list_keeps_it_recorded() {
+    let body = with_step_ending(loop_over_an_owned_list(), program_call(vec![int(1)]));
+    let records = records_of(body);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].local, LIST);
+}
+
+#[test]
+fn test_a_call_handed_an_owned_list_leaves_it_unrecorded() {
+    let handed = program_call(vec![Operand::Copy(Place::new(LIST))]);
+    assert!(records_of(with_step_ending(loop_over_an_owned_list(), handed)).is_empty());
+}
+
+#[test]
+fn test_a_call_handed_a_copy_of_an_owned_list_leaves_it_unrecorded() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements.push(assign(
+        Place::new(SPARE_LIST),
+        Rvalue::Use(Operand::Copy(Place::new(LIST))),
+    ));
+    let handed = program_call(vec![Operand::Copy(Place::new(SPARE_LIST))]);
+    assert!(records_of(with_step_ending(body, handed)).is_empty());
+}
+
+#[test]
+fn test_a_call_writing_its_result_into_a_copy_of_an_owned_list_leaves_it_unrecorded() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements.push(assign(
+        Place::new(SPARE_LIST),
+        Rvalue::Use(Operand::Copy(Place::new(LIST))),
+    ));
+    let mut into_copy = program_call(Vec::new());
+    if let TerminatorKind::Call { destination, .. } = &mut into_copy.kind {
+        *destination = Place::new(SPARE_LIST);
+    }
+    assert!(records_of(with_step_ending(body, into_copy)).is_empty());
+}
+
+#[test]
+fn test_a_call_handed_a_list_borrowed_from_an_owned_list_leaves_it_unrecorded() {
+    let mut body = loop_over_an_owned_list();
+    body.borrowed_locals.insert(SPARE_LIST, vec![LIST]);
+    let handed = program_call(vec![Operand::Copy(Place::new(SPARE_LIST))]);
+    assert!(records_of(with_step_ending(body, handed)).is_empty());
+}
+
+#[test]
+fn test_a_call_handed_a_string_borrowed_from_an_owned_list_keeps_it_recorded() {
+    let mut body = loop_over_an_owned_list();
+    let text = body.new_local(LocalDecl::new(ty(TypeKind::String), Span::default()));
+    body.borrowed_locals.insert(text, vec![LIST]);
+    let handed = program_call(vec![Operand::Copy(Place::new(text))]);
+    assert_eq!(records_of(with_step_ending(body, handed)).len(), 1);
+}
+
+#[test]
+fn test_an_owned_list_borrowed_from_another_is_unrecorded_across_a_call() {
+    let mut body = loop_over_an_owned_list();
+    body.borrowed_locals.insert(LIST, vec![SPARE_LIST]);
+    let unrelated = program_call(vec![int(1)]);
+    assert!(records_of(with_step_ending(body, unrelated)).is_empty());
+}
+
+#[test]
+fn test_an_owned_list_copied_without_a_retain_is_unrecorded_across_a_call() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements[0] = assign(
+        Place::new(LIST),
+        Rvalue::Use(Operand::Copy(Place::new(SPARE_LIST))),
+    );
+    let unrelated = program_call(vec![int(1)]);
+    assert!(records_of(with_step_ending(body, unrelated)).is_empty());
+}
+
+#[test]
+fn test_an_owned_list_copied_after_a_retain_stays_recorded_across_a_call() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements[0] = assign(
+        Place::new(LIST),
+        Rvalue::Use(Operand::Copy(Place::new(SPARE_LIST))),
+    );
+    body.basic_blocks[0]
+        .statements
+        .insert(0, statement(StatementKind::IncRef(Place::new(SPARE_LIST))));
+    let unrelated = program_call(vec![int(1)]);
+    assert_eq!(records_of(with_step_ending(body, unrelated)).len(), 1);
+}
+
+#[test]
+fn test_a_parameter_the_body_takes_over_stays_recorded_across_a_call() {
+    let mut body = loop_over_a_list();
+    body.owned_params = vec![true];
+    let unrelated = program_call(vec![int(1)]);
+    assert_eq!(records_of(with_step_ending(body, unrelated)).len(), 1);
+}
+
+#[test]
+fn test_a_borrowed_parameter_is_unrecorded_across_a_call_naming_nothing_of_it() {
+    let unrelated = program_call(vec![int(1)]);
+    assert!(records_of(with_step_ending(loop_over_a_list(), unrelated)).is_empty());
+}
+
+#[test]
+fn test_a_virtual_call_leaves_an_owned_list_unrecorded() {
+    let virtual_call = terminator(TerminatorKind::VirtualCall {
+        vtable_slot: 0,
+        args: vec![Operand::Copy(Place::new(SPARE_LIST))],
+        arg_modes: Vec::new(),
+        param_types: Vec::new(),
+        destination: Place::new(SPARE),
+        target: Some(BasicBlock(LOOP_HEADER)),
+    });
+    assert!(records_of(with_step_ending(loop_over_an_owned_list(), virtual_call)).is_empty());
+}
+
+#[test]
+fn test_a_closure_built_around_an_owned_list_and_called_leaves_it_unrecorded() {
+    let mut body = loop_over_an_owned_list();
+    let environment = ty(TypeKind::Custom("Environment".to_string(), None));
+    let closure = body.new_local(LocalDecl::new(environment.clone(), Span::default()));
+    body.basic_blocks[0].statements.push(assign(
+        Place::new(closure),
+        Rvalue::Aggregate(
+            AggregateKind::Class(environment),
+            vec![Operand::Copy(Place::new(LIST))],
+        ),
+    ));
+    let through_closure = call(
+        Operand::Copy(Place::new(closure)),
+        vec![int(1)],
+        SPARE,
+        LOOP_HEADER,
+    );
+    assert!(records_of(with_step_ending(body, through_closure)).is_empty());
+}
+
+#[test]
+fn test_a_call_handed_a_pointer_borrowed_from_an_owned_list_leaves_it_unrecorded() {
+    let mut body = loop_over_an_owned_list();
+    let pointer = body.new_local(LocalDecl::new(ty(TypeKind::RawPtr), Span::default()));
+    body.borrowed_locals.insert(pointer, vec![LIST]);
+    let handed = program_call(vec![Operand::Copy(Place::new(pointer))]);
+    assert!(records_of(with_step_ending(body, handed)).is_empty());
+}
+
+/// `loop_over_an_owned_list` with the list moved out of `SPARE_LIST` rather
+/// than built, and its step ending in a call naming nothing of either.
+fn loop_over_a_list_moved_out_of_a_spare() -> Body {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements[0] = assign(
+        Place::new(LIST),
+        Rvalue::Use(Operand::Move(Place::new(SPARE_LIST))),
+    );
+    with_step_ending(body, program_call(vec![int(1)]))
+}
+
+#[test]
+fn test_an_owned_list_moved_out_of_a_local_holding_its_own_reference_stays_recorded() {
+    assert_eq!(records_of(loop_over_a_list_moved_out_of_a_spare()).len(), 1);
+}
+
+#[test]
+fn test_an_owned_list_moved_out_of_a_captured_binding_is_unrecorded_across_a_call() {
+    let mut body = loop_over_a_list_moved_out_of_a_spare();
+    body.env_capture_locals.push(SPARE_LIST);
+    assert!(records_of(body).is_empty());
+}
+
+#[test]
+fn test_an_owned_list_moved_out_of_an_address_taken_local_is_unrecorded_across_a_call() {
+    let mut body = loop_over_a_list_moved_out_of_a_spare();
+    let pointer = body.new_local(LocalDecl::new(ty(TypeKind::RawPtr), Span::default()));
+    body.basic_blocks[0].statements.insert(
+        0,
+        assign(Place::new(pointer), Rvalue::Ref(Place::new(SPARE_LIST))),
+    );
+    assert!(records_of(body).is_empty());
+}
+
+#[test]
+fn test_an_owned_list_moved_out_of_a_device_resident_local_is_unrecorded_across_a_call() {
+    let mut body = loop_over_a_list_moved_out_of_a_spare();
+    body.local_decls[SPARE_LIST.0].device_handle = Some(DeviceHandleId(1));
+    assert!(records_of(body).is_empty());
+}
+
+/// The body of `source` named `suffix`, its records checked to cover no
+/// loop.
+fn assert_unrecorded(source: &str, suffix: &str) {
+    let body = body_named(source, suffix);
+    assert!(body.stable_collections.is_empty(), "{body}");
+}
+
+#[test]
+fn test_a_loop_calling_a_function_handed_its_list_twice_is_unrecorded() {
+    assert_unrecorded(&callee_writing_its_parameter("push(9)"), "main");
+}
+
+#[test]
+fn test_a_loop_calling_a_function_handed_a_holder_of_its_list_is_unrecorded() {
+    assert_unrecorded(THROUGH_A_CLASS_FIELD, "main");
+    assert_unrecorded(THROUGH_AN_ELEMENT_POINTING_BACK, "main");
+}
+
+#[test]
+fn test_a_loop_calling_a_closure_capturing_its_list_is_unrecorded() {
+    assert_unrecorded(THROUGH_A_PASSED_CLOSURE, "main");
+    assert_unrecorded(CLOSURE_PUSHING_ITS_CAPTURE, "main");
+    assert_unrecorded(CLOSURE_IN_A_FIELD, "main");
+}
+
+#[test]
+fn test_a_loop_calling_a_function_handed_another_binding_of_its_list_is_unrecorded() {
+    assert_unrecorded(THROUGH_ANOTHER_BINDING, "main");
+    assert_unrecorded(ALIAS_BOUND_IN_THE_LOOP, "main");
+    assert_unrecorded(OUT_ARGUMENT_ALIAS, "main");
+    assert_unrecorded(OWNED_PARAMETER_TRANSFER, "main");
+}
+
+#[test]
+fn test_a_loop_over_a_parameter_calling_itself_is_unrecorded() {
+    assert_unrecorded(RECURSIVE_CALLEE, ".walk");
+}
+
+#[test]
+fn test_a_loop_making_a_virtual_call_is_unrecorded() {
+    assert_unrecorded(VIRTUAL_CALL, "main");
+}
+
+/// The local of the one record of the body of `source` named `suffix`.
+fn recorded_local(source: &str, suffix: &str) -> (Body, Local) {
+    let body = body_named(source, suffix);
+    let [record] = body.stable_collections.as_slice() else {
+        panic!("one record:\n{body}");
+    };
+    let local = record.local;
+    (body, local)
+}
+
+#[test]
+fn test_a_loop_over_spheres_calling_functions_records_the_list_and_its_access() {
+    let (body, local) = recorded_local(SPHERES, ".shade");
+    assert!(
+        body.in_bounds.iter().any(|entry| entry.collection == local),
+        "the element read is proven in bounds:\n{body}"
+    );
+}
+
+#[test]
+fn test_a_loop_over_a_list_its_calls_reach_only_through_counted_holders_is_recorded() {
+    recorded_local(LOOP_OVER_A_FIELD, "main");
+    recorded_local(WRITER_THROUGH_A_COUNTED_FIELD, "main");
+    recorded_local(BORROWED_PARAMETER_COPIED_IN_THE_LOOP, ".sum");
+}
+
+#[test]
+fn test_a_loop_over_a_list_a_holder_handed_out_through_a_call_is_recorded() {
+    // The accessor's result holds a reference of its own, so a method
+    // writing the holder's list copies it and the loop's header stays.
+    recorded_local(LIST_FROM_AN_ELEMENT_ACCESSOR, "main");
+    recorded_local(LIST_FROM_A_MAP_VALUE_ACCESSOR, "main");
+    recorded_local(LIST_FROM_A_METHOD_RETURNING_A_FIELD, "main");
+}
+
+#[test]
+fn test_an_index_a_call_writes_through_out_is_not_proven_in_bounds() {
+    let (body, local) = recorded_local(INDEX_WRITTEN_THROUGH_OUT, "main");
+    assert!(
+        body.in_bounds.iter().all(|entry| entry.collection != local),
+        "{body}"
+    );
 }

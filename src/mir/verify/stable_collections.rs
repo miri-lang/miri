@@ -9,23 +9,24 @@
 //! record's blocks. That is sound only while every path into those blocks
 //! passes through the preheader, the local keeps its value throughout, and
 //! nothing there can change a header: no call outside the runtime entry
-//! points that leave headers unchanged, no store through a dereference, no
+//! points that leave headers unchanged, except a call to a function of the
+//! program that `analysis::header_reach` finds cannot reach the collection
+//! (the same authority the pass asks), no store through a dereference, no
 //! release that may run a drop hook, and — for a parameter the body borrows —
 //! no release, other than through the parameter, of a value that may hold a
-//! collection of its type. Each record is re-derived here from
-//! the body alone, without the pass's own reasoning, and every way it fails
-//! is reported.
+//! collection of its type. Each record is re-derived here from the body
+//! alone, without the pass's loop search, and every way it fails is
+//! reported.
 
 use super::VerificationViolation;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
-use crate::mir::instantiation::shape::constructor_parts;
+use crate::ast::types::BuiltinCollectionKind;
+use crate::mir::analysis::header_reach::{may_hold_type, HeaderReach, UncountedRoot};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, StableCollection, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::leaves_collection_headers_unchanged;
 
 /// Every way a record on [`Body::stable_collections`] fails to keep its
 /// collection's header.
@@ -81,11 +82,12 @@ impl<'a> RecordCheck<'a> {
     /// Every failure of `record`, each with the local it concerns.
     fn failures(&self, record: &StableCollection) -> Vec<(Local, String)> {
         let local = record.local;
+        let reach = HeaderReach::of(self.body, local);
         let mut found: Vec<String> = Vec::new();
         found.extend(self.binding_failure(local));
         found.extend(self.shape_failures(record));
         for block in &record.blocks {
-            found.extend(self.block_failures(record, block.0));
+            found.extend(self.block_failures(record, &reach, block.0));
         }
         found
             .into_iter()
@@ -187,7 +189,12 @@ impl<'a> RecordCheck<'a> {
     }
 
     /// What in `block` may change the recorded collection's header.
-    fn block_failures(&self, record: &StableCollection, block: usize) -> Vec<String> {
+    fn block_failures(
+        &self,
+        record: &StableCollection,
+        reach: &HeaderReach,
+        block: usize,
+    ) -> Vec<String> {
         let Some(data) = self.body.basic_blocks.get(block) else {
             return vec![format!("bb{block} does not exist")];
         };
@@ -202,7 +209,9 @@ impl<'a> RecordCheck<'a> {
             .collect();
         match &data.terminator {
             None => found.push(format!("bb{block} has no terminator")),
-            Some(terminator) => found.extend(terminator_failure(record.local, block, terminator)),
+            Some(terminator) => {
+                found.extend(self.terminator_failure(record.local, reach, block, terminator))
+            }
         }
         found
     }
@@ -269,8 +278,48 @@ impl<'a> RecordCheck<'a> {
             && self
                 .places
                 .declared(released)
-                .is_none_or(|ty| holds_collection_of(&ty, target, 0));
+                .is_none_or(|ty| may_hold_type(&ty, target));
         may_free.then(|| format!("{block} may release the list it borrows"))
+    }
+
+    /// What `terminator`, ending `block`, does that may change the header of
+    /// `local`'s collection, whose aliases `reach` holds.
+    fn terminator_failure(
+        &self,
+        local: Local,
+        reach: &HeaderReach,
+        block: usize,
+        terminator: &Terminator,
+    ) -> Option<String> {
+        let rebinds = terminator
+            .written_places()
+            .any(|place| place.local == local && place.projection.is_empty());
+        if rebinds {
+            return Some(format!("bb{block} gives it another value"));
+        }
+        match &terminator.kind {
+            TerminatorKind::Goto { .. }
+            | TerminatorKind::SwitchInt { .. }
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => None,
+            TerminatorKind::Call { func, .. } => (!reach.call_leaves_header(terminator))
+                .then(|| match (func.called_runtime_name(), reach.uncounted_root()) {
+                    (Some(name), _) => format!("bb{block} calls `{name}`, which may change a header"),
+                    (None, Some(root)) => format!(
+                        "bb{block} calls a function of the program while {}",
+                        uncounted_reason(root)
+                    ),
+                    (None, None) => format!(
+                        "bb{block} calls a function of the program handed something that may hold it"
+                    ),
+                }),
+            TerminatorKind::VirtualCall { .. } => Some(format!(
+                "bb{block} calls through a vtable, which may change a header"
+            )),
+            TerminatorKind::GpuLaunch { .. } => Some(format!(
+                "bb{block} launches a kernel, which may change a header"
+            )),
+        }
     }
 
     fn may_run_hook(&self, place: &Place) -> bool {
@@ -321,37 +370,6 @@ impl<'a> RecordCheck<'a> {
     }
 }
 
-/// Whether a value of `ty` is, or may contain, a value of `target`'s type;
-/// a declared type, a type parameter or a function may contain anything.
-fn holds_collection_of(ty: &Type, target: &Type, depth: usize) -> bool {
-    let declared =
-        matches!(ty.kind, TypeKind::Custom(..)) && ty.kind.as_builtin_collection().is_none();
-    if depth > 16 || declared || matches!(ty.kind, TypeKind::Generic(..) | TypeKind::Function(_)) {
-        return true;
-    }
-    let (name, parts) = constructor_parts(ty);
-    let (target_name, target_parts) = constructor_parts(target);
-    let is_target = name == target_name
-        && parts.len() == target_parts.len()
-        && parts
-            .iter()
-            .zip(&target_parts)
-            .all(|(part, target_part)| spells_same(part, target_part));
-    is_target
-        || parts
-            .iter()
-            .any(|part| holds_collection_of(part, target, depth + 1))
-}
-
-/// Whether `a` and `b` are spelled with the same constructors throughout.
-fn spells_same(a: &Type, b: &Type) -> bool {
-    let (a_name, a_parts) = constructor_parts(a);
-    let (b_name, b_parts) = constructor_parts(b);
-    a_name == b_name
-        && a_parts.len() == b_parts.len()
-        && a_parts.iter().zip(&b_parts).all(|(a, b)| spells_same(a, b))
-}
-
 /// `(to, from)` when `statement` is `to = move from`, both whole locals.
 fn whole_move(statement: &Statement) -> Option<(Local, Local)> {
     match &statement.kind {
@@ -372,34 +390,28 @@ fn whole_move(statement: &Statement) -> Option<(Local, Local)> {
     }
 }
 
-/// What `terminator`, ending `block`, does that may change the header of
-/// `local`'s collection.
-fn terminator_failure(local: Local, block: usize, terminator: &Terminator) -> Option<String> {
-    let rebinds = terminator
-        .written_places()
-        .any(|place| place.local == local && place.projection.is_empty());
-    if rebinds {
-        return Some(format!("bb{block} gives it another value"));
-    }
-    match &terminator.kind {
-        TerminatorKind::Goto { .. }
-        | TerminatorKind::SwitchInt { .. }
-        | TerminatorKind::Return
-        | TerminatorKind::Unreachable => None,
-        TerminatorKind::Call { func, .. } => {
-            let name = func.called_runtime_name();
-            (!name.is_some_and(leaves_collection_headers_unchanged)).then(|| {
-                format!(
-                    "bb{block} calls `{}`, which may change a header",
-                    name.map_or_else(|| "a function of the program".to_string(), str::to_string)
-                )
-            })
+/// Why a recorded collection's local holds no reference of its own that
+/// only its aliases reach, worded to follow "while".
+fn uncounted_reason(root: UncountedRoot) -> String {
+    match root {
+        UncountedRoot::NotCounted => "it is not reference counted".to_string(),
+        UncountedRoot::Parameter(alias) => {
+            format!("`{alias}`, which may hold it, is a parameter the body borrows")
         }
-        TerminatorKind::VirtualCall { .. } => Some(format!(
-            "bb{block} calls through a vtable, which may change a header"
-        )),
-        TerminatorKind::GpuLaunch { .. } => Some(format!(
-            "bb{block} launches a kernel, which may change a header"
-        )),
+        UncountedRoot::Borrowed(alias) => {
+            format!("`{alias}`, which may hold it, holds no reference of its own")
+        }
+        UncountedRoot::Captured(alias) => {
+            format!("`{alias}`, which may hold it, is a captured binding")
+        }
+        UncountedRoot::DeviceResident(alias) => {
+            format!("`{alias}`, which may hold it, is a gpu-resident binding")
+        }
+        UncountedRoot::AddressTaken(alias) => {
+            format!("`{alias}`, which may hold it, has its address taken")
+        }
+        UncountedRoot::UncountedDefinition(block) => {
+            format!("{block} gives it a value it holds no reference to")
+        }
     }
 }

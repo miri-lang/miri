@@ -19,6 +19,7 @@ pub mod functions;
 pub mod generic_managed_type_arguments;
 pub mod generics;
 pub mod heap_guard;
+pub mod loop_headers_across_calls;
 pub mod loops;
 pub mod match_arms;
 pub mod method_arg_temps;

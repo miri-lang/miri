@@ -15,9 +15,13 @@
 //!   found unneeded leaves behind, its storage neither starts nor ends, and
 //!   its address is never taken, nor is it a capture or a gpu-resident
 //!   binding, any of which lets code this body does not show change it;
-//! - no call can write a header: every call names a runtime entry point
-//!   `runtime_fns::leaves_collection_headers_unchanged` lists, and nothing is
-//!   stored through a dereference;
+//! - no call can write its header: every call into the runtime names an
+//!   entry point `runtime_fns::leaves_collection_headers_unchanged` lists,
+//!   and a call to a function of the program is allowed only where
+//!   `analysis::header_reach` finds the local holds a reference of its own
+//!   and the call names nothing that may hold the collection without one; a
+//!   call through a vtable or a kernel launch is never allowed, and nothing
+//!   is stored through a dereference;
 //! - no release can run code of the program's own: no release of a value
 //!   whose drop may run a `fn drop(self)` hook anywhere inside it, and no
 //!   store into a slot holding one, which releases what it overwrites;
@@ -28,8 +32,8 @@
 //!   no other release can take.
 //!
 //! Every header a write could change is changed by one of those, so the
-//! collection need not be unshared: another name for it cannot change it
-//! while the loop runs either.
+//! collection need not be unshared: another name for it holds a reference
+//! of its own, so a write through it copies the collection first.
 //!
 //! For each such loop the pass gives the loop a preheader of its own — a block
 //! every entry into the header passes through, placed after any copy-on-write
@@ -46,12 +50,12 @@
 //! rebinding and no call, and records it.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type};
 use crate::mir::analysis::dominators::DominatorTree;
+use crate::mir::analysis::header_reach::{may_hold_type, HeaderReach};
 use crate::mir::analysis::loops::{natural_loops, predecessors, NaturalLoop};
-use crate::mir::instantiation::shape::constructor_parts;
 use crate::mir::place::PlaceContext;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
@@ -60,7 +64,6 @@ use crate::mir::{
     BasicBlock, BasicBlockData, Body, Local, Operand, Place, PlaceElem, Rvalue, StableCollection,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::leaves_collection_headers_unchanged;
 
 /// Records every collection a loop of `body` leaves the header of unchanged,
 /// inserting a preheader before each such loop. Returns true if any was
@@ -92,10 +95,11 @@ fn stable_loops(body: &Body) -> Vec<(NaturalLoop, Local)> {
     loops.sort_by_key(|found| Reverse(found.blocks.len()));
     let releases = ReleaseFacts::of(body);
     let predecessors = predecessors(body);
+    let mut reaches: HashMap<Local, HeaderReach> = HashMap::new();
     let mut found: Vec<(NaturalLoop, Local)> = Vec::new();
     for candidate in loops {
         if !is_single_entry(&candidate, &predecessors)
-            || !leaves_every_header_unchanged(body, &candidate, &releases)
+            || !statements_leave_headers(body, &candidate, &releases)
         {
             continue;
         }
@@ -107,6 +111,12 @@ fn stable_loops(body: &Body) -> Vec<(NaturalLoop, Local)> {
             .filter(|local| {
                 !is_borrowed_param(body, *local)
                     || releases_nothing_it_borrows(body, &candidate, *local, &releases)
+            })
+            .filter(|local| {
+                let reach = reaches
+                    .entry(*local)
+                    .or_insert_with(|| HeaderReach::of(body, *local));
+                calls_leave_header(body, &candidate, reach)
             })
             .collect();
         found.extend(stable.into_iter().map(|local| (candidate.clone(), local)));
@@ -181,7 +191,7 @@ impl<'a> ReleaseFacts<'a> {
     fn may_hold(&self, place: &Place, target: &Type) -> bool {
         self.places
             .declared(place)
-            .is_none_or(|ty| may_hold_type(&ty, target, 0))
+            .is_none_or(|ty| may_hold_type(&ty, target))
     }
 
     /// Whether releasing what `place` holds may run a drop hook; a place
@@ -193,16 +203,22 @@ impl<'a> ReleaseFacts<'a> {
     }
 }
 
-/// Whether nothing in `found` can change any collection's header.
-fn leaves_every_header_unchanged(body: &Body, found: &NaturalLoop, facts: &ReleaseFacts) -> bool {
+/// Whether no statement in `found` can change any collection's header.
+fn statements_leave_headers(body: &Body, found: &NaturalLoop, facts: &ReleaseFacts) -> bool {
     found.blocks.iter().all(|block| {
         body.basic_blocks.get(*block).is_some_and(|data| {
             (data.statements.iter()).all(|statement| statement_leaves_headers(statement, facts))
-                && data
-                    .terminator
-                    .as_ref()
-                    .is_some_and(terminator_leaves_headers)
         })
+    })
+}
+
+/// Whether every block of `found` ends in a terminator that reaches no code
+/// able to change the header of `reach`'s collection.
+fn calls_leave_header(body: &Body, found: &NaturalLoop, reach: &HeaderReach) -> bool {
+    found.blocks.iter().all(|block| {
+        (body.basic_blocks.get(*block))
+            .and_then(|data| data.terminator.as_ref())
+            .is_some_and(|terminator| reach.call_leaves_header(terminator))
     })
 }
 
@@ -264,45 +280,6 @@ fn releases_nothing_it_borrows(
             | StatementKind::IncRef(_)
             | StatementKind::Nop => true,
         })
-}
-
-/// Whether a value of `ty` may be, or hold, a value of `target`'s type: a
-/// type whose contents its spelling does not show — a declared type, a
-/// type parameter, a function — may hold anything.
-fn may_hold_type(ty: &Type, target: &Type, depth: usize) -> bool {
-    const MAX_DEPTH: usize = 16;
-    let is_opaque = matches!(ty.kind, TypeKind::Generic(..) | TypeKind::Function(_))
-        || (matches!(ty.kind, TypeKind::Custom(..)) && ty.kind.as_builtin_collection().is_none());
-    if depth > MAX_DEPTH || is_opaque || is_same_type(ty, target) {
-        return true;
-    }
-    (constructor_parts(ty).1.iter()).any(|part| may_hold_type(part, target, depth + 1))
-}
-
-/// Whether `a` and `b` spell one type, constructor by constructor.
-fn is_same_type(a: &Type, b: &Type) -> bool {
-    let (a_name, a_parts) = constructor_parts(a);
-    let (b_name, b_parts) = constructor_parts(b);
-    a_name == b_name
-        && a_parts.len() == b_parts.len()
-        && a_parts
-            .iter()
-            .zip(&b_parts)
-            .all(|(a, b)| is_same_type(a, b))
-}
-
-/// Whether `terminator` reaches no code that could write a header.
-fn terminator_leaves_headers(terminator: &Terminator) -> bool {
-    match &terminator.kind {
-        TerminatorKind::Goto { .. }
-        | TerminatorKind::SwitchInt { .. }
-        | TerminatorKind::Return
-        | TerminatorKind::Unreachable => true,
-        TerminatorKind::Call { func, .. } => func
-            .called_runtime_name()
-            .is_some_and(leaves_collection_headers_unchanged),
-        TerminatorKind::VirtualCall { .. } | TerminatorKind::GpuLaunch { .. } => false,
-    }
 }
 
 /// The collections a block of `found` indexes or takes the length of.

@@ -5,7 +5,9 @@
 //! its header there. Each record is forged by hand onto a body it does not
 //! hold for, and the check has to say why.
 
-use crate::mir::optimization::stable_collections::{list_of, loop_over_a_list};
+use crate::mir::optimization::stable_collections::{
+    list_of, loop_over_a_list, loop_over_an_owned_list, program_call,
+};
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::optimization::stable_collections::record_stable_collections;
@@ -154,4 +156,87 @@ fn test_a_record_of_a_borrowed_list_over_a_loop_storing_a_list_elsewhere_is_flag
             .any(|message| message.contains("may release the list it borrows")),
         "{found:?}"
     );
+}
+
+/// `found`, which must hold a message containing `fragment`.
+fn assert_flagged(body: &Body, fragment: &str) {
+    let found = messages(body);
+    assert!(
+        found.iter().any(|message| message.contains(fragment)),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn test_a_record_the_pass_made_over_a_loop_calling_a_function_of_the_program_has_no_violation() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[2].terminator = Some(program_call(Vec::new()));
+    assert!(record_stable_collections(&mut body), "{body}");
+    assert_eq!(messages(&body), Vec::<String>::new());
+}
+
+#[test]
+fn test_a_record_over_a_loop_calling_a_function_handed_a_copy_of_the_list_is_flagged() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(SPARE_LIST),
+            Rvalue::Use(Operand::Copy(Place::new(LIST))),
+        ),
+        span: Span::default(),
+    });
+    body.basic_blocks[2].terminator =
+        Some(program_call(vec![Operand::Copy(Place::new(SPARE_LIST))]));
+    assert_flagged(&forge_record(body), "bb2 calls");
+}
+
+#[test]
+fn test_a_record_over_a_loop_calling_a_function_handed_a_borrow_of_the_list_is_flagged() {
+    let mut body = loop_over_an_owned_list();
+    body.borrowed_locals.insert(SPARE_LIST, vec![LIST]);
+    body.basic_blocks[2].terminator =
+        Some(program_call(vec![Operand::Copy(Place::new(SPARE_LIST))]));
+    assert_flagged(&forge_record(body), "bb2 calls");
+}
+
+#[test]
+fn test_a_record_of_a_borrowed_list_over_a_loop_calling_a_function_is_flagged() {
+    let mut body = loop_over_an_owned_list();
+    body.borrowed_locals.insert(LIST, vec![SPARE_LIST]);
+    body.basic_blocks[2].terminator = Some(program_call(Vec::new()));
+    assert_flagged(&forge_record(body), "holds no reference of its own");
+}
+
+#[test]
+fn test_a_record_of_a_list_copied_without_a_retain_over_a_loop_calling_a_function_is_flagged() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[0].statements[0] = Statement {
+        kind: StatementKind::Assign(
+            Place::new(LIST),
+            Rvalue::Use(Operand::Copy(Place::new(SPARE_LIST))),
+        ),
+        span: Span::default(),
+    };
+    body.basic_blocks[2].terminator = Some(program_call(Vec::new()));
+    assert_flagged(
+        &forge_record(body),
+        "bb0 gives it a value it holds no reference to",
+    );
+}
+
+#[test]
+fn test_a_record_over_a_loop_making_a_virtual_call_is_flagged() {
+    let mut body = loop_over_an_owned_list();
+    body.basic_blocks[2].terminator = Some(Terminator::new(
+        TerminatorKind::VirtualCall {
+            vtable_slot: 0,
+            args: vec![Operand::Copy(Place::new(SPARE_LIST))],
+            arg_modes: Vec::new(),
+            param_types: Vec::new(),
+            destination: Place::new(SPARE),
+            target: Some(BasicBlock(1)),
+        },
+        Span::default(),
+    ));
+    assert_flagged(&forge_record(body), "bb2 calls through a vtable");
 }
