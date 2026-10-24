@@ -65,6 +65,7 @@ pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
 pub(crate) mod pattern_coverage;
+pub mod receiver_writes;
 mod reference_cycles;
 pub(crate) mod runtime_settled;
 mod source_arithmetic;
@@ -141,6 +142,9 @@ pub struct TypeChecker {
     /// AST statements collected from imported modules.
     /// These need to be included in MIR lowering and codegen.
     pub imported_statements: Vec<Statement>,
+    /// The methods that write their receiver, so a call of one on a value
+    /// another binding shares copies it first; see [`receiver_writes`].
+    pub receiver_writes: receiver_writes::ReceiverWrites,
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
@@ -307,6 +311,7 @@ impl TypeChecker {
             modules: ModuleLoader::new(),
             fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
+            receiver_writes: receiver_writes::ReceiverWrites::default(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
             instantiation_requirements: HashMap::new(),
@@ -639,6 +644,10 @@ impl TypeChecker {
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
         self.check_hygiene(program);
+        self.receiver_writes = receiver_writes::ReceiverWrites::of(
+            top_level_statements(program).chain(&self.imported_statements),
+            |name| self.type_identity_named_by(name).map(str::to_string),
+        );
         self.global_scope = Some(compiled_instances::GlobalScope(context));
 
         if self.diagnostics.is_empty() {

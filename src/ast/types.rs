@@ -356,23 +356,6 @@ impl BuiltinCollectionKind {
             Self::Set => "Set",
         }
     }
-
-    /// True if `method_name` mutates the underlying collection storage and so
-    /// requires a copy-on-write guard before lowering.
-    ///
-    /// Methods handled by inline intrinsics (`push`, `insert`, `set` on List)
-    /// emit their own CoW check and are excluded here.
-    pub fn mutates_method(self, method_name: &str) -> bool {
-        match self {
-            Self::List => matches!(
-                method_name,
-                "pop" | "remove" | "remove_at" | "clear" | "sort" | "reverse"
-            ),
-            Self::Set => matches!(method_name, "add" | "remove" | "clear"),
-            Self::Map => matches!(method_name, "set" | "remove" | "clear"),
-            Self::Array => matches!(method_name, "set" | "sort" | "reverse"),
-        }
-    }
 }
 
 /// Canonical mapping from a primitive type's source spelling to its `TypeKind`.

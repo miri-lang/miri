@@ -503,7 +503,7 @@ fn emit_resolved_method_call(
     let arg_types = method_argument_types(ctx, &m);
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local, boxed) =
-        prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
+        prepare_method_self(ctx, m.obj, m.obj_ty, (m.class_name, m.method_name), *m.span)?;
     let (destination, op) = super::dispatch::call_destination(ctx, return_ty, dest, *m.span);
     let span = *m.span;
     let result = emit_method_call(
@@ -1141,19 +1141,28 @@ fn monomorph_for_instantiation(
     Some((callee.symbol, return_ty))
 }
 
-/// Lower the receiver, apply a CoW check for mutating collection methods, and
-/// return the self operand plus the receiver temp local (for Perceus drops).
+/// Lower the receiver, apply a CoW check when the call writes a collection
+/// receiver, and return the self operand plus the receiver temp local (for
+/// Perceus drops).
+///
+/// Whether `method_name` of `class_name` writes its receiver is read off the
+/// method's body by the type checker ([`ReceiverWrites`]), so no method is
+/// named here.
+///
+/// [`ReceiverWrites`]: crate::type_checker::receiver_writes::ReceiverWrites
 fn prepare_method_self(
     ctx: &mut LoweringContext,
     obj: &Expression,
     obj_ty: &Type,
-    method_name: &str,
+    (class_name, method_name): (&str, &str),
     span: Span,
 ) -> Result<(Operand, Option<Local>, Option<Local>), LoweringError> {
+    let writes_receiver =
+        (ctx.type_checker.receiver_writes).writes_receiver(class_name, method_name);
     let mutated_cow = obj_ty
         .kind
         .as_builtin_collection()
-        .filter(|k| k.mutates_method(method_name))
+        .filter(|_| writes_receiver)
         .and_then(cow_fn);
     let (self_op, boxed) = match mutated_cow {
         Some(cow) => (

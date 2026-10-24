@@ -34,6 +34,7 @@ pub mod reassignment;
 pub mod recycled_blocks;
 pub mod reference_cycles;
 pub mod release_by_runtime_class;
+pub mod shared_receivers;
 pub mod stored_closures;
 pub mod temporaries;
 pub mod trait_coercion;
