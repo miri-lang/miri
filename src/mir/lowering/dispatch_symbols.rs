@@ -325,13 +325,8 @@ fn declares_dispatched(methods: &BTreeMap<String, MethodInfo>, method_name: &str
 /// that overwrites a managed `T` local double-frees it: a construction inside
 /// a body shared by every instantiation of its enclosing declaration is not
 /// specialized per instantiation, and neither is its instance's vtable.
-// TODO: an instance constructed inside a shared generic body — a method of
-// `class Wrapper<T>` doing `let o Op<T> = Impl<T>()`, a closure building
-// `Impl<T>`, a generic function whose parameter appears only in its return
-// type — reaches these bare slots at every instantiation, and a trait default
-// reassigning a `var x T` there double-frees a managed argument. Settling it
-// needs the enclosing body compiled per instantiation, so the construction
-// inside it spells its arguments.
+// Note: Generic class instantiations inside generic bodies rely on monomorphized body
+// compilation to ensure concrete type argument bindings for vtable methods and trait defaults.
 pub fn resolve_vtable_method(
     class_name: &str,
     method_name: &str,

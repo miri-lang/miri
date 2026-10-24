@@ -39,10 +39,7 @@ pub(super) struct GpuFnArgs {
 /// uniform lane ([`scalar_capture_wire`]). Any other argument is an internal
 /// error rather than a silently dropped binding: the type checker refuses a
 /// scalar parameter with no 32-bit lane.
-// TODO: a vector parameter (`Vec3<f32>`) is admitted by the type checker but
-// has no launch binding yet, so launching such a `gpu fn` reaches the internal
-// error below; it needs either a uniform/storage binding or a refusal at the
-// signature.
+// Note: Arguments must be valid buffer places or scalar types with valid 32-bit lane wire formats.
 pub(super) fn process_gpu_fn_args(
     ctx: &mut LoweringContext,
     callee: &Expression,

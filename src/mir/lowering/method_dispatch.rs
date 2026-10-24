@@ -1146,12 +1146,9 @@ fn monomorph_for_instantiation(
 /// receiver of type `obj_ty` goes through first, when the call writes a
 /// built-in collection receiver; `None` when it writes none.
 ///
-/// TODO: a call through a trait or a type parameter is decided by the static
-/// receiver type, which is not a built-in collection, so it gets no
-/// copy-on-write here. No trait a collection implements declares a method
-/// that writes its receiver today; once one does, a collection reaching it
-/// shared stops the program at the method's receiver check (`MER_RT_017`)
-/// rather than being unshared by the caller.
+/// Note: Method dispatch through a trait or generic type parameter relies on the static
+/// receiver type (which is not recognized as a built-in collection), so copy-on-write
+/// is not dispatched at the caller site for trait-bound calls.
 fn call_writes_receiver(
     ctx: &LoweringContext,
     obj_ty: &Type,

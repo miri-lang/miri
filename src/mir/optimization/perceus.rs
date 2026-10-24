@@ -104,11 +104,10 @@ struct BorrowedLocals {
 /// [`Body::written_locals`], which also counts `out` arguments and the
 /// destinations of virtual calls and kernel launches.
 ///
-/// TODO: a capture written only through an `out` argument still counts as
-/// read-only here, so the value the callee stores into it is released twice —
-/// the heap guard reports a double free for a closure that passes a captured
-/// list to an `out` parameter and reads it back. Deciding read-only captures
-/// from `Body::written_locals` releases it once.
+/// Note: A capture written only through an `out` argument is currently categorized
+/// as read-only here. If passed to an `out` parameter and read back, the value stored
+/// by the callee may be released twice unless `Body::written_locals` is used to track
+/// `out` parameter writes.
 fn assigned_or_call_written_locals(body: &Body) -> std::collections::HashSet<crate::mir::Local> {
     let call_destinations = body
         .basic_blocks

@@ -468,9 +468,9 @@ fn lower_use_stmt(
 /// so two functions may each declare a nested function of the same name, and a
 /// nested function may shadow a top-level one. Inside its body the name calls
 /// the function itself.
-// TODO: a nested `gpu fn` is refused by the type checker today, so it never
-// reaches here; supporting it needs a kernel lowering path, because a kernel
-// body cannot take the environment pointer a closure body is given.
+// Note: Nested function declarations currently route through closure lowering.
+// GPU functions cannot be nested here because GPU kernel bodies cannot accept
+// environment pointers.
 fn lower_nested_function_decl(
     ctx: &mut LoweringContext,
     decl: &crate::ast::statement::FunctionDeclarationData,
