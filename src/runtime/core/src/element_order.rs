@@ -206,6 +206,9 @@ pub(crate) unsafe fn sort_elements(
     let Some(total) = len.checked_mul(elem_size) else {
         return;
     };
+    if order.compare_fn == 0 && sort_scalars(data, len, elem_size, order.kind) {
+        return;
+    }
     let element = |i: usize| data.add(i * elem_size) as *const u8;
     let mut positions: Vec<usize> = (0..len).collect();
     positions.sort_by(|&a, &b| unsafe { order.compare(element(a), element(b), elem_size) });
@@ -214,6 +217,49 @@ pub(crate) unsafe fn sort_elements(
         sorted.extend_from_slice(std::slice::from_raw_parts(element(position), elem_size));
     }
     std::ptr::copy_nonoverlapping(sorted.as_ptr(), data, total);
+}
+
+/// Sorts elements whose bytes are their value directly as a slice of their
+/// type, returning false, having touched nothing, when the width has no such
+/// type or the buffer is not aligned for it.
+///
+/// Every rule here is a total order under which two elements compare equal
+/// only when their bits are identical (floats by `total_cmp`), so an unstable
+/// sort leaves exactly what the stable index sort above leaves.
+///
+/// # Safety
+///
+/// As for [`sort_elements`].
+unsafe fn sort_scalars(data: *mut u8, len: usize, elem_size: usize, kind: usize) -> bool {
+    match (kind, elem_size) {
+        (BY_FLOAT_VALUE, 4) => sort_slice_by(data, len, f32::total_cmp),
+        (BY_FLOAT_VALUE, 8) => sort_slice_by(data, len, f64::total_cmp),
+        (BY_UNSIGNED_VALUE, 1) => sort_slice_by(data, len, u8::cmp),
+        (BY_UNSIGNED_VALUE, 2) => sort_slice_by(data, len, u16::cmp),
+        (BY_UNSIGNED_VALUE, 4) => sort_slice_by(data, len, u32::cmp),
+        (BY_UNSIGNED_VALUE, 8) => sort_slice_by(data, len, u64::cmp),
+        (BY_UNSIGNED_VALUE, 16) => sort_slice_by(data, len, u128::cmp),
+        (BY_SIGNED_VALUE, 1) => sort_slice_by(data, len, i8::cmp),
+        (BY_SIGNED_VALUE, 2) => sort_slice_by(data, len, i16::cmp),
+        (BY_SIGNED_VALUE, 4) => sort_slice_by(data, len, i32::cmp),
+        (BY_SIGNED_VALUE, 8) => sort_slice_by(data, len, i64::cmp),
+        (BY_SIGNED_VALUE, 16) => sort_slice_by(data, len, i128::cmp),
+        _ => false,
+    }
+}
+
+/// Sorts `len` values of `T` at `data` by `compare`, unstably, or returns
+/// false when `data` is not aligned for `T`.
+///
+/// # Safety
+///
+/// `data` must point at `len` initialized values of `T` nothing else touches.
+unsafe fn sort_slice_by<T>(data: *mut u8, len: usize, compare: fn(&T, &T) -> Ordering) -> bool {
+    if !(data as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return false;
+    }
+    std::slice::from_raw_parts_mut(data as *mut T, len).sort_unstable_by(compare);
+    true
 }
 
 /// The longest run the merge sort orders by insertion before it starts merging.
@@ -529,6 +575,107 @@ mod tests {
         let mut order = ElementOrder::SIGNED;
         order.set_kind(kind);
         order
+    }
+
+    /// The order the generic path gives: a stable sort of the elements by
+    /// `order.compare`, the reference the scalar fast paths must match.
+    fn generically_sorted(bytes: &[u8], elem_size: usize, order: ElementOrder) -> Vec<u8> {
+        let mut chunks: Vec<&[u8]> = bytes.chunks(elem_size).collect();
+        chunks.sort_by(|a, b| unsafe { order.compare(a.as_ptr(), b.as_ptr(), elem_size) });
+        chunks.concat()
+    }
+
+    /// Sorts `values` through `sort_elements` and checks the bytes equal the
+    /// generic order's, for an aligned buffer and for one shifted off its
+    /// alignment, which must take the generic path and agree as well.
+    fn assert_sorts_like_the_generic_path<T: Copy>(values: &[T], order: ElementOrder) {
+        let size = std::mem::size_of::<T>();
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|v| {
+                unsafe { std::slice::from_raw_parts(v as *const T as *const u8, size) }.to_vec()
+            })
+            .collect();
+        let expected = generically_sorted(&bytes, size, order);
+        let mut aligned: Vec<T> = values.to_vec();
+        let mut shifted = vec![0u8; bytes.len() + 1];
+        shifted[1..].copy_from_slice(&bytes);
+        unsafe {
+            sort_elements(aligned.as_mut_ptr() as *mut u8, values.len(), size, order);
+            sort_elements(shifted.as_mut_ptr().add(1), values.len(), size, order);
+            let sorted = std::slice::from_raw_parts(aligned.as_ptr() as *const u8, bytes.len());
+            assert_eq!(sorted, expected.as_slice(), "aligned, {size}-byte elements");
+        }
+        assert_eq!(
+            &shifted[1..],
+            expected.as_slice(),
+            "unaligned, {size}-byte elements"
+        );
+    }
+
+    #[test]
+    fn scalar_elements_sort_exactly_as_the_generic_order_does() {
+        let mut state = 7u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let wide: Vec<u64> = (0..500).map(|_| next()).collect();
+        let signed = ordered_by(BY_SIGNED_VALUE);
+        let unsigned = ordered_by(BY_UNSIGNED_VALUE);
+        let floats = ordered_by(BY_FLOAT_VALUE);
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as i8).collect::<Vec<_>>(),
+            signed,
+        );
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as i16).collect::<Vec<_>>(),
+            signed,
+        );
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as i32 % 50).collect::<Vec<_>>(),
+            signed,
+        );
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as i64).collect::<Vec<_>>(),
+            signed,
+        );
+        assert_sorts_like_the_generic_path(
+            &wide
+                .iter()
+                .map(|&v| ((v as i128) << 64) | v as i128)
+                .collect::<Vec<_>>(),
+            signed,
+        );
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as u8).collect::<Vec<_>>(),
+            unsigned,
+        );
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as u32).collect::<Vec<_>>(),
+            unsigned,
+        );
+        assert_sorts_like_the_generic_path(&wide, unsigned);
+        assert_sorts_like_the_generic_path(
+            &wide.iter().map(|&v| v as u128 * 3).collect::<Vec<_>>(),
+            unsigned,
+        );
+        let mut doubles: Vec<f64> = wide.iter().map(|&v| (v % 1000) as f64 - 500.0).collect();
+        doubles.extend([
+            0.0,
+            -0.0,
+            f64::NAN,
+            -f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -0.0,
+        ]);
+        assert_sorts_like_the_generic_path(&doubles, floats);
+        let singles: Vec<f32> = doubles.iter().map(|&v| v as f32).collect();
+        assert_sorts_like_the_generic_path(&singles, floats);
     }
 
     #[test]
