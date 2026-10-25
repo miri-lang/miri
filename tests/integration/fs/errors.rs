@@ -876,3 +876,33 @@ fn main()
         "Undefined variable: miri_rt_fs_status",
     );
 }
+
+#[test]
+fn test_read_file_invalid_data_past_the_first_kilobyte() {
+    let temp_dir = TempDir::new().expect("failed to create temp dir");
+    let file_path = temp_dir.path().join("late_non_utf8.bin");
+    let mut bytes = b"x".repeat(4096);
+    bytes.push(0xFF);
+    std::fs::write(&file_path, &bytes).expect("failed to write test file");
+    let path = file_path.to_string_lossy().to_string();
+
+    let code = format!(
+        r#"
+use system.result
+use system.fs
+
+fn handle_read_error(e FsError)
+    match e
+        FsError.InvalidData(_): println("InvalidData")
+        default: println("other")
+
+fn main()
+    let fs = Fs()
+    match fs.read_file("{}")
+        Result.Ok(_): println("unexpected ok")
+        Result.Err(e): handle_read_error(e)
+"#,
+        path
+    );
+    assert_runs_with_output(&code, "InvalidData");
+}

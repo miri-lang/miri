@@ -106,6 +106,32 @@ print(sep.join(parts))
 }
 
 #[test]
+fn test_string_join_with_a_non_ascii_separator_counts_characters() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+let joined = "é".join(List(["a", "b", "c"]))
+println(f"{joined} {joined.length()} {joined.substring(1, 2)}")
+"#,
+        "aébéc 5 é",
+    );
+}
+
+#[test]
+fn test_string_join_of_non_ascii_parts_counts_characters() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+let joined = ",".join(List(["žä", "ö"]))
+println(f"{joined} {joined.length()} {joined.substring(2, 4)}")
+"#,
+        "žä,ö 4 ,ö",
+    );
+}
+
+#[test]
 fn test_string_join_empty_list() {
     assert_runs_with_output(
         r#"

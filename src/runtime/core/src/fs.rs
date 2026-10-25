@@ -27,11 +27,11 @@
 
 use std::cell::RefCell;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 use crate::guard;
-use crate::string::{new_string, MiriString};
+use crate::string::{alloc_string, miri_rt_string_free, new_string, MiriString};
 
 thread_local! {
     /// Thread-local status code for the last filesystem operation.
@@ -58,7 +58,7 @@ fn set_status(code: i64, msg: String) {
 }
 
 /// Maps an `io::Error` to a status code and message string.
-/// Preserves the `InvalidData` distinction for reads: only `read_to_string`
+/// Preserves the `InvalidData` distinction for reads: only a read
 /// can produce `InvalidData`, while writes cannot.
 fn map_io_error(e: &io::Error, path: &str, is_read: bool) -> (i64, String) {
     match e.kind() {
@@ -67,6 +67,84 @@ fn map_io_error(e: &io::Error, path: &str, is_read: bool) -> (i64, String) {
         io::ErrorKind::InvalidData if is_read => (5, path.to_string()),
         _ => (6, e.to_string()),
     }
+}
+
+/// The whole file at `path` as a new string, holding its bytes once.
+///
+/// The string is sized from the file's metadata and the file is read straight
+/// into its buffer, then checked as UTF-8 in place: reading into a Rust
+/// `String` and copying that into a Miri string would hold the file twice at
+/// the peak. A file whose metadata gives no usable size (a zero-length special
+/// file) or that grows while it is read takes the copying path instead.
+fn read_file_once(path: &str) -> io::Result<*mut MiriString> {
+    let mut file = fs::File::open(path)?;
+    let size = usize::try_from(file.metadata()?.len()).unwrap_or(0);
+    if size == 0 {
+        return read_file_by_copy(file);
+    }
+    // SAFETY: every one of the `size` bytes is zeroed before any is read, and
+    // the string is either returned with `len` and `ascii` describing the bytes
+    // written, or freed.
+    unsafe {
+        let string = alloc_string(size, false);
+        if string.is_null() {
+            return Err(io::ErrorKind::OutOfMemory.into());
+        }
+        std::ptr::write_bytes((*string).data, 0, size);
+        let bytes = std::slice::from_raw_parts_mut((*string).data, size);
+        let read = fill(&mut file, bytes)
+            .and_then(|filled| Ok((filled, filled == size && has_more(&mut file)?)));
+        let filled = match read {
+            Ok((filled, false)) => filled,
+            Ok((_, true)) => {
+                miri_rt_string_free(string);
+                return read_file_by_copy(fs::File::open(path)?);
+            }
+            Err(e) => {
+                miri_rt_string_free(string);
+                return Err(e);
+            }
+        };
+        match std::str::from_utf8(&bytes[..filled]) {
+            Ok(text) => {
+                (*string).ascii = text.is_ascii();
+                (*string).len = filled;
+                Ok(string)
+            }
+            Err(e) => {
+                miri_rt_string_free(string);
+                Err(io::Error::new(io::ErrorKind::InvalidData, e))
+            }
+        }
+    }
+}
+
+/// Reads from `file` until `bytes` is full or the file ends, returning how
+/// many bytes were read.
+fn fill(file: &mut fs::File, bytes: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < bytes.len() {
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
+/// Whether `file` holds another byte past where it has been read to.
+fn has_more(file: &mut fs::File) -> io::Result<bool> {
+    let mut probe = [0u8; 1];
+    Ok(fill(file, &mut probe)? > 0)
+}
+
+/// The whole of `file` as a new string, read into a Rust `String` and copied.
+fn read_file_by_copy(mut file: fs::File) -> io::Result<*mut MiriString> {
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(new_string(&contents))
 }
 
 /// Returns whether a path exists and is a directory.
@@ -178,10 +256,10 @@ pub mod ffi {
             return new_string("");
         }
 
-        match fs::read_to_string(path_str) {
+        match read_file_once(path_str) {
             Ok(contents) => {
                 set_status(0, String::new());
-                new_string(&contents)
+                contents
             }
             Err(e) => {
                 let (code, msg) = map_io_error(&e, path_str, true);

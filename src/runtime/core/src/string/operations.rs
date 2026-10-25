@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 
-use super::{new_string, new_string_of_ascii, MiriString};
+use super::{alloc_string, new_string, new_string_of_ascii, MiriString};
 use crate::guard;
 use crate::list::{push_word, MiriList};
 
@@ -142,33 +142,62 @@ pub unsafe extern "C" fn miri_rt_string_join(
         return new_string("");
     }
 
-    let parts_list = &*parts;
-    if parts_list.is_empty() {
-        return new_string("");
-    }
+    let parts: Vec<&str> = (0..(*parts).len())
+        .filter_map(|i| list_string_at(parts, i))
+        .collect();
+    join_into_new_string(sep_str, &parts)
+}
 
-    // Read all strings from the list and collect into a Vec
-    let mut parts_vec = Vec::new();
-    for i in 0..parts_list.len() {
-        // miri_rt_list_get returns a pointer to the storage where the element is stored.
-        // Since the element size is sizeof(usize), we need to read a usize from this location.
-        let elem_storage = crate::miri_rt_list_get(parts, i) as *const usize;
-        if elem_storage.is_null() {
-            continue;
+/// The string the list element at `index` points at, or `None` when the slot
+/// or the element is null.
+///
+/// # Safety
+/// `parts` is a live list of string pointers and `index` is in bounds.
+unsafe fn list_string_at<'a>(parts: *const MiriList, index: usize) -> Option<&'a str> {
+    // The slot holds one word: the element's pointer.
+    let slot = crate::miri_rt_list_get(parts, index) as *const usize;
+    if slot.is_null() {
+        return None;
+    }
+    let element = *slot as *const MiriString;
+    (!element.is_null()).then(|| (*element).as_str())
+}
+
+/// `parts` joined by `separator` in a new string, written straight into the
+/// string's buffer, so the result is held once and never built in a Rust
+/// `String` first.
+fn join_into_new_string(separator: &str, parts: &[&str]) -> *mut MiriString {
+    let separators = separator.len().checked_mul(parts.len().saturating_sub(1));
+    let Some(len) = parts
+        .iter()
+        .try_fold(separators.unwrap_or(usize::MAX), |sum, part| {
+            sum.checked_add(part.len())
+        })
+        .filter(|&len| len < isize::MAX as usize)
+    else {
+        return std::ptr::null_mut();
+    };
+    let ascii =
+        (parts.len() < 2 || separator.is_ascii()) && parts.iter().all(|part| part.is_ascii());
+    // SAFETY: the string has room for `len` bytes, and the loop writes exactly
+    // `len` bytes of valid UTF-8 (whole parts and separators), ASCII exactly
+    // when `ascii` says so; no part lies inside the block just allocated.
+    unsafe {
+        let string = alloc_string(len, ascii);
+        if string.is_null() || len == 0 {
+            return string;
         }
-        let elem_ptr = *elem_storage as *const MiriString;
-        if !elem_ptr.is_null() {
-            let s = (*elem_ptr).as_str();
-            parts_vec.push(s.to_string());
+        let mut at = (*string).data;
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                std::ptr::copy_nonoverlapping(separator.as_ptr(), at, separator.len());
+                at = at.add(separator.len());
+            }
+            std::ptr::copy_nonoverlapping(part.as_ptr(), at, part.len());
+            at = at.add(part.len());
         }
+        string
     }
-
-    if parts_vec.is_empty() {
-        return new_string("");
-    }
-
-    let joined = parts_vec.join(sep_str);
-    new_string(&joined)
 }
 
 /// Parses a string as an integer.

@@ -295,3 +295,46 @@ fn main()
         "got cwd",
     );
 }
+
+/// A program that reads `path` and prints its character count, the
+/// characters 1..3 and whether it equals the text written.
+fn read_back_program(path: &str, text: &str) -> String {
+    format!(
+        r#"
+use system.result
+use system.fs
+
+fn main()
+    match Fs().read_file("{path}")
+        Result.Ok(contents): describe(contents)
+        Result.Err(e): println("read: error")
+
+fn describe(contents String)
+    let same = contents == "{text}"
+    println(f"{{contents.length()}} {{contents.substring(1, 3)}} {{same}}")
+"#
+    )
+}
+
+#[test]
+fn test_read_file_keeps_short_non_ascii_text() {
+    let (_temp, path) = temp_test_file("short_non_ascii.txt");
+    fs::write(&path, "héllo wörld").expect("write input");
+    assert_runs_with_output(&read_back_program(&path, "héllo wörld"), "11 él true");
+}
+
+#[test]
+fn test_read_file_keeps_long_non_ascii_text() {
+    let (_temp, path) = temp_test_file("long_non_ascii.txt");
+    let text = "žä".repeat(300);
+    fs::write(&path, &text).expect("write input");
+    assert_runs_with_output(&read_back_program(&path, &text), "600 äž true");
+}
+
+#[test]
+fn test_read_file_keeps_long_ascii_text() {
+    let (_temp, path) = temp_test_file("long_ascii.txt");
+    let text = "ab".repeat(5000);
+    fs::write(&path, &text).expect("write input");
+    assert_runs_with_output(&read_back_program(&path, &text), "10000 ba true");
+}
