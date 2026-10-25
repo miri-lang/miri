@@ -252,6 +252,7 @@ impl ElementIdentity {
     /// # Safety
     ///
     /// `elem` must point at an element of this rule, whose optionals are live.
+    #[inline]
     unsafe fn resolve(&self, elem: *const u8) -> Resolved {
         let mut at = elem;
         for opened in 0..self.optional_depth() {
@@ -319,6 +320,7 @@ impl ElementIdentity {
     ///
     /// `a` and `b` must each point at `slot_size` readable bytes holding an
     /// element of this rule.
+    #[inline]
     pub(crate) unsafe fn same(&self, a: *const u8, b: *const u8, slot_size: usize) -> bool {
         match (self.resolve(a), self.resolve(b)) {
             (Resolved::Value(left), Resolved::Value(right)) => {
@@ -332,6 +334,7 @@ impl ElementIdentity {
 
     /// True when the values at `a` and `b`, read over `size` bytes, are the
     /// same value under the settling rule.
+    #[inline]
     unsafe fn same_value(&self, a: *const u8, b: *const u8, size: usize) -> bool {
         if self.equals_fn != 0 {
             return self.same_through_callback(a, b);
@@ -411,16 +414,52 @@ fn normalized_float_bits(bits: u64, sign_bit: u32, infinity: u64, quiet_nan: u64
 }
 
 /// Compares two byte sequences of `len` bytes for equality.
+///
+/// Keys are mostly short, and a call into the C library's `memcmp` costs more
+/// than comparing a few bytes, so up to sixteen bytes are compared here with
+/// two loads from each side that overlap in the middle and never read past
+/// `len`.
+#[inline]
 unsafe fn bytes_equal(a: *const u8, b: *const u8, len: usize) -> bool {
-    if len == 0 {
-        return true;
+    match len {
+        0 => true,
+        1..=3 => (0..len).all(|i| *a.add(i) == *b.add(i)),
+        4..=7 => {
+            let word = |p: *const u8, at: usize| (p.add(at) as *const u32).read_unaligned();
+            word(a, 0) == word(b, 0) && word(a, len - 4) == word(b, len - 4)
+        }
+        8..=16 => {
+            let word = |p: *const u8, at: usize| (p.add(at) as *const u64).read_unaligned();
+            word(a, 0) == word(b, 0) && word(a, len - 8) == word(b, len - 8)
+        }
+        _ => std::slice::from_raw_parts(a, len) == std::slice::from_raw_parts(b, len),
     }
-    std::slice::from_raw_parts(a, len) == std::slice::from_raw_parts(b, len)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bytes_equal_sees_a_difference_at_every_position_of_every_short_length() {
+        for len in 0..=20usize {
+            let a: Vec<u8> = (0..len as u8).map(|i| i.wrapping_mul(37)).collect();
+            // SAFETY: both buffers hold `len` bytes.
+            assert!(
+                unsafe { bytes_equal(a.as_ptr(), a.clone().as_ptr(), len) },
+                "equal at {len}"
+            );
+            for at in 0..len {
+                let mut b = a.clone();
+                b[at] ^= 1;
+                // SAFETY: both buffers hold `len` bytes.
+                assert!(
+                    !unsafe { bytes_equal(a.as_ptr(), b.as_ptr(), len) },
+                    "length {len}, byte {at}"
+                );
+            }
+        }
+    }
 
     /// An identity registering `rule` through `boxed_depth` boxes over a
     /// pointer-wide value, ending in a nullable pointer when `nullable` says so.
