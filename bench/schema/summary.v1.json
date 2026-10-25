@@ -65,6 +65,11 @@
         }
       }
     },
+    "explanations": {
+      "description": "Each measured cell's reason for where its language lands, by workload and then language, from the workload manifest's explain table.",
+      "type": "object",
+      "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}}
+    },
     "port_notes": {
       "description": "Each measured workload's manifest notes: what a reader needs beside its ratios to read them fairly, such as a reference port's known handicap.",
       "type": "object",

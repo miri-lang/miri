@@ -32,3 +32,15 @@ checksum = "819536973 399934053"
 [sizes.l]
 parameter = 15000000
 checksum = "185633034 741520587"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "qsort with a comparator function the compiler cannot inline (see the port notes)."
+cpp = "std::sort and std::stable_sort with the comparison inlined."
+rust = "sort_unstable and sort_by with the comparison inlined; the fastest arm here."
+go = "slices.Sort and slices.SortStableFunc, generic and inlined."
+python = "The built-in sort in C, with key comparisons on Python objects."
+typescript = "Array.prototype.sort calling a JavaScript comparator per comparison."
+miri = "The number sort is native; the record sort is native too but calls the comparator through a trampoline on every comparison, which Rust inlines."

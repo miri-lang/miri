@@ -6,6 +6,7 @@ print, the order it runs them in, and the records it writes."""
 
 import argparse
 import hashlib
+import re
 import sys
 import tempfile
 import unittest
@@ -201,6 +202,23 @@ class ReviewTest(unittest.TestCase):
             for language in ("miri", "c", "cpp", "rust", "go", "python", "typescript"):
                 comment = charter["languages"][language]["checklist_comment"]
                 self.assertIsNone(run.review_problem(workload.port(language), comment), workload.port(language))
+
+
+class ExplanationTest(unittest.TestCase):
+    def test_every_workload_explains_every_headline_language_and_miri(self):
+        charter = run.load_charter()
+        languages = [*charter["tiers"]["subject"], *charter["tiers"]["headline"]]
+        for workload in run.load_workloads(None):
+            explain = workload.manifest.get("explain", {})
+            for language in languages:
+                reason = explain.get(language, "")
+                self.assertTrue(reason.strip().endswith("."), (workload.name, language))
+
+    def test_no_reason_carries_a_hand_typed_figure(self):
+        for workload in run.load_workloads(None):
+            for language, reason in workload.manifest.get("explain", {}).items():
+                # A digit inside a name (V8, x86) is not a figure.
+                self.assertIsNone(re.search(r"(?<![A-Za-z])\d", reason), (workload.name, language, reason))
 
 
 class CheckedRustTest(unittest.TestCase):

@@ -29,3 +29,15 @@ checksum = "524287 29185376 262143"
 [sizes.l]
 parameter = 19
 checksum = "2097151 133518688 1048575"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "One malloc and one free per node through the C library."
+cpp = "The same allocation per node as C, plus a constructor and destructor call per node."
+rust = "One Box allocation and one drop per node on the system allocator, close to C."
+go = "The garbage collector traces the long-lived tree on every cycle, marking work the freeing languages do not have."
+python = "Every node is a reference-counted heap object, and the tree check runs in the interpreter."
+typescript = "V8 bump-allocates nodes in its young generation and discards dead trees wholesale instead of freeing each node: the textbook best case for a generational collector."
+miri = "One reference-counted allocation per node from the runtime's block cache, close to Rust in time; each node carries a reference-count header C does not, so peak memory is higher."

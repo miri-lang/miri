@@ -25,3 +25,15 @@ checksum = "677232387 9845408"
 [sizes.l]
 parameter = 9800
 checksum = "215173033 59103498"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Small vector structs kept in registers."
+cpp = "The same as C."
+rust = "The same as C, with bounds checks."
+go = "Small vector structs passed and returned by value."
+python = "Every vector is a heap object in the interpreter."
+typescript = "Escape analysis removes some vector allocations, not all."
+miri = "Vectors are returned through a memory slot instead of registers, so the one-line vector helpers cost a store and a load each."

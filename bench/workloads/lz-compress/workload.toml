@@ -30,3 +30,15 @@ checksum = "407755 183044 500456907"
 [sizes.l]
 parameter = 15000000
 checksum = "2452786 1095858 355206530"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "A byte-compare scan with unchecked reads."
+cpp = "The same unchecked scan as C."
+rust = "The same scan; the optimiser removes most bounds checks."
+go = "The same scan with bounds checks on every read."
+python = "The byte loop runs in the interpreter."
+typescript = "Typed-array reads compiled by V8, with bounds checks."
+miri = "Two bounds-checked list reads per compared byte; the checks stay in the loop because its bound is a parameter."

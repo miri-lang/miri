@@ -28,3 +28,15 @@ checksum = "267882272 396000000 198074950"
 [sizes.l]
 parameter = 25000000
 checksum = "566349453 618750000 169889594"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Writes the container once per element type by hand, with nothing generic left at run time."
+cpp = "Templates are instantiated per type and inlined."
+rust = "Generics are monomorphised per type and inlined."
+go = "Generic code is compiled once per memory shape, with a dictionary lookup for some operations."
+python = "Every value is a heap object and every call is dynamic."
+typescript = "Each pair is a heap object and calls go through inline caches."
+miri = "Memory matches C; the time goes to optional values and pairs returned through a memory slot instead of registers, and to the generic class body shared across element types."

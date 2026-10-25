@@ -18,7 +18,10 @@ import summarize  # noqa: E402
 
 CHARTER = run.load_charter()
 HASH = "h" * 64
-MANIFESTS = {"w": {"tags": ["float"], "notes": ["The C port formats with snprintf."]}, "v": {"tags": ["int"]}}
+MANIFESTS = {
+    "w": {"tags": ["float"], "notes": ["The C port formats with snprintf."], "explain": {"c": "A plain loop.", "miri": "A checked loop.", "go": "Not run."}},
+    "v": {"tags": ["int"]},
+}
 
 
 def records(workload, language, walls, mode="cold", attempt=0, status="ok", rss=10_000_000):
@@ -201,6 +204,20 @@ class PortNotesTest(unittest.TestCase):
         summary = summarize_records(records("v", "c", [100, 100, 100]))
         self.assertEqual(summary["port_notes"], {})
         self.assertNotIn("Port notes", summarize.markdown(summary))
+
+
+class ExplanationsTest(unittest.TestCase):
+    def test_each_measured_language_carries_its_reason_into_the_summary(self):
+        summary = summarize_records(records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150]))
+        self.assertEqual(summary["explanations"], {"w": {"c": "A plain loop.", "miri": "A checked loop."}})
+        text = summarize.markdown(summary)
+        self.assertIn("## Why each language lands where it does", text)
+        self.assertIn("- **w**, miri: A checked loop.", text)
+
+    def test_a_workload_without_reasons_carries_none(self):
+        summary = summarize_records(records("v", "c", [100, 100, 100]))
+        self.assertEqual(summary["explanations"], {})
+        self.assertNotIn("Why each language", summarize.markdown(summary))
 
 
 class SchemaTest(unittest.TestCase):

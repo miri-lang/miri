@@ -34,3 +34,15 @@ checksum = "7912199 401748214"
 [sizes.l]
 parameter = 300000000
 checksum = "16252325 755721940"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "One flag per byte, written with unchecked strided stores."
+cpp = "The same as C."
+rust = "The same flags with a bounds check on every strided write."
+go = "The same loop with bounds checks; it runs slightly faster than C and the reason is not explained (measured: not a page-fault effect, the hot run takes no more page faults than the cold one)."
+python = "The marking loop runs in the interpreter over a list of objects."
+typescript = "A plain array of booleans, filled up front and written by compiled V8 code, at more bytes per flag than C."
+miri = "A bounds check on every strided write, like Rust; memory matches C."

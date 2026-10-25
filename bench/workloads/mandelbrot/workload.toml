@@ -25,3 +25,15 @@ checksum = "386996177 2480929"
 [sizes.l]
 parameter = 6100
 checksum = "182016586 14768878"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "A scalar floating-point loop with no allocation."
+cpp = "The same scalar loop as C."
+rust = "The same scalar loop as C."
+go = "The same scalar loop with no allocation."
+python = "Every floating-point operation boxes a float object in the interpreter."
+typescript = "V8 emits the same scalar double-precision code with no allocation: parity, not a win."
+miri = "At parity: the same scalar loop with no allocation."

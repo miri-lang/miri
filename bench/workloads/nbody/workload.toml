@@ -25,3 +25,15 @@ checksum = "-169075163 -169056787"
 [sizes.l]
 parameter = 90000000
 checksum = "-169075163 -169068410"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Straight-line floating-point code over an array of structs; clang's straight-line vectoriser contributes part of its speed (measured by turning it off)."
+cpp = "The same code as C."
+rust = "The same code with bounds checks the optimiser removes."
+go = "Go's compiler does not vectorise and keeps a bounds check per pair; together these explain only part of its distance from C, and the rest is not explained."
+python = "Every floating-point operation boxes a float object in the interpreter."
+typescript = "Property loads with shape checks on each body object."
+miri = "Close to C: the remaining distance is a reference-count increment and decrement per step and floating-point values spilled around calls."

@@ -33,3 +33,15 @@ checksum = "575399776"
 [sizes.l]
 parameter = 20000000
 checksum = "227999587"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Reuses its stage buffers across rounds (see the port notes) and calls no closures, so it allocates almost nothing."
+cpp = "Builds a fresh vector per stage, with each lambda inlined into its loop."
+rust = "Builds a fresh Vec per stage; the iterator adapters inline each closure."
+go = "Grows each stage's slice from empty and calls every closure through a function value."
+python = "Calls a Python function per element in the interpreter."
+typescript = "The built-in map, filter and reduce call a JavaScript closure per element and allocate an array per stage."
+miri = "map, filter and reduce call the lambda indirectly once per element where C++ and Rust inline it; memory matches C."

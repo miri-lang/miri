@@ -30,3 +30,15 @@ checksum = "6992739750"
 [sizes.l]
 parameter = 1230
 checksum = "43265157750"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "A strict floating-point inner product over row pointers, with unchecked reads."
+cpp = "The same loop as C."
+rust = "The same loop with a bounds check on every read; measured, this is Rust's whole distance from C here, since Rust with unchecked indexing runs at C's speed and C gains nothing from its vectorisers."
+go = "The same loop with bounds checks."
+python = "The inner product runs in the interpreter over boxed floats."
+typescript = "Nested arrays with a shape check and a bounds check per read."
+miri = "A bounds check per read like Rust, plus the inner row's header reloaded on every read and a check the optimiser cannot hoist because the bound is a parameter."

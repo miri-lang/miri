@@ -30,3 +30,15 @@ checksum = "1274224152"
 [sizes.l]
 parameter = 7600
 checksum = "1274224152"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "A serial floating-point reduction; clang's vectorisers add nothing here (measured by turning them off)."
+cpp = "The same as C."
+rust = "The same reduction with bounds checks."
+go = "The same reduction with bounds checks."
+python = "The reduction runs in the interpreter over boxed floats."
+typescript = "V8 compiles the reduction to scalar code close to C's."
+miri = "Not yet explained at the current size: vectorisation is ruled out, and whether a call or a spill remains in the inner loop has still to be read from the disassembly."

@@ -30,3 +30,15 @@ checksum = "504635887 279687510"
 [sizes.l]
 parameter = 120000000
 checksum = "27815740 1678125010"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "A switch on the instruction tag, compiled to a jump table."
+cpp = "Dispatches with std::visit, which runs several times slower than a switch on the variant's index (see the port notes)."
+rust = "A match compiled to a jump table, plus bounds checks on the register file."
+go = "Go has no sum types, so the port switches on an opcode field; the switch is a jump table and register access is bounds-checked."
+python = "The match statement tests each case in turn for every instruction, in the interpreter."
+typescript = "Switches on a string opcode, so each instruction compares strings before it runs."
+miri = "Each step reads the instruction's payload through a pointer, because an enum that carries a payload is boxed, and pays a checked remainder."

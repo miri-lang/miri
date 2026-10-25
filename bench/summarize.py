@@ -265,6 +265,7 @@ def summarize(records, charter, expected_hash, manifests, env=None):
         "cells": [key_dict(key) | cell for key, cell in sorted(cells.items())],
         "aggregates": aggregates(cells, manifests),
         "port_notes": port_notes(cells, manifests),
+        "explanations": explanations(cells, manifests),
     }
 
 
@@ -273,6 +274,17 @@ def port_notes(cells, manifests):
     ratios to read them fairly, such as a reference port's known handicap."""
     measured = sorted({key[0] for key in cells})
     return {w: list(manifests[w]["notes"]) for w in measured if manifests.get(w, {}).get("notes")}
+
+
+def explanations(cells, manifests):
+    """Each measured cell's reason for where its language lands, from its
+    workload manifest's `explain` table, for the languages the run measured."""
+    measured = {}
+    for workload, language, *_ in cells:
+        reason = manifests.get(workload, {}).get("explain", {}).get(language)
+        if reason:
+            measured.setdefault(workload, {})[language] = reason
+    return {w: dict(sorted(reasons.items())) for w, reasons in sorted(measured.items())}
 
 
 def workload_manifests():
@@ -369,6 +381,9 @@ def markdown(summary):
     lines += ["", "| Language | Size | Mode | Tag | Geomean × C | Workloads |", "|---|---|---|---|---|---|"]
     for row in summary["aggregates"]:
         lines.append(f"| {row['language']} | {row['size']} | {row['mode']} | {row['tag']} | {fmt(row['geomean_vs_c'])} | {row['coverage']} |")
+    if reasons := summary.get("explanations"):
+        lines += ["", "## Why each language lands where it does", ""]
+        lines += [f"- **{workload}**, {language}: {reason}" for workload, by_language in reasons.items() for language, reason in by_language.items()]
     if notes := summary.get("port_notes"):
         lines += ["", "## Port notes", ""]
         lines += [f"- **{workload}**: {note}" for workload, items in notes.items() for note in items]

@@ -30,3 +30,15 @@ checksum = "732945000"
 [sizes.l]
 parameter = 180000
 checksum = "4397670000"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Loads each shape's kind and then its function table before the indirect call."
+cpp = "One virtual call through the vtable per shape."
+rust = "One dynamic call through the trait object's vtable per shape."
+go = "One interface method call through the itab per shape."
+python = "A dynamic method lookup and call per shape in the interpreter."
+typescript = "A polymorphic inline cache over the shape classes."
+miri = "Ahead of C: the loop reads each shape without reference-count traffic, and the inliner removes calls whose target it can see."

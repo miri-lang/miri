@@ -35,3 +35,15 @@ checksum = "73196 38"
 [sizes.l]
 parameter = 11
 checksum = "556355 51"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Integer loops over a small array, unchecked."
+cpp = "The same integer loops as C."
+rust = "The same loops with bounds checks the optimiser mostly removes."
+go = "The same loops with bounds checks."
+python = "The permutation loops run in the interpreter."
+typescript = "V8 compiles the integer loops to machine code close to C's."
+miri = "Every array access keeps a bounds check the optimiser cannot hoist because the loop bound is a parameter, and the counters are overflow-checked."

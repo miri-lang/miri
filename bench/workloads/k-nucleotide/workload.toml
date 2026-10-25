@@ -35,3 +35,15 @@ input_sha256 = "66744754c7c71705163428ae40e07a10e9d2a5d77f2892f46bd8c07d29bcb66e
 parameter = 5000000
 checksum = "A=1252849 C=1238166 G=1246440 T=1262545 AA=312653 AC=310048 AG=312482 AT=317666 CA=309347 CC=309381 CG=310692 CT=308745 GA=310406 GC=308959 GG=312685 GT=314390 TA=320442 TC=309778 TG=310581 TT=321744 GGT=80096 GGTA=21946 GGTATT=3656 GGTATTTTAATT=2481 GGTATTTTAATTTATAGT=2480"
 input_sha256 = "d0d36dd2c2a4138a97d5a0bd2fb1d9b6d065dc397e9988fbe9283885a2f0b47e"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Counts with the suite's shared chained hash table (see the port notes), which allocates one entry per distinct key; with a distinct key at almost every position it falls behind Rust, so read Miri against Rust here."
+cpp = "A node-based unordered_map, which allocates per distinct key like C's table."
+rust = "An open-addressing HashMap that stores borrowed slices without allocating per key."
+go = "The built-in map with substrings that share the input's bytes."
+python = "A new string per position and a dictionary update."
+typescript = "A new string per position and a Map update."
+miri = "An owned string per position, string hashing through the generic identity path, two map probes per update, and a larger entry per key than C's."

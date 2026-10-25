@@ -49,3 +49,15 @@ input_sha256 = "0f7f3c334a248ad25a3b056634609d29fb36043420267d6c5d8dbda244d900b3
 parameter = 500000
 checksum = "8002139 155631904195 79059990"
 input_sha256 = "049602ac85779ce8077bab21406e4adfda2c0a6e393d1f7adea22ee299564ee7"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "A subset parser and writer for the grammar the input uses (see the port notes)."
+cpp = "A subset parser like C's, with standard containers for the tree."
+rust = "A subset parser that allocates one map per object and borrows keys from the input."
+go = "The standard encoding/json package, driven by reflection."
+python = "The standard json module, implemented in C."
+typescript = "The built-in JSON.parse and JSON.stringify, implemented in C++ inside V8."
+miri = "A full parser written in Miri: it allocates a node per value and a string per key and number, and reads characters through a runtime call each."

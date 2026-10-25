@@ -30,3 +30,15 @@ checksum = "46216890 656651736"
 [sizes.l]
 parameter = 25000000
 checksum = "309688890 630331041"
+
+# Why each language lands where it does on this workload: one to three
+# sentences per language, no figures (the summary prints them beside the
+# numbers, which come only from a run).
+[explain]
+c = "Formats every piece with snprintf, which is nearly all of its time (see the port notes)."
+cpp = "Converts integers with std::to_string and appends in place."
+rust = "Formats integers directly into the string with write!, appending in place."
+go = "Appends to a strings.Builder."
+python = "In-place string concatenation, which CPython does when a string has one reference."
+typescript = "V8 builds rope strings and flattens them once."
+miri = "Appends in place; at the current size the reason for the remaining distance has not been measured, only at a smaller size, where it was the hash loop's character indexing and a string per interpolated number."
