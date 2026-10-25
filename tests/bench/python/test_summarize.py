@@ -94,6 +94,17 @@ class RatioTest(unittest.TestCase):
         self.assertEqual(miri["metrics"]["net_rss_bytes"]["value"], 20_000_000)
         self.assertTrue(miri["diagnose"])
 
+    def test_every_cell_carries_its_time_over_rust_with_miris_checks(self):
+        recs = records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150])
+        recs += records("w", "rust", [100, 100, 100]) + records("w", "rust-checked", [120, 120, 120])
+        summary = summarize_records(recs)
+        self.assertAlmostEqual(cell(summary, "w", "miri")["vs_rust_checked"]["time"]["value"], 1.25)
+        self.assertAlmostEqual(cell(summary, "w", "rust")["vs_rust_checked"]["time"]["value"], 100 / 120)
+
+    def test_without_the_checked_arm_the_ratio_is_absent(self):
+        summary = summarize_records(records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150]))
+        self.assertIsNone(cell(summary, "w", "miri")["vs_rust_checked"]["time"])
+
     def test_a_mismatch_or_timeout_never_enters_a_ratio(self):
         recs = records("w", "c", [100, 100, 100]) + [unmeasured("w", "miri", "mismatch")]
         recs += records("v", "c", [100, 100]) + records("v", "miri", [100, 99999], status="timeout")

@@ -6,12 +6,12 @@
 # value it has. `tests/bench/charter.rs` fails when the two disagree on any
 # number or any build line, so neither can be changed alone.
 
-charter_version = 2
+charter_version = 3
 
 [tiers]
 subject = ["miri"]
 headline = ["c", "cpp", "rust", "go", "python", "typescript"]
-diagnostic = ["swift", "koka"]
+diagnostic = ["swift", "koka", "rust-checked"]
 optional = ["pypy"]
 
 # `{src}` is the port's source file, `{out}` the executable the build writes.
@@ -38,6 +38,14 @@ run = "{out}"
 checklist_comment = "//"
 build = "rustc --edition 2021 -C opt-level=3 -o {out} {src}"
 native_build = "rustc --edition 2021 -C opt-level=3 -C target-cpu=native -o {out} {src}"
+run = "{out}"
+
+# The Rust port built with integer overflow checks on: the same check set as
+# Miri (bounds checks and overflow traps), so a Miri cell's distance from it is
+# the compiler's and Rust's distance from it is the price of the checks.
+[languages.rust-checked]
+checklist_comment = "//"
+build = "rustc --edition 2021 -C opt-level=3 -C overflow-checks=on -o {out} {src}"
 run = "{out}"
 
 [languages.go]

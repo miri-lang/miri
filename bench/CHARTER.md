@@ -20,7 +20,7 @@ of this document, and the prose refers to values by key rather than restating
 them. `tests/bench/charter.rs` fails the build when the two files disagree on a
 number, a build line, a tier or a key.
 
-**Charter version: 2.**
+**Charter version: 3.**
 
 ## 1. Identity of a result
 
@@ -53,7 +53,7 @@ under different charter versions are never drawn on the same chart
 |---|---|---|
 | Subject | Miri `miri` | What is measured. |
 | Headline | C `c`, C++ `cpp`, Rust `rust`, Go `go`, Python `python`, TypeScript on Deno `typescript` | Mandatory. Every published chart shows all six. A run missing one of them is not a publication run. |
-| Diagnostic | Swift `swift`, Koka `koka` | Opt-in, skipped cleanly when the toolchain is absent. Swift shares Miri's memory model (reference counting with copy-on-write collections); Koka is the reference implementation of Perceus, the reference-counting scheme Miri uses, and tells us whether Miri's Perceus does what the original does. They explain results; they are not the headline. |
+| Diagnostic | Swift `swift`, Koka `koka`, checked Rust `rust-checked` | Opt-in, skipped cleanly when the toolchain is absent. Swift shares Miri's memory model (reference counting with copy-on-write collections); Koka is the reference implementation of Perceus, the reference-counting scheme Miri uses, and tells us whether Miri's Perceus does what the original does. `rust-checked` builds the Rust port with integer overflow checks on, which gives it exactly Miri's run-time checks (section 4) with the same standard containers: Miri's distance from it is the compiler's, and Rust's distance from it is the price of the checks. They explain results; they are not the headline. |
 | Optional | PyPy `pypy` | A second Python arm, shown beside CPython and never in its place. CPython is the Python people run. |
 
 Python means CPython in its default build: with the global interpreter lock and
@@ -145,6 +145,7 @@ program, never a shell around it.
 | `c` | `clang -std=c17 -O3 -o {out} {src} -lm` | `clang -std=c17 -O3 -march=native -o {out} {src} -lm` | `{out}` |
 | `cpp` | `clang++ -std=c++20 -O3 -o {out} {src}` | `clang++ -std=c++20 -O3 -march=native -o {out} {src}` | `{out}` |
 | `rust` | `rustc --edition 2021 -C opt-level=3 -o {out} {src}` | `rustc --edition 2021 -C opt-level=3 -C target-cpu=native -o {out} {src}` | `{out}` |
+| `rust-checked` | `rustc --edition 2021 -C opt-level=3 -C overflow-checks=on -o {out} {src}` | n/a | `{out}` |
 | `go` | `go build -o {out} {src}` | `GOAMD64=v3 go build -o {out} {src}` | `{out}` |
 | `python` | n/a | n/a | `python3 {src}` |
 | `typescript` | n/a | n/a | `deno run --allow-read {src}` |
@@ -167,9 +168,10 @@ in a TypeScript run.
 What each language checks at run time differs, and is part of what is measured,
 not tuned away: bounds checks are kept by Miri, Rust, Go, Swift, Python and Deno
 and absent in C and C++. Integer overflow traps in Miri and Swift only; Rust's
-release build and Go wrap, and Python and Deno have no fixed-width integers. No
-language's checks are switched off (Swift is built with `-O`, never
-`-Ounchecked`).
+release build and Go wrap, and Python and Deno have no fixed-width integers.
+The diagnostic `rust-checked` arm (section 2) turns Rust's overflow checks on,
+so it checks what Miri checks. No language's checks are switched off (Swift is
+built with `-O`, never `-Ounchecked`).
 
 Miri's `--opt-level 3` selects its code generator's highest optimisation
 setting. A Miri number is publishable only from a compiler in which that setting
@@ -380,7 +382,7 @@ checks the two files agree reads this table.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `charter_version` | `2` | The version every record carries (section 1). |
+| `charter_version` | `3` | The version every record carries (section 1). |
 | `runs.process_warmup_runs` | `2` | Discarded runs at the start of each cell. |
 | `runs.hot_warmup_iterations` | `5` | Untimed kernel iterations at the start of a hot run. |
 | `runs.hot_timed_iterations` | `5` | Timed kernel iterations in a hot run; `hot_ns` is their median. |
@@ -403,6 +405,12 @@ checks the two files agree reads this table.
 | `diagnosis.net_rss_vs_rust` | `1.5` | Ratio to Rust at which a Miri memory cell is diagnosed. |
 
 ## Changelog
+
+- **Version 3, 2026-10-25** — added the diagnostic arm `rust-checked`
+  (section 2): the Rust ports built with integer overflow checks on, which is
+  Miri's check set. A Miri ratio to C mixes what the compiler costs with what
+  the checks cost; the ratio to this arm separates them. The summary carries
+  every cell's time over it, and the charts draw Miri and Rust against it.
 
 - **Version 2, 2026-10-25** — a port-fairness review of every reference port.
   Added port notes (section 3): the manifests now say where a reference port

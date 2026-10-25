@@ -21,12 +21,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The source file extension of each language's port.
-const PORT_EXTENSIONS: [(&str, &str); 7] = [
+/// The source file extension of each language's port. `rust-checked` builds
+/// the Rust port again with Miri's checks on, so an overflow the release build
+/// would wrap past fails the gate instead of skewing that arm.
+const PORT_EXTENSIONS: [(&str, &str); 8] = [
     ("miri", "mi"),
     ("c", "c"),
     ("cpp", "cpp"),
     ("rust", "rs"),
+    ("rust-checked", "rs"),
     ("go", "go"),
     ("python", "py"),
     ("typescript", "ts"),

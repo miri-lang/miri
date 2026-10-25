@@ -32,6 +32,9 @@ HOT_METRICS = ("hot_ns",)
 TIME_METRIC = {"cold": "process_wall_ns", "hot": "hot_ns"}
 REFERENCE = "c"
 MEMORY_REFERENCE = "rust"
+# Rust built with Miri's run-time checks: Miri's distance from it is the
+# compiler's, and Rust's is the price of the checks (charter section 2).
+CHECKED_REFERENCE = "rust-checked"
 
 
 # Reading records.
@@ -187,6 +190,7 @@ def add_ratios(cells, charter):
         mode = key[4]
         cell["vs_c"] = {"time": ratio(cells, key, REFERENCE, TIME_METRIC[mode])}
         cell["vs_miri"] = {"time": ratio(cells, key, "miri", TIME_METRIC[mode])}
+        cell["vs_rust_checked"] = {"time": ratio(cells, key, CHECKED_REFERENCE, TIME_METRIC[mode])}
         if mode == "cold":
             cell["vs_c"]["max_rss"] = ratio(cells, key, REFERENCE, "max_rss_bytes")
             cell["vs_rust"] = {"max_rss": ratio(cells, key, MEMORY_REFERENCE, "max_rss_bytes"), "net_rss": net_ratio(cells, key, MEMORY_REFERENCE)}

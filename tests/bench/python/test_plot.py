@@ -67,6 +67,19 @@ class PlotTest(unittest.TestCase):
         self.assertIn("test cpu", svg)
         self.assertIn("9.9.9", svg)
 
+    def test_the_checks_chart_is_drawn_only_when_rust_checked_was_measured(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.draw(out)
+            self.assertFalse((Path(out) / "checks-cost.svg").exists())
+        recs = records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150])
+        recs += records("w", "rust", [100, 100, 100]) + records("w", "rust-checked", [120, 120, 120])
+        summary = summarize_records(recs)
+        summary["provenance"] = {"miri_version": "miri 9.9.9 (test)", "cpu_model": "test cpu", "miri_sha": "0" * 40}
+        with tempfile.TemporaryDirectory() as out:
+            self.plot.plot(summary, out, diagnosis_dir=Path(out) / "none")
+            svg = (Path(out) / "checks-cost.svg").read_text()
+        self.assertIn("Rust with Miri", svg)
+
     def test_the_lost_table_lists_every_miri_cell_to_diagnose(self):
         with tempfile.TemporaryDirectory() as out:
             self.draw(out)

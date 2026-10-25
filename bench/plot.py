@@ -203,6 +203,22 @@ def memory_chart(summary, out_dir, size):
     save(fig, out_dir, "memory-vs-c")
 
 
+def checks_chart(summary, out_dir, size):
+    """Miri and Rust against Rust built with Miri's checks: Miri's bar is what
+    the compiler costs beyond the checks, Rust's what the checks cost. Drawn
+    only when that arm was measured."""
+    if not any(c["language"] == "rust-checked" and "metrics" in c for c in summary["cells"]):
+        return
+    fig, axes = plt.subplots(2, 1, figsize=(11, 8))
+    for ax, mode, label in ((axes[0], "cold", "Wall time"), (axes[1], "hot", "Hot time")):
+        cells = {k: c for k, c in cells_at(summary, size, mode).items() if k[1] in ("miri", "rust")}
+        grouped_bars(ax, {"cells": list(cells.values())}, size, mode, ("vs_rust_checked", "time"), f"{label} × Rust with Miri's checks (size {size.upper()})")
+    fig.legend(handles=legend_handles(["miri", "rust"]), loc="upper right", fontsize=8, frameon=False)
+    footer(fig, summary)
+    fig.tight_layout(rect=(0, 0.03, 0.76, 1))
+    save(fig, out_dir, "checks-cost")
+
+
 def scatter_chart(summary, out_dir, size):
     """One point per language, every point labelled with its name, so the
     chart never asks colour alone to tell seven languages apart."""
@@ -293,6 +309,7 @@ def plot(summary, out_dir, size=None, history=None, diagnosis_dir=None):
     time_chart(summary, out_dir, size)
     memory_chart(summary, out_dir, size)
     scatter_chart(summary, out_dir, size)
+    checks_chart(summary, out_dir, size)
     if history is not None:
         history_chart(history, summary, out_dir)
     lost_table(summary, out_dir, diagnosis_dir or out_dir / "diagnosis")

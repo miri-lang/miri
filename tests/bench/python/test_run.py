@@ -203,6 +203,16 @@ class ReviewTest(unittest.TestCase):
                 self.assertIsNone(run.review_problem(workload.port(language), comment), workload.port(language))
 
 
+class CheckedRustTest(unittest.TestCase):
+    def test_rust_with_miris_checks_builds_the_rust_port_with_overflow_checks(self):
+        charter = run.load_charter()
+        workload = next(w for w in run.load_workloads(None) if w.name == "nbody")
+        self.assertEqual(workload.port("rust-checked"), workload.port("rust"))
+        self.assertIn("rust-checked", charter["tiers"]["diagnostic"])
+        build = charter["languages"]["rust-checked"]["build"]
+        self.assertEqual(build, charter["languages"]["rust"]["build"].replace("opt-level=3", "opt-level=3 -C overflow-checks=on"))
+
+
 class PortNotesTest(unittest.TestCase):
     def test_every_manifest_note_is_a_sentence(self):
         for workload in run.load_workloads(None):
