@@ -20,7 +20,7 @@ of this document, and the prose refers to values by key rather than restating
 them. `tests/bench/charter.rs` fails the build when the two files disagree on a
 number, a build line, a tier or a key.
 
-**Charter version: 3.**
+**Charter version: 4.**
 
 ## 1. Identity of a result
 
@@ -236,6 +236,11 @@ except `hot_ns`, which only the program can know.
   to `statistics.noisy_max_reruns` times. Every attempt's runs are kept and
   published; the last attempt is the one charted. A cell still noisy after the
   last re-run is published with a `noisy` flag, never dropped.
+- **Steal time.** Where the kernel reports it, the runner reads the pinned
+  core's steal time (the time a hypervisor gave to another guest) around every
+  measured run. A cell whose steal exceeds `statistics.steal_share_max` of its
+  CPU time is noisy and re-run like one; each cell's steal share and the run's
+  largest are published beside its CV.
 - **Ratio to C.** Each cell's median is divided by the median of the C cell of
   the same workload, size, build variant and mode from the same run. Comparisons
   across runs — across days, machines or CI hosts — use these ratios, never
@@ -277,7 +282,8 @@ published together.
 
 | Profile | Machine | May appear in a published chart |
 |---|---|---|
-| `publication` | A dedicated Linux x86-64 machine: CPU frequency governor fixed at `performance`, turbo and frequency boost off, the benchmark on one core isolated from the scheduler with its hyper-thread sibling idle, nothing else running, toolchains from the pinned container image. | **Yes — the only one.** |
+| `publication` | A dedicated Linux x86-64 machine: CPU frequency governor fixed at `performance`, turbo and frequency boost off, the benchmark on one core isolated from the scheduler with its hyper-thread sibling idle, nothing else running, toolchains from the pinned container image. | **Yes.** |
+| `preliminary-vps` | A rented Linux x86-64 virtual machine with dedicated vCPUs, the benchmark pinned to one of at least two, inputs in memory, toolchains from the pinned container image. | **Only under the label `preliminary`**, which every chart and table of the run carries. |
 | `dev` | A developer's workstation. | No. For diagnosis and for checking a change before a publication run. |
 | `ci-smoke` | A shared CI runner, size S only. | No. A regression signal on ratios to C, read with the verdict rule. |
 
@@ -287,6 +293,32 @@ and refuses the `publication` label to a run in which any check failed. The
 whole process tree is pinned to the one isolated core, a runtime's service
 threads included, so no language gets free cores the others do not; `user_ns`
 and `sys_ns` show what those threads cost.
+
+A virtual machine cannot give what `publication` checks: it exposes no
+frequency governor or turbo control, its cores are shared with the host's
+other guests at some level, and its clock can move between sessions. The
+`preliminary-vps` profile therefore declares only what it can hold and the
+runner checks only that: Linux, a pinned core, inputs in memory. What it
+cannot hold is measured instead of assumed. Steal time is read around every
+run (section 6). The whole suite runs twice, hours apart or on two days, and
+the second session's summary is made against the first: a cell whose ratio
+to C does not agree between them under the verdict rule (section 6) is marked
+unreproduced and is shown as such, never as a bar, and the largest drift
+between the sessions is published as the run's noise. Ratios to C stay
+meaningful on such a machine because each is taken between cells measured
+side by side in one session, so a slower host moves both. The sizes keep the
+parameters set on the developer's workstation and the article says they were
+not calibrated on this machine; the native variant and the optional tier are
+skipped. Memory is published from this run, Linux only: the macOS allocator
+keeps freed blocks of grown buffers for every language, so a workstation's
+peak memory is indicative only.
+
+Two disclosures go with every run, whichever profile: the TypeScript arm is
+named "TypeScript (V8 via Deno)", because Deno strips the type annotations and
+the number is V8's; and a language's built-ins that are implemented natively
+(V8's JSON, Python's json module, dictionaries and sort) are what that
+language gives a programmer, and are counted as such, said once in the
+article.
 
 Input files live on a memory-backed file system, so the page cache does not
 depend on which run came first. Address-space layout randomisation stays at the
@@ -302,7 +334,8 @@ untimed identity gate, never in a timed run.
 
 Every number in an article, on the website's benchmark page or in a chart is
 generated from a committed `summary.json` produced by the statistics stage from
-committed raw records under one charter version and one `publication` run. A
+committed raw records under one charter version and one run on a publishable
+profile (section 8), under that profile's label if it has one. A
 hand-typed number anywhere in a published artifact is a defect, and a gate
 checks for it. A summary that mixes machine profiles or charter versions is
 refused.
@@ -382,7 +415,7 @@ checks the two files agree reads this table.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `charter_version` | `3` | The version every record carries (section 1). |
+| `charter_version` | `4` | The version every record carries (section 1). |
 | `runs.process_warmup_runs` | `2` | Discarded runs at the start of each cell. |
 | `runs.hot_warmup_iterations` | `5` | Untimed kernel iterations at the start of a hot run. |
 | `runs.hot_timed_iterations` | `5` | Timed kernel iterations in a hot run; `hot_ns` is their median. |
@@ -395,6 +428,7 @@ checks the two files agree reads this table.
 | `sizes.target_c_wall_ms.l` | `3000` | C reference wall time for size L, in milliseconds. |
 | `statistics.noisy_cv` | `0.05` | CV above which a cell is re-run. |
 | `statistics.noisy_max_reruns` | `2` | Re-runs before a noisy cell is published flagged. |
+| `statistics.steal_share_max` | `0.01` | Largest share of a cell's CPU time a hypervisor may take before the cell is re-run as noisy. |
 | `statistics.p_high` | `0.9` | The upper quantile reported beside the median. |
 | `verdict.min_threshold` | `0.05` | Smallest relative change a cross-version verdict calls faster or slower. |
 | `verdict.cv_multiplier` | `3` | How many ratio CVs a change must exceed to be called faster or slower. |
@@ -405,6 +439,16 @@ checks the two files agree reads this table.
 | `diagnosis.net_rss_vs_rust` | `1.5` | Ratio to Rust at which a Miri memory cell is diagnosed. |
 
 ## Changelog
+
+- **Version 4, 2026-10-25** — added the machine profile `preliminary-vps`
+  (section 8), so a first result can be published from a rented virtual
+  machine under the label `preliminary` before a dedicated box exists. It
+  states what a virtual machine cannot give and measures it instead: steal
+  time around every run (section 6, `statistics.steal_share_max`), and a
+  second session against which every cell must reproduce. A profile is now
+  checked only for the state it declares, so a machine without a governor is
+  not asked for one. The TypeScript arm is labelled as V8, and natively
+  implemented built-ins are disclosed.
 
 - **Version 3, 2026-10-25** — added the diagnostic arm `rust-checked`
   (section 2): the Rust ports built with integer overflow checks on, which is

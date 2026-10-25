@@ -220,12 +220,47 @@ class ExplanationsTest(unittest.TestCase):
         self.assertNotIn("Why each language", summarize.markdown(summary))
 
 
+class PreliminaryTest(unittest.TestCase):
+    def test_a_vps_summary_carries_its_label_and_the_largest_steal_share(self):
+        recs = records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150])
+        for record in recs:
+            record["machine_profile"] = "preliminary-vps"
+            record["steal_ns"] = 1 if record["language"] == "c" else 3
+        summary = summarize_records(recs)
+        self.assertEqual(summary["label"], "preliminary")
+        self.assertAlmostEqual(cell(summary, "w", "miri")["steal_share"], 3 / 150)
+        self.assertAlmostEqual(summary["max_steal_share"], 3 / 150)
+
+    def test_a_dev_summary_has_no_label(self):
+        summary = summarize_records(records("w", "c", [100, 100, 100]))
+        self.assertIsNone(summary["label"])
+
+    def test_a_second_session_marks_each_cell_reproduced_or_not(self):
+        first = summarize_records(records("w", "c", [100] * 5) + records("w", "miri", [150] * 5) + records("v", "c", [100] * 5) + records("v", "miri", [150] * 5))
+        second_recs = records("w", "c", [100] * 5) + records("w", "miri", [151] * 5) + records("v", "c", [100] * 5) + records("v", "miri", [300] * 5)
+        second = summarize.summarize(second_recs, CHARTER, HASH, MANIFESTS, reproduces=first)
+        self.assertTrue(cell(second, "w", "miri")["reproduced"])
+        self.assertFalse(cell(second, "v", "miri")["reproduced"])
+        self.assertEqual(second["reproduction"]["of"], first["run_id"])
+        self.assertEqual((second["reproduction"]["agreeing"], second["reproduction"]["disagreeing"]), (3, 1))
+        self.assertAlmostEqual(second["reproduction"]["max_drift"], 1.0)
+
+
 class SchemaTest(unittest.TestCase):
     def test_a_summary_validates_against_the_committed_schema(self):
         schema = json.loads((BENCH / "schema" / "summary.v1.json").read_text())
         recs = records("w", "c", [100, 100, 100]) + records("w", "miri", steady(150, 0.01))
         recs += records("w", "c", [50, 50, 50], mode="hot") + [unmeasured("v", "miri", "mismatch")]
         validate(summarize_records(recs), schema, schema)
+
+    def test_a_reproduced_vps_summary_validates_too(self):
+        schema = json.loads((BENCH / "schema" / "summary.v1.json").read_text())
+        recs = records("w", "c", [100, 100, 100]) + records("w", "miri", steady(150, 0.01))
+        for record in recs:
+            record["machine_profile"] = "preliminary-vps"
+            record["steal_ns"] = 0
+        first = summarize_records(recs)
+        validate(summarize.summarize(recs, CHARTER, HASH, MANIFESTS, reproduces=first), schema, schema)
 
 
 if __name__ == "__main__":

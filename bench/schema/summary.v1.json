@@ -10,7 +10,7 @@
     "charter_version": {"type": "integer"},
     "charter_hash": {"type": "string"},
     "run_id": {"type": "string"},
-    "machine_profile": {"enum": ["dev", "ci-smoke", "publication"]},
+    "machine_profile": {"enum": ["dev", "ci-smoke", "publication", "preliminary-vps"]},
     "provenance": {"type": "object"},
     "cells": {
       "type": "array",
@@ -43,7 +43,9 @@
           "vs_c": {"type": "object"},
           "vs_miri": {"type": "object"},
           "vs_rust": {"type": "object"},
-          "diagnose": {"type": "boolean"}
+          "diagnose": {"type": "boolean"},
+          "steal_share": {"description": "The share of the cell's CPU time the hypervisor took from the pinned core.", "type": "number"},
+          "reproduced": {"description": "Whether the cell's ratio to C agrees with the first session's under the verdict rule; present only on a second session.", "type": "boolean"}
         }
       }
     },
@@ -64,6 +66,14 @@
           "memory_coverage": {"type": "integer"}
         }
       }
+    },
+    "label": {"description": "The label a publishable profile's charts carry, such as preliminary; null otherwise.", "type": ["string", "null"]},
+    "max_steal_share": {"description": "The largest steal share of any cell in the run; null where steal time was not read.", "type": ["number", "null"]},
+    "reproduction": {
+      "description": "A second session's agreement with the first: which run it reproduces, how many cells agree and disagree, and the largest drift of a ratio to C.",
+      "type": "object",
+      "required": ["of", "agreeing", "disagreeing", "max_drift"],
+      "properties": {"of": {"type": "string"}, "agreeing": {"type": "integer"}, "disagreeing": {"type": "integer"}, "max_drift": {"type": "number"}}
     },
     "explanations": {
       "description": "Each measured cell's reason for where its language lands, by workload and then language, from the workload manifest's explain table.",

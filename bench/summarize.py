@@ -32,6 +32,9 @@ HOT_METRICS = ("hot_ns",)
 TIME_METRIC = {"cold": "process_wall_ns", "hot": "hot_ns"}
 REFERENCE = "c"
 MEMORY_REFERENCE = "rust"
+# How a language is named in a table or chart where its id alone would
+# mislead: the TypeScript arm measures V8, since Deno strips the annotations.
+LANGUAGE_LABELS = {"typescript": "TypeScript (V8 via Deno)"}
 # Rust built with Miri's run-time checks: Miri's distance from it is the
 # compiler's, and Rust's is the price of the checks (charter section 2).
 CHECKED_REFERENCE = "rust-checked"
@@ -135,7 +138,7 @@ def summarize_cell(cell_runs, charter):
         metrics["net_rss_bytes"] = net_rss(metrics, ok)
     threshold = charter["statistics"]["noisy_cv"]
     noisy = any(m["cv"] > threshold for name, m in metrics.items() if name in ("process_wall_ns", "hot_ns", "max_rss_bytes"))
-    return {
+    cell = {
         "status": "noisy" if noisy else "ok",
         "attempts": cell_runs[0]["attempt"] + 1,
         "metrics": metrics,
@@ -143,6 +146,17 @@ def summarize_cell(cell_runs, charter):
         "floor_rss_bytes": cell_runs[0].get("floor_rss_bytes"),
         "startup_ns": cell_runs[0].get("startup_ns"),
     }
+    if (share := steal_share(ok)) is not None:
+        cell["steal_share"] = share
+    return cell
+
+
+def steal_share(runs):
+    """The share of the runs' CPU time the hypervisor took from the pinned
+    core, or None where the runner could not read steal time."""
+    measured = [r for r in runs if r.get("steal_ns") is not None]
+    cpu = sum(r["user_ns"] + r["sys_ns"] for r in measured)
+    return sum(r["steal_ns"] for r in measured) / cpu if measured and cpu else None
 
 
 def net_rss(metrics, runs):
@@ -246,7 +260,7 @@ def aggregates(cells, manifests):
 # The summary.
 
 
-def summarize(records, charter, expected_hash, manifests, env=None):
+def summarize(records, charter, expected_hash, manifests, env=None, reproduces=None):
     if problems := check_provenance(records, expected_hash):
         raise SystemExit("refusing to summarize:\n  " + "\n  ".join(problems))
     last, statuses = group_cells(records)
@@ -255,7 +269,7 @@ def summarize(records, charter, expected_hash, manifests, env=None):
         cells.setdefault(key, {"status": status})
     add_ratios(cells, charter)
     first = records[0]
-    return {
+    summary = {
         "schema_version": SCHEMA_VERSION,
         "charter_version": first["charter_version"],
         "charter_hash": first["charter_hash"],
@@ -266,6 +280,37 @@ def summarize(records, charter, expected_hash, manifests, env=None):
         "aggregates": aggregates(cells, manifests),
         "port_notes": port_notes(cells, manifests),
         "explanations": explanations(cells, manifests),
+        "label": profile_label(first["machine_profile"]),
+        "max_steal_share": max((c["steal_share"] for c in cells.values() if "steal_share" in c), default=None),
+    }
+    if reproduces is not None:
+        mark_reproduction(summary, reproduces, charter)
+    return summary
+
+
+def profile_label(profile_name):
+    """The label a publishable profile's charts carry, such as "preliminary"."""
+    path = run.BENCH / "machine" / f"{profile_name}.toml"
+    if not path.is_file():
+        return None
+    profile = run.load_profile(profile_name)
+    return profile.get("label") if profile.get("publishable") else None
+
+
+def mark_reproduction(summary, first, charter):
+    """Mark each cell of a second session reproduced when its ratio to C agrees
+    with the first session's under the charter's verdict rule, and record how
+    far the two sessions drifted apart."""
+    rows = {cell_identity(row): row for row in compare(first, summary, charter)["rows"]}
+    for cell in summary["cells"]:
+        if (row := rows.get(cell_identity(cell))) is not None:
+            cell["reproduced"] = row["verdict"] == "same"
+    verdicts = [row["verdict"] for row in rows.values()]
+    summary["reproduction"] = {
+        "of": first["run_id"],
+        "agreeing": verdicts.count("same"),
+        "disagreeing": len(verdicts) - verdicts.count("same"),
+        "max_drift": max((abs(row["ratio"] - 1) for row in rows.values()), default=0.0),
     }
 
 
@@ -356,6 +401,10 @@ def history(summaries):
 # Markdown.
 
 
+def language_label(language):
+    return LANGUAGE_LABELS.get(language, language)
+
+
 def fmt(value, digits=2):
     return "—" if value is None else f"{value:.{digits}f}"
 
@@ -375,12 +424,12 @@ def markdown(summary):
         rss = metrics.get("max_rss_bytes", {}).get("median")
         vs_c = ((cell.get("vs_c") or {}).get("time") or {}).get("value")
         lines.append(
-            f"| {cell['workload']} | {cell['language']} | {cell['size']} | {cell['mode']} | {cell['status']}"
+            f"| {cell['workload']} | {language_label(cell['language'])} | {cell['size']} | {cell['mode']} | {cell['status']}"
             f" | {fmt(time / 1e6 if time else None, 1)} | {fmt(vs_c)} | {fmt(rss / 2**20 if rss else None, 1)} |"
         )
     lines += ["", "| Language | Size | Mode | Tag | Geomean × C | Workloads |", "|---|---|---|---|---|---|"]
     for row in summary["aggregates"]:
-        lines.append(f"| {row['language']} | {row['size']} | {row['mode']} | {row['tag']} | {fmt(row['geomean_vs_c'])} | {row['coverage']} |")
+        lines.append(f"| {language_label(row['language'])} | {row['size']} | {row['mode']} | {row['tag']} | {fmt(row['geomean_vs_c'])} | {row['coverage']} |")
     if reasons := summary.get("explanations"):
         lines += ["", "## Why each language lands where it does", ""]
         lines += [f"- **{workload}**, {language}: {reason}" for workload, by_language in reasons.items() for language, reason in by_language.items()]
@@ -393,11 +442,12 @@ def markdown(summary):
 # Command line.
 
 
-def write_summary(run_dir):
+def write_summary(run_dir, reproduces=None):
     run_dir = Path(run_dir)
     env_path = run_dir / "env.json"
     env = json.loads(env_path.read_text()) if env_path.is_file() else {}
-    summary = summarize(load_records(run_dir), run.load_charter(), run.charter_hash(), workload_manifests(), env)
+    first = json.loads(Path(reproduces).read_text()) if reproduces else None
+    summary = summarize(load_records(run_dir), run.load_charter(), run.charter_hash(), workload_manifests(), env, first)
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
     (run_dir / "summary.md").write_text(markdown(summary))
     return summary
@@ -414,7 +464,9 @@ def main(argv=None):
     else:
         parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
         parser.add_argument("run_dir", help="a results directory bench/run.py wrote")
-        summary = write_summary(parser.parse_args(argv).run_dir)
+        parser.add_argument("--reproduces", help="the summary.json of the first session this run reproduces")
+        args = parser.parse_args(argv)
+        summary = write_summary(args.run_dir, args.reproduces)
         print(f"summarized {len(summary['cells'])} cells")
 
 

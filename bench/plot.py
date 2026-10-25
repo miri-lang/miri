@@ -39,6 +39,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 from matplotlib.ticker import FuncFormatter, LogLocator  # noqa: E402
 
+from summarize import language_label  # noqa: E402
+
 # The categorical palette, in fixed order (validated: every adjacent pair is
 # apart under colour-vision deficiency; three slots sit below 3:1 on the
 # surface, so every chart carries a legend and the markdown table is its
@@ -95,8 +97,9 @@ def style():
 def footer(fig, summary):
     """Provenance on every chart, so a screenshot cannot lose it."""
     p = summary.get("provenance", {})
+    label = f"{summary['label'].upper()} · " if summary.get("label") else ""
     text = (
-        f"profile {summary['machine_profile']} · {p.get('cpu_model', 'unknown CPU')} · "
+        f"{label}profile {summary['machine_profile']} · {p.get('cpu_model', 'unknown CPU')} · "
         f"{p.get('miri_version', 'unknown Miri')} · charter v{summary['charter_version']} · run {summary['run_id']}"
     )
     fig.text(0.01, 0.01, text, fontsize=7, color=MUTED, ha="left", va="bottom")
@@ -138,7 +141,7 @@ def grouped_bars(ax, summary, size, mode, path, title):
             x = wi - 0.4 + width * (li + 0.5)
             cell = cells.get((workload, language))
             value = ratio_of(cell, path) if cell else None
-            if cell is None or cell.get("status") in UNMEASURED or value is None:
+            if cell is None or cell.get("status") in UNMEASURED or value is None or cell.get("reproduced") is False:
                 ax.text(x, 1.0, absent_label(cell), rotation=90, fontsize=6, color=MUTED, ha="center", va="bottom")
                 continue
             # A ratio's bar grows from 1, the reference, so a faster cell
@@ -168,6 +171,8 @@ def absent_label(cell):
     runtime floor is too small to be a number."""
     if cell is None:
         return "n/a"
+    if cell.get("reproduced") is False:
+        return "unreproduced"
     if cell.get("status") in UNMEASURED:
         return cell["status"]
     if (cell.get("metrics", {}).get("net_rss_bytes") or {}).get("at_or_below_floor"):
@@ -176,7 +181,7 @@ def absent_label(cell):
 
 
 def legend_handles(languages, extra=True):
-    handles = [Patch(facecolor=LANGUAGE_COLORS[lang], label=lang) for lang in languages]
+    handles = [Patch(facecolor=LANGUAGE_COLORS[lang], label=language_label(lang)) for lang in languages]
     if extra:
         handles.append(Patch(facecolor=SURFACE, edgecolor=MUTED, hatch="////", label="noisy (CV over the charter's threshold)"))
         handles.append(Patch(facecolor=SURFACE, edgecolor=SURFACE, label="label in place of a bar: not measured, or ≤ floor"))

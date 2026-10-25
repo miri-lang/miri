@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) Viacheslav Shynkarenko
+
+# A rented Linux x86-64 virtual machine with dedicated vCPUs, whose numbers
+# may be published only under the label "preliminary" (bench/CHARTER.md
+# section 8). A VM exposes no frequency governor or turbo control, so this
+# profile declares neither and is never checked for them; what it can give is
+# a pinned core, inputs in memory, steal time read around every run, and a
+# second session that reproduces the first.
+
+name = "preliminary-vps"
+publishable = true
+label = "preliminary"
+os = "linux"
+arch = "x86_64"
+# The core every benchmark process tree is pinned to. The VM has at least two
+# vCPUs, so the pinned one has an idle neighbour for the runner itself.
+pinned_core = 1
+# Inputs are written here so the page cache never depends on run order.
+input_dir = "/dev/shm"
+# The exact machine and provider, filled in when the run is made.
+model = "recorded in env.json by the run"

@@ -204,6 +204,49 @@ class ReviewTest(unittest.TestCase):
                 self.assertIsNone(run.review_problem(workload.port(language), comment), workload.port(language))
 
 
+STAT = """cpu  100 0 50 900 0 0 0 7 0 0
+cpu0 50 0 25 450 0 0 0 3 0 0
+cpu1 50 0 25 450 0 0 0 4 0 0
+"""
+
+
+class PreliminaryVpsTest(unittest.TestCase):
+    def test_the_vps_profile_publishes_only_under_its_label(self):
+        profile = run.load_profile("preliminary-vps")
+        self.assertTrue(profile["publishable"])
+        self.assertEqual(profile["label"], "preliminary")
+        self.assertGreaterEqual(profile["pinned_core"], 0)
+        self.assertEqual(profile["input_dir"], "/dev/shm")
+        self.assertEqual(run.parse_args(["--profile", "preliminary-vps"]).profile, "preliminary-vps")
+
+    def test_a_vm_is_judged_only_on_the_state_its_profile_declares(self):
+        vm = {"os": "linux", "pinned_core": 1}
+        fit = {"os": "Linux", "can_pin": True, "governor": None, "turbo": None, "siblings": "1,3"}
+        self.assertEqual(run.profile_problems(vm, fit), [])
+        self.assertIn("the process tree cannot be pinned (taskset is missing)", run.profile_problems(vm, fit | {"can_pin": False}))
+        self.assertIn("a publishable run needs Linux", run.profile_problems(vm, fit | {"os": "Darwin"}))
+
+    def test_a_bare_metal_profile_still_checks_governor_turbo_and_sibling(self):
+        box = run.load_profile("publication")
+        state = {"os": "Linux", "can_pin": True, "governor": "powersave", "turbo": True, "siblings": "2,6"}
+        problems = run.profile_problems(box, state)
+        self.assertEqual(len(problems), 3, problems)
+
+    def test_steal_is_read_for_the_pinned_core(self):
+        self.assertEqual(run.steal_jiffies(1, STAT), 4)
+        self.assertEqual(run.steal_jiffies(0, STAT), 3)
+        self.assertIsNone(run.steal_jiffies(5, STAT))
+        self.assertIsNone(run.steal_jiffies(0, ""))
+
+    def test_a_cell_whose_steal_passes_the_threshold_is_noisy(self):
+        with tempfile.TemporaryDirectory() as work:
+            ctx = context(work)
+            calm = [run.Measurement(0, "", "", 100, 1_000_000, 0, 10, steal_ns=0) for _ in range(5)]
+            stolen = [run.Measurement(0, "", "", 100, 1_000_000, 0, 10, steal_ns=20_000) for _ in range(5)]
+            self.assertFalse(run.noisy(ctx, calm, "cold"))
+            self.assertTrue(run.noisy(ctx, stolen, "cold"))
+
+
 class ExplanationTest(unittest.TestCase):
     def test_every_workload_explains_every_headline_language_and_miri(self):
         charter = run.load_charter()
@@ -253,7 +296,7 @@ class ProfileTest(unittest.TestCase):
     def test_this_machine_is_refused_for_publication_unless_it_is_prepared(self):
         problems = run.publication_problems(run.load_profile("publication"))
         if run.platform.system() != "Linux":
-            self.assertIn("a publication run needs Linux", problems)
+            self.assertIn("a publishable run needs Linux", problems)
 
     def test_inputs_go_to_the_profiles_directory_when_it_exists(self):
         with tempfile.TemporaryDirectory() as root:

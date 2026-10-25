@@ -87,6 +87,23 @@ reason from the manifest's `explain` table into `explanations`. A cell that was 
 ratio. It refuses records made under a charter other than the one on disk,
 and a run that mixes machine profiles or charter versions.
 
+A preliminary publication from a rented virtual machine runs the suite twice
+under the `preliminary-vps` profile and summarizes the second session against
+the first:
+
+```bash
+python3 bench/run.py --full --profile preliminary-vps          # session one
+python3 bench/run.py --full --profile preliminary-vps          # session two, hours later
+python3 bench/summarize.py bench/results/<two>/ --reproduces bench/results/<one>/summary.json
+```
+
+Each cell of the second session is then marked `reproduced` when its ratio to
+C agrees with the first session's under the verdict rule; the charts show an
+unreproduced cell as a label, and the summary's `reproduction` gives the
+largest drift between the sessions. The runner reads the pinned core's steal
+time around every run and re-runs a cell the hypervisor took too much from.
+Every chart of such a run carries its profile's label, `PRELIMINARY`.
+
 `compare` gives a verdict per cell, `faster`, `same` or `slower`, by the
 charter's rule: the change in ratio to C must exceed the larger of 5 % and
 three times the ratio's coefficient of variation. It refuses two runs from

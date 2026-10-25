@@ -30,27 +30,34 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 BENCH = REPO / "bench"
 DEFAULT_SITE = REPO.parent / "miri-lang.org"
 CHARTS = ("time-vs-c", "memory-vs-c", "time-memory-scatter", "miri-history")
-CELL_FIELDS = ("workload", "language", "variant", "size", "mode", "status", "attempts", "diagnose")
+CELL_FIELDS = ("workload", "language", "variant", "size", "mode", "status", "attempts", "diagnose", "reproduced")
 METRICS = ("process_wall_ns", "hot_ns", "max_rss_bytes", "user_ns", "sys_ns")
 
 
 def published_runs(repo=REPO):
-    """Every committed publication run's directory, oldest first."""
+    """Every committed publishable run's directory, oldest first."""
     listed = subprocess.run(
         ["git", "ls-files", "bench/results/*/summary.json"], cwd=repo, capture_output=True, text=True, check=True
     ).stdout.split()
     runs = []
     for name in listed:
         summary = json.loads((repo / name).read_text())
-        if summary["machine_profile"] == "publication":
+        if is_publishable(summary["machine_profile"]):
             runs.append((summary["run_id"], (repo / name).parent))
     return [path for _, path in sorted(runs)]
+
+
+def is_publishable(profile_name):
+    """Whether a run on this machine profile may reach the website."""
+    path = BENCH / "machine" / f"{profile_name}.toml"
+    return path.is_file() and bool(tomllib.loads(path.read_text()).get("publishable"))
 
 
 def version_of(summary):
@@ -100,14 +107,15 @@ def lost_cells(summary, diagnosis_dir):
 
 def site_data(summary, run_dir):
     """The website's copy of a summary: what the page shows and nothing else."""
-    if summary["machine_profile"] != "publication":
-        raise SystemExit(f"only a publication run is exported; this one ran on '{summary['machine_profile']}'")
+    if not is_publishable(summary["machine_profile"]):
+        raise SystemExit(f"only a publishable run is exported; this one ran on '{summary['machine_profile']}'")
     return {
         "schema_version": summary["schema_version"],
         "charter_version": summary["charter_version"],
         "charter_hash": summary["charter_hash"],
         "run_id": summary["run_id"],
         "machine_profile": summary["machine_profile"],
+        "label": summary.get("label"),
         "miri_version": version_of(summary),
         "provenance": summary["provenance"],
         "cells": [site_cell(c) for c in summary["cells"]],

@@ -80,6 +80,26 @@ class PlotTest(unittest.TestCase):
             svg = (Path(out) / "checks-cost.svg").read_text()
         self.assertIn("Rust with Miri", svg)
 
+    def test_a_preliminary_run_says_so_on_every_chart_and_names_the_typescript_runtime(self):
+        recs = records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150]) + records("w", "typescript", [200, 200, 200])
+        for record in recs:
+            record["machine_profile"] = "preliminary-vps"
+        summary = summarize_records(recs)
+        summary["provenance"] = {"miri_version": "miri 9.9.9 (test)", "cpu_model": "test cpu", "miri_sha": "0" * 40}
+        with tempfile.TemporaryDirectory() as out:
+            self.plot.plot(summary, out, diagnosis_dir=Path(out) / "none")
+            for name in ("time-vs-c", "memory-vs-c"):
+                svg = (Path(out) / f"{name}.svg").read_text()
+                self.assertIn("PRELIMINARY", svg)
+                self.assertIn("TypeScript (V8 via Deno)", svg)
+
+    def test_an_unreproduced_cell_is_labelled_not_drawn(self):
+        miri = next(c for c in self.summary["cells"] if (c["workload"], c["language"], c["mode"]) == ("w", "miri", "cold"))
+        miri["reproduced"] = False
+        with tempfile.TemporaryDirectory() as out:
+            svg = self.draw(out)
+        self.assertIn("unreproduced", svg)
+
     def test_the_lost_table_lists_every_miri_cell_to_diagnose(self):
         with tempfile.TemporaryDirectory() as out:
             self.draw(out)
@@ -134,6 +154,13 @@ class ExportTest(unittest.TestCase):
             lost = self.export_site.site_data(fixture(), self.run)["lost"]
             row = next(c for c in lost if c["workload"] == "w" and c["mode"] == "cold")
             self.assertEqual((row["mechanism"], row["task"]), ("struct values on the heap", shown))
+
+    def test_a_preliminary_vps_run_is_exported_with_its_label(self):
+        summary = fixture()
+        summary["machine_profile"] = "preliminary-vps"
+        summary["label"] = "preliminary"
+        data = self.export_site.site_data(summary, self.run)
+        self.assertEqual(data["label"], "preliminary")
 
     def test_a_dev_run_is_never_exported(self):
         summary = fixture()

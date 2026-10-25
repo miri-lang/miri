@@ -20,6 +20,7 @@ library only, so it runs on any machine with Python 3.11 or later.
 """
 
 import argparse
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -165,25 +166,62 @@ def pin_words(profile):
     return ["taskset", "-c", str(core)]
 
 
-def publication_problems(profile):
-    """What keeps this machine from the state a publication profile states,
-    checked before every cell (bench/CHARTER.md section 8)."""
+def machine_state(profile):
+    """What this machine shows about the profile's pinned core right now."""
     core = profile.get("pinned_core", -1)
-    governor = read_text(f"/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor")
     _, turbo = frequency_state()
-    siblings = read_text(f"/sys/devices/system/cpu/cpu{core}/topology/thread_siblings_list")
+    return {
+        "os": platform.system(),
+        "can_pin": bool(pin_words(profile)),
+        "governor": read_text(f"/sys/devices/system/cpu/cpu{core}/cpufreq/scaling_governor"),
+        "turbo": turbo,
+        "siblings": read_text(f"/sys/devices/system/cpu/cpu{core}/topology/thread_siblings_list"),
+    }
+
+
+def profile_problems(profile, state):
+    """What keeps a machine in `state` from what a publishable profile
+    declares (bench/CHARTER.md section 8). A profile is judged only on the
+    state it declares: a virtual machine that exposes no governor or turbo
+    control declares neither, and is never asked for them."""
+    core = profile.get("pinned_core", -1)
     problems = []
-    if platform.system() != "Linux":
-        problems.append("a publication run needs Linux")
-    if governor != profile.get("governor"):
-        problems.append(f"core {core}'s governor is {governor}, not {profile.get('governor')}")
-    if turbo is not False:
-        problems.append(f"turbo is {turbo}, not off")
-    if profile.get("smt_sibling_offline") and siblings != str(core):
-        problems.append(f"core {core} still shares its core with {siblings}")
-    if not pin_words(profile):
+    if state["os"] != "Linux":
+        problems.append("a publishable run needs Linux")
+    if "governor" in profile and state["governor"] != profile["governor"]:
+        problems.append(f"core {core}'s governor is {state['governor']}, not {profile['governor']}")
+    if "turbo" in profile and state["turbo"] is not profile["turbo"]:
+        problems.append(f"turbo is {state['turbo']}, not {'on' if profile['turbo'] else 'off'}")
+    if profile.get("smt_sibling_offline") and state["siblings"] != str(core):
+        problems.append(f"core {core} still shares its core with {state['siblings']}")
+    if not state["can_pin"]:
         problems.append("the process tree cannot be pinned (taskset is missing)")
     return problems
+
+
+def publication_problems(profile):
+    """What keeps this machine from the state a publishable profile declares,
+    checked before every cell."""
+    return profile_problems(profile, machine_state(profile))
+
+
+def steal_jiffies(core, stat_text):
+    """The time the hypervisor has taken from `core`, in clock ticks, from the
+    text of /proc/stat, or None when the line is absent."""
+    for line in stat_text.splitlines():
+        fields = line.split()
+        if fields and fields[0] == f"cpu{core}" and len(fields) > 8:
+            return int(fields[8])
+    return None
+
+
+def stolen_ns(core):
+    """The pinned core's steal time so far in nanoseconds, or None where the
+    kernel does not report it (any machine but Linux, or no pinned core)."""
+    if core < 0:
+        return None
+    ticks = steal_jiffies(core, read_text("/proc/stat") or "")
+    return None if ticks is None else ticks * 1_000_000_000 // os.sysconf("SC_CLK_TCK")
 
 
 # Commands: executed directly, never through a shell, in a scrubbed environment.
@@ -231,6 +269,8 @@ class Measurement:
     sys_ns: int
     max_rss_bytes: int
     timed_out: bool = False
+    # The time the hypervisor took from the pinned core during the run.
+    steal_ns: int | None = None
 
 
 def max_rss_bytes(ru_maxrss, system=None):
@@ -626,6 +666,7 @@ def measured_record(ctx, env, cell, run_index, attempt, measurement, floors):
         startup_ns=floor.get("process_wall_ns"),
         binary_bytes=cell.built.binary_bytes,
         exit_code=measurement.exit_code,
+        steal_ns=measurement.steal_ns,
         status="timeout" if measurement.timed_out else "ok",
     )
     return record
@@ -698,10 +739,9 @@ def run_rounds(ctx, cells, attempt, cap_s):
     for round_index, i in interleaved(list(range(len(cells))), rounds):
         if i in timed_out:
             continue
-        measurement = measure(cells[i].words(), child_environment(ctx.work_dir), ctx.work_dir, cap_s)
+        measurement = measure_with_steal(ctx, cells[i], cap_s)
         if measurement.timed_out:
-            retry = measure(cells[i].words(), child_environment(ctx.work_dir), ctx.work_dir, cap_s)
-            measurement = retry
+            measurement = measure_with_steal(ctx, cells[i], cap_s)
         if measurement.timed_out:
             timed_out.add(i)
         if round_index >= warmup or measurement.timed_out:
@@ -709,9 +749,29 @@ def run_rounds(ctx, cells, attempt, cap_s):
     return results, timed_out
 
 
+def measure_with_steal(ctx, cell, cap_s):
+    """One measured run, with the pinned core's steal time over it."""
+    core = ctx.profile.get("pinned_core", -1) if cell.pin else -1
+    before = stolen_ns(core)
+    measurement = measure(cell.words(), child_environment(ctx.work_dir), ctx.work_dir, cap_s)
+    after = stolen_ns(core)
+    steal = after - before if before is not None and after is not None else None
+    return dataclasses.replace(measurement, steal_ns=steal)
+
+
+def steal_share(measurements):
+    """The share of the runs' CPU time the hypervisor took, or None unmeasured."""
+    stolen = [m.steal_ns for m in measurements if m.steal_ns is not None]
+    cpu = sum(m.user_ns + m.sys_ns for m in measurements if m.steal_ns is not None)
+    return sum(stolen) / cpu if stolen and cpu else None
+
+
 def noisy(ctx, measurements, mode):
     threshold = ctx.charter["statistics"]["noisy_cv"]
     ok = [m for m in measurements if not m.timed_out]
+    share = steal_share(ok)
+    if share is not None and share > ctx.charter["statistics"]["steal_share_max"]:
+        return True
     metrics = [[m.process_wall_ns for m in ok], [m.max_rss_bytes for m in ok]]
     if mode == "hot":
         hots = [statistics.median(s) for s in (hot_samples(m.stderr) for m in ok) if s]
@@ -848,8 +908,8 @@ def run_workload_size(ctx, env, workload, ready, size, floors):
 def refuse_if_unfit(ctx):
     """Before every cell of a publication run, the machine must still be in its
     profile's state; a run that drifts out of it stops rather than publish."""
-    if ctx.args.profile == "publication" and (problems := publication_problems(ctx.profile)):
-        raise SystemExit("stopping the publication run:\n  " + "\n  ".join(problems))
+    if ctx.profile.get("publishable") and (problems := publication_problems(ctx.profile)):
+        raise SystemExit("stopping the publishable run:\n  " + "\n  ".join(problems))
 
 
 def results_directory(profile):
@@ -870,7 +930,7 @@ def preflight(ctx):
     problems = []
     if tree_is_dirty() and not ctx.args.allow_dirty:
         problems.append("the working tree has uncommitted changes (pass --allow-dirty to run anyway)")
-    if ctx.args.profile == "publication":
+    if ctx.profile.get("publishable"):
         problems.extend(publication_problems(ctx.profile))
     return problems
 
@@ -935,7 +995,7 @@ def parse_args(argv=None):
     parser.add_argument("--langs", help="comma-separated languages")
     parser.add_argument("--sizes", help="comma-separated sizes: s, m, l")
     parser.add_argument("--runs", type=int, help="measured runs per cell, in place of the charter's")
-    parser.add_argument("--profile", default="dev", choices=["dev", "ci-smoke", "publication"])
+    parser.add_argument("--profile", default="dev", choices=sorted(p.stem for p in (BENCH / "machine").glob("*.toml")))
     parser.add_argument("--variant", default="default", choices=["default", "native"])
     parser.add_argument("--keep", action="store_true", help="keep binaries and inputs under target/bench/")
     parser.add_argument("--allow-dirty", action="store_true", help="run from a tree with uncommitted changes")
