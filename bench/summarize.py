@@ -108,7 +108,7 @@ def group_cells(records):
     runs = defaultdict(list)
     statuses = {}
     for record in records:
-        if record["mode"] == "alloc-count":
+        if record["mode"] in ("alloc-count", "compile"):
             continue
         key = cell_key(record)
         if record.get("run_index") is None:
@@ -280,12 +280,31 @@ def summarize(records, charter, expected_hash, manifests, env=None, reproduces=N
         "aggregates": aggregates(cells, manifests),
         "port_notes": port_notes(cells, manifests),
         "explanations": explanations(cells, manifests),
+        "compile": compile_times(records),
         "label": profile_label(first["machine_profile"]),
         "max_steal_share": max((c["steal_share"] for c in cells.values() if "steal_share" in c), default=None),
     }
     if reproduces is not None:
         mark_reproduction(summary, reproduces, charter)
     return summary
+
+
+def compile_times(records):
+    """Per workload and optimisation level, the best of the Miri port's timed
+    builds: the compiler's wall time and its peak resident memory. Recorded
+    for awareness; nothing is gated on it."""
+    builds = defaultdict(list)
+    for record in records:
+        if record["mode"] == "compile" and record["status"] == "ok":
+            builds[(record["workload"], f"opt{record['opt_level']}")].append(record)
+    out = {}
+    for (workload, level), runs in sorted(builds.items()):
+        out.setdefault(workload, {})[level] = {
+            "wall_ns": min(r["process_wall_ns"] for r in runs),
+            "max_rss_bytes": min(r["max_rss_bytes"] for r in runs),
+            "runs": len(runs),
+        }
+    return out
 
 
 def profile_label(profile_name):
@@ -430,6 +449,12 @@ def markdown(summary):
     lines += ["", "| Language | Size | Mode | Tag | Geomean × C | Workloads |", "|---|---|---|---|---|---|"]
     for row in summary["aggregates"]:
         lines.append(f"| {language_label(row['language'])} | {row['size']} | {row['mode']} | {row['tag']} | {fmt(row['geomean_vs_c'])} | {row['coverage']} |")
+    if compiled := summary.get("compile"):
+        lines += ["", "## Compile time", "", "Best of the Miri port's timed builds. Recorded for awareness; nothing is gated on it.", ""]
+        lines += ["| Workload | Level | Wall (ms) | Peak RSS (MB) |", "|---|---|---|---|"]
+        for workload, levels in compiled.items():
+            for level, best in levels.items():
+                lines.append(f"| {workload} | {level} | {fmt(best['wall_ns'] / 1e6, 1)} | {fmt(best['max_rss_bytes'] / 2**20, 1)} |")
     if reasons := summary.get("explanations"):
         lines += ["", "## Why each language lands where it does", ""]
         lines += [f"- **{workload}**, {language}: {reason}" for workload, by_language in reasons.items() for language, reason in by_language.items()]

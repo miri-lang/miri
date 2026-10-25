@@ -58,6 +58,11 @@ PORT_EXTENSIONS = {
     "pypy": "py",
 }
 SMOKE_LANGUAGES = ("miri", "c", "rust")
+# Compile time is recorded for awareness, never gated: the Miri port is
+# built this many times at each of these optimisation levels, and the best
+# run is reported.
+COMPILE_RUNS = 3
+COMPILE_OPT_LEVELS = (3, 0)
 SMOKE_RUNS = 5
 # The reference sets everyone else's time cap, so its own verify run is capped
 # only by this, generously.
@@ -549,6 +554,42 @@ def build(ctx, workload_name, language, src, variant):
     return built_port(ctx, language, src, out)
 
 
+def compile_line(charter, opt_level):
+    """The charter's Miri build line at `opt_level`, otherwise unchanged."""
+    return charter["languages"]["miri"]["build"].replace("--opt-level 3", f"--opt-level {opt_level}")
+
+
+def compile_record(ctx, env, workload, opt_level, run_index, measurement):
+    """One timed build of the Miri port: the compiler's wall time and peak
+    resident memory at `opt_level`."""
+    record = base_record(ctx, env, workload, "miri", "default", "-", "compile")
+    record.update(
+        opt_level=opt_level,
+        run_index=run_index,
+        attempt=0,
+        process_wall_ns=measurement.process_wall_ns,
+        user_ns=measurement.user_ns,
+        sys_ns=measurement.sys_ns,
+        max_rss_bytes=measurement.max_rss_bytes,
+        status="ok" if measurement.exit_code == 0 and not measurement.timed_out else "build-failed",
+    )
+    return record
+
+
+def record_compile_times(ctx, env, workload):
+    """Build the Miri port `COMPILE_RUNS` times at each level, pinned like a
+    timed run, recording each build."""
+    src = workload.port("miri")
+    out = ctx.work_dir / "bin" / f"{workload.name}.miri.compile"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for opt_level in COMPILE_OPT_LEVELS:
+        words, assignments = command_words(compile_line(ctx.charter, opt_level), src, out, ctx.programs())
+        for run_index in range(COMPILE_RUNS):
+            env_vars = ctx.build_env("miri") | assignments
+            measurement = measure([*pin_words(ctx.profile), *words], env_vars, ctx.work_dir, C_VERIFY_CAP_S)
+            ctx.records.append(compile_record(ctx, env, workload, opt_level, run_index, measurement))
+
+
 def counted_build(ctx, workload_name, src):
     """The Miri port built for the untimed counter run: the charter's build line
     without `--release`, which leaves the runtime's counters out of the code it
@@ -963,6 +1004,8 @@ def run(args):
     floors = measure_floors(ctx, languages, args.variant)
     for workload in load_workloads(args.only.split(",") if args.only else None):
         ready = built_ports(ctx, env, workload, languages, args.variant)
+        if "miri" in ready:
+            record_compile_times(ctx, env, workload)
         for size in selected_sizes(ctx):
             run_workload_size(ctx, env, workload, ready, size, floors)
     out = write_results(ctx, env)

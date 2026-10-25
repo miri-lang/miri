@@ -67,6 +67,18 @@
         }
       }
     },
+    "compile": {
+      "description": "Per workload and optimisation level (opt3, opt0), the best of the Miri port's timed builds: wall time and the compiler's peak resident memory. For awareness; nothing is gated on it.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "required": ["wall_ns", "max_rss_bytes", "runs"],
+          "properties": {"wall_ns": {"type": "integer"}, "max_rss_bytes": {"type": "integer"}, "runs": {"type": "integer"}}
+        }
+      }
+    },
     "label": {"description": "The label a publishable profile's charts carry, such as preliminary; null otherwise.", "type": ["string", "null"]},
     "max_steal_share": {"description": "The largest steal share of any cell in the run; null where steal time was not read.", "type": ["number", "null"]},
     "reproduction": {

@@ -220,6 +220,30 @@ class ExplanationsTest(unittest.TestCase):
         self.assertNotIn("Why each language", summarize.markdown(summary))
 
 
+def compile_records(workload, opt_level, walls, rss=40_000_000):
+    out = []
+    for i, wall in enumerate(walls):
+        record = records(workload, "miri", [wall], rss=rss + i)[0]
+        record.update(mode="compile", opt_level=opt_level, run_index=i, attempt=0)
+        out.append(record)
+    return out
+
+
+class CompileTimeTest(unittest.TestCase):
+    def test_compile_runs_stay_out_of_the_cells_and_report_their_best(self):
+        recs = records("w", "c", [100, 100, 100]) + compile_records("w", 3, [900, 700, 800]) + compile_records("w", 0, [300, 200, 250])
+        summary = summarize_records(recs)
+        self.assertNotIn("compile", {c["mode"] for c in summary["cells"]})
+        self.assertEqual(summary["compile"]["w"]["opt3"], {"wall_ns": 700, "max_rss_bytes": 40_000_000, "runs": 3})
+        self.assertEqual(summary["compile"]["w"]["opt0"]["wall_ns"], 200)
+        self.assertIn("## Compile time", summarize.markdown(summary))
+
+    def test_a_run_without_compile_records_has_an_empty_compile_section(self):
+        summary = summarize_records(records("w", "c", [100, 100, 100]))
+        self.assertEqual(summary["compile"], {})
+        self.assertNotIn("## Compile time", summarize.markdown(summary))
+
+
 class PreliminaryTest(unittest.TestCase):
     def test_a_vps_summary_carries_its_label_and_the_largest_steal_share(self):
         recs = records("w", "c", [100, 100, 100]) + records("w", "miri", [150, 150, 150])
@@ -251,6 +275,7 @@ class SchemaTest(unittest.TestCase):
         schema = json.loads((BENCH / "schema" / "summary.v1.json").read_text())
         recs = records("w", "c", [100, 100, 100]) + records("w", "miri", steady(150, 0.01))
         recs += records("w", "c", [50, 50, 50], mode="hot") + [unmeasured("v", "miri", "mismatch")]
+        recs += compile_records("w", 3, [900]) + compile_records("w", 0, [300])
         validate(summarize_records(recs), schema, schema)
 
     def test_a_reproduced_vps_summary_validates_too(self):

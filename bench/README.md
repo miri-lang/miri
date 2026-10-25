@@ -46,7 +46,11 @@ exit, and CPU time and peak memory come from the child's `wait4` resource usage.
 A noisy cell is re-run from its warm-up as the charter allows, and every
 attempt is kept. Sizes S and M also run in hot mode. Each Miri cell gets one
 extra, untimed run with the runtime's allocation counter on, from a build of
-the same line without `--release`: a release build leaves the counters out.
+the same line without `--release`: a release build leaves the counters out. Each Miri port is also built
+three times at the charter's `--opt-level 3` line and three times at the same
+line at `--opt-level 0`, pinned like a timed run, and the summary reports the
+best wall time and the compiler's peak memory at each level (`compile`):
+awareness of what the optimiser costs, never a gate.
 
 ## What it writes
 

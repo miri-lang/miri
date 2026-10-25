@@ -247,6 +247,24 @@ class PreliminaryVpsTest(unittest.TestCase):
             self.assertTrue(run.noisy(ctx, stolen, "cold"))
 
 
+class CompileTimeTest(unittest.TestCase):
+    def test_the_opt_level_zero_line_differs_from_the_charter_line_only_in_its_level(self):
+        charter = run.load_charter()
+        timed = charter["languages"]["miri"]["build"]
+        self.assertEqual(run.compile_line(charter, 3), timed)
+        self.assertEqual(run.compile_line(charter, 0), timed.replace("--opt-level 3", "--opt-level 0"))
+
+    def test_each_compile_run_becomes_a_record_of_its_level(self):
+        with tempfile.TemporaryDirectory() as work:
+            ctx = context(work)
+            env = fake_environment()
+            workload = next(w for w in run.load_workloads(None) if w.name == "nbody")
+            measurement = run.Measurement(0, "", "", 2_000_000, 1, 0, 50_000_000)
+            record = run.compile_record(ctx, env, workload, 0, 1, measurement)
+        self.assertEqual((record["mode"], record["opt_level"], record["run_index"]), ("compile", 0, 1))
+        self.assertEqual((record["process_wall_ns"], record["max_rss_bytes"], record["status"]), (2_000_000, 50_000_000, "ok"))
+
+
 class ExplanationTest(unittest.TestCase):
     def test_every_workload_explains_every_headline_language_and_miri(self):
         charter = run.load_charter()
