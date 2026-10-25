@@ -7,6 +7,7 @@ pub mod append;
 pub mod basic;
 pub mod completion;
 pub mod errors;
+pub mod field_append;
 pub mod index_of_any;
 pub mod integration;
 pub mod interpolation;

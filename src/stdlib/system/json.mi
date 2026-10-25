@@ -687,16 +687,8 @@ private class JsonWriter
                 self.write(text.substring(run, length))
         self.write("\"")
 
-    // TODO: an append to a field (`self.text = self.text + piece`) copies the
-    // whole text rather than growing it in place, which makes serialization
-    // quadratic. Appending to a local grows in place, so the text is moved
-    // into one, grown, and moved back. Once field-targeted string appends grow
-    // in place, this becomes `self.text += piece`.
     private fn write(piece String)
-        var held = self.text
-        self.text = ""
-        held = held + piece
-        self.text = held
+        self.text += piece
 
     private static fn boolean_text(flag bool) String
         if flag

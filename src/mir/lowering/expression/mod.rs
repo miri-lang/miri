@@ -24,6 +24,7 @@ pub mod cast_expr;
 pub mod collection_literal;
 pub mod conditional_expr;
 pub mod enumvalue_expr;
+pub mod field_append;
 pub mod formattedstring_expr;
 pub mod function_reference;
 pub mod guard_expr;

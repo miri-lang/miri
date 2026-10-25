@@ -20,6 +20,10 @@ use crate::mir::lowering::dispatch::{
     collection_slot_type, conform_operand_to_collection_slot, donate_operand_to_container,
     lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
 };
+use crate::mir::lowering::expression::field_append::{
+    append_in_place, appended_pieces, field_append_target, lower_field_append, same_path,
+    whole_local,
+};
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::expression::unshare::TemporaryRoot;
 use crate::mir::lowering::helpers::{
@@ -37,7 +41,7 @@ fn assign_to_identifier(
 ) -> Result<Operand, LoweringError> {
     if let ExpressionKind::Identifier(name, _) = &id_expr.node {
         if let Some(&local) = ctx.variable_map.get(name.as_str()) {
-            if let Some(pieces) = appended_strings(ctx, local, name, op, rhs) {
+            if let Some(pieces) = appended_strings(ctx, local, id_expr, op, rhs) {
                 return lower_string_append(ctx, local, &pieces, expr, dest);
             }
         }
@@ -70,16 +74,15 @@ fn assign_to_identifier(
 }
 
 /// The strings `s = s + t + u` or `s += t` appends, in order, to the string
-/// local `local` named `name` holds: when `local` is declared `String` and is
-/// a binding of this host body, and every piece is a string too.
+/// local `local` the identifier `target` names: when `local` is declared
+/// `String` and is a binding of this host body, and every piece is a string too.
 fn appended_strings<'e>(
     ctx: &LoweringContext,
     local: crate::mir::Local,
-    name: &str,
+    target: &Expression,
     op: &crate::ast::operator::AssignmentOp,
     rhs: &'e Expression,
 ) -> Option<Vec<&'e Expression>> {
-    use crate::ast::operator::{AssignmentOp, BinaryOp};
     let decl = ctx.body.local_decls.get(local.0)?;
     let is_host = decl.device_handle.is_none()
         && !ctx.body.env_capture_locals.contains(&local)
@@ -87,40 +90,8 @@ fn appended_strings<'e>(
     if decl.ty.kind != TypeKind::String || !is_host {
         return None;
     }
-    let pieces = match op {
-        AssignmentOp::AssignAdd => vec![rhs],
-        AssignmentOp::Assign => {
-            // `s + a + b` is `(s + a) + b`: walk down the left operands to `s`.
-            let mut pieces = Vec::new();
-            let mut current = rhs;
-            loop {
-                if let ExpressionKind::Binary(left, BinaryOp::Add, right) = &current.node {
-                    pieces.push(right.as_ref());
-                    current = left.as_ref();
-                    continue;
-                }
-                let reaches_target = matches!(
-                    &current.node,
-                    ExpressionKind::Identifier(n, _) if n.as_str() == name
-                );
-                if !reaches_target || pieces.is_empty() {
-                    return None;
-                }
-                break;
-            }
-            pieces.reverse();
-            pieces
-        }
-        AssignmentOp::AssignSub
-        | AssignmentOp::AssignMul
-        | AssignmentOp::AssignDiv
-        | AssignmentOp::AssignMod => return None,
-    };
-    let is_string = |piece: &&Expression| {
-        ctx.recorded_type(piece.id)
-            .is_some_and(|ty| ty.kind == TypeKind::String)
-    };
-    pieces.iter().all(is_string).then_some(pieces)
+    let reaches_target = |candidate: &Expression| same_path(ctx, target, candidate);
+    appended_pieces(ctx, op, rhs, reaches_target).map(|appended| appended.pieces)
 }
 
 /// Lowers `s = s + t + …` and `s += t` on the string local `local` to one
@@ -152,31 +123,11 @@ fn append_piece(
     let watermark = ctx.body.local_decls.len();
     let piece = lower_expression(ctx, appended, None)?;
     let piece = ensure_place(ctx, piece, expr_span);
-    let result = ctx.push_temp(Type::new(TypeKind::String, expr_span), expr_span);
-    let target = ctx.new_basic_block();
-    ctx.set_terminator(crate::mir::Terminator::new(
-        crate::mir::TerminatorKind::Call {
-            func: Operand::runtime(crate::runtime_fns::rt::STRING_APPEND, expr_span),
-            args: vec![
-                Operand::Move(Place::new(local)),
-                Operand::Copy(piece.clone()),
-            ],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            destination: Place::new(result),
-            target: Some(target),
-        },
-        expr_span,
-    ));
-    ctx.set_current_block(target);
-    // `Assign`, not `Reassign`: the call took over what `local` held.
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(local),
-            Rvalue::Use(Operand::Move(Place::new(result))),
-        ),
-        span: expr_span,
-    });
+    let appended = whole_local(ctx, &piece, expr_span);
+    append_in_place(ctx, local, appended, expr_span);
+    if appended != piece.local {
+        ctx.emit_temp_drop(appended, watermark, expr_span);
+    }
     ctx.emit_temp_drop(piece.local, watermark, expr_span);
     Ok(())
 }
@@ -351,7 +302,7 @@ fn assign_to_var_compound(
     Ok(())
 }
 
-fn finalize_assign_result(
+pub(super) fn finalize_assign_result(
     ctx: &mut LoweringContext,
     val: Operand,
     dest: Option<Place>,
@@ -381,6 +332,9 @@ fn assign_to_member(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     if let ExpressionKind::Member(obj, prop) = &member_expr.node {
+        if let Some((target, appended)) = field_append_target(ctx, member_expr, op, rhs) {
+            return lower_field_append(ctx, target, &appended, expr, dest);
+        }
         // A store through a field projection hands its reference to the object
         // being written, which releases it when that object dies — so the store
         // takes a reference of its own. Reading the right-hand side as a `Copy`
@@ -549,6 +503,24 @@ pub(crate) fn resolve_member_field_index(
     }
 }
 
+/// The position of the field `prop` names in a value of type `base_ty`: a
+/// struct or class field by its name, or a tuple element by its position.
+pub(crate) fn field_index(
+    ctx: &LoweringContext,
+    base_ty: &Type,
+    prop: &Expression,
+) -> Option<usize> {
+    if let TypeKind::Custom(type_name, _) = &base_ty.kind {
+        return resolve_member_field_index(type_name, prop, ctx.type_checker.type_definitions());
+    }
+    if let (TypeKind::Tuple(_), ExpressionKind::Literal(Literal::Integer(position))) =
+        (&base_ty.kind, &prop.node)
+    {
+        return Some(super::member_expr::extract_integer_index(position));
+    }
+    None
+}
+
 /// The right-hand side of a member assignment, carried together with what the
 /// type checker recorded for it and the local watermark taken before it was
 /// lowered — which is what tells a temp made for it from a pre-existing local.
@@ -600,7 +572,7 @@ fn wrap_value_for_field_slot(
 /// instance's own type arguments are what give the field the type its value
 /// actually has, and that type is what decides whether the store releases what
 /// it replaces and whether a bare value is wrapped for an optional slot.
-fn field_slot_type(
+pub(super) fn field_slot_type(
     ctx: &LoweringContext,
     instance: &Type,
     type_name: &str,

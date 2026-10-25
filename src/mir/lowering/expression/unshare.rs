@@ -33,7 +33,6 @@
 //! a collection is a value.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -563,20 +562,7 @@ fn field_step<'e>(
     prop: &Expression,
     expr: &Expression,
 ) -> Option<Step<'e>> {
-    let base = &steps.last()?.ty().kind;
-    let idx = if let TypeKind::Custom(type_name, _) = base {
-        super::assignment_expr::resolve_member_field_index(
-            type_name,
-            prop,
-            ctx.type_checker.type_definitions(),
-        )?
-    } else if let (TypeKind::Tuple(_), ExpressionKind::Literal(Literal::Integer(position))) =
-        (base, &prop.node)
-    {
-        super::member_expr::extract_integer_index(position)
-    } else {
-        return None;
-    };
+    let idx = super::assignment_expr::field_index(ctx, steps.last()?.ty(), prop)?;
     Some(Step::Field(idx, ctx.recorded_type(expr.id)?))
 }
 
