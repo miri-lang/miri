@@ -1,0 +1,21 @@
+{
+ "run_id": "20261026T104152Z",
+ "suspect": [
+  {
+   "cell": "binary-trees/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0652249270376357,
+   "baseline": 1.321529339635929,
+   "tonight": 1.4077259943917773
+  },
+  {
+   "cell": "sieve/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.187064897121746,
+   "baseline": 2.5152884742740387,
+   "tonight": 2.985810653945625
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
