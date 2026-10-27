@@ -57,6 +57,10 @@ struct PreparedCall {
     result: CallResult,
 }
 
+/// The fewest targets a `SwitchInt` dispatches through a jump table or a
+/// search tree; fewer are compared one by one, which is as fast.
+const SWITCH_TABLE_MIN_TARGETS: usize = 3;
+
 impl PreparedCall {
     fn with_capacity(count: usize) -> Self {
         Self {
@@ -914,9 +918,11 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Translate `TerminatorKind::SwitchInt`. Lowers to a chain of `icmp` +
-    /// `brif`, with a final unconditional branch to `otherwise` when no target
-    /// matches. An optional held as its bytes switches on its tag.
+    /// Translate `TerminatorKind::SwitchInt`. One or two targets lower to a
+    /// compare and branch each; more lower through Cranelift's `Switch`, which
+    /// builds a jump table over dense values and a binary search over sparse
+    /// ones, so a many-armed `match` does not test its cases one by one. An
+    /// optional held as its bytes switches on its tag.
     #[allow(clippy::too_many_arguments)]
     fn translate_switch_int(
         builder: &mut FunctionBuilder,
@@ -933,31 +939,57 @@ impl<'a> FunctionTranslator<'a> {
             None => Self::translate_operand(builder, ctx, discr, locals, type_ctx, None)?,
         };
         let disc_ty = builder.func.dfg.value_type(disc_val);
-
-        if targets.is_empty() {
-            builder.ins().jump(blocks[otherwise], &[]);
-            return Ok(());
-        }
-        if targets.len() == 1 {
-            let (value, target) = &targets[0];
-            let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
-            let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
-            builder
-                .ins()
-                .brif(cond, blocks[target], &[], blocks[otherwise], &[]);
-            return Ok(());
-        }
-
-        let mut remaining_targets: Vec<_> = targets.iter().collect();
         let otherwise_block = blocks[otherwise];
+        if targets.len() >= SWITCH_TABLE_MIN_TARGETS && disc_ty.bits() <= 64 {
+            Self::emit_switch_table(builder, disc_val, targets, otherwise_block, blocks);
+        } else {
+            Self::emit_switch_chain(builder, disc_val, targets, otherwise_block, blocks);
+        }
+        Ok(())
+    }
+
+    /// Dispatches on `disc_val` through Cranelift's `Switch`. Each case value
+    /// is taken at the width of `disc_val`, the bits the comparison sees; of
+    /// two targets with one value the later wins, as in the compare chain.
+    fn emit_switch_table(
+        builder: &mut FunctionBuilder,
+        disc_val: cranelift_codegen::ir::Value,
+        targets: &[(crate::mir::terminator::Discriminant, BasicBlock)],
+        otherwise: Block,
+        blocks: &HashMap<BasicBlock, Block>,
+    ) {
+        let width_mask = u128::MAX >> (128 - builder.func.dfg.value_type(disc_val).bits());
+        let mut switch = cranelift_frontend::Switch::new();
+        for (value, target) in targets.iter().rev() {
+            let case = value.value() & width_mask;
+            if !switch.entries().contains_key(&case) {
+                switch.set_entry(case, blocks[target]);
+            }
+        }
+        switch.emit(builder, disc_val, otherwise);
+    }
+
+    /// Dispatches on `disc_val` by comparing it with each case in turn, the
+    /// last target first, then branching to `otherwise`.
+    fn emit_switch_chain(
+        builder: &mut FunctionBuilder,
+        disc_val: cranelift_codegen::ir::Value,
+        targets: &[(crate::mir::terminator::Discriminant, BasicBlock)],
+        otherwise: Block,
+        blocks: &HashMap<BasicBlock, Block>,
+    ) {
+        let disc_ty = builder.func.dfg.value_type(disc_val);
+        let mut remaining_targets: Vec<_> = targets.iter().collect();
+        if remaining_targets.is_empty() {
+            builder.ins().jump(otherwise, &[]);
+            return;
+        }
         while let Some((value, target)) = remaining_targets.pop() {
             let target_block = blocks[target];
             let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
             let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
             if remaining_targets.is_empty() {
-                builder
-                    .ins()
-                    .brif(cond, target_block, &[], otherwise_block, &[]);
+                builder.ins().brif(cond, target_block, &[], otherwise, &[]);
             } else {
                 let next_check = builder.create_block();
                 builder.ins().brif(cond, target_block, &[], next_check, &[]);
@@ -965,7 +997,6 @@ impl<'a> FunctionTranslator<'a> {
                 builder.switch_to_block(next_check);
             }
         }
-        Ok(())
     }
 
     /// Translate `TerminatorKind::Call`: direct named call or indirect closure

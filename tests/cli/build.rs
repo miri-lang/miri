@@ -1651,3 +1651,74 @@ fn test_a_constant_divisor_emits_no_division_checks() {
     let run = Command::new(&out).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "-3 -7 4");
 }
+
+const DENSE_MATCH: &str = r#"
+use system.io
+
+enum Op
+    Load
+    Store
+    Add
+    Sub
+    Jump
+    Halt
+
+fn cost(op Op) int
+    match op
+        Op.Load: return 3
+        Op.Store: return 4
+        Op.Add: return 1
+        Op.Sub: return 2
+        Op.Jump: return 5
+        Op.Halt: return 0
+
+fn sparse(x int) int
+    match x
+        0: return 1
+        1: return 11
+        2: return 22
+        1000000: return 7
+        default: return 99
+
+fn three(x int) int
+    match x
+        1: return 100
+        2: return 200
+        3: return 300
+        default: return 0
+
+fn main()
+    let total = cost(Op.Load) + cost(Op.Store) * 10 + cost(Op.Jump) * 100 + cost(Op.Halt)
+    let small = three(1) + three(3) + three(9)
+    println(f"{total} {sparse(0)} {sparse(1)} {sparse(2)} {sparse(1000000)} {sparse(5)} {small}")
+"#;
+
+/// A match over many dense cases dispatches through one jump table rather
+/// than comparing the cases one after another; a match over sparse values, and
+/// a match with exactly three cases, still find each case and fall to
+/// their default otherwise.
+#[test]
+fn test_a_dense_match_dispatches_through_a_jump_table() {
+    let source = create_test_file(DENSE_MATCH);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("dense");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--release", "--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("dense.clif")).unwrap();
+    let (blocks, _) = clif_function(&listing, "miri.cost");
+    assert!(
+        blocks.iter().any(|(_, body)| body.contains("br_table")),
+        "the six-way match in cost has no jump table:\n{blocks:?}"
+    );
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "543 1 11 22 7 99 400"
+    );
+}
