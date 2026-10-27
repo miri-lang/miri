@@ -1,0 +1,14 @@
+{
+ "run_id": "20261027T100947Z",
+ "suspect": [
+  {
+   "cell": "sieve/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.100922424921493,
+   "baseline": 3.1255711223155833,
+   "tonight": 3.4410113392442647
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
