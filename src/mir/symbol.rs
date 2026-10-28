@@ -797,6 +797,6 @@ impl InstantiationKey {
 fn tokens<'t>(types: impl IntoIterator<Item = &'t Type>) -> Vec<Token> {
     types
         .into_iter()
-        .map(|ty| type_kind_to_mangle_str(&ty.kind))
+        .map(|ty| Cow::Owned(type_kind_to_mangle_str(&ty.kind).into_owned()))
         .collect()
 }

@@ -85,13 +85,13 @@ pub(crate) const MAX_TOKEN_DEPTH: usize = 64;
 /// open when a component names an unbound parameter, unspellable otherwise —
 /// since a name built from either would be the same name for every type that
 /// contains one.
-pub(crate) fn type_kind_to_mangle_str(kind: &TypeKind) -> Cow<'static, str> {
+pub(crate) fn type_kind_to_mangle_str<'a>(kind: &'a TypeKind) -> Cow<'a, str> {
     type_kind_token(kind, 0)
 }
 
 /// [`type_kind_to_mangle_str`] one level into a type, carrying how far the
 /// descent has already gone.
-fn type_kind_token(kind: &TypeKind, depth: usize) -> Cow<'static, str> {
+fn type_kind_token<'a>(kind: &'a TypeKind, depth: usize) -> Cow<'a, str> {
     if depth >= MAX_TOKEN_DEPTH {
         return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
     }
@@ -158,8 +158,11 @@ fn type_kind_token(kind: &TypeKind, depth: usize) -> Cow<'static, str> {
 /// The segment heading a built-in type of `arity` components: the arity, then
 /// `tag`. Starting with a digit is what keeps it out of reach of any declared
 /// name, and the arity is what tells a decoder where the components end.
-fn built_in_head(tag: &str, arity: usize) -> Cow<'static, str> {
-    Cow::Owned(format!("{arity}{tag}"))
+fn built_in_head<'a>(tag: &str, arity: usize) -> Cow<'a, str> {
+    let mut s = String::with_capacity(8 + tag.len());
+    use std::fmt::Write;
+    let _ = write!(&mut s, "{arity}{tag}");
+    Cow::Owned(s)
 }
 
 /// Whether a declared type's `name` can spell itself as is: a letter followed
@@ -178,12 +181,12 @@ fn is_plain_type_name(name: &str) -> bool {
 /// [`is_plain_type_name`]), otherwise its length, [`ESCAPED_NAME_TAG`] and the
 /// name — `My_Box` is `6xMy_Box` — so an underscore inside it can never be read
 /// as the boundary between two components.
-fn declared_name_token(name: &str) -> Cow<'static, str> {
+fn declared_name_token<'a>(name: &'a str) -> Cow<'a, str> {
     if type_identity::is_qualified(name) {
         return qualified_name_token(name);
     }
     if is_plain_type_name(name) {
-        return Cow::Owned(name.to_string());
+        return Cow::Borrowed(name);
     }
     Cow::Owned(format!("{}{ESCAPED_NAME_TAG}{name}", name.len()))
 }
@@ -202,7 +205,7 @@ pub(super) fn identifier_spelling(identity: &str) -> Cow<'_, str> {
 /// then each one as a declared name — `local.k.Helper` is
 /// `3q_local_k_Helper` — so neither the `.` between them nor an `_` inside one
 /// reaches the token.
-fn qualified_name_token(identity: &str) -> Cow<'static, str> {
+fn qualified_name_token<'a>(identity: &'a str) -> Cow<'a, str> {
     let segments: Vec<&str> = type_identity::module_path(identity)
         .chain(std::iter::once(type_identity::source_name(identity)))
         .collect();
@@ -218,7 +221,7 @@ fn collection_token<'a>(
     collection: Collection,
     args: impl IntoIterator<Item = &'a Expression>,
     depth: usize,
-) -> Cow<'static, str> {
+) -> Cow<'a, str> {
     compound_token(declared_name_token(collection.name()), args, depth)
 }
 
@@ -230,7 +233,7 @@ fn collection_token<'a>(
 /// A closure type declaring type parameters of its own, or taking a parameter
 /// resident anywhere but the host, has no token: it crosses a call in a way no
 /// instantiation of a class can hold.
-fn closure_token(function: &FunctionTypeData, depth: usize) -> Cow<'static, str> {
+fn closure_token<'a>(function: &'a FunctionTypeData, depth: usize) -> Cow<'a, str> {
     let on_host = |param: &crate::ast::common::Parameter| match param.residency {
         None | Some(BindingResidency::Host) => true,
         Some(BindingResidency::Gpu) => false,
@@ -256,10 +259,10 @@ fn closure_token(function: &FunctionTypeData, depth: usize) -> Cow<'static, str>
 /// The token for a type written as `head` applied to `args`, e.g. `Map<String,
 /// int>` → `Map_String_int`.
 fn compound_token<'a>(
-    head: Cow<'static, str>,
+    head: Cow<'a, str>,
     args: impl IntoIterator<Item = &'a Expression>,
     depth: usize,
-) -> Cow<'static, str> {
+) -> Cow<'a, str> {
     join_tokens(
         head,
         args.into_iter().map(|arg| expression_token(arg, depth + 1)),
@@ -270,26 +273,33 @@ fn compound_token<'a>(
 /// token when a component has no token of its own: [`OPEN_PARAMETER_TOKEN`]
 /// when any component is still open, as the type is then not an instantiation
 /// yet, otherwise [`UNSPELLABLE_TYPE_TOKEN`].
-fn join_tokens(
-    head: Cow<'static, str>,
-    parts: impl Iterator<Item = Cow<'static, str>>,
-) -> Cow<'static, str> {
-    let mut out = head.into_owned();
+fn join_tokens<'a>(head: Cow<'a, str>, parts: impl Iterator<Item = Cow<'a, str>>) -> Cow<'a, str> {
+    let mut out = String::new();
+    let mut initialized = false;
     let mut is_unspellable = false;
     for part in parts {
         if part == OPEN_PARAMETER_TOKEN {
             return Cow::Borrowed(OPEN_PARAMETER_TOKEN);
         }
-        is_unspellable |= part == UNSPELLABLE_TYPE_TOKEN;
-        if !is_unspellable {
+        if part == UNSPELLABLE_TYPE_TOKEN {
+            is_unspellable = true;
+        } else if !is_unspellable {
+            if !initialized {
+                out.reserve(head.len() + part.len() + 16);
+                out.push_str(&head);
+                initialized = true;
+            }
             out.push('_');
             out.push_str(&part);
         }
     }
     if is_unspellable {
-        return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
+        Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN)
+    } else if initialized {
+        Cow::Owned(out)
+    } else {
+        head
     }
-    Cow::Owned(out)
 }
 
 /// Whether `token` names no type: an open one or one that cannot be named.
@@ -325,13 +335,13 @@ const VOID_TOKEN: &str = "void";
 /// — spells the constant itself, so two sizes of the same element type get two
 /// symbols instead of sharing one body between them. A size that is still an
 /// unfolded expression names no single instantiation and is open.
-fn expression_mangle_token(arg: &Expression) -> Cow<'static, str> {
+fn expression_mangle_token<'a>(arg: &'a Expression) -> Cow<'a, str> {
     expression_token(arg, 0)
 }
 
 /// [`expression_mangle_token`] one level into a type, carrying how far the
 /// descent has already gone.
-fn expression_token(arg: &Expression, depth: usize) -> Cow<'static, str> {
+fn expression_token<'a>(arg: &'a Expression, depth: usize) -> Cow<'a, str> {
     if depth >= MAX_TOKEN_DEPTH {
         return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
     }
