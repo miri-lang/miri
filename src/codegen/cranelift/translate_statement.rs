@@ -57,6 +57,14 @@ struct PreparedCall {
     result: CallResult,
 }
 
+/// Where a `MiriString` header keeps its bytes, its byte length and its
+/// ASCII flag, in pointer-sized words from its start. The runtime's
+/// `test_string_header_sits_where_compiled_code_reads_and_writes_it` holds the
+/// header to these.
+const STRING_DATA_WORD: i32 = 0;
+const STRING_LEN_WORD: i32 = 1;
+const STRING_ASCII_WORD: i32 = 3;
+
 /// The fewest targets a `SwitchInt` dispatches through a jump table or a
 /// search tree; fewer are compared one by one, which is as fast.
 const SWITCH_TABLE_MIN_TARGETS: usize = 3;
@@ -1281,6 +1289,12 @@ impl<'a> FunctionTranslator<'a> {
         if callee.runtime_name() == Some(rt::RC_STATS_COW_COPY) {
             return Self::emit_rc_stats_hook(builder, ctx, rt::RC_STATS_COW_COPY);
         }
+        if callee.runtime_name() == Some(rt::STRING_CODE_AT)
+            && ctx.runtime_checks == RuntimeChecks::CompiledOut
+        {
+            let code = Self::emit_inline_code_at(builder, ctx, callee, &arg_values, &sig)?;
+            return Self::define_call_destination(builder, locals, destination, code);
+        }
         if callee.runtime_name() == Some(rt::LIST_PUSH) {
             if let Some(push) = ListPush::of(builder, &arg_values) {
                 return Self::emit_inline_list_push(builder, ctx, callee, push, &sig);
@@ -1312,6 +1326,87 @@ impl<'a> FunctionTranslator<'a> {
             Self::apply_list_new_init(builder, ctx, maybe_result, dest_ty, type_ctx, ptr_type)?;
         }
         Ok(())
+    }
+
+    /// Answers `miri_rt_string_code_at(string, index)` for an ASCII string and
+    /// an index inside it by loading the byte, and calls the runtime for
+    /// everything else: a null or non-ASCII string, or an index outside it,
+    /// which an unsigned compare against the length also catches when it is
+    /// negative. Emitted only in a build with the runtime's checks compiled
+    /// out, so a build that keeps them still has the heap guard see every
+    /// string the runtime is handed.
+    fn emit_inline_code_at(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        arg_values: &[cranelift_codegen::ir::Value],
+        sig: &Signature,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        let [string, index] = arg_values else {
+            return Err(CodegenError::Internal(format!(
+                "{} takes a string and an index, got {} arguments",
+                rt::STRING_CODE_AT,
+                arg_values.len()
+            )));
+        };
+        let code_type = sig
+            .returns
+            .first()
+            .map(|param| param.value_type)
+            .ok_or_else(|| {
+                CodegenError::Internal(format!("{} returns nothing", rt::STRING_CODE_AT))
+            })?;
+        let header = builder.create_block();
+        let byte_read = builder.create_block();
+        let runtime_call = builder.create_block();
+        let join = builder.create_block();
+        builder.append_block_param(join, code_type);
+        builder.ins().brif(*string, header, &[], runtime_call, &[]);
+
+        builder.switch_to_block(header);
+        builder.seal_block(header);
+        let word = i32::try_from(code_type.bytes()).map_err(|_| {
+            CodegenError::Internal(format!("{} returns a {code_type}", rt::STRING_CODE_AT))
+        })?;
+        let flags = MemFlagsData::new();
+        let ascii = builder.ins().uload8(
+            cranelift_codegen::ir::types::I32,
+            flags,
+            *string,
+            word * STRING_ASCII_WORD,
+        );
+        let len = builder
+            .ins()
+            .load(code_type, flags, *string, word * STRING_LEN_WORD);
+        let inside = builder.ins().icmp(IntCC::UnsignedLessThan, *index, len);
+        let is_ascii = builder.ins().icmp_imm_u(IntCC::NotEqual, ascii, 0);
+        let fast = builder.ins().band(inside, is_ascii);
+        builder.ins().brif(fast, byte_read, &[], runtime_call, &[]);
+
+        builder.switch_to_block(byte_read);
+        builder.seal_block(byte_read);
+        let data = builder
+            .ins()
+            .load(code_type, flags, *string, word * STRING_DATA_WORD);
+        let at = builder.ins().iadd(data, *index);
+        let byte = builder.ins().uload8(code_type, flags, at, 0);
+        builder.ins().jump(join, &[byte.into()]);
+
+        builder.switch_to_block(runtime_call);
+        builder.seal_block(runtime_call);
+        let func_name = callee.link_name();
+        let func_id = ctx
+            .module
+            .declare_function(&func_name, Linkage::Import, sig)
+            .map_err(|e| CodegenError::declare_function(func_name, e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, arg_values);
+        let answer = builder.inst_results(call)[0];
+        builder.ins().jump(join, &[answer.into()]);
+
+        builder.seal_block(join);
+        builder.switch_to_block(join);
+        Ok(builder.block_params(join)[0])
     }
 
     /// Answers `miri_rt_rc_is_shared(ptr)` without the call while nothing is

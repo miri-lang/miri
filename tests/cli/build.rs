@@ -1722,3 +1722,88 @@ fn test_a_dense_match_dispatches_through_a_jump_table() {
         "543 1 11 22 7 99 400"
     );
 }
+
+const CODE_AT: &str = r#"
+use system.io
+
+fn sum_codes(text String) int
+    var total = 0
+    var i = -2
+    while i < text.length() + 2
+        total = total * 7 % 1000003 + (text.code_at(i) ?? -1)
+        i += 1
+    return total
+
+fn main()
+    let ascii = sum_codes("hello, world")
+    let wide = sum_codes("héllo wörld")
+    let empty = sum_codes("")
+    var long = ""
+    var i = 0
+    while i < 40
+        long += "abcdefghij"
+        i += 1
+    let heap = sum_codes(long)
+    var grown = "abc"
+    grown += "é"
+    let appended = sum_codes(grown)
+    println(f"{ascii} {wide} {empty} {heap} {appended}")
+"#;
+
+/// A release build reads a character of an ASCII string straight from its
+/// bytes, and still asks the runtime for anything else: a string that is not
+/// ASCII, and an index before the start or past the end.
+#[test]
+fn test_code_at_reads_an_ascii_string_without_a_call() {
+    let source = create_test_file(CODE_AT);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("codes");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--release", "--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("codes.clif")).unwrap();
+    let (blocks, names) = clif_function(&listing, "miri.sum_codes");
+    assert!(
+        blocks.iter().any(|(_, body)| body.contains("uload8")),
+        "sum_codes reads no byte inline:\n{blocks:?}"
+    );
+    assert!(
+        names.values().any(|name| *name == "miri_rt_string_code_at"),
+        "sum_codes no longer asks the runtime for the cases it cannot read inline"
+    );
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        expected_code_sums()
+    );
+}
+
+/// What `sum_codes` prints, computed the way the program does.
+fn expected_code_sums() -> String {
+    let sum = |text: &str| {
+        let chars: Vec<char> = text.chars().collect();
+        let mut total: i64 = 0;
+        for i in -2..(chars.len() as i64 + 2) {
+            let code = usize::try_from(i)
+                .ok()
+                .and_then(|i| chars.get(i))
+                .map_or(-1, |c| *c as i64);
+            total = total * 7 % 1000003 + code;
+        }
+        total
+    };
+    let long = "abcdefghij".repeat(40);
+    format!(
+        "{} {} {} {} {}",
+        sum("hello, world"),
+        sum("héllo wörld"),
+        sum(""),
+        sum(&long),
+        sum("abcé")
+    )
+}
