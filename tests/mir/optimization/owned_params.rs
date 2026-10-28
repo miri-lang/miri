@@ -15,17 +15,19 @@ use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::body::DeviceHandleId;
 use miri::mir::optimization::owned_params::decide_owned_parameters;
+use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::Symbol;
 use miri::mir::type_facts::{
     ClassDefinition, DropHookReach, GenericDefinition, MethodInfo, TypeDefinition,
 };
 use miri::mir::{
-    ArgMode, Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue, Statement,
+    ArgMode, Body, ExecutionModel, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
 use miri::type_checker::context::{FieldInfo, StructDefinition};
 use miri::type_checker::ModuleId;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 fn span() -> Span {
     Span::new(0, 0)
@@ -358,18 +360,216 @@ fn a_callee_a_gpu_body_calls_stays_borrowed() {
 }
 
 #[test]
-fn a_method_or_the_entry_point_keeps_its_parameters_borrowed() {
-    for symbol in [Symbol::method("Owner", &[], "callee", &[]), Symbol::entry()] {
-        let mut program = vec![
-            (symbol.clone(), binding_callee()),
-            (
-                Symbol::declared_function(&ModuleId::Program, "caller"),
-                caller_of(symbol),
-            ),
-        ];
-        decide(&mut program);
-        assert_borrowed(&program);
+fn the_entry_point_keeps_its_parameters_borrowed() {
+    let mut program = vec![
+        (Symbol::entry(), binding_callee()),
+        (
+            Symbol::declared_function(&ModuleId::Program, "caller"),
+            caller_of(Symbol::entry()),
+        ),
+    ];
+    decide(&mut program);
+    assert_borrowed(&program);
+}
+
+#[test]
+fn a_statically_called_method_binding_its_parameter_owns_it() {
+    let symbol = Symbol::method("Owner", &[], "callee", &[]);
+    let mut program = vec![
+        (symbol.clone(), binding_callee()),
+        (
+            Symbol::declared_function(&ModuleId::Program, "caller"),
+            caller_of(symbol),
+        ),
+    ];
+    decide(&mut program);
+    assert_owned(&program);
+}
+
+#[test]
+fn a_receiver_bound_to_a_local_stays_borrowed() {
+    let mut callee = binding_callee();
+    callee.receiver = Some(Local(1));
+    let symbol = Symbol::method("Owner", &[], "callee", &[]);
+    let mut program = vec![
+        (symbol.clone(), callee),
+        (
+            Symbol::declared_function(&ModuleId::Program, "caller"),
+            caller_of(symbol),
+        ),
+    ];
+    decide(&mut program);
+    assert_borrowed(&program);
+}
+
+/// Codegen calls an element method through a runtime thunk at every
+/// instantiation of its class, lending what it passes.
+#[test]
+fn a_method_a_runtime_thunk_calls_stays_borrowed() {
+    let int = Type::new(TypeKind::Int, span());
+    let symbol = Symbol::method("Owner", &[int], "equals", &[]);
+    let mut program = vec![
+        (symbol.clone(), binding_callee()),
+        (
+            Symbol::declared_function(&ModuleId::Program, "caller"),
+            caller_of(symbol),
+        ),
+    ];
+    decide(&mut program);
+    assert_borrowed(&program);
+}
+
+fn holder_symbol() -> Symbol {
+    Symbol::method("Holder", &[], "init", &[])
+}
+
+/// `class Holder` with one `String` field, beside the shared definitions.
+fn holder_definitions() -> HashMap<String, TypeDefinition> {
+    let mut definitions = definitions();
+    definitions.insert(
+        "Holder".to_string(),
+        class_def("Holder", string_ty(), false, false),
+    );
+    definitions
+}
+
+/// `_1.0`, the field of the receiver.
+fn receiver_field() -> Place {
+    Place {
+        local: Local(1),
+        projection: vec![PlaceElem::Field(0)],
     }
+}
+
+fn store_parameter() -> Statement {
+    stmt(StatementKind::Reassign(
+        receiver_field(),
+        Rvalue::Use(Operand::Copy(place(2))),
+    ))
+}
+
+/// `fn init(self, value String)` storing `value` into the receiver's field,
+/// then discarding the store's value as an expression statement does.
+/// Locals: 0 return, 1 `self`, 2 `value`, 3 the discarded value.
+fn storing_method(statements: Vec<Statement>) -> Body {
+    let holder = named("Holder", Vec::new());
+    let mut body = body_of(
+        &[void_ty(), holder, string_ty(), string_ty()],
+        2,
+        vec![block(statements, TerminatorKind::Return)],
+    );
+    body.receiver = Some(Local(1));
+    body.rc_classifier = RcClassifier::new(Rc::new(holder_definitions()));
+    body
+}
+
+fn storing_statements() -> Vec<Statement> {
+    vec![
+        store_parameter(),
+        bind(3, 2),
+        storage_dead(3),
+        storage_dead(2),
+        storage_dead(1),
+    ]
+}
+
+/// A caller handing `Holder.init` its receiver `_1` and a string `_3`.
+/// Locals: 0 return, 1 the receiver, 2 the unmanaged result, 3 the string.
+fn holder_caller() -> Body {
+    let holder = named("Holder", Vec::new());
+    body_of(
+        &[void_ty(), holder, void_ty(), string_ty()],
+        0,
+        vec![
+            block(
+                Vec::new(),
+                call(
+                    holder_symbol(),
+                    vec![Operand::Copy(place(1)), Operand::Copy(place(3))],
+                    2,
+                    1,
+                ),
+            ),
+            block(Vec::new(), TerminatorKind::Return),
+        ],
+    )
+}
+
+fn holder_program(statements: Vec<Statement>) -> Vec<(Symbol, Body)> {
+    vec![
+        (holder_symbol(), storing_method(statements)),
+        (Symbol::entry(), holder_caller()),
+    ]
+}
+
+#[test]
+fn a_parameter_only_stored_into_a_field_is_owned_and_moved_there() {
+    let mut program = holder_program(storing_statements());
+    decide_with(&mut program, &holder_definitions());
+
+    let (_, init) = &program[0];
+    assert_eq!(init.owned_params, vec![false, true]);
+    assert_eq!(
+        init.basic_blocks[0].statements[0].kind,
+        StatementKind::Reassign(receiver_field(), Rvalue::Use(Operand::Move(place(2)))),
+        "the store takes the parameter's reference over"
+    );
+    assert!(
+        !init.basic_blocks[0]
+            .statements
+            .iter()
+            .any(|statement| matches!(
+                &statement.kind,
+                StatementKind::Assign(_, Rvalue::Use(operand)) if operand.place() == Some(&place(2))
+            )),
+        "the discarded value no longer reads the moved parameter: {init}"
+    );
+    assert_eq!(
+        call_modes(&program[1].1),
+        vec![ArgMode::Borrowed, ArgMode::Owned]
+    );
+}
+
+#[test]
+fn a_parameter_stored_twice_stays_borrowed() {
+    let mut statements = storing_statements();
+    statements.insert(1, store_parameter());
+    let mut program = holder_program(statements);
+    decide_with(&mut program, &holder_definitions());
+    assert!(!program[0].1.owned_params.contains(&true));
+    assert!(!call_modes(&program[1].1).contains(&ArgMode::Owned));
+}
+
+#[test]
+fn a_stored_value_read_again_stays_borrowed() {
+    let mut statements = storing_statements();
+    statements.insert(2, bind(0, 3));
+    let mut program = holder_program(statements);
+    decide_with(&mut program, &holder_definitions());
+    assert!(!program[0].1.owned_params.contains(&true));
+}
+
+/// A store whose field type the body cannot read may hold the value as its
+/// bytes, taking no reference.
+#[test]
+fn a_store_into_a_field_of_unknown_type_stays_borrowed() {
+    let mut program = holder_program(storing_statements());
+    program[0].1.rc_classifier = RcClassifier::default();
+    decide_with(&mut program, &holder_definitions());
+    assert!(!program[0].1.owned_params.contains(&true));
+}
+
+#[test]
+fn a_method_codegen_reaches_through_a_vtable_stays_borrowed() {
+    let mut program = holder_program(storing_statements());
+    let reached: HashSet<Symbol> = [holder_symbol()].into_iter().collect();
+    decide_owned_parameters(
+        &mut program,
+        &reached,
+        &DropHookReach::new(&holder_definitions()),
+    );
+    assert!(!program[0].1.owned_params.contains(&true));
+    assert!(!call_modes(&program[1].1).contains(&ArgMode::Owned));
 }
 
 #[test]

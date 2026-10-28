@@ -57,8 +57,8 @@ fn run() int
 println(f"{run()}")
 "#,
         "10",
-        4,
-        15,
+        0,
+        11,
     );
 }
 
@@ -190,8 +190,8 @@ fn read_after_index_assign() int
 println(f"{read_after_clear()} {read_after_push()} {read_after_index_assign()}")
 "#,
         "1 44 19",
-        50,
-        112,
+        44,
+        106,
     );
 }
 
@@ -251,8 +251,8 @@ let w = passed_owned()
 println(f"{ys[0].v} {r.v} {f()} {w.inner.v}")
 "#,
         "1 4 5 8",
-        14,
-        45,
+        4,
+        35,
     );
 }
 
@@ -291,8 +291,8 @@ fn run() String
 println(run())
 "#,
         "ay",
-        17,
-        50,
+        5,
+        38,
     );
 }
 
@@ -323,8 +323,8 @@ fn pairs() int
 println(f"{pairs()}")
 "#,
         "36",
-        7,
-        16,
+        4,
+        13,
     );
 }
 
@@ -347,8 +347,8 @@ fn grow() String
 println(grow())
 "#,
         "2 3 1",
-        4,
-        15,
+        1,
+        12,
     );
 }
 
@@ -387,8 +387,8 @@ let h = Holder(List([Node(3), Node(4)]))
 println(f"{probe(h, h.items)}")
 "#,
         "3",
-        5,
-        16,
+        2,
+        13,
     );
 }
 
@@ -423,8 +423,8 @@ fn probe() int
 println(f"{probe()}")
 "#,
         "7",
-        3,
-        6,
+        1,
+        4,
     );
 }
 
@@ -465,8 +465,8 @@ fn total() int
 println(f"{total()}")
 "#,
         "3",
-        10,
-        25,
+        4,
+        19,
     );
 }
 
@@ -498,8 +498,8 @@ fn run() int
 println(f"{run()}")
 "#,
         "21",
-        4,
-        16,
+        1,
+        13,
     );
 }
 
@@ -555,8 +555,8 @@ fn run() String
 println(run())
 "#,
         "24 1 1",
-        11,
-        23,
+        10,
+        22,
     );
 }
 
@@ -587,8 +587,8 @@ fn run() String
 println(run())
 "#,
         "1 4 2 4",
-        13,
-        36,
+        7,
+        30,
     );
 }
 
@@ -637,8 +637,8 @@ fn run() String
 println(run())
 "#,
         "6 9 3",
-        14,
-        40,
+        9,
+        35,
     );
 }
 
@@ -754,10 +754,11 @@ fn test_the_children_a_tree_walk_reads_out_of_its_parameter_take_no_reference() 
 }
 
 /// The seven inner nodes each read two children without a retain or a
-/// release: fourteen of each fewer than when every child read was counted.
+/// release, and building them retains nothing: each of the fifteen nodes and
+/// the printed string is released once.
 #[test]
 fn test_a_tree_walk_counts_only_the_tree_it_builds() {
-    assert_borrowing(TREE_WALK, "15", 28, 44);
+    assert_borrowing(TREE_WALK, "15", 0, 16);
     for level in ["0", "3"] {
         assert_output_at(TREE_WALK, level, "15");
     }

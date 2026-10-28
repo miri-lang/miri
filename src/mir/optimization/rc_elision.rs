@@ -44,6 +44,14 @@
 //!
 //! The caller's RC for `_1` is unchanged; the object is freed by the caller.
 //!
+//! # Dying sources
+//!
+//! A copy of a local that dies right after it — `IncRef(x); d = x` or
+//! `IncRef(x); d = Some(x)`, then `DecRef(x)` and the end of `x` — retains `x`
+//! only for `x`'s own release to give the reference back. The pair cancels and
+//! the copy becomes a move: the destination takes over `x`'s reference. See
+//! [`move_dying_sources`].
+//!
 //! # Owned arguments
 //!
 //! A call passing an argument [`ArgMode::Owned`] is preceded by the retain that
@@ -60,7 +68,7 @@ use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
-use crate::mir::{Body, Operand, Place};
+use crate::mir::{Body, Operand, Place, Rvalue};
 use std::collections::HashSet;
 
 pub struct RcElision;
@@ -87,7 +95,8 @@ impl OptimizationPass for RcElision {
                 any_changed = true;
             }
         }
-        cancel_owned_transfers(body) || any_changed
+        let moved = move_dying_sources(body, kept);
+        cancel_owned_transfers(body) || moved || any_changed
     }
 
     fn name(&self) -> &'static str {
@@ -210,6 +219,173 @@ fn retained_copy(stmts: &[Statement], i: usize) -> Option<(Local, Local)> {
         && dest.projection.is_empty()
         && *source == Place::new(retained.local);
     is_whole_copy.then_some((retained.local, dest.local))
+}
+
+/// Turn each copy of a local that dies right after it into a move, cancelling
+/// the retain that funded the copy against the local's own release.
+///
+/// The triple `IncRef(x)` … `d = x` (or `d` built from `x`) … `DecRef(x)` in
+/// one block becomes `d = move x` when:
+///
+/// 1. `x` is a whole local the body owns and releases — managed, not a
+///    parameter or a capture, holding no device buffer — that no borrow reads
+///    and that borrows from nothing;
+/// 2. the first mention of `x` after the retain is an assignment or rebinding
+///    whose value is `x` itself or an aggregate naming `x` once, and whose
+///    destination does not name `x`;
+/// 3. the next mention of `x` is `DecRef(x)`, with nothing released between —
+///    so the release the pair cancels was never the last one, and no drop hook
+///    moves — followed, with no mention of `x` between, by `StorageDead(x)` or
+///    a rebinding of `x` that does not read it.
+///
+/// Between the copy and that end `x` holds a reference the destination now
+/// owns, and nothing reads it.
+///
+/// Returns true if any copy became a move.
+fn move_dying_sources(body: &mut Body, kept: KeptPairs) -> bool {
+    let mut changed = false;
+    for block in 0..body.basic_blocks.len() {
+        while let Some(transfer) = dying_source_transfer(body, block, kept) {
+            apply_transfer(&mut body.basic_blocks[block].statements, transfer);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// The positions of one retain, the copy it funds and the release it cancels
+/// against, for a copy of a local dying right after it.
+#[derive(Clone, Copy)]
+struct DyingTransfer {
+    local: Local,
+    retain: usize,
+    copy: usize,
+    release: usize,
+}
+
+/// The first copy in `block` of `body` that [`move_dying_sources`] turns into
+/// a move.
+fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<DyingTransfer> {
+    let statements = &body.basic_blocks[block].statements;
+    statements
+        .iter()
+        .enumerate()
+        .find_map(|(retain, statement)| {
+            let StatementKind::IncRef(retained) = &statement.kind else {
+                return None;
+            };
+            let local = retained.projection.is_empty().then_some(retained.local)?;
+            if !is_transferable_source(body, local, kept) {
+                return None;
+            }
+            let copy = next_mention(statements, local, retain + 1)?;
+            if !transfers_local(&statements[copy], local) {
+                return None;
+            }
+            let release = copy + 1 + dying_release(&statements[copy + 1..], local)?;
+            let releases_between = statements[copy + 1..release].iter().any(|statement| {
+                matches!(
+                    statement.kind,
+                    StatementKind::DecRef(_) | StatementKind::Dealloc(_)
+                )
+            });
+            (!releases_between).then_some(DyingTransfer {
+                local,
+                retain,
+                copy,
+                release,
+            })
+        })
+}
+
+/// Whether `local` is one the body owns and releases, and no borrow involves.
+fn is_transferable_source(body: &Body, local: Local, kept: KeptPairs) -> bool {
+    local.0 > body.arg_count
+        && !body.env_capture_locals.contains(&local)
+        && !kept.borrows.contains(&local)
+        && !kept.lenders.contains(&local)
+        && body.local_decls[local.0].device_handle.is_none()
+        && body.is_counted_local(local)
+}
+
+/// The position of the first statement at or after `start` mentioning `local`.
+fn next_mention(statements: &[Statement], local: Local, start: usize) -> Option<usize> {
+    (start..statements.len()).find(|&at| statement_mentions(&statements[at], local))
+}
+
+/// Whether `statement` stores `local` whole into a destination not naming it:
+/// as the value itself, or as one operand of an aggregate naming it once.
+fn transfers_local(statement: &Statement, local: Local) -> bool {
+    let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
+        &statement.kind
+    else {
+        return false;
+    };
+    let names_dest = mentions(local, |mention| {
+        mention.visit_place(dest, PlaceContext::MutatingUse, BasicBlock(0))
+    });
+    let mut naming = stored_operands(rvalue).iter().filter(|operand| {
+        mentions(local, |mention| {
+            mention.visit_operand(operand, BasicBlock(0))
+        })
+    });
+    let is_stored_whole_once = naming
+        .next()
+        .is_some_and(|operand| operand.bare_local() == Some(local))
+        && naming.next().is_none();
+    is_stored_whole_once && !names_dest
+}
+
+/// Remove the retain and the release of `transfer` and spell its copy as a
+/// move of the local.
+fn apply_transfer(statements: &mut Vec<Statement>, transfer: DyingTransfer) {
+    if let StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) =
+        &mut statements[transfer.copy].kind
+    {
+        for operand in stored_operands_mut(rvalue) {
+            if operand.bare_local() == Some(transfer.local) {
+                *operand = Operand::Move(Place::new(transfer.local));
+            }
+        }
+    }
+    statements.remove(transfer.release);
+    statements.remove(transfer.retain);
+}
+
+/// The operands an rvalue stores into its destination as they are: the value
+/// of a use, or every operand of an aggregate. Every other rvalue computes a
+/// value of its own from what it reads.
+fn stored_operands(rvalue: &Rvalue) -> &[Operand] {
+    match rvalue {
+        Rvalue::Use(operand) => std::slice::from_ref(operand),
+        Rvalue::Aggregate(_, operands) => operands,
+        Rvalue::Ref(_)
+        | Rvalue::BinaryOp(..)
+        | Rvalue::UnaryOp(..)
+        | Rvalue::Cast(..)
+        | Rvalue::Len(_)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::MathIntrinsic(..)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Phi(_) => &[],
+    }
+}
+
+/// [`stored_operands`], to rewrite.
+fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
+    match rvalue {
+        Rvalue::Use(operand) => std::slice::from_mut(operand),
+        Rvalue::Aggregate(_, operands) => operands,
+        Rvalue::Ref(_)
+        | Rvalue::BinaryOp(..)
+        | Rvalue::UnaryOp(..)
+        | Rvalue::Cast(..)
+        | Rvalue::Len(_)
+        | Rvalue::GpuIntrinsic(_)
+        | Rvalue::MathIntrinsic(..)
+        | Rvalue::AtomicOp { .. }
+        | Rvalue::Phi(_) => &mut [],
+    }
 }
 
 /// Cancel each retain funding an owned argument against the caller's release

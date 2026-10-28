@@ -763,3 +763,423 @@ mod owned_transfers {
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 }
+
+mod dying_sources {
+    //! A retain funding a copy of a local that dies right after it, cancelled
+    //! against that local's release: the copy takes the local's own reference.
+
+    use miri::ast::literal::Literal;
+    use miri::ast::types::{Type, TypeKind};
+    use miri::error::syntax::Span;
+    use miri::mir::block::BasicBlockData;
+    use miri::mir::optimization::elide_rc;
+    use miri::mir::verify::verify_body;
+    use miri::mir::{
+        AggregateKind, Body, Constant, ExecutionModel, Local, LocalDecl, Operand, Place, PlaceElem,
+        Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    };
+    use std::collections::HashMap;
+
+    fn span() -> Span {
+        Span::new(0, 0)
+    }
+
+    fn place(local: usize) -> Place {
+        Place::new(Local(local))
+    }
+
+    fn stmt(kind: StatementKind) -> Statement {
+        Statement { kind, span: span() }
+    }
+
+    fn incref(local: usize) -> Statement {
+        stmt(StatementKind::IncRef(place(local)))
+    }
+
+    fn decref(local: usize) -> Statement {
+        stmt(StatementKind::DecRef(place(local)))
+    }
+
+    fn storage_dead(local: usize) -> Statement {
+        stmt(StatementKind::StorageDead(place(local)))
+    }
+
+    fn string_ty() -> Type {
+        Type::new(TypeKind::String, span())
+    }
+
+    fn optional_string_ty() -> Type {
+        Type::new(TypeKind::Option(Box::new(string_ty())), span())
+    }
+
+    fn fresh(local: usize) -> Statement {
+        stmt(StatementKind::Assign(
+            place(local),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                ty: string_ty(),
+                literal: Literal::String("x".to_string()),
+                span: span(),
+            }))),
+        ))
+    }
+
+    /// `_2 = Some(_1)`.
+    fn wrap_source() -> Statement {
+        stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Aggregate(
+                AggregateKind::Option(optional_string_ty()),
+                vec![Operand::Copy(place(1))],
+            ),
+        ))
+    }
+
+    /// `_3 = _1`, or `reassign _3 = _1` when `is_reassign`.
+    fn copy_source(is_reassign: bool) -> Statement {
+        let rvalue = Rvalue::Use(Operand::Copy(place(1)));
+        stmt(if is_reassign {
+            StatementKind::Reassign(place(3), rvalue)
+        } else {
+            StatementKind::Assign(place(3), rvalue)
+        })
+    }
+
+    /// Locals: 0 the return slot, 1 the source `x` of type `source`, 2 an
+    /// optional string, 3 a string; one block holding `statements`.
+    fn body_of(source: Type, statements: Vec<Statement>) -> Body {
+        let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+        let void = Type::new(TypeKind::Void, span());
+        for ty in [void, source, optional_string_ty(), string_ty()] {
+            body.new_local(LocalDecl::new(ty, span()));
+        }
+        body.basic_blocks = vec![BasicBlockData {
+            statements,
+            terminator: Some(Terminator {
+                kind: TerminatorKind::Return,
+                span: span(),
+            }),
+            is_cleanup: false,
+        }];
+        body
+    }
+
+    fn rc_ops_on_x(body: &Body) -> usize {
+        body.basic_blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(&statement.kind,
+                    StatementKind::IncRef(p) | StatementKind::DecRef(p) if p.local == Local(1))
+            })
+            .count()
+    }
+
+    /// `x` built, retained for `transfer`, released and dead, with `between`
+    /// after the transfer and before the release; the destination of the
+    /// transfer is released at the end.
+    fn dying(transfer: Statement, between: Vec<Statement>, dest: usize) -> Vec<Statement> {
+        let mut statements = vec![fresh(1), incref(1), transfer];
+        statements.extend(between);
+        statements.extend([decref(1), storage_dead(1), decref(dest), storage_dead(dest)]);
+        statements
+    }
+
+    fn elided(statements: Vec<Statement>) -> Body {
+        let mut body = body_of(string_ty(), statements);
+        elide_rc(&mut body);
+        body
+    }
+
+    fn assert_moved(body: &Body) {
+        assert_eq!(rc_ops_on_x(body), 0, "{body}");
+        assert!(
+            verify_body(body).is_empty(),
+            "{:?}\n{body}",
+            verify_body(body)
+        );
+    }
+
+    #[test]
+    fn a_dying_local_wrapped_in_an_optional_hands_its_reference_over() {
+        let body = elided(dying(wrap_source(), vec![storage_dead(3)], 2));
+        assert_moved(&body);
+        let StatementKind::Assign(_, Rvalue::Aggregate(_, operands)) =
+            &body.basic_blocks[0].statements[1].kind
+        else {
+            panic!("the aggregate stays second: {body}");
+        };
+        assert_eq!(operands, &vec![Operand::Move(place(1))], "{body}");
+    }
+
+    #[test]
+    fn a_dying_local_copied_or_rebound_hands_its_reference_over() {
+        for is_reassign in [false, true] {
+            let body = elided(dying(copy_source(is_reassign), Vec::new(), 3));
+            assert_moved(&body);
+        }
+    }
+
+    /// The return slot is never released in the body, so only the source's
+    /// own release can pay for the retain.
+    #[test]
+    fn a_dying_local_returned_hands_its_reference_over() {
+        let returned = stmt(StatementKind::Assign(
+            place(0),
+            Rvalue::Use(Operand::Copy(place(1))),
+        ));
+        let statements = vec![
+            fresh(1),
+            incref(1),
+            returned,
+            storage_dead(2),
+            decref(1),
+            storage_dead(1),
+        ];
+        let mut body = body_of(string_ty(), statements);
+        body.local_decls[0] = LocalDecl::new(string_ty(), span());
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_x(&body), 0, "{body}");
+    }
+
+    #[test]
+    fn a_source_read_after_the_copy_keeps_the_pair() {
+        let read = stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(place(1))),
+        ));
+        let body = elided(dying(wrap_source(), vec![read], 2));
+        assert_eq!(rc_ops_on_x(&body), 2, "{body}");
+    }
+
+    #[test]
+    fn a_source_copied_twice_keeps_one_pair() {
+        let body = elided(vec![
+            fresh(1),
+            incref(1),
+            copy_source(false),
+            incref(1),
+            wrap_source(),
+            decref(1),
+            storage_dead(1),
+            decref(2),
+            storage_dead(2),
+            decref(3),
+            storage_dead(3),
+        ]);
+        assert!(rc_ops_on_x(&body) >= 1, "{body}");
+        assert!(
+            verify_body(&body).is_empty(),
+            "{:?}\n{body}",
+            verify_body(&body)
+        );
+    }
+
+    #[test]
+    fn a_source_living_on_after_its_release_keeps_the_pair() {
+        let rebuilt = fresh(1);
+        let read = stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(place(1))),
+        ));
+        let mut statements = vec![fresh(1), incref(1), wrap_source(), decref(1), read];
+        statements.extend([rebuilt, decref(1), storage_dead(1)]);
+        let body = elided(statements);
+        assert_eq!(rc_ops_on_x(&body), 3, "{body}");
+    }
+
+    #[test]
+    fn a_projected_source_keeps_the_pair() {
+        let field = Place {
+            local: Local(1),
+            projection: vec![PlaceElem::Field(0)],
+        };
+        let statements = vec![
+            fresh(1),
+            stmt(StatementKind::IncRef(field.clone())),
+            stmt(StatementKind::Assign(
+                place(3),
+                Rvalue::Use(Operand::Copy(field)),
+            )),
+            decref(1),
+            storage_dead(1),
+            decref(3),
+            storage_dead(3),
+        ];
+        let body = elided(statements);
+        let retains = body.basic_blocks[0]
+            .statements
+            .iter()
+            .filter(|s| matches!(&s.kind, StatementKind::IncRef(_)))
+            .count();
+        assert_eq!(retains, 1, "{body}");
+    }
+
+    /// A release between the copy and the source's own release could be the
+    /// last one once the pair is gone, moving where a drop hook runs.
+    #[test]
+    fn a_release_between_the_copy_and_the_source_release_keeps_the_pair() {
+        let body = elided(dying(wrap_source(), vec![decref(2)], 3));
+        assert_eq!(rc_ops_on_x(&body), 2, "{body}");
+    }
+
+    #[test]
+    fn a_dying_local_with_a_drop_hook_hands_its_reference_over() {
+        let resource = Type::new(TypeKind::Custom("Res".to_string(), None), span());
+        let mut body = body_of(resource, dying(copy_source(false), Vec::new(), 3));
+        body.local_decls[3] = body.local_decls[1].clone();
+        body.has_drop_types.insert("Res".to_string());
+        elide_rc(&mut body);
+        assert_eq!(rc_ops_on_x(&body), 0, "{body}");
+    }
+
+    /// `_2 = Some(move _1)`.
+    fn wrap_moved_source() -> Statement {
+        stmt(StatementKind::Assign(
+            place(2),
+            Rvalue::Aggregate(
+                AggregateKind::Option(optional_string_ty()),
+                vec![Operand::Move(place(1))],
+            ),
+        ))
+    }
+
+    /// The verifier reads a moved operand as the aggregate taking the
+    /// local's reference: a retain before it pays for the local, and with no
+    /// retain the local's own release afterwards is one too many.
+    #[test]
+    fn the_verifier_reads_a_moved_aggregate_operand_as_taken_over() {
+        let funded = vec![
+            fresh(1),
+            incref(1),
+            wrap_moved_source(),
+            decref(1),
+            storage_dead(1),
+            decref(2),
+            storage_dead(2),
+        ];
+        let body = body_of(string_ty(), funded);
+        assert!(verify_body(&body).is_empty(), "{:?}", verify_body(&body));
+
+        let released_again = vec![
+            fresh(1),
+            wrap_moved_source(),
+            decref(1),
+            storage_dead(1),
+            decref(2),
+            storage_dead(2),
+        ];
+        let body = body_of(string_ty(), released_again);
+        assert!(!verify_body(&body).is_empty(), "{body}");
+    }
+
+    #[test]
+    fn a_borrowed_or_lending_source_keeps_the_pair() {
+        for borrowed in [
+            HashMap::from([(Local(1), vec![Local(3)])]),
+            HashMap::from([(Local(3), vec![Local(1)])]),
+        ] {
+            let mut body = body_of(string_ty(), dying(wrap_source(), Vec::new(), 2));
+            body.borrowed_locals = borrowed;
+            elide_rc(&mut body);
+            assert_eq!(rc_ops_on_x(&body), 2, "{body}");
+        }
+    }
+}
+
+mod constructed_trees {
+    //! A node built from two subtrees: each subtree moves into the optional
+    //! wrapping it, each optional moves into the constructor, and the
+    //! constructor moves each into its field.
+
+    use super::get_elided_bodies;
+    use miri::mir::optimization::count_all_rc_ops;
+    use miri::mir::symbol::Symbol;
+    use miri::mir::{ArgMode, Body, StatementKind, TerminatorKind};
+    use miri::type_checker::ModuleId;
+
+    const TREES: &str = r#"
+class Node
+    var left Node?
+    var right Node?
+
+    fn init(left Node?, right Node?)
+        self.left = left
+        self.right = right
+
+fn bottom_up(depth int) Node
+    if depth == 0
+        return Node(None, None)
+    Node(bottom_up(depth - 1), bottom_up(depth - 1))
+
+fn kept_leaf(leaf Node) Node
+    let wrapped = Some(leaf)
+    let parent = Node(wrapped, None)
+    match wrapped
+        Some(l): return l
+        None: return parent
+"#;
+
+    fn body<'b>(bodies: &'b [(String, Body)], symbol: &Symbol) -> &'b Body {
+        let name = symbol.link_name();
+        &bodies
+            .iter()
+            .find(|(candidate, _)| *candidate == name)
+            .unwrap_or_else(|| panic!("{name} was not lowered"))
+            .1
+    }
+
+    fn init_modes(body: &Body) -> Vec<Vec<ArgMode>> {
+        body.basic_blocks
+            .iter()
+            .filter_map(|block| block.terminator.as_ref())
+            .filter_map(|terminator| match &terminator.kind {
+                TerminatorKind::Call { arg_modes, .. } if arg_modes.contains(&ArgMode::Owned) => {
+                    Some(arg_modes.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn building_a_node_from_dying_subtrees_retains_and_releases_nothing() {
+        let bodies = get_elided_bodies(TREES);
+        let init = body(&bodies, &Symbol::method("Node", &[], "init", &[]));
+        assert_eq!(init.owned_params, vec![false, true, true, false], "{init}");
+        assert_eq!(count_all_rc_ops(init).0, 0, "{init}");
+
+        let bottom_up = body(
+            &bodies,
+            &Symbol::function(&ModuleId::Program, "bottom_up", &[]),
+        );
+        assert_eq!(count_all_rc_ops(bottom_up), (0, 0), "{bottom_up}");
+        assert!(
+            init_modes(bottom_up)
+                .iter()
+                .all(|modes| modes[..3] == [ArgMode::Borrowed, ArgMode::Owned, ArgMode::Owned]),
+            "{bottom_up}"
+        );
+    }
+
+    /// The optional is read again after the node is built from it, so the
+    /// call is funded by a retain of its own and the optional keeps its
+    /// reference.
+    #[test]
+    fn a_subtree_read_after_the_node_is_built_keeps_its_retain() {
+        let bodies = get_elided_bodies(TREES);
+        let kept = body(
+            &bodies,
+            &Symbol::function(&ModuleId::Program, "kept_leaf", &[]),
+        );
+        let retains_before_a_call = kept.basic_blocks.iter().any(|block| {
+            matches!(
+                block.terminator.as_ref().map(|terminator| &terminator.kind),
+                Some(TerminatorKind::Call { arg_modes, .. }) if arg_modes.contains(&ArgMode::Owned)
+            ) && block
+                .statements
+                .iter()
+                .any(|statement| matches!(statement.kind, StatementKind::IncRef(_)))
+        });
+        assert!(retains_before_a_call, "{kept}");
+    }
+}

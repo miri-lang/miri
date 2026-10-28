@@ -8,7 +8,9 @@
 //! value — an alias, a later read, the same value in two arguments — the
 //! callee's write copies first, and the caller sees what it had.
 
-use super::super::utils::{assert_runs_with_output, get_allocation_count_value};
+use super::super::utils::{
+    assert_heap_guard_output, assert_runs_with_output, get_allocation_count_value,
+};
 
 /// The callee every program below shares: it binds its parameter, then writes
 /// every element of that binding.
@@ -633,4 +635,266 @@ fn main()
 "#,
         "looped 33 branched 50 items 10 20",
     );
+}
+
+/// A complete binary tree built bottom-up: each node's constructor stores the
+/// two subtrees it is handed, and each subtree is wrapped in an optional the
+/// moment it is built.
+const TREES: &str = r#"
+use system.io
+
+class Node
+    var left Node?
+    var right Node?
+
+    fn init(left Node?, right Node?)
+        self.left = left
+        self.right = right
+
+fn bottom_up(depth int) Node
+    if depth == 0
+        return Node(None, None)
+    Node(bottom_up(depth - 1), bottom_up(depth - 1))
+
+fn check(node Node) int
+    match node.left
+        Some(l)
+            match node.right
+                Some(r): return 1 + check(l) + check(r)
+                None: return 1
+        None: return 1
+
+println(f"{check(bottom_up(4))}")
+"#;
+
+/// The optional around a subtree takes the subtree's reference over, and the
+/// constructor takes the optional's: building a node retains nothing, and each
+/// node is released once, by whatever holds it.
+#[test]
+fn test_a_tree_built_bottom_up_retains_nothing_per_node() {
+    assert_runs_with_output(TREES, "31");
+    assert_eq!(
+        super::rc_stats::rc_stats(TREES, &[]),
+        "MIRI_RC_STATS: dup=0 drop=32 drop_free=32 cow_copy=0 realloc=0"
+    );
+}
+
+#[test]
+fn test_a_tree_built_bottom_up_is_freed_cleanly() {
+    assert_heap_guard_output(TREES, "31");
+}
+
+/// A class storing the list its constructor is handed, and writing it.
+const BAG: &str = r#"
+use system.io
+use system.collections.list
+
+class Bag
+    var items [int]
+
+    fn init(items [int])
+        self.items = items
+
+    fn add(x int)
+        self.items.push(x)
+"#;
+
+/// The caller keeps using the list it handed the constructor: the bag's write
+/// copies, and neither side sees the other's push.
+#[test]
+fn test_a_list_the_caller_keeps_after_construction_is_unchanged_by_the_object() {
+    assert_heap_guard_output(
+        &format!(
+            r#"{BAG}
+fn main()
+    var mine = List([1, 2])
+    let bag = Bag(mine)
+    bag.add(3)
+    mine.push(9)
+    println(f"{{mine.length()}} {{bag.items.length()}} {{mine[2]}} {{bag.items[2]}}")
+"#
+        ),
+        "3 3 9 3",
+    );
+}
+
+/// A list built for the constructor and handed over as it dies is the bag's
+/// alone, so writing it through the bag copies nothing.
+#[test]
+fn test_a_list_handed_to_a_constructor_as_it_dies_is_written_in_place() {
+    let code = format!(
+        r#"{BAG}
+let bag = Bag(List([1, 2]))
+bag.add(3)
+println(f"{{bag.items.length()}}")
+"#
+    );
+    assert_runs_with_output(&code, "3");
+    let line = super::rc_stats::rc_stats(&code, &[]);
+    assert!(line.contains("cow_copy=0"), "{line}");
+}
+
+#[test]
+fn test_a_subclass_constructor_handing_its_parameters_to_the_base_keeps_them_intact() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Base
+    public name String
+    public items [int]
+
+    fn init(name String, items [int])
+        self.name = name
+        self.items = items
+
+class Child extends Base
+    public extra [int]
+
+    fn init(name String, items [int], extra [int])
+        super.init(name, items)
+        self.extra = extra
+
+fn main()
+    var kept = List([1, 2])
+    let c = Child("a" + "b", kept, List([7]))
+    kept.push(3)
+    c.items.push(4)
+    println(f"{c.name} {kept.length()} {c.items.length()} {c.items[2]} {c.extra[0]}")
+"#,
+        "ab 3 3 4 7",
+    );
+}
+
+#[test]
+fn test_a_generic_class_constructor_stores_each_instantiation_intact() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Holder<T>
+    public value T
+
+    fn init(value T)
+        self.value = value
+
+fn main()
+    let kept = List([1, 2, 3])
+    let lists = Holder<[int]>(kept)
+    let text = Holder<String>("x" + "y")
+    let count = Holder<int>(5)
+    println(f"{lists.value.length()} {kept.length()} {text.value} {count.value}")
+"#,
+        "3 3 xy 5",
+    );
+}
+
+/// A class with a drop hook stores what its constructor is handed; a value
+/// whose own release runs a hook is stored too, and every hook runs once, in
+/// the order the values are released.
+#[test]
+fn test_constructors_of_classes_with_drop_hooks_run_each_hook_once() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Res
+    var label String
+
+    fn init(label String)
+        self.label = label
+
+    fn drop()
+        println(f"drop {self.label}")
+
+class Owner
+    var res Res
+
+    fn init(res Res)
+        self.res = res
+
+fn main()
+    let a = Res("a" + "1")
+    let o = Owner(Res("b" + "2"))
+    println(f"{a.label} {o.res.label}")
+"#,
+        "a1 b2\ndrop b2\ndrop a1",
+    );
+}
+
+/// A method a vtable slot points at is called through the slot as well as by
+/// name, lending its argument on both paths, so it keeps borrowing it.
+#[test]
+fn test_a_method_called_through_a_trait_keeps_the_caller_s_list_intact() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.list
+
+trait Sink
+    fn put(items [int])
+    fn size() int
+
+class ListSink implements Sink
+    var items [int]
+
+    fn init()
+        self.items = List<int>()
+
+    public fn put(items [int])
+        self.items = items
+
+    public fn size() int: self.items.length()
+
+fn fill(s Sink, items [int]): s.put(items)
+
+fn main()
+    let kept = List([1, 2])
+    let alias = kept
+    let sink = ListSink()
+    fill(sink, kept)
+    alias.push(3)
+    let direct = List([4])
+    let other = direct
+    sink.put(direct)
+    other.push(5)
+    println(f"{sink.size()} {alias.length()} {other.length()}")
+"#,
+        "1 3 2",
+    );
+}
+
+/// A method called only by name takes over what it stores: an argument an
+/// alias still holds is copied by the alias's write, one handed over as it
+/// dies is written in place.
+#[test]
+fn test_a_method_storing_its_argument_takes_a_dying_one_over() {
+    let code = r#"
+use system.io
+use system.collections.list
+
+class Box
+    var items [int]
+
+    fn init()
+        self.items = List<int>()
+
+    fn replace(items [int])
+        self.items = items
+
+let b = Box()
+let kept = List([1])
+let alias = kept
+b.replace(kept)
+alias.push(2)
+b.replace(List([5, 6, 7]))
+b.items.push(8)
+println(f"{b.items.length()} {alias.length()}")
+"#;
+    assert_heap_guard_output(code, "4 2");
+    let line = super::rc_stats::rc_stats(code, &[]);
+    assert!(line.contains("cow_copy=1"), "{line}");
 }

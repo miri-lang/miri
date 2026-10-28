@@ -10,8 +10,12 @@
 //! nobody will ever read the original again.
 //!
 //! This pass finds the parameters whose only use is one such binding, in the
-//! entry block, and makes them owned. The binding moves the parameter instead of
-//! copying it, and every call to the function passes the argument
+//! entry block, and makes them owned. A store into a field (`self.items =
+//! items` in a constructor) is such a binding as well: the object keeps the
+//! value. A copy of the parameter whose value is discarded — what an
+//! expression statement leaves of a store — is no use. The binding moves the
+//! parameter instead of copying it, and every call to the function passes the
+//! argument
 //! [`ArgMode::Owned`]: Perceus retains the argument before the call, and the
 //! callee releases that reference through the local it moved it into. Where the
 //! argument dies at the call, RC elision cancels the retain against the release
@@ -21,22 +25,26 @@
 //! A parameter's mode is a contract between a body and every call to it, so the
 //! pass runs once over the whole program, before Perceus, and only for a
 //! function every mention of which is a direct call from host code it can
-//! stamp: a top-level host function that no GPU body, function value or
-//! compiler-synthesized caller reaches.
+//! stamp: a top-level host function or a statically dispatched method that no
+//! GPU body, function value, vtable slot or compiler-synthesized caller
+//! reaches. A method's receiver stays borrowed.
 //!
 //! Owning a parameter moves where the value's last release may happen — from
 //! the caller, after the call, into the callee — so a parameter whose release
 //! may run a drop hook anywhere inside it stays borrowed, and the hooks run in
 //! the order the program was written in.
 
+use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
+use crate::ast::statement::DROP_HOOK_NAME;
 use crate::mir::instantiation::shape::mentions_type_parameter;
 use crate::mir::place::PlaceContext;
+use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    ArgMode, BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Operand, Place, Rvalue,
-    Statement, StatementKind, TerminatorKind,
+    ArgMode, BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Operand, Place, PlaceElem,
+    Rvalue, Statement, StatementKind, TerminatorKind,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -44,7 +52,8 @@ use std::collections::{HashMap, HashSet};
 /// owned parameter's binding into a move, and mark every call passing one.
 ///
 /// `synthesized` names the bodies codegen calls without a MIR call carrying
-/// them; their parameters stay borrowed, since no call site could be marked.
+/// them — the runtime thunks' and every filled vtable slot's; their parameters
+/// stay borrowed, since no call site could be marked.
 /// `drop_hooks` answers which parameter types may run a drop hook when
 /// released. Bodies are visited in `program` order, so the result is
 /// deterministic.
@@ -74,9 +83,9 @@ pub fn decide_owned_parameters(
 /// A function some of whose parameters could be owned, and what the program
 /// does with its symbol.
 struct Candidate {
-    /// For each parameter, the index of the entry-block statement binding it,
-    /// when that binding is the parameter's only use.
-    bindings: Vec<Option<usize>>,
+    /// For each parameter, the entry-block statement binding it, when that
+    /// binding is the parameter's only use.
+    bindings: Vec<Option<Binding>>,
     /// How many parameters the function takes.
     arity: usize,
     /// How many bodies were lowered under the symbol.
@@ -124,12 +133,16 @@ fn collect_candidates(
 }
 
 /// Whether `body`, lowered under `symbol`, may take any parameter over: a
-/// host function compiled for one instantiation, captured nothing, that every
-/// caller reaches through a MIR call, and whose entry block runs once per call
-/// — nothing branches back to it, so a binding there takes the reference over
-/// exactly once.
+/// host function or method compiled for one instantiation, captured nothing,
+/// that every caller reaches through a MIR call, and whose entry block runs
+/// once per call — nothing branches back to it, so a binding there takes the
+/// reference over exactly once.
 fn can_own_parameters(symbol: &Symbol, body: &Body, synthesized: &HashSet<Symbol>) -> bool {
-    symbol.is_plain_function()
+    let is_static_callee = symbol.is_plain_function()
+        || symbol
+            .plain_method_name()
+            .is_some_and(|method| !is_called_by_a_thunk(method));
+    is_static_callee
         && !synthesized.contains(symbol)
         && matches!(body.execution_model, ExecutionModel::Cpu)
         && body.open_params.is_empty()
@@ -137,26 +150,68 @@ fn can_own_parameters(symbol: &Symbol, body: &Body, synthesized: &HashSet<Symbol
         && body.predecessor_counts().first() == Some(&1)
 }
 
+/// Whether codegen calls the method `method` of every class through a
+/// runtime thunk, at each instantiation, lending what it passes: the drop
+/// hook and the element methods a collection compares, hashes and clones by.
+fn is_called_by_a_thunk(method: &str) -> bool {
+    method == DROP_HOOK_NAME || THUNK_METHOD_NAMES.contains(&method)
+}
+
+/// The entry-block statement binding a parameter, and the copies of it whose
+/// value is discarded.
+#[derive(Clone)]
+struct Binding {
+    statement: usize,
+    discarded: Vec<Local>,
+}
+
 /// For each parameter of `body`, the entry-block statement binding it when the
-/// parameter can be owned and that binding is its only use.
-fn sole_bindings(body: &Body, drop_hooks: &DropHookReach) -> Vec<Option<usize>> {
+/// parameter can be owned and that binding is its only use apart from copies
+/// whose value is discarded.
+fn sole_bindings(body: &Body, drop_hooks: &DropHookReach) -> Vec<Option<Binding>> {
     let mut uses = ParameterUses {
-        counts: vec![0; body.arg_count],
+        counts: vec![0; body.local_decls.len()],
     };
     uses.visit_body(body);
     (1..=body.arg_count)
         .map(|index| {
             let param = Local(index);
-            let is_used_once = uses.counts[index - 1] == 1;
-            (is_used_once && is_ownable_param(body, param, drop_hooks))
+            let discarded = discarded_copies(body, param, &uses.counts);
+            let is_used_once = uses.counts[index] == discarded.len() + 1;
+            let statement = (is_used_once && is_ownable_param(body, param, drop_hooks))
                 .then(|| binding_of(body, param))
-                .flatten()
+                .flatten()?;
+            Some(Binding {
+                statement,
+                discarded,
+            })
         })
         .collect()
 }
 
-/// How many times each parameter is mentioned, apart from the end of its
-/// storage.
+/// The temporaries holding an entry-block copy of `param` that nothing reads:
+/// each is mentioned only by that copy and by the end of its storage, in the
+/// entry block. A binding outlives the entry block, so none is among them.
+/// `counts` is how many times each local is mentioned apart from that end.
+fn discarded_copies(body: &Body, param: Local, counts: &[usize]) -> Vec<Local> {
+    let Some(entry) = body.basic_blocks.first() else {
+        return Vec::new();
+    };
+    entry
+        .statements
+        .iter()
+        .filter_map(|statement| copied_parameter(statement, param))
+        .filter(|dest| dest.projection.is_empty())
+        .map(|dest| dest.local)
+        .filter(|&temp| {
+            temp.0 > body.arg_count
+                && counts.get(temp.0) == Some(&1)
+                && dies_in_entry_block(body, temp)
+        })
+        .collect()
+}
+
+/// How many times each local is mentioned, apart from the end of its storage.
 struct ParameterUses {
     counts: Vec<usize>,
 }
@@ -166,11 +221,7 @@ impl Visitor for ParameterUses {
         if matches!(context, PlaceContext::StorageDead) {
             return;
         }
-        if let Some(count) = local
-            .0
-            .checked_sub(1)
-            .and_then(|index| self.counts.get_mut(index))
-        {
+        if let Some(count) = self.counts.get_mut(local.0) {
             *count += 1;
         }
     }
@@ -178,14 +229,16 @@ impl Visitor for ParameterUses {
 
 /// Whether the parameter `param` holds a value whose ownership can move: a
 /// managed, heap-allocated value whose release runs no drop hook anywhere
-/// inside it, not an `out` slot, not a gpu-resident buffer, not a vector a
-/// collection would store inline, and typed without any type parameter.
+/// inside it, not a method's receiver, not an `out` slot, not a gpu-resident
+/// buffer, not a vector a collection would store inline, and typed without any
+/// type parameter.
 fn is_ownable_param(body: &Body, param: Local, drop_hooks: &DropHookReach) -> bool {
     let decl = &body.local_decls[param.0];
     let is_out = body.out_params.get(param.0 - 1).copied().unwrap_or(false);
     let is_type_parameter =
         |name: &str| body.type_params.contains(name) || body.open_params.contains(name);
     body.is_counted_local(param)
+        && body.receiver != Some(param)
         && !is_out
         && decl.device_handle.is_none()
         && !decl.mir_ty.is_inline_vector()
@@ -193,17 +246,47 @@ fn is_ownable_param(body: &Body, param: Local, drop_hooks: &DropHookReach) -> bo
         && !drop_hooks.may_run_drop_hook(&decl.ty)
 }
 
-/// The entry-block statement `x = copy param` binding `param` to a local of its
-/// own type, if there is one.
+/// The entry-block statement binding `param`, if there is one: `x = copy
+/// param` binding it to a local of its own type, or a store of it into a field
+/// holding a reference to a value of its type.
 fn binding_of(body: &Body, param: Local) -> Option<usize> {
     let entry = body.basic_blocks.first()?;
     entry.statements.iter().position(|statement| {
-        matches!(
-            &statement.kind,
-            StatementKind::Assign(dest, Rvalue::Use(Operand::Copy(source)))
-                if *source == Place::new(param) && is_binding_target(body, param, dest)
-        )
+        let is_rebinding = matches!(statement.kind, StatementKind::Reassign(..));
+        copied_parameter(statement, param).is_some_and(|dest| {
+            is_field_store_target(body, param, dest)
+                || (!is_rebinding && is_binding_target(body, param, dest))
+        })
     })
+}
+
+/// The place `statement` copies `param` whole into, when it is an assignment
+/// or a rebinding doing nothing else.
+fn copied_parameter(statement: &Statement, param: Local) -> Option<&Place> {
+    let (StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue)) =
+        &statement.kind
+    else {
+        return None;
+    };
+    matches!(rvalue, Rvalue::Use(Operand::Copy(source)) if *source == Place::new(param))
+        .then_some(dest)
+}
+
+/// Whether `dest` is a field, reached through fields alone from a local other
+/// than `param`, declared at `param`'s type: the object holding it keeps the
+/// reference a store hands it and releases it when it dies.
+fn is_field_store_target(body: &Body, param: Local, dest: &Place) -> bool {
+    let is_field_path = !dest.projection.is_empty()
+        && dest
+            .projection
+            .iter()
+            .all(|elem| matches!(elem, PlaceElem::Field(_)));
+    is_field_path
+        && dest.local != param
+        && body.local_decls[dest.local.0].device_handle.is_none()
+        && PlaceTypes::of(body)
+            .declared(dest)
+            .is_some_and(|field| field.kind == body.local_decls[param.0].ty.kind)
 }
 
 /// Whether `dest` can receive `param`'s reference: a whole local of the body's
@@ -287,22 +370,65 @@ fn count_direct_calls(body: &Body, candidates: &mut HashMap<Symbol, Candidate>) 
 /// Turn each owned parameter's binding into a move out of the parameter, and
 /// record which parameters `body` owns: exactly those whose binding was
 /// rewritten.
-fn take_over_parameters(body: &mut Body, bindings: &[Option<usize>]) {
-    let mut entry = body.basic_blocks.first_mut();
-    body.owned_params = bindings
+///
+/// The discarded copies of an owned parameter go, along with their
+/// temporaries' storage ends: nothing reads them, and past the move they would
+/// read a parameter whose reference has left.
+fn take_over_parameters(body: &mut Body, bindings: &[Option<Binding>]) {
+    let owned: Vec<bool> = bindings
         .iter()
         .map(|binding| {
-            binding
-                .and_then(|index| entry.as_mut()?.statements.get_mut(index))
-                .is_some_and(move_bound_value)
+            binding.as_ref().is_some_and(|binding| {
+                body.basic_blocks
+                    .first_mut()
+                    .and_then(|entry| entry.statements.get_mut(binding.statement))
+                    .is_some_and(move_bound_value)
+            })
         })
         .collect();
+    let discarded: HashSet<Local> = bindings
+        .iter()
+        .zip(&owned)
+        .filter(|(_, is_owned)| **is_owned)
+        .filter_map(|(binding, _)| binding.as_ref())
+        .flat_map(|binding| binding.discarded.iter().copied())
+        .collect();
+    remove_discarded_copies(body, &discarded);
+    body.owned_params = owned;
+}
+
+/// Turn every statement naming one of `discarded` into a no-op.
+fn remove_discarded_copies(body: &mut Body, discarded: &HashSet<Local>) {
+    if discarded.is_empty() {
+        return;
+    }
+    for statement in body
+        .basic_blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+    {
+        let names_discarded = match &statement.kind {
+            StatementKind::Assign(place, _)
+            | StatementKind::Reassign(place, _)
+            | StatementKind::StorageDead(place)
+            | StatementKind::StorageLive(place) => discarded.contains(&place.local),
+            StatementKind::IncRef(_)
+            | StatementKind::DecRef(_)
+            | StatementKind::Dealloc(_)
+            | StatementKind::Nop => false,
+        };
+        if names_discarded {
+            statement.kind = StatementKind::Nop;
+        }
+    }
 }
 
 /// Rewrite `x = copy p` into `x = move p`, reporting whether the statement
 /// had that shape.
 fn move_bound_value(statement: &mut Statement) -> bool {
-    let StatementKind::Assign(_, Rvalue::Use(operand)) = &mut statement.kind else {
+    let (StatementKind::Assign(_, Rvalue::Use(operand))
+    | StatementKind::Reassign(_, Rvalue::Use(operand))) = &mut statement.kind
+    else {
         return false;
     };
     let Operand::Copy(place) = operand else {

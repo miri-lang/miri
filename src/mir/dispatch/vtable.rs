@@ -285,6 +285,11 @@ impl VtableFills {
     pub fn slots(&self, symbol: &str) -> &[FilledSlot] {
         self.slots.get(symbol).map_or(&[], Vec::as_slice)
     }
+
+    /// The symbol of every body some filled slot points at.
+    pub fn slot_symbols(&self) -> impl Iterator<Item = &Symbol> {
+        self.slots.values().flatten().map(|slot| &slot.symbol)
+    }
 }
 
 impl FromIterator<(String, Vec<FilledSlot>)> for VtableFills {

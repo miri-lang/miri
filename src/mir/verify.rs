@@ -31,6 +31,7 @@
 //! | `Dealloc(p)` | `d(p)` must be exactly 1, then `d(p) -= 1`; over-specialization error otherwise |
 //! | `Assign(x, rv)` / `Reassign(x, rv)` with an owning rvalue | `d(x) += 1` |
 //! | a bare-local `Move(p)` inside a `Use` or a `Cast` | `d(p) -= 1`; double-release if `p` owns none |
+//! | a bare-local `Move(p)` operand of an aggregate holding references | `d(p) -= 1`; a retain before it pays for `p` itself |
 //! | call destination | `d(dest) += 1`, unless the callee hands back a borrow |
 //! | an argument the callee takes ownership of — a runtime intrinsic's taken position, or one passed `ArgMode::Owned` | `d(p) -= 1` |
 //! | entry to a body | each parameter it takes over (`Body::owned_params`) owns 1; every other parameter is the caller's and untracked |
@@ -100,6 +101,7 @@ use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Discriminant;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::terminator::{arg_mode, ArgMode};
+use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
 use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
@@ -947,6 +949,9 @@ fn reader_of(statements: &[Statement], index: usize, retained: &Place) -> Option
     for (at, stmt) in statements.iter().enumerate().skip(index + 1) {
         match &stmt.kind {
             StatementKind::Assign(dest, rvalue) | StatementKind::Reassign(dest, rvalue) => {
+                if moves_place_into_an_aggregate(rvalue, retained) {
+                    return None;
+                }
                 if stores_place_in_a_value(dest, rvalue, retained) {
                     return Some(Reader::Slot);
                 }
@@ -982,7 +987,9 @@ fn reader_of(statements: &[Statement], index: usize, retained: &Place) -> Option
 /// owned, which is why the store itself never consumes anything.
 fn stores_place_in_a_value(dest: &Place, rvalue: &Rvalue, place: &Place) -> bool {
     match rvalue {
-        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| reads(operand, place)),
+        Rvalue::Aggregate(_, operands) => operands
+            .iter()
+            .any(|operand| matches!(operand, Operand::Copy(source) if source == place)),
         Rvalue::Use(operand) => !dest.projection.is_empty() && reads(operand, place),
         Rvalue::Cast(_, _)
         | Rvalue::Ref(_)
@@ -994,6 +1001,41 @@ fn stores_place_in_a_value(dest: &Place, rvalue: &Rvalue, place: &Place) -> bool
         | Rvalue::AtomicOp { .. }
         | Rvalue::Phi(_) => false,
     }
+}
+
+/// Whether an aggregate takes `place` over by moving it whole into a slot.
+///
+/// The retain before such a store pays for the moved local itself, which the
+/// aggregate then consumes — see [`aggregate_taken_locals`].
+fn moves_place_into_an_aggregate(rvalue: &Rvalue, place: &Place) -> bool {
+    place.projection.is_empty()
+        && matches!(rvalue, Rvalue::Aggregate(_, operands)
+            if operands.iter().any(|operand| matches!(operand, Operand::Move(moved) if moved == place)))
+}
+
+/// The locals an aggregate takes over: each one it moves whole into a slot of
+/// a value holding references. RC elision spells a copy of a local that dies
+/// right after it as such a move, the local's own reference going into the
+/// slot; a retain before the store pays for the local, as
+/// [`moves_place_into_an_aggregate`] credits it. A collection laying vector
+/// elements out inline copies their bytes and takes nothing.
+fn aggregate_taken_locals(body: &Body, dest: &Place, rvalue: &Rvalue) -> Vec<Local> {
+    let Rvalue::Aggregate(_, operands) = rvalue else {
+        return Vec::new();
+    };
+    if stores_elements_inline(body, dest) {
+        return Vec::new();
+    }
+    operands.iter().filter_map(bare_local_moved).collect()
+}
+
+/// Whether `dest` is a whole array or list whose elements are laid out inline.
+fn stores_elements_inline(body: &Body, dest: &Place) -> bool {
+    dest.projection.is_empty()
+        && body.local_decls.get(dest.local.0).is_some_and(|decl| {
+            matches!(&decl.mir_ty, MirType::Array(element) | MirType::List(element)
+                    if element.is_inline_vector())
+        })
 }
 
 /// Whether an operand reads exactly `place`, however it is spelled.
@@ -1037,7 +1079,8 @@ fn apply_statement(
             if takes_no_reference(body, dest, rvalue) {
                 return;
             }
-            for consumed in consumed_bare_locals(rvalue) {
+            let taken = aggregate_taken_locals(body, dest, rvalue);
+            for consumed in consumed_bare_locals(rvalue).into_iter().chain(taken) {
                 release(body, &Place::new(consumed), tracked, state, violations);
             }
         }

@@ -2945,7 +2945,11 @@ impl Pipeline {
         is_verifying: bool,
     ) -> Vec<(Symbol, mir::verify::VerificationViolation)> {
         let type_definitions = result.type_checker.type_definitions();
-        let synthesized = mir::lowering::dispatch_symbols::synthesized_references(type_definitions);
+        // A vtable slot is called through without a MIR call naming its body,
+        // so a body some slot points at lends every parameter too.
+        let mut synthesized =
+            mir::lowering::dispatch_symbols::synthesized_references(type_definitions);
+        synthesized.extend(result.vtable_fills.slot_symbols().cloned());
         mir::optimization::owned_params::decide_owned_parameters(
             lowered,
             &synthesized,

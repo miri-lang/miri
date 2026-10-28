@@ -532,6 +532,26 @@ impl Symbol {
         matches!(self.kind, SymbolKind::Method { .. })
     }
 
+    /// The name of the method this symbol names, when it names one compiled
+    /// for no gpu-resident buffers a call passes; `None` for any other symbol.
+    pub fn plain_method_name(&self) -> Option<&str> {
+        match &self.kind {
+            SymbolKind::Method { method, .. } if self.residency.is_empty() => Some(method),
+            SymbolKind::Method { .. }
+            | SymbolKind::Function { .. }
+            | SymbolKind::Vtable { .. }
+            | SymbolKind::Closure { .. }
+            | SymbolKind::GpuKernel { .. }
+            | SymbolKind::Runtime(_)
+            | SymbolKind::Entry
+            | SymbolKind::TypeThunk { .. }
+            | SymbolKind::ClosureDestructor(_)
+            | SymbolKind::ClosureTrampoline(_)
+            | SymbolKind::KernelDatum { .. }
+            | SymbolKind::StringLiteral { .. } => None,
+        }
+    }
+
     /// Whether the runtime library, not this compilation, provides the body.
     pub fn is_runtime(&self) -> bool {
         matches!(self.kind, SymbolKind::Runtime(_))
