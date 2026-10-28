@@ -17,12 +17,14 @@ use crate::mir::optimization::stable_collections::{
 };
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
+use miri::mir::analysis::dominators::DominatorTree;
+use miri::mir::analysis::loops::{natural_loops, NaturalLoop};
 use miri::mir::optimization::in_bounds::record_in_bounds;
 use miri::mir::optimization::loop_versioning::version_bounded_loops;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::{
-    BasicBlock, BasicBlockData, BinOp, Body, Discriminant, ExecutionModel, InBounds, LocalDecl,
-    Operand, Place, Rvalue, StatementKind, TerminatorKind,
+    BasicBlock, BasicBlockData, BinOp, Body, Discriminant, ExecutionModel, InBounds, Local,
+    LocalDecl, Operand, Place, Rvalue, StatementKind, TerminatorKind,
 };
 
 const EXIT: usize = 3;
@@ -322,6 +324,54 @@ fn test_matmul_reads_a_row_and_a_row_of_the_other_matrix_without_a_bounds_check(
         "{proven:?}\n{body}"
     );
     assert!(proven.len() >= 2, "{proven:?}\n{body}");
+}
+
+/// The local of `body` the program names `name`.
+fn named_local(body: &Body, name: &str) -> Local {
+    (body
+        .local_decls
+        .iter()
+        .position(|decl| decl.name.as_deref() == Some(name)))
+    .map(Local)
+    .unwrap_or_else(|| panic!("no local named {name}:\n{body}"))
+}
+
+/// The innermost of `body`'s loops holding `block`.
+fn innermost_loop_holding(body: &Body, block: BasicBlock) -> NaturalLoop {
+    let dominators = DominatorTree::compute(body);
+    natural_loops(body, &dominators)
+        .into_iter()
+        .filter(|found| found.blocks.contains(&block.0))
+        .min_by_key(|found| found.blocks.len())
+        .unwrap_or_else(|| panic!("{block} is in no loop:\n{body}"))
+}
+
+#[test]
+fn test_matmul_reads_its_three_lists_headers_outside_the_innermost_loop() {
+    let body = workload_function("matmul", "kernel");
+    let [a, b, row] = ["a", "b", "row"].map(|name| named_local(&body, name));
+    let k = named_local(&body, "k");
+    let proof_of = |collection: Local| {
+        (body.in_bounds.iter())
+            .find(|proof| proof.collection == collection && proof.index == k)
+            .unwrap_or_else(|| panic!("{collection}[{k}] is not proven:\n{body}"))
+    };
+    let (b_k, row_k) = (proof_of(b), proof_of(row));
+    assert_eq!(b_k.block, row_k.block, "{body}");
+    let innermost = innermost_loop_holding(&body, b_k.block);
+    for list in [a, b, row] {
+        let record = (body.stable_collections.iter())
+            .find(|record| record.local == list)
+            .unwrap_or_else(|| panic!("{list} is not recorded:\n{body}"));
+        assert!(
+            !innermost.blocks.contains(&record.preheader.0),
+            "{list}'s header is read inside the innermost loop:\n{body}"
+        );
+        assert!(
+            (innermost.blocks.iter()).all(|block| record.blocks.contains(&BasicBlock(*block))),
+            "{list}'s record does not cover the innermost loop:\n{body}"
+        );
+    }
 }
 
 #[test]

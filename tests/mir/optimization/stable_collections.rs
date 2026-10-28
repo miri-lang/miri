@@ -21,6 +21,8 @@ use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
+use miri::mir::analysis::dominators::DominatorTree;
+use miri::mir::analysis::loops::natural_loops;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::symbol::Symbol;
@@ -523,7 +525,7 @@ fn test_releasing_an_instance_without_a_drop_hook_keeps_its_list_recorded() {
 }
 
 #[test]
-fn test_a_pair_loop_writing_through_a_list_of_structs_records_it_and_calls_nothing() {
+fn test_a_pair_loop_writing_through_a_list_of_structs_records_it_once_for_the_outer_loop() {
     let source = program(
         r#"
 fn step(start [Body], dt float) [Body]
@@ -543,8 +545,12 @@ fn step(start [Body], dt float) [Body]
     );
     let body = body_named(&source, ".step");
     let [record] = body.stable_collections.as_slice() else {
-        panic!("one record, for the inner loop:\n{body}");
+        panic!("one record, for the outer loop:\n{body}");
     };
+    assert!(
+        holds_another_loop(&body, record),
+        "the record is not over the outer loop:\n{body}"
+    );
     let unreachable = body.find_unreachable_blocks();
     let calls_inside = record
         .blocks
@@ -561,6 +567,15 @@ fn step(start [Body], dt float) [Body]
         })
         .count();
     assert_eq!(calls_inside, 0, "the pair loop still calls:\n{body}");
+}
+
+/// Whether `record`'s blocks hold the header of a loop other than its own.
+fn holds_another_loop(body: &Body, record: &StableCollection) -> bool {
+    let dominators = DominatorTree::compute(body);
+    natural_loops(body, &dominators)
+        .iter()
+        .map(|found| BasicBlock(found.header))
+        .any(|header| header != record.header && record.blocks.contains(&header))
 }
 
 const HOLDER: &str = r#"

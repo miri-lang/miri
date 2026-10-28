@@ -11,8 +11,11 @@
 
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
+use miri::mir::analysis::dominators::DominatorTree;
+use miri::mir::analysis::loops::natural_loops;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::optimization::elide_unshare_checks;
+use miri::mir::optimization::loop_unsharing::hoist_loop_unsharing;
 use miri::mir::{
     AggregateKind, ArgMode, BasicBlock, BasicBlockData, Body, Discriminant, ExecutionModel,
     GpuLaunchArgs, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
@@ -368,6 +371,137 @@ fn mark(n int) int
     assert_eq!(calls_in_loops(&body, rt::LIST_COW), 1);
 }
 
+/// For each copy-on-write call `body` still reaches, how many loops hold it:
+/// 0 before every loop, 1 inside one loop but before the loop it holds, and
+/// so on.
+fn copy_on_write_loop_depths(body: &Body) -> Vec<usize> {
+    let dominators = DominatorTree::compute(body);
+    let loops = natural_loops(body, &dominators);
+    let unreachable = body.find_unreachable_blocks();
+    (0..body.basic_blocks.len())
+        .filter(|index| !unreachable.contains(index))
+        .filter(|index| calls_runtime(body.basic_blocks[*index].terminator.as_ref(), rt::LIST_COW))
+        .map(|index| {
+            loops
+                .iter()
+                .filter(|found| found.blocks.contains(&index))
+                .count()
+        })
+        .collect()
+}
+
+#[test]
+fn test_a_list_written_in_every_iteration_of_an_inner_loop_is_made_its_own_before_the_outer_one() {
+    let source = with_cell(
+        r#"
+fn spread(n int) int
+    var counts = List([0, 0, 0, 0])
+    var i = 0
+    while i < n
+        var j = 0
+        while j < n
+            counts[j % 4] = counts[j % 4] + i
+            j = j + 1
+        i = i + 1
+    counts[0]
+"#,
+    );
+    let body = body_named(&source, ".spread");
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 0, "{body}");
+    assert_eq!(reachable_copy_on_writes(&body), 1, "{body}");
+}
+
+#[test]
+fn test_a_list_path_written_in_every_iteration_of_an_inner_loop_is_made_its_own_before_the_outer_one(
+) {
+    let source = with_cell(
+        r#"
+fn touch(start [Cell], n int) [Cell]
+    var l = start
+    var i = 0
+    while i < n
+        var j = 0
+        while j < n
+            l[j % 2].x = l[j % 2].x + i
+            j = j + 1
+        i = i + 1
+    l
+"#,
+    );
+    let body = body_named(&source, ".touch");
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 0, "{body}");
+    assert_eq!(reachable_copy_on_writes(&body), 1, "{body}");
+}
+
+#[test]
+fn test_a_loop_after_a_nest_writing_the_list_asks_nothing_more() {
+    let source = with_cell(
+        r#"
+fn spread(n int) int
+    var counts = List([0, 0, 0, 0])
+    var i = 0
+    while i < n
+        var j = 0
+        while j < n
+            counts[j % 4] = counts[j % 4] + i
+            j = j + 1
+        i = i + 1
+    var k = 0
+    while k < 4
+        counts[k] = counts[k] * 2
+        k = k + 1
+    counts[0]
+"#,
+    );
+    let body = body_named(&source, ".spread");
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 0, "{body}");
+    assert_eq!(reachable_copy_on_writes(&body), 1, "{body}");
+}
+
+#[test]
+fn test_an_outer_loop_sharing_the_list_asks_before_each_run_of_the_inner_one() {
+    let source = with_cell(
+        r#"
+fn spread(n int) int
+    var counts = List([0, 0, 0, 0])
+    var total = 0
+    var i = 0
+    while i < n
+        let snapshot = counts
+        var j = 0
+        while j < n
+            counts[j % 4] = snapshot[j % 4] + i
+            j = j + 1
+        total = total + snapshot[0]
+        i = i + 1
+    total + counts[0]
+"#,
+    );
+    let body = body_named(&source, ".spread");
+    assert_eq!(copy_on_write_loop_depths(&body), vec![1], "{body}");
+}
+
+#[test]
+fn test_an_outer_loop_rebinding_the_list_asks_before_each_run_of_the_inner_one() {
+    let source = with_cell(
+        r#"
+fn spread(start [int], n int) int
+    var counts = List([0, 0, 0, 0])
+    var i = 0
+    while i < n
+        counts = start
+        var j = 0
+        while j < n
+            counts[j % 4] = counts[j % 4] + i
+            j = j + 1
+        i = i + 1
+    counts[0]
+"#,
+    );
+    let body = body_named(&source, ".spread");
+    assert_eq!(copy_on_write_loop_depths(&body), vec![1], "{body}");
+}
+
 #[test]
 fn test_a_snapshot_taken_inside_a_loop_keeps_its_values() {
     crate::integration::utils::assert_runs_with_output(
@@ -675,7 +809,7 @@ fn touch(start [Cell], i int, keep bool) int
 }
 
 #[test]
-fn test_nbody_advance_makes_the_bodies_its_own_before_each_writing_loop() {
+fn test_nbody_advance_makes_the_bodies_its_own_once_before_its_loops() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/bench/workloads/nbody/nbody.mi"
@@ -683,7 +817,8 @@ fn test_nbody_advance_makes_the_bodies_its_own_before_each_writing_loop() {
     let source = std::fs::read_to_string(path).expect("nbody source should be readable");
     let body = body_named(&source, ".advance");
     assert_eq!(reachable_checks(&body), 0);
-    assert_eq!(reachable_copy_on_writes(&body), 2);
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 0, "{body}");
+    assert_eq!(reachable_copy_on_writes(&body), 1, "{body}");
 }
 
 /// The n-body step whose allocation count and checksum
@@ -1215,4 +1350,136 @@ fn test_the_copy_path_of_an_answered_check_does_not_reach_the_join() {
     builder.check_with_copy(local(2), vec![StatementKind::IncRef(local(2))]);
     builder.check(local(2));
     assert_eq!(checks_left(builder.finish()), 0);
+}
+
+/// Locals of [`nest_writing_a_list`].
+const OUTER_INDEX: Local = Local(1);
+const NEST_LIST: Local = Local(2);
+const INNER_INDEX: Local = Local(3);
+const OUTER_BELOW: Local = Local(4);
+const INNER_BELOW: Local = Local(5);
+const HANDED_BACK: Local = Local(6);
+const REPLACEMENT: Local = Local(7);
+/// Blocks of [`nest_writing_a_list`].
+const OUTER_HEADER: usize = 1;
+const OUTER_STEP: usize = 2;
+const INNER_HEADER: usize = 3;
+const INNER_ASK: usize = 4;
+/// The block the pass appends first: the copy-on-write it inserts.
+const INSERTED_ASK: usize = 8;
+
+/// A nest whose inner loop hands the list to its copy-on-write entry point
+/// on every iteration and writes an element:
+/// `while outer: [OUTER_STEP] ; while inner: l = cow(l); l[j] = 0`. When
+/// `outer_step` replaces the whole list, the outer loop writes it by
+/// something other than the inner loop's questions, reading nothing of the
+/// list it replaces.
+fn nest_writing_a_list(outer_step: Vec<StatementKind>) -> Body {
+    use crate::mir::optimization::stable_collections::{call, int, list_of, terminator, ty};
+
+    let mut body = Body::new(0, span(), ExecutionModel::Cpu);
+    body.local_decls = [
+        ty(TypeKind::Int),
+        ty(TypeKind::Int),
+        list_of(TypeKind::Int),
+        ty(TypeKind::Int),
+        ty(TypeKind::Boolean),
+        ty(TypeKind::Boolean),
+        list_of(TypeKind::Int),
+        list_of(TypeKind::Int),
+    ]
+    .into_iter()
+    .map(|declared| LocalDecl::new(declared, span()))
+    .collect();
+    let goto = |target: usize| {
+        terminator(TerminatorKind::Goto {
+            target: BasicBlock(target),
+        })
+    };
+    let switch = |below: Local, body_block: usize, exit: usize| {
+        terminator(TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(below)),
+            targets: vec![(Discriminant::bool_true(), BasicBlock(body_block))],
+            otherwise: BasicBlock(exit),
+        })
+    };
+    let block = |statements: Vec<StatementKind>, ending: Terminator| {
+        let mut data = BasicBlockData::new(Some(ending));
+        data.statements = statements
+            .into_iter()
+            .map(|kind| Statement { kind, span: span() })
+            .collect();
+        data
+    };
+    let element = Place {
+        local: NEST_LIST,
+        projection: vec![PlaceElem::Index(INNER_INDEX)],
+    };
+    body.basic_blocks = vec![
+        block(Vec::new(), goto(OUTER_HEADER)),
+        block(Vec::new(), switch(OUTER_BELOW, OUTER_STEP, 6)),
+        block(outer_step, goto(INNER_HEADER)),
+        block(Vec::new(), switch(INNER_BELOW, INNER_ASK, 5)),
+        block(
+            Vec::new(),
+            call(
+                Operand::runtime(rt::LIST_COW, span()),
+                vec![Operand::Move(Place::new(NEST_LIST))],
+                HANDED_BACK,
+                7,
+            ),
+        ),
+        block(Vec::new(), goto(OUTER_HEADER)),
+        block(Vec::new(), terminator(TerminatorKind::Return)),
+        block(
+            vec![
+                assign(
+                    Place::new(NEST_LIST),
+                    Rvalue::Use(Operand::Move(Place::new(HANDED_BACK))),
+                ),
+                assign(element, Rvalue::Use(int(0))),
+                assign(
+                    Place::new(INNER_INDEX),
+                    Rvalue::Use(Operand::Copy(Place::new(OUTER_INDEX))),
+                ),
+            ],
+            goto(INNER_HEADER),
+        ),
+    ];
+    body
+}
+
+/// The header of the loop the copy-on-write `hoist_loop_unsharing` inserted
+/// leads into, after checking it inserted exactly one.
+fn hoisted_before(mut body: Body) -> usize {
+    assert!(hoist_loop_unsharing(&mut body), "nothing hoisted:\n{body}");
+    let asks = (body.basic_blocks.iter())
+        .filter(|block| calls_runtime(block.terminator.as_ref(), rt::LIST_COW))
+        .count();
+    assert_eq!(asks, 2, "one copy-on-write inserted:\n{body}");
+    let write_back = INSERTED_ASK + 1;
+    match terminator(&body, write_back) {
+        Some(TerminatorKind::Goto { target }) => target.0,
+        other => panic!("bb{write_back} ends in {other:?}:\n{body}"),
+    }
+}
+
+#[test]
+fn test_a_nest_writing_a_list_only_by_its_questions_is_made_its_own_before_the_outer_loop() {
+    assert_eq!(
+        hoisted_before(nest_writing_a_list(Vec::new())),
+        OUTER_HEADER
+    );
+}
+
+#[test]
+fn test_an_outer_loop_replacing_the_list_whole_keeps_the_copy_on_write_before_the_inner_loop() {
+    let replace = assign(
+        Place::new(NEST_LIST),
+        Rvalue::Use(Operand::Move(Place::new(REPLACEMENT))),
+    );
+    assert_eq!(
+        hoisted_before(nest_writing_a_list(vec![replace])),
+        INNER_HEADER
+    );
 }

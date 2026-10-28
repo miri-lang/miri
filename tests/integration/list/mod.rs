@@ -18,6 +18,7 @@ pub mod integration;
 pub mod loop_header_reads;
 pub mod membership;
 pub mod methods;
+pub mod nested_loop_writes;
 pub mod optional_elements;
 pub mod optional_results;
 pub mod proven_indices;

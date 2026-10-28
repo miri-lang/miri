@@ -35,13 +35,37 @@
 //! parameter, a capture, a gpu-resident binding and an address-taken local
 //! never do, as no fact is rooted at one. A loop whose question runs only on
 //! some iterations is left alone: copying a shared collection before it would
-//! copy one the loop may never write. The one copy this adds is a shared
-//! collection entering a loop that runs no iteration at all.
+//! copy one the loop may never write.
+//!
+//! The copy-on-write before a loop is itself a question its enclosing loop
+//! asks, on every iteration when the inner loop's header dominates every edge
+//! back to the enclosing header. So it moves out again, through every
+//! enclosing loop that asks it on every iteration, writes `x` no other way
+//! than by the questions' write-backs and never hands `x`'s value to another
+//! holder — no retain, no copy or move of the whole local, no call it is
+//! handed to but a question or a question's copy — and the pass puts one
+//! copy-on-write before the outermost loop it reaches and none before the
+//! loops inside: the elision then answers every question within, those of
+//! later loops the collection reaches unshared included. A loop that shares
+//! `x` stops the move, so the inner loop is made its own before each of its
+//! runs, after the sharing. The walk happens within the one pass, on the
+//! loops as found before it inserts anything: running the pass again would
+//! put another copy-on-write before each outer loop every time.
+//!
+//! The one copy this can add is made by the copy-on-write before the
+//! outermost loop reached, which runs whenever that loop is entered: it
+//! copies a shared collection that no question of the loop it was made for
+//! would have copied, when the outermost loop runs no iteration, or when that
+//! inner loop runs none each time it is entered. Every other entry runs one
+//! of those questions at least once, and the first would have copied the
+//! shared collection there.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::mir::analysis::dominators::DominatorTree;
 use crate::mir::analysis::loops::{natural_loops, predecessors, NaturalLoop};
+use crate::mir::place::PlaceContext;
+use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, BasicBlockData, Body, Local, LocalDecl, Operand, Place, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
@@ -60,8 +84,9 @@ enum Question {
 }
 
 /// Inserts a copy-on-write before each loop that asks about a collection
-/// every iteration and writes it no other way. Returns true if any was
-/// inserted.
+/// every iteration and writes it no other way, or before the outermost loop
+/// enclosing it that asks that copy-on-write on every iteration and neither
+/// writes nor shares the collection. Returns true if any was inserted.
 pub fn hoist_loop_unsharing(body: &mut Body) -> bool {
     let asked = whole_locals_asked(body);
     if asked.is_empty() {
@@ -69,21 +94,124 @@ pub fn hoist_loop_unsharing(body: &mut Body) -> bool {
     }
     let dominators = DominatorTree::compute(body);
     let loops = natural_loops(body, &dominators);
-    let mut hoists: Vec<(usize, Local)> = Vec::new();
+    let mut hoists: BTreeSet<(usize, usize)> = BTreeSet::new();
     for found in &loops {
         for (local, question) in locals_asked_every_iteration(found, &asked, &dominators) {
             let is_worth_hoisting =
                 question == Question::CopyOnWrite || calls_only_questions(body, found, &asked);
             if is_worth_hoisting && is_written_only_by_its_questions(body, found, local) {
-                hoists.push((found.header, local));
+                let outermost =
+                    lift_through_enclosing_loops(body, &loops, &dominators, found, local);
+                hoists.insert((outermost.header, local.0));
             }
         }
     }
     let mut changed = false;
     for (header, local) in hoists {
-        changed |= make_own_before(body, &loops, header, local);
+        changed |= make_own_before(body, &loops, header, Local(local));
     }
     changed
+}
+
+/// The outermost loop a copy-on-write of `local` made before `found` can be
+/// made before instead. It moves out of a loop to the one enclosing it when
+/// the moved copy-on-write runs on every iteration of the enclosing loop —
+/// `found`'s header dominates every edge back to the enclosing header, so
+/// each of its iterations enters `found` — and that loop writes `local` no
+/// other way than by its questions and never hands its value to another
+/// holder. The copy-on-write then answers every question inside, `found`'s
+/// own included, and the inner loops get none of their own.
+fn lift_through_enclosing_loops<'l>(
+    body: &Body,
+    loops: &'l [NaturalLoop],
+    dominators: &DominatorTree,
+    found: &'l NaturalLoop,
+    local: Local,
+) -> &'l NaturalLoop {
+    let mut lifted = found;
+    while let Some(enclosing) = enclosing_loop(loops, lifted) {
+        let is_entered_every_iteration = (enclosing.latches.iter())
+            .all(|latch| dominators.dominates(BasicBlock(lifted.header), BasicBlock(*latch)));
+        if !is_entered_every_iteration
+            || !is_written_only_by_its_questions(body, enclosing, local)
+            || may_share(body, enclosing, local)
+        {
+            break;
+        }
+        lifted = enclosing;
+    }
+    lifted
+}
+
+/// The innermost loop of `loops` holding `inner` other than `inner` itself.
+fn enclosing_loop<'l>(loops: &'l [NaturalLoop], inner: &NaturalLoop) -> Option<&'l NaturalLoop> {
+    loops
+        .iter()
+        .filter(|outer| outer.header != inner.header && outer.blocks.contains(&inner.header))
+        .min_by_key(|outer| outer.blocks.len())
+}
+
+/// Whether a block of `found` may hand the value of the whole local `local`
+/// to another holder: retain it, or read it whole anywhere but in taking its
+/// length, in a release, or in a call to one of its questions or their copy
+/// paths.
+fn may_share(body: &Body, found: &NaturalLoop, local: Local) -> bool {
+    let mut uses = WholeUses {
+        local,
+        is_used: false,
+    };
+    for &block in &found.blocks {
+        let Some(data) = body.basic_blocks.get(block) else {
+            continue;
+        };
+        let location = BasicBlock(block);
+        for statement in &data.statements {
+            match &statement.kind {
+                StatementKind::Assign(_, Rvalue::Len(_))
+                | StatementKind::Reassign(_, Rvalue::Len(_)) => {}
+                StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => {
+                    uses.visit_rvalue(rvalue, location);
+                }
+                StatementKind::IncRef(place) => {
+                    uses.visit_place(place, PlaceContext::NonMutatingUse, location);
+                }
+                StatementKind::DecRef(_)
+                | StatementKind::Dealloc(_)
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_)
+                | StatementKind::Nop => {}
+            }
+        }
+        if let Some(terminator) = data.terminator.as_ref().filter(|t| !is_question_call(t)) {
+            uses.visit_terminator(location, terminator);
+        }
+    }
+    uses.is_used
+}
+
+/// Whether `terminator` calls a copy-on-write entry point, asks whether a
+/// value is shared, or makes a fresh copy.
+fn is_question_call(terminator: &Terminator) -> bool {
+    let TerminatorKind::Call { func, .. } = &terminator.kind else {
+        return false;
+    };
+    func.called_runtime_name().is_some_and(|name| {
+        is_copy_on_write(name) || returns_unshared(name) || name == rt::RC_IS_SHARED
+    })
+}
+
+/// Whether a visited node reads the whole of `local`.
+struct WholeUses {
+    local: Local,
+    is_used: bool,
+}
+
+impl Visitor for WholeUses {
+    fn visit_place(&mut self, place: &Place, _context: PlaceContext, _location: BasicBlock) {
+        if place.local == self.local && place.projection.is_empty() {
+            self.is_used = true;
+        }
+    }
 }
 
 /// The blocks asking about each whole local the elision may track: by local,
