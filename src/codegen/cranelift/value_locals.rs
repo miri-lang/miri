@@ -27,14 +27,12 @@ use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeC
 use crate::error::CodegenError;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{AggregateKind, Body, Local, Operand, Place, PlaceElem, Rvalue};
+use cranelift_codegen::ir::immediates::Ieee16;
 use cranelift_codegen::ir::{
     types as cl_types, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Value,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use std::collections::HashMap;
-
-/// The widest single load and store a value copy moves, in bytes.
-const COPY_CHUNK_BYTES: u32 = 8;
 
 impl<'a> FunctionTranslator<'a> {
     /// Give every value local that is neither a parameter nor the result a
@@ -797,43 +795,74 @@ pub fn copy_chunks(
     }
 }
 
-/// Copy the bytes of a value laid out as `layout` from `source` to `dest`,
-/// in the widest chunks both its size and its alignment allow.
+/// Copy the value laid out as `layout` from `source` to `dest`, each member
+/// loaded and stored whole at its own type and offset; padding is left
+/// alone.
+///
+/// Every access of a value's bytes — building it, reading a member, testing
+/// an optional's tag — takes a member at that member's type, so copying the
+/// same way keeps one shape per offset, which is what lets a slot holding
+/// the value be promoted to SSA values.
 pub fn copy_value(builder: &mut FunctionBuilder, source: Value, dest: Value, layout: &ValueLayout) {
-    let width = copy_width(layout);
-    let Some(chunk) = cl_types::Type::int_with_byte_size(width as u16) else {
-        return;
-    };
-    let chunks = (0..layout.size / width).map(|index| ((index * width) as i32, chunk));
-    copy_chunks(builder, source, dest, chunks);
+    let members = scalar_members(layout)
+        .into_iter()
+        .map(|(offset, scalar)| (offset as i32, scalar_type(scalar)));
+    copy_chunks(builder, source, dest, members);
 }
 
-/// Clear every byte of a value laid out as `layout` at `dest`, in the widest
-/// chunks its size and alignment allow.
+/// Clear every member of a value laid out as `layout` at `dest`, each stored
+/// as the zero of its own type at its own offset; padding is left alone. An
+/// optional's tag is among the members, and reads absent.
 pub fn clear_value(builder: &mut FunctionBuilder, dest: Value, layout: &ValueLayout) {
-    let width = copy_width(layout);
-    let Some(chunk) = cl_types::Type::int_with_byte_size(width as u16) else {
-        return;
-    };
-    let zero = builder.ins().iconst(chunk, 0);
-    for index in 0..layout.size / width {
+    for (offset, scalar) in scalar_members(layout) {
+        let zero = zero_scalar(builder, scalar);
         builder
             .ins()
-            .store(MemFlagsData::new(), zero, dest, (index * width) as i32);
+            .store(MemFlagsData::new(), zero, dest, offset as i32);
     }
 }
 
-/// The widest power of two, at most [`COPY_CHUNK_BYTES`], dividing both the
-/// value's size and its alignment.
-fn copy_width(layout: &ValueLayout) -> u32 {
-    let bound = layout.align.clamp(1, COPY_CHUNK_BYTES);
-    let size_bound = 1
-        << layout
-            .size
-            .max(1)
-            .trailing_zeros()
-            .min(COPY_CHUNK_BYTES.trailing_zeros());
-    bound.min(size_bound)
+/// Each scalar member of a value laid out as `layout`, with its byte offset
+/// from the value's start, nested values flattened in layout order. An
+/// optional's tag is the one-byte unsigned scalar it is read and written as.
+fn scalar_members(layout: &ValueLayout) -> Vec<(u32, ScalarKind)> {
+    let mut members = Vec::with_capacity(layout.fields.len());
+    collect_scalar_members(layout, 0, &mut members);
+    members
+}
+
+/// Append the scalar members of `layout`, placed at `base`, to `members`.
+fn collect_scalar_members(layout: &ValueLayout, base: u32, members: &mut Vec<(u32, ScalarKind)>) {
+    for field in &layout.fields {
+        let offset = base + field.offset;
+        match &field.repr {
+            FieldRepr::Scalar(scalar) => members.push((offset, *scalar)),
+            FieldRepr::OptionTag => members.push((offset, ScalarKind::Unsigned(1))),
+            FieldRepr::Value(inner) => collect_scalar_members(inner, offset, members),
+        }
+    }
+}
+
+/// The zero of `scalar`, at the type [`scalar_type`] stores it at.
+fn zero_scalar(builder: &mut FunctionBuilder, scalar: ScalarKind) -> Value {
+    match scalar {
+        ScalarKind::Float(2) => builder.ins().f16const(Ieee16::with_bits(0)),
+        ScalarKind::Float(4) => builder.ins().f32const(0.0),
+        ScalarKind::Float(_) => builder.ins().f64const(0.0),
+        ScalarKind::Signed(_) | ScalarKind::Unsigned(_) | ScalarKind::Boolean => {
+            zero_integer(builder, scalar_type(scalar))
+        }
+    }
+}
+
+/// The zero of the integer type `ty`. A 128-bit constant is joined from two
+/// 64-bit halves: `iconst` takes no immediate that wide.
+fn zero_integer(builder: &mut FunctionBuilder, ty: cl_types::Type) -> Value {
+    if ty != cl_types::I128 {
+        return builder.ins().iconst(ty, 0);
+    }
+    let half = builder.ins().iconst(cl_types::I64, 0);
+    builder.ins().iconcat(half, half)
 }
 
 /// A value being built in place: where its bytes start and how they are laid

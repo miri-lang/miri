@@ -434,3 +434,162 @@ fn a_struct_local_mutated_in_a_loop_leaves_no_slot_in_main() {
         "a slot keeps its bytes in:\n{main}"
     );
 }
+
+/// `pick` clears an `int?` local, sets it on one arm, copies it and opens
+/// the copy.
+const OPTIONAL_INT_LOCAL: &str = r#"use system.io
+
+fn pick(n int) int
+    var o int? = None
+    if n % 3 == 0
+        o = n * 2
+    let c = o
+    var r = -1
+    if let Some(v) = c
+        r = v
+    r
+
+fn main()
+    var s = 0
+    var i = 0
+    while i < 10
+        s += pick(i)
+        i += 1
+    println(f"{s}")
+"#;
+
+/// `pick` clears a `float?` local, sets it on one arm, copies it and opens
+/// the copy.
+const OPTIONAL_FLOAT_LOCAL: &str = r#"use system.io
+
+fn pick(n int) float
+    var o float? = None
+    if n % 3 == 0
+        o = (n as float) * 1.5
+    let c = o
+    var r = -1.0
+    if let Some(v) = c
+        r = v
+    r
+
+fn main()
+    var s = 0.0
+    var i = 0
+    while i < 10
+        s += pick(i)
+        i += 1
+    println(f"{s}")
+"#;
+
+/// `pick` builds a struct of an `int` and a `bool`, rebuilds it on one arm,
+/// copies it and reads both fields of the copy.
+const INT_AND_BOOL_STRUCT_LOCAL: &str = r#"use system.io
+
+struct Tag
+    id int
+    live bool
+
+fn pick(n int) int
+    var t = Tag(id: n, live: n % 2 == 0)
+    if n % 3 == 0
+        t = Tag(id: n * 2, live: true)
+    let c = t
+    if c.live
+        return c.id
+    -c.id
+
+fn main()
+    var s = 0
+    var i = 0
+    while i < 10
+        s += pick(i)
+        i += 1
+    println(f"{s}")
+"#;
+
+/// `pick` builds an `(int, float)` tuple, rebuilds it on one arm, copies it
+/// and reads both elements of the copy.
+const INT_AND_FLOAT_TUPLE_LOCAL: &str = r#"use system.io
+
+fn pick(n int) float
+    var t = (n, 0.5)
+    if n % 3 == 0
+        t = (n * 2, 1.5)
+    let c = t
+    (c.0 as float) * c.1
+
+fn main()
+    var s = 0.0
+    var i = 0
+    while i < 10
+        s += pick(i)
+        i += 1
+    println(f"{s}")
+"#;
+
+/// `pick` builds an `(int, bool)` tuple, rebuilds it on one arm, copies it
+/// and reads both elements of the copy.
+const INT_AND_BOOL_TUPLE_LOCAL: &str = r#"use system.io
+
+fn pick(n int) int
+    var t = (n, false)
+    if n % 3 == 0
+        t = (n * 2, true)
+    let c = t
+    if c.1
+        return c.0
+    -c.0
+
+fn main()
+    var s = 0
+    var i = 0
+    while i < 10
+        s += pick(i)
+        i += 1
+    println(f"{s}")
+"#;
+
+/// Assert that the optimized `pick` of `source` keeps no slot holding
+/// bytes, and that it prints `expected` at every optimization level.
+fn assert_pick_holds_its_value_in_registers(source: &str, expected: &str) {
+    let (optimized, output) = listing_and_output(source, "3");
+    assert_eq!(output, expected, "at opt level 3");
+    let pick = function_text(&optimized, "miri.pick");
+    assert!(
+        !pick.contains("stack_addr"),
+        "a slot address is left in:\n{pick}"
+    );
+    assert!(
+        slot_sizes(pick).iter().all(|&size| size == 0),
+        "a slot keeps its bytes in:\n{pick}"
+    );
+    for opt_level in ["0", "1"] {
+        let (_, output) = listing_and_output(source, opt_level);
+        assert_eq!(output, expected, "at opt level {opt_level}");
+    }
+}
+
+#[test]
+fn an_optional_int_cleared_set_and_copied_leaves_no_slot() {
+    assert_pick_holds_its_value_in_registers(OPTIONAL_INT_LOCAL, "30\n");
+}
+
+#[test]
+fn an_optional_float_cleared_set_and_copied_leaves_no_slot() {
+    assert_pick_holds_its_value_in_registers(OPTIONAL_FLOAT_LOCAL, "21.0\n");
+}
+
+#[test]
+fn a_struct_of_an_int_and_a_bool_built_and_copied_leaves_no_slot() {
+    assert_pick_holds_its_value_in_registers(INT_AND_BOOL_STRUCT_LOCAL, "37\n");
+}
+
+#[test]
+fn a_tuple_of_an_int_and_a_float_built_and_copied_leaves_no_slot() {
+    assert_pick_holds_its_value_in_registers(INT_AND_FLOAT_TUPLE_LOCAL, "67.5\n");
+}
+
+#[test]
+fn a_tuple_of_an_int_and_a_bool_built_and_copied_leaves_no_slot() {
+    assert_pick_holds_its_value_in_registers(INT_AND_BOOL_TUPLE_LOCAL, "9\n");
+}

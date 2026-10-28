@@ -7,6 +7,7 @@ pub mod basic;
 pub mod coalescing;
 pub mod declared_optional_literals;
 pub mod edge_cases;
+pub mod held_bytes_round_trips;
 pub mod inline_seams;
 pub mod inline_values;
 pub mod matching;
