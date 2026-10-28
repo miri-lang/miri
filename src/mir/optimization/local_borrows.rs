@@ -24,7 +24,14 @@
 //!   by design — a class, or a trait only classes implement. A borrowed value's
 //!   count is its owner's, so a copy-on-write check on it would answer "not
 //!   shared" and write into the owner's element. Every write through `l`, every
-//!   uniqueness check on it and every move of it into a call is refused.
+//!   uniqueness check on it and every move of it into a call is refused, and so
+//!   is every hand-off to a callee, except a whole `l` of a type a write copies
+//!   (`type_facts::unsharing`) lent to a function of the program, or to a method
+//!   past its receiver: a body writing such a parameter binds a copy of it on
+//!   entry (`lowering::written_parameters`), which takes a reference of its
+//!   own, so the write copies. A method's receiver gets no such copy — a write
+//!   through it relies on the caller's copy-on-write, or checks that it arrived
+//!   unique (`RECEIVER_UNIQUE`), which a borrowed count would answer yes to.
 //! - **Its root is a local the body owns** — not a parameter and not a capture —
 //!   and every step from the root to `p` is a value step. Nothing crosses a
 //!   class field: a method can clear a field it never names here. Any other
@@ -43,6 +50,7 @@ use crate::mir::block::BasicBlockData;
 use crate::mir::optimization::perceus::{place_declared_type, Perceus, PerceusContext};
 use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
+use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -214,7 +222,7 @@ fn is_owned_root(body: &Body, root: Local) -> bool {
 /// a definition that is not a read, a rebinding, a release by hand, a write
 /// through it, a runtime entry point keeping or checking it, an `out`
 /// argument, a kernel launch, or — for a value that is not a reference by
-/// design — a move into a call.
+/// design — a hand-off to a callee that may write it in place.
 fn refused_locals(body: &Body, ctx: &PerceusContext, reads: &Reads) -> HashSet<Local> {
     let reads_at: HashSet<(Local, Site)> = reads
         .iter()
@@ -222,6 +230,7 @@ fn refused_locals(body: &Body, ctx: &PerceusContext, reads: &Reads) -> HashSet<L
         .collect();
     let is_reference =
         |local: Local| has_reference_semantics(&ctx.local_decls[local.0].ty.kind, definitions(ctx));
+    let is_copied = |local: Local| is_copied_on_write(body, &ctx.local_decls[local.0].ty);
     let mut refused = HashSet::new();
     for (block, data) in body.basic_blocks.iter().enumerate() {
         for (index, statement) in data.statements.iter().enumerate() {
@@ -234,7 +243,7 @@ fn refused_locals(body: &Body, ctx: &PerceusContext, reads: &Reads) -> HashSet<L
         }
         if let Some(terminator) = &data.terminator {
             refused.extend(
-                refused_by_terminator(terminator, is_reference)
+                refused_by_terminator(terminator, is_reference, is_copied)
                     .into_iter()
                     .filter(|local| reads.contains_key(local)),
             );
@@ -299,12 +308,15 @@ fn refused_by_rvalue(rvalue: &Rvalue) -> Vec<Local> {
 
 /// The locals a terminator writes, launches, calls by moving, passes `out`,
 /// hands to a runtime entry point that keeps or checks them, or — unless
-/// `is_reference` — hands to any callee not known to only read it. A callee
-/// writes a parameter in place when nothing else holds it, and a borrowed
-/// value's count is its owner's.
+/// `is_reference` — hands to any callee not known to only read it, other than
+/// one copying it on entry before a write ([`lends_to_entry_copy`], for a
+/// local `is_copied` holds a value a write copies). A method's receiver gets
+/// no such copy and is written in place by the count its caller hands it, and
+/// a borrowed value's count is its owner's.
 fn refused_by_terminator(
     terminator: &Terminator,
     is_reference: impl Fn(Local) -> bool,
+    is_copied: impl Fn(Local) -> bool,
 ) -> Vec<Local> {
     let (func, args, arg_modes, destination) = match &terminator.kind {
         TerminatorKind::Call {
@@ -330,7 +342,10 @@ fn refused_by_terminator(
         let place = arg.place()?;
         let keeps =
             keeps_or_checks(func, position) || arg_mode(arg_modes, position) == ArgMode::Out;
-        let may_write_a_value = !is_reference(place.local) && !only_reads(func, position);
+        let copies_on_entry = is_copied(place.local)
+            && lends_to_entry_copy(func, position, arg, arg_mode(arg_modes, position));
+        let may_write_a_value =
+            !is_reference(place.local) && !only_reads(func, position) && !copies_on_entry;
         (keeps || may_write_a_value).then_some(place.local)
     });
     let moved_callee = match func {
@@ -349,6 +364,24 @@ fn refused_by_terminator(
 fn only_reads(func: Option<&Operand>, position: usize) -> bool {
     func.and_then(Operand::called_runtime_name)
         .is_some_and(|name| only_reads_argument(name, position))
+}
+
+/// Whether the call to `func` lends `arg`, a whole local by copy and `mode`
+/// borrowed, to a parameter its callee binds a copy of on entry before
+/// writing it: any parameter of a function of the program, and any of a
+/// method's past its receiver. A closure, a virtual call and every other
+/// symbol are not known to.
+fn lends_to_entry_copy(
+    func: Option<&Operand>,
+    position: usize,
+    arg: &Operand,
+    mode: ArgMode,
+) -> bool {
+    let is_whole_copy = matches!(arg, Operand::Copy(place) if place.projection.is_empty());
+    let copies_parameter = func
+        .and_then(Operand::called_symbol)
+        .is_some_and(|symbol| symbol.is_plain_function() || (symbol.is_method() && position > 0));
+    is_whole_copy && mode == ArgMode::Borrowed && copies_parameter
 }
 
 /// Whether the call to `func` keeps the argument at `position`, or asks
@@ -522,8 +555,10 @@ fn operand_changes(operand: &Operand, owners: &[Local]) -> bool {
 
 /// Whether `terminator` changes one of `owners`: writes it, launches a kernel
 /// over it, or hands it to a call other than lent by copy to a runtime entry
-/// point that only reads it. Any other callee may write what it is lent in
-/// place.
+/// point that only reads it. A method writes its receiver in place, by the
+/// count its caller hands it (`RECEIVER_UNIQUE`), and so may free what a
+/// borrow reads. An owner lent to any other callee is refused too, though a
+/// function of the program copies a parameter it writes on entry.
 fn terminator_changes(terminator: &Terminator, owners: &[Local]) -> bool {
     let (func, args, arg_modes, destination) = match &terminator.kind {
         TerminatorKind::Call {

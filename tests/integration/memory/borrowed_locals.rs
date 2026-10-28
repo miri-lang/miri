@@ -467,6 +467,178 @@ println(f"{total()}")
     );
 }
 
+/// `for row in grid` lends each row to `sum`, a function of the program that
+/// reads its parameter in place: the row borrows `grid`'s element, so the
+/// three iterations retain and release nothing.
+#[test]
+fn test_a_loop_variable_lent_to_a_function_takes_no_reference() {
+    assert_borrowing(
+        r#"
+use system.io
+use system.collections.list
+
+fn sum(xs [int]) int
+    var t = 0
+    var i = 0
+    while i < xs.length()
+        t = t + xs[i]
+        i += 1
+    t
+
+fn run() int
+    var grid = List([List([1, 2]), List([3, 4]), List([5, 6])])
+    var total = 0
+    for row in grid
+        total = total + sum(row)
+    total
+
+println(f"{run()}")
+"#,
+        "21",
+        4,
+        16,
+    );
+}
+
+/// `grown` pushes to and reverses the list it is lent, and keeps it lent: a
+/// list of trait values may run a drop hook when released, so the parameter
+/// is never taken over. It binds a copy of the parameter on entry, which
+/// takes a reference of its own, so each of the two calls copies the
+/// borrowed `rows.first` before writing and `rows` keeps its one element.
+#[test]
+fn test_a_function_writing_a_borrowed_element_leaves_its_list_alone() {
+    assert_borrowing(
+        r#"
+use system.io
+use system.collections.list
+
+trait Shape
+    fn area() int
+
+class Square implements Shape
+    var side int
+
+    fn init(side int)
+        self.side = side
+
+    public fn area() int: self.side * self.side
+
+struct Rows
+    first [Shape]
+    second [Shape]
+
+fn grown(xs [Shape]) int
+    xs.push(Square(3))
+    xs.reverse()
+    var t = 0
+    for s in xs
+        t = t + s.area()
+    t + xs.length()
+
+fn run() String
+    let a = List<Shape>()
+    a.push(Square(1))
+    let b = List<Shape>()
+    b.push(Square(2))
+    let rows = Rows(a, b)
+    var total = 0
+    var i = 0
+    while i < 2
+        let row = rows.first
+        total = total + grown(row)
+        i += 1
+    f"{total} {rows.first.length()} {rows.first[0].area()}"
+
+println(run())
+"#,
+        "24 1 1",
+        11,
+        23,
+    );
+}
+
+/// A method's receiver is written in place, relying on its caller's
+/// copy-on-write or a check that it arrived unique, which a borrowed row
+/// would answer with its owner's count. A row a method is called on — one
+/// that only reads it, or `sort`, which writes it — keeps its reference.
+#[test]
+fn test_an_element_a_method_is_called_on_keeps_its_reference() {
+    assert_borrowing(
+        r#"
+use system.io
+use system.collections.list
+
+fn run() String
+    var grid = List([List([1, 2]), List([3, 4]), List([5, 6])])
+    var found = 0
+    for row in grid
+        if row.contains(4)
+            found += 1
+    var sorted = List([List([2, 1]), List([4, 3])])
+    var firsts = 0
+    for row in sorted
+        row.sort()
+        firsts = firsts + row[0]
+    f"{found} {firsts} {sorted[0][0]} {sorted[1][0]}"
+
+println(run())
+"#,
+        "1 4 2 4",
+        13,
+        36,
+    );
+}
+
+/// A string, an optional and a closure's argument are not copied on entry by
+/// the callee writing them, so each keeps its reference when lent: the
+/// counts are those of a program with no borrowing of them.
+#[test]
+fn test_a_string_an_optional_or_a_closure_argument_keeps_its_reference() {
+    assert_borrowing(
+        r#"
+use system.io
+use system.collections.list
+
+fn width(s String) int: s.length()
+
+fn present(b Box?) int
+    match b
+        Some(x): x.v
+        None: 0
+
+class Box
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+fn run() String
+    let names = List(["ab", "cde", "f"])
+    var w = 0
+    for s in names
+        w = w + width(s)
+    let boxes = List<Box?>()
+    boxes.push(Box(4))
+    boxes.push(None)
+    boxes.push(Box(5))
+    var p = 0
+    for b in boxes
+        p = p + present(b)
+    let grid = List([List([1, 2]), List([3])])
+    let count = fn(xs [int]) int: xs.length()
+    var c = 0
+    for row in grid
+        c = c + count(row)
+    f"{w} {p} {c}"
+
+println(run())
+"#,
+        "6 9 3",
+        14,
+        40,
+    );
+}
+
 /// Run `code` under the leak check and under the heap guard, expecting
 /// `expected` both times.
 fn assert_correct(code: &str, expected: &str) {

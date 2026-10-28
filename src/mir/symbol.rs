@@ -526,6 +526,12 @@ impl Symbol {
         matches!(self.kind, SymbolKind::Function { .. }) && self.residency.is_empty()
     }
 
+    /// Whether this symbol names a method of a type the program declares or
+    /// instantiates, whose first parameter is its receiver when it has one.
+    pub fn is_method(&self) -> bool {
+        matches!(self.kind, SymbolKind::Method { .. })
+    }
+
     /// Whether the runtime library, not this compilation, provides the body.
     pub fn is_runtime(&self) -> bool {
         matches!(self.kind, SymbolKind::Runtime(_))

@@ -17,8 +17,13 @@
 //!   handed to a runtime entry point that keeps it or asks whether it is
 //!   shared, passed `out`, launched over or merged in a phi; and unless its
 //!   type is a reference by design, never written through nor handed to any
-//!   callee but a runtime entry point that only reads it — a callee writes a
-//!   parameter in place when nothing else holds it;
+//!   callee but a runtime entry point that only reads it — except that a value
+//!   a write copies (`type_facts::unsharing`) may be lent whole, by copy, to a
+//!   function of the program or to a method past its receiver, since a body
+//!   writing such a parameter binds a copy of it on entry. A method's receiver
+//!   gets no copy: a write through it relies on the caller's copy-on-write, or
+//!   checks that it arrived unique (`RECEIVER_UNIQUE`), and a borrowed value's
+//!   count is its owner's;
 //! - on every path from a definition to the end of its storage, its owner —
 //!   and, for a borrow read out of another borrowed local, that local's owners —
 //!   is only read through a projection, retained through one, or lent by copy
@@ -36,10 +41,12 @@
 //! untracked, as it does a borrowed parameter. One that fails is a violation.
 
 use super::{local_display_name, VerificationViolation};
+use crate::ast::types::Type;
 use crate::mir::optimization::local_borrows::{has_reference_semantics, reads_through_values};
 use crate::mir::place::PlaceContext;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
+use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
@@ -78,9 +85,14 @@ enum Access {
     /// Handed to a runtime entry point that only reads it
     /// (`runtime_fns::only_reads_argument`), or called as a closure.
     ReadByCallee,
-    /// Handed to any other callee — a Miri function or method, a closure or a
-    /// virtual call — by copy or by move, lent or owned. A callee writes a
-    /// parameter in place when nothing else holds it.
+    /// Lent whole, by copy, to a parameter of a function of the program or of
+    /// a method past its receiver: a body writing such a parameter binds a
+    /// copy of it on entry when its type is one a write copies.
+    LentToEntryCopy,
+    /// Handed to any other callee — a method as its receiver, a closure or a
+    /// virtual call, or any callee by move or owned. A method writes its
+    /// receiver in place, by the count its caller hands it
+    /// (`RECEIVER_UNIQUE`).
     MayBeWritten,
     /// Handed to a call any other way, or to a kernel launch.
     Handed,
@@ -167,9 +179,9 @@ impl Checker<'_> {
         if definitions_of(body, local).is_none() {
             return Some("a definition of it is not a copy of a projected place".to_string());
         }
-        let reference = has_reference_semantics(&decl.ty.kind, body.rc_classifier.definitions());
+        let writes = written_as(body, &decl.ty);
         accesses_in(body)
-            .find(|(accessed, access, _)| *accessed == local && refuses(*access, reference))
+            .find(|(accessed, access, _)| *accessed == local && refuses(*access, writes))
             .map(|(_, access, _)| format!("the body reaches it as {access:?}"))
     }
 
@@ -220,16 +232,41 @@ fn owner_names(owners: &[Local]) -> String {
         .join(", ")
 }
 
-/// Whether `access` to a candidate borrow refuses it; `reference` says
-/// whether the value is a reference by design.
-fn refuses(access: Access, reference: bool) -> bool {
+/// How a write reaches a value of some type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Writes {
+    /// A reference by design: a write changes what every holder sees, and
+    /// asks no count.
+    Shared,
+    /// A value a write copies first, and a callee writing a parameter of it
+    /// copies on entry.
+    CopiedOnEntry,
+    /// Any other value, which a callee may write in place by its count.
+    InPlace,
+}
+
+/// How a write reaches a value of type `ty` held in `body`.
+fn written_as(body: &Body, ty: &Type) -> Writes {
+    if has_reference_semantics(&ty.kind, body.rc_classifier.definitions()) {
+        Writes::Shared
+    } else if is_copied_on_write(body, ty) {
+        Writes::CopiedOnEntry
+    } else {
+        Writes::InPlace
+    }
+}
+
+/// Whether `access` to a candidate borrow whose value `writes` reach
+/// refuses it.
+fn refuses(access: Access, writes: Writes) -> bool {
     match access {
         Access::Rebound
         | Access::CallResult
         | Access::Released
         | Access::AddressTaken
         | Access::Handed => true,
-        Access::WrittenThrough | Access::MayBeWritten => !reference,
+        Access::WrittenThrough | Access::MayBeWritten => writes != Writes::Shared,
+        Access::LentToEntryCopy => writes == Writes::InPlace,
         Access::ProjectedRead
         | Access::WholeRead
         | Access::Moved
@@ -255,6 +292,7 @@ fn leaves_owner(access: Access) -> bool {
         | Access::Released
         | Access::Storage
         | Access::AddressTaken
+        | Access::LentToEntryCopy
         | Access::MayBeWritten
         | Access::Handed => false,
     }
@@ -510,12 +548,38 @@ fn terminator_accesses(terminator: &Terminator) -> Vec<(Local, Access)> {
     }
     let runtime = func.and_then(Operand::called_runtime_name);
     for (position, arg) in args.iter().enumerate() {
-        if let Some(place) = arg.place() {
-            let access = argument_access(runtime, position, arg_mode(arg_modes, position));
-            push_place(&mut accesses, place, access, access);
-        }
+        let Some(place) = arg.place() else {
+            continue;
+        };
+        let mode = arg_mode(arg_modes, position);
+        let access = if is_lent_to_entry_copy(func, position, arg, mode) {
+            Access::LentToEntryCopy
+        } else {
+            argument_access(runtime, position, mode)
+        };
+        push_place(&mut accesses, place, access, access);
     }
     accesses
+}
+
+/// Whether a call to `func` lends `arg`, at `position` and passed `mode`, as
+/// a whole local by copy to a parameter its callee copies on entry before a
+/// write: one of a function of the program, or of a method past its
+/// receiver.
+fn is_lent_to_entry_copy(
+    func: Option<&Operand>,
+    position: usize,
+    arg: &Operand,
+    mode: ArgMode,
+) -> bool {
+    let Operand::Copy(place) = arg else {
+        return false;
+    };
+    let Some(symbol) = func.and_then(Operand::called_symbol) else {
+        return false;
+    };
+    let is_copying_parameter = symbol.is_plain_function() || (symbol.is_method() && position > 0);
+    place.projection.is_empty() && mode == ArgMode::Borrowed && is_copying_parameter
 }
 
 /// How a call reaches its argument at `position`, passed `mode`, when its

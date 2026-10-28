@@ -13,11 +13,16 @@ use super::{
 };
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
-use miri::mir::block::BasicBlockData;
+use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::place::PlaceElem;
+use miri::mir::symbol::Symbol;
 use miri::mir::verify::{verify_body, verify_local_borrows};
-use miri::mir::{Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
+use miri::mir::{
+    ArgMode, Body, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
+    TerminatorKind,
+};
 use miri::runtime_fns::rt;
+use miri::type_checker::ModuleId;
 use std::collections::HashMap;
 
 fn int_ty() -> Type {
@@ -239,4 +244,120 @@ fn a_borrow_whose_list_is_lent_to_a_reader_holds() {
     ]);
     let violations = verify_local_borrows(&body);
     assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+/// Locals as in [`borrowing_body`], but `_1` is a list of lists of integers
+/// and `_3` the row read out of it — a value a callee writing its parameter
+/// copies on entry. `_4` is a second list of integers.
+fn row_borrowing_body(call: Terminator) -> Body {
+    let row = collection_ty("List", &[TypeKind::Int]);
+    let mut body = body_of(
+        &[
+            void_ty(),
+            collection_ty("List", &[row.kind.clone()]),
+            int_ty(),
+            row.clone(),
+            row,
+        ],
+        0,
+        vec![
+            block(list_and_index(), call),
+            block(end_of_borrow_and_list(), ret()),
+        ],
+    );
+    body.borrowed_locals = HashMap::from([(Local(3), vec![Local(1)])]);
+    body
+}
+
+/// A call to `callee` handing it `args`, each with its mode, returning to
+/// block 1.
+fn call(callee: Operand, args: Vec<(Operand, ArgMode)>) -> Terminator {
+    let (args, arg_modes) = args.into_iter().unzip();
+    Terminator {
+        kind: TerminatorKind::Call {
+            func: callee,
+            args,
+            arg_modes,
+            arg_handles: Vec::new(),
+            destination: place(0),
+            target: Some(BasicBlock(1)),
+        },
+        span: miri::error::syntax::Span::new(0, 0),
+    }
+}
+
+fn function_named(name: &str) -> Operand {
+    Operand::function(
+        Symbol::declared_function(&ModuleId::Program, name),
+        miri::error::syntax::Span::new(0, 0),
+    )
+}
+
+fn method_named(name: &str) -> Operand {
+    let int = int_ty();
+    Operand::function(
+        Symbol::method("List", [&int], name, []),
+        miri::error::syntax::Span::new(0, 0),
+    )
+}
+
+fn lent(local: usize) -> (Operand, ArgMode) {
+    (Operand::Copy(place(local)), ArgMode::Borrowed)
+}
+
+fn assert_held(body: &Body, what: &str) {
+    let violations = verify_local_borrows(body);
+    assert!(violations.is_empty(), "{what}: {}", messages(&violations));
+}
+
+/// A function writing a list parameter writes a copy it binds on entry, which
+/// takes a reference of its own, so a borrowed row lent to it stays valid.
+#[test]
+fn a_borrowed_row_lent_to_a_function_holds() {
+    let body = row_borrowing_body(call(function_named("callee"), vec![lent(3)]));
+    assert_held(&body, "lending the row to a function");
+}
+
+/// A method's receiver is not copied on entry: a write through it checks
+/// that it arrived unique, which a borrowed row's count — its owner's —
+/// would answer yes to.
+#[test]
+fn a_borrowed_row_handed_to_a_method_as_its_receiver_is_refused() {
+    let body = row_borrowing_body(call(method_named("sort"), vec![lent(3)]));
+    assert_refused(&body, "the row as a method's receiver");
+}
+
+/// Past the receiver, a method's parameters are copied on entry like a
+/// function's.
+#[test]
+fn a_borrowed_row_lent_to_a_method_past_its_receiver_holds() {
+    let body = row_borrowing_body(call(method_named("append"), vec![lent(4), lent(3)]));
+    assert_held(&body, "lending the row to a method past its receiver");
+}
+
+/// An owned argument and a closure's are refused: the callee takes over the
+/// first, and what a closure binds on entry is not known at the call.
+#[test]
+fn a_borrowed_row_passed_owned_or_to_a_closure_is_refused() {
+    let owned = row_borrowing_body(call(
+        function_named("callee"),
+        vec![(Operand::Copy(place(3)), ArgMode::Owned)],
+    ));
+    assert_refused(&owned, "the row passed owned");
+    let closure = row_borrowing_body(call(Operand::Copy(place(4)), vec![lent(3)]));
+    assert_refused(&closure, "the row lent to a closure");
+}
+
+/// A string is not copied on entry by a callee writing it, so a borrowed
+/// string lent to a function is refused.
+#[test]
+fn a_borrowed_string_lent_to_a_function_is_refused() {
+    let body = borrowing_body(vec![
+        block(
+            list_and_index(),
+            call(function_named("callee"), vec![lent(3)]),
+        ),
+        block(end_of_borrow_and_list(), ret()),
+    ]);
+    assert_refused(&body, "lending the string to a function");
 }

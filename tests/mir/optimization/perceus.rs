@@ -1373,12 +1373,11 @@ fn grow() int
     );
 }
 
-/// A row lent to a callee keeps its reference: the callee writes a copy of
-/// the parameter it binds on entry, and that copy is unshared from the row,
-/// so a borrowed row would share `grid[0]`'s count and the copy's unsharing
-/// would read `grid[0]` as unshared and push into it.
+/// A row lent to a function borrows `grid`'s element: the callee writes the
+/// copy it binds of its parameter on entry, which takes a reference of its
+/// own, so the write copies and `grid` keeps its elements.
 #[test]
-fn test_an_element_lent_to_a_callee_keeps_its_reference() {
+fn test_an_element_lent_to_a_function_that_writes_it_borrows_it() {
     let source = r#"
 use system.collections.list
 
@@ -1388,9 +1387,57 @@ fn grow(r [int]) int
 
 fn t() int
     var grid = List([List([1, 2]), List([3])])
+    var n = 0
+    for row in grid
+        n = n + grow(row)
+    n
+"#;
+    let body = lowered_with_rc(source, "t");
+    let row = local_named(&body, "row");
+    assert_eq!(retain_and_releases(&body, row), (false, 0));
+    assert!(body.borrowed_locals.contains_key(&row));
+}
+
+/// `for row in grid` lends each row to `sum`, a function that only reads it:
+/// the loop variable borrows the row and nothing is retained per iteration.
+#[test]
+fn test_a_loop_variable_lent_to_a_function_borrows_its_element() {
+    let source = r#"
+use system.collections.list
+
+fn sum(xs [int]) int
+    var t = 0
+    for x in xs
+        t = t + x
+    t
+
+fn run() int
+    var grid = List([List([1, 2]), List([3, 4]), List([5, 6])])
+    var total = 0
+    for row in grid
+        total = total + sum(row)
+    total
+"#;
+    let body = lowered_with_rc(source, "run");
+    let row = local_named(&body, "row");
+    assert_eq!(count_rc_ops(&body, row), (0, 0));
+    assert_eq!(retain_and_releases(&body, row), (false, 0));
+    assert!(body.borrowed_locals.contains_key(&row));
+}
+
+/// A method's receiver is not copied on entry: it relies on the caller's
+/// copy-on-write, and a check that it arrived unique would read a borrowed
+/// row's count as its owner's. A row a method is called on keeps its
+/// reference, even for a method that only reads it.
+#[test]
+fn test_an_element_a_method_is_called_on_keeps_its_reference() {
+    let source = r#"
+use system.collections.list
+
+fn t() bool
+    var grid = List([List([1, 2]), List([3])])
     let row = grid[0]
-    let n = grow(row)
-    n + grid[0].length()
+    row.contains(2)
 "#;
     let body = lowered_with_rc(source, "t");
     assert_eq!(
