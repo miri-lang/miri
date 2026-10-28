@@ -106,7 +106,7 @@ fn stdlib_path() -> PathBuf {
 /// Run `code` at optimization `level` under the heap guard, the leak check,
 /// MIR verification and a scribbling allocator, and assert it prints
 /// `expected` with every check silent.
-fn assert_output_at(code: &str, level: &str, expected: &str) {
+pub(super) fn assert_output_at(code: &str, level: &str, expected: &str) {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("prog.mi");
     std::fs::write(&source, code).unwrap();
@@ -136,7 +136,7 @@ fn assert_output_at(code: &str, level: &str, expected: &str) {
 }
 
 /// The body of `function` as `miri build --emit mir` writes it for `code`.
-fn emitted_body(code: &str, function: &str) -> String {
+pub(super) fn emitted_body(code: &str, function: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("prog.mi");
     std::fs::write(&source, code).unwrap();

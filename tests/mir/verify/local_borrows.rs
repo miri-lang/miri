@@ -2,10 +2,13 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 //! Tests for the check on locals a body records as borrowing from a place it
-//! owns. Each body reads a string out of a list the body owns into `_3` and
-//! records `_3` as borrowing it; a body where nothing touches the list while
-//! `_3` holds the string passes, and each body that changes the list, or asks
-//! whether `_3` is shared, inside that range is refused.
+//! owns or is lent. Each body reads a string out of a list — one the body
+//! owns, or a parameter — into `_3` and records `_3` as borrowing it; a body
+//! where nothing touches the list while `_3` holds the string passes, and
+//! each body that changes the list, or asks whether `_3` is shared, inside
+//! that range is refused. A parameter's list may be reached by other code, so
+//! a borrow of its element is refused across anything that may release a
+//! value another name holds.
 
 use super::{
     block, body_of, collection_ty, goto, messages, place, ret, runtime_call, stmt, string_ty,
@@ -23,7 +26,7 @@ use miri::mir::{
 };
 use miri::runtime_fns::rt;
 use miri::type_checker::ModuleId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn int_ty() -> Type {
     Type::new(TypeKind::Int, miri::error::syntax::Span::new(0, 0))
@@ -87,7 +90,7 @@ fn single_block(middle: Vec<Statement>) -> Body {
 }
 
 fn assert_refused(body: &Body, what: &str) {
-    let violations = verify_local_borrows(body);
+    let violations = verify_local_borrows(body, None);
     assert!(
         violations
             .iter()
@@ -190,25 +193,106 @@ fn a_borrow_reaching_the_return_before_its_storage_ends_is_refused() {
     assert_refused(&body, "a path to the return that skips the borrow's end");
 }
 
-/// A list a parameter holds may be emptied through another name, so an
-/// element of it is never borrowed.
-#[test]
-fn a_borrow_of_a_parameter_element_is_refused() {
+/// The statements reading `_1[_2]` into `_3`, for a body whose list `_1`
+/// is a parameter.
+fn parameter_element() -> Vec<Statement> {
     let zero = super::constant(int_ty(), Literal::Integer(IntegerLiteral::I64(0)));
-    let mut body = borrowing_body(vec![block(
-        vec![
-            stmt(StatementKind::Assign(place(2), Rvalue::Use(zero))),
-            super::storage_live(3),
-            stmt(StatementKind::Assign(
-                place(3),
-                Rvalue::Use(Operand::Copy(element())),
-            )),
-            super::storage_dead(3),
-        ],
-        ret(),
-    )]);
+    vec![
+        stmt(StatementKind::Assign(place(2), Rvalue::Use(zero))),
+        super::storage_live(3),
+        stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(element())),
+        )),
+    ]
+}
+
+/// A body whose list `_1` is a parameter it borrows, with `_3` recorded as
+/// borrowing `_1[_2]`: block 0 reads the element and ends in `terminator`,
+/// block 1 runs `middle` and ends the borrow.
+fn parameter_borrowing_body(terminator: Terminator, middle: Vec<Statement>) -> Body {
+    let mut end = middle;
+    end.push(super::storage_dead(3));
+    let mut body = borrowing_body(vec![
+        block(parameter_element(), terminator),
+        block(end, ret()),
+    ]);
     body.arg_count = 1;
-    assert_refused(&body, "an element of a parameter");
+    body
+}
+
+/// A call to the function of the program `callee` with no arguments,
+/// returning to block 1.
+fn unrelated_call() -> Terminator {
+    unrelated_call_returning_to(1)
+}
+
+/// A call to the function of the program `callee` with no arguments,
+/// returning to block `target`.
+fn unrelated_call_returning_to(target: usize) -> Terminator {
+    let mut call = call(function_named("callee"), Vec::new());
+    if let TerminatorKind::Call { target: next, .. } = &mut call.kind {
+        *next = Some(BasicBlock(target));
+    }
+    call
+}
+
+/// The caller's reference keeps a parameter's list alive, and nothing runs
+/// while `_3` holds its element, so the borrow holds.
+#[test]
+fn a_borrow_of_a_parameter_element_holds_while_nothing_runs() {
+    let body = parameter_borrowing_body(goto(1), Vec::new());
+    assert_held(&body, "an element of a parameter, nothing running");
+}
+
+/// Other code may reach the list a parameter holds, so a call not known to
+/// release nothing another name holds ends the borrow: with no heap facts
+/// every call to the program is such a call.
+#[test]
+fn a_borrow_of_a_parameter_element_across_a_call_with_no_heap_facts_is_refused() {
+    let body = parameter_borrowing_body(unrelated_call(), Vec::new());
+    assert_refused(&body, "a call with no heap facts");
+}
+
+/// The same call found quiet keeps the borrow; facts that do not name it
+/// leave it loud.
+#[test]
+fn a_borrow_of_a_parameter_element_holds_only_across_a_call_found_quiet() {
+    let body = parameter_borrowing_body(unrelated_call(), Vec::new());
+    let quiet = HashSet::from([BasicBlock(0)]);
+    let violations = verify_local_borrows(&body, Some(&quiet));
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+    let elsewhere = HashSet::from([BasicBlock(1)]);
+    let violations = verify_local_borrows(&body, Some(&elsewhere));
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.local == Local(3)),
+        "a call the facts do not name must refuse the borrow, got: {}",
+        messages(&violations)
+    );
+}
+
+/// A release that may run a drop hook can run code reaching the list, so it
+/// ends a borrow of a parameter's element.
+#[test]
+fn a_borrow_of_a_parameter_element_across_a_hooked_release_is_refused() {
+    let mut body = parameter_borrowing_body(goto(1), vec![super::decref(4)]);
+    body.local_decls[4].ty = Type::new(
+        TypeKind::Custom("Hooked".to_string(), None),
+        miri::error::syntax::Span::new(0, 0),
+    );
+    assert_refused(&body, "a release whose type is not known to run no hook");
+}
+
+/// The end of a borrowed parameter's binding leaves the caller's reference
+/// in place; the end of a local owner's storage releases what it holds.
+#[test]
+fn the_storage_end_of_a_parameter_owner_keeps_the_borrow_and_of_a_local_owner_refuses_it() {
+    let body = parameter_borrowing_body(goto(1), vec![super::storage_dead(1)]);
+    assert_held(&body, "the end of a parameter's binding");
+    let local = single_block(vec![super::storage_dead(1)]);
+    assert_refused(&local, "the end of a local owner's storage");
 }
 
 /// The record must name every owner the body shows: RC elision keeps the
@@ -242,7 +326,7 @@ fn a_borrow_whose_list_is_lent_to_a_reader_holds() {
         ),
         block(end_of_borrow_and_list(), ret()),
     ]);
-    let violations = verify_local_borrows(&body);
+    let violations = verify_local_borrows(&body, None);
     assert!(violations.is_empty(), "got: {}", messages(&violations));
 }
 
@@ -306,7 +390,7 @@ fn lent(local: usize) -> (Operand, ArgMode) {
 }
 
 fn assert_held(body: &Body, what: &str) {
-    let violations = verify_local_borrows(body);
+    let violations = verify_local_borrows(body, None);
     assert!(violations.is_empty(), "{what}: {}", messages(&violations));
 }
 
@@ -360,4 +444,92 @@ fn a_borrowed_string_lent_to_a_function_is_refused() {
         block(end_of_borrow_and_list(), ret()),
     ]);
     assert_refused(&body, "lending the string to a function");
+}
+
+/// Locals: 0 the return slot, 1 a map of lists of strings the body owns, 2
+/// the key and index, 3 the string read out of the entry, 4 the entry the
+/// map hands back as a borrow. Block 0 looks the entry up, block 1 reads
+/// `_4[_2]` into `_3`, runs `middle` and ends in `terminator`, block 2 ends
+/// the borrow and the map. `_3` is recorded as borrowing from `recorded`.
+fn entry_borrowing_body(
+    middle: Vec<Statement>,
+    terminator: Terminator,
+    recorded: Vec<Local>,
+) -> Body {
+    let list = collection_ty("List", &[TypeKind::String]);
+    let zero = super::constant(int_ty(), Literal::Integer(IntegerLiteral::I64(0)));
+    let lookup = vec![
+        super::storage_live(1),
+        super::assign_fresh(1),
+        stmt(StatementKind::Assign(place(2), Rvalue::Use(zero))),
+    ];
+    let mut read = vec![
+        super::storage_live(3),
+        stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(Place {
+                local: Local(4),
+                projection: vec![PlaceElem::Index(Local(2))],
+            })),
+        )),
+    ];
+    read.extend(middle);
+    let mut body = body_of(
+        &[
+            void_ty(),
+            collection_ty("Map", &[TypeKind::Int, list.kind.clone()]),
+            int_ty(),
+            string_ty(),
+            list,
+        ],
+        0,
+        vec![
+            block(
+                lookup,
+                runtime_call(
+                    rt::MAP_GET_CHECKED,
+                    vec![Operand::Copy(place(1)), Operand::Copy(place(2))],
+                    4,
+                    1,
+                ),
+            ),
+            block(read, terminator),
+            block(end_of_borrow_and_list(), ret()),
+        ],
+    );
+    body.borrowed_locals = HashMap::from([(Local(3), recorded)]);
+    body
+}
+
+/// An entry a map hands back holds no reference of its own: the map does.
+/// A borrow read out of it relies on the map, which must be recorded.
+#[test]
+fn a_borrow_out_of_a_map_entry_must_record_the_map() {
+    let body = entry_borrowing_body(Vec::new(), goto(2), vec![Local(4)]);
+    assert_refused(&body, "a record missing the map the entry is held by");
+    let body = entry_borrowing_body(Vec::new(), goto(2), vec![Local(4), Local(1)]);
+    assert_held(&body, "a borrow out of an entry while nothing runs");
+}
+
+/// What else holds the map may replace or empty it, so a call not known
+/// quiet ends a borrow read out of its entry.
+#[test]
+fn a_borrow_out_of_a_map_entry_across_a_call_not_found_quiet_is_refused() {
+    let body = entry_borrowing_body(
+        Vec::new(),
+        unrelated_call_returning_to(2),
+        vec![Local(4), Local(1)],
+    );
+    assert_refused(&body, "a call with no heap facts");
+    let quiet = HashSet::from([BasicBlock(1)]);
+    let violations = verify_local_borrows(&body, Some(&quiet));
+    assert!(violations.is_empty(), "got: {}", messages(&violations));
+}
+
+/// Rebinding the map releases the entry the borrow reads.
+#[test]
+fn a_borrow_out_of_a_map_entry_whose_map_is_rebound_is_refused() {
+    let rebind = stmt(StatementKind::Reassign(place(1), super::fresh_string()));
+    let body = entry_borrowing_body(vec![rebind], goto(2), vec![Local(4), Local(1)]);
+    assert_refused(&body, "rebinding the map inside the range");
 }

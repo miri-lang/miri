@@ -3289,6 +3289,22 @@ impl Pipeline {
         violations
     }
 
+    /// The calls of each of `bodies` to a function of the program that may
+    /// release nothing another name holds, worked out again over the program
+    /// with every retain and release in place.
+    fn quiet_calls_after_rc(
+        result: &PipelineResult,
+        bodies: &[(String, mir::Body)],
+    ) -> Vec<HashSet<mir::BasicBlock>> {
+        use mir::analysis::heap_effects::{HeapEffects, Phase};
+        let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
+        let effects = HeapEffects::of(bodies, String::clone, Phase::Counted, &hooks);
+        bodies
+            .iter()
+            .map(|(_, body)| effects.call_facts(body, Phase::Counted, &hooks).quiet)
+            .collect()
+    }
+
     /// Run every verification pass over every body and turn what they find
     /// into one report — printed under `warn`, fatal otherwise.
     ///
@@ -3322,8 +3338,9 @@ impl Pipeline {
                 .into_iter()
                 .map(|(name, v)| format!("  fn {}: {}", name, v)),
         );
-        for (name, body) in bodies {
-            let mut violations = mir::verify::verify_body(body);
+        let quiet_calls = Self::quiet_calls_after_rc(result, bodies);
+        for ((name, body), quiet) in bodies.iter().zip(&quiet_calls) {
+            let mut violations = mir::verify::verify_body_with_quiet_calls(body, Some(quiet));
             violations.extend(mir::verify::verify_collection_element_ownership(
                 body,
                 &shared_collection_methods,

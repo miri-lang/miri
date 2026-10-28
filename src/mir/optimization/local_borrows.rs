@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Borrowed locals: a managed value read out of a place the body owns takes
-//! no reference while nothing can change or release that place.
+//! Borrowed locals: a managed value read out of a place the body owns or is
+//! lent takes no reference while nothing can change or release that place.
 //!
-//! A local `l = copy p`, where `p` is reached from a root `r` through value
-//! steps only — an element of a list or an array, a field of a struct, a tuple
-//! or an optional, an enum's payload — reads a value `r` already holds. While
-//! `r` stays as it was, `r`'s reference keeps that value alive, so `l` can
+//! A local `l = copy p`, where `p` is reached from a root `r` — a local the
+//! body owns, or a parameter — through value steps — an element of a list or
+//! an array, a field of a struct, a tuple or an optional, an enum's payload —
+//! and class fields, reads a value `r` holds. While `r` and everything on the
+//! way stays as it was, `r`'s reference keeps that value alive, so `l` can
 //! borrow it the way a body borrows a parameter: no retain when it is read, no
 //! release when its storage ends. Perceus funds every way a borrowed value
 //! escapes: a copy into a store, a return, an aggregate or a capture is
@@ -32,25 +33,48 @@
 //!   own, so the write copies. A method's receiver gets no such copy — a write
 //!   through it relies on the caller's copy-on-write, or checks that it arrived
 //!   unique (`RECEIVER_UNIQUE`), which a borrowed count would answer yes to.
-//! - **Its root is a local the body owns** — not a parameter and not a capture —
-//!   and every step from the root to `p` is a value step. Nothing crosses a
-//!   class field: a method can clear a field it never names here. Any other
-//!   holder of a value the body owns holds its own reference and copies before
-//!   writing, so only this body can change what `r` holds.
+//! - **Its root holds a reference.** The root is a counted local the body owns,
+//!   or a parameter — lent, taken over, or the receiver — but never an `out`
+//!   parameter, a capture or a local whose address is taken; every step from
+//!   it to `p` is a value step or a field of a class instance, never a
+//!   dereference.
 //! - **Its root is not touched while it borrows.** On every path from a
 //!   definition of `l` to the end of `l`'s storage, the root is only read
 //!   through a projection, or lent to a call by copy: never written, moved,
-//!   copied whole, passed owned or `out`, released, or ended. A borrow read out
-//!   of another borrowed local inherits that local's root, so its root's root
-//!   must stay as well, and the end of its root's storage is a change. A path
-//!   that reaches the end of the body before `l`'s storage ends is refused.
+//!   copied whole, passed owned or `out`, released, or ended — though the end
+//!   of a lent parameter's binding leaves its caller's reference in place. A
+//!   borrow read out of another borrowed local inherits that local's root, so
+//!   its root's root must stay as well, and the end of its root's storage is a
+//!   change. A path that reaches the end of the body before `l`'s storage ends
+//!   is refused.
+//! - **Nothing that may release a value another name holds runs while it
+//!   borrows, when other code may reach what it reads.** A value held behind a
+//!   class field is reached by every holder of the instance, and a parameter's
+//!   value by its caller and whatever else the caller lent it to, so a method
+//!   can clear the field, or empty the list, without naming the root. Such a
+//!   borrow — and every borrow read out of one — is refused when its range
+//!   holds an operation `analysis::heap_effects` finds loud: a store through a
+//!   class field or into a shared root, a release that may run a drop hook, a
+//!   virtual call, a closure call, a loud runtime call, or a call to a function
+//!   of the program not recorded quiet (`Body::quiet_calls`). That rule ignores
+//!   which value an operation touches, so an alias of the root changes nothing.
+//!   A value only the root's own value holds is reached by nothing else: any
+//!   other holder of it holds its own reference and copies before writing.
+//! - **An entry a collection lends is no owner on its own.** A runtime getter
+//!   that hands back an entry as a borrow (`runtime_fns::hands_back_a_borrow`,
+//!   `m[k]` on a map) leaves the local it defines holding no reference: the
+//!   collection's keeps the entry alive. A borrow read out of such a local
+//!   counts the locals holding the collection among its owners — rebinding,
+//!   emptying or releasing the map ends it — and is reached by other code,
+//!   since whatever else holds the collection can replace it.
 
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME};
-use crate::mir::block::BasicBlockData;
+use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
 use crate::mir::optimization::perceus::{place_declared_type, Perceus, PerceusContext};
 use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
+use crate::mir::type_facts::DropHookReach;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -79,31 +103,75 @@ pub(super) fn infer_local_borrows(
     reads.retain(|&local, _| is_plain_value(body, local));
     let refused = refused_locals(body, ctx, &reads);
     reads.retain(|local, _| !refused.contains(local));
+    let exposed_sites = retain_rooted_reads(body, ctx, managed_locals, &mut reads);
+    let entries = entry_collections(body);
+    let hooks = DropHookReach::new(definitions(ctx));
+    let noise = (!exposed_sites.is_empty() || !entries.is_empty())
+        .then(|| BodyNoise::of(body, Phase::Lowered, &hooks, Some(&body.quiet_calls)));
+    let mut settled = Settled {
+        body,
+        reads: &reads,
+        exposed_sites: &exposed_sites,
+        entries: &entries,
+        noise: noise.as_ref(),
+        decided: HashMap::new(),
+        owners: HashMap::new(),
+        exposed: HashSet::new(),
+    };
+    for &local in reads.keys() {
+        settled.borrows(local);
+    }
+    settled.owners
+}
+
+/// Keeps the reads in `reads` whose candidate reads, from a root that holds a
+/// reference, through steps a borrow can rely on, dropping every candidate
+/// with a read that does not. Returns the sites of the reads other code may
+/// reach: through a class field, or out of a parameter.
+fn retain_rooted_reads(
+    body: &Body,
+    ctx: &PerceusContext,
+    managed_locals: &HashSet<Local>,
+    reads: &mut Reads,
+) -> HashSet<Site> {
     let roots: HashSet<Local> = reads
         .values()
         .flatten()
         .map(|(_, source)| source.local)
         .collect();
     let address_taken = address_taken_locals(body, &roots);
+    let mut exposed_sites = HashSet::new();
     reads.retain(|&local, sources| {
-        sources.iter().all(|(_, source)| {
-            source.local != local
-                && is_owned_root(body, source.local)
-                && managed_locals.contains(&source.local)
-                && !address_taken.contains(&source.local)
-                && reads_through_values(source, |p| place_declared_type(p, ctx), definitions(ctx))
+        sources.iter().all(|(site, source)| {
+            let is_root = source.local != local
+                && is_root(body, source.local, managed_locals)
+                && !address_taken.contains(&source.local);
+            let reach = is_root
+                .then(|| reach_of(source, |p| place_declared_type(p, ctx), definitions(ctx)))
+                .flatten();
+            if reach == Some(Reach::ThroughField) || is_parameter(body, source.local) {
+                exposed_sites.insert(*site);
+            }
+            reach.is_some()
         })
     });
-    let mut settled = Settled {
-        body,
-        reads: &reads,
-        decided: HashMap::new(),
-        owners: HashMap::new(),
-    };
-    for &local in reads.keys() {
-        settled.borrows(local);
+    exposed_sites
+}
+
+/// Each local `body` holds an entry in that a runtime getter hands back as a
+/// borrow of a collection, with the root local of every collection it reads
+/// the entry from. Such a local holds no reference: the collection's does.
+fn entry_collections(body: &Body) -> HashMap<Local, Vec<Local>> {
+    let mut entries: HashMap<Local, Vec<Local>> = HashMap::new();
+    for (entry, collection) in borrowed_entries(body) {
+        let roots = entries.entry(entry).or_default();
+        if let Some(place) = collection {
+            if !roots.contains(&place.local) {
+                roots.push(place.local);
+            }
+        }
     }
-    settled.owners
+    entries
 }
 
 /// Decides, parents first, which candidates borrow: a candidate read out of
@@ -112,11 +180,22 @@ pub(super) fn infer_local_borrows(
 struct Settled<'b> {
     body: &'b Body,
     reads: &'b Reads,
+    /// The reads other code may reach what they read through.
+    exposed_sites: &'b HashSet<Site>,
+    /// Each entry a runtime getter hands back as a borrow, with the locals
+    /// holding the collections it may come from.
+    entries: &'b HashMap<Local, Vec<Local>>,
+    /// What may release a value another name holds, which ends a borrow of
+    /// a value other code may reach; `None` when the body reads none.
+    noise: Option<&'b BodyNoise<'b>>,
     /// Each candidate decided so far; `None` while it is being decided, so a
     /// candidate read, around a loop, out of itself is refused.
     decided: HashMap<Local, Option<bool>>,
     /// Each candidate that borrows, with the owners of what it holds.
     owners: HashMap<Local, Vec<Local>>,
+    /// The borrows other code may reach what they hold through, directly or
+    /// through a borrowed parent.
+    exposed: HashSet<Local>,
 }
 
 impl Settled<'_> {
@@ -131,14 +210,22 @@ impl Settled<'_> {
         let reads = self.reads;
         let mut answer = Some(true);
         let mut all_owners: Vec<Local> = Vec::new();
+        let mut is_exposed = false;
         for (site, source) in reads.get(&local).into_iter().flatten() {
-            let Some(owners) = self.owners_of(source.local) else {
+            let Some((owners, parent_exposed)) = self.owners_of(source.local) else {
                 answer = None;
                 continue;
             };
-            if !owner_stays(self.body, local, *site, &owners) {
+            let read_exposed = parent_exposed || self.exposed_sites.contains(site);
+            let watch = Watch {
+                body: self.body,
+                owners: &owners,
+                noise: self.noise.filter(|_| read_exposed),
+            };
+            if (read_exposed && self.noise.is_none()) || !watch.stays(local, *site) {
                 answer = answer.and(Some(false));
             }
+            is_exposed |= read_exposed;
             for owner in owners {
                 if !all_owners.contains(&owner) {
                     all_owners.push(owner);
@@ -147,28 +234,38 @@ impl Settled<'_> {
         }
         if answer == Some(true) {
             self.owners.insert(local, all_owners);
+            if is_exposed {
+                self.exposed.insert(local);
+            }
         }
         self.decided.insert(local, Some(answer == Some(true)));
         answer
     }
 
     /// `root` and, while it is itself a borrowed read, the owners of what it
-    /// reads: every local whose change could release what a borrow out of
-    /// `root` holds. `None` on a cycle of reads.
-    fn owners_of(&mut self, root: Local) -> Option<Vec<Local>> {
+    /// reads — or, for an entry a collection lends, the locals holding that
+    /// collection: every local whose change could release what a borrow out
+    /// of `root` holds; with whether other code may reach what `root` holds.
+    /// An entry is reached by whatever else holds its collection. `None` on a
+    /// cycle of reads.
+    fn owners_of(&mut self, root: Local) -> Option<(Vec<Local>, bool)> {
         let mut owners = vec![root];
+        if let Some(collections) = self.entries.get(&root) {
+            owners.extend(collections.iter().filter(|&&c| c != root));
+            return Some((owners, true));
+        }
         if !self.reads.contains_key(&root) || !self.borrows(root)? {
-            return Some(owners);
+            return Some((owners, false));
         }
         let reads = self.reads;
         for (_, source) in reads.get(&root).into_iter().flatten() {
-            for owner in self.owners_of(source.local)? {
+            for owner in self.owners_of(source.local)?.0 {
                 if !owners.contains(&owner) {
                     owners.push(owner);
                 }
             }
         }
-        Some(owners)
+        Some((owners, self.exposed.contains(&root)))
     }
 }
 
@@ -210,12 +307,34 @@ fn is_plain_value(body: &Body, local: Local) -> bool {
     !has_drop_hook && decl.device_handle.is_none()
 }
 
-/// Whether `root` is a local the body owns outright: not the return slot, a
-/// parameter or a capture, and holding no device buffer.
-fn is_owned_root(body: &Body, root: Local) -> bool {
-    root.0 > body.arg_count
+/// Whether `root` holds a reference a borrow can rely on: a counted local the
+/// body owns, or a counted parameter — lent, taken over, or the receiver —
+/// but not the return slot, an `out` parameter, a capture, or a local holding
+/// a device buffer.
+fn is_root(body: &Body, root: Local, managed_locals: &HashSet<Local>) -> bool {
+    let is_counted = if is_parameter(body, root) {
+        body.is_counted_local(root)
+    } else {
+        root.0 > body.arg_count && managed_locals.contains(&root)
+    };
+    is_counted
         && !body.env_capture_locals.contains(&root)
         && body.local_decls[root.0].device_handle.is_none()
+}
+
+/// Whether `local` is a parameter of `body` other than an `out` one.
+fn is_parameter(body: &Body, local: Local) -> bool {
+    (1..=body.arg_count).contains(&local.0)
+        && !body.out_params.get(local.0 - 1).copied().unwrap_or(false)
+}
+
+/// Whether `statement` ends the binding of a parameter `body` is lent, whose
+/// value its caller's reference keeps.
+fn ends_lent_parameter(body: &Body, statement: &Statement) -> bool {
+    matches!(&statement.kind, StatementKind::StorageDead(place)
+        if place.projection.is_empty()
+            && is_parameter(body, place.local)
+            && !body.is_owned_param(place.local))
 }
 
 /// The candidates something in `body` uses in a way a borrow cannot carry:
@@ -438,54 +557,90 @@ enum Segment {
     /// The range ends in the block: the borrow's storage ends or it is
     /// defined again.
     Ended,
-    /// Something in the block changes an owner.
+    /// Something in the block changes an owner, or may release a value
+    /// another name holds where the borrow's value is one other code reaches.
     Changed,
-    /// Nothing ends the range or changes an owner; it carries on into the
+    /// Nothing ends the range or changes anything; it carries on into the
     /// block's successors.
     Continues(Vec<BasicBlock>),
 }
 
-/// Whether nothing in `owners` changes on any path from the definition of
-/// `local` at `site` to the end of its storage.
-fn owner_stays(body: &Body, local: Local, site: Site, owners: &[Local]) -> bool {
-    let mut pending = vec![(site.0, site.1 + 1)];
-    let mut entered = HashSet::new();
-    while let Some((block, from)) = pending.pop() {
-        match segment(&body.basic_blocks[block], local, from, owners) {
-            Segment::Changed => return false,
-            Segment::Ended => {}
-            Segment::Continues(successors) => pending.extend(
-                successors
-                    .into_iter()
-                    .filter(|successor| entered.insert(successor.0))
-                    .map(|successor| (successor.0, 0)),
-            ),
-        }
-    }
-    true
+/// What a borrow's range must leave as it was.
+struct Watch<'w> {
+    body: &'w Body,
+    owners: &'w [Local],
+    /// For a borrow other code may reach what it holds through: the rule
+    /// finding each operation that may release a value another name holds,
+    /// every one of which ends it.
+    noise: Option<&'w BodyNoise<'w>>,
 }
 
-/// How `data`, from statement `from` on, extends the range of `local`.
-fn segment(data: &BasicBlockData, local: Local, from: usize, owners: &[Local]) -> Segment {
-    for statement in data.statements.iter().skip(from) {
-        if ends_range(statement, local) {
-            return Segment::Ended;
+impl Watch<'_> {
+    /// Whether nothing changes on any path from the definition of `local` at
+    /// `site` to the end of its storage.
+    fn stays(&self, local: Local, site: Site) -> bool {
+        let mut pending = vec![(site.0, site.1 + 1)];
+        let mut entered = HashSet::new();
+        while let Some((block, from)) = pending.pop() {
+            match self.segment(block, local, from) {
+                Segment::Changed => return false,
+                Segment::Ended => {}
+                Segment::Continues(successors) => pending.extend(
+                    successors
+                        .into_iter()
+                        .filter(|successor| entered.insert(successor.0))
+                        .map(|successor| (successor.0, 0)),
+                ),
+            }
         }
-        if statement_changes(statement, owners) {
-            return Segment::Changed;
+        true
+    }
+
+    /// How block `block`, from statement `from` on, extends the range of
+    /// `local`.
+    fn segment(&self, block: usize, local: Local, from: usize) -> Segment {
+        let data = &self.body.basic_blocks[block];
+        for statement in data.statements.iter().skip(from) {
+            if ends_range(statement, local) {
+                return Segment::Ended;
+            }
+            if self.is_changed_by(statement) {
+                return Segment::Changed;
+            }
+        }
+        match data.terminator.as_ref() {
+            Some(terminator) if !self.is_changed_by_terminator(block, terminator) => {
+                match &terminator.kind {
+                    TerminatorKind::Return => Segment::Changed,
+                    TerminatorKind::Goto { .. }
+                    | TerminatorKind::SwitchInt { .. }
+                    | TerminatorKind::Unreachable
+                    | TerminatorKind::Call { .. }
+                    | TerminatorKind::VirtualCall { .. }
+                    | TerminatorKind::GpuLaunch { .. } => {
+                        Segment::Continues(terminator.successors())
+                    }
+                }
+            }
+            Some(_) | None => Segment::Changed,
         }
     }
-    match data.terminator.as_ref() {
-        Some(terminator) if !terminator_changes(terminator, owners) => match &terminator.kind {
-            TerminatorKind::Return => Segment::Changed,
-            TerminatorKind::Goto { .. }
-            | TerminatorKind::SwitchInt { .. }
-            | TerminatorKind::Unreachable
-            | TerminatorKind::Call { .. }
-            | TerminatorKind::VirtualCall { .. }
-            | TerminatorKind::GpuLaunch { .. } => Segment::Continues(terminator.successors()),
-        },
-        Some(_) | None => Segment::Changed,
+
+    fn is_changed_by(&self, statement: &Statement) -> bool {
+        if ends_lent_parameter(self.body, statement) {
+            return false;
+        }
+        statement_changes(statement, self.owners)
+            || self
+                .noise
+                .is_some_and(|noise| noise.is_loud_statement(&statement.kind))
+    }
+
+    fn is_changed_by_terminator(&self, block: usize, terminator: &Terminator) -> bool {
+        terminator_changes(terminator, self.owners)
+            || self
+                .noise
+                .is_some_and(|noise| noise.is_loud_terminator(BasicBlock(block), terminator))
     }
 }
 
@@ -618,22 +773,57 @@ impl Visitor for Mentions {
     }
 }
 
-/// Whether every step from `place`'s root to it is a value step: an element
-/// of a list or an array, or a field of a struct, a tuple, an optional or an
-/// enum. `declared` gives the declared type of each place on the way.
-pub(crate) fn reads_through_values(
+/// Where a place read out of a root is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// In the root's own value: every step is a value step.
+    InValue,
+    /// Behind a field of a class instance on the way, which every holder of
+    /// the instance reaches and may replace.
+    ThroughField,
+}
+
+/// How `place` is reached from its root, through value steps — an element of
+/// a list or an array, a field of a struct, a tuple, an optional or an enum —
+/// and fields of class instances; `None` for a place with no step, or with a
+/// dereference or a field of a value whose holder is not known. `declared`
+/// gives the declared type of each place on the way.
+pub(crate) fn reach_of(
     place: &Place,
     declared: impl Fn(&Place) -> Option<Type>,
     definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
-    !place.projection.is_empty()
-        && place.projection.iter().enumerate().all(|(depth, step)| {
+) -> Option<Reach> {
+    if place.projection.is_empty() {
+        return None;
+    }
+    place
+        .projection
+        .iter()
+        .enumerate()
+        .try_fold(Reach::InValue, |reach, (depth, step)| {
             let container = Place {
                 local: place.local,
                 projection: place.projection[..depth].to_vec(),
             };
-            declared(&container).is_some_and(|ty| is_value_step(&ty.kind, step, definitions))
+            let ty = declared(&container)?;
+            if is_value_step(&ty.kind, step, definitions) {
+                Some(reach)
+            } else {
+                let is_class_field =
+                    matches!(step, PlaceElem::Field(_)) && is_class_instance(&ty.kind, definitions);
+                is_class_field.then_some(Reach::ThroughField)
+            }
         })
+}
+
+/// Whether a value of `kind` is an instance of a class of the program, other
+/// than a built-in collection.
+fn is_class_instance(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) -> bool {
+    let TypeKind::Custom(name, _) = kind else {
+        return false;
+    };
+    kind.as_builtin_collection().is_none()
+        && matches!(definitions.get(name), Some(TypeDefinition::Class(_)))
 }
 
 /// Whether `step` out of a value of `container` reaches a part of that value

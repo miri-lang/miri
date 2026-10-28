@@ -3,11 +3,14 @@
 
 //! A managed value read out of a list, struct, tuple, enum or optional a body
 //! owns borrows it, taking no reference, while nothing can change or release
-//! what it was read from. Each program is checked for its output under the
-//! leak check and under the heap guard, and for exactly how many references
-//! it took and released.
+//! what it was read from. So does one read out of a parameter, or through a
+//! class field, while nothing that may release a value another name holds
+//! runs. Each program is checked for its output under the leak check and
+//! under the heap guard, and for exactly how many references it took and
+//! released.
 
 use super::super::utils::{assert_heap_guard_output, assert_runs_with_output};
+use super::lent_field_arguments::{assert_output_at, emitted_body};
 use super::rc_stats::rc_stats;
 
 /// Run `code` under the leak check and under the heap guard, expecting
@@ -706,4 +709,431 @@ println(f"{t()}")
 "#,
         "1",
     );
+}
+
+/// `check` walks a tree it is lent: the children it reads out of its
+/// parameter's class fields stay held by the tree while it recurses, and the
+/// recursion releases and replaces nothing.
+const TREE_WALK: &str = r#"
+use system.io
+
+class Node
+    var left Node?
+    var right Node?
+
+    fn init(left Node?, right Node?)
+        self.left = left
+        self.right = right
+
+fn bottom_up(depth int) Node
+    if depth == 0
+        return Node(None, None)
+    Node(bottom_up(depth - 1), bottom_up(depth - 1))
+
+fn check(node Node) int
+    match node.left
+        Some(l)
+            match node.right
+                Some(r): return 1 + check(l) + check(r)
+                None: return 1
+        None: return 1
+
+println(f"{check(bottom_up(3))}")
+"#;
+
+#[test]
+fn test_the_children_a_tree_walk_reads_out_of_its_parameter_take_no_reference() {
+    let check = emitted_body(TREE_WALK, "miri.check");
+    for field in ["_1.0", "_1.1"] {
+        assert!(
+            !check.contains(&format!("IncRef({field})")),
+            "the read of {field} is retained:\n{check}"
+        );
+    }
+    assert!(!check.contains("DecRef("), "a release in:\n{check}");
+}
+
+/// The seven inner nodes each read two children without a retain or a
+/// release: fourteen of each fewer than when every child read was counted.
+#[test]
+fn test_a_tree_walk_counts_only_the_tree_it_builds() {
+    assert_borrowing(TREE_WALK, "15", 28, 44);
+    for level in ["0", "3"] {
+        assert_output_at(TREE_WALK, level, "15");
+    }
+}
+
+/// A node class whose `cut` empties the left child: each program below
+/// reads `left` out of a parameter, cuts it some way the body never names,
+/// allocates a node that may reuse the freed block, and reads the child.
+const CUT_NODE: &str = r#"
+use system.io
+
+class Node
+    var left Node?
+    var parent Node?
+    var v int
+
+    fn init(left Node?, v int)
+        self.left = left
+        self.parent = None
+        self.v = v
+
+    fn cut()
+        self.left = None
+"#;
+
+/// Run `program` after [`CUT_NODE`] at both optimization levels, expecting
+/// the child's value read after the cut, and expect `function` to retain the
+/// child it reads out of `field`.
+fn assert_cut_child_survives(program: &str, function: &str, field: &str) {
+    let code = format!("{CUT_NODE}{program}");
+    for level in ["0", "3"] {
+        assert_output_at(&code, level, "62");
+    }
+    let body = emitted_body(&code, function);
+    assert!(
+        body.contains(&format!("IncRef({field})")),
+        "the read of {field} is not retained:\n{body}"
+    );
+}
+
+#[test]
+fn test_a_child_of_a_parameter_its_own_method_cuts_keeps_its_reference() {
+    assert_cut_child_survives(
+        r#"
+fn probe(node Node) int
+    match node.left
+        Some(l)
+            node.cut()
+            let junk = Node(None, 55)
+            l.v + junk.v
+        None: 0
+
+println(f"{probe(Node(Node(None, 7), 1))}")
+"#,
+        "miri.probe",
+        "_1.0",
+    );
+}
+
+#[test]
+fn test_a_child_cut_through_a_second_parameter_naming_the_same_node_keeps_its_reference() {
+    assert_cut_child_survives(
+        r#"
+fn alias(a Node, b Node) int
+    match a.left
+        Some(l)
+            b.cut()
+            let junk = Node(None, 55)
+            l.v + junk.v
+        None: 0
+
+let n = Node(Node(None, 7), 1)
+println(f"{alias(n, n)}")
+"#,
+        "miri.alias",
+        "_1.0",
+    );
+}
+
+#[test]
+fn test_a_child_cut_by_a_callee_through_a_back_pointer_keeps_its_reference() {
+    assert_cut_child_survives(
+        r#"
+fn walk(n Node) int
+    match n.left
+        Some(l)
+            let s = up(l)
+            let junk = Node(None, 55)
+            l.v + junk.v + s
+        None: 0
+
+fn up(c Node) int
+    match c.parent
+        Some(p)
+            p.cut()
+            0
+        None: 0
+
+var child = Node(None, 7)
+let root = Node(child, 1)
+child.parent = root
+println(f"{walk(root)}")
+"#,
+        "miri.walk",
+        "_1.0",
+    );
+}
+
+#[test]
+fn test_a_child_cut_by_a_closure_keeps_its_reference() {
+    assert_cut_child_survives(
+        r#"
+fn clos(n Node) int
+    let g = fn() int
+        n.cut()
+        0
+    match n.left
+        Some(l)
+            let z = g()
+            let junk = Node(None, 55)
+            l.v + junk.v + z
+        None: 0
+
+println(f"{clos(Node(Node(None, 7), 1))}")
+"#,
+        "miri.clos",
+        "_1.0",
+    );
+}
+
+#[test]
+fn test_a_child_cut_by_a_trait_method_keeps_its_reference() {
+    assert_cut_child_survives(
+        r#"
+trait Cutter
+    fn act(n Node) int
+
+class RealCutter implements Cutter
+    fn init()
+        let x = 0
+
+    fn act(n Node) int
+        n.cut()
+        0
+
+fn virt(c Cutter, n Node) int
+    match n.left
+        Some(l)
+            let z = c.act(n)
+            let junk = Node(None, 55)
+            l.v + junk.v + z
+        None: 0
+
+println(f"{virt(RealCutter(), Node(Node(None, 7), 1))}")
+"#,
+        "miri.virt",
+        "_2.0",
+    );
+}
+
+#[test]
+fn test_a_child_cut_by_a_drop_hook_keeps_its_reference() {
+    assert_cut_child_survives(
+        r#"
+class Hook
+    var target Node
+
+    fn init(target Node)
+        self.target = target
+
+    fn drop()
+        self.target.cut()
+
+fn hooked(n Node) int
+    match n.left
+        Some(l)
+            var h = Hook(n)
+            h = Hook(Node(None, 0))
+            let junk = Node(None, 55)
+            l.v + junk.v
+        None: 0
+
+println(f"{hooked(Node(Node(None, 7), 1))}")
+"#,
+        "miri.hooked",
+        "_1.0",
+    );
+}
+
+/// `h.wipe()` empties the list the parameter `xs` names through a class
+/// field, so the element read out of `xs` keeps its reference.
+#[test]
+fn test_an_element_of_a_parameter_list_a_callee_empties_is_retained() {
+    let code = r#"
+use system.io
+use system.collections.list
+
+class Node
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+class Holder
+    var items [Node]
+
+    fn init(items [Node])
+        self.items = items
+
+    fn wipe()
+        self.items.clear()
+
+fn probe(h Holder, xs [Node]) int
+    let x = xs[0]
+    h.wipe()
+    let junk = Node(55)
+    x.v + junk.v
+
+let h = Holder(List([Node(7), Node(4)]))
+println(f"{probe(h, h.items)}")
+"#;
+    for level in ["0", "3"] {
+        assert_output_at(code, level, "62");
+    }
+    let probe = emitted_body(code, "miri.probe");
+    assert!(
+        probe.contains("IncRef(_2["),
+        "the element is not retained:\n{probe}"
+    );
+}
+
+/// A map hands back an entry as a borrow: the map's reference holds it, and
+/// the entry local holds none. Each read below is taken out of such an entry
+/// whose map a method then replaces, so each keeps a reference of its own.
+const REPLACED_MAP_ENTRIES: &str = r#"
+use system.io
+use system.collections.list
+use system.collections.map
+
+class Node
+    var v int
+    fn init(v int)
+        self.v = v
+
+struct Reg
+    xs [Node]
+    n Node
+    name String
+
+struct Pair
+    a Node
+    b Node
+
+class Holder
+    var m {int: Reg}
+    var ml {int: [Node]}
+    var ms {int: Pair}
+    fn init()
+        self.m = {1: Reg(xs: List([Node(7)]), n: Node(8), name: "a-long-string-value-to-live-on-the-heap-aaaaaaaaaaaa")}
+        self.ml = {1: List([Node(9)])}
+        self.ms = {1: Pair(a: Node(7), b: Node(8))}
+    fn clr()
+        self.m = {}
+        self.ml = {}
+        self.ms = {}
+
+fn element_of_a_field(h Holder) int
+    let x = h.m[1].xs[0]
+    h.clr()
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    x.v + junk.length()
+
+fn field(h Holder) int
+    let x = h.m[1].n
+    h.clr()
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    x.v + junk.length()
+
+fn string_field(h Holder) int
+    let s = h.m[1].name
+    h.clr()
+    let junk = "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+    s.length() + junk.length()
+
+fn element(h Holder) int
+    let x = h.ml[1][0]
+    h.clr()
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    x.v + junk.length()
+
+fn whole_entry(h Holder) int
+    let l = h.ml[1]
+    h.clr()
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    l[0].v + l.length() + junk.length()
+
+fn struct_field(h Holder) int
+    let x = h.ms[1].a
+    h.clr()
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    x.v + junk.length()
+
+fn peek(h Holder) int
+    let x = h.m[1].n
+    x.v + 1
+
+fn main()
+    println(f"{element_of_a_field(Holder())}")
+    println(f"{field(Holder())}")
+    println(f"{string_field(Holder())}")
+    println(f"{element(Holder())}")
+    println(f"{whole_entry(Holder())}")
+    println(f"{struct_field(Holder())}")
+    println(f"{peek(Holder())}")
+"#;
+
+#[test]
+fn test_a_value_read_out_of_a_map_entry_a_method_replaces_keeps_its_reference() {
+    for level in ["0", "3"] {
+        assert_output_at(REPLACED_MAP_ENTRIES, level, "15\n16\n117\n17\n18\n15\n9");
+    }
+    let field = emitted_body(REPLACED_MAP_ENTRIES, "miri.field");
+    assert!(
+        field.contains("IncRef(_4.1)"),
+        "the read out of the entry is not retained:\n{field}"
+    );
+}
+
+/// With nothing in range that may release what another name holds, a read
+/// out of a map entry borrows it.
+#[test]
+fn test_a_value_read_out_of_a_map_entry_nothing_replaces_takes_no_reference() {
+    let peek = emitted_body(REPLACED_MAP_ENTRIES, "miri.peek");
+    assert!(
+        peek.contains("= _4.1;") && !peek.contains("IncRef(_4.1)"),
+        "the read out of the entry is retained:\n{peek}"
+    );
+}
+
+/// A map the body owns, rebound or emptied while a value read out of its
+/// entry is held: the release reaches nothing another name holds, so only
+/// naming the map as the borrow's owner keeps the value.
+#[test]
+fn test_a_value_read_out_of_an_entry_of_a_local_map_survives_the_map_changing() {
+    let code = r#"
+use system.io
+use system.collections.list
+use system.collections.map
+
+class Node
+    var v int
+    fn init(v int)
+        self.v = v
+
+struct W
+    n Node
+
+fn rebound() int
+    var m = {1: W(n: Node(8))}
+    let x = m[1].n
+    m = {2: W(n: Node(3))}
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    x.v + junk.length()
+
+fn cleared() int
+    var m = {1: W(n: Node(8))}
+    let x = m[1].n
+    m.clear()
+    let junk = List([55, 56, 57, 58, 59, 60, 61, 62])
+    x.v + junk.length()
+
+fn main()
+    println(f"{rebound()}")
+    println(f"{cleared()}")
+"#;
+    for level in ["0", "3"] {
+        assert_output_at(code, level, "16\n16");
+    }
 }

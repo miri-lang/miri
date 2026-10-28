@@ -205,6 +205,45 @@ impl HeapEffects {
     }
 }
 
+/// Which operations of one body may release a heap value another name holds:
+/// the per-operation rule, with each call to a function of the program loud
+/// unless `quiet_calls` names the block it ends — and every such call loud
+/// when there are no facts. A runtime search whose matching runs code of the
+/// program is taken as loud.
+pub struct BodyNoise<'b> {
+    classifier: Classifier<'b>,
+    quiet_calls: Option<&'b HashSet<BasicBlock>>,
+}
+
+impl<'b> BodyNoise<'b> {
+    pub fn of(
+        body: &'b Body,
+        phase: Phase,
+        hooks: &'b DropHookReach<'b>,
+        quiet_calls: Option<&'b HashSet<BasicBlock>>,
+    ) -> Self {
+        BodyNoise {
+            classifier: Classifier::of(body, phase, hooks),
+            quiet_calls,
+        }
+    }
+
+    /// Whether the statement `kind` may release a value another name holds.
+    pub fn is_loud_statement(&self, kind: &StatementKind) -> bool {
+        self.classifier.is_loud_statement(kind)
+    }
+
+    /// Whether `terminator`, ending `block`, may release a value another name
+    /// holds.
+    pub fn is_loud_terminator(&self, block: BasicBlock, terminator: &Terminator) -> bool {
+        match self.classifier.noise(terminator) {
+            Noise::Quiet => false,
+            Noise::Loud | Noise::Matches(_) => true,
+            Noise::Calls(..) => !self.quiet_calls.is_some_and(|quiet| quiet.contains(&block)),
+        }
+    }
+}
+
 /// Record, on every body of `program`, the calls to a quiet callee and the
 /// calls handing their callee a receiver it writes in place, keyed by the
 /// block each call ends. Read before reference counting, which funds every
@@ -716,6 +755,22 @@ impl<'b> HeapLends<'b> {
 /// collection is reached through a class field or a dereference, or is the
 /// receiver, an owned or `out` parameter or a capture.
 fn entry_borrows(body: &Body, types: &PlaceTypes) -> HashSet<Local> {
+    borrowed_entries(body)
+        .filter(|(_, collection)| {
+            collection.is_some_and(|place| {
+                crosses_heap_field(types, place) || is_shared_root(body, place.local)
+            })
+        })
+        .map(|(entry, _)| entry)
+        .collect()
+}
+
+/// Each local of `body` a runtime getter hands an entry to as a borrow of
+/// the collection it reads (`runtime_fns::hands_back_a_borrow`), with the
+/// place of that collection. The local holds no reference of its own: the
+/// collection's keeps the entry alive, until the collection is replaced,
+/// emptied or released.
+pub fn borrowed_entries(body: &Body) -> impl Iterator<Item = (Local, Option<&Place>)> + '_ {
     let scope = body.layout_scope();
     body.basic_blocks
         .iter()
@@ -734,15 +789,10 @@ fn entry_borrows(body: &Body, types: &PlaceTypes) -> HashSet<Local> {
             | TerminatorKind::GpuLaunch { .. }
             | TerminatorKind::VirtualCall { .. } => None,
         })
-        .filter(|(name, args, destination)| {
+        .filter(move |(name, _, destination)| {
             let result = body.local_decls.get(destination.local.0);
-            let collection = args.first().and_then(Operand::place);
             destination.projection.is_empty()
                 && result.is_some_and(|decl| hands_back_a_borrow(name, &decl.ty.kind, scope))
-                && collection.is_some_and(|place| {
-                    crosses_heap_field(types, place) || is_shared_root(body, place.local)
-                })
         })
-        .map(|(_, _, destination)| destination.local)
-        .collect()
+        .map(|(_, args, destination)| (destination.local, args.first().and_then(Operand::place)))
 }

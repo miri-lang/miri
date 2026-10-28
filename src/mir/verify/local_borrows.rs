@@ -11,8 +11,9 @@
 //!
 //! - the local is one the body owns, holding a counted value with no drop hook
 //!   and no device buffer, and every definition of it copies a projected place;
-//! - that place is reached from a local the body owns — not a parameter, a
-//!   capture or a local whose address is taken — through value steps only;
+//! - that place is reached from a counted local the body owns, or a counted
+//!   parameter other than an `out` one — never a capture or a local whose
+//!   address is taken — through value steps and class fields only;
 //! - the local is never rebound, released, written into a call's result,
 //!   handed to a runtime entry point that keeps it or asks whether it is
 //!   shared, passed `out`, launched over or merged in a phi; and unless its
@@ -27,13 +28,25 @@
 //! - on every path from a definition to the end of its storage, its owner —
 //!   and, for a borrow read out of another borrowed local, that local's owners —
 //!   is only read through a projection, retained through one, or lent by copy
-//!   to a runtime entry point that only reads it;
+//!   to a runtime entry point that only reads it; the end of a lent
+//!   parameter's binding leaves its caller's reference in place;
+//! - an entry a runtime getter lends out of a collection
+//!   (`runtime_fns::hands_back_a_borrow`) holds no reference of its own: a
+//!   borrow read out of one counts the locals holding the collection among
+//!   its owners, and other code may reach it;
+//! - when what it reads is reached through a class field, out of a
+//!   parameter or out of a lent entry — directly or through a borrowed parent — nothing on such a
+//!   path may release a value another name holds, by the rule of
+//!   [`crate::mir::analysis::heap_effects`] read over the counted body, with
+//!   the calls to the program the caller found quiet: this check is handed
+//!   them, worked out again over the counted program rather than read from
+//!   `Body::quiet_calls`, and with none every such call is taken as loud;
 //! - every owner it shows is recorded, since RC elision keeps the retains of
 //!   exactly the recorded owners.
 //!
 //! What a runtime entry point does to its arguments is read from
 //! `runtime_fns`, the ground truth both this check and the inference use. The
-//! two type predicates — whether a step is a value step and whether a type is
+//! type predicates — how a step reaches what it reads and whether a type is
 //! a reference by design — are shared with the inference too
 //! (`optimization::local_borrows`), so a defect in either passes both.
 //!
@@ -42,11 +55,13 @@
 
 use super::{local_display_name, VerificationViolation};
 use crate::ast::types::Type;
-use crate::mir::optimization::local_borrows::{has_reference_semantics, reads_through_values};
+use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
+use crate::mir::optimization::local_borrows::{has_reference_semantics, reach_of, Reach};
 use crate::mir::place::PlaceContext;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
+use crate::mir::type_facts::DropHookReach;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
@@ -99,14 +114,25 @@ enum Access {
 }
 
 /// Every local `body` records as borrowing that the body bears out, and a
-/// violation for each record it does not.
-pub(super) fn held_borrows(body: &Body) -> (HashSet<Local>, Vec<VerificationViolation>) {
-    let mut checker = Checker {
-        body,
-        decided: HashMap::new(),
-    };
+/// violation for each record it does not. `quiet_calls` are the calls to the
+/// program found to release nothing another name holds; `None` takes every
+/// such call as one that may.
+pub(super) fn held_borrows(
+    body: &Body,
+    quiet_calls: Option<&HashSet<BasicBlock>>,
+) -> (HashSet<Local>, Vec<VerificationViolation>) {
     let mut held = HashSet::new();
     let mut violations = Vec::new();
+    if body.borrowed_locals.is_empty() {
+        return (held, violations);
+    }
+    let hooks = DropHookReach::new(body.rc_classifier.definitions());
+    let mut checker = Checker {
+        body,
+        noise: BodyNoise::of(body, Phase::Counted, &hooks, quiet_calls),
+        entries: entry_collections(body),
+        decided: HashMap::new(),
+    };
     let mut records: Vec<(&Local, &Vec<Local>)> = body.borrowed_locals.iter().collect();
     records.sort_unstable_by_key(|(local, _)| local.0);
     for (&local, recorded) in records {
@@ -127,17 +153,30 @@ pub(super) fn held_borrows(body: &Body) -> (HashSet<Local>, Vec<VerificationViol
     (held, violations)
 }
 
-/// Every record of a borrowed local in `body` the body does not bear out.
-pub fn verify_local_borrows(body: &Body) -> Vec<VerificationViolation> {
-    held_borrows(body).1
+/// Every record of a borrowed local in `body` the body does not bear out,
+/// with `quiet_calls` as for [`held_borrows`].
+pub fn verify_local_borrows(
+    body: &Body,
+    quiet_calls: Option<&HashSet<BasicBlock>>,
+) -> Vec<VerificationViolation> {
+    held_borrows(body, quiet_calls).1
 }
+
+/// The owners a borrow's value is held by, with whether other code may
+/// reach it — through a class field or out of a parameter.
+type Owners = (Vec<Local>, bool);
 
 /// Checks records, remembering each local decided, so a borrow out of a
 /// borrowed local reads that local's owners once.
 struct Checker<'b> {
     body: &'b Body,
+    /// What may release a value another name holds.
+    noise: BodyNoise<'b>,
+    /// Each local holding an entry a collection lends, with the locals
+    /// holding that collection.
+    entries: HashMap<Local, Vec<Local>>,
     /// `None` while a local is being decided, so a cycle of reads is refused.
-    decided: HashMap<Local, Option<Option<Vec<Local>>>>,
+    decided: HashMap<Local, Option<Option<Owners>>>,
 }
 
 impl Checker<'_> {
@@ -148,10 +187,10 @@ impl Checker<'_> {
         if let Some(reason) = self.local_refusal(local) {
             return Some(reason);
         }
-        let Some(owners) = self.owners(local) else {
+        let Some((owners, _)) = self.owners(local) else {
             return Some(
                 "an owner of what it reads changes while it holds the value, or is not a \
-                 local the body owns reached through value steps"
+                 counted local or parameter reached through value steps and class fields"
                     .to_string(),
             );
         };
@@ -187,7 +226,7 @@ impl Checker<'_> {
 
     /// The owners whose value `local` holds while it borrows, when every one
     /// of them stays unchanged over its range; `None` when it does not borrow.
-    fn owners(&mut self, local: Local) -> Option<Vec<Local>> {
+    fn owners(&mut self, local: Local) -> Option<Owners> {
         if let Some(decided) = self.decided.get(&local) {
             return decided.clone().flatten();
         }
@@ -197,30 +236,50 @@ impl Checker<'_> {
         answer
     }
 
-    fn settle(&mut self, local: Local) -> Option<Vec<Local>> {
+    fn settle(&mut self, local: Local) -> Option<Owners> {
         let body = self.body;
         let mut all_owners = Vec::new();
+        let mut is_exposed = false;
         for (site, source) in definitions_of(body, local)? {
-            if !is_owned_root(body, source.local)
-                || !reads_through_values(
-                    &source,
-                    |place| PlaceTypes::of(body).declared(place),
-                    body.rc_classifier.definitions(),
-                )
-            {
+            if !is_root(body, source.local) {
                 return None;
             }
+            let reach = reach_of(
+                &source,
+                |place| PlaceTypes::of(body).declared(place),
+                body.rc_classifier.definitions(),
+            )?;
             let mut owners = vec![source.local];
-            if body.borrowed_locals.contains_key(&source.local) {
-                owners.extend(self.owners(source.local)?);
+            let mut read_exposed = reach == Reach::ThroughField || is_parameter(body, source.local);
+            if let Some(collections) = self.entries.get(&source.local) {
+                owners.extend(collections);
+                read_exposed = true;
+            } else if body.borrowed_locals.contains_key(&source.local) {
+                let (parents, parent_exposed) = self.owners(source.local)?;
+                owners.extend(parents);
+                read_exposed |= parent_exposed;
             }
-            if !stays_over_range(body, local, site, &owners) {
+            let noise = read_exposed.then_some(&self.noise);
+            if !stays_over_range(body, local, site, &owners, noise) {
                 return None;
             }
             all_owners.extend(owners);
+            is_exposed |= read_exposed;
         }
-        Some(all_owners)
+        Some((all_owners, is_exposed))
     }
+}
+
+/// Each local `body` holds an entry in that a runtime getter lends out of a
+/// collection, with the root local of every collection it is read from: the
+/// entry holds no reference, so a change to that collection may free it.
+fn entry_collections(body: &Body) -> HashMap<Local, Vec<Local>> {
+    let mut entries: HashMap<Local, Vec<Local>> = HashMap::new();
+    for (entry, collection) in borrowed_entries(body) {
+        let roots = entries.entry(entry).or_default();
+        roots.extend(collection.map(|place| place.local).filter(|&c| c != entry));
+    }
+    entries
 }
 
 /// The locals `owners` names, as a finding spells them.
@@ -322,10 +381,11 @@ fn definitions_of(body: &Body, local: Local) -> Option<Vec<((usize, usize), Plac
     (!reads.is_empty()).then_some(reads)
 }
 
-/// Whether `root` is a local the body owns outright, whose address it never
-/// takes.
-fn is_owned_root(body: &Body, root: Local) -> bool {
-    root.0 > body.arg_count
+/// Whether `root` holds a reference a borrow can rely on: a counted local the
+/// body owns or a counted parameter other than an `out` one, never a capture,
+/// a local holding a device buffer, or one whose address the body takes.
+fn is_root(body: &Body, root: Local) -> bool {
+    (root.0 > body.arg_count || is_parameter(body, root))
         && !body.env_capture_locals.contains(&root)
         && body.is_counted_local(root)
         && body.local_decls[root.0].device_handle.is_none()
@@ -333,10 +393,36 @@ fn is_owned_root(body: &Body, root: Local) -> bool {
             .any(|(local, access, _)| local == root && access == Access::AddressTaken)
 }
 
+/// Whether `local` is a parameter of `body` other than an `out` one.
+fn is_parameter(body: &Body, local: Local) -> bool {
+    let is_out = (local.0.checked_sub(1))
+        .and_then(|index| body.out_params.get(index))
+        .copied()
+        .unwrap_or(false);
+    (1..=body.arg_count).contains(&local.0) && !is_out
+}
+
+/// Whether `statement` ends the binding of a parameter the body is lent:
+/// its caller's reference still holds the value.
+fn ends_lent_parameter(body: &Body, statement: &Statement) -> bool {
+    matches!(&statement.kind, StatementKind::StorageDead(place)
+        if place.projection.is_empty()
+            && is_parameter(body, place.local)
+            && !body.is_owned_param(place.local))
+}
+
 /// Whether, on every path from the definition of `local` at `site` to the end
 /// of its storage, each of `owners` is reached only in ways that leave it as
-/// it was. A path reaching the body's end first does not end the range.
-fn stays_over_range(body: &Body, local: Local, site: (usize, usize), owners: &[Local]) -> bool {
+/// it was, and — given `noise`, for a value other code may reach — nothing
+/// runs that may release a value another name holds. A path reaching the
+/// body's end first does not end the range.
+fn stays_over_range(
+    body: &Body,
+    local: Local,
+    site: (usize, usize),
+    owners: &[Local],
+    noise: Option<&BodyNoise>,
+) -> bool {
     let changes = |accesses: Vec<(Local, Access)>| {
         accesses
             .into_iter()
@@ -352,15 +438,21 @@ fn stays_over_range(body: &Body, local: Local, site: (usize, usize), owners: &[L
             if ends {
                 continue 'blocks;
             }
-            if changes(statement_accesses(statement)) {
+            let is_loud = noise.is_some_and(|noise| noise.is_loud_statement(&statement.kind));
+            let changes_owner =
+                !ends_lent_parameter(body, statement) && changes(statement_accesses(statement));
+            if changes_owner || is_loud {
                 return false;
             }
         }
         let Some(terminator) = &data.terminator else {
             return false;
         };
+        let is_loud =
+            noise.is_some_and(|noise| noise.is_loud_terminator(BasicBlock(block), terminator));
         if matches!(terminator.kind, TerminatorKind::Return)
             || changes(terminator_accesses(terminator))
+            || is_loud
         {
             return false;
         }

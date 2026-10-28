@@ -262,7 +262,23 @@ fn join_states(into: &mut PathState, from: &PathState) {
 /// and in buffers the host owns and releases, and the shader backends discard
 /// every RC operation. Reading such a body through the host's rules reports a
 /// leak for each value the kernel holds.
+///
+/// With no facts on which calls are quiet, every call to a function of the
+/// program is taken as one that may release a value another name holds; see
+/// [`verify_body_with_quiet_calls`].
 pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
+    verify_body_with_quiet_calls(body, None)
+}
+
+/// [`verify_body`], judging the borrowed locals the body records against
+/// `quiet_calls`: its calls to the program found, over the counted program,
+/// to release nothing another name holds
+/// ([`crate::mir::analysis::heap_effects`]); `None` takes every such call
+/// as one that may.
+pub fn verify_body_with_quiet_calls(
+    body: &Body,
+    quiet_calls: Option<&HashSet<BasicBlock>>,
+) -> Vec<VerificationViolation> {
     let mut violations = verify_callees(body);
     if matches!(
         body.execution_model,
@@ -272,7 +288,7 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
     }
 
     let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
-    let (borrows, borrow_violations) = local_borrows::held_borrows(body);
+    let (borrows, borrow_violations) = local_borrows::held_borrows(body, quiet_calls);
     violations.extend(borrow_violations);
     let tracked = collect_tracked_locals(body, &env_captures, &borrows);
     let managed_params = collect_managed_param_locals(body);
