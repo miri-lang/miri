@@ -45,6 +45,7 @@
 //! }
 //! ```
 
+pub mod branch_threading;
 pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
@@ -206,6 +207,17 @@ pub fn elide_rc(body: &mut Body) {
         return;
     }
     RcElision.run(body);
+}
+
+/// Let each block branch on the condition it computed rather than jump to a
+/// join block that branches on a copy of it ([`branch_threading`]). A body
+/// that runs on a GPU is left alone: its backend rebuilds structured control
+/// flow from the blocks as lowering left them.
+pub fn thread_branch_conditions(body: &mut Body) {
+    if runs_on_a_gpu(body) {
+        return;
+    }
+    branch_threading::thread_branch_conditions(body);
 }
 
 /// Remove each uniqueness check a write path repeats after an earlier check or
