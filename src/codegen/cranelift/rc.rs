@@ -103,13 +103,13 @@ pub(crate) struct ElementOrderSetters {
 
 /// The enum value one variant's drop guard releases fields out of.
 #[derive(Clone, Copy)]
-struct EnumDropSite {
+struct EnumDropSite<'a> {
     /// The discriminant, read once for every variant's guard.
     disc: Value,
+    /// Where each field of the value sits, from [`layout::enum_payload_layout`].
+    layout: &'a layout::EnumLayout,
     /// Address of the discriminant slot.
     payload_ptr: Value,
-    /// Width of each slot, from [`layout::enum_payload_slot_size`].
-    slot_size: i32,
 }
 
 /// The drop thunk a value of a named type is released through.
@@ -1713,7 +1713,7 @@ impl<'a> FunctionTranslator<'a> {
         // site carries, so both sides resolve payloads by the same rule.
         let type_args: Option<Vec<Expression>> =
             inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
-        let slot_size = layout::enum_payload_slot_size(
+        let enum_layout = layout::enum_payload_layout(
             enum_def,
             type_args.as_deref(),
             type_ctx.layout_scope(),
@@ -1728,8 +1728,8 @@ impl<'a> FunctionTranslator<'a> {
                 ctx,
                 EnumDropSite {
                     disc,
+                    layout: &enum_layout,
                     payload_ptr,
-                    slot_size: slot_size as i32,
                 },
                 variant_idx,
                 &managed_fields,
@@ -1787,15 +1787,15 @@ impl<'a> FunctionTranslator<'a> {
     fn emit_enum_variant_drop_guard(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        site: EnumDropSite,
+        site: EnumDropSite<'_>,
         variant_idx: usize,
         managed_fields: &[(usize, TypeKind)],
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let EnumDropSite {
             disc,
+            layout: enum_layout,
             payload_ptr,
-            slot_size,
         } = site;
         let ptr_type = type_ctx.ptr_type;
         let variant_val = builder.ins().iconst(ptr_type, variant_idx as i64);
@@ -1814,8 +1814,17 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(drop_block);
         for (field_idx, field_kind) in managed_fields {
             // Payload field `k` is enum field `k + 1`: the discriminant
-            // occupies the first slot.
-            let field_offset = (*field_idx as i32 + 1) * slot_size;
+            // occupies the first column.
+            let field_offset = enum_layout
+                .columns
+                .get(*field_idx + 1)
+                .ok_or_else(|| {
+                    CodegenError::Internal(format!(
+                        "variant {variant_idx} releases payload field {field_idx}, past the \
+                         enum's last column"
+                    ))
+                })?
+                .offset;
             let field_ptr =
                 builder
                     .ins()

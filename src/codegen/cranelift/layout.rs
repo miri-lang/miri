@@ -418,7 +418,7 @@ fn custom_field_layout(
             return placed_field(layout, field_idx, &written);
         }
         TypeDefinition::Enum(enum_def) => {
-            enum_field_layout(enum_def, type_args, field_idx, scope, ptr_ty)
+            return enum_field_layout(enum_def, type_args, field_idx, scope, ptr_ty);
         }
         TypeDefinition::Alias(_) => {
             let written = TypeKind::Custom(name.to_string(), type_args.map(<[_]>::to_vec));
@@ -453,56 +453,131 @@ fn struct_field_slot(
 /// Where field `field_idx` of an enum value sits: the discriminant is field 0,
 /// and payload field `k` of whichever variant the value holds is field `k + 1`.
 ///
-/// A read of a payload field does not know which variant it reads — the match
-/// arm that reached it does, but the projection only carries the index — so
-/// the offset must not depend on the variant. Every field therefore occupies
-/// one slot of [`enum_payload_slot_size`], the same for all variants of the
-/// enum at this instantiation. The type returned is a pointer-sized word; a
-/// reader loads at the width of the binding it fills.
+/// The offset is the column [`enum_payload_layout`] gives that position. The
+/// type returned is a pointer-sized word, which every column holds at least; a
+/// reader loads at the width of the binding it fills. An index past the last
+/// column names no field any variant carries.
 fn enum_field_layout(
     enum_def: &EnumDefinition,
     type_args: Option<&[Expression]>,
     field_idx: usize,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
-) -> (i32, Member) {
-    let slot = enum_payload_slot_size(enum_def, type_args, scope, ptr_ty) as i32;
-    ((field_idx as i32) * slot, Member::Word(ptr_ty))
+) -> Result<(i32, Member), CodegenError> {
+    let layout = enum_payload_layout(enum_def, type_args, scope, ptr_ty);
+    let column = layout.columns.get(field_idx).ok_or_else(|| {
+        CodegenError::Internal(format!(
+            "field index {field_idx} out of range: the enum carries at most {} fields",
+            layout.columns.len()
+        ))
+    })?;
+    Ok((column.offset, Member::Word(ptr_ty)))
 }
 
-/// The width of every slot in an enum value: the discriminant's and each
-/// payload field's.
+/// The bytes one field position of an enum value occupies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumColumn {
+    /// Offset of the position from the start of the value.
+    pub offset: i32,
+    /// Bytes the position spans: enough for the widest field any variant
+    /// stores there, and never less than a pointer.
+    pub size: i32,
+}
+
+/// Where each field position of an enum value sits, and how many bytes the
+/// widest value needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumLayout {
+    /// The discriminant's column first, then payload position `k` at index
+    /// `k + 1`.
+    pub columns: Vec<EnumColumn>,
+    /// Bytes a value carrying every column needs, padded to the widest
+    /// column alignment.
+    ///
+    /// This is the bound of the enum, not the size of any one value: each
+    /// variant is allocated at [`EnumLayout::value_size`] of its own field
+    /// count, which is smaller for a variant that leaves trailing columns
+    /// unused. Nothing may copy or clear a whole enum value by `size`, since
+    /// that reads or writes past a short variant's allocation.
+    pub size: u32,
+}
+
+impl EnumLayout {
+    /// Every one of `count` columns one pointer word wide: the layout of a
+    /// value whose enum definition is not known, where each field sits in a
+    /// word of its own.
+    pub fn words(count: usize, ptr_ty: CraneliftType) -> Self {
+        let word = ptr_ty.bytes() as i32;
+        let columns: Vec<EnumColumn> = (0..count)
+            .map(|position| EnumColumn {
+                offset: position as i32 * word,
+                size: word,
+            })
+            .collect();
+        let size = (columns.len() as i32 * word) as u32;
+        Self { columns, size }
+    }
+
+    /// Bytes a value carrying its first `field_count` fields — the
+    /// discriminant and its variant's payload — needs, or `None` when the
+    /// enum has fewer columns than that.
+    pub fn value_size(&self, field_count: usize) -> Option<u32> {
+        let last = match field_count.checked_sub(1) {
+            Some(last) => self.columns.get(last)?,
+            None => return Some(0),
+        };
+        u32::try_from(last.offset + last.size).ok()
+    }
+}
+
+/// Lay out the values of an enum at the instantiation `type_args` names.
 ///
-/// It is the widest payload any variant carries at this instantiation, and
-/// never narrower than a pointer, so a 128-bit payload gets a slot it fits in
-/// and every other enum keeps pointer-sized slots. A payload held as its
-/// bytes sits inline and takes its own size. The width is a multiple of the
-/// widest alignment among the payloads, so every slot is aligned. A payload
-/// spelled as a type parameter takes the width of the argument bound to it;
-/// one with no bound argument is pointer-sized.
+/// A read of a payload field does not know which variant it reads — the match
+/// arm that reached it does, but the projection only carries the index — so
+/// the offset of a field must not depend on the variant. Each field position
+/// is therefore one column shared by every variant: the discriminant takes the
+/// first, one pointer word, and payload position `k` takes a column as wide as
+/// the widest field any variant stores at `k` and as aligned as the most
+/// aligned of them. A column is never narrower or less aligned than a pointer,
+/// so a reader loading a whole word from it stays inside it. A payload held as
+/// its bytes sits inline at its own size; one spelled as a type parameter takes
+/// the argument bound to it, and one with no bound argument is pointer-sized.
 ///
 /// This is the one authority for enum payload offsets: construction, the
 /// field reads and writes of a match, and the drop path all lay a value out
 /// by it, so none of them can disagree about where a field lives.
-pub fn enum_payload_slot_size(
+pub fn enum_payload_layout(
     enum_def: &EnumDefinition,
     type_args: Option<&[Expression]>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
-) -> u32 {
+) -> EnumLayout {
     let word = Slot::of(ptr_ty);
-    let (size, align) = enum_def
-        .variants
-        .values()
-        .flatten()
-        .map(|field_ty| {
+    let positions = enum_def.variants.values().map(Vec::len).max().unwrap_or(0);
+    let mut extents = vec![(word.size, word.align); positions + 1];
+    for fields in enum_def.variants.values() {
+        for (position, field_ty) in fields.iter().enumerate() {
             let stored = enum_payload_field_kind(enum_def, &field_ty.kind, type_args);
-            Slot::member(&stored, scope, ptr_ty)
-        })
-        .fold((word.size, word.align), |(size, align), slot| {
-            (size.max(slot.size), align.max(slot.align))
-        });
-    align_to(size, align) as u32
+            let slot = Slot::member(&stored, scope, ptr_ty);
+            if let Some((size, align)) = extents.get_mut(position + 1) {
+                *size = (*size).max(slot.size);
+                *align = (*align).max(slot.align);
+            }
+        }
+    }
+    let mut columns = Vec::with_capacity(extents.len());
+    let mut end = 0;
+    let mut max_align = word.align;
+    for (size, align) in extents {
+        let offset = align_to(end, align);
+        columns.push(EnumColumn { offset, size });
+        end = offset + size;
+        max_align = max_align.max(align);
+    }
+    EnumLayout {
+        columns,
+        size: align_to(end, max_align) as u32,
+    }
 }
 
 /// The kind an enum payload field declared as `declared` stores at the
@@ -510,9 +585,9 @@ pub fn enum_payload_slot_size(
 /// argument bound to it, and any other payload is stored as declared. A
 /// parameter with no bound argument is returned unresolved.
 ///
-/// The slot width above, and the drop path's choice of which fields to
-/// release, both resolve payloads through this, so the offsets a value is
-/// written at and the offsets it is released from cannot disagree.
+/// The column widths of [`enum_payload_layout`], and the drop path's choice of
+/// which fields to release, both resolve payloads through this, so the offsets
+/// a value is written at and the offsets it is released from cannot disagree.
 pub fn enum_payload_field_kind(
     enum_def: &EnumDefinition,
     declared: &TypeKind,
@@ -691,16 +766,13 @@ fn struct_aggregate_size(
     align_to(payload, ptr_ty.bytes() as i32) as u32
 }
 
-/// Size of an enum aggregate: the discriminant slot followed by as many
-/// payload slots as the variant with the most fields carries, each slot as wide
-/// as [`enum_payload_slot_size`] says.
+/// Size of an enum aggregate: every column [`enum_payload_layout`] lays out.
 fn enum_aggregate_size(
     enum_def: &EnumDefinition,
     type_args: Option<&[Expression]>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
 ) -> u32 {
-    let max_fields = enum_def.variants.values().map(Vec::len).max().unwrap_or(0);
     let scope = LayoutScope::program(type_definitions);
-    enum_payload_slot_size(enum_def, type_args, scope, ptr_ty) * (1 + max_fields as u32)
+    enum_payload_layout(enum_def, type_args, scope, ptr_ty).size
 }

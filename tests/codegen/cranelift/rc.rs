@@ -471,8 +471,8 @@ fn test_inline_atomic_payload_is_not_collected_as_managed() {
     );
 }
 
-/// An enum payload slot is one word wide (`enum_payload_slot_size` never
-/// grows it for a vector, which translates to a pointer), so a `Vec3<f32>`
+/// An enum payload column is one word wide (`enum_payload_layout` never
+/// widens it for a vector, which translates to a pointer), so a `Vec3<f32>`
 /// payload is held as the pointer to its own allocation, and dropping the enum
 /// must release it.
 #[test]

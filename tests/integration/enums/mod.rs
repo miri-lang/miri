@@ -14,6 +14,7 @@ pub mod later_declared_enum;
 pub mod managed;
 pub mod matching;
 pub mod methods;
+pub mod payload_columns;
 pub mod payload_less_generic_variant;
 pub mod payload_substitution;
 pub mod statics;

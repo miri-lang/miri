@@ -6,12 +6,14 @@ use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::layout::{
-    aggregate_layout, aggregate_size, class_payload_layout, field_layout, Member,
+    aggregate_layout, aggregate_size, class_payload_layout, enum_payload_layout, field_layout,
+    EnumColumn, EnumLayout, Member,
 };
 use miri::codegen::cranelift::value_locals::scalar_type;
 use miri::mir::type_facts::{held_value_layout, FieldRepr};
 
 use miri::error::syntax::Span;
+use miri::error::CodegenError;
 use miri::mir::option_layout::LayoutScope;
 use miri::type_checker::context::{
     AliasDefinition, ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition,
@@ -514,11 +516,18 @@ fn test_enum_max_payload_wins() {
     assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 4 * ptr.bytes());
 }
 
-/// A 128-bit payload widens every slot of its enum, in every variant, so a
-/// field's offset depends only on its index and a read that does not know the
-/// variant still finds it.
+/// Field `idx` of `kind`'s offset, laid out against `defs`.
+fn enum_field_offset(kind: &TypeKind, idx: usize, defs: &HashMap<String, TypeDefinition>) -> i32 {
+    field_layout(kind, idx, LayoutScope::program(defs), ptr_ty())
+        .expect("the field has a layout")
+        .0
+}
+
+/// A 128-bit payload widens only the position it sits at: every variant's
+/// field at that position shares the wide column, and the positions after it
+/// keep their own width, so a field's offset still depends only on its index.
 #[test]
-fn test_enum_wide_payload_widens_every_slot() {
+fn test_enum_wide_payload_widens_only_its_column() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
 
@@ -530,32 +539,128 @@ fn test_enum_wide_payload_widens_every_slot() {
 
     let enum_kind = TypeKind::Custom("Wide".to_string(), None);
 
-    assert_eq!(
-        field_layout(&enum_kind, 0, LayoutScope::program(&type_defs), ptr)
-            .expect("the field has a layout")
-            .0,
-        0
+    assert_eq!(enum_field_offset(&enum_kind, 0, &type_defs), 0);
+    // The first payload column is aligned for the 128-bit value it may hold.
+    assert_eq!(enum_field_offset(&enum_kind, 1, &type_defs), 16);
+    assert_eq!(enum_field_offset(&enum_kind, 2, &type_defs), 32);
+    assert_eq!(enum_field_offset(&enum_kind, 3, &type_defs), 40);
+    // Padded to the widest column alignment.
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 48);
+}
+
+/// An enum with `A(int)`, `B(<a 128-byte struct held as its bytes>)` and
+/// `C(int, int)`. The held struct widens the first payload column alone: the
+/// discriminant keeps one word and the second payload column keeps one word.
+fn mixed_column_enum() -> HashMap<String, TypeDefinition> {
+    let wide_fields = (0..16).map(|i| format!("f{i}")).collect::<Vec<_>>();
+    let wide = make_struct(
+        wide_fields
+            .iter()
+            .map(|name| (name.as_str(), TypeKind::Int))
+            .collect(),
     );
+    let enum_def = make_enum(vec![
+        ("A", vec![TypeKind::Int]),
+        ("B", vec![TypeKind::Custom("Wide".to_string(), None)]),
+        ("C", vec![TypeKind::Int, TypeKind::Int]),
+    ]);
+    HashMap::from([
+        ("Wide".to_string(), TypeDefinition::Struct(wide)),
+        ("Columns".to_string(), TypeDefinition::Enum(enum_def)),
+    ])
+}
+
+#[test]
+fn test_enum_payload_columns_are_sized_per_position() {
+    let type_defs = mixed_column_enum();
+    let ptr = ptr_ty();
+    let wide = TypeKind::Custom("Wide".to_string(), None);
     assert_eq!(
-        field_layout(&enum_kind, 1, LayoutScope::program(&type_defs), ptr)
-            .expect("the field has a layout")
-            .0,
-        16
+        held_value_layout(&wide, LayoutScope::program(&type_defs)).map(|layout| layout.size),
+        Some(128),
+        "the payload struct is held as its 128 bytes"
     );
+
+    let enum_kind = TypeKind::Custom("Columns".to_string(), None);
+    // The discriminant takes one word.
+    assert_eq!(enum_field_offset(&enum_kind, 0, &type_defs), 0);
+    // Payload position 0 is as wide as the held struct.
+    assert_eq!(enum_field_offset(&enum_kind, 1, &type_defs), 8);
+    // Payload position 1 starts right after it, one word wide.
+    assert_eq!(enum_field_offset(&enum_kind, 2, &type_defs), 136);
+    // One word of discriminant, 128 bytes, one word: 144 bytes. Sizing every
+    // slot at the widest payload took 128 * (1 + 2) = 384.
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 144);
+}
+
+#[test]
+fn test_enum_payload_layout_names_each_column() {
+    let type_defs = mixed_column_enum();
+    let Some(TypeDefinition::Enum(enum_def)) = type_defs.get("Columns") else {
+        panic!("the enum is defined");
+    };
+    let layout = enum_payload_layout(enum_def, None, LayoutScope::program(&type_defs), ptr_ty());
+    let columns: Vec<(i32, i32)> = layout
+        .columns
+        .iter()
+        .map(|column| (column.offset, column.size))
+        .collect();
+    assert_eq!(columns, vec![(0, 8), (8, 128), (136, 8)]);
+    assert_eq!(layout.size, 144);
+    // A value of `A` carries the discriminant and one payload field.
+    assert_eq!(layout.value_size(2), Some(136));
+    assert_eq!(layout.value_size(3), Some(144));
+    assert_eq!(layout.value_size(4), None);
+}
+
+#[test]
+fn test_enum_field_past_the_last_column_is_an_internal_error() {
+    let type_defs = mixed_column_enum();
+    let enum_kind = TypeKind::Custom("Columns".to_string(), None);
+
+    // The enum lays out three columns: the discriminant and two payloads.
+    let error = field_layout(&enum_kind, 3, LayoutScope::program(&type_defs), ptr_ty())
+        .expect_err("an index past the last column has no layout");
+    assert!(
+        matches!(&error, CodegenError::Internal(message)
+            if message.contains("field index 3 out of range")
+                && message.contains("at most 3 fields")),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn test_enum_layout_words_gives_each_field_a_word() {
+    let layout = EnumLayout::words(3, ptr_ty());
     assert_eq!(
-        field_layout(&enum_kind, 2, LayoutScope::program(&type_defs), ptr)
-            .expect("the field has a layout")
-            .0,
-        32
+        layout.columns,
+        vec![
+            EnumColumn { offset: 0, size: 8 },
+            EnumColumn { offset: 8, size: 8 },
+            EnumColumn {
+                offset: 16,
+                size: 8
+            },
+        ]
     );
-    assert_eq!(
-        field_layout(&enum_kind, 3, LayoutScope::program(&type_defs), ptr)
-            .expect("the field has a layout")
-            .0,
-        48
-    );
-    // Discriminant slot + the three fields of the widest variant, 16 bytes each.
-    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 64);
+    assert_eq!(layout.size, 24);
+    assert_eq!(layout.value_size(3), Some(24));
+
+    let empty = EnumLayout::words(0, ptr_ty());
+    assert!(empty.columns.is_empty());
+    assert_eq!(empty.size, 0);
+}
+
+#[test]
+fn test_enum_value_of_no_fields_needs_no_bytes() {
+    let type_defs = mixed_column_enum();
+    let Some(TypeDefinition::Enum(enum_def)) = type_defs.get("Columns") else {
+        panic!("the enum is defined");
+    };
+    let layout = enum_payload_layout(enum_def, None, LayoutScope::program(&type_defs), ptr_ty());
+    assert_eq!(layout.value_size(0), Some(0));
+    // A payload-less value carries only its discriminant: one word.
+    assert_eq!(layout.value_size(1), Some(8));
 }
 
 #[test]

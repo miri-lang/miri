@@ -6,7 +6,7 @@ use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout::{
-    aggregate_layout, class_payload_layout, enum_payload_slot_size, field_layout, Member,
+    aggregate_layout, class_payload_layout, enum_payload_layout, field_layout, EnumLayout, Member,
     PayloadLayout,
 };
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
@@ -937,7 +937,7 @@ impl<'a> FunctionTranslator<'a> {
             None if matches!(kind, AggregateKind::Option(_)) => {
                 Self::boxed_option_payload(builder, translated, held, type_ctx)
             }
-            None => Self::payload_layout(builder, kind, translated, type_ctx, expected_ty),
+            None => Self::payload_layout(builder, kind, (translated, held), type_ctx, expected_ty),
         }
     }
 
@@ -1075,13 +1075,13 @@ impl<'a> FunctionTranslator<'a> {
     /// constructor hands over say nothing about how much room the instance
     /// needs: a field the constructor leaves to `init` arrives as a placeholder
     /// one byte wide, and sizing the allocation from those widths hands out an
-    /// object smaller than its own fields. An enum value takes the slots every
+    /// object smaller than its own fields. An enum value takes the columns every
     /// match reads it from. An optional's box and a formatted string carry
     /// their real values here, so their own widths are the layout.
     fn payload_layout(
         builder: &FunctionBuilder,
         kind: &AggregateKind,
-        translated: &[Value],
+        (translated, held): (&[Value], &[Option<ValueLayout>]),
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<(Vec<u32>, u32), CodegenError> {
@@ -1097,7 +1097,9 @@ impl<'a> FunctionTranslator<'a> {
             )));
         }
         if let AggregateKind::Enum(enum_name, _) = kind {
-            return Self::enum_value_layout(builder, enum_name, translated, type_ctx, expected_ty);
+            let columns =
+                Self::enum_value_columns(enum_name, translated.len(), type_ctx, expected_ty);
+            return Self::enum_value_layout(builder, &columns, (translated, held));
         }
         Self::compute_aggregate_layout(
             builder,
@@ -1107,35 +1109,27 @@ impl<'a> FunctionTranslator<'a> {
         )
     }
 
-    /// Where each field of an enum value is stored, and how many bytes the
-    /// fields need.
-    ///
-    /// Every field sits in a slot of the width
-    /// [`enum_payload_slot_size`] gives this instantiation, because
-    /// that is where a match reads it back from. A value wider than that slot
-    /// can only be a payload whose type parameter this site does not see bound;
-    /// the slot grows to hold it rather than let the store run past the
-    /// allocation.
-    fn enum_value_layout(
-        builder: &FunctionBuilder,
+    /// The columns an enum value of `enum_name` is laid out in, at the
+    /// instantiation `expected_ty` names: [`enum_payload_layout`]'s, which is
+    /// where a match reads each field back from. A name that is not a known
+    /// enum definition keeps a pointer-sized column per field.
+    fn enum_value_columns(
         enum_name: &str,
-        translated: &[Value],
+        field_count: usize,
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
-    ) -> Result<(Vec<u32>, u32), CodegenError> {
+    ) -> EnumLayout {
         let ptr_type = type_ctx.ptr_type;
-        let declared_slot = match type_ctx.facts.definitions().get(enum_name) {
+        match type_ctx.facts.definitions().get(enum_name) {
             Some(TypeDefinition::Enum(enum_def)) => {
                 let type_args = expected_ty.and_then(|ty| Self::enum_instantiation_args(&ty.kind));
-                enum_payload_slot_size(
+                enum_payload_layout(
                     enum_def,
                     type_args.as_deref(),
                     type_ctx.layout_scope(),
                     ptr_type,
                 )
             }
-            // Not a known enum definition: keep the pointer-sized slot every
-            // payload used before slots were sized from the variants.
             Some(
                 TypeDefinition::Struct(_)
                 | TypeDefinition::Generic(_)
@@ -1143,20 +1137,52 @@ impl<'a> FunctionTranslator<'a> {
                 | TypeDefinition::Class(_)
                 | TypeDefinition::Trait(_),
             )
-            | None => ptr_type.bytes(),
-        };
-        let slot = translated
-            .iter()
-            .map(|val| builder.func.dfg.value_type(*val).bytes())
-            .fold(declared_slot, u32::max);
-        let field_count = u32::try_from(translated.len()).map_err(|_| {
-            CodegenError::Internal("enum value carries too many fields".to_string())
+            | None => EnumLayout::words(field_count, ptr_type),
+        }
+    }
+
+    /// Where each field of an enum value laid out in `columns` is stored, and
+    /// how many bytes the fields need: the columns the value's own fields
+    /// reach, and no further.
+    ///
+    /// A value wider than its column — a word, or the bytes of a value held
+    /// inline — would be written over the next column, or past the
+    /// allocation, and no read would find it where it was put. That is the
+    /// construction site and the layout disagreeing about the instantiation,
+    /// and is reported rather than stored.
+    fn enum_value_layout(
+        builder: &FunctionBuilder,
+        columns: &EnumLayout,
+        (translated, held): (&[Value], &[Option<ValueLayout>]),
+    ) -> Result<(Vec<u32>, u32), CodegenError> {
+        let mut offsets = Vec::with_capacity(translated.len());
+        for (position, value) in translated.iter().enumerate() {
+            let width = match held.get(position).and_then(Option::as_ref) {
+                Some(layout) => layout.size,
+                None => builder.func.dfg.value_type(*value).bytes(),
+            };
+            let column = columns.columns.get(position).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "an enum value carries {} fields; its enum lays out {}",
+                    translated.len(),
+                    columns.columns.len()
+                ))
+            })?;
+            if i64::from(width) > i64::from(column.size) {
+                return Err(CodegenError::Internal(format!(
+                    "a {width}-byte value is built into enum field {position}, whose column \
+                     holds {} bytes",
+                    column.size
+                )));
+            }
+            offsets.push(u32::try_from(column.offset).map_err(|_| {
+                CodegenError::Internal(format!("enum field {position} has a negative offset"))
+            })?);
+        }
+        let size = columns.value_size(translated.len()).ok_or_else(|| {
+            CodegenError::Internal("an enum value outgrows its enum's columns".to_string())
         })?;
-        let total_size = slot.checked_mul(field_count).ok_or_else(|| {
-            CodegenError::Internal("aggregate layout exceeds 4 GiB addressable space".to_string())
-        })?;
-        let offsets = (0..field_count).map(|i| i * slot).collect();
-        Ok((offsets, total_size))
+        Ok((offsets, size))
     }
 
     /// Bring each payload value to the type its slot is declared at, where the
@@ -1261,11 +1287,15 @@ impl<'a> FunctionTranslator<'a> {
     /// Resolve the declared payload types for an aggregate kind, one entry per
     /// payload field.
     ///
-    /// An entry is `None` when the payload has no statically known width — a
-    /// generic enum constructed inside a generic function body, where the type
-    /// parameter is not bound at this site. Those fields keep the value's own
-    /// width, which is the width the match arm reads them back at. Returns
-    /// `None` for aggregate kinds that carry no declared payload types at all.
+    /// An entry is `None` when the field keeps the value's own representation:
+    /// a reference-counted payload, one pointer whatever it is named, or a
+    /// payload written at a parameter the expected type leaves open — inside a
+    /// shared body, where every open parameter is one word. A generic function
+    /// or method body is compiled per instantiation, so its parameters arrive
+    /// here bound. The column such a field lands in is laid out by the same
+    /// rule, and `enum_value_layout` refuses a value wider than its column.
+    /// Returns `None` for aggregate kinds that carry no declared payload types
+    /// at all.
     fn resolve_declared_field_types_for_aggregate(
         kind: &AggregateKind,
         type_ctx: &TypeCtx,
