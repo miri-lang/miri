@@ -317,7 +317,7 @@ fn header_of<'l>(listing: &'l str, name: &str) -> &'l str {
 }
 
 #[test]
-fn a_value_body_is_signed_with_a_return_slot_and_an_address_parameter() {
+fn a_value_body_is_signed_with_its_members_as_results_and_an_address_parameter() {
     let (make, shift, main) = program();
     let make_name = function("make").link_name();
     let shift_name = function("shift").link_name();
@@ -329,13 +329,14 @@ fn a_value_body_is_signed_with_a_return_slot_and_an_address_parameter() {
     let (_, listing) = compile(&named).expect("the program compiles and verifies");
     let make_header = header_of(&listing, &make_name);
     assert!(
-        make_header.contains("(i64, i64, f64)") && !make_header.contains("->"),
-        "`make` takes its return slot first and returns nothing: {make_header}"
+        make_header.contains("(i64, f64) -> i64, f64 "),
+        "`make` takes no return slot and returns the value's two members: {make_header}"
     );
     let shift_header = header_of(&listing, &shift_name);
     assert!(
-        shift_header.contains("(i64, i64)") && !shift_header.contains("->"),
-        "`shift` takes its return slot and its value by address: {shift_header}"
+        shift_header.contains("(i64) -> i64, f64 "),
+        "`shift` takes its value by address and returns the value's two members: \
+         {shift_header}"
     );
 }
 

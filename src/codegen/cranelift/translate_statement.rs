@@ -12,7 +12,10 @@ use crate::codegen::cranelift::translator::{
     CallSite, ElementShape, FunctionTranslator, ModuleCtx, RuntimeChecks, TypeCtx,
 };
 use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
-use crate::codegen::cranelift::value_abi::{call_arguments, miri_signature, CallResult, Passing};
+use crate::codegen::cranelift::value_abi::{
+    call_arguments, load_lanes, miri_signature, store_lanes, CallResult, HeldResult, Passing,
+    Returning,
+};
 use crate::codegen::cranelift::value_locals::{copy_chunks, ValueBuild};
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
@@ -97,7 +100,7 @@ impl PreparedCall {
         leading: &[cranelift_codegen::ir::Value],
     ) -> Vec<cranelift_codegen::ir::Value> {
         let args: Vec<_> = leading.iter().chain(&self.values).copied().collect();
-        call_arguments(self.result.slot, &args)
+        call_arguments(self.result.return_slot(), &args)
     }
 }
 
@@ -895,7 +898,10 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Translate `TerminatorKind::Return`: write back scalar out params via
-    /// caller stack slots, then return local(0) (or void).
+    /// caller stack slots, then return local(0) as the body's signature says
+    /// it comes back: nothing, one word, or the members of a value held as
+    /// its bytes loaded out of its slot. A value written through the
+    /// caller's return slot comes back in no register.
     fn translate_return(
         builder: &mut FunctionBuilder,
         body: &Body,
@@ -909,21 +915,27 @@ impl<'a> FunctionTranslator<'a> {
                 builder.ins().store(MemFlagsData::new(), val, ptr, 0);
             }
         }
-        if let Some(&var) = locals.get(&Local(0)) {
-            let ret_ty = &body.local_decls[0].ty;
-            // A value held as its bytes was written through the return slot.
-            if type_ctx.values.layout(Local(0)).is_some() {
-                builder.ins().return_(&[]);
-            } else if ret_ty.kind != TypeKind::Void {
-                let value = builder.use_var(var);
-                builder.ins().return_(&[value]);
-            } else {
-                builder.ins().return_(&[]);
+        let returns_nothing =
+            (body.local_decls.first()).is_none_or(|decl| decl.ty.kind == TypeKind::Void);
+        let returned = match type_ctx.values.held_result() {
+            Some(HeldResult::ThroughSlot) => Vec::new(),
+            Some(HeldResult::Lanes(lanes)) => {
+                let address = builder.use_var(Self::result_variable(locals)?);
+                load_lanes(builder, &lanes, address)
             }
-        } else {
-            builder.ins().return_(&[]);
-        }
+            None if returns_nothing => Vec::new(),
+            None => vec![builder.use_var(Self::result_variable(locals)?)],
+        };
+        builder.ins().return_(&returned);
         Ok(())
+    }
+
+    /// The variable of the body's result, `_0`.
+    fn result_variable(locals: &HashMap<Local, Variable>) -> Result<Variable, CodegenError> {
+        locals
+            .get(&Local(0))
+            .copied()
+            .ok_or_else(|| CodegenError::Internal("the body has no result local".to_string()))
     }
 
     /// Translate `TerminatorKind::SwitchInt`. One or two targets lower to a
@@ -1036,19 +1048,16 @@ impl<'a> FunctionTranslator<'a> {
 
         let dest_ty = &body.local_decls[destination.local.0].ty;
         if let Some(callee) = callee {
-            let sig = call.signature(&[], builder.func.signature.call_conv, ptr_type);
             Self::dispatch_named_call(
                 builder,
                 ctx,
                 callee,
                 args,
-                call.arguments(&[]),
-                sig,
+                &call,
                 dest_ty,
                 destination,
                 locals,
                 type_ctx,
-                ptr_type,
             )?;
         } else {
             Self::dispatch_indirect_call(builder, ctx, func, &call, destination, locals, type_ctx)?;
@@ -1115,7 +1124,7 @@ impl<'a> FunctionTranslator<'a> {
         call.result =
             Self::call_result(builder, operands.destination, is_runtime, locals, type_ctx)?;
         // The callee was declared with its return slot ahead of the arguments.
-        let first_declared = usize::from(call.result.slot.is_some());
+        let first_declared = usize::from(call.result.return_slot().is_some());
         let written: Vec<Local> =
             call_written_roots(operands.args, operands.arg_modes, operands.destination).collect();
 
@@ -1158,7 +1167,10 @@ impl<'a> FunctionTranslator<'a> {
     /// Look up `func_name`'s pre-existing module declaration so later call
     /// args can be cast to the declared param types (avoids DFG-widened
     /// mismatches like passing an `I64`-widened `u8` where `I8` is expected).
-    fn lookup_predeclared_sig(ctx: &ModuleCtx, func_name: Option<&str>) -> Option<Signature> {
+    pub(crate) fn lookup_predeclared_sig(
+        ctx: &ModuleCtx,
+        func_name: Option<&str>,
+    ) -> Option<Signature> {
         use cranelift_module::FuncOrDataId;
         let name = func_name?;
         if let Some(FuncOrDataId::Func(id)) = ctx.module.get_name(name) {
@@ -1258,7 +1270,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Direct call to a named symbol: declare-import the callee, emit the
-    /// `call` instruction, store the result into the destination local, and
+    /// `call` instruction, land the result in the destination, and
     /// run any runtime-specific post-call initialization (List drop-fn /
     /// clone-fn registration for `miri_rt_list_new*`).
     #[allow(clippy::too_many_arguments)]
@@ -1267,14 +1279,15 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         callee: &Symbol,
         args: &[Operand],
-        arg_values: Vec<cranelift_codegen::ir::Value>,
-        sig: Signature,
+        prepared: &PreparedCall,
         dest_ty: &crate::ast::types::Type,
         destination: &Place,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
-        ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let arg_values = prepared.arguments(&[]);
+        let sig = prepared.signature(&[], builder.func.signature.call_conv, ptr_type);
         if callee.runtime_name() == Some(rt::RC_IS_SHARED) {
             let shared = Self::emit_inline_is_shared(builder, ctx, callee, &arg_values, sig)?;
             return Self::define_call_destination(builder, locals, destination, shared);
@@ -1307,12 +1320,8 @@ impl<'a> FunctionTranslator<'a> {
             .map_err(|e| CodegenError::declare_function(func_name, e.to_string()))?;
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         let call = builder.ins().call(local_func, &arg_values);
-
-        // A result written through a return slot comes back in no register.
-        let maybe_result = builder.inst_results(call).first().copied();
-        if let Some(result) = maybe_result {
-            Self::define_call_destination(builder, locals, destination, result)?;
-        }
+        let maybe_result =
+            Self::land_call_result(builder, call, &prepared.result, destination, locals)?;
 
         let runtime_name = callee.runtime_name();
         if runtime_name == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY) {
@@ -1779,11 +1788,8 @@ impl<'a> FunctionTranslator<'a> {
         let full_args = call.arguments(&[closure_ptr]);
 
         let sig_ref = builder.import_signature(full_sig);
-        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
-
-        if let Some(&result) = builder.inst_results(call).first() {
-            Self::define_call_destination(builder, locals, destination, result)?;
-        }
+        let inst = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
+        Self::land_call_result(builder, inst, &call.result, destination, locals)?;
         Ok(())
     }
 
@@ -1986,7 +1992,7 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .call_indirect(sig_ref, fn_ptr, &prepared.arguments(&[]));
 
-        Self::store_vcall_result(builder, call, destination, locals)?;
+        Self::land_call_result(builder, call, &prepared.result, destination, locals)?;
         Self::writeback_out_arg_slots(builder, &prepared.out_slots, locals, type_ctx, ptr_type);
         if let Some(t) = target {
             builder.ins().jump(blocks[t], &[]);
@@ -2011,26 +2017,43 @@ impl<'a> FunctionTranslator<'a> {
             .load(ptr_type, MemFlagsData::new(), vtable_ptr, slot_offset)
     }
 
-    /// Write the result a virtual call returns in a register back into the
-    /// destination local. No-op when it returns none: a void result, or one
-    /// written through a return slot.
-    fn store_vcall_result(
+    /// Land what `call` returned in `destination`, as `result` says it comes
+    /// back: a word becomes the destination local's value, and each member
+    /// of a value held as its bytes is stored at its offset in the
+    /// destination's bytes. A void result, or one written through a return
+    /// slot, comes back in no register. Answers the word, when there is one;
+    /// a call signed to return one that returns none is refused.
+    fn land_call_result(
         builder: &mut FunctionBuilder,
         call: cranelift_codegen::ir::Inst,
+        result: &CallResult,
         destination: &Place,
         locals: &HashMap<Local, Variable>,
-    ) -> Result<(), CodegenError> {
-        let Some(&result) = builder.inst_results(call).first() else {
-            return Ok(());
-        };
-        let dest_var = locals.get(&destination.local).ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "Unknown vcall destination local: {:?}",
-                destination.local
-            ))
-        })?;
-        builder.def_var(*dest_var, result);
-        Ok(())
+    ) -> Result<Option<cranelift_codegen::ir::Value>, CodegenError> {
+        match result.returning {
+            Returning::Nothing | Returning::ThroughSlot => Ok(None),
+            Returning::Word(_) => {
+                let word = builder.inst_results(call).first().copied().ok_or_else(|| {
+                    CodegenError::Internal(format!(
+                        "the call into `{destination}` is signed to return a word, but \
+                         returned none"
+                    ))
+                })?;
+                Self::define_call_destination(builder, locals, destination, word)?;
+                Ok(Some(word))
+            }
+            Returning::Lanes(lanes) => {
+                let address = result.address.ok_or_else(|| {
+                    CodegenError::Internal(format!(
+                        "the call into `{destination}` returns a value held as its bytes, \
+                         but its destination has no address"
+                    ))
+                })?;
+                let values = builder.inst_results(call).to_vec();
+                store_lanes(builder, &lanes, &values, address)?;
+                Ok(None)
+            }
+        }
     }
 
     /// Resolve the `TypeKind` of a place after following its projections.

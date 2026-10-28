@@ -67,6 +67,10 @@ fn ty(kind: TypeKind) -> Type {
 }
 
 fn function_of(params: usize) -> TypeKind {
+    function_returning(params, TypeKind::Int)
+}
+
+fn function_returning(params: usize, result: TypeKind) -> TypeKind {
     let param = || Parameter {
         name: String::new(),
         name_span: Span::default(),
@@ -79,7 +83,7 @@ fn function_of(params: usize) -> TypeKind {
     TypeKind::Function(Box::new(FunctionTypeData {
         generics: None,
         params: (0..params).map(|_| param()).collect(),
-        return_type: Some(Box::new(type_expr_non_null(ty(TypeKind::Int)))),
+        return_type: Some(Box::new(type_expr_non_null(ty(result)))),
     }))
 }
 
@@ -197,6 +201,21 @@ fn a_closure_over_values_wider_than_the_list_s_elements_is_refused() {
     let refusal = pass_closures_through(&mut body, &table).expect_err("the width is refused");
     assert!(
         refusal.contains("not read as the collection holds"),
+        "{refusal}"
+    );
+}
+
+/// A value held as its bytes comes back from a Miri call in registers or
+/// through the caller's slot, and a trampoline stores only a word: a closure
+/// handed to the runtime that answers one is refused.
+#[test]
+fn a_closure_answering_a_value_held_as_its_bytes_is_refused() {
+    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR]);
+    let answer = TypeKind::Option(Box::new(ty(TypeKind::Int)));
+    let mut body = calling_sort_with(&[list_of_int(), function_returning(2, answer)]);
+    let refusal = pass_closures_through(&mut body, &table).expect_err("a held result is refused");
+    assert!(
+        refusal.contains("which a trampoline cannot store"),
         "{refusal}"
     );
 }

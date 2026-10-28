@@ -2212,6 +2212,7 @@ impl<'a> FunctionTranslator<'a> {
         sig: &Signature,
         ptr_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
+        Self::refuse_value_signature_mismatch(ctx, name, sig)?;
         let func_id = ctx
             .module
             .declare_function(name, Linkage::Import, sig)
@@ -2219,6 +2220,28 @@ impl<'a> FunctionTranslator<'a> {
         let func_ref = ctx.module.declare_func_in_func(func_id, builder.func);
         Ok(builder.ins().func_addr(ptr_type, func_ref))
     }
+    /// Refuse a function value or closure pointer to `name` typed with `sig`
+    /// when the body named `name` is defined under another signature.
+    ///
+    /// A call through the value is made under `sig`, with no declaration to
+    /// check it against, so a result its body returns in registers and the
+    /// caller expects through a slot, or the other way round, would be read
+    /// from the wrong place. Every body is declared before any is translated,
+    /// so the body's own signature is known here.
+    fn refuse_value_signature_mismatch(
+        ctx: &ModuleCtx,
+        name: &str,
+        sig: &Signature,
+    ) -> Result<(), CodegenError> {
+        match Self::lookup_predeclared_sig(ctx, Some(name)) {
+            Some(defined) if defined != *sig => Err(CodegenError::Internal(format!(
+                "`{name}` is taken as a function value called as {sig}, but its body is \
+                 defined as {defined}"
+            ))),
+            Some(_) | None => Ok(()),
+        }
+    }
+
     /// Translate a closure aggregate into a heap-allocated closure struct.
     ///
     /// Layout: [size][RC=1][fn_ptr][dtor_ptr], then the

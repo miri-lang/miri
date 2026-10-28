@@ -15,7 +15,7 @@ use crate::codegen::cranelift::pass_through::forward_pass_through_parameters;
 use crate::codegen::cranelift::source_points::{SourcePoint, SourcePoints};
 use crate::codegen::cranelift::stable_headers::StableHeaders;
 use crate::codegen::cranelift::types::translate_type;
-use crate::codegen::cranelift::value_abi::body_signature;
+use crate::codegen::cranelift::value_abi::{body_signature, HeldResult};
 use crate::codegen::cranelift::value_locals::{copy_chunks, copy_value, value_slot, ValueLocals};
 use crate::error::syntax::Span;
 use crate::error::{CodegenError, SourceId};
@@ -371,8 +371,10 @@ impl<'a> FunctionTranslator<'a> {
     /// at Return; the value load is deferred to the main loop so the entry
     /// block stays Pristine until `switch_to_block` runs.
     ///
-    /// A result held as its bytes arrives first, as the address of the
-    /// caller's slot, and becomes `_0`'s `Variable`. A value parameter is the
+    /// A result held as its bytes that comes back through the caller's slot
+    /// arrives first, as the slot's address, and becomes `_0`'s `Variable`;
+    /// one that comes back in registers is built in a slot of this frame
+    /// ([`Self::define_value_slots`]). A value parameter is the
     /// address of the caller's own bytes, rebound to a copy on entry when the
     /// body writes it ([`Self::copy_written_value_params`]); a value `out`
     /// parameter is that address too, written in place with nothing to write
@@ -394,7 +396,7 @@ impl<'a> FunctionTranslator<'a> {
         };
         builder.switch_to_block(entry_block);
         let mut params_vec: Vec<Value> = builder.block_params(entry_block).to_vec();
-        if values.layout(Local(0)).is_some() && !params_vec.is_empty() {
+        if values.held_result() == Some(HeldResult::ThroughSlot) && !params_vec.is_empty() {
             let return_slot = params_vec.remove(0);
             if let Some(&var) = locals.get(&Local(0)) {
                 builder.def_var(var, return_slot);

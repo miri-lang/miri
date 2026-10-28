@@ -1807,3 +1807,121 @@ fn expected_code_sums() -> String {
         sum("abcé")
     )
 }
+
+const OPTIONAL_RESULT: &str = r#"
+use system.io
+
+fn f(n int) int?
+    if n <= 0
+        return None
+    if n % 2 == 0
+        return n
+    f(n - 1)
+
+fn main()
+    println(f"{f(9)} {f(0)}")
+"#;
+
+/// The line a CLIF listing declares `function` with.
+fn clif_declaration<'a>(listing: &'a str, function: &str) -> &'a str {
+    let header = format!("; {function}\n");
+    let start = listing
+        .find(&header)
+        .expect("the function is in the listing")
+        + header.len();
+    listing[start..]
+        .lines()
+        .next()
+        .expect("the header is followed by the declaration")
+}
+
+/// An `int?` result comes back in two registers, its tag and its payload,
+/// so the function takes no return-slot pointer ahead of its parameters:
+/// only `n` and the allocator it is handed.
+#[test]
+fn test_an_optional_int_result_comes_back_in_two_registers() {
+    let source = create_test_file(OPTIONAL_RESULT);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("optional");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("optional.clif")).unwrap();
+    let declaration = clif_declaration(&listing, "miri.f");
+    assert!(
+        declaration.starts_with("function ") && declaration.contains("(i64, i64) -> i8, i64 "),
+        "`f` takes `n` and the allocator and returns its tag and payload: {declaration}"
+    );
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "Some(8) None");
+}
+
+const STRUCT_RESULTS: &str = r#"
+use system.io
+
+struct Pt
+    x int
+    y float
+
+trait Maker
+    fn make(n int) Pt
+
+class A implements Maker
+    fn make(n int) Pt
+        return Pt(x: n, y: 0.5)
+
+fn mk(n int) Pt
+    if n > 0
+        return mk(n - 1)
+    return Pt(x: 7, y: 0.25)
+
+fn main()
+    let scale = 2.0
+    let c = fn(n int) Pt
+        return Pt(x: n, y: scale)
+    let m Maker = A()
+    let a = mk(3)
+    let b = c(4)
+    let d = m.make(5)
+    println(f"{a.x} {a.y} {b.x} {b.y} {d.x} {d.y}")
+"#;
+
+/// A struct of an `int` and a `float` comes back as those two members from a
+/// function, a closure and a trait method alike: each is declared returning
+/// `i64, f64`, which a function writing a return slot never is.
+#[test]
+fn test_a_struct_result_comes_back_in_registers_from_every_kind_of_callee() {
+    let source = create_test_file(STRUCT_RESULTS);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("structs");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("structs.clif")).unwrap();
+    let lambda = listed_functions(&listing)
+        .into_iter()
+        .find(|name| name.starts_with("miri.$lambda"))
+        .expect("the closure is listed");
+    for function in ["miri.mk", "miri.A.make", lambda] {
+        let declaration = clif_declaration(&listing, function);
+        assert!(
+            declaration.contains(") -> i64, f64 "),
+            "`{function}` returns the struct's two members: {declaration}"
+        );
+    }
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "7 0.25 4 2.0 5 0.5"
+    );
+}

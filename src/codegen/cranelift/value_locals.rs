@@ -8,7 +8,8 @@
 //! bitwise and whose body's classifier does not count. Its Cranelift
 //! `Variable` holds the address of its bytes: a slot of this frame sized and
 //! aligned by the value's [`ValueLayout`], the pointer to the copy a caller
-//! made for a parameter, or the caller's return slot for `_0`.
+//! made for a parameter, or, for a `_0` that comes back through one, the
+//! caller's return slot.
 //!
 //! - Reading a value place yields the address of its bytes; reading a scalar
 //!   inside one loads it from its offset in the layout.
@@ -24,6 +25,7 @@
 use crate::ast::types::{Type, TypeKind};
 use crate::codegen::cranelift::inline_optionals::is_absent;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
+use crate::codegen::cranelift::value_abi::HeldResult;
 use crate::error::CodegenError;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{AggregateKind, Body, Local, Operand, Place, PlaceElem, Rvalue};
@@ -35,8 +37,9 @@ use cranelift_frontend::{FunctionBuilder, Variable};
 use std::collections::HashMap;
 
 impl<'a> FunctionTranslator<'a> {
-    /// Give every value local that is neither a parameter nor the result a
-    /// stack slot of this frame, and set its `Variable` to the slot's address.
+    /// Give every value local that is not a parameter a stack slot of this
+    /// frame, and set its `Variable` to the slot's address. The result `_0`
+    /// gets one too unless it comes back through the caller's slot.
     pub(crate) fn define_value_slots(
         builder: &mut FunctionBuilder,
         body: &Body,
@@ -44,7 +47,10 @@ impl<'a> FunctionTranslator<'a> {
         values: &ValueLocals,
         ptr_type: cl_types::Type,
     ) {
-        let owned = (body.arg_count + 1..body.local_decls.len()).map(Local);
+        let result = (values.held_result() != Some(HeldResult::ThroughSlot)).then_some(Local(0));
+        let owned = result
+            .into_iter()
+            .chain((body.arg_count + 1..body.local_decls.len()).map(Local));
         for local in owned {
             let (Some(layout), Some(&var)) = (values.layout(local), locals.get(&local)) else {
                 continue;
@@ -568,6 +574,7 @@ pub fn value_layout(body: &Body, kind: &TypeKind) -> Option<ValueLayout> {
 pub struct ValueLocals<'b> {
     body: Option<&'b Body>,
     layouts: Vec<Option<ValueLayout>>,
+    result: Option<HeldResult>,
 }
 
 impl<'b> ValueLocals<'b> {
@@ -578,9 +585,11 @@ impl<'b> ValueLocals<'b> {
             .iter()
             .map(|decl| value_layout(body, &decl.ty.kind))
             .collect();
+        let result = layouts.first().and_then(Option::as_ref).map(HeldResult::of);
         Ok(Self {
             body: Some(body),
             layouts,
+            result,
         })
     }
 
@@ -590,6 +599,7 @@ impl<'b> ValueLocals<'b> {
         Self {
             body: None,
             layouts: Vec::new(),
+            result: None,
         }
     }
 
@@ -597,6 +607,13 @@ impl<'b> ValueLocals<'b> {
     /// one.
     pub fn body(&self) -> Option<&'b Body> {
         self.body
+    }
+
+    /// How the body's result `_0` comes back when it is held as its bytes,
+    /// decided once from its layout: the entry binding, the frame slot and
+    /// every return read this one answer. `None` for any other result.
+    pub fn held_result(&self) -> Option<HeldResult> {
+        self.result
     }
 
     /// The layout of `local`, when it is a value local.
@@ -825,7 +842,7 @@ pub fn clear_value(builder: &mut FunctionBuilder, dest: Value, layout: &ValueLay
 /// Each scalar member of a value laid out as `layout`, with its byte offset
 /// from the value's start, nested values flattened in layout order. An
 /// optional's tag is the one-byte unsigned scalar it is read and written as.
-fn scalar_members(layout: &ValueLayout) -> Vec<(u32, ScalarKind)> {
+pub(crate) fn scalar_members(layout: &ValueLayout) -> Vec<(u32, ScalarKind)> {
     let mut members = Vec::with_capacity(layout.fields.len());
     collect_scalar_members(layout, 0, &mut members);
     members
