@@ -440,6 +440,9 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<bool, CodegenError> {
+        if Self::assign_read_in_place(builder, ctx, (place, rvalue), locals, type_ctx)? {
+            return Ok(true);
+        }
         if let Some((address, spot)) = Self::value_place_address(builder, place, locals, type_ctx)?
         {
             let expected = Self::value_destination_type(place, type_ctx)?;

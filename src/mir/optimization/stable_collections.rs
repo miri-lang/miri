@@ -17,11 +17,15 @@
 //!   binding, any of which lets code this body does not show change it;
 //! - no call can write its header: every call into the runtime names an
 //!   entry point `runtime_fns::leaves_collection_headers_unchanged` lists,
-//!   and a call to a function of the program is allowed only where
-//!   `analysis::header_reach` finds the local holds a reference of its own
-//!   and the call names nothing that may hold the collection without one; a
-//!   call through a vtable or a kernel launch is never allowed, and nothing
-//!   is stored through a dereference;
+//!   or copies an array or a list whose elements run no `clone` method of
+//!   the program's own — a copy-on-write hands back its argument or a fresh
+//!   copy and writes no header of a collection that already exists, so a
+//!   loop writing another list stays recorded while the list it writes, which
+//!   takes the result, does not — and a call to a function of the program
+//!   is allowed only where `analysis::header_reach` finds the local holds a
+//!   reference of its own and the call names nothing that may hold the
+//!   collection without one; a call through a vtable or a kernel launch is
+//!   never allowed, and nothing is stored through a dereference;
 //! - no release can run code of the program's own: no release of a value
 //!   whose drop may run a `fn drop(self)` hook anywhere inside it, and no
 //!   store into a slot holding one, which releases what it overwrites;

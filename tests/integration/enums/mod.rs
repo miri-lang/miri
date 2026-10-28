@@ -9,6 +9,8 @@ pub mod float_payload;
 pub mod functions;
 pub mod generic_enum_leaks;
 pub mod generic_own_type_signature;
+pub mod held_match_places;
+pub mod held_values;
 pub mod int128_payload;
 pub mod later_declared_enum;
 pub mod managed;

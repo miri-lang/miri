@@ -10,12 +10,12 @@
 
 use crate::integration::memory::loop_headers_across_calls::{
     callee_writing_its_parameter, ALIAS_BOUND_IN_THE_LOOP, BORROWED_PARAMETER_COPIED_IN_THE_LOOP,
-    CLOSURE_IN_A_FIELD, CLOSURE_PUSHING_ITS_CAPTURE, INDEX_WRITTEN_THROUGH_OUT,
-    LIST_FROM_AN_ELEMENT_ACCESSOR, LIST_FROM_A_MAP_VALUE_ACCESSOR,
-    LIST_FROM_A_METHOD_RETURNING_A_FIELD, LOOP_OVER_A_FIELD, OUT_ARGUMENT_ALIAS,
-    OWNED_PARAMETER_TRANSFER, RECURSIVE_CALLEE, SPHERES, THROUGH_ANOTHER_BINDING,
-    THROUGH_AN_ELEMENT_POINTING_BACK, THROUGH_A_CLASS_FIELD, THROUGH_A_PASSED_CLOSURE,
-    VIRTUAL_CALL, WRITER_THROUGH_A_COUNTED_FIELD,
+    CLOSURE_IN_A_FIELD, CLOSURE_PUSHING_ITS_CAPTURE, COPY_ON_WRITE_OF_ANOTHER_LIST,
+    COPY_ON_WRITE_OF_AN_ALIAS, INDEX_WRITTEN_THROUGH_OUT, LIST_FROM_AN_ELEMENT_ACCESSOR,
+    LIST_FROM_A_MAP_VALUE_ACCESSOR, LIST_FROM_A_METHOD_RETURNING_A_FIELD, LOOP_OVER_A_FIELD,
+    OUT_ARGUMENT_ALIAS, OWNED_PARAMETER_TRANSFER, RECURSIVE_CALLEE, REGISTER_MACHINE, SPHERES,
+    THROUGH_ANOTHER_BINDING, THROUGH_AN_ELEMENT_POINTING_BACK, THROUGH_A_CLASS_FIELD,
+    THROUGH_A_PASSED_CLOSURE, VIRTUAL_CALL, WRITER_THROUGH_A_COUNTED_FIELD,
 };
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
@@ -973,4 +973,131 @@ fn test_an_index_a_call_writes_through_out_is_not_proven_in_bounds() {
         body.in_bounds.iter().all(|entry| entry.collection != local),
         "{body}"
     );
+}
+
+/// A call to the runtime entry point `name`, handed `SPARE_LIST` and writing
+/// its result into `destination`, ending the loop's step.
+fn copy_of_spare_list(name: &str, destination: Local) -> Terminator {
+    call(
+        Operand::runtime(name, Span::default()),
+        vec![Operand::Move(Place::new(SPARE_LIST))],
+        destination,
+        LOOP_HEADER,
+    )
+}
+
+#[test]
+fn test_a_copy_on_write_of_another_list_keeps_the_list_recorded() {
+    for name in [rt::LIST_COW, rt::LIST_CLONE] {
+        let copy = copy_of_spare_list(name, SPARE_LIST);
+        let records = records_of(with_step_ending(loop_over_a_list(), copy));
+        assert_eq!(records.len(), 1, "{name}: {records:?}");
+        assert_eq!(records[0].local, LIST, "{name}");
+    }
+}
+
+#[test]
+fn test_a_copy_on_write_of_another_array_keeps_the_list_recorded() {
+    for name in [rt::ARRAY_COW, rt::ARRAY_CLONE] {
+        let mut body = loop_over_a_list();
+        let array = ty(TypeKind::Array(
+            Box::new(type_expression(TypeKind::Int)),
+            Box::new(type_expression(TypeKind::Int)),
+        ));
+        body.local_decls[SPARE_LIST.0] = LocalDecl::new(array, Span::default());
+        let copy = copy_of_spare_list(name, SPARE_LIST);
+        assert_eq!(records_of(with_step_ending(body, copy)).len(), 1, "{name}");
+    }
+}
+
+#[test]
+fn test_a_copy_of_a_list_whose_elements_may_run_a_clone_method_leaves_the_list_unrecorded() {
+    // Copying a list of class instances calls each element's `clone`, code
+    // of the program that may reach any collection.
+    for name in [rt::LIST_COW, rt::LIST_CLONE] {
+        let mut body = loop_over_a_list();
+        let instances = list_of(TypeKind::Custom("Plain".to_string(), None));
+        body.local_decls[SPARE_LIST.0] = LocalDecl::new(instances, Span::default());
+        let copy = copy_of_spare_list(name, SPARE_LIST);
+        assert!(
+            records_of(with_step_ending(body, copy)).is_empty(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn test_a_copy_on_write_of_the_list_itself_leaves_it_unrecorded() {
+    let cow = call(
+        Operand::runtime(rt::LIST_COW, Span::default()),
+        vec![Operand::Move(Place::new(LIST))],
+        LIST,
+        LOOP_HEADER,
+    );
+    assert!(records_of(with_step_ending(loop_over_a_list(), cow)).is_empty());
+}
+
+#[test]
+fn test_a_copy_on_write_whose_result_the_list_takes_leaves_it_unrecorded() {
+    let mut body = loop_over_a_list();
+    body.basic_blocks[LOOP_BODY].terminator = Some(call(
+        Operand::runtime(rt::LIST_COW, Span::default()),
+        vec![Operand::Move(Place::new(LIST))],
+        SPARE_LIST,
+        4,
+    ));
+    let mut back = BasicBlockData::new(Some(goto(LOOP_HEADER)));
+    back.statements.push(assign(
+        Place::new(LIST),
+        Rvalue::Use(Operand::Move(Place::new(SPARE_LIST))),
+    ));
+    body.basic_blocks.push(back);
+    assert!(records_of(body).is_empty());
+}
+
+/// The type `kind` spelled as a type argument.
+fn type_expression(kind: TypeKind) -> Expression {
+    Expression {
+        id: 0,
+        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        span: Span::default(),
+    }
+}
+
+/// The local of `body` the program names `name`.
+fn named_local(body: &Body, name: &str) -> Local {
+    let index = (body.local_decls.iter())
+        .position(|decl| decl.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no local named {name}:\n{body}"));
+    Local(index)
+}
+
+#[test]
+fn test_a_loop_writing_another_list_on_some_iterations_records_the_list_it_reads() {
+    let body = body_named(COPY_ON_WRITE_OF_ANOTHER_LIST, ".mix");
+    let read = named_local(&body, "a");
+    let written = named_local(&body, "b");
+    let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
+    assert!(recorded.contains(&read), "{body}");
+    assert!(!recorded.contains(&written), "{body}");
+}
+
+#[test]
+fn test_a_loop_writing_an_alias_of_the_list_it_reads_records_the_list() {
+    let body = body_named(COPY_ON_WRITE_OF_AN_ALIAS, ".mix");
+    let read = named_local(&body, "a");
+    let written = named_local(&body, "b");
+    let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
+    assert!(recorded.contains(&read), "{body}");
+    assert!(!recorded.contains(&written), "{body}");
+}
+
+#[test]
+fn test_a_register_machine_records_its_program_but_not_its_registers() {
+    let body = body_named(REGISTER_MACHINE, ".run");
+    let code = named_local(&body, "code");
+    let regs = named_local(&body, "regs");
+    let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
+    assert!(recorded.contains(&code), "{body}");
+    assert!(!recorded.contains(&regs), "{body}");
 }

@@ -9,9 +9,11 @@
 //! record's blocks. That is sound only while every path into those blocks
 //! passes through the preheader, the local keeps its value throughout, and
 //! nothing there can change a header: no call outside the runtime entry
-//! points that leave headers unchanged, except a call to a function of the
-//! program that `analysis::header_reach` finds cannot reach the collection
-//! (the same authority the pass asks), no store through a dereference, no
+//! points that leave headers unchanged — among them a copy of an array or a
+//! list whose elements run no `clone` method of the program — except a call
+//! to a function of the program that `analysis::header_reach` finds cannot
+//! reach the collection (the same authority the pass asks), no store
+//! through a dereference, no
 //! release that may run a drop hook, and — for a parameter the body borrows —
 //! no release, other than through the parameter, of a value that may hold a
 //! collection of its type. Each record is re-derived here from the body

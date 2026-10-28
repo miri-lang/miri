@@ -621,7 +621,8 @@ impl<'a> FunctionTranslator<'a> {
         expected_ty: Option<&Type>,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        if let Some(value) = Self::read_value_local_place(builder, ctx, place, locals, type_ctx)? {
+        let rooted = (place, expected_ty);
+        if let Some(value) = Self::read_value_local_place(builder, ctx, rooted, locals, type_ctx)? {
             return Ok(value);
         }
         let var = locals
@@ -711,10 +712,13 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Read `place` when it is rooted in a value local: a scalar inside it is
     /// loaded, a whole value is its address. `None` for any other place.
+    ///
+    /// `expected`, the type it is read into, says what an enum payload column
+    /// whose variants store different members holds.
     fn read_value_local_place(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        place: &Place,
+        (place, expected): (&Place, Option<&Type>),
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
@@ -725,8 +729,11 @@ impl<'a> FunctionTranslator<'a> {
         if is_indexed && type_ctx.values.layout(place.local).is_some() {
             return Self::read_indexed_value_place(builder, ctx, place, locals, type_ctx).map(Some);
         }
-        Ok(Self::value_place_address(builder, place, locals, type_ctx)?
-            .map(|(address, spot)| Self::read_value_spot(builder, address, spot)))
+        Self::value_place_address(builder, place, locals, type_ctx)?
+            .map(|(address, spot)| {
+                Self::read_value_spot(builder, address, spot, expected, type_ctx)
+            })
+            .transpose()
     }
 
     /// Whether a projection reaching a value of `reached` kind reaches a value
@@ -2210,6 +2217,11 @@ impl<'a> FunctionTranslator<'a> {
                 0,
             ),
             FieldRepr::Value(_) | FieldRepr::OptionTag => address,
+            FieldRepr::Overlay(_) => {
+                return Err(CodegenError::Internal(
+                    "a tuple element picked by a value is an enum's payload column".to_string(),
+                ))
+            }
         })
     }
 

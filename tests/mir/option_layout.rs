@@ -73,9 +73,10 @@ fn structure() -> TypeDefinition {
     })
 }
 
-fn enumeration() -> TypeDefinition {
+/// An enum whose one variant carries `payload`: none, or a string.
+fn enumeration(payload: Vec<Type>) -> TypeDefinition {
     TypeDefinition::Enum(EnumDefinition {
-        variants: BTreeMap::from([("A".to_string(), Vec::new())]),
+        variants: BTreeMap::from([("A".to_string(), payload)]),
         generics: None,
         methods: BTreeMap::new(),
         module: String::new(),
@@ -130,7 +131,8 @@ fn definitions() -> HashMap<String, TypeDefinition> {
     [
         ("Node", class("Node")),
         ("Point", structure()),
-        ("Color", enumeration()),
+        ("Color", enumeration(Vec::new())),
+        ("Label", enumeration(vec![ty(TypeKind::String)])),
         ("Shape", trait_definition("Shape")),
         ("Meters", alias_to(TypeKind::Int)),
         ("Distance", alias_to(custom("Meters"))),
@@ -177,7 +179,7 @@ fn nullable_pointer_payloads() -> Vec<(&'static str, TypeKind)> {
         ("fn()", function_kind()),
         ("class", custom("Node")),
         ("struct", custom("Point")),
-        ("enum", custom("Color")),
+        ("enum carrying a string", custom("Label")),
         ("trait", custom("Shape")),
         ("alias to a class", custom("Graph")),
     ]
@@ -206,6 +208,7 @@ fn scalar_kinds() -> Vec<TypeKind> {
 
 fn value_payloads() -> Vec<(String, TypeKind)> {
     let named = vec![
+        ("enum held as its bytes", custom("Color")),
         ("alias to a scalar", custom("Meters")),
         ("alias chain to a scalar", custom("Distance")),
         ("alias to an optional", custom("MaybeNode")),

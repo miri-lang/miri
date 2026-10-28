@@ -13,13 +13,16 @@
 //! it. A tuple whose bytes are its value is matched by its bytes and needs
 //! neither. An optional's bytes are never its value: an absent one's payload
 //! bytes are not part of it, so its tag is compared and hashed first, and its
-//! payload only when present.
+//! payload only when present. An enum's are not either: its tag is hashed,
+//! then the fields of the variant the tag names.
 
+use crate::codegen::cranelift::held_enums::{column_member, load_tag};
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::codegen::cranelift::value_locals::scalar_type;
 use crate::error::CodegenError;
 use crate::mir::symbol::{Symbol, ThunkKind};
-use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
+use crate::mir::type_facts::{FieldRepr, LayoutShape, ScalarKind, ValueLayout};
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature, Value};
 use cranelift_codegen::isa::TargetIsa;
@@ -64,7 +67,7 @@ fn define_thunk(
     ctx: &mut cranelift_codegen::Context,
     isa: &Arc<dyn TargetIsa>,
     (name, arity, result): (&str, usize, cl_types::Type),
-    body: impl FnOnce(&mut FunctionBuilder, &[Value]) -> Value,
+    body: impl FnOnce(&mut FunctionBuilder, &[Value]) -> Result<Value, CodegenError>,
 ) -> Result<(), CodegenError> {
     let ptr_type = isa.pointer_type();
     let mut sig = Signature::new(isa.default_call_conv());
@@ -85,7 +88,7 @@ fn define_thunk(
     builder.switch_to_block(entry);
     builder.seal_block(entry);
     let params = builder.block_params(entry).to_vec();
-    let answer = body(&mut builder, &params);
+    let answer = body(&mut builder, &params)?;
     builder.ins().return_(&[answer]);
     builder.finalize(isa.frontend_config());
     crate::codegen::cranelift::define_function(module, func_id, ctx)
@@ -97,7 +100,11 @@ fn define_thunk(
 /// The hash of the value at `address`, laid out as `layout`: every scalar
 /// member mixed in order, a float as the number it holds so `-0.0` and `0.0`
 /// hash alike. Padding is never read.
-fn hash_value(builder: &mut FunctionBuilder, address: Value, layout: &ValueLayout) -> Value {
+fn hash_value(
+    builder: &mut FunctionBuilder,
+    address: Value,
+    layout: &ValueLayout,
+) -> Result<Value, CodegenError> {
     let start = builder
         .ins()
         .iconst(cl_types::I64, layout.fields.len() as i64);
@@ -112,33 +119,43 @@ fn mix_members(
     layout: &ValueLayout,
     offset: u32,
     hash: Value,
-) -> Value {
-    if layout.is_optional() {
-        return mix_optional(builder, address, layout, offset, hash);
+) -> Result<Value, CodegenError> {
+    match &layout.shape {
+        LayoutShape::Optional => mix_optional(builder, address, layout, offset, hash),
+        LayoutShape::Enum { variants } => {
+            let value = HeldEnum {
+                address,
+                layout,
+                offset,
+            };
+            mix_enum(builder, value, variants, hash)
+        }
+        LayoutShape::Record => layout.fields.iter().try_fold(hash, |hash, field| {
+            mix_member(builder, address, (offset + field.offset, &field.repr), hash)
+        }),
     }
-    layout.fields.iter().fold(hash, |hash, field| {
-        mix_member(builder, address, field, offset, hash)
-    })
 }
 
-/// `hash` with member `field` of the value at `offset` from `address` mixed
-/// into it. A tag is no member of its own: only an optional's layout holds
-/// one, mixed in with its payload.
+/// `hash` with the member `repr` at `at` from `address` mixed into it. A tag
+/// is no member of its own: only an optional's layout holds one, mixed in with
+/// its payload. An enum's payload column says nothing without the tag naming
+/// its variant, and is mixed in only through its enum.
 fn mix_member(
     builder: &mut FunctionBuilder,
     address: Value,
-    field: &ValueField,
-    offset: u32,
+    (at, repr): (u32, &FieldRepr),
     hash: Value,
-) -> Value {
-    let at = offset + field.offset;
-    match &field.repr {
+) -> Result<Value, CodegenError> {
+    match repr {
         FieldRepr::Scalar(scalar) => {
             let word = scalar_word(builder, address, at, *scalar);
-            mix_word(builder, hash, word)
+            Ok(mix_word(builder, hash, word))
         }
         FieldRepr::Value(inner) => mix_members(builder, address, inner, at, hash),
-        FieldRepr::OptionTag => hash,
+        FieldRepr::OptionTag => Ok(hash),
+        FieldRepr::Overlay(_) => Err(CodegenError::Internal(
+            "an enum's payload column is hashed apart from its tag".to_string(),
+        )),
     }
 }
 
@@ -151,9 +168,9 @@ fn mix_optional(
     layout: &ValueLayout,
     offset: u32,
     hash: Value,
-) -> Value {
+) -> Result<Value, CodegenError> {
     let (Some(tag), Some(payload)) = (layout.fields.first(), layout.projected_field(0)) else {
-        return hash;
+        return Ok(hash);
     };
     let presence = builder.ins().load(
         cl_types::I8,
@@ -163,8 +180,50 @@ fn mix_optional(
     );
     let tag_word = builder.ins().uextend(cl_types::I64, presence);
     let with_tag = mix_word(builder, hash, tag_word);
-    let with_payload = mix_member(builder, address, payload, offset, with_tag);
-    builder.ins().select(presence, with_payload, with_tag)
+    let payload = (offset + payload.offset, &payload.repr);
+    let with_payload = mix_member(builder, address, payload, with_tag)?;
+    Ok(builder.ins().select(presence, with_payload, with_tag))
+}
+
+/// An enum held as its bytes: where they start, how they are laid out, and
+/// the offset of the enum inside them.
+#[derive(Clone, Copy)]
+struct HeldEnum<'l> {
+    address: Value,
+    layout: &'l ValueLayout,
+    offset: u32,
+}
+
+/// `hash` with the enum `value` mixed into it: its tag, then the fields of
+/// the variant the tag names, so two values of one variant with equal fields
+/// hash alike whatever the other columns hold. `variants` lists each
+/// variant's members, as the enum's layout shape does.
+fn mix_enum(
+    builder: &mut FunctionBuilder,
+    value: HeldEnum,
+    variants: &[Vec<usize>],
+    hash: Value,
+) -> Result<Value, CodegenError> {
+    let HeldEnum {
+        address,
+        layout,
+        offset,
+    } = value;
+    let tag = load_tag(builder, address, layout, offset)?;
+    let with_tag = mix_word(builder, hash, tag);
+    let mut mixed = with_tag;
+    for (discriminant, members) in variants.iter().enumerate() {
+        let mut variant_hash = with_tag;
+        for (position, &member) in members.iter().enumerate() {
+            let (at, repr) = column_member(layout, position, member)?;
+            variant_hash = mix_member(builder, address, (offset + at, repr), variant_hash)?;
+        }
+        let is_variant = builder
+            .ins()
+            .icmp_imm_s(IntCC::Equal, tag, discriminant as i64);
+        mixed = builder.ins().select(is_variant, variant_hash, mixed);
+    }
+    Ok(mixed)
 }
 
 /// `hash` with `word` mixed into it.

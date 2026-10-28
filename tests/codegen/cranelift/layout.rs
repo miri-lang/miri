@@ -687,12 +687,17 @@ fn test_enum_payload_fields_are_pointer_typed() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
 
-    let enum_def = make_enum(vec![("Val", vec![TypeKind::I8, TypeKind::Boolean])]);
+    // The string payload keeps the enum a counted allocation.
+    let enum_def = make_enum(vec![
+        ("Val", vec![TypeKind::I8, TypeKind::Boolean]),
+        ("Text", vec![TypeKind::String]),
+    ]);
     type_defs.insert("E".to_string(), TypeDefinition::Enum(enum_def));
 
     let enum_kind = TypeKind::Custom("E".to_string(), None);
 
-    // Even though the actual types are I8 and Boolean, enum payload uses ptr-sized slots
+    // Even though the actual types are I8 and Boolean, a counted enum's
+    // payload uses ptr-sized slots
     let (_, ty1) = field_layout(&enum_kind, 1, LayoutScope::program(&type_defs), ptr)
         .expect("the field has a layout");
     let (_, ty2) = field_layout(&enum_kind, 2, LayoutScope::program(&type_defs), ptr)
@@ -1042,12 +1047,15 @@ fn test_enum_layout_with_32bit_pointers() {
     // 32-bit: discriminant (4) + 1 field (4) = 8
     assert_eq!(aggregate_size(&kind, &type_defs, ptr32), 8);
 
-    let (disc_off, _) = field_layout(&kind, 0, LayoutScope::program(&type_defs), ptr32)
-        .expect("the field has a layout");
-    let (payload_off, _) = field_layout(&kind, 1, LayoutScope::program(&type_defs), ptr32)
-        .expect("the field has a layout");
-    assert_eq!(disc_off, 0);
-    assert_eq!(payload_off, 4);
+    // The columns a counted enum is laid out in follow the pointer width. An
+    // enum held as its bytes is laid out by the value-class authority, whose
+    // word is the host's, so the columns are read here directly.
+    let Some(TypeDefinition::Enum(enum_def)) = type_defs.get("Opt") else {
+        panic!("the enum is defined");
+    };
+    let layout = enum_payload_layout(enum_def, None, LayoutScope::program(&type_defs), ptr32);
+    let offsets: Vec<i32> = layout.columns.iter().map(|column| column.offset).collect();
+    assert_eq!(offsets, vec![0, 4]);
 }
 
 /// A class definition carrying `fields`, extending `base` when one is named.
@@ -1239,6 +1247,7 @@ fn built_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> (Vec<(i32, Member)>,
                 FieldRepr::Scalar(scalar) => Member::Word(scalar_type(*scalar)),
                 FieldRepr::Value(inner) => Member::Inline(inner.clone()),
                 FieldRepr::OptionTag => panic!("no struct or tuple field is an optional's tag"),
+                FieldRepr::Overlay(_) => panic!("no struct or tuple field is an enum's column"),
             };
             (field.offset as i32, member)
         })
@@ -1431,4 +1440,73 @@ fn only_a_struct_tuple_or_vector_has_an_aggregate_layout() {
             "{kind:?} is not laid out as a struct or tuple"
         );
     }
+}
+
+/// An enum held as its bytes places its tag and each payload position where
+/// [`enum_payload_layout`] puts that column, so a value read in place and one
+/// built into a counted holder agree on every offset.
+#[test]
+fn test_held_enum_offsets_are_the_enum_columns() {
+    let pair = make_struct(vec![("small", TypeKind::I8), ("whole", TypeKind::I32)]);
+    let enums = [
+        make_enum(vec![("North", vec![]), ("South", vec![])]),
+        make_enum(vec![
+            ("Circle", vec![TypeKind::Float]),
+            ("Rect", vec![TypeKind::Float, TypeKind::Float]),
+        ]),
+        make_enum(vec![
+            ("Big", vec![TypeKind::I128, TypeKind::Int]),
+            ("Small", vec![TypeKind::Int, TypeKind::Int, TypeKind::Int]),
+        ]),
+        make_enum(vec![
+            ("Flag", vec![TypeKind::Boolean, TypeKind::F32]),
+            ("Both", vec![TypeKind::Custom("Pair".to_string(), None)]),
+            ("Byte", vec![TypeKind::U8, TypeKind::I16, TypeKind::Int]),
+        ]),
+    ];
+    for enum_def in enums {
+        let type_defs = HashMap::from([
+            ("Pair".to_string(), TypeDefinition::Struct(pair.clone())),
+            ("E".to_string(), TypeDefinition::Enum(enum_def.clone())),
+        ]);
+        let scope = LayoutScope::program(&type_defs);
+        let kind = TypeKind::Custom("E".to_string(), None);
+        let held = held_value_layout(&kind, scope).expect("the enum is held as its bytes");
+        let columns = enum_payload_layout(&enum_def, None, scope, ptr_ty());
+        let held_offsets: Vec<i32> = held.fields.iter().map(|f| f.offset as i32).collect();
+        let column_offsets: Vec<i32> = columns.columns.iter().map(|c| c.offset).collect();
+        assert_eq!(held_offsets, column_offsets, "offsets of {enum_def:?}");
+        assert_eq!(held.size, columns.size, "size of {enum_def:?}");
+    }
+}
+
+/// A held enum's payload column whose variants all store one member is read
+/// as that member, a column of several scalars as a word a reader narrows to
+/// its binding, and a column overlaying a held value with other members is
+/// refused rather than read as a word.
+#[test]
+fn test_held_enum_columns_are_read_as_their_members() {
+    let ptr = ptr_ty();
+    let pair = make_struct(vec![("small", TypeKind::I8), ("whole", TypeKind::I32)]);
+    let enum_def = make_enum(vec![
+        (
+            "Both",
+            vec![TypeKind::I8, TypeKind::Custom("Pair".to_string(), None)],
+        ),
+        (
+            "Byte",
+            vec![TypeKind::Int, TypeKind::Int, TypeKind::Boolean],
+        ),
+        ("Flag", vec![TypeKind::Float]),
+    ]);
+    let type_defs = HashMap::from([
+        ("Pair".to_string(), TypeDefinition::Struct(pair)),
+        ("E".to_string(), TypeDefinition::Enum(enum_def)),
+    ]);
+    let scope = LayoutScope::program(&type_defs);
+    let kind = TypeKind::Custom("E".to_string(), None);
+    let member = |index| field_layout(&kind, index, scope, ptr).map(|(_, member)| member);
+    assert!(matches!(member(1), Ok(Member::Word(ty)) if ty == ptr));
+    assert!(member(2).is_err());
+    assert!(matches!(member(3), Ok(Member::Word(ty)) if ty == types::I8));
 }

@@ -246,7 +246,7 @@ impl FunctionTranslator<'_> {
             builder,
             ctx,
             build.address,
-            payload,
+            (payload.offset, &payload.repr),
             operand,
             locals,
             type_ctx,

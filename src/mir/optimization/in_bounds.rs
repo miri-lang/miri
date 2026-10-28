@@ -10,8 +10,8 @@
 //!   to the result of a copy-on-write or a clone of `l`, which keep its
 //!   length (`runtime_fns::preserves_length`), and to a whole-local copy;
 //!   lost when `n` or `l` is given another value, their storage ends, `l` is
-//!   released, or a call not listed by
-//!   `runtime_fns::leaves_collection_headers_unchanged` runs;
+//!   released, or a call runs that
+//!   `analysis::header_reach::runtime_call_leaves_headers` does not clear;
 //! - `i` is in bounds of `l` — made on the edge a `switchInt(c)` takes when
 //!   `c = Lt(i, n)` holds, if `c`, `i` and `n` keep their values from the
 //!   comparison to the switch, `n` holds the length of `l`, and `i` is never
@@ -41,13 +41,14 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{leaves_collection_headers_unchanged, preserves_length};
+use crate::runtime_fns::preserves_length;
 
 /// Whether integer `+`, `-` and `*` stop the program on overflow rather than
 /// wrap. Code generation emits them overflow-checked at every optimization
@@ -379,9 +380,7 @@ impl<'a> Flow<'a> {
         } else {
             None
         };
-        if !name
-            .is_some_and(|name| leaves_collection_headers_unchanged(name) || preserves_length(name))
-        {
+        if !name.is_some_and(|name| runtime_call_leaves_headers(self.body, name, args)) {
             state.clear();
         }
         if !destination.projection.is_empty() {

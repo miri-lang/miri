@@ -19,7 +19,9 @@ use crate::codegen::cranelift::value_locals::copy_value;
 use crate::error::CodegenError;
 use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
-use crate::mir::type_facts::{FieldRepr, StructDefinition, TypeDefinition, ValueLayout};
+use crate::mir::type_facts::{
+    FieldRepr, LayoutShape, StructDefinition, TypeDefinition, ValueLayout,
+};
 use crate::mir::{
     AggregateKind, BinOp, Constant, FunctionConstant, Local, MathIntrinsic, Operand, Place, Rvalue,
     UnOp,
@@ -312,9 +314,7 @@ impl<'a> FunctionTranslator<'a> {
         };
         let lhs = Self::value_operand_address(builder, ctx, lhs, locals, type_ctx, None)?;
         let rhs = Self::value_operand_address(builder, ctx, rhs, locals, type_ctx, None)?;
-        Ok(Some(Self::held_value_equality(
-            builder, lhs, rhs, &layout, 0,
-        )))
+        Self::held_value_equality(builder, lhs, rhs, &layout, 0).map(Some)
     }
 
     /// Compare an unsigned and a signed integer by the numbers they hold:
@@ -3178,9 +3178,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let tuple_type = TypeKind::Tuple(element_exprs.to_vec());
         if let Some(layout) = type_ctx.value_layout(&tuple_type) {
-            return Ok(Self::held_value_equality(
-                builder, lhs_ptr, rhs_ptr, &layout, 0,
-            ));
+            return Self::held_value_equality(builder, lhs_ptr, rhs_ptr, &layout, 0);
         }
 
         // Start with true (all fields equal so far)
@@ -3188,7 +3186,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for i in 0..element_exprs.len() {
             let (offset, member) = field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
-            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member);
+            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member)?;
             result = builder.ins().band(result, field_eq);
         }
 
@@ -3198,21 +3196,27 @@ impl<'a> FunctionTranslator<'a> {
     /// Whether member `member` at `offset` of the two aggregates at `lhs` and
     /// `rhs` is equal: a word compared as one, a value held inline compared
     /// member by member.
+    ///
+    /// TODO: a word member that is a counted value compares the two
+    /// addresses, not the values: `(Named.Text(\"a\"), 1) == (Named.Text(\"a\"), 1)`
+    /// is false for an enum carrying a string, and an enum's own `equals` is
+    /// never called. A counted member needs its type's `equals` called here,
+    /// the way a struct's derived `==` calls it.
     fn member_equality(
         builder: &mut FunctionBuilder,
         (lhs, rhs): (Value, Value),
         offset: i32,
         member: &Member,
-    ) -> Value {
+    ) -> Result<Value, CodegenError> {
         match member {
             Member::Word(ty) => {
                 let left = builder.ins().load(*ty, MemFlagsData::new(), lhs, offset);
                 let right = builder.ins().load(*ty, MemFlagsData::new(), rhs, offset);
-                if ty.is_float() {
+                Ok(if ty.is_float() {
                     builder.ins().fcmp(FloatCC::Equal, left, right)
                 } else {
                     builder.ins().icmp(IntCC::Equal, left, right)
-                }
+                })
             }
             Member::Inline(layout) => {
                 let lhs = builder.ins().iadd_imm_s(lhs, i64::from(offset));
@@ -3226,50 +3230,61 @@ impl<'a> FunctionTranslator<'a> {
     /// out as `layout` from `offset` on, are equal: every scalar compared as
     /// `==` compares it — a float as a number, so `-0.0` equals `0.0` and NaN
     /// equals nothing — and every nested value member by member, never by
-    /// its bytes, whose padding is unspecified.
+    /// its bytes, whose padding is unspecified. An enum compares the fields
+    /// of the variant its tag names.
     pub(crate) fn held_value_equality(
         builder: &mut FunctionBuilder,
         lhs: Value,
         rhs: Value,
         layout: &ValueLayout,
         offset: u32,
-    ) -> Value {
-        if layout.is_optional() {
-            return Self::held_optional_equality(builder, lhs, rhs, layout, offset);
+    ) -> Result<Value, CodegenError> {
+        match &layout.shape {
+            LayoutShape::Optional => {
+                Self::held_optional_equality(builder, lhs, rhs, layout, offset)
+            }
+            LayoutShape::Enum { .. } => {
+                Self::held_enum_equality(builder, (lhs, rhs), layout, offset)
+            }
+            LayoutShape::Record => {
+                let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+                for field in &layout.fields {
+                    let member = (offset + field.offset, &field.repr);
+                    let field_eq = Self::held_member_equality(builder, (lhs, rhs), member)?;
+                    result = builder.ins().band(result, field_eq);
+                }
+                Ok(result)
+            }
         }
-        let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
-        for field in &layout.fields {
-            let field_eq = Self::held_member_equality(builder, (lhs, rhs), field, offset);
-            result = builder.ins().band(result, field_eq);
-        }
-        result
     }
 
-    /// Whether member `field` of the two values held as their bytes at `lhs`
-    /// and `rhs`, laid out from `offset` on, is equal. A tag is no member of
-    /// its own — only an optional's layout holds one, compared with its
-    /// payload — so it compares equal here.
-    fn held_member_equality(
+    /// Whether the member `repr` at `at` of the two values held as their
+    /// bytes at `lhs` and `rhs` is equal. A tag is no member of its own —
+    /// only an optional's layout holds one, compared with its payload — so it
+    /// compares equal here. An enum's payload column says nothing without the
+    /// tag naming its variant, and is compared only through its enum.
+    pub(crate) fn held_member_equality(
         builder: &mut FunctionBuilder,
         (lhs, rhs): (Value, Value),
-        field: &crate::mir::type_facts::ValueField,
-        offset: u32,
-    ) -> Value {
-        let at = offset + field.offset;
-        match &field.repr {
+        (at, repr): (u32, &FieldRepr),
+    ) -> Result<Value, CodegenError> {
+        match repr {
             FieldRepr::Scalar(scalar) => {
                 let ty = crate::codegen::cranelift::value_locals::scalar_type(*scalar);
                 let at = at as i32;
                 let left = builder.ins().load(ty, MemFlagsData::new(), lhs, at);
                 let right = builder.ins().load(ty, MemFlagsData::new(), rhs, at);
-                if ty.is_float() {
+                Ok(if ty.is_float() {
                     builder.ins().fcmp(FloatCC::Equal, left, right)
                 } else {
                     builder.ins().icmp(IntCC::Equal, left, right)
-                }
+                })
             }
             FieldRepr::Value(inner) => Self::held_value_equality(builder, lhs, rhs, inner, at),
-            FieldRepr::OptionTag => builder.ins().iconst(cranelift_codegen::ir::types::I8, 1),
+            FieldRepr::OptionTag => Ok(builder.ins().iconst(cranelift_codegen::ir::types::I8, 1)),
+            FieldRepr::Overlay(_) => Err(CodegenError::Internal(
+                "an enum's payload column is compared apart from its tag".to_string(),
+            )),
         }
     }
 
@@ -3282,9 +3297,9 @@ impl<'a> FunctionTranslator<'a> {
         rhs: Value,
         layout: &ValueLayout,
         offset: u32,
-    ) -> Value {
+    ) -> Result<Value, CodegenError> {
         let (Some(tag), Some(payload)) = (layout.fields.first(), layout.projected_field(0)) else {
-            return builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+            return Ok(builder.ins().iconst(cranelift_codegen::ir::types::I8, 1));
         };
         let at = (offset + tag.offset) as i32;
         let left = builder
@@ -3295,9 +3310,10 @@ impl<'a> FunctionTranslator<'a> {
             .load(cl_types::I8, MemFlagsData::new(), rhs, at);
         let same_presence = builder.ins().icmp(IntCC::Equal, left, right);
         let absent = builder.ins().icmp_imm_s(IntCC::Equal, left, 0);
-        let payloads_equal = Self::held_member_equality(builder, (lhs, rhs), payload, offset);
+        let payload = (offset + payload.offset, &payload.repr);
+        let payloads_equal = Self::held_member_equality(builder, (lhs, rhs), payload)?;
         let settled = builder.ins().bor(absent, payloads_equal);
-        builder.ins().band(same_presence, settled)
+        Ok(builder.ins().band(same_presence, settled))
     }
 
     /// Generate structural equality comparison for two struct instances.
@@ -3312,9 +3328,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         if let Some(layout) = type_ctx.value_layout(struct_type) {
-            return Ok(Self::held_value_equality(
-                builder, lhs_ptr, rhs_ptr, &layout, 0,
-            ));
+            return Self::held_value_equality(builder, lhs_ptr, rhs_ptr, &layout, 0);
         }
 
         // Start with true (all fields equal so far)
@@ -3322,7 +3336,7 @@ impl<'a> FunctionTranslator<'a> {
 
         for i in 0..def.fields.len() {
             let (offset, member) = field_layout(struct_type, i, type_ctx.layout_scope(), ptr_type)?;
-            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member);
+            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member)?;
             result = builder.ins().band(result, field_eq);
         }
 

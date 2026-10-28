@@ -22,9 +22,48 @@ fn assert_borrowing(code: &str, expected: &str, dup: usize, drop: usize) {
 
 /// `match code[pc]` reads its subject out of a list the body owns and does
 /// not change while the arms run, so the subject borrows the element: the four
-/// matches executed retain nothing.
+/// matches executed retain nothing. The variant carrying a string, never
+/// built, keeps `Instr` a counted allocation.
 #[test]
 fn test_match_on_an_element_of_a_local_list_takes_no_reference() {
+    assert_borrowing(
+        r#"
+use system.io
+use system.collections.list
+
+enum Instr
+    Add(int)
+    Twice
+    Halt
+    Note(String)
+
+fn run() int
+    let code = List([Instr.Add(3), Instr.Twice, Instr.Add(4), Instr.Halt])
+    var acc = 0
+    var pc = 0
+    var running = true
+    while running
+        match code[pc]
+            Instr.Add(v): acc = acc + v
+            Instr.Twice: acc = acc * 2
+            Instr.Halt: running = false
+            Instr.Note(_): acc = acc
+        pc += 1
+    acc
+
+println(f"{run()}")
+"#,
+        "10",
+        4,
+        15,
+    );
+}
+
+/// An enum of scalar payloads is held as its bytes inside the list, so
+/// building, matching and releasing its elements counts nothing: what is
+/// left is the list and the formatted output.
+#[test]
+fn test_match_on_an_element_held_as_its_bytes_counts_nothing() {
     assert_borrowing(
         r#"
 use system.io
@@ -51,8 +90,8 @@ fn run() int
 println(f"{run()}")
 "#,
         "10",
-        4,
-        15,
+        0,
+        3,
     );
 }
 

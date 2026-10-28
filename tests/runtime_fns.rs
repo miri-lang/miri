@@ -3,9 +3,9 @@
 
 use miri::ast::types::BuiltinCollectionKind;
 use miri::runtime_fns::{
-    cow_fn, is_copy_on_write, leaves_collection_headers_unchanged, only_reads_argument,
-    preserves_length, reads_reference_count, returns_unshared, rt, taken_argument_positions,
-    writes_in_place,
+    copies_collection, cow_fn, is_copy_on_write, leaves_collection_headers_unchanged,
+    only_reads_argument, preserves_length, reads_reference_count, returns_unshared, rt,
+    taken_argument_positions, writes_in_place,
 };
 
 #[test]
@@ -81,6 +81,29 @@ fn leaves_collection_headers_unchanged_names_only_calls_that_cannot_write_a_head
         assert!(
             !leaves_collection_headers_unchanged(writer),
             "{writer} may write a collection header"
+        );
+    }
+}
+
+/// The array and list copies hand back their argument or a fresh copy; the
+/// map and set copies, and every writer, are not among them.
+#[test]
+fn copies_collection_names_only_the_array_and_list_copies() {
+    for copy in [rt::LIST_COW, rt::LIST_CLONE, rt::ARRAY_COW, rt::ARRAY_CLONE] {
+        assert!(copies_collection(copy), "{copy} copies a collection");
+    }
+    for other in [
+        rt::MAP_COW,
+        rt::SET_COW,
+        rt::MAP_CLONE,
+        rt::SET_CLONE,
+        rt::LIST_PUSH,
+        rt::LIST_SET,
+        rt::RC_IS_SHARED,
+    ] {
+        assert!(
+            !copies_collection(other),
+            "{other} is not an array or list copy"
         );
     }
 }

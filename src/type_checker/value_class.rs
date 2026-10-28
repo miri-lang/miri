@@ -5,12 +5,17 @@
 //! bytes with no managed interior, a single word whose owner decides its
 //! treatment, or a reference-counted allocation.
 //!
-//! A struct, tuple or optional is a *bitwise value* when every field, element
-//! or payload — read at the arguments the type is written with and through
-//! every alias — is a scalar or itself a bitwise value, and the whole fits in
-//! [`AUTO_COPY_MAX_SIZE`] bytes. Its [`ValueLayout`] places each member at its
-//! natural alignment in declaration order, the way a C compiler lays out a
-//! struct, and nests a member value's layout inline.
+//! A struct, tuple, optional or enum is a *bitwise value* when every field,
+//! element or payload — read at the arguments the type is written with and
+//! through every alias — is a scalar or itself a bitwise value, and the whole
+//! fits in [`AUTO_COPY_MAX_SIZE`] bytes. Its [`ValueLayout`] places each member
+//! at its natural alignment in declaration order, the way a C compiler lays out
+//! a struct, and nests a member value's layout inline. An enum is its tag, one
+//! word, followed by one column per payload position that every variant
+//! storing a field there shares; an enum declaring a drop hook keeps its
+//! identity and is never bitwise, nor is one supplying its own `equals`,
+//! which a comparison of its bytes would bypass, and neither, for now, is a
+//! generic one.
 //!
 //! Type arguments are never substituted into a rewritten type. A definition's
 //! members are read in a frame binding its parameters to the arguments as
@@ -22,9 +27,12 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{
     vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, AUTO_COPY_MAX_SIZE,
-    OPTION_TYPE_NAME, RANGE_TYPE_NAME,
+    EQUALS_METHOD_NAME, OPTION_TYPE_NAME, RANGE_TYPE_NAME,
 };
-use crate::type_checker::context::{GenericDefinition, StructDefinition, TypeDefinition};
+use crate::type_checker::context::{
+    EnumDefinition, GenericDefinition, StructDefinition, TypeDefinition,
+};
+use crate::type_checker::utils::has_drop_hook;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -133,13 +141,34 @@ pub enum ValueClass {
     Managed,
 }
 
-/// The bytes of a bitwise value: its size, its alignment, and where each
-/// member sits, in declaration order.
+/// The bytes of a bitwise value: its size, its alignment, what kind of value
+/// it lays out, and where each member sits, in declaration order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ValueLayout {
     pub size: u32,
     pub align: u32,
+    pub shape: LayoutShape,
     pub fields: Vec<ValueField>,
+}
+
+/// What kind of value a [`ValueLayout`] lays out, which decides how a field
+/// projection numbers its members and how two values are compared.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LayoutShape {
+    /// A struct, tuple or range: each member numbered as it is laid out.
+    Record,
+    /// An optional: its presence tag, then its one member, the payload.
+    Optional,
+    /// An enum: its tag as member 0, then payload position `k` as member
+    /// `k + 1`, each a [`FieldRepr::Overlay`] column.
+    ///
+    /// `variants` holds, for each variant in discriminant order — the order
+    /// the definition keeps its variants in, sorted by name, not the order
+    /// they are declared in — which member of each column its fields are:
+    /// field `k` of the variant the tag `d` names is member `variants[d][k]`
+    /// of column `k + 1`. A column read alone does not say which variant
+    /// wrote it; the tag does.
+    Enum { variants: Vec<Vec<usize>> },
 }
 
 /// One member of a [`ValueLayout`] at its byte offset.
@@ -157,14 +186,26 @@ pub enum FieldRepr {
     Value(ValueLayout),
     /// An optional's one-byte presence tag: zero when absent.
     OptionTag,
+    /// One payload position of an enum: what each variant carrying a field
+    /// there stores in it, each distinct member once, in variant order. The
+    /// column is as wide and as aligned as the widest member, and never less
+    /// than a word, the column a reader of a counted enum loads a word from.
+    Overlay(Vec<FieldRepr>),
 }
 
 impl FieldRepr {
-    fn size_and_align(&self) -> (u32, u32) {
+    /// The bytes this member spans and the alignment it takes.
+    pub fn size_and_align(&self) -> (u32, u32) {
         match self {
             FieldRepr::Scalar(scalar) => (scalar.size(), scalar.size()),
             FieldRepr::Value(layout) => (layout.size, layout.align),
             FieldRepr::OptionTag => (1, 1),
+            FieldRepr::Overlay(members) => members.iter().map(FieldRepr::size_and_align).fold(
+                (WORD_BYTES, WORD_BYTES),
+                |(size, align), (member_size, member_align)| {
+                    (size.max(member_size), align.max(member_align))
+                },
+            ),
         }
     }
 }
@@ -172,8 +213,7 @@ impl FieldRepr {
 /// The value class of `kind`, decided against `scope`.
 ///
 /// Inline vectors keep the representation they have today, a reference-counted
-/// allocation of their own, and so answer `Managed`; an enum answers `Managed`
-/// whatever its payloads.
+/// allocation of their own, and so answer `Managed`.
 pub fn value_class(kind: &TypeKind, scope: LayoutScope<'_>) -> ValueClass {
     let mut classifier = Classifier {
         definitions: scope.definitions,
@@ -200,7 +240,8 @@ pub fn is_absent_placeholder(kind: &TypeKind) -> bool {
 /// `scope`, or `None` when it is held as one word.
 ///
 /// This is the one place that decides which bitwise values leave the heap. A
-/// struct, tuple or optional the authority calls bitwise is held as its bytes:
+/// struct, tuple, optional or enum the authority calls bitwise is held as its
+/// bytes:
 /// in a frame's stack slot, inline in the class, struct or collection holding
 /// it. An optional held so is its presence tag with the payload beside it. A
 /// value of no bytes has nothing to hold.
@@ -434,6 +475,15 @@ impl<'a> Classifier<'a> {
             Some(TypeDefinition::Struct(definition)) => {
                 self.classify_struct(definition, args, names)
             }
+            Some(TypeDefinition::Enum(definition)) => {
+                if has_drop_hook(name, self.definitions)
+                    || supplies_own_equality(definition)
+                    || is_generic_enum(definition)
+                {
+                    return Verdict::Pointer;
+                }
+                self.classify_enum(definition, args, names)
+            }
             Some(TypeDefinition::Alias(alias)) => {
                 let frame = bind(alias.generics.as_deref(), args, names);
                 self.classify(&alias.template.kind, Names::Definition(&frame))
@@ -441,10 +491,45 @@ impl<'a> Classifier<'a> {
             Some(TypeDefinition::Generic(_)) => {
                 Verdict::Class(ValueClass::Word(WordRole::Parameter))
             }
-            Some(TypeDefinition::Class(_) | TypeDefinition::Enum(_) | TypeDefinition::Trait(_)) => {
-                Verdict::Pointer
-            }
+            Some(TypeDefinition::Class(_) | TypeDefinition::Trait(_)) => Verdict::Pointer,
             None => Verdict::managed(),
+        }
+    }
+
+    /// An enum without a drop hook: bitwise when every payload of every
+    /// variant is, laid out as its tag and then one column per payload
+    /// position, each overlaying what the variants store there.
+    fn classify_enum(
+        &mut self,
+        definition: &'a EnumDefinition,
+        args: Option<&'a [Expression]>,
+        names: Names<'_, 'a>,
+    ) -> Verdict {
+        let frame = bind(definition.generics.as_deref(), args, names);
+        let mut columns: Vec<Vec<FieldRepr>> = Vec::new();
+        let mut variants = Vec::with_capacity(definition.variants.len());
+        for payloads in definition.variants.values() {
+            let mut members = Vec::with_capacity(payloads.len());
+            for (position, payload) in payloads.iter().enumerate() {
+                let argument = Argument::plain(payload, Names::Definition(&frame));
+                let Some(repr) = self.member_repr(argument) else {
+                    return Verdict::Pointer;
+                };
+                if columns.len() == position {
+                    columns.push(Vec::new());
+                }
+                members.push(overlay_member(&mut columns[position], repr));
+            }
+            variants.push(members);
+        }
+        let mut layout = LayoutBuilder::new(LayoutShape::Enum { variants });
+        layout.push(FieldRepr::Scalar(ScalarKind::Signed(WORD_BYTES)));
+        for members in columns {
+            layout.push(FieldRepr::Overlay(members));
+        }
+        match layout.finish() {
+            Some(layout) => Verdict::Class(ValueClass::Bitwise(layout)),
+            None => Verdict::Pointer,
         }
     }
 
@@ -474,7 +559,7 @@ impl<'a> Classifier<'a> {
     /// A struct or tuple: bitwise when every member is, otherwise its own
     /// allocation. `None` marks a member that is not a type.
     fn classify_aggregate(&mut self, members: Vec<Option<Argument<'_, 'a>>>) -> Verdict {
-        let mut layout = LayoutBuilder::default();
+        let mut layout = LayoutBuilder::new(LayoutShape::Record);
         for member in members {
             let Some(repr) = member.and_then(|argument| self.member_repr(argument)) else {
                 return Verdict::Pointer;
@@ -499,7 +584,7 @@ impl<'a> Classifier<'a> {
     /// A range over `element`: built as its start, its end and whether the
     /// end is included, a tuple of those three.
     fn classify_range(&mut self, element: Argument<'_, 'a>) -> Verdict {
-        let mut layout = LayoutBuilder::default();
+        let mut layout = LayoutBuilder::new(LayoutShape::Record);
         for _ in 0..2 {
             let Some(repr) = self.member_repr(element) else {
                 return Verdict::Pointer;
@@ -541,12 +626,50 @@ impl<'a> Classifier<'a> {
                 | ValueClass::Managed,
             ) => return Verdict::managed(),
         };
-        let mut layout = LayoutBuilder::default();
+        let mut layout = LayoutBuilder::new(LayoutShape::Optional);
         layout.push(FieldRepr::OptionTag);
         layout.push(payload_repr);
         match layout.finish() {
             Some(layout) => Verdict::Class(ValueClass::Bitwise(layout)),
             None => Verdict::managed(),
+        }
+    }
+}
+
+/// Whether `definition` declares type parameters.
+///
+/// TODO: a generic enum stays a counted allocation at every instantiation.
+/// Its methods are not lowered at the instantiation their callers hold: a
+/// `static fn` returning `Self` is one body shared by every instantiation,
+/// whose result leaves the parameter open, and the enum's own name written
+/// bare in a method's signature is not substituted with the instantiation the
+/// way `Self` is. Holding `E<int>` as its bytes while those bodies hand over
+/// a counted `E<T>` would meet one value in two representations. Both
+/// lowering seams need the method bodies of a generic enum lowered at each
+/// instantiation before this rule can go.
+fn is_generic_enum(definition: &EnumDefinition) -> bool {
+    definition
+        .generics
+        .as_ref()
+        .is_some_and(|generics| !generics.is_empty())
+}
+
+/// Whether `definition` supplies its own `equals`, the method `==` on the
+/// enum then calls rather than comparing payloads. Such an enum decides alone what equal means, which a
+/// comparison of its bytes would bypass, so it stays counted and every `==`
+/// reaching it calls that `equals`.
+fn supplies_own_equality(definition: &EnumDefinition) -> bool {
+    definition.methods.contains_key(EQUALS_METHOD_NAME)
+}
+
+/// The index of `repr` among the members of an enum column, added when no
+/// variant stored it there before.
+fn overlay_member(column: &mut Vec<FieldRepr>, repr: FieldRepr) -> usize {
+    match column.iter().position(|member| *member == repr) {
+        Some(index) => index,
+        None => {
+            column.push(repr);
+            column.len() - 1
         }
     }
 }
@@ -661,42 +784,39 @@ impl ValueLayout {
     /// Whether this is the layout of an optional: its presence tag, then its
     /// payload.
     pub fn is_optional(&self) -> bool {
-        matches!(
-            self.fields.first().map(|field| &field.repr),
-            Some(FieldRepr::OptionTag)
-        )
+        self.shape == LayoutShape::Optional
     }
 
     /// The member a field projection numbered `index` reaches.
     ///
-    /// A struct's or tuple's members are numbered as they are laid out. An
-    /// optional's tag is no member of its own: its one member, numbered 0, is
-    /// the payload beside the tag.
+    /// A struct's or tuple's members are numbered as they are laid out, and
+    /// so are an enum's: its tag, then its payload columns. An optional's tag
+    /// is no member of its own: its one member, numbered 0, is the payload
+    /// beside the tag.
     pub fn projected_field(&self, index: usize) -> Option<&ValueField> {
-        if self.is_optional() {
-            return (index == 0).then(|| self.fields.get(1)).flatten();
+        match self.shape {
+            LayoutShape::Optional => (index == 0).then(|| self.fields.get(1)).flatten(),
+            LayoutShape::Record | LayoutShape::Enum { .. } => self.fields.get(index),
         }
-        self.fields.get(index)
     }
 
     /// Whether two values laid out this way are equal exactly when their
     /// bytes are: no member is a float, whose `-0.0` and `0.0` are equal and
-    /// whose NaN equals nothing, and no byte is padding, whose contents are
-    /// unspecified.
+    /// whose NaN equals nothing, no byte is padding, whose contents are
+    /// unspecified, and no member is an enum's payload column, whose bytes
+    /// past the field its variant wrote are no part of the value.
     pub fn is_compared_by_bytes(&self) -> bool {
-        !self.holds_float() && self.member_bytes() == self.size
+        !self.holds_float() && !self.holds_overlay() && self.member_bytes() == self.size
     }
 
     /// Whether a float appears anywhere in this layout.
     fn holds_float(&self) -> bool {
-        self.fields.iter().any(|field| match &field.repr {
-            FieldRepr::Scalar(ScalarKind::Float(_)) => true,
-            FieldRepr::Value(inner) => inner.holds_float(),
-            FieldRepr::Scalar(
-                ScalarKind::Signed(_) | ScalarKind::Unsigned(_) | ScalarKind::Boolean,
-            )
-            | FieldRepr::OptionTag => false,
-        })
+        self.fields.iter().any(|field| field.repr.holds_float())
+    }
+
+    /// Whether an enum payload column appears anywhere in this layout.
+    fn holds_overlay(&self) -> bool {
+        self.fields.iter().any(|field| field.repr.holds_overlay())
     }
 
     /// How many of this layout's bytes are members rather than padding.
@@ -705,7 +825,9 @@ impl ValueLayout {
             .iter()
             .map(|field| match &field.repr {
                 FieldRepr::Value(inner) => inner.member_bytes(),
-                FieldRepr::Scalar(_) | FieldRepr::OptionTag => field.repr.size_and_align().0,
+                FieldRepr::Scalar(_) | FieldRepr::OptionTag | FieldRepr::Overlay(_) => {
+                    field.repr.size_and_align().0
+                }
             })
             .sum()
     }
@@ -715,7 +837,32 @@ impl ValueLayout {
         Self {
             size: 0,
             align: 1,
+            shape: LayoutShape::Record,
             fields: Vec::new(),
+        }
+    }
+}
+
+impl FieldRepr {
+    /// Whether a float appears anywhere in this member.
+    fn holds_float(&self) -> bool {
+        match self {
+            FieldRepr::Scalar(ScalarKind::Float(_)) => true,
+            FieldRepr::Value(inner) => inner.holds_float(),
+            FieldRepr::Overlay(members) => members.iter().any(FieldRepr::holds_float),
+            FieldRepr::Scalar(
+                ScalarKind::Signed(_) | ScalarKind::Unsigned(_) | ScalarKind::Boolean,
+            )
+            | FieldRepr::OptionTag => false,
+        }
+    }
+
+    /// Whether this member is, or nests, an enum payload column.
+    fn holds_overlay(&self) -> bool {
+        match self {
+            FieldRepr::Overlay(_) => true,
+            FieldRepr::Value(inner) => inner.holds_overlay(),
+            FieldRepr::Scalar(_) | FieldRepr::OptionTag => false,
         }
     }
 }
@@ -724,21 +871,22 @@ impl ValueLayout {
 struct LayoutBuilder {
     end: u32,
     align: u32,
+    shape: LayoutShape,
     fields: Vec<ValueField>,
 }
 
-impl Default for LayoutBuilder {
-    fn default() -> Self {
+impl LayoutBuilder {
+    /// A builder of a value of `shape` with no members yet.
+    fn new(shape: LayoutShape) -> Self {
         let empty = ValueLayout::empty();
         Self {
             end: empty.size,
             align: empty.align,
+            shape,
             fields: empty.fields,
         }
     }
-}
 
-impl LayoutBuilder {
     fn push(&mut self, repr: FieldRepr) {
         let (size, align) = repr.size_and_align();
         let offset = align_up(self.end, align);
@@ -754,6 +902,7 @@ impl LayoutBuilder {
         fits.then_some(ValueLayout {
             size,
             align: self.align,
+            shape: self.shape,
             fields: self.fields,
         })
     }

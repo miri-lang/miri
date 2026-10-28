@@ -125,7 +125,7 @@ impl Slot {
 fn value_member(
     layout: &ValueLayout,
     index: usize,
-    kind: &TypeKind,
+    (kind, ptr_ty): (&TypeKind, CraneliftType),
 ) -> Result<(i32, Member), CodegenError> {
     let field = layout.projected_field(index).ok_or_else(|| {
         CodegenError::Internal(format!(
@@ -133,18 +133,46 @@ fn value_member(
             layout.fields.len()
         ))
     })?;
-    let member = match &field.repr {
-        FieldRepr::Scalar(scalar) => Member::Word(
-            crate::codegen::cranelift::value_locals::scalar_type(*scalar),
-        ),
-        FieldRepr::Value(inner) => Member::Inline(inner.clone()),
-        FieldRepr::OptionTag => {
-            return Err(CodegenError::Internal(format!(
-                "field {index} of `{kind}` is an optional's tag, which no projection reaches"
-            )))
-        }
-    };
+    let member = held_member(&field.repr, (kind, ptr_ty), index)?;
     Ok((field.offset as i32, member))
+}
+
+/// What the member `repr`, numbered `index` in a value of `kind`, is read as.
+///
+/// An enum's payload column whose variants all store one member is that
+/// member. A column of several scalars is a pointer-sized word, as a counted
+/// enum's is: a reader loads it at the width of the binding it fills. A
+/// column overlaying a value held inline with other members has no one
+/// member to answer, and no reader reaches it here.
+fn held_member(
+    repr: &FieldRepr,
+    (kind, ptr_ty): (&TypeKind, CraneliftType),
+    index: usize,
+) -> Result<Member, CodegenError> {
+    match repr {
+        FieldRepr::Scalar(scalar) => Ok(Member::Word(
+            crate::codegen::cranelift::value_locals::scalar_type(*scalar),
+        )),
+        FieldRepr::Value(inner) => Ok(Member::Inline(inner.clone())),
+        FieldRepr::OptionTag => Err(CodegenError::Internal(format!(
+            "field {index} of `{kind}` is an optional's tag, which no projection reaches"
+        ))),
+        FieldRepr::Overlay(members) => {
+            if let [sole] = members.as_slice() {
+                return held_member(sole, (kind, ptr_ty), index);
+            }
+            if members
+                .iter()
+                .any(|member| matches!(member, FieldRepr::Value(_)))
+            {
+                return Err(CodegenError::Internal(format!(
+                    "field {index} of `{kind}` overlays a value held inline with other members, \
+                     which no single word reads"
+                )));
+            }
+            Ok(Member::Word(ptr_ty))
+        }
+    }
 }
 
 /// Compute byte offset and Cranelift type for a field within an aggregate.
@@ -160,7 +188,7 @@ pub fn field_layout(
 ) -> Result<(i32, Member), CodegenError> {
     let ptr_size = ptr_ty.bytes() as i32;
     if let Some(layout) = held_value_layout(local_type, scope) {
-        return value_member(&layout, field_idx, local_type);
+        return value_member(&layout, field_idx, (local_type, ptr_ty));
     }
     match local_type {
         TypeKind::Tuple(element_exprs) => placed_field(

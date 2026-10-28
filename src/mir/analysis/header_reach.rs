@@ -29,21 +29,26 @@
 //! borrowed, not a parameter it borrows, not captured, not gpu-resident, not
 //! address-taken, and each of its definitions hands it a reference — and the
 //! call names none of its aliases, nor a borrow of one that may hold such a
-//! collection. A call into the runtime leaves every header unchanged only
-//! when `runtime_fns::leaves_collection_headers_unchanged` lists it; a call
-//! through a vtable or a kernel launch is never known to.
+//! collection. A call into the runtime leaves every header unchanged when
+//! [`runtime_call_leaves_headers`] says so: the entry point is one
+//! `runtime_fns::leaves_collection_headers_unchanged` lists, or it copies an
+//! array or a list (`runtime_fns::copies_collection`) whose elements carry
+//! no `clone` method of the program's own. A call through a vtable or a
+//! kernel launch is never known to.
 
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::ast::gpu_wire::collection_element_kind;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::shape::constructor_parts;
 use crate::mir::place_type::PlaceTypes;
+use crate::mir::type_facts::TypeDefinition;
 use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
     TerminatorKind,
 };
-use crate::runtime_fns::leaves_collection_headers_unchanged;
+use crate::runtime_fns::{copies_collection, leaves_collection_headers_unchanged};
 
 /// Why a collection's local does not hold a reference of its own that only
 /// its aliases can reach, so a call to a function of the program may change
@@ -135,7 +140,7 @@ impl<'a> HeaderReach<'a> {
                 destination,
                 ..
             } => match func.called_runtime_name() {
-                Some(name) => leaves_collection_headers_unchanged(name),
+                Some(name) => runtime_call_leaves_headers(self.body, name, args),
                 None => {
                     let facts = self.facts();
                     facts.root.is_none()
@@ -146,6 +151,55 @@ impl<'a> HeaderReach<'a> {
             },
             TerminatorKind::VirtualCall { .. } | TerminatorKind::GpuLaunch { .. } => false,
         }
+    }
+}
+
+/// Whether a call in `body` to the runtime entry point `name`, handed
+/// `args`, leaves the header of every collection that exists before it as it
+/// found it.
+///
+/// Besides the entry points `leaves_collection_headers_unchanged` lists,
+/// that holds of a copy of an array or a list (`copies_collection`) whose
+/// elements run no code of the program when copied. Such a call writes only
+/// the place its result goes to, which a reader of the header checks like
+/// any other write of a local.
+pub fn runtime_call_leaves_headers(body: &Body, name: &str, args: &[Operand]) -> bool {
+    leaves_collection_headers_unchanged(name)
+        || (copies_collection(name)
+            && args
+                .first()
+                .is_some_and(|copied| copy_runs_no_program_code(body, copied)))
+}
+
+/// Whether copying the array or list `copied` names calls no `clone` method
+/// of the program: its element type is spelled out, and is a struct, an
+/// enum or a type whose spelling shows every part of it — never a class, a
+/// trait, a type parameter or anything else whose values may be instances
+/// of a class, the only kind of element a copy runs a `clone` method for.
+fn copy_runs_no_program_code(body: &Body, copied: &Operand) -> bool {
+    let Some(place) = copied.place().filter(|place| place.projection.is_empty()) else {
+        return false;
+    };
+    (body.local_decls.get(place.local.0))
+        .and_then(|decl| collection_element_kind(&decl.ty.kind))
+        .is_some_and(|element| !is_opaque(&element) || is_data_type(body, &element))
+}
+
+/// Whether `kind` names a struct or an enum: a copy calls the `clone` method
+/// of a class element only, never of one of these.
+fn is_data_type(body: &Body, kind: &TypeKind) -> bool {
+    let TypeKind::Custom(name, _) = kind else {
+        return false;
+    };
+    match body.rc_classifier.definitions().get(name) {
+        Some(TypeDefinition::Struct(_) | TypeDefinition::Enum(_)) => true,
+        Some(
+            TypeDefinition::Class(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => false,
     }
 }
 

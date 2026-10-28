@@ -5,6 +5,8 @@
 //!
 //! This module provides analysis passes that compute properties of the control flow graph:
 //!
+//! - **Copies read in place**: The copies of a value held as its bytes whose
+//!   every read can take its bytes from where they were copied from.
 //! - **Dominators**: Compute dominator trees and dominance frontiers for SSA construction
 //!   and loop detection. A block `A` dominates block `B` if every path from the entry
 //!   to `B` must pass through `A`.
@@ -17,6 +19,7 @@
 //!
 //! These analyses are foundational for optimization passes and SSA transformation.
 
+pub mod copies_read_in_place;
 pub mod dominators;
 pub mod header_reach;
 pub mod loops;

@@ -838,7 +838,9 @@ pub fn preserves_length(name: &str) -> bool {
 /// A loop whose calls all qualify may read a collection's header once before
 /// it starts. The list is an allow-list of calls that read a count or bump a
 /// statistic and reach no code that could grow, shrink, replace or release a
-/// collection; any call not named here is taken to write a header.
+/// collection; any call not named here is taken to write a header, unless it
+/// is one [`copies_collection`] names and the copy runs no code of the
+/// program (`mir::analysis::header_reach::runtime_call_leaves_headers`).
 pub fn leaves_collection_headers_unchanged(name: &str) -> bool {
     matches!(
         name,
@@ -847,6 +849,25 @@ pub fn leaves_collection_headers_unchanged(name: &str) -> bool {
             | rt::RC_STATS_DUP
             | rt::RC_STATS_FREE
             | rt::RC_STATS_COW_COPY
+    )
+}
+
+/// Whether `name` hands back the array or list it is given, or a fresh copy
+/// of it, and writes the header of no collection that already exists.
+///
+/// A copy-on-write entry point returns its argument untouched when nothing
+/// else holds it. Otherwise it, like a clone, reads the argument, allocates
+/// the copy and fills it, retaining every counted element; copy-on-write then
+/// takes one from the argument's count, which was above one, so the count
+/// never reaches zero and nothing is released or freed. The one thing such a
+/// call runs beyond the runtime is an element's own `clone` method, which a
+/// list or array of class instances calls on every element to copy it: code
+/// of the program that may reach any collection. The caller must rule that
+/// out from the element type before taking every other header as unchanged.
+pub fn copies_collection(name: &str) -> bool {
+    matches!(
+        name,
+        rt::LIST_COW | rt::ARRAY_COW | rt::LIST_CLONE | rt::ARRAY_CLONE
     )
 }
 

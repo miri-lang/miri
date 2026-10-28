@@ -1455,19 +1455,7 @@ fn estimated_type_size<'a>(
                     .map(|(_, ty, _)| estimated_type_size(&ty.kind, type_definitions, visited))
                     .sum(),
                 Some(TypeDefinition::Enum(enum_def)) => {
-                    // discriminant (8) + max payload size
-                    let max_payload: usize = enum_def
-                        .variants
-                        .values()
-                        .map(|fields| {
-                            fields
-                                .iter()
-                                .map(|ty| estimated_type_size(&ty.kind, type_definitions, visited))
-                                .sum::<usize>()
-                        })
-                        .max()
-                        .unwrap_or(0);
-                    8 + max_payload
+                    estimated_enum_size(kind, enum_def, type_definitions, visited)
                 }
                 _ => 8,
             };
@@ -1486,6 +1474,33 @@ fn estimated_type_size<'a>(
             .sum(),
         _ => 8,
     }
+}
+
+/// The byte size of an enum of `kind` for the auto-copy threshold: the size
+/// the value-class authority holds it in when it is held as its bytes, and
+/// otherwise its discriminant beside its largest payload.
+fn estimated_enum_size<'a>(
+    kind: &'a TypeKind,
+    enum_def: &'a crate::type_checker::context::EnumDefinition,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> usize {
+    let scope = LayoutScope::program(type_definitions);
+    if let Some(layout) = crate::type_checker::value_class::held_value_layout(kind, scope) {
+        return usize::try_from(layout.size).unwrap_or(usize::MAX);
+    }
+    let max_payload: usize = enum_def
+        .variants
+        .values()
+        .map(|fields| {
+            fields
+                .iter()
+                .map(|ty| estimated_type_size(&ty.kind, type_definitions, visited))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    8 + max_payload
 }
 
 impl TypeChecker {

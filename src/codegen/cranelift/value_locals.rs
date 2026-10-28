@@ -23,10 +23,14 @@
 //! holder's layout places it at.
 
 use crate::ast::types::{Type, TypeKind};
+use crate::codegen::cranelift::held_enums::{
+    collect_column_members, member_read_as, projected_column_value,
+};
 use crate::codegen::cranelift::inline_optionals::is_absent;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::value_abi::HeldResult;
 use crate::error::CodegenError;
+use crate::mir::analysis::copies_read_in_place::copies_read_in_place;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{AggregateKind, Body, Local, Operand, Place, PlaceElem, Rvalue};
 use cranelift_codegen::ir::immediates::Ieee16;
@@ -34,7 +38,7 @@ use cranelift_codegen::ir::{
     types as cl_types, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Value,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl<'a> FunctionTranslator<'a> {
     /// Give every value local that is not a parameter a stack slot of this
@@ -92,20 +96,34 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Read what `spot` reaches at `address`: a scalar is loaded, a whole
-    /// value is its address.
+    /// value is its address. An enum payload column whose variants store
+    /// different members is read as the member `expected`, the type it is
+    /// read into, names.
     pub(crate) fn read_value_spot(
         builder: &mut FunctionBuilder,
         address: Value,
         spot: ValueSpot,
-    ) -> Value {
-        match spot {
-            ValueSpot::Scalar { scalar, .. } => {
-                builder
-                    .ins()
-                    .load(scalar_type(scalar), MemFlagsData::new(), address, 0)
+        expected: Option<&Type>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, CodegenError> {
+        let scalar = match spot {
+            ValueSpot::Scalar { scalar, .. } => scalar,
+            ValueSpot::Value { .. } => return Ok(address),
+            ValueSpot::Column { members, .. } => {
+                match member_read_as(members, expected, type_ctx)? {
+                    FieldRepr::Scalar(scalar) => *scalar,
+                    FieldRepr::Value(_) => return Ok(address),
+                    FieldRepr::OptionTag | FieldRepr::Overlay(_) => {
+                        return Err(CodegenError::Internal(
+                            "an enum payload column holds a tag or a column".to_string(),
+                        ))
+                    }
+                }
             }
-            ValueSpot::Value { .. } => address,
-        }
+        };
+        Ok(builder
+            .ins()
+            .load(scalar_type(scalar), MemFlagsData::new(), address, 0))
     }
 
     /// The address of the bytes of the whole value `operand` reads — in a
@@ -412,7 +430,41 @@ impl<'a> FunctionTranslator<'a> {
                 let target = ValueBuild { address, layout };
                 Self::assign_whole_value(builder, ctx, target, rvalue, locals, type_ctx, expected)
             }
+            ValueSpot::Column { .. } => Err(CodegenError::Internal(
+                "a payload of an enum held as its bytes is written outside its construction"
+                    .to_string(),
+            )),
         }
+    }
+
+    /// Let a value local read in place name the bytes `rvalue` copies rather
+    /// than copy them into its own slot, so each read of it loads only what
+    /// it reads, from there. `false` for any other assignment, which copies.
+    pub(crate) fn assign_read_in_place(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        (place, rvalue): (&Place, &Rvalue),
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<bool, CodegenError> {
+        let Rvalue::Use(operand) = rvalue else {
+            return Ok(false);
+        };
+        let names_source = place.projection.is_empty()
+            && type_ctx.values.is_read_in_place(place.local)
+            && !is_absent(operand)
+            && !Self::reads_absent_placeholder(operand, type_ctx)?;
+        if !names_source {
+            return Ok(false);
+        }
+        let var = locals
+            .get(&place.local)
+            .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;
+        let expected = &type_ctx.local_types[place.local.0];
+        let source =
+            Self::value_operand_address(builder, ctx, operand, locals, type_ctx, Some(expected))?;
+        builder.def_var(*var, source);
+        Ok(true)
     }
 
     /// Fill the bytes of the value `target` describes from `rvalue`: an
@@ -436,6 +488,11 @@ impl<'a> FunctionTranslator<'a> {
             Rvalue::Aggregate(AggregateKind::Option(_), operands) => {
                 let build = ValueBuild { address, layout };
                 Self::build_present_optional(builder, ctx, build, operands, locals, type_ctx)
+            }
+            Rvalue::Aggregate(AggregateKind::Enum(enum_name, variant), operands) => {
+                let build = ValueBuild { address, layout };
+                let built = (enum_name.as_ref(), variant.as_ref());
+                Self::build_enum_in_place(builder, ctx, build, built, operands, locals, type_ctx)
             }
             Rvalue::Use(operand) if is_absent(operand) => Self::store_absent_value(builder, target),
             Rvalue::Use(operand) if Self::reads_absent_placeholder(operand, type_ctx)? => {
@@ -486,7 +543,7 @@ impl<'a> FunctionTranslator<'a> {
                 builder,
                 ctx,
                 build.address,
-                field,
+                (field.offset, &field.repr),
                 operand,
                 locals,
                 type_ctx,
@@ -495,32 +552,26 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Store `operand` into `field` of the value whose bytes start at
-    /// `address`.
+    /// Store `operand` into the member `repr` at `offset` of the value whose
+    /// bytes start at `address`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn store_member(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         address: Value,
-        field: &ValueField,
+        (offset, repr): (u32, &FieldRepr),
         operand: &Operand,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        match &field.repr {
+        match repr {
             FieldRepr::Scalar(scalar) => {
                 let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx, None)?;
                 let is_unsigned = Self::operand_is_unsigned(operand, type_ctx)?;
-                Self::store_scalar(
-                    builder,
-                    value,
-                    (*scalar, is_unsigned),
-                    address,
-                    field.offset,
-                )
+                Self::store_scalar(builder, value, (*scalar, is_unsigned), address, offset)
             }
             FieldRepr::Value(inner) => {
-                let dest = builder.ins().iadd_imm_s(address, i64::from(field.offset));
+                let dest = builder.ins().iadd_imm_s(address, i64::from(offset));
                 let target = ValueBuild {
                     address: dest,
                     layout: inner,
@@ -535,6 +586,9 @@ impl<'a> FunctionTranslator<'a> {
             }
             FieldRepr::OptionTag => Err(CodegenError::Internal(
                 "an aggregate stores into an optional's tag held as bytes".to_string(),
+            )),
+            FieldRepr::Overlay(_) => Err(CodegenError::Internal(
+                "an aggregate stores into an enum's payload column without its variant".to_string(),
             )),
         }
     }
@@ -575,6 +629,9 @@ pub struct ValueLocals<'b> {
     body: Option<&'b Body>,
     layouts: Vec<Option<ValueLayout>>,
     result: Option<HeldResult>,
+    /// The value locals that name the bytes they were copied from rather
+    /// than a copy of their own (see [`copies_read_in_place`]).
+    read_in_place: HashSet<Local>,
 }
 
 impl<'b> ValueLocals<'b> {
@@ -590,6 +647,7 @@ impl<'b> ValueLocals<'b> {
             body: Some(body),
             layouts,
             result,
+            read_in_place: copies_read_in_place(body),
         })
     }
 
@@ -600,6 +658,7 @@ impl<'b> ValueLocals<'b> {
             body: None,
             layouts: Vec::new(),
             result: None,
+            read_in_place: HashSet::new(),
         }
     }
 
@@ -614,6 +673,12 @@ impl<'b> ValueLocals<'b> {
     /// every return read this one answer. `None` for any other result.
     pub fn held_result(&self) -> Option<HeldResult> {
         self.result
+    }
+
+    /// Whether the value local `local` names the bytes it was copied from,
+    /// which every read of it finds unchanged, instead of a copy.
+    pub fn is_read_in_place(&self, local: Local) -> bool {
+        self.read_in_place.contains(&local)
     }
 
     /// The layout of `local`, when it is a value local.
@@ -655,12 +720,20 @@ pub enum ValueSpot<'l> {
         offset: u32,
         layout: &'l ValueLayout,
     },
+    /// An enum payload column at `offset` whose variants store different
+    /// `members`: which one it holds is the reader's type to say.
+    Column {
+        offset: u32,
+        members: &'l [FieldRepr],
+    },
 }
 
 impl<'l> ValueSpot<'l> {
     fn offset(self) -> u32 {
         match self {
-            ValueSpot::Scalar { offset, .. } | ValueSpot::Value { offset, .. } => offset,
+            ValueSpot::Scalar { offset, .. }
+            | ValueSpot::Value { offset, .. }
+            | ValueSpot::Column { offset, .. } => offset,
         }
     }
 
@@ -668,7 +741,24 @@ impl<'l> ValueSpot<'l> {
     pub fn value(self) -> Option<&'l ValueLayout> {
         match self {
             ValueSpot::Value { layout, .. } => Some(layout),
-            ValueSpot::Scalar { .. } => None,
+            ValueSpot::Scalar { .. } | ValueSpot::Column { .. } => None,
+        }
+    }
+
+    /// What `repr` at `offset` is reached as. An enum column whose variants
+    /// all store one member is that member.
+    fn of(offset: u32, repr: &'l FieldRepr, elem: &PlaceElem) -> Result<Self, CodegenError> {
+        match repr {
+            FieldRepr::Scalar(scalar) => Ok(ValueSpot::Scalar {
+                offset,
+                scalar: *scalar,
+            }),
+            FieldRepr::Value(layout) => Ok(ValueSpot::Value { offset, layout }),
+            FieldRepr::OptionTag => Err(projection_error(elem, "an optional's bytes")),
+            FieldRepr::Overlay(members) => match members.as_slice() {
+                [sole] => Self::of(offset, sole, elem),
+                members => Ok(ValueSpot::Column { offset, members }),
+            },
         }
     }
 }
@@ -686,6 +776,9 @@ fn locate<'l>(
     for elem in projection {
         let (offset, outer) = match spot {
             ValueSpot::Value { offset, layout } => (offset, layout),
+            ValueSpot::Column { offset, members } => {
+                (offset, projected_column_value(members, elem)?)
+            }
             ValueSpot::Scalar { .. } => return Err(projection_error(elem, "a scalar")),
         };
         let (field_offset, repr) = match elem {
@@ -698,17 +791,7 @@ fn locate<'l>(
             PlaceElem::Index(_) => (0, uniform_element(outer)?.1),
             PlaceElem::Deref => return Err(projection_error(elem, "a value held as its bytes")),
         };
-        spot = match repr {
-            FieldRepr::Scalar(scalar) => ValueSpot::Scalar {
-                offset: offset + field_offset,
-                scalar: *scalar,
-            },
-            FieldRepr::Value(inner) => ValueSpot::Value {
-                offset: offset + field_offset,
-                layout: inner,
-            },
-            FieldRepr::OptionTag => return Err(projection_error(elem, "an optional's bytes")),
-        };
+        spot = ValueSpot::of(offset + field_offset, repr, elem)?;
     }
     Ok(spot)
 }
@@ -722,10 +805,13 @@ enum ReachedRepr<'l> {
 
 impl<'l> ReachedRepr<'l> {
     fn of(repr: &'l FieldRepr, elem: &PlaceElem) -> Result<Self, CodegenError> {
-        match repr {
-            FieldRepr::Scalar(scalar) => Ok(Self::Scalar(*scalar)),
-            FieldRepr::Value(inner) => Ok(Self::Value(inner)),
-            FieldRepr::OptionTag => Err(projection_error(elem, "an optional's bytes")),
+        match ValueSpot::of(0, repr, elem)? {
+            ValueSpot::Scalar { scalar, .. } => Ok(Self::Scalar(scalar)),
+            ValueSpot::Value { layout, .. } => Ok(Self::Value(layout)),
+            ValueSpot::Column { .. } => Err(projection_error(
+                elem,
+                "an enum payload column reached through an element picked by a value",
+            )),
         }
     }
 }
@@ -842,26 +928,47 @@ pub fn clear_value(builder: &mut FunctionBuilder, dest: Value, layout: &ValueLay
 /// Each scalar member of a value laid out as `layout`, with its byte offset
 /// from the value's start, nested values flattened in layout order. An
 /// optional's tag is the one-byte unsigned scalar it is read and written as.
+///
+/// An enum payload column is the scalars its members flatten to when every
+/// member flattens to the same ones, and otherwise the unsigned integers
+/// tiling the column: those carry whichever member a variant wrote, and are
+/// the one shape every copy of the column takes.
 pub(crate) fn scalar_members(layout: &ValueLayout) -> Vec<(u32, ScalarKind)> {
     let mut members = Vec::with_capacity(layout.fields.len());
     collect_scalar_members(layout, 0, &mut members);
     members
 }
 
+/// Each scalar member of `repr`, with its byte offset from `repr`'s start,
+/// flattened as [`scalar_members`] flattens a value's.
+pub(crate) fn repr_scalar_members(repr: &FieldRepr) -> Vec<(u32, ScalarKind)> {
+    let mut members = Vec::new();
+    collect_repr_members(repr, 0, &mut members);
+    members
+}
+
 /// Append the scalar members of `layout`, placed at `base`, to `members`.
 fn collect_scalar_members(layout: &ValueLayout, base: u32, members: &mut Vec<(u32, ScalarKind)>) {
     for field in &layout.fields {
-        let offset = base + field.offset;
-        match &field.repr {
-            FieldRepr::Scalar(scalar) => members.push((offset, *scalar)),
-            FieldRepr::OptionTag => members.push((offset, ScalarKind::Unsigned(1))),
-            FieldRepr::Value(inner) => collect_scalar_members(inner, offset, members),
+        collect_repr_members(&field.repr, base + field.offset, members);
+    }
+}
+
+/// Append the scalar members of `repr`, placed at `offset`, to `members`.
+fn collect_repr_members(repr: &FieldRepr, offset: u32, members: &mut Vec<(u32, ScalarKind)>) {
+    match repr {
+        FieldRepr::Scalar(scalar) => members.push((offset, *scalar)),
+        FieldRepr::OptionTag => members.push((offset, ScalarKind::Unsigned(1))),
+        FieldRepr::Value(inner) => collect_scalar_members(inner, offset, members),
+        FieldRepr::Overlay(column) => {
+            let (size, _) = repr.size_and_align();
+            collect_column_members(column, size, offset, members);
         }
     }
 }
 
 /// The zero of `scalar`, at the type [`scalar_type`] stores it at.
-fn zero_scalar(builder: &mut FunctionBuilder, scalar: ScalarKind) -> Value {
+pub(crate) fn zero_scalar(builder: &mut FunctionBuilder, scalar: ScalarKind) -> Value {
     match scalar {
         ScalarKind::Float(2) => builder.ins().f16const(Ieee16::with_bits(0)),
         ScalarKind::Float(4) => builder.ins().f32const(0.0),

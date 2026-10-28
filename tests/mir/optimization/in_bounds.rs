@@ -6,15 +6,17 @@
 //! `while i < list.length(): x = list[i]; i += 1`, changed in one way.
 
 use crate::mir::optimization::stable_collections::{
-    assign, call, int, loop_over_a_list, statement, INDEX, LENGTH, LIST, LOOP_BODY, LOOP_HEADER,
-    SPARE,
+    assign, call, int, list_of, loop_over_a_list, statement, INDEX, LENGTH, LIST, LOOP_BODY,
+    LOOP_HEADER, SPARE, SPARE_LIST,
 };
+use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::optimization::in_bounds::{record_in_bounds, INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW};
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::symbol::Symbol;
 use miri::mir::{
-    BasicBlock, BinOp, Body, ExecutionModel, InBounds, Operand, Place, Rvalue, StatementKind,
+    BasicBlock, BinOp, Body, ExecutionModel, InBounds, LocalDecl, Operand, Place, Rvalue,
+    StatementKind,
 };
 use miri::pipeline::Pipeline;
 
@@ -130,6 +132,44 @@ fn test_a_push_between_the_length_and_the_access_proves_nothing() {
     after.statements.clear();
     body.basic_blocks.push(after);
     assert!(proofs_of(body).is_empty());
+}
+
+/// The proofs of the test loop once its step starts with a copy-on-write of
+/// a second list with elements of `element`, between the guard and the read.
+/// The list is recorded stable over the loop before the copy is added, so
+/// only the in-bounds dataflow decides what the copy loses.
+fn proofs_after_copying_a_list_of(element: TypeKind) -> Vec<InBounds> {
+    let mut body = loop_over_a_list();
+    body.local_decls[SPARE_LIST.0] = LocalDecl::new(list_of(element), Span::default());
+    record_stable_collections(&mut body);
+    let read = body.basic_blocks.len();
+    let copy = call(
+        Operand::runtime(miri::runtime_fns::rt::LIST_COW, Span::default()),
+        vec![Operand::Move(Place::new(SPARE_LIST))],
+        SPARE_LIST,
+        read,
+    );
+    let step = std::mem::replace(
+        &mut body.basic_blocks[LOOP_BODY],
+        miri::mir::BasicBlockData::new(Some(copy)),
+    );
+    body.basic_blocks.push(step);
+    for record in &mut body.stable_collections {
+        record.blocks.push(BasicBlock(read));
+    }
+    record_in_bounds(&mut body);
+    body.in_bounds
+}
+
+#[test]
+fn test_a_copy_on_write_of_another_list_of_ints_keeps_the_proof() {
+    assert_eq!(proofs_after_copying_a_list_of(TypeKind::Int).len(), 1);
+}
+
+#[test]
+fn test_a_copy_of_a_list_whose_elements_may_run_a_clone_method_proves_nothing() {
+    let instances = TypeKind::Custom("Plain".to_string(), None);
+    assert!(proofs_after_copying_a_list_of(instances).is_empty());
 }
 
 #[test]

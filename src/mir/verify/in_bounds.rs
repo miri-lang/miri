@@ -20,13 +20,14 @@
 use super::VerificationViolation;
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{leaves_collection_headers_unchanged, preserves_length};
+use crate::runtime_fns::preserves_length;
 use std::collections::{HashMap, HashSet};
 
 /// `(length or index local, collection local, is_index)`.
@@ -178,7 +179,7 @@ impl<'a> Check<'a> {
             self.step(statement, facts);
         }
         if let Some(terminator) = &data.terminator {
-            step_terminator(terminator, facts);
+            step_terminator(self.body, terminator, facts);
         }
     }
 
@@ -288,7 +289,7 @@ fn restated(facts: &HashSet<Known>, from: usize, to: usize) -> Vec<Known> {
         .collect()
 }
 
-fn step_terminator(terminator: &Terminator, facts: &mut HashSet<Known>) {
+fn step_terminator(body: &Body, terminator: &Terminator, facts: &mut HashSet<Known>) {
     match &terminator.kind {
         TerminatorKind::Call {
             func,
@@ -302,7 +303,7 @@ fn step_terminator(terminator: &Terminator, facts: &mut HashSet<Known>) {
                 .first()
                 .and_then(Operand::bare_local)
                 .filter(|_| keeps_length);
-            if !keeps_length && !name.is_some_and(leaves_collection_headers_unchanged) {
+            if !name.is_some_and(|name| runtime_call_leaves_headers(body, name, args)) {
                 facts.clear();
             }
             if destination.projection.is_empty() {

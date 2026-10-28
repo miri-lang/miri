@@ -12,6 +12,7 @@ mod code_map;
 pub mod collection_header;
 mod element_method_thunks;
 mod gpu_launch;
+mod held_enums;
 mod inline_optionals;
 mod inliner;
 pub mod layout;

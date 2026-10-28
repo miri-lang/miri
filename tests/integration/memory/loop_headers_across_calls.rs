@@ -9,6 +9,10 @@
 //! through a holder with a reference of its own copies the list first, so the
 //! loop's list keeps its header.
 //!
+//! The last programs call no function of the program: they write a second
+//! list inside the loop, which asks its copy-on-write entry point first, and
+//! must print the same whether or not the list they read keeps its header.
+//!
 //! `tests/mir/optimization/stable_collections.rs` checks which of these loops
 //! are recorded; every program also runs clean under the heap guard.
 
@@ -412,6 +416,97 @@ fn main()
     println(f"{total} {a.length()} {t.lists.value_at(0).length()}")
 "#;
 
+/// A loop reading `a` writes `b` on some iterations, so each write asks
+/// `b`'s copy-on-write entry point first, inside the loop.
+pub(crate) const COPY_ON_WRITE_OF_ANOTHER_LIST: &str = r#"
+use system.io
+use system.collections.list
+
+fn mix(n int) String
+    let a = List([3, 1, 4, 1, 5, 9, 2, 6])
+    var b = List([0, 0, 0, 0, 0, 0, 0, 0])
+    var i = 0
+    while i < n
+        let k = i % a.length()
+        if a[k] > 2
+            b[k] = b[k] + a[k]
+        i += 1
+    f"{b[0]} {b[1]} {b[2]} {b[4]} {b[5]} {b[7]} {a[0]}"
+
+fn main()
+    println(mix(20))
+"#;
+
+/// As [`COPY_ON_WRITE_OF_ANOTHER_LIST`], with `b` a second name for `a`: the
+/// first write copies the list, and `a` keeps its elements.
+pub(crate) const COPY_ON_WRITE_OF_AN_ALIAS: &str = r#"
+use system.io
+use system.collections.list
+
+fn mix(n int) String
+    let a = List([3, 1, 4, 1, 5, 9, 2, 6])
+    var b = a
+    var i = 0
+    while i < n
+        let k = i % a.length()
+        if a[k] > 2
+            b[k] = b[k] + a[k]
+        i += 1
+    f"{a[0]} {a[2]} {a[5]} {b[0]} {b[2]} {b[5]} {b[1]} {a.length()} {b.length()}"
+
+fn main()
+    println(mix(20))
+"#;
+
+/// A register machine whose program is a list of enum values with payloads,
+/// read every step while the registers, another list, are written.
+pub(crate) const REGISTER_MACHINE: &str = r#"
+use system.io
+use system.collections.list
+
+enum Op
+    Set(int, int)
+    Add(int, int, int)
+    Jump(int)
+    JumpIfLess(int, int, int)
+    Halt
+
+fn run(limit int) String
+    let code = List([
+        Op.Set(0, 0),
+        Op.Set(1, 0),
+        Op.Set(2, limit),
+        Op.Set(3, 1),
+        Op.JumpIfLess(0, 2, 6),
+        Op.Halt,
+        Op.Add(1, 1, 0),
+        Op.Add(0, 0, 3),
+        Op.Jump(4)
+    ])
+    var regs = List<int>()
+    var r = 0
+    while r < 4
+        regs.push(0)
+        r += 1
+    var pc = 0
+    var steps = 0
+    var running = true
+    while running
+        var next = pc + 1
+        match code[pc]
+            Op.Set(d, v): regs[d] = v
+            Op.Add(d, a, b): regs[d] = regs[a] + regs[b]
+            Op.Jump(target): next = target
+            Op.JumpIfLess(a, b, target): next = if regs[a] < regs[b]: target else: next
+            Op.Halt: running = false
+        pc = next
+        steps += 1
+    f"{regs[1]} {steps}"
+
+fn main()
+    println(run(10))
+"#;
+
 pub(crate) const LIST_FROM_A_METHOD_RETURNING_A_FIELD: &str = r#"
 use system.io
 use system.collections.list
@@ -554,4 +649,19 @@ fn test_a_list_read_off_a_map_value_accessor_keeps_its_length_while_its_holder_g
 #[test]
 fn test_a_list_a_method_returns_from_a_field_keeps_its_length_while_the_field_grows() {
     assert_heap_guard_output(LIST_FROM_A_METHOD_RETURNING_A_FIELD, "21 3 6");
+}
+
+#[test]
+fn test_a_loop_reading_one_list_and_writing_another_prints_both_right() {
+    assert_heap_guard_output(COPY_ON_WRITE_OF_ANOTHER_LIST, "9 0 12 10 18 12 3");
+}
+
+#[test]
+fn test_a_loop_writing_an_alias_of_the_list_it_reads_leaves_the_list_unchanged() {
+    assert_heap_guard_output(COPY_ON_WRITE_OF_AN_ALIAS, "3 4 9 12 16 27 1 8 8");
+}
+
+#[test]
+fn test_a_register_machine_reading_its_program_while_writing_registers_runs_right() {
+    assert_heap_guard_output(REGISTER_MACHINE, "45 46");
 }
