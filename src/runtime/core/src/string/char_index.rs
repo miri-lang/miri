@@ -123,10 +123,21 @@ pub(crate) fn forget(string: &MiriString) {
 ///
 /// # Safety
 /// `string` holds valid UTF-8.
+#[inline]
 pub(crate) unsafe fn char_count(string: &MiriString) -> usize {
     if string.ascii {
         return string.len;
     }
+    char_count_slow(string)
+}
+
+/// [`char_count`] for a string not known to be ASCII, kept out of line so the
+/// ASCII check above inlines into its callers without this path's frame.
+///
+/// # Safety
+/// As for the function it serves.
+#[inline(never)]
+unsafe fn char_count_slow(string: &MiriString) -> usize {
     let text = string.as_str();
     with_entry(string, |entry| {
         *entry.char_count.get_or_insert_with(|| {
@@ -141,10 +152,21 @@ pub(crate) unsafe fn char_count(string: &MiriString) -> usize {
 ///
 /// # Safety
 /// `string` holds valid UTF-8.
+#[inline]
 pub(crate) unsafe fn char_byte_offset(string: &MiriString, index: usize) -> Option<usize> {
     if string.ascii {
         return (index < string.len).then_some(index);
     }
+    char_byte_offset_slow(string, index)
+}
+
+/// [`char_byte_offset`] for a string not known to be ASCII, kept out of line so the
+/// ASCII check above inlines into its callers without this path's frame.
+///
+/// # Safety
+/// As for the function it serves.
+#[inline(never)]
+unsafe fn char_byte_offset_slow(string: &MiriString, index: usize) -> Option<usize> {
     let text = string.as_str();
     with_entry(string, |entry| {
         if entry.is_ascii() {
@@ -173,6 +195,7 @@ pub(crate) unsafe fn char_byte_offset(string: &MiriString, index: usize) -> Opti
 ///
 /// # Safety
 /// `string` holds valid UTF-8.
+#[inline]
 pub(crate) unsafe fn char_boundary(string: &MiriString, index: usize) -> Option<usize> {
     if index == char_count(string) {
         return Some(string.len);
@@ -186,10 +209,21 @@ pub(crate) unsafe fn char_boundary(string: &MiriString, index: usize) -> Option<
 ///
 /// # Safety
 /// `string` holds valid UTF-8 and `byte` is a character boundary in it.
+#[inline]
 pub(crate) unsafe fn char_index_of_byte(string: &MiriString, byte: usize) -> usize {
     if string.ascii {
         return byte;
     }
+    char_index_of_byte_slow(string, byte)
+}
+
+/// [`char_index_of_byte`] for a string not known to be ASCII, kept out of line so the
+/// ASCII check above inlines into its callers without this path's frame.
+///
+/// # Safety
+/// As for the function it serves.
+#[inline(never)]
+unsafe fn char_index_of_byte_slow(string: &MiriString, byte: usize) -> usize {
     let text = string.as_str();
     with_entry(string, |entry| {
         if entry.is_ascii() {
