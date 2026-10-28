@@ -130,9 +130,11 @@ fn test_a_slot_size_mismatch_traps_from_a_cold_block_not_a_conditional_trap() {
 fn test_a_loop_reads_the_length_of_a_list_it_leaves_unchanged_once() {
     let clif = clif_of(SIEVE_SHAPED, "count_primes");
     // One read of the length for the outer loop's access, which shares the
-    // loop with a copy-on-write that may replace the list, and one before
-    // the inner loop for both of its accesses.
-    assert_eq!(header_loads_at(&clif, 8), 2, "{clif}");
+    // loop with a copy-on-write that may replace the list. The inner loop,
+    // bounded by `n` rather than the length, runs in one of two copies: one
+    // read in the guard choosing between them, and one before each copy for
+    // both of its accesses. None inside the inner loop.
+    assert_eq!(header_loads_at(&clif, 8), 4, "{clif}");
 }
 
 #[test]

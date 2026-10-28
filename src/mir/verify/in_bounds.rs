@@ -6,16 +6,32 @@
 //! Code generation emits a recorded access without comparing its index to
 //! the collection's length, so a record nothing proves reads or writes past
 //! the end. Each entry is re-derived here from the body alone, with a
-//! dataflow of its own: a length is known of a collection from `Len` until
-//! the length local or the collection is given another value (a
-//! copy-on-write or clone of the collection, or a whole-local copy, carries
-//! it), its storage ends, or a call outside the header-preserving runtime
-//! entry points runs; an index is known in bounds on the taken edge of a
-//! switch on `index < length` whose operands keep their values to the switch,
-//! when the index is never negative, and until the index or the collection's
-//! length is lost. The access must also sit where the entry says and lie in
-//! a block a stable-collection record of the collection covers, since it is
-//! that record's length code generation compares against no more.
+//! dataflow of its own over three kinds of fact:
+//!
+//! - a length is known of a collection from `Len` until the length local or
+//!   the collection is given another value (a copy-on-write or clone of the
+//!   collection, or a whole-local copy, carries it), its storage ends, or a
+//!   call outside the header-preserving runtime entry points runs;
+//! - an order `a + m <= b`, `m >= 0`, between integers of one type, is known
+//!   on the taken edge of a switch on `a < b` (`m = 1`) or `a <= b` (`m = 0`)
+//!   computed in the switch's block, directly or into a local the switched
+//!   one is a whole copy of, its operands kept to the switch; the same edge
+//!   knows `a + m + m' <= c` for each `b + m' <= c` known before it. A sum
+//!   `x = y + k` or difference `x = y - k`, `k` a constant at least 0, knows
+//!   `x + (m - k) <= c` (sum, `m >= k`) or `x + m <= c` and `x + k <= y`
+//!   (difference) from each `y + m <= c`: the arithmetic traps rather than
+//!   wraps, so `x` is exactly that value;
+//! - an index is known in bounds of a collection once it is at least 0 —
+//!   never negative, or ordered above a never-negative local — and ordered
+//!   below a local holding the length by a margin of 1 or more, checked
+//!   where an order about it is made; or on the taken edge of `i < n`, `n`
+//!   the length and `i` never negative.
+//!
+//! The guard of a switch holds only along its true edge; an `otherwise`
+//! leading to the same block does not carry it. The access must also sit
+//! where the entry says and lie in a block a stable-collection record of the
+//! collection covers, since it is that record's length code generation
+//! compares against no more.
 
 use super::VerificationViolation;
 use crate::ast::literal::{IntegerLiteral, Literal};
@@ -30,8 +46,77 @@ use crate::mir::{
 use crate::runtime_fns::preserves_length;
 use std::collections::{HashMap, HashSet};
 
-/// `(length or index local, collection local, is_index)`.
-type Known = (usize, usize, bool);
+/// What is known of the locals at a program point, by local index. Each
+/// fact is of the values the locals hold there: a write kills every fact
+/// naming its destination, and what it adds is derived only from facts
+/// whose other locals the write leaves alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Known {
+    /// `length` holds the length of `collection`.
+    Length { length: usize, collection: usize },
+    /// `index` lies in bounds of `collection`.
+    Index { index: usize, collection: usize },
+    /// `lhs + margin <= rhs` over mathematical integers: `<` is a margin
+    /// of 1, `<=` one of 0.
+    Order { lhs: usize, rhs: usize, margin: u64 },
+}
+
+impl Known {
+    /// Whether the fact says anything of `local`.
+    fn names(self, local: usize) -> bool {
+        match self {
+            Known::Length {
+                length: a,
+                collection: b,
+            }
+            | Known::Index {
+                index: a,
+                collection: b,
+            }
+            | Known::Order { lhs: a, rhs: b, .. } => a == local || b == local,
+        }
+    }
+
+    /// Whether the fact says anything of the collection `local`.
+    fn names_collection(self, local: usize) -> bool {
+        match self {
+            Known::Length { collection, .. } | Known::Index { collection, .. } => {
+                collection == local
+            }
+            Known::Order { .. } => false,
+        }
+    }
+
+    /// The fact with every mention of `from` made of `to`, for `to` taking
+    /// `from`'s value; `None` when the fact also names `to`, whose value it
+    /// speaks of is the one being replaced.
+    fn restated(self, from: usize, to: usize) -> Option<Known> {
+        if self.names(to) {
+            return None;
+        }
+        let swap = |local: usize| if local == from { to } else { local };
+        match self {
+            Known::Length { length, collection } => Some(Known::Length {
+                length: swap(length),
+                collection: swap(collection),
+            }),
+            Known::Index { index, collection } => Some(Known::Index {
+                index: swap(index),
+                collection: swap(collection),
+            }),
+            Known::Order { lhs, rhs, margin } => order(swap(lhs), swap(rhs), margin),
+        }
+    }
+}
+
+/// A switch's comparison `lhs < rhs` (`strict`) or `lhs <= rhs`, which holds
+/// on the edge it takes when true.
+#[derive(Debug, Clone, Copy)]
+struct Guard {
+    lhs: usize,
+    rhs: usize,
+    strict: bool,
+}
 
 /// Every entry of [`Body::in_bounds`] the body does not prove.
 pub fn verify_in_bounds(body: &Body) -> Vec<VerificationViolation> {
@@ -60,7 +145,7 @@ pub fn verify_in_bounds(body: &Body) -> Vec<VerificationViolation> {
 struct Check<'a> {
     body: &'a Body,
     never_negative: HashSet<usize>,
-    predecessors: Vec<Vec<(usize, Option<Known>)>>,
+    predecessors: Vec<Vec<(usize, Option<Guard>)>>,
 }
 
 impl<'a> Check<'a> {
@@ -75,33 +160,35 @@ impl<'a> Check<'a> {
         check
     }
 
-    /// For each block, every edge into it with the index fact the edge's
-    /// guard may add, by the collection and index locals it names later.
-    fn edges(&self) -> Vec<Vec<(usize, Option<Known>)>> {
+    /// For each block, every edge into it with the comparison known true
+    /// along it.
+    fn edges(&self) -> Vec<Vec<(usize, Option<Guard>)>> {
         let mut into = vec![Vec::new(); self.body.basic_blocks.len()];
         for (block, data) in self.body.basic_blocks.iter().enumerate() {
             let Some(terminator) = &data.terminator else {
                 continue;
             };
             let guarded = self.guard_of(block, terminator);
-            for successor in terminator.successors() {
+            // A guarded switch has one target, its true edge, which
+            // `successors` lists first; `otherwise` follows it, and may be
+            // the same block without the guard holding along it.
+            for (position, successor) in terminator.successors().into_iter().enumerate() {
                 if let Some(list) = into.get_mut(successor.0) {
-                    let on_true = guarded.filter(|(target, _)| *target == successor.0);
-                    list.push((block, on_true.map(|(_, guard)| guard)));
+                    list.push((block, guarded.filter(|_| position == 0)));
                 }
             }
         }
         into
     }
 
-    /// `(true target, (index, length, false))` when `terminator` switches on
-    /// `index < length` computed in `block`, both kept to the switch, and the
-    /// index is never negative. The fact is completed per collection later.
-    fn guard_of(&self, block: usize, terminator: &Terminator) -> Option<(usize, Known)> {
+    /// The guard of the true edge when `terminator` switches on `lhs < rhs`
+    /// or `lhs <= rhs` computed in `block` — directly, or into a local the
+    /// switched one is a whole copy of — both operands kept to the switch.
+    fn guard_of(&self, block: usize, terminator: &Terminator) -> Option<Guard> {
         let TerminatorKind::SwitchInt { discr, targets, .. } = &terminator.kind else {
             return None;
         };
-        let [(value, target)] = targets.as_slice() else {
+        let [(value, _)] = targets.as_slice() else {
             return None;
         };
         if *value != Discriminant::bool_true() {
@@ -109,21 +196,99 @@ impl<'a> Check<'a> {
         }
         let condition = discr.bare_local()?;
         let statements = &self.body.basic_blocks.get(block)?.statements;
-        let at = statements.iter().rposition(|s| assigns(s, condition))?;
-        let (StatementKind::Assign(_, Rvalue::BinaryOp(BinOp::Lt, lhs, rhs))
-        | StatementKind::Reassign(_, Rvalue::BinaryOp(BinOp::Lt, lhs, rhs))) =
-            &statements.get(at)?.kind
+        let mut at = statements.iter().rposition(|s| assigns(s, condition))?;
+        if let Some(source) = whole_copy_of(statements.get(at)?) {
+            at = statements
+                .get(..at)?
+                .iter()
+                .rposition(|s| assigns(s, source))?;
+        }
+        let (StatementKind::Assign(_, Rvalue::BinaryOp(op, lhs, rhs))
+        | StatementKind::Reassign(_, Rvalue::BinaryOp(op, lhs, rhs))) = &statements.get(at)?.kind
         else {
             return None;
         };
-        let (index, length) = (lhs.bare_local()?, rhs.bare_local()?);
+        let strict = is_strict_order(*op)?;
+        let (lhs, rhs) = (lhs.bare_local()?, rhs.bare_local()?);
         let kept = statements
             .get(at + 1..)
             .unwrap_or_default()
             .iter()
-            .all(|s| !assigns(s, index) && !assigns(s, length));
-        (kept && self.never_negative.contains(&index.0))
-            .then_some((target.0, (index.0, length.0, false)))
+            .all(|s| !assigns(s, lhs) && !assigns(s, rhs));
+        kept.then_some(Guard {
+            lhs: lhs.0,
+            rhs: rhs.0,
+            strict,
+        })
+    }
+
+    /// What `guard` adds to `facts`: `lhs` in bounds of a collection whose
+    /// length `rhs` holds, for a strict guard and a never-negative `lhs`;
+    /// and, between integers of one type, the order it states, that order
+    /// carried past each local `rhs` is ordered below, and each collection
+    /// either operand then lies inside.
+    fn proven_by(&self, guard: Guard, facts: &HashSet<Known>) -> Vec<Known> {
+        let mut proven: Vec<Known> = facts
+            .iter()
+            .filter_map(|fact| match *fact {
+                Known::Length { length, collection }
+                    if guard.strict
+                        && length == guard.rhs
+                        && self.never_negative.contains(&guard.lhs) =>
+                {
+                    Some(Known::Index {
+                        index: guard.lhs,
+                        collection,
+                    })
+                }
+                Known::Length { .. } | Known::Index { .. } | Known::Order { .. } => None,
+            })
+            .collect();
+        if guard.lhs == guard.rhs || !same_integer_type(self.body, guard.lhs, guard.rhs) {
+            return proven;
+        }
+        let margin = u64::from(guard.strict);
+        proven.extend(order(guard.lhs, guard.rhs, margin));
+        proven.extend(facts.iter().filter_map(|fact| match *fact {
+            Known::Order {
+                lhs,
+                rhs,
+                margin: more,
+            } if lhs == guard.rhs => order(guard.lhs, rhs, margin.checked_add(more)?),
+            Known::Order { .. } | Known::Length { .. } | Known::Index { .. } => None,
+        }));
+        let mut after = facts.clone();
+        after.extend(proven.iter().copied());
+        for operand in [guard.lhs, guard.rhs] {
+            proven.extend(self.inside(&after, operand));
+        }
+        proven
+    }
+
+    /// `Index` facts for every collection `facts` puts `local` inside: it is
+    /// at least 0 — never negative, or ordered above a never-negative local
+    /// — and ordered at least 1 below a local holding the length.
+    fn inside(&self, facts: &HashSet<Known>, local: usize) -> Vec<Known> {
+        let is_never_negative = |l: usize| self.never_negative.contains(&l);
+        let at_least_zero = is_never_negative(local)
+            || facts.iter().any(|fact| {
+                matches!(*fact, Known::Order { lhs, rhs, .. } if rhs == local && is_never_negative(lhs))
+            });
+        if !at_least_zero {
+            return Vec::new();
+        }
+        facts
+            .iter()
+            .filter_map(|fact| match *fact {
+                Known::Length { length, collection } if is_below(facts, local, length) => {
+                    Some(Known::Index {
+                        index: local,
+                        collection,
+                    })
+                }
+                Known::Length { .. } | Known::Index { .. } | Known::Order { .. } => None,
+            })
+            .collect()
     }
 
     /// The facts known on entry to each block, by repeated meets until none
@@ -155,11 +320,8 @@ impl<'a> Check<'a> {
                 continue;
             };
             self.run_block(*pred, &mut facts);
-            if let Some((index, length, _)) = guard {
-                let proven: Vec<Known> = (facts.iter())
-                    .filter(|(local, _, is_index)| !is_index && local == length)
-                    .map(|(_, collection, _)| (*index, *collection, true))
-                    .collect();
+            if let Some(guard) = guard {
+                let proven = self.proven_by(*guard, &facts);
                 facts.extend(proven);
             }
             result = Some(match result {
@@ -190,17 +352,20 @@ impl<'a> Check<'a> {
             {
                 let dest = place.local.0;
                 let made = self.made_by(dest, rvalue, facts);
-                facts.retain(|(local, collection, _)| *local != dest && *collection != dest);
+                facts.retain(|fact| !fact.names(dest));
                 facts.extend(made);
+                if let Rvalue::BinaryOp(..) = rvalue {
+                    let inside = self.inside(facts, dest);
+                    facts.extend(inside);
+                }
             }
             StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
-                let gone = place.local.0;
-                facts.retain(|(local, collection, _)| *local != gone && *collection != gone);
+                facts.retain(|fact| !fact.names(place.local.0));
             }
             StatementKind::DecRef(place) | StatementKind::Dealloc(place)
                 if place.projection.is_empty() =>
             {
-                facts.retain(|(_, collection, _)| *collection != place.local.0);
+                facts.retain(|fact| !fact.names_collection(place.local.0));
             }
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
@@ -225,7 +390,10 @@ impl<'a> Check<'a> {
                         )
                     });
                 (is_indexed && measured.local.0 != dest)
-                    .then_some((dest, measured.local.0, false))
+                    .then_some(Known::Length {
+                        length: dest,
+                        collection: measured.local.0,
+                    })
                     .into_iter()
                     .collect()
             }
@@ -234,9 +402,9 @@ impl<'a> Check<'a> {
                 .filter(|source| source.0 != dest)
                 .map(|source| restated(facts, source.0, dest))
                 .unwrap_or_default(),
+            Rvalue::BinaryOp(op, lhs, rhs) => self.offsets(dest, *op, lhs, rhs, facts),
             Rvalue::Len(_)
             | Rvalue::Ref(_)
-            | Rvalue::BinaryOp(..)
             | Rvalue::UnaryOp(..)
             | Rvalue::Cast(..)
             | Rvalue::GpuIntrinsic(_)
@@ -245,6 +413,54 @@ impl<'a> Check<'a> {
             | Rvalue::Phi(_)
             | Rvalue::AtomicOp { .. } => Vec::new(),
         }
+    }
+
+    /// The orders `dest = base + k`, `dest = k + base` or `dest = base - k`
+    /// leaves, for an integer constant `k >= 0` and `dest` of `base`'s type.
+    /// The arithmetic traps rather than wraps, so `dest` is exactly that
+    /// value: `base + m <= r` with `m >= k` gives `dest + (m - k) <= r` for
+    /// the sum, and `dest + m <= r` and `dest + k <= base` for the
+    /// difference, which is at most `base`.
+    fn offsets(
+        &self,
+        dest: usize,
+        op: BinOp,
+        lhs: &Operand,
+        rhs: &Operand,
+        facts: &HashSet<Known>,
+    ) -> Vec<Known> {
+        let Some(is_sum) = is_sum_or_difference(op) else {
+            return Vec::new();
+        };
+        let (base, constant) = match (lhs.bare_local(), rhs.bare_local()) {
+            (Some(base), None) => (base.0, rhs),
+            (None, Some(base)) if is_sum => (base.0, lhs),
+            (None, Some(_)) | (Some(_), Some(_)) | (None, None) => return Vec::new(),
+        };
+        let Some(k) = constant_at_least_zero(constant) else {
+            return Vec::new();
+        };
+        if !same_integer_type(self.body, dest, base) {
+            return Vec::new();
+        }
+        let mut made: Vec<Known> = facts
+            .iter()
+            .filter_map(|fact| match *fact {
+                Known::Order { lhs, rhs, margin } if lhs == base && rhs != dest => {
+                    let margin = if is_sum {
+                        margin.checked_sub(k)?
+                    } else {
+                        margin
+                    };
+                    order(dest, rhs, margin)
+                }
+                Known::Order { .. } | Known::Length { .. } | Known::Index { .. } => None,
+            })
+            .collect();
+        if !is_sum {
+            made.extend(order(dest, base, k));
+        }
+        made
     }
 
     /// Why `proof` does not hold, if it does not.
@@ -272,8 +488,35 @@ impl<'a> Check<'a> {
         for statement in data.statements.iter().take(proof.statement_index) {
             self.step(statement, &mut facts);
         }
-        let known = (proof.index.0, proof.collection.0, true);
+        let known = Known::Index {
+            index: proof.index.0,
+            collection: proof.collection.0,
+        };
         (!facts.contains(&known)).then(|| "no guard proves it there".to_string())
+    }
+}
+
+/// Whether `op` orders its operands strictly (`<`) or not (`<=`); `None`
+/// for any other operator.
+fn is_strict_order(op: BinOp) -> Option<bool> {
+    match op {
+        BinOp::Lt => Some(true),
+        BinOp::Le => Some(false),
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::BitXor
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::Eq
+        | BinOp::Ne
+        | BinOp::Ge
+        | BinOp::Gt
+        | BinOp::Offset => None,
     }
 }
 
@@ -281,12 +524,16 @@ impl<'a> Check<'a> {
 fn restated(facts: &HashSet<Known>, from: usize, to: usize) -> Vec<Known> {
     facts
         .iter()
-        .filter(|(local, collection, _)| *local == from || *collection == from)
-        .map(|(local, collection, is_index)| {
-            let swap = |l: usize| if l == from { to } else { l };
-            (swap(*local), swap(*collection), *is_index)
-        })
+        .filter(|fact| fact.names(from))
+        .filter_map(|fact| fact.restated(from, to))
         .collect()
+}
+
+/// `lhs + margin <= rhs` as a fact, unless both are one local: such an
+/// order could only come from an old value of a local mixed with its new
+/// one, and is never made.
+fn order(lhs: usize, rhs: usize, margin: u64) -> Option<Known> {
+    (lhs != rhs).then_some(Known::Order { lhs, rhs, margin })
 }
 
 fn step_terminator(body: &Body, terminator: &Terminator, facts: &mut HashSet<Known>) {
@@ -311,7 +558,7 @@ fn step_terminator(body: &Body, terminator: &Terminator, facts: &mut HashSet<Kno
                 let made = source
                     .map(|s| restated(facts, s.0, dest))
                     .unwrap_or_default();
-                facts.retain(|(local, collection, _)| *local != dest && *collection != dest);
+                facts.retain(|fact| !fact.names(dest));
                 facts.extend(made);
             }
         }
@@ -456,6 +703,13 @@ fn keeps_non_negative(body: &Body, rvalue: &Rvalue, known: &HashSet<usize>) -> b
     }
 }
 
+/// Whether `lhs` and `rhs` are declared the same integer type.
+fn same_integer_type(body: &Body, lhs: usize, rhs: usize) -> bool {
+    let kind = |local: usize| body.local_decls.get(local).map(|d| &d.ty.kind);
+    kind(lhs).is_some_and(|left| kind(rhs) == Some(left))
+        && (is_signed(body, lhs) || is_unsigned(body, lhs))
+}
+
 fn is_unsigned(body: &Body, local: usize) -> bool {
     body.local_decls.get(local).is_some_and(|d| {
         matches!(
@@ -492,4 +746,62 @@ fn literal_non_negative(value: &IntegerLiteral) -> bool {
         | IntegerLiteral::U64(_)
         | IntegerLiteral::U128(_) => true,
     }
+}
+
+/// Whether `facts` orders `local` below `length` by a margin of 1 or more.
+fn is_below(facts: &HashSet<Known>, local: usize, length: usize) -> bool {
+    facts.iter().any(|fact| {
+        matches!(*fact, Known::Order { lhs, rhs, margin } if lhs == local && rhs == length && margin >= 1)
+    })
+}
+
+/// Whether `op` adds (`true`) or subtracts (`false`); `None` for any other
+/// operator.
+fn is_sum_or_difference(op: BinOp) -> Option<bool> {
+    match op {
+        BinOp::Add => Some(true),
+        BinOp::Sub => Some(false),
+        BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::BitXor
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::Eq
+        | BinOp::Lt
+        | BinOp::Le
+        | BinOp::Ne
+        | BinOp::Ge
+        | BinOp::Gt
+        | BinOp::Offset => None,
+    }
+}
+
+/// The local `statement` copies whole into a whole local, if it does.
+fn whole_copy_of(statement: &Statement) -> Option<Local> {
+    match &statement.kind {
+        StatementKind::Assign(_, Rvalue::Use(operand))
+        | StatementKind::Reassign(_, Rvalue::Use(operand)) => operand.bare_local(),
+        StatementKind::Assign(..)
+        | StatementKind::Reassign(..)
+        | StatementKind::StorageLive(_)
+        | StatementKind::StorageDead(_)
+        | StatementKind::IncRef(_)
+        | StatementKind::DecRef(_)
+        | StatementKind::Dealloc(_)
+        | StatementKind::Nop => None,
+    }
+}
+
+/// The value of an integer constant `operand` that is at least 0.
+fn constant_at_least_zero(operand: &Operand) -> Option<u64> {
+    let Operand::Constant(constant) = operand else {
+        return None;
+    };
+    let Literal::Integer(value) = &constant.literal else {
+        return None;
+    };
+    u64::try_from(value.as_i128()?).ok()
 }

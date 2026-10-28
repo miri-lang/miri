@@ -25,4 +25,5 @@ pub mod rc;
 pub mod shared_bodies;
 pub mod sorted_by;
 pub mod transformable;
+pub mod versioned_loops;
 pub mod wide_scalar_elements;

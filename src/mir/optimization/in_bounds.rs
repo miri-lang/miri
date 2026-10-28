@@ -4,7 +4,7 @@
 //! Finds the element accesses a loop's guard already proves in bounds, so
 //! code generation emits them without comparing the index to the length.
 //!
-//! A forward must-dataflow carries two facts from block to block:
+//! A forward must-dataflow carries three facts from block to block:
 //!
 //! - `n` holds the length of collection `l` — made by `n = Len(l)`, carried
 //!   to the result of a copy-on-write or a clone of `l`, which keep its
@@ -12,23 +12,38 @@
 //!   lost when `n` or `l` is given another value, their storage ends, `l` is
 //!   released, or a call runs that
 //!   `analysis::header_reach::runtime_call_leaves_headers` does not clear;
-//! - `i` is in bounds of `l` — made on the edge a `switchInt(c)` takes when
-//!   `c = Lt(i, n)` holds, if `c`, `i` and `n` keep their values from the
-//!   comparison to the switch, `n` holds the length of `l`, and `i` is never
-//!   negative; lost when `i` is given another value or anything that loses
-//!   `l`'s length runs.
+//! - `a + m <= b` for a margin `m >= 0` (`a < b` is a margin of 1, `a <= b`
+//!   one of 0), between integers of one type — made on the edge a
+//!   `switchInt(c)` takes when `c = Lt(a, b)` or `c = Le(a, b)` holds (or `c`
+//!   is a whole copy of such a comparison made in the same block), if the
+//!   comparison's operands keep their values to the switch; that edge also
+//!   carries the order one step on, `a + m + m' <= x` for each
+//!   `b + m' <= x` known there. `x = y + k` and `x = y - k`, for a constant
+//!   `k >= 0`, carry `y`'s margins to `x`: less `k` for a sum, the same for a
+//!   difference, which also makes `x + k <= y`. Lost when either side is
+//!   given another value;
+//! - `i` is in bounds of `l` — made wherever `i` gains a margin (on that
+//!   edge, or when `i` is computed by such a sum or difference) when `i` is
+//!   at least 0 and `i + m <= L` with `m >= 1` for a local `L` holding the
+//!   length of `l`; also on the true edge of `i < n` with `n` the length of
+//!   `l` and `i` never negative. `i` is at least 0 when it is never negative,
+//!   or when `a + m <= i` for an `a` that is never negative. Lost when `i`
+//!   is given another value or anything that loses `l`'s length runs.
 //!
-//! Only `<` proves anything: `i <= n` admits `i == n`, one past the end.
+//! Every margin is a statement about mathematical integers, and the
+//! arithmetic it follows stops the program rather than wrap
+//! ([`INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW`]), so `x = y + k` is exactly that
+//! sum. The off-by-one cases: `i <= n <= L` admits `i == L`, a margin of 0;
+//! `i < n` with `n <= L` gives `i + 1 <= L`, so `i + 1` itself needs
+//! `n + 1 <= L`; and `lo < hi` with `hi + 1 <= L`, `lo` never negative,
+//! keeps both `lo` and `hi` inside, `hi` stepping down keeping its margin.
+//! The loop-versioning pass puts the guards these need in front of a loop.
 //!
-//! Whether `i` is never negative is decided once for the whole body: every
-//! definition of it is a non-negative constant, a length, a copy of such a
-//! local, or a sum or product of such operands. A sum or product of
-//! non-negative operands stays non-negative only because integer `+` and `*`
-//! stop the program on overflow ([`INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW`]);
-//! were they to wrap, a sum could turn negative, and this rule admits only
-//! constants, lengths and copies. A parameter, a call's result, a local
-//! written through a projection and one whose address is taken are never
-//! known non-negative; an unsigned local always is.
+//! Whether `i` is never negative is decided once for the whole body
+//! (`analysis::non_negative`): every definition of it is a non-negative
+//! constant, a length, a copy of such a local, or a sum or product of such
+//! operands, which overflow-checked arithmetic keeps non-negative
+//! ([`INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW`]).
 //!
 //! An access is recorded on [`Body::in_bounds`] when its index is the first
 //! projection of a place rooted at a collection a stable-collection record
@@ -37,11 +52,12 @@
 //! pass runs last among the MIR passes; any pass that later changes a block
 //! must drop the entries in it, and `--verify-mir` re-derives every entry.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
-use crate::ast::literal::{IntegerLiteral, Literal};
-use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
+use crate::mir::analysis::loops::{comparison_before_switch, Comparison};
+use crate::mir::analysis::non_negative::{constant_step, is_integer, non_negative_locals, Step};
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -51,24 +67,41 @@ use crate::mir::{
 use crate::runtime_fns::preserves_length;
 
 /// Whether integer `+`, `-` and `*` stop the program on overflow rather than
-/// wrap. Code generation emits them overflow-checked at every optimization
-/// level while this holds; the non-negativity rule above relies on it.
-pub const INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW: bool = true;
+/// wrap; the non-negativity rule relies on it.
+pub use crate::mir::analysis::non_negative::INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW;
 
 /// What the dataflow knows at a program point, by local index.
+///
+/// Every fact speaks of the values its locals hold at that point. A write to
+/// a local kills every fact mentioning it before it derives any about the new
+/// value, and derives those only from facts whose other locals keep their
+/// values across the write, so no fact about an old value is ever restated
+/// of a new one; and no order relates a local to itself ([`Fact::below`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Fact {
     /// `length` holds the number of elements of `collection`.
     LengthOf { length: usize, collection: usize },
     /// `index` is at least 0 and below the length of `collection`.
     InBounds { index: usize, collection: usize },
+    /// `lhs + margin <= rhs`: `a < b` is a margin of 1, `a <= b` one of 0.
+    /// Both are integers of one type, and the sum is of mathematical
+    /// integers, so no width bounds it.
+    Below { lhs: usize, rhs: usize, margin: u64 },
 }
 
 impl Fact {
+    /// `lhs + margin <= rhs`, unless `lhs` and `rhs` are one local: no
+    /// write makes `x + m <= x` true of a value, so such a fact could only
+    /// come from mixing an old value of `x` with its new one.
+    fn below(lhs: usize, rhs: usize, margin: u64) -> Option<Fact> {
+        (lhs != rhs).then_some(Fact::Below { lhs, rhs, margin })
+    }
+
     fn mentions(self, local: usize) -> bool {
         match self {
             Fact::LengthOf { length, collection } => length == local || collection == local,
             Fact::InBounds { index, collection } => index == local || collection == local,
+            Fact::Below { lhs, rhs, .. } => lhs == local || rhs == local,
         }
     }
 
@@ -77,22 +110,29 @@ impl Fact {
             Fact::LengthOf { collection, .. } | Fact::InBounds { collection, .. } => {
                 collection == local
             }
+            Fact::Below { .. } => false,
         }
     }
 
-    /// The fact with `from` replaced by `to`, if it mentions `from`.
+    /// The fact restated of `to`, given `from`'s value by a whole copy, if
+    /// it mentions `from` and not `to`: a fact mentioning `to` speaks of the
+    /// value the copy replaces.
     fn renamed(self, from: usize, to: usize) -> Option<Fact> {
+        if !self.mentions(from) || self.mentions(to) {
+            return None;
+        }
         let rename = |local: usize| if local == from { to } else { local };
-        self.mentions(from).then(|| match self {
-            Fact::LengthOf { length, collection } => Fact::LengthOf {
+        match self {
+            Fact::LengthOf { length, collection } => Some(Fact::LengthOf {
                 length: rename(length),
                 collection: rename(collection),
-            },
-            Fact::InBounds { index, collection } => Fact::InBounds {
+            }),
+            Fact::InBounds { index, collection } => Some(Fact::InBounds {
                 index: rename(index),
                 collection: rename(collection),
-            },
-        })
+            }),
+            Fact::Below { lhs, rhs, margin } => Fact::below(rename(lhs), rename(rhs), margin),
+        }
     }
 }
 
@@ -293,9 +333,9 @@ impl<'a> Flow<'a> {
             {
                 renamed_facts(state, source.local, dest)
             }
+            Rvalue::BinaryOp(op, lhs, rhs) => self.offset_facts(dest, *op, lhs, rhs, state),
             Rvalue::Use(_)
             | Rvalue::Ref(_)
-            | Rvalue::BinaryOp(..)
             | Rvalue::UnaryOp(..)
             | Rvalue::Cast(..)
             | Rvalue::Len(_)
@@ -307,6 +347,51 @@ impl<'a> Flow<'a> {
         };
         state.retain(|fact| !fact.mentions(dest.0));
         state.extend(made);
+        if matches!(rvalue, Rvalue::BinaryOp(..)) {
+            let in_bounds = self.in_bounds_of(state, dest.0);
+            state.extend(in_bounds);
+        }
+    }
+
+    /// The margins `dest = source + value` or `dest = source - value` keeps,
+    /// for a constant `value >= 0`. Integer `+` and `-` stop the program on
+    /// overflow ([`INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW`]), so `dest` is
+    /// exactly that sum or difference: where `source + m <= b`, a sum gives
+    /// `dest + (m - value) <= b` when `m >= value`, and a difference, at most
+    /// `source`, gives `dest + m <= b` and `dest + value <= source`. Only
+    /// facts whose `b` is not `dest` are read, so each one made relates the
+    /// new `dest` to a local the write leaves alone; for `x = x + k` the
+    /// facts read are those of the old `x`, which is exactly the `source`.
+    fn offset_facts(
+        &self,
+        dest: Local,
+        op: BinOp,
+        lhs: &Operand,
+        rhs: &Operand,
+        state: &Facts,
+    ) -> Vec<Fact> {
+        let Some((source, step)) = constant_step(op, lhs, rhs) else {
+            return Vec::new();
+        };
+        if !self.are_integers_of_one_type(dest, source) {
+            return Vec::new();
+        }
+        let mut made: Vec<Fact> = (state.iter())
+            .filter_map(|fact| match *fact {
+                Fact::Below { lhs, rhs, margin } if lhs == source.0 && rhs != dest.0 => {
+                    let margin = match step {
+                        Step::Up(value) => margin.checked_sub(value)?,
+                        Step::Down(_) => margin,
+                    };
+                    Fact::below(dest.0, rhs, margin)
+                }
+                Fact::Below { .. } | Fact::LengthOf { .. } | Fact::InBounds { .. } => None,
+            })
+            .collect();
+        if let Step::Down(value) = step {
+            made.extend(Fact::below(dest.0, source.0, value));
+        }
+        made
     }
 
     fn is_indexed_collection(&self, local: Local) -> bool {
@@ -333,13 +418,12 @@ impl<'a> Flow<'a> {
                 targets,
                 otherwise,
             } => {
-                let guarded = self.guarded(block, discr, &state);
                 let mut edges: Vec<(usize, Facts)> = targets
                     .iter()
                     .map(|(value, target)| {
                         let mut facts = state.clone();
                         if *value == Discriminant::bool_true() {
-                            facts.extend(guarded.iter().copied());
+                            self.guard(block, discr, &mut facts);
                         }
                         (target.0, facts)
                     })
@@ -394,58 +478,97 @@ impl<'a> Flow<'a> {
         state.extend(made);
     }
 
-    /// The in-bounds facts the true edge of a switch on `discr`, ending
-    /// `block`, proves in `state`.
-    fn guarded(&self, block: usize, discr: &Operand, state: &Facts) -> Vec<Fact> {
+    /// Adds to `facts` what the true edge of a switch on `discr`, ending
+    /// `block`, makes: the order its comparison `lhs < rhs` or `lhs <= rhs`
+    /// states, that order carried one step past each local `rhs` is known
+    /// below, and the collections either operand then lies inside.
+    fn guard(&self, block: usize, discr: &Operand, facts: &mut Facts) {
         let Some(condition) = discr.bare_local() else {
-            return Vec::new();
+            return;
         };
-        let Some((index, length)) = self.comparison_before_switch(block, condition) else {
-            return Vec::new();
+        let Some(Comparison { lhs, rhs, strict }) =
+            comparison_before_switch(self.body, block, condition)
+        else {
+            return;
         };
-        if !self.is_non_negative(index) {
+        if strict && self.is_non_negative(lhs) {
+            let below_its_length = lengths_held_by(facts, rhs.0)
+                .map(|collection| Fact::InBounds {
+                    index: lhs.0,
+                    collection,
+                })
+                .collect::<Vec<_>>();
+            facts.extend(below_its_length);
+        }
+        if lhs == rhs || !self.are_integers_of_one_type(lhs, rhs) {
+            return;
+        }
+        let margin = u64::from(strict);
+        let carried: Vec<Fact> = (facts.iter())
+            .filter_map(|fact| match *fact {
+                Fact::Below {
+                    lhs: below,
+                    rhs: above,
+                    margin: further,
+                } if below == rhs.0 => Fact::below(lhs.0, above, margin.checked_add(further)?),
+                Fact::Below { .. } | Fact::LengthOf { .. } | Fact::InBounds { .. } => None,
+            })
+            .collect();
+        facts.extend(Fact::below(lhs.0, rhs.0, margin));
+        facts.extend(carried);
+        for operand in [lhs, rhs] {
+            let in_bounds = self.in_bounds_of(facts, operand.0);
+            facts.extend(in_bounds);
+        }
+    }
+
+    /// The collections `facts` keeps `index` inside: `index` is at least 0 —
+    /// never negative anywhere, or at least a local that never is — and
+    /// below a local holding the collection's length by a margin of 1 or
+    /// more.
+    fn in_bounds_of(&self, facts: &Facts, index: usize) -> Vec<Fact> {
+        let at_least_zero = self.non_negative.contains(&index)
+            || facts.iter().any(|fact| match *fact {
+                Fact::Below { lhs, rhs, .. } => rhs == index && self.non_negative.contains(&lhs),
+                Fact::LengthOf { .. } | Fact::InBounds { .. } => false,
+            });
+        if !at_least_zero {
             return Vec::new();
         }
-        state
-            .iter()
-            .filter_map(|fact| match fact {
-                Fact::LengthOf {
-                    length: known,
-                    collection,
-                } if *known == length.0 => Some(Fact::InBounds {
-                    index: index.0,
-                    collection: *collection,
-                }),
-                Fact::LengthOf { .. } | Fact::InBounds { .. } => None,
+        let below = |length: usize| {
+            facts.iter().any(|fact| {
+                matches!(*fact, Fact::Below { lhs, rhs, margin }
+                    if lhs == index && rhs == length && margin >= 1)
+            })
+        };
+        (facts.iter())
+            .filter_map(|fact| match *fact {
+                Fact::LengthOf { length, collection } if below(length) => {
+                    Some(Fact::InBounds { index, collection })
+                }
+                Fact::LengthOf { .. } | Fact::InBounds { .. } | Fact::Below { .. } => None,
             })
             .collect()
     }
 
-    /// `(i, n)` when the last statement of `block` writing `condition` is
-    /// `condition = Lt(i, n)` and nothing after it writes `condition`, `i` or
-    /// `n`.
-    fn comparison_before_switch(&self, block: usize, condition: Local) -> Option<(Local, Local)> {
-        let statements = &self.body.basic_blocks.get(block)?.statements;
-        let position = statements
-            .iter()
-            .rposition(|statement| writes_whole(statement, condition))?;
-        let (StatementKind::Assign(_, Rvalue::BinaryOp(BinOp::Lt, lhs, rhs))
-        | StatementKind::Reassign(_, Rvalue::BinaryOp(BinOp::Lt, lhs, rhs))) =
-            &statements.get(position)?.kind
-        else {
-            return None;
-        };
-        let (index, length) = (lhs.bare_local()?, rhs.bare_local()?);
-        let later = statements.get(position + 1..).unwrap_or_default();
-        let is_kept = later
-            .iter()
-            .all(|statement| !writes_whole(statement, index) && !writes_whole(statement, length));
-        is_kept.then_some((index, length))
+    /// Whether `lhs` and `rhs` are declared the same integer type, so one
+    /// ordering of them carries to another.
+    fn are_integers_of_one_type(&self, lhs: Local, rhs: Local) -> bool {
+        let kind = |local: Local| self.body.local_decls.get(local.0).map(|decl| &decl.ty.kind);
+        kind(lhs).is_some_and(|left| is_integer(left) && kind(rhs) == Some(left))
     }
 
     fn is_non_negative(&self, local: Local) -> bool {
         self.non_negative.contains(&local.0)
     }
+}
+
+/// The collections `bound` holds the length of in `facts`.
+fn lengths_held_by(facts: &Facts, bound: usize) -> impl Iterator<Item = usize> + '_ {
+    facts.iter().filter_map(move |fact| match *fact {
+        Fact::LengthOf { length, collection } if length == bound => Some(collection),
+        Fact::LengthOf { .. } | Fact::InBounds { .. } | Fact::Below { .. } => None,
+    })
 }
 
 /// The facts of `state` mentioning `from`, restated of `to`.
@@ -454,172 +577,4 @@ fn renamed_facts(state: &Facts, from: Local, to: Local) -> Vec<Fact> {
         .iter()
         .filter_map(|fact| fact.renamed(from.0, to.0))
         .collect()
-}
-
-/// Whether `statement` gives the whole of `local` a value or starts or ends
-/// its storage.
-fn writes_whole(statement: &Statement, local: Local) -> bool {
-    match &statement.kind {
-        StatementKind::Assign(place, _)
-        | StatementKind::Reassign(place, _)
-        | StatementKind::StorageLive(place)
-        | StatementKind::StorageDead(place) => place.local == local && place.projection.is_empty(),
-        StatementKind::IncRef(_)
-        | StatementKind::DecRef(_)
-        | StatementKind::Dealloc(_)
-        | StatementKind::Nop => false,
-    }
-}
-
-/// The integer locals of `body` no definition can make negative, decided
-/// optimistically: every candidate starts known, and one with a definition
-/// that could be negative given the others is dropped, until none is.
-fn non_negative_locals(body: &Body) -> HashSet<usize> {
-    let definitions = whole_definitions(body);
-    let excluded = excluded_locals(body);
-    let mut known: HashSet<usize> = (body.local_decls.iter().enumerate())
-        .filter(|(index, decl)| {
-            is_unsigned(&decl.ty.kind)
-                || (is_signed_integer(&decl.ty.kind)
-                    && !excluded.contains(index)
-                    && definitions.contains_key(index))
-        })
-        .map(|(index, _)| index)
-        .collect();
-    loop {
-        let dropped: Vec<usize> = (known.iter().copied())
-            .filter(|local| !is_unsigned_local(body, *local))
-            .filter(|local| {
-                (definitions.get(local).into_iter().flatten())
-                    .any(|rvalue| !is_non_negative_rvalue(rvalue, body, &known))
-            })
-            .collect();
-        if dropped.is_empty() {
-            return known;
-        }
-        for local in dropped {
-            known.remove(&local);
-        }
-    }
-}
-
-/// Every rvalue each whole local is assigned, by local index.
-fn whole_definitions(body: &Body) -> HashMap<usize, Vec<&Rvalue>> {
-    let mut definitions: HashMap<usize, Vec<&Rvalue>> = HashMap::new();
-    for statement in body.basic_blocks.iter().flat_map(|data| &data.statements) {
-        if let StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) =
-            &statement.kind
-        {
-            if place.projection.is_empty() {
-                definitions.entry(place.local.0).or_default().push(rvalue);
-            }
-        }
-    }
-    definitions
-}
-
-/// The locals whose value code this body does not show may set: parameters,
-/// captures, call results, locals written through a projection and locals
-/// whose address is taken.
-fn excluded_locals(body: &Body) -> HashSet<usize> {
-    let mut excluded: HashSet<usize> = (1..=body.arg_count).collect();
-    excluded.extend(body.env_capture_locals.iter().map(|local| local.0));
-    for data in &body.basic_blocks {
-        for statement in &data.statements {
-            match &statement.kind {
-                StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
-                    if !place.projection.is_empty() {
-                        excluded.insert(place.local.0);
-                    }
-                    if let Rvalue::Ref(taken) = rvalue {
-                        excluded.insert(taken.local.0);
-                    }
-                }
-                StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
-                | StatementKind::IncRef(_)
-                | StatementKind::DecRef(_)
-                | StatementKind::Dealloc(_)
-                | StatementKind::Nop => {}
-            }
-        }
-        let written = data.terminator.iter().flat_map(Terminator::written_places);
-        excluded.extend(written.map(|place| place.local.0));
-    }
-    excluded
-}
-
-/// Whether `rvalue` is non-negative when every local of `known` is.
-fn is_non_negative_rvalue(rvalue: &Rvalue, body: &Body, known: &HashSet<usize>) -> bool {
-    let operand_is = |operand: &Operand| is_non_negative_operand(operand, body, known);
-    match rvalue {
-        Rvalue::Use(operand) => operand_is(operand),
-        Rvalue::Len(_) => true,
-        Rvalue::BinaryOp(BinOp::Add | BinOp::Mul, lhs, rhs) => {
-            INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW && operand_is(lhs) && operand_is(rhs)
-        }
-        Rvalue::BinaryOp(..)
-        | Rvalue::Ref(_)
-        | Rvalue::UnaryOp(..)
-        | Rvalue::Cast(..)
-        | Rvalue::GpuIntrinsic(_)
-        | Rvalue::MathIntrinsic(..)
-        | Rvalue::Aggregate(..)
-        | Rvalue::Phi(_)
-        | Rvalue::AtomicOp { .. } => false,
-    }
-}
-
-fn is_non_negative_operand(operand: &Operand, body: &Body, known: &HashSet<usize>) -> bool {
-    match operand {
-        Operand::Constant(constant) => matches!(
-            &constant.literal,
-            Literal::Integer(value) if is_non_negative_literal(value)
-        ),
-        Operand::Copy(place) | Operand::Move(place) => {
-            place.projection.is_empty()
-                && (known.contains(&place.local.0) || is_unsigned_local(body, place.local.0))
-        }
-        Operand::Function(_) => false,
-    }
-}
-
-fn is_non_negative_literal(value: &IntegerLiteral) -> bool {
-    match value {
-        IntegerLiteral::I8(v) => *v >= 0,
-        IntegerLiteral::I16(v) => *v >= 0,
-        IntegerLiteral::I32(v) => *v >= 0,
-        IntegerLiteral::I64(v) => *v >= 0,
-        IntegerLiteral::I128(v) => *v >= 0,
-        IntegerLiteral::U8(_)
-        | IntegerLiteral::U16(_)
-        | IntegerLiteral::U32(_)
-        | IntegerLiteral::U64(_)
-        | IntegerLiteral::U128(_) => true,
-    }
-}
-
-fn is_unsigned_local(body: &Body, local: usize) -> bool {
-    body.local_decls
-        .get(local)
-        .is_some_and(|decl| is_unsigned(&decl.ty.kind))
-}
-
-fn is_unsigned(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
-    )
-}
-
-fn is_signed_integer(kind: &TypeKind) -> bool {
-    matches!(
-        kind,
-        TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I64
-            | TypeKind::I128
-    )
 }

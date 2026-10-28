@@ -27,7 +27,10 @@
 //! against the caller's release of it. [`elide_unshare_checks`] runs after
 //! it, on every host body at every optimization level, and removes a
 //! uniqueness check an earlier check or a freshly built value has already
-//! answered. [`stable_collections::record_stable_collections`] runs last, and
+//! answered. [`loop_versioning::version_bounded_loops`] runs next, and gives
+//! a loop compared with a bound other than a length a copy entered only when
+//! a guard ties the bound to the length of each list it indexes.
+//! [`stable_collections::record_stable_collections`] runs after it, and
 //! records each array or list a loop leaves the header of unchanged, so code
 //! generation reads that header once before the loop.
 //! [`in_bounds::record_in_bounds`] runs after it, and records each access a
@@ -53,6 +56,7 @@ pub mod in_bounds;
 pub mod index_numbering;
 pub mod local_borrows;
 pub mod loop_unsharing;
+pub mod loop_versioning;
 pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;

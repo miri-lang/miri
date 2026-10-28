@@ -561,7 +561,9 @@ fn touch(start [Cell], j int) [Cell]
 fn test_a_computed_index_in_a_loop_is_checked_once_per_iteration() {
     // Within an iteration the second write reaches the element the first
     // checked; the index changes every iteration, so the element check stays
-    // in the loop. The list is made its own once before it.
+    // in the loop. The list is made its own once before it. The loop reads
+    // `l[i + 1]` below a parameter, so it is versioned: the check is counted
+    // once in each of its two copies.
     let source = with_cell(
         r#"
 fn touch(start [Cell], n int) [Cell]
@@ -575,8 +577,8 @@ fn touch(start [Cell], n int) [Cell]
 "#,
     );
     let body = body_named(&source, ".touch");
-    assert_eq!(reachable_checks(&body), 1);
-    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 1);
+    assert_eq!(reachable_checks(&body), 2);
+    assert_eq!(calls_in_loops(&body, rt::RC_IS_SHARED), 2);
     assert_eq!(reachable_copy_on_writes(&body), 1);
 }
 

@@ -14,7 +14,11 @@
 //!   of a collection the body holds: the collection's aliases, and whether it
 //!   holds a reference of its own.
 //! - **Loops**: The natural loops of a body, each found along the edges back to
-//!   its header.
+//!   its header, and the comparison of two locals a block switches on.
+//! - **Non-negative locals**: The integer locals no definition can make
+//!   negative.
+//! - **Stable headers**: Whether a loop leaves the header of a collection it
+//!   indexes unchanged.
 //! - **Traversal**: The reverse postorder a forward dataflow visits blocks in.
 //!
 //! These analyses are foundational for optimization passes and SSA transformation.
@@ -23,4 +27,6 @@ pub mod copies_read_in_place;
 pub mod dominators;
 pub mod header_reach;
 pub mod loops;
+pub mod non_negative;
+pub mod stable_headers;
 pub mod traversal;

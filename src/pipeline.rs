@@ -2897,12 +2897,13 @@ impl Pipeline {
         }
 
         // Drop the uniqueness checks an earlier write through the same path
-        // already answered, on the bodies with every retain explicit; let each
-        // block branch on the condition it computed; then record each
-        // collection a loop leaves the header of unchanged.
+        // already answered, on the bodies with every retain explicit; thread
+        // branch conditions; copy each loop a guard on its bound proves in
+        // bounds; then record each collection a loop leaves unchanged.
         for (_name, body) in &mut bodies {
             mir::optimization::elide_unshare_checks(body);
             mir::optimization::thread_branch_conditions(body);
+            mir::optimization::loop_versioning::version_bounded_loops(body);
             mir::optimization::stable_collections::record_stable_collections(body);
             mir::optimization::in_bounds::record_in_bounds(body);
         }

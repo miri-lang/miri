@@ -7,6 +7,7 @@ pub mod copy_propagation;
 pub mod dead_code;
 pub mod in_bounds;
 pub mod index_numbering;
+pub mod loop_versioning;
 pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
