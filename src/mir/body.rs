@@ -112,6 +112,16 @@ pub struct Body {
     /// (`crate::mir::optimization::local_borrows`); the verifier checks each
     /// entry again against the body.
     pub borrowed_locals: HashMap<Local, Vec<Local>>,
+    /// The calls, by the block each ends, to a function of the program that
+    /// may release nothing its caller lends it, so an argument read through a
+    /// class field is lent to it without a retain. Empty — every call may —
+    /// until `crate::mir::analysis::heap_effects` decides it over the whole
+    /// program.
+    pub quiet_calls: HashSet<BasicBlock>,
+    /// The calls, by the block each ends, whose callee writes the receiver
+    /// passed first in place as a value its caller copies on write: the
+    /// caller made it unique for the call, so it is never retained for it.
+    pub unique_receiver_calls: HashSet<BasicBlock>,
     /// Which parameters (indexed 1..=arg_count) the body actually writes.
     /// `param_written[i-1] == true` means parameter `_i` is written by this body.
     /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
@@ -295,6 +305,8 @@ impl Body {
             receiver: None,
             owned_params: Vec::new(),
             borrowed_locals: HashMap::new(),
+            quiet_calls: HashSet::new(),
+            unique_receiver_calls: HashSet::new(),
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),

@@ -3,5 +3,6 @@
 
 pub mod copies_read_in_place;
 pub mod dominators;
+pub mod heap_effects;
 pub mod loops;
 pub mod traversal;

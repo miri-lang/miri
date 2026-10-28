@@ -10,6 +10,10 @@
 //! - **Dominators**: Compute dominator trees and dominance frontiers for SSA construction
 //!   and loop detection. A block `A` dominates block `B` if every path from the entry
 //!   to `B` must pass through `A`.
+//! - **Element matching**: What code the runtime runs when it matches or
+//!   orders the elements of a container.
+//! - **Heap effects**: Which calls may release a value their caller lends
+//!   them, decided over the whole program.
 //! - **Header reach**: Which calls a loop may make without changing the header
 //!   of a collection the body holds: the collection's aliases, and whether it
 //!   holds a reference of its own.
@@ -25,7 +29,9 @@
 
 pub mod copies_read_in_place;
 pub mod dominators;
+pub mod element_matching;
 pub mod header_reach;
+pub mod heap_effects;
 pub mod loops;
 pub mod non_negative;
 pub mod stable_headers;

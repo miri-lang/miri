@@ -54,6 +54,7 @@ pub mod copy_propagation;
 pub mod dead_code;
 pub mod in_bounds;
 pub mod index_numbering;
+mod lent_arguments;
 pub mod local_borrows;
 pub mod loop_unsharing;
 pub mod loop_versioning;

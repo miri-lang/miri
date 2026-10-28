@@ -158,6 +158,11 @@ impl BorrowedLocals {
 
 impl OptimizationPass for Perceus {
     fn run(&mut self, body: &mut Body) -> bool {
+        // Step 0: a lent argument held only through a class field gets a local
+        // of its own across a call that may release it, retained below like
+        // any other copy of a counted field.
+        let held = super::lent_arguments::hold_lent_field_arguments(body);
+
         // Step 1: Identify which variables actually need tracking (managed locals).
         //
         // NOTE: We do NOT exit early when managed_locals is empty. Even when there
@@ -185,7 +190,7 @@ impl OptimizationPass for Perceus {
             borrowed.reads.insert(*local);
         }
         body.borrowed_locals = borrows;
-        let mut changed = self.retain_written_captures(body, &managed_locals);
+        let mut changed = self.retain_written_captures(body, &managed_locals) || held;
 
         // Step 2: Iterate through every block of code and inject RC instructions.
 

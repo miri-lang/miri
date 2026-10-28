@@ -13,6 +13,7 @@
 //! verifier reports nothing at all.
 
 mod in_bounds;
+mod lent_arguments;
 mod local_borrows;
 mod optional_representation;
 mod parameter_writes;

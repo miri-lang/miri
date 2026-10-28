@@ -2875,6 +2875,8 @@ impl Pipeline {
         let verify_mode = self.verify_mode();
         let program_violations =
             Self::decide_owned_parameters(result, &mut lowered, verify_mode.is_some());
+        let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
+        mir::analysis::heap_effects::stamp_quiet_calls(&mut lowered, &hooks);
 
         let mut bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
@@ -3270,6 +3272,23 @@ impl Pipeline {
         Ok(())
     }
 
+    /// The violations found across the program with every retain and release
+    /// in place: optional slots checked again, and every argument lent through
+    /// a class field to a call that may release it.
+    fn verify_program_after_rc(
+        result: &PipelineResult,
+        bodies: &[(String, mir::Body)],
+    ) -> Vec<(String, mir::verify::VerificationViolation)> {
+        let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
+        let mut violations = mir::verify::verify_optional_slots(bodies, String::clone);
+        violations.extend(mir::verify::verify_lent_arguments(
+            bodies,
+            String::clone,
+            &hooks,
+        ));
+        violations
+    }
+
     /// Run every verification pass over every body and turn what they find
     /// into one report — printed under `warn`, fatal otherwise.
     ///
@@ -3292,8 +3311,7 @@ impl Pipeline {
             .into_iter()
             .map(|(symbol, v)| format!("  fn {}: {}", symbol, v))
             .collect();
-        // Checked again with every retain and release in place.
-        let after_rc = mir::verify::verify_optional_slots(bodies, String::clone);
+        let after_rc = Self::verify_program_after_rc(result, bodies);
         functions_with_violations += after_rc
             .iter()
             .map(|(name, _)| name)

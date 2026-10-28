@@ -350,7 +350,9 @@ println(grow())
 }
 
 /// `h.wipe()` empties the list `xs` names without mentioning `xs`, so an
-/// element read from a parameter keeps its reference.
+/// element read from a parameter keeps its reference. The caller retains
+/// `h.items` for the call, since `probe` may release what that field holds,
+/// so `wipe` copies the list before clearing it and `xs` keeps both nodes.
 #[test]
 fn test_an_element_of_a_borrowed_parameter_keeps_its_reference() {
     assert_borrowing(
@@ -382,8 +384,8 @@ let h = Holder(List([Node(3), Node(4)]))
 println(f"{probe(h, h.items)}")
 "#,
         "3",
-        4,
-        12,
+        5,
+        16,
     );
 }
 
