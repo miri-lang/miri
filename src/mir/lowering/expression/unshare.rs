@@ -47,7 +47,6 @@ use crate::mir::{
     TerminatorKind,
 };
 use crate::runtime_fns::rt;
-use crate::type_checker::element_layout::element_layout;
 
 /// One step of the path a write reaches through, read off the expression
 /// before any code for it is emitted.
@@ -111,9 +110,9 @@ impl TemporaryRoot {
 
 /// A map entry a write lands in that the lookup handed back as a copy.
 ///
-/// A map holds a vector inline, as its components' bytes, so looking one up
-/// copies it out: a component written into that copy reaches the map only
-/// once the copy is stored back under the same key.
+/// A map holds a value held as its bytes inline, so looking one up copies it
+/// out: a member written into that copy reaches the map only once the copy is
+/// stored back under the same key.
 pub(crate) struct EntryWriteBack {
     map: Place,
     key: Place,
@@ -594,9 +593,7 @@ fn own_entry_place(
         crate::mir::lowering::helpers::ensure_place(ctx, entry, obj.span)
     };
     let entry = lookup(ctx);
-    let is_held_inline = element_layout(&value_ty.kind, ctx.body.layout_scope()).is_address
-        || ctx.body.value_layout(&value_ty.kind).is_some();
-    if is_held_inline {
+    if ctx.body.value_layout(&value_ty.kind).is_some() {
         return Ok(WrittenPlace {
             place: entry.clone(),
             write_back: Some(EntryWriteBack {

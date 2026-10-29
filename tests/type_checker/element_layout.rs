@@ -79,7 +79,6 @@ fn held_by_value(bytes: i64) -> ElementLayout {
     ElementLayout {
         payload: bytes,
         stride: bytes,
-        is_address: false,
     }
 }
 
@@ -123,22 +122,22 @@ fn struct_and_tuple_elements_of_scalars_are_held_inline_as_their_bytes() {
             ElementLayout {
                 payload: 16,
                 stride: 16,
-                is_address: false,
             },
             "`{parameter}` should be held inline as its sixteen bytes"
         );
     }
 }
 
+/// A vector element is held as its bytes like any value, spaced at the
+/// std430 stride: a `Vec3<f32>` is twelve bytes sixteen apart.
 #[test]
-fn vector_element_is_laid_out_inline_at_its_std430_stride() {
+fn vector_element_is_held_as_its_bytes_at_its_std430_stride() {
     let probe = Probe::of(SOURCE);
     assert_eq!(
         probe.layout_of("v"),
         ElementLayout {
             payload: 12,
             stride: 16,
-            is_address: true,
         }
     );
 }

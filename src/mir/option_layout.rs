@@ -5,8 +5,8 @@
 //!
 //! An optional whose payload is itself a pointer to a reference-counted
 //! allocation can spell its absence as a null payload pointer, with no box of
-//! its own. Every other optional layer — a scalar or inline-vector payload, or
-//! an outer layer of a nested optional — needs a box, so that the layer's
+//! its own. Every other optional layer — a scalar payload, a payload held as
+//! its bytes, or an outer layer of a nested optional — needs a box, so that the layer's
 //! absence and the inner value's absence stay distinguishable.
 //!
 //! [`OptionalLayers`] is the one place that decides how many layers of a
@@ -252,8 +252,8 @@ fn alias_target(kind: &TypeKind, definitions: &HashMap<String, TypeDefinition>) 
 /// function value, and a name the type table defines as a class, struct, enum
 /// or trait. An alias is judged as the type it names at its arguments, so an
 /// alias naming an optional is an optional. False for every value held by value —
-/// scalars, aliases to them, a struct or tuple held as its bytes, inline
-/// vectors and atomics — for an optional
+/// scalars, aliases to them, a struct, tuple or vector held as its bytes, and
+/// atomics — for an optional
 /// (whose own absence must stay distinct from the outer one), for names that
 /// denote no allocation (generic parameters, a bare name the scope leaves open as a
 /// parameter, placeholders, a collection named

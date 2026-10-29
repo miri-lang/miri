@@ -16,33 +16,30 @@
 //! caller names — again an address and a byte count, appended after its other
 //! arguments — and returns nothing, so an element of any width arrives whole
 //! and at its own width. This pass spells that too: the destination becomes an
-//! `out` argument, or the storage of the inline vector it is built into.
+//! `out` argument, or the address of the bytes of the value it is held as.
 //!
 //! The positions come from [`crate::runtime_fns::element_positions`] and
-//! [`crate::runtime_fns::returns_element_value`]; the width, and whether the
-//! operand is already an address, from
+//! [`crate::runtime_fns::returns_element_value`]; the width from
 //! [`crate::type_checker::element_layout::element_layout`], read against the
 //! body's own layout scope.
 //! The pass runs after reference counting, which has already accounted for the
 //! element as the value it is.
 
-use crate::ast::expression::ExpressionKind;
-use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
+use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::{
-    AggregateKind, ArgMode, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType,
-    Operand, Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    ArgMode, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType, Operand, Place,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 pub use crate::type_checker::element_layout::{element_layout, ElementLayout};
 
 /// Rewrite every element argument in `body` into its address and byte count,
 /// and every element result into caller storage the runtime writes.
 ///
-/// An element that cannot be sized — an inline vector read through a
-/// projection, whose component width the projected type does not record — is
-/// reported rather than guessed at.
+/// An element that cannot be sized — a projection reaching a type this pass
+/// cannot read — is reported rather than guessed at.
 pub fn pass_elements_by_address(body: &mut Body) -> Result<(), String> {
     for block in 0..body.basic_blocks.len() {
         pass_element_arguments(body, block)?;
@@ -127,9 +124,6 @@ fn element_address(
 ) -> Result<(Operand, Operand), String> {
     let layout = argument_layout(body, &arg)?;
     let payload = byte_count(layout.payload, span);
-    if layout.is_address {
-        return Ok((arg, payload));
-    }
     let place = match arg {
         Operand::Copy(place) | Operand::Move(place) => place,
         Operand::Constant(constant) => {
@@ -172,12 +166,7 @@ fn argument_layout(body: &Body, arg: &Operand) -> Result<ElementLayout, String> 
             let reached = arg.ty_projected(body).ok_or_else(|| {
                 format!("the collection element {place} reaches a type this pass cannot size")
             })?;
-            projected_layout(body, &reached).ok_or_else(|| {
-                format!(
-                    "the collection element {place} is an inline vector read through a \
-                     projection, whose component width is not known here"
-                )
-            })
+            Ok(projected_layout(body, &reached))
         }
     }
 }
@@ -191,16 +180,12 @@ fn projected_value(body: &Body, place: &Place) -> Option<TypeKind> {
 }
 
 /// The layout of an element whose type is known only as the MIR type a
-/// projection reaches, or `None` for an inline vector, whose components that
-/// type does not record.
-fn projected_layout(body: &Body, reached: &MirType) -> Option<ElementLayout> {
-    if reached.is_inline_vector() {
-        return None;
-    }
-    Some(element_layout(
+/// projection reaches: a scalar, or a value word.
+fn projected_layout(body: &Body, reached: &MirType) -> ElementLayout {
+    element_layout(
         &register_scalar(reached).unwrap_or(TypeKind::RawPtr),
         body.layout_scope(),
-    ))
+    )
 }
 
 /// The scalar type a value of MIR type `reached` is held as in one register,
@@ -237,7 +222,6 @@ fn register_scalar(reached: &MirType) -> Option<TypeKind> {
         | MirType::Option(_)
         | MirType::Future(_)
         | MirType::Custom(_)
-        | MirType::Vector(_)
         | MirType::Function
         | MirType::Generic
         | MirType::Unknown => return None,
@@ -267,21 +251,18 @@ fn byte_count(bytes: i64, span: Span) -> Operand {
 ///
 /// The call gains two trailing arguments — where the element goes and how many
 /// bytes it is there — and its result becomes nothing. A destination held in
-/// one register is itself the `out` argument. An inline vector is built with
-/// zero components first and its storage is handed over. Anything else — a
-/// reference, or a destination reached through a projection — is written into
-/// a fresh register-sized slot that the destination is assigned from once the
-/// call returns.
+/// one register is itself the `out` argument. A value held as its bytes hands
+/// over the address of those bytes. Anything else — a reference, or a
+/// destination reached through a projection — is written into a fresh
+/// register-sized slot that the destination is assigned from once the call
+/// returns.
 fn return_element_through_storage(body: &mut Body, block: usize) -> Result<(), String> {
     let Some((destination, target, span)) = element_returning_call(body, block) else {
         return Ok(());
     };
     let kind = destination_kind(body, &destination)?;
     let layout = element_layout(&kind, body.layout_scope());
-    let (storage, is_out) = if layout.is_address {
-        build_zero_vector(body, block, &destination, &kind, span)?;
-        (destination, false)
-    } else if body.value_layout(&kind).is_some() {
+    let (storage, is_out) = if body.value_layout(&kind).is_some() {
         (
             value_storage(body, block, (destination, target), &kind, span),
             false,
@@ -358,9 +339,9 @@ fn element_returning_call(body: &Body, block: usize) -> Option<(Place, Option<Ba
 
 /// The type of the element a call's destination receives.
 ///
-/// A whole local answers with its declared type, which keeps an inline
-/// vector's components; a projected destination with the scalar its
-/// projection reaches, or a value word for anything held by reference.
+/// A whole local answers with its declared type; a projected destination with
+/// the value held as its bytes or the scalar its projection reaches, or a
+/// value word for anything held by reference.
 fn destination_kind(body: &Body, destination: &Place) -> Result<TypeKind, String> {
     if destination.projection.is_empty() {
         return Ok(body.local_decls[destination.local.0].ty.kind.clone());
@@ -375,72 +356,12 @@ fn destination_kind(body: &Body, destination: &Place) -> Result<TypeKind, String
                 "the collection element result {destination} reaches a type this pass cannot size"
             )
         })?;
-    if reached.is_inline_vector() {
-        return Err(format!(
-            "the collection element result {destination} is an inline vector stored through a \
-             projection, whose component width is not known here"
-        ));
-    }
     Ok(register_scalar(&reached).unwrap_or(TypeKind::Int))
 }
 
 /// Whether a value of type `kind` is one scalar held in one register.
 fn register_scalar_kind(kind: &TypeKind) -> bool {
     register_scalar(&MirType::from_type_kind(kind)).is_some()
-}
-
-/// Build an inline vector of type `kind` with every component zero into
-/// `destination`, ahead of the call ending `block`, so the runtime has storage
-/// to write the element's components into.
-fn build_zero_vector(
-    body: &mut Body,
-    block: usize,
-    destination: &Place,
-    kind: &TypeKind,
-    span: Span,
-) -> Result<(), String> {
-    let (Some(components), TypeKind::Custom(name, Some(args))) = (vec_components(kind), kind)
-    else {
-        return Err(format!(
-            "the collection element result {destination} is not a vector"
-        ));
-    };
-    let Some(ExpressionKind::Type(component, _)) = args.first().map(|arg| &arg.node) else {
-        return Err(format!("the vector type {name} names no component type"));
-    };
-    let zeros = (0..components)
-        .map(|_| zero_constant(&component.kind, span))
-        .collect();
-    let aggregate = AggregateKind::Struct(Type::new(kind.clone(), span));
-    push_assign(
-        body,
-        block,
-        destination.clone(),
-        Rvalue::Aggregate(aggregate, zeros),
-        span,
-    );
-    Ok(())
-}
-
-/// The number of components of the vector type `kind`.
-fn vec_components(kind: &TypeKind) -> Option<usize> {
-    crate::ast::types::vec_type_dim(kind).map(usize::from)
-}
-
-/// A zero of the vector component type `component`.
-fn zero_constant(component: &TypeKind, span: Span) -> Operand {
-    let literal = if matches!(component, TypeKind::F32) {
-        Literal::Float(FloatLiteral::F32(0f32.to_bits()))
-    } else if matches!(component, TypeKind::F64 | TypeKind::Float) {
-        Literal::Float(FloatLiteral::F64(0f64.to_bits()))
-    } else {
-        Literal::Integer(IntegerLiteral::I64(0))
-    };
-    Operand::Constant(Box::new(Constant {
-        span,
-        ty: Type::new(component.clone(), span),
-        literal,
-    }))
 }
 
 /// Route the call ending `block` through a new block that assigns

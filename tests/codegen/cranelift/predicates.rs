@@ -83,21 +83,6 @@ fn classify_element_shape_builtin_collections() {
     ));
 }
 
-/// A vector written with the component it holds is stored inline and carries no
-/// per-element drop callback.
-#[test]
-fn classify_element_shape_vec_types_are_other() {
-    for name in [VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME] {
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&TypeKind::Custom(
-                name.to_string(),
-                Some(vec![mk_expr_type(TypeKind::F32)])
-            )),
-            ElementShape::Other
-        ));
-    }
-}
-
 /// A declaration reusing a vector's name without the component it holds is an
 /// ordinary type, so its elements are released through that type's own thunk.
 #[test]

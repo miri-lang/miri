@@ -11,15 +11,19 @@
 //! invokes the single runtime entry that handles init / compile / cache /
 //! dispatch / sync / readback.
 
-use crate::ast::gpu_wire::{buffer_conversion, scalar_capture_wire, WireConversion};
+use crate::ast::gpu_wire::{
+    buffer_conversion, collection_element_kind, scalar_capture_wire, WireConversion,
+};
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind, DIM3_TYPE_NAME};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{ModuleCtx, TypeCtx};
+use crate::codegen::wgsl::types::buffer_array_stride;
 use crate::codegen::wgsl::{WgslBackend, WgslOptions};
 use crate::codegen::Backend;
 use crate::error::CodegenError;
 use crate::mir::body::DeviceHandleId;
+use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::{KernelDatum, Symbol};
 use crate::mir::{Body, ExecutionModel, GpuLaunchArgs, Local, Operand, Place};
 use crate::runtime_fns::rt;
@@ -390,6 +394,35 @@ fn buffer_conversion_codes(
         .collect()
 }
 
+/// Refuses a captured buffer whose elements the host spaces differently from
+/// the kernel's `array<E>`.
+///
+/// The upload and the readback copy a buffer of elements held as their bytes
+/// unconverted, so the host stride ([`element_layout`]) and the device stride
+/// the element's WGSL spelling implies ([`buffer_array_stride`]) have to be
+/// one number: a stride they disagree on hands the kernel every element after
+/// the first at the wrong offset. A scalar element crosses through its wire
+/// conversion instead and is not checked here.
+fn check_buffer_stride(arg: &Operand, type_ctx: &TypeCtx) -> Result<(), CodegenError> {
+    let buffer = &operand_type(arg, type_ctx)?.kind;
+    let Some(element) = collection_element_kind(buffer) else {
+        return Ok(());
+    };
+    if type_ctx.value_layout(&element).is_none() {
+        return Ok(());
+    }
+    let host = element_layout(&element, type_ctx.layout_scope()).stride;
+    let device = buffer_array_stride(buffer)?;
+    if host == i64::from(device) {
+        return Ok(());
+    }
+    Err(CodegenError::Internal(format!(
+        "a GPU buffer of `{element}` elements spaces them {host} bytes apart on the host but \
+         {device} bytes apart in the kernel's storage buffer, and the upload copies the host's \
+         bytes unconverted"
+    )))
+}
+
 /// The declared type of a projection-free launch operand's local.
 fn operand_type<'a>(op: &Operand, type_ctx: &'a TypeCtx) -> Result<&'a Type, CodegenError> {
     let (Operand::Copy(place) | Operand::Move(place)) = op else {
@@ -490,6 +523,7 @@ fn populate_capture_arrays(
 ) -> Result<(), CodegenError> {
     let ptr_size = ptr_ty.bytes() as i32;
     for (i, arg) in args.iter().enumerate() {
+        check_buffer_stride(arg, type_ctx)?;
         let arr_ptr = read_operand_value(builder, arg, locals, type_ctx)?;
         let data_ptr = builder.ins().load(
             ptr_ty,

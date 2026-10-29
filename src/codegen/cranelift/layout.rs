@@ -203,9 +203,6 @@ pub fn field_layout(
             Ok(((field_idx as i32) * ptr_size, Member::Word(ptr_ty)))
         }
         TypeKind::Custom(name, type_args) => {
-            if let Some(layout) = vector_payload_layout(name, type_args.as_deref(), ptr_ty) {
-                return placed_field(layout, field_idx, local_type);
-            }
             custom_field_layout(name, type_args.as_deref(), field_idx, scope, ptr_ty)
         }
         TypeKind::Int
@@ -263,8 +260,7 @@ fn boxed_optional_field_layout(
     ))
 }
 
-/// Where each field of a struct, tuple or compiler-known vector of `kind`
-/// sits in its payload, and how many bytes the payload needs; `None` for any
+/// Where each field of a struct or tuple of `kind` sits in its payload, and how many bytes the payload needs; `None` for any
 /// other kind.
 ///
 /// This is the one authority for those payloads: the aggregate that builds a
@@ -322,17 +318,14 @@ pub fn aggregate_layout(
     }
 }
 
-/// [`aggregate_layout`] of `Custom(name, type_args)`: a compiler-known vector,
-/// a struct, or an alias of either.
+/// [`aggregate_layout`] of `Custom(name, type_args)`: a struct, or an alias
+/// of one.
 fn custom_aggregate_layout(
     name: &str,
     type_args: Option<&[Expression]>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> Option<PayloadLayout> {
-    if let Some(layout) = vector_payload_layout(name, type_args, ptr_ty) {
-        return Some(layout);
-    }
     match scope.definitions.get(name)? {
         TypeDefinition::Struct(struct_def) => {
             Some(struct_payload_layout(struct_def, type_args, scope, ptr_ty))
@@ -347,22 +340,6 @@ fn custom_aggregate_layout(
         | TypeDefinition::Generic(_)
         | TypeDefinition::Trait(_) => None,
     }
-}
-
-/// The payload of a compiler-known vector written with its component type
-/// (`Vec3<f32>`): its components one after another. `None` for any other
-/// name, a program's own `Vec3` among them.
-fn vector_payload_layout(
-    name: &str,
-    type_args: Option<&[Expression]>,
-    ptr_ty: CraneliftType,
-) -> Option<PayloadLayout> {
-    let dim = crate::ast::types::vec_dim(name)?;
-    let ExpressionKind::Type(component, _) = &type_args?.first()?.node else {
-        return None;
-    };
-    let component = Slot::of(translate_type_kind(&component.kind, ptr_ty));
-    Some(place_fields(0, (0..dim).map(|_| component.clone())))
 }
 
 /// The payload of a tuple held as a reference-counted allocation: the

@@ -709,12 +709,7 @@ pub(crate) fn lower_list_constructor(
                 let array_ty = ctx.recorded_type(array.id)?;
                 sequence_elem_kind(ctx, &array_ty)
             });
-            // An inline element is copied as its component bytes; there is no
-            // reference in its slot for the list to take.
-            let elems_are_managed = elem_kind.is_some_and(|kind| {
-                ctx.is_perceus_managed(&kind)
-                    && !element_layout(&kind, ctx.body.layout_scope()).is_address
-            });
+            let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_perceus_managed(&kind));
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
         _ => emit_empty_list(ctx, span, &list_ty, destination),
@@ -1066,13 +1061,11 @@ pub(crate) fn lower_array_constructor(
         _ => Type::new(TypeKind::Int, *span),
     };
 
-    // An element stored inline lives in the array's own bytes, so the zeroed
-    // storage the runtime hands back is already a valid value of its type and no
-    // managed-element handling applies. Every other managed element is a
-    // reference the type checker refuses; reaching here with one is a compiler bug.
-    if ctx.is_perceus_managed(&elem_type.kind)
-        && !element_layout(&elem_type.kind, ctx.body.layout_scope()).is_address
-    {
+    // A managed element is a reference the type checker refuses; reaching here
+    // with one is a compiler bug. An element held as its bytes lives in the
+    // array's own bytes, so the zeroed storage the runtime hands back is
+    // already a valid value of its type.
+    if ctx.is_perceus_managed(&elem_type.kind) {
         return Err(LoweringError::unsupported_expression(
             format!(
                 "Array<T, N>() with managed element type '{}' should have been rejected at type-check time",

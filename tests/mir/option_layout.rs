@@ -331,9 +331,9 @@ fn test_option_layout_value_payload_layers() {
     assert_inline_layers(optional(TypeKind::Int), 1, &TypeKind::Int);
     assert_inline_layers(optional(optional(TypeKind::Int)), 2, &TypeKind::Int);
     assert_inline_layers(optional(custom("Meters")), 1, &TypeKind::Int);
-    // An inline vector keeps an allocation of its own, so its optional is a box.
+    // A vector is held as its bytes, so its optional is held so too.
     let vector = custom_of(VEC3_TYPE_NAME, vec![TypeKind::F32]);
-    assert_layers(optional(vector.clone()), 1, false, &vector);
+    assert_inline_layers(optional(vector.clone()), 1, &vector);
 }
 
 #[test]

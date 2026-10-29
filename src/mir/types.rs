@@ -75,11 +75,6 @@ pub enum MirType {
     /// is asked of the declared type, which keeps them.
     Custom(String),
 
-    /// A compiler-known vector (`Vec2`, `Vec3`, `Vec4`), written with its
-    /// component. A program's own type of the same name, written without one,
-    /// is a [`MirType::Custom`] like any other.
-    Vector(String),
-
     /// A heap-allocated closure (function value with a captured environment).
     /// Closure structs are RC-managed: [size][RC][fn_ptr][cap0][cap1]...
     /// The closure local holds `payload_ptr` (the word past the RC header).
@@ -164,9 +159,6 @@ impl MirType {
                 return Self::from_expr(component);
             }
         }
-        if crate::ast::types::written_vec_dim(name, args).is_some() {
-            return MirType::Vector(name.to_string());
-        }
         let Some(builtin) = BuiltinCollectionKind::from_name(name) else {
             return MirType::Custom(name.to_string());
         };
@@ -186,19 +178,6 @@ impl MirType {
             }
             BuiltinCollectionKind::Set => MirType::Set(Box::new(arg_or_unknown(0))),
         }
-    }
-
-    /// Whether this is a vector type. A vector is stored inline wherever a
-    /// collection lays its elements out at their std430 stride, so it is the
-    /// one managed type whose element position holds bytes rather than a
-    /// pointer.
-    ///
-    /// Only a vector written with its component is one: a program's own type
-    /// named `Vec3` is an ordinary struct, held behind a pointer. Every vector
-    /// that reaches MIR has a component with an inline layout: the type checker
-    /// refuses the rest where they are written (`validate_vector_component`).
-    pub fn is_inline_vector(&self) -> bool {
-        matches!(self, MirType::Vector(_))
     }
 
     /// Resolves a type expression node into a [`MirType`].

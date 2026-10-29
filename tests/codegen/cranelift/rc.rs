@@ -471,12 +471,10 @@ fn test_inline_atomic_payload_is_not_collected_as_managed() {
     );
 }
 
-/// An enum payload column is one word wide (`enum_payload_layout` never
-/// widens it for a vector, which translates to a pointer), so a `Vec3<f32>`
-/// payload is held as the pointer to its own allocation, and dropping the enum
-/// must release it.
+/// A `Vec3<f32>` payload is held as its bytes inline in the enum's column,
+/// as the atomic beside it is, so dropping the enum releases neither.
 #[test]
-fn test_vector_payload_is_collected_as_managed() {
+fn test_vector_payload_is_held_inline_and_not_collected() {
     let vector = custom_of(VEC3_TYPE_NAME, TypeKind::F32);
     let shape = enum_def([(
         "Mixed",
@@ -487,10 +485,9 @@ fn test_vector_payload_is_collected_as_managed() {
     let out_ptrs = HashMap::new();
     let type_ctx = minimal_type_ctx(&facts, &captures, &out_ptrs);
 
-    assert_eq!(
-        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx),
-        vec![(0, vec![(0, vector)])],
-        "only the vector's pointer word is released; the atomic is inline"
+    assert!(
+        FunctionTranslator::enum_variants_with_managed_fields(&shape, None, &type_ctx).is_empty(),
+        "the vector and the atomic are both inline"
     );
 }
 

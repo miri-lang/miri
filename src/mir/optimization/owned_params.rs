@@ -230,8 +230,7 @@ impl Visitor for ParameterUses {
 /// Whether the parameter `param` holds a value whose ownership can move: a
 /// managed, heap-allocated value whose release runs no drop hook anywhere
 /// inside it, not a method's receiver, not an `out` slot, not a gpu-resident
-/// buffer, not a vector a collection would store inline, and typed without any
-/// type parameter.
+/// buffer, and typed without any type parameter.
 fn is_ownable_param(body: &Body, param: Local, drop_hooks: &DropHookReach) -> bool {
     let decl = &body.local_decls[param.0];
     let is_out = body.out_params.get(param.0 - 1).copied().unwrap_or(false);
@@ -241,7 +240,6 @@ fn is_ownable_param(body: &Body, param: Local, drop_hooks: &DropHookReach) -> bo
         && body.receiver != Some(param)
         && !is_out
         && decl.device_handle.is_none()
-        && !decl.mir_ty.is_inline_vector()
         && !mentions_type_parameter(&decl.ty, &is_type_parameter, true)
         && !drop_hooks.may_run_drop_hook(&decl.ty)
 }

@@ -101,11 +101,9 @@ use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Discriminant;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::terminator::{arg_mode, ArgMode};
-use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
 use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
-use crate::type_checker::element_layout::element_layout;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
@@ -1017,25 +1015,12 @@ fn moves_place_into_an_aggregate(rvalue: &Rvalue, place: &Place) -> bool {
 /// a value holding references. RC elision spells a copy of a local that dies
 /// right after it as such a move, the local's own reference going into the
 /// slot; a retain before the store pays for the local, as
-/// [`moves_place_into_an_aggregate`] credits it. A collection laying vector
-/// elements out inline copies their bytes and takes nothing.
-fn aggregate_taken_locals(body: &Body, dest: &Place, rvalue: &Rvalue) -> Vec<Local> {
+/// [`moves_place_into_an_aggregate`] credits it.
+fn aggregate_taken_locals(rvalue: &Rvalue) -> Vec<Local> {
     let Rvalue::Aggregate(_, operands) = rvalue else {
         return Vec::new();
     };
-    if stores_elements_inline(body, dest) {
-        return Vec::new();
-    }
     operands.iter().filter_map(bare_local_moved).collect()
-}
-
-/// Whether `dest` is a whole array or list whose elements are laid out inline.
-fn stores_elements_inline(body: &Body, dest: &Place) -> bool {
-    dest.projection.is_empty()
-        && body.local_decls.get(dest.local.0).is_some_and(|decl| {
-            matches!(&decl.mir_ty, MirType::Array(element) | MirType::List(element)
-                    if element.is_inline_vector())
-        })
 }
 
 /// Whether an operand reads exactly `place`, however it is spelled.
@@ -1079,7 +1064,7 @@ fn apply_statement(
             if takes_no_reference(body, dest, rvalue) {
                 return;
             }
-            let taken = aggregate_taken_locals(body, dest, rvalue);
+            let taken = aggregate_taken_locals(rvalue);
             for consumed in consumed_bare_locals(rvalue).into_iter().chain(taken) {
                 release(body, &Place::new(consumed), tracked, state, violations);
             }
@@ -1248,10 +1233,9 @@ fn apply_terminator(
         release(body, &Place::new(local), tracked, state, violations);
     }
 
-    let result = &body.local_decls[destination.local.0].ty.kind;
     let borrows = func
         .and_then(Operand::called_runtime_name)
-        .is_some_and(|name| hands_back_a_borrow(name, result, body.layout_scope()));
+        .is_some_and(hands_back_a_borrow);
     if destination.projection.is_empty() && !borrows {
         adjust(state, tracked, destination.local, 1);
     }
@@ -1279,11 +1263,6 @@ fn release_taken_args(
         let Some(local) = args.get(*position).and_then(Operand::bare_local) else {
             continue;
         };
-        // An element the container lays out inline is copied as bytes; the
-        // caller keeps the reference it passed.
-        if element_layout(&body.local_decls[local.0].ty.kind, body.layout_scope()).is_address {
-            continue;
-        }
         release(body, &Place::new(local), tracked, state, violations);
     }
 }

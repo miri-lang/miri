@@ -247,14 +247,13 @@ fn written_kind(expr: &crate::ast::expression::Expression) -> Result<TypeKind, S
 /// How a trampoline reads an argument of type `kind` out of the element slot
 /// whose address it is handed, as the closure takes it.
 ///
-/// A value held as its bytes is held inline in the slot and taken by address;
-/// an inline vector is held as its components, and its value is their
-/// address. Any other value is one word, which must fill the slot exactly.
+/// A value held as its bytes is held inline in the slot and taken by address.
+/// Any other value is one word, which must fill the slot exactly.
 fn trampoline_argument(body: &Body, kind: &TypeKind) -> Result<TrampolineArgument, String> {
-    let slot = element_layout(kind, body.layout_scope());
-    if body.value_layout(kind).is_some() || slot.is_address {
+    if body.value_layout(kind).is_some() {
         return Ok(TrampolineArgument::Address);
     }
+    let slot = element_layout(kind, body.layout_scope());
     let word = register_word(kind);
     if word.bytes(VALUE_WORD_BYTES) != slot.payload {
         return Err(format!(

@@ -657,8 +657,6 @@ pub mod rt {
 }
 
 use crate::ast::types::BuiltinCollectionKind;
-use crate::type_checker::element_layout::element_layout;
-use crate::type_checker::value_class::LayoutScope;
 
 /// Argument positions whose reference `name` takes ownership of, in call order.
 ///
@@ -1119,17 +1117,9 @@ pub fn returns_element_value(name: &str) -> bool {
 /// read. Treating that as a fresh reference would report it as one nobody released.
 ///
 /// Every other call hands back something its caller owns: a reader that raises the
-/// count before returning, or a value built on the spot. So does indexing a map
-/// whose values it lays out inline (`result`, the type the call hands back, is an
-/// inline vector): the components are copied out into a value of the caller's
-/// own, and the map keeps no reference to it. `scope` is what `result` is laid
-/// out against.
-pub fn hands_back_a_borrow(
-    name: &str,
-    result: &crate::ast::types::TypeKind,
-    scope: LayoutScope<'_>,
-) -> bool {
-    name == rt::MAP_GET_CHECKED && !element_layout(result, scope).is_address
+/// count before returning, or a value built on the spot.
+pub fn hands_back_a_borrow(name: &str) -> bool {
+    name == rt::MAP_GET_CHECKED
 }
 
 /// Whether `name` never returns to its caller.

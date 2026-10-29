@@ -881,13 +881,10 @@ pub fn vec_dim(name: &str) -> Option<u8> {
 ///
 /// A compiler-known vector is generic over its component and is always written
 /// with it (`Vec2<f32>`): the component decides the type's width, so a spelling
-/// that omits it names nothing the compiler can lay out inline. A declaration
-/// that reuses one of these names for an ordinary type therefore keeps ordinary
-/// struct behavior — heap-allocated, reference-counted, laid out from its own
-/// fields — instead of silently inheriting inline vector treatment.
-///
-/// This is the same test the field-layout path applies, so a type laid out as a
-/// vector is exactly a type the drop path treats as one.
+/// that omits it names nothing the compiler can lay out as a vector. A
+/// declaration that reuses one of these names for an ordinary type therefore
+/// keeps ordinary struct behavior — laid out from its own fields — instead of
+/// silently inheriting vector treatment.
 pub fn vec_type_dim(kind: &TypeKind) -> Option<u8> {
     let TypeKind::Custom(name, type_args) = kind else {
         return None;
@@ -924,72 +921,37 @@ pub fn atomic_inner_type(args: &[Type]) -> Option<&Type> {
     }
 }
 
-/// Byte width of a scalar usable as a vector component, or `None` for a
-/// non-numeric kind. Four-byte scalars (`f32`/`i32`/`u32`) are the only
-/// GPU-compatible components; the eight-byte kinds are accepted so host-side
-/// (CPU) inline layout of wider vectors stays consistent.
-///
-/// `int` and `float` are the eight-byte kinds a component gets when its width is
-/// inferred rather than written (`Vec3(1.0, 2.0, 3.0)` is a `Vec3<float>`). They
-/// are laid out like `i64` and `f64`: a vector is stored inline whatever width
-/// its component was given, because reference counting never retains a vector
-/// placed in a collection and a pointer stored there would outlive its target.
-fn vec_component_bytes(scalar: &TypeKind) -> Option<i64> {
-    match scalar {
-        TypeKind::F32 | TypeKind::I32 | TypeKind::U32 => Some(4),
-        TypeKind::F64 | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::Int => Some(8),
-        _ => None,
-    }
-}
-
 /// Whether `scalar` can be a vector's component.
 ///
-/// A component earns its place by having an inline byte width: that width is
-/// what a collection strides its elements by and what reference counting reads
-/// as bytes rather than as a pointer. A component without one has no layout for
-/// the two to agree on, so the type checker refuses it where it is written —
-/// see [`VECTOR_COMPONENT_TYPE_NAMES`] for the message that names the set.
+/// A component is a scalar four or eight bytes wide: the four-byte kinds
+/// (`f32`/`i32`/`u32`) are the ones a GPU holds, and the eight-byte kinds are
+/// accepted on the host. `int` and `float`, the kinds a component gets when
+/// its width is inferred rather than written (`Vec3(1.0, 2.0, 3.0)` is a
+/// `Vec3<float>`), are among them. How a vector of a component is laid out is
+/// decided by the value-class authority (`type_checker::value_class`); the
+/// type checker refuses any other component where it is written — see
+/// [`VECTOR_COMPONENT_TYPE_NAMES`] for the message that names the set.
 pub fn is_vector_component(scalar: &TypeKind) -> bool {
-    vec_component_bytes(scalar).is_some()
+    matches!(
+        scalar,
+        TypeKind::F32
+            | TypeKind::I32
+            | TypeKind::U32
+            | TypeKind::F64
+            | TypeKind::I64
+            | TypeKind::U64
+            | TypeKind::Float
+            | TypeKind::Int
+    )
 }
 
 /// The component types a vector may be written at, widest use first, as the
 /// refusal diagnostic lists them.
 ///
-/// [`vec_component_bytes`] is the authority; this is its prose. A unit test
-/// holds the two together, so a component gaining a width without gaining a
+/// [`is_vector_component`] is the authority; this is its prose. A unit test
+/// holds the two together, so a component gaining a place without gaining a
 /// name here fails the build.
 pub const VECTOR_COMPONENT_TYPE_NAMES: &str = "f32, i32, u32, f64, i64, u64, int, float";
-
-/// How a collection lays out an element it stores inline: the spacing between
-/// consecutive elements and the number of those bytes the element really uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InlineElementLayout {
-    /// std430 spacing between consecutive elements; see [`inline_element_stride`].
-    pub stride: i64,
-    /// Bytes the element's components occupy; see [`inline_element_payload`].
-    pub payload: i64,
-}
-
-/// The inline layout of a collection element of type `kind`, or `None` when the
-/// element is stored as a single value word (a scalar or a pointer).
-///
-/// Only a vector with a numeric component is stored inline. Every site that
-/// decides how an element travels in or out of a collection asks this, so the
-/// size a collection is allocated with and the stride its elements are written
-/// and read at cannot disagree.
-pub fn inline_element_layout(kind: &TypeKind) -> Option<InlineElementLayout> {
-    let TypeKind::Custom(name, Some(args)) = kind else {
-        return None;
-    };
-    let ExpressionKind::Type(scalar, _) = &args.first()?.node else {
-        return None;
-    };
-    Some(InlineElementLayout {
-        stride: inline_element_stride(name, &scalar.kind)?,
-        payload: inline_element_payload(name, &scalar.kind)?,
-    })
-}
 
 /// Byte width of a 128-bit scalar, the one scalar too wide for a value word.
 pub const WIDE_SCALAR_BYTES: i64 = 16;
@@ -1175,41 +1137,6 @@ pub fn common_numeric_type(left: &TypeKind, right: &TypeKind) -> Option<TypeKind
             holds_every_value_of(candidate, left) && holds_every_value_of(candidate, right)
         })
         .cloned()
-}
-
-/// std430 inline byte stride between consecutive vector elements stored inline
-/// in a collection (the spacing used for addressing `arr[i]`), or `None` when
-/// `name` is not a vector type or `scalar` is not a vector component.
-///
-/// std430 alignment rules with component size `s`: vec2 strides by `2*s`, while
-/// vec3 and vec4 both stride by `4*s` (vec3 is padded up to vec4 alignment).
-/// For 4-byte components this gives vec2=8, vec3=16, vec4=16.
-///
-/// This is the **spacing**, not the number of bytes to copy — a vec3 occupies
-/// only `3*s` real bytes (see [`inline_element_payload`]); the trailing pad is
-/// uninitialized. Copying `stride` bytes out of a vec3 source reads past it.
-pub fn inline_element_stride(name: &str, scalar: &TypeKind) -> Option<i64> {
-    let dim = vec_dim(name)?;
-    let s = vec_component_bytes(scalar)?;
-    let stride = match dim {
-        2 => 2 * s,
-        3 | 4 => 4 * s,
-        _ => return None,
-    };
-    Some(stride)
-}
-
-/// Number of real bytes a vector element occupies (`dim * component_size`) —
-/// the exact span to copy when moving an inline vector value, or `None` when
-/// `name` is not a vector type or `scalar` is not a vector component.
-///
-/// For 4-byte components this gives vec2=8, vec3=12, vec4=16. This is always
-/// `<= inline_element_stride`; the difference is std430 tail padding (vec3 only)
-/// which must never be read from a source aggregate.
-pub fn inline_element_payload(name: &str, scalar: &TypeKind) -> Option<i64> {
-    let dim = vec_dim(name)? as i64;
-    let s = vec_component_bytes(scalar)?;
-    Some(dim * s)
 }
 
 /// Maps a Miri type kind to its WGSL scalar type name.

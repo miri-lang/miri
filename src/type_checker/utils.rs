@@ -29,9 +29,8 @@ use crate::diagnostics::RepairRequest;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
-use crate::type_checker::element_layout::element_layout;
 use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
-use crate::type_checker::value_class::LayoutScope;
+use crate::type_checker::value_class::{held_value_layout, LayoutScope};
 
 /// The element type a definition that names `Iterable` without an argument
 /// yields.
@@ -250,9 +249,9 @@ fn is_resource_inner<'a>(
 /// The constructor allocates its elements zeroed, so an element is admissible
 /// only when a run of zero bytes is already a valid value of its type. That
 /// holds for a scalar, for a type parameter — which is instantiated at one — and
-/// for the two wrappers a collection stores inside its own bytes: a vector,
-/// whose components lie inline, and an `Atomic`, which is a scalar in a struct's
-/// clothing. It does not hold for a value reached through a reference, whose
+/// for the two wrappers a collection stores inside its own bytes: a vector of
+/// a scalar component, held as those components, and an `Atomic`, which is a
+/// scalar in a struct's clothing. It does not hold for a value reached through a reference, whose
 /// zero word is a null pointer, so a string, a collection, a closure and every
 /// user-defined struct, enum and class are refused.
 ///
@@ -260,7 +259,7 @@ fn is_resource_inner<'a>(
 /// only when one of its fields is, so a struct of plain scalars passes it while
 /// still being reached through a reference.
 pub fn is_zero_fillable_element(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    if element_layout(kind, scope).is_address {
+    if vec_type_dim(kind).is_some() && held_value_layout(kind, scope).is_some() {
         return true;
     }
     if let TypeKind::Custom(name, _) = kind {
@@ -2884,7 +2883,8 @@ impl TypeChecker {
         );
     }
 
-    /// Refuses `ty` when it is a vector whose component has no inline layout,
+    /// Refuses `ty` when it is a vector whose component is not a scalar it can
+    /// be held as,
     /// and answers whether it did — so the caller can stop rather than report a
     /// second, vaguer reason for the same type.
     ///
@@ -2897,7 +2897,7 @@ impl TypeChecker {
             return false;
         };
         if vec_type_dim(&ty.kind).is_none()
-            || element_layout(&ty.kind, LayoutScope::program(self.type_definitions())).is_address
+            || held_value_layout(&ty.kind, LayoutScope::program(self.type_definitions())).is_some()
         {
             return false;
         }

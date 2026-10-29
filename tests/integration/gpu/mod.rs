@@ -74,6 +74,7 @@ pub mod uniform_portability;
 pub mod variable_bound_gpu_for;
 pub mod vector_components;
 pub mod vector_lists;
+pub mod vector_values;
 pub mod vectors;
 pub mod warp;
 pub mod wgsl;

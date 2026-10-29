@@ -4,7 +4,9 @@
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
-use miri::mir::rc::is_field_managed;
+use miri::mir::rc::{is_element_counted, is_field_managed, is_slot_counted};
+use miri::type_checker::value_class::LayoutScope;
+use std::collections::HashMap;
 
 fn expr_ty(kind: TypeKind) -> Expression {
     Expression {
@@ -40,12 +42,16 @@ fn is_field_managed_includes_function_values() {
     assert!(is_field_managed(&fn_kind));
 }
 
-/// A vector element is stored inline in the collection's buffer, so the drop
-/// path must not read its bytes as a pointer and release them.
+/// A vector is held as its bytes, inline in the collection or aggregate
+/// holding it, so the drop path must not read its bytes as a pointer and
+/// release them.
 #[test]
-fn is_field_managed_excludes_inline_vector_elements() {
+fn a_vector_held_as_its_bytes_is_no_counted_element_or_slot() {
+    let definitions = HashMap::new();
+    let scope = LayoutScope::program(&definitions);
     let vec3 = TypeKind::Custom("Vec3".to_string(), Some(vec![expr_ty(TypeKind::F32)]));
-    assert!(!is_field_managed(&vec3));
+    assert!(!is_element_counted(&vec3, scope));
+    assert!(!is_slot_counted(&vec3, scope));
 }
 
 /// Declares the types `counted` asks about, each spelled as a parameter of

@@ -359,7 +359,7 @@ impl<'a> PlaceTypes<'a> {
             }
             // Custom(struct/class).Field(i) → the declared field type, read at the
             // instance's type arguments.
-            MirType::Custom(name) | MirType::Vector(name) => {
+            MirType::Custom(name) => {
                 let field_ty = match self.instance_field(declared, index) {
                     Some(field_ty) => field_ty,
                     None => self.recorded_field(name, declared, index)?,
@@ -411,11 +411,7 @@ impl<'a> PlaceTypes<'a> {
 }
 
 /// The element an `Index` projection yields from a collection of type
-/// `current`, declared `declared`; `None` when it is no collection, or when
-/// its element is a vector, which lives inline in the collection's buffer:
-/// indexing yields an interior address rather than a pointer to an
-/// allocation of its own, and retaining or releasing it would reach into the
-/// buffer's bytes.
+/// `current`, declared `declared`; `None` when it is no collection.
 fn project_index(current: &MirType, declared: &Type) -> Option<(MirType, Type)> {
     if let Some(element) = tuple_element(declared) {
         return Some((MirType::from_type_kind(&element.kind), element));
@@ -427,9 +423,6 @@ fn project_index(current: &MirType, declared: &Type) -> Option<(MirType, Type)> 
     else {
         return None;
     };
-    if element.is_inline_vector() {
-        return None;
-    }
     Some((*element.clone(), indexed_element_type(declared)?))
 }
 

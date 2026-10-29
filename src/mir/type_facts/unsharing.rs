@@ -31,15 +31,12 @@ pub enum Unsharing {
 /// A value held as its bytes is copied whenever a binding, a field, an element
 /// or a closure takes it, so no second holder of it ever exists. Any other
 /// struct is a reference-counted allocation that a copy shares, and a write
-/// copies it first. A vector is never shared either: a collection holds it
-/// inline, as its components' bytes, and a copy built for it would be stored
-/// by value and never released.
+/// copies it first.
 pub fn unsharing(body: &Body, ty: &Type) -> Option<Unsharing> {
     if let Some(kind) = ty.kind.as_builtin_collection() {
         return Some(Unsharing::Collection(kind));
     }
-    if crate::ast::types::vec_type_dim(&ty.kind).is_some() || body.value_layout(&ty.kind).is_some()
-    {
+    if body.value_layout(&ty.kind).is_some() {
         return None;
     }
     if let TypeKind::Tuple(elements) = &ty.kind {

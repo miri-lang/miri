@@ -16,7 +16,7 @@ use crate::codegen::cranelift::value_abi::{
     call_arguments, load_lanes, miri_signature, store_lanes, CallResult, HeldResult, Passing,
     Returning,
 };
-use crate::codegen::cranelift::value_locals::{copy_chunks, ValueBuild};
+use crate::codegen::cranelift::value_locals::ValueBuild;
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
 use crate::mir::value_arguments::call_written_roots;
@@ -404,10 +404,6 @@ impl<'a> FunctionTranslator<'a> {
             expected_ty_for_rvalue,
         )?;
 
-        if place.projection.is_empty() {
-            value = Self::copy_bound_inline_vec(builder, ctx, rvalue, value, type_ctx)?;
-        }
-
         let dest_cl_ty = translate_type_kind(&dest_kind_to_cast, ptr_type);
         let val_ty = builder.func.dfg.value_type(value);
         if dest_cl_ty != val_ty {
@@ -582,55 +578,6 @@ impl<'a> FunctionTranslator<'a> {
             return false;
         };
         matches!(operand, Operand::Constant(constant) if matches!(constant.literal, Literal::None))
-    }
-
-    /// Copies an inline vector element into an allocation of its own when it is
-    /// bound to a local.
-    ///
-    /// A collection lays vector elements out inline at their std430 stride, so
-    /// indexing one yields an address inside the collection's buffer. Binding
-    /// that address would alias the collection — mutating the binding would edit
-    /// the element, and releasing it would decrement a header the buffer never
-    /// had. Copying restores the value semantics a vector is meant to have and
-    /// gives the binding an allocation the reference counter can own.
-    ///
-    /// Any other destination (an element write, a field store) consumes the
-    /// address directly, so `value` passes through untouched.
-    fn copy_bound_inline_vec(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        rvalue: &Rvalue,
-        value: cranelift_codegen::ir::Value,
-        type_ctx: &TypeCtx,
-    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let Rvalue::Use(Operand::Copy(source) | Operand::Move(source)) = rvalue else {
-            return Ok(value);
-        };
-        if !matches!(source.projection.last(), Some(PlaceElem::Index(_))) {
-            return Ok(value);
-        }
-        let element_kind = Self::resolve_projected_type_kind(source, type_ctx)?;
-        let Some((stride, dim, component)) =
-            crate::codegen::cranelift::translator::inline_vec_element_layout(
-                &element_kind,
-                type_ctx,
-            )
-        else {
-            return Ok(value);
-        };
-
-        let copy = Self::alloc_aggregate_payload(
-            builder,
-            ctx,
-            ptr_type,
-            ptr_type.bytes() as i32,
-            stride as u32,
-        )?;
-        let component_bytes = component.bytes() as i32;
-        let lanes = (0..dim as i32).map(|lane| (lane * component_bytes, component));
-        copy_chunks(builder, value, copy, lanes);
-        Ok(copy)
     }
 
     /// After an empty `Map<K,V>()` constructor: derive the key and value types

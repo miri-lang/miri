@@ -153,14 +153,12 @@ fn is_never_counted(kind: &TypeKind) -> bool {
 }
 
 /// Returns true if a field/element type is managed (heap-allocated, needs DecRef
-/// on drop). Vector types (Vec2/3/4) are value types stored inline — when held
-/// as a collection element or aggregate field they are raw bytes, not a managed
-/// pointer, so they must never be DecRef'd here.
+/// on drop), before asking whether it is held as its bytes: a struct, tuple,
+/// optional or enum answers `true` here, and [`is_slot_counted`] and
+/// [`is_element_counted`] rule out the ones held inline.
 ///
 /// A function value is a closure allocation of its own wherever it is held, so
-/// a collection element or an aggregate field holding one releases it. A
-/// closure's captures are one-word slots and are decided by
-/// [`is_word_slot_managed`] instead.
+/// a collection element or an aggregate field holding one releases it.
 ///
 /// The native `Result` and `Future` kinds answer `false` because no value of
 /// either reaches a body: the type checker spells every `Result` as the
@@ -170,18 +168,12 @@ fn is_never_counted(kind: &TypeKind) -> bool {
 /// holds a value.
 pub fn is_field_managed(kind: &TypeKind) -> bool {
     if let TypeKind::Custom(name, args) = kind {
-        // Inline scalar/vector element wrappers (`Vec*`, `Atomic<scalar>`) are
-        // stored by value, never reference-counted — exclude them from the
-        // managed-element drop path. Each is recognized by its component, as
-        // the field-layout path recognizes it, so a user type that merely
-        // reuses the name stays managed and its allocation is released.
-        //
-        // A class or struct field, a tuple element, and an enum or optional
-        // payload hold a vector as a pointer instead; the drop path for those
-        // slots asks `is_word_slot_managed`.
-        if crate::ast::types::vec_type_dim(kind).is_some()
-            || is_builtin_atomic(name, args.as_deref())
-        {
+        // The atomic element wrapper (`Atomic<scalar>`) is stored as its
+        // scalar, never reference-counted — exclude it from the
+        // managed-element drop path. It is recognized by its component, so a
+        // user type that merely reuses the name stays managed and its
+        // allocation is released.
+        if is_builtin_atomic(name, args.as_deref()) {
             return false;
         }
     }
@@ -215,26 +207,15 @@ pub fn atomic_component(args: Option<&[Expression]>) -> Option<&Expression> {
         .filter(|arg| matches!(arg.node, ExpressionKind::Type(_, _)))
 }
 
-/// Returns true if a value held in a one-word slot — an optional's payload, an
-/// enum's payload, a tuple element, a field of a class or struct, or a
-/// closure's capture — is managed.
-///
-/// Such a slot holds its value as one word laid out at the field's own type,
-/// never as inline bytes, so a vector reaches it as the pointer to an allocation
-/// of its own — where the inline-layout reasoning behind [`is_field_managed`]
-/// does not hold. Freeing the holder without releasing that pointer leaks the
-/// vector.
-pub fn is_word_slot_managed(kind: &TypeKind) -> bool {
-    is_field_managed(kind) || crate::ast::types::vec_type_dim(kind).is_some()
-}
-
-/// Whether a one-word slot holding a value of `kind`, read against `scope`,
-/// holds a counted reference its holder releases.
+/// Whether a slot of an aggregate — an optional's or an enum's payload, a
+/// tuple element, a field of a class or struct, or a closure's capture —
+/// holding a value of `kind`, read against `scope`, holds a counted reference
+/// its holder releases.
 ///
 /// A value held as its bytes sits inline in its holder instead: it is no
 /// reference, and its holder's release has nothing to release in it.
 pub fn is_slot_counted(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    is_word_slot_managed(kind) && held_value_layout(kind, scope).is_none()
+    is_field_managed(kind) && held_value_layout(kind, scope).is_none()
 }
 
 /// Whether a collection element of `kind`, read against `scope`, is a counted

@@ -5,30 +5,37 @@ use system.accelerator
 
 /// Generic vector types for GPU and CPU computation.
 ///
-/// Vec2, Vec3, and Vec4 are compiler-known inline value types with component-wise
-/// operations. They are NOT heap-allocated and do NOT participate in Perceus RC.
-/// Component access is via `.x`, `.y`, `.z`, `.w` fields; construction is via
-/// `Vec3<f32>(a, b, c)` function-call syntax that mirrors struct initialization.
+/// Vec2, Vec3, and Vec4 are compiler-known value types with component-wise
+/// operations. A vector of a scalar component is held as its components' bytes,
+/// like a struct of scalars: in a local, inline in the struct, class, tuple,
+/// optional or collection holding it, and copied whole wherever it is bound or
+/// passed. It is never a heap allocation of its own and takes no part in
+/// reference counting. Component access is via `.x`, `.y`, `.z`, `.w` fields;
+/// construction is via `Vec3<f32>(a, b, c)` function-call syntax that mirrors
+/// struct initialization.
 ///
-/// A component is constrained to a scalar with a byte width, because that width
-/// is the stride a collection spaces its elements by: f32, i32, u32 carry to the
-/// GPU, while f64, i64, u64 and the inferred int/float stay on the host (WGSL has
-/// no 64-bit vector). Any other component is refused where it is written. The
-/// stdlib is minimal because the compiler recognizes Vec as a built-in type and
-/// handles layout and lowering directly. This follows the same pattern as Dim3
-/// (GPU kernel context dimension).
+/// A vector is laid out as WGSL lays it out, so its bytes on the host and in a
+/// GPU buffer agree: its components one after another, aligned to two
+/// components for a Vec2 and to four for a Vec3 or Vec4. A component is
+/// constrained to a scalar four or eight bytes wide: f32, i32, u32 carry to the
+/// GPU, while f64, i64, u64 and the inferred int/float stay on the host (WGSL
+/// has no 64-bit vector). Any other component is refused where it is written.
+/// The stdlib is minimal because the compiler recognizes Vec as a built-in type
+/// and handles layout and lowering directly. This follows the same pattern as
+/// Dim3 (GPU kernel context dimension).
 
 /// A 2-component vector with generic scalar type T.
 /// T must be one of: f32, i32, u32, f64, i64, u64, int, float.
-/// Layout: two components, no padding (8 bytes at a 4-byte component).
+/// Layout: two components, aligned to two (8 bytes at a 4-byte component).
 struct Vec2<T>
     x T
     y T
 
 /// A 3-component vector with generic scalar type T.
 /// T must be one of: f32, i32, u32, f64, i64, u64, int, float.
-/// Layout: std430-padded to four components (16 bytes at a 4-byte component:
-/// three scalars plus 4B of pad); only the three are ever read.
+/// Layout: three components aligned to four (12 bytes at a 4-byte component,
+/// aligned to 16). A field after it fills its fourth slot, and a collection
+/// spaces such vectors 16 bytes apart.
 struct Vec3<T>
     x T
     y T
@@ -36,7 +43,7 @@ struct Vec3<T>
 
 /// A 4-component vector with generic scalar type T.
 /// T must be one of: f32, i32, u32, f64, i64, u64, int, float.
-/// Layout: four components, naturally aligned (16 bytes at a 4-byte component).
+/// Layout: four components, aligned to four (16 bytes at a 4-byte component).
 struct Vec4<T>
     x T
     y T

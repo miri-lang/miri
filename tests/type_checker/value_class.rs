@@ -8,7 +8,9 @@
 use crate::type_checker::utils::type_checker_result;
 use miri::ast::expression::ExpressionKind;
 use miri::ast::factory::{make_type, type_expr_non_null};
-use miri::ast::types::{Type, TypeKind, ATOMIC_TYPE_NAME, VEC3_TYPE_NAME};
+use miri::ast::types::{
+    Type, TypeKind, ATOMIC_TYPE_NAME, VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+};
 use miri::ast::StatementKind;
 use miri::type_checker::context::TypeDefinition;
 use miri::type_checker::value_class::{
@@ -391,14 +393,126 @@ fn written_with_component(name: &str, component: TypeKind) -> TypeKind {
     )
 }
 
+/// A vector of `dim` components of `component`, each `bytes` wide, at the
+/// size and alignment WGSL gives it: `vec2` aligned to two components, `vec3`
+/// and `vec4` to four, a `vec3` three components long.
 #[test]
-fn value_class_inline_vector_keeps_its_managed_representation() {
+fn value_class_vector_is_held_as_its_components_at_the_wgsl_size_and_alignment() {
     let definitions = HashMap::new();
-    let vector = written_with_component(VEC3_TYPE_NAME, TypeKind::F32);
-    assert_eq!(
-        value_class(&vector, LayoutScope::program(&definitions)),
-        ValueClass::Managed
+    let cases = [
+        (VEC2_TYPE_NAME, TypeKind::F32, ScalarKind::Float(4), 8, 8),
+        (VEC3_TYPE_NAME, TypeKind::F32, ScalarKind::Float(4), 12, 16),
+        (VEC4_TYPE_NAME, TypeKind::F32, ScalarKind::Float(4), 16, 16),
+        (VEC2_TYPE_NAME, TypeKind::I32, ScalarKind::Signed(4), 8, 8),
+        (
+            VEC3_TYPE_NAME,
+            TypeKind::U32,
+            ScalarKind::Unsigned(4),
+            12,
+            16,
+        ),
+        (VEC2_TYPE_NAME, TypeKind::F64, ScalarKind::Float(8), 16, 16),
+        (VEC3_TYPE_NAME, TypeKind::F64, ScalarKind::Float(8), 24, 32),
+        (VEC4_TYPE_NAME, TypeKind::Int, ScalarKind::Signed(8), 32, 32),
+    ];
+    for (name, component, scalar, size, align) in cases {
+        let vector = written_with_component(name, component);
+        let bytes = scalar.size();
+        let fields = (0..size / bytes)
+            .map(|index| scalar_at(index * bytes, scalar))
+            .collect();
+        assert_eq!(
+            value_class(&vector, LayoutScope::program(&definitions)),
+            ValueClass::Bitwise(ValueLayout {
+                size,
+                align,
+                shape: LayoutShape::Record,
+                fields,
+            }),
+            "`{vector}`"
+        );
+    }
+}
+
+/// A collection spaces vectors by their size rounded up to their alignment:
+/// a `Vec3<f32>` takes twelve bytes and strides by sixteen.
+#[test]
+fn value_layout_stride_rounds_a_vector_up_to_its_alignment() {
+    let definitions = HashMap::new();
+    let stride_of = |name: &str, component: TypeKind| {
+        let vector = written_with_component(name, component);
+        match value_class(&vector, LayoutScope::program(&definitions)) {
+            ValueClass::Bitwise(layout) => layout.stride(),
+            other => panic!("`{vector}` should be bitwise, got {other:?}"),
+        }
+    };
+    assert_eq!(stride_of(VEC2_TYPE_NAME, TypeKind::F32), 8);
+    assert_eq!(stride_of(VEC3_TYPE_NAME, TypeKind::F32), 16);
+    assert_eq!(stride_of(VEC4_TYPE_NAME, TypeKind::F32), 16);
+    assert_eq!(stride_of(VEC3_TYPE_NAME, TypeKind::F64), 32);
+}
+
+const VECTOR_MEMBERS: &str = "
+use system.gpu.vector
+
+struct After
+    v Vec3<f32>
+    w f32
+
+struct Before
+    w f32
+    v Vec3<f32>
+
+enum Shape
+    Point(Vec3<f32>)
+    Scaled(Vec3<f32>, f32)
+
+fn probe(after After, before Before, maybe Vec3<f32>?, pair (Vec3<f32>, Vec3<f32>), shape Shape)
+    return
+";
+
+/// A scalar after a `Vec3<f32>` fills the vector's fourth slot, as WGSL
+/// places a struct member; one before it pushes it to the next sixteen.
+#[test]
+fn value_class_vector_members_are_placed_at_the_vector_alignment() {
+    let probe = Probe::of(VECTOR_MEMBERS);
+    let after = probe.layout_of("after");
+    assert_eq!((after.size, after.align), (16, 16));
+    assert_eq!(after.fields[1], scalar_at(12, ScalarKind::Float(4)));
+    let before = probe.layout_of("before");
+    assert_eq!((before.size, before.align), (32, 16));
+    assert_eq!(before.fields[1].offset, 16);
+}
+
+/// An optional, a tuple and an enum around vectors are held as their bytes.
+#[test]
+fn value_class_vector_inside_an_optional_tuple_or_enum_is_bitwise() {
+    let probe = Probe::of(VECTOR_MEMBERS);
+    let maybe = probe.layout_of("maybe");
+    assert_eq!((maybe.size, maybe.align), (32, 16));
+    assert_eq!(maybe.fields[1].offset, 16);
+    let pair = probe.layout_of("pair");
+    assert_eq!((pair.size, pair.align), (32, 16));
+    assert_eq!(pair.fields[1].offset, 16);
+    let shape = probe.layout_of("shape");
+    assert_eq!(shape.align, 16);
+    assert_eq!(shape.fields[1].offset, 16);
+}
+
+/// A vector whose component is a type parameter left open has no bytes to
+/// lay out, and is held as a counted struct like any generic struct is.
+#[test]
+fn value_class_vector_of_an_open_parameter_is_not_held_as_bytes() {
+    let probe = Probe::of(
+        "
+use system.gpu.vector
+
+fn probe<T>(v Vec2<T>)
+    return
+",
     );
+    let open = HashSet::from(["T".to_string()]);
+    assert_eq!(probe.class_in("v", &open), ValueClass::Managed);
 }
 
 #[test]

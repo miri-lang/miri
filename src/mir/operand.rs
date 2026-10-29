@@ -159,7 +159,7 @@ fn resolve_place_mir_type(place: &Place, body: &Body) -> Option<MirType> {
                     // Tuple(T0, T1, ...).Field(i) → Ti
                     MirType::Tuple(elems) => elems.get(*i)?.clone(),
                     // Custom struct/class → look up in field_types and convert to MirType
-                    MirType::Custom(name) | MirType::Vector(name) => {
+                    MirType::Custom(name) => {
                         let field_ty = body.field_types.get(name.as_str())?.get(*i)?;
                         MirType::from_type_kind(&field_ty.kind)
                     }

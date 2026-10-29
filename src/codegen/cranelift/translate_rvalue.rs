@@ -597,8 +597,8 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Translate an array literal's elements and build the array from them.
     ///
-    /// Inline vector elements occupy their std430 stride even though the operand
-    /// value is a pointer to the source aggregate; pointer-sized and scalar
+    /// An element held as its bytes occupies its stride even though the operand
+    /// value is the address of the source value; pointer-sized and scalar
     /// elements use the operand's Cranelift width.
     fn build_array_from_operands(
         builder: &mut FunctionBuilder,
@@ -653,9 +653,9 @@ impl<'a> FunctionTranslator<'a> {
         let first_op_direct_kind = operands
             .first()
             .and_then(|op| Self::direct_operand_kind(op, type_ctx));
-        // Inline elements — a vector, a value held as its bytes — are copied
-        // from the source (`val` is its address); pointer-sized elements store
-        // the operand value directly.
+        // An element held as its bytes is copied from the source (`val` is
+        // its address); pointer-sized elements store the operand value
+        // directly.
         let inline_kind = operands
             .first()
             .map(|op| Self::operand_projected_kind(op, type_ctx))

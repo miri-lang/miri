@@ -15,7 +15,6 @@ use crate::mir::place_type::PlaceTypes;
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
-use crate::mir::types::MirType;
 use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 
 /// Inserts reference counting operations for managed types.
@@ -374,7 +373,7 @@ impl Perceus {
         // 3. If we are creating a collection or calling a math intrinsic,
         // increment the RC of every managed element/operand.
         if let Rvalue::Aggregate(_, operands) | Rvalue::MathIntrinsic(_, operands) = rvalue {
-            if self.handle_aggregate(operands, stmt.span, ctx, lhs, new_stmts) {
+            if self.handle_aggregate(operands, stmt.span, ctx, new_stmts) {
                 changed = true;
             }
         }
@@ -446,12 +445,6 @@ impl Perceus {
         dest: &Place,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
     ) -> bool {
-        // An inline element slot copies the source's bytes and keeps no pointer
-        // to it, so the write takes no reference.
-        if writes_inline_element(ctx, dest) {
-            return false;
-        }
-
         // A value held as its bytes read from a counted one — an optional
         // read out of the placeholder word the absent value is spelled at —
         // copies what it reads and holds no reference to it.
@@ -480,22 +473,13 @@ impl Perceus {
     }
 
     /// Handles RC for operands inside an aggregate (like a List or Map).
-    ///
-    /// A container that stores its elements inline copies the operand's bytes
-    /// instead of keeping its pointer, so it takes no reference and the operand
-    /// must not be retained — the temporary that built the element is then freed
-    /// at its own `StorageDead`.
     fn handle_aggregate(
         &self,
         operands: &[Operand],
         span: Span,
         ctx: &PerceusContext,
-        lhs: &Place,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
-        if stores_elements_inline(ctx, lhs) {
-            return false;
-        }
         let mut changed = false;
         for place in operands.iter().filter_map(Operand::place) {
             if is_place_managed(place, ctx) {
@@ -667,28 +651,4 @@ pub(super) fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option
         strict: true,
     }
     .declared(place)
-}
-
-/// Whether the destination of an aggregate is an array or list whose elements
-/// are stored inline, laid out at their std430 stride rather than as pointers.
-fn stores_elements_inline(ctx: &PerceusContext, lhs: &Place) -> bool {
-    if !lhs.projection.is_empty() {
-        return false;
-    }
-    holds_inline_elements(&ctx.local_decls[lhs.local.0].mir_ty)
-}
-
-/// Whether `dest` names one inline element of an array or list, as `arr[i]`
-/// does for a vector element.
-fn writes_inline_element(ctx: &PerceusContext, dest: &Place) -> bool {
-    matches!(dest.projection.last(), Some(PlaceElem::Index(_)))
-        && holds_inline_elements(&ctx.local_decls[dest.local.0].mir_ty)
-}
-
-/// Whether `ty` is a collection that lays its elements out inline.
-fn holds_inline_elements(ty: &MirType) -> bool {
-    match ty {
-        MirType::Array(elem) | MirType::List(elem) => elem.is_inline_vector(),
-        _ => false,
-    }
 }

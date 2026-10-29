@@ -15,7 +15,9 @@
 //! storing a field there shares; an enum declaring a drop hook keeps its
 //! identity and is never bitwise, nor is one supplying its own `equals`,
 //! which a comparison of its bytes would bypass, and neither, for now, is a
-//! generic one.
+//! generic one. A compiler-known vector of a scalar component is a bitwise
+//! value too, laid out the way WGSL lays it out (see `vector_layout`), so its
+//! bytes on the host and on the device agree.
 //!
 //! Type arguments are never substituted into a rewritten type. A definition's
 //! members are read in a frame binding its parameters to the arguments as
@@ -145,7 +147,14 @@ pub enum ValueClass {
 /// it lays out, and where each member sits, in declaration order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ValueLayout {
+    /// The bytes the value spans. Not always a multiple of `align`: a
+    /// `Vec3<f32>` spans twelve bytes aligned to sixteen, and a collection
+    /// spaces such values by [`ValueLayout::stride`].
     pub size: u32,
+    /// Where the value is placed relative to what holds it: its offset in a
+    /// struct, class, tuple or payload, and its spacing in a collection, are
+    /// multiples of this. It does not promise the address the bytes end up
+    /// at is so aligned, and no reader may assume it.
     pub align: u32,
     pub shape: LayoutShape,
     pub fields: Vec<ValueField>,
@@ -211,9 +220,6 @@ impl FieldRepr {
 }
 
 /// The value class of `kind`, decided against `scope`.
-///
-/// Inline vectors keep the representation they have today, a reference-counted
-/// allocation of their own, and so answer `Managed`.
 pub fn value_class(kind: &TypeKind, scope: LayoutScope<'_>) -> ValueClass {
     let mut classifier = Classifier {
         definitions: scope.definitions,
@@ -450,8 +456,8 @@ impl<'a> Classifier<'a> {
         if let Some(payload) = option_payload(name, args.as_deref(), names) {
             return self.classify_option(payload);
         }
-        if vec_type_dim(kind).is_some() {
-            return Verdict::managed();
+        if let Some(dim) = vec_type_dim(kind) {
+            return self.classify_vector(dim, args.as_deref(), names);
         }
         if let Some(component) = atomic_component(name, args.as_deref(), names) {
             return self.classify_argument(component);
@@ -581,6 +587,31 @@ impl<'a> Classifier<'a> {
         }
     }
 
+    /// A compiler-known vector of `dim` components, held as its components
+    /// one after another when its component is a scalar; one whose component
+    /// is a parameter left open is a counted struct, as any generic struct
+    /// over that parameter is.
+    fn classify_vector(
+        &mut self,
+        dim: u8,
+        args: Option<&'a [Expression]>,
+        names: Names<'_, 'a>,
+    ) -> Verdict {
+        let component = args
+            .and_then(<[Expression]>::first)
+            .and_then(|component| Argument::written(component, names));
+        match component.map(|component| self.classify_argument(component)) {
+            Some(Verdict::Class(ValueClass::Scalar(scalar))) => {
+                Verdict::Class(ValueClass::Bitwise(vector_layout(dim, scalar)))
+            }
+            Some(Verdict::Class(
+                ValueClass::Bitwise(_) | ValueClass::Word(_) | ValueClass::Managed,
+            ))
+            | Some(Verdict::Pointer)
+            | None => Verdict::Pointer,
+        }
+    }
+
     /// A range over `element`: built as its start, its end and whether the
     /// end is included, a tuple of those three.
     fn classify_range(&mut self, element: Argument<'_, 'a>) -> Verdict {
@@ -633,6 +664,30 @@ impl<'a> Classifier<'a> {
             Some(layout) => Verdict::Class(ValueClass::Bitwise(layout)),
             None => Verdict::managed(),
         }
+    }
+}
+
+/// The layout of a vector of `dim` components of `component`, as WGSL lays
+/// it out: the components one after another, aligned to two components for a
+/// `vec2` and to four for a `vec3` or `vec4`. A `vec3` keeps its size of three
+/// components, so a member after it fills its fourth slot and a collection
+/// strides by [`ValueLayout::stride`], four components. The size is not
+/// rounded up to the alignment, which is why this is built directly rather
+/// than through [`LayoutBuilder`].
+fn vector_layout(dim: u8, component: ScalarKind) -> ValueLayout {
+    let bytes = component.size();
+    let count = u32::from(dim);
+    let aligned_components = if dim == 2 { 2 } else { 4 };
+    ValueLayout {
+        size: count * bytes,
+        align: aligned_components * bytes,
+        shape: LayoutShape::Record,
+        fields: (0..count)
+            .map(|index| ValueField {
+                offset: index * bytes,
+                repr: FieldRepr::Scalar(component),
+            })
+            .collect(),
     }
 }
 
@@ -779,6 +834,13 @@ impl ValueLayout {
     /// hold.
     pub fn is_held_as_bytes(&self) -> bool {
         self.size > 0
+    }
+
+    /// The spacing between consecutive values laid out this way in a
+    /// collection: the size rounded up to the alignment. A `Vec3<f32>` spans
+    /// twelve bytes and strides by sixteen.
+    pub fn stride(&self) -> u32 {
+        self.size.next_multiple_of(self.align.max(1))
     }
 
     /// Whether this is the layout of an optional: its presence tag, then its

@@ -37,6 +37,17 @@ impl WgslScalar {
             WgslScalar::F64 => "f64",
         }
     }
+
+    /// The bytes this scalar spans in a WGSL buffer, which is also its
+    /// alignment. `bool` has no buffer layout of its own and is carried in a
+    /// 32-bit lane.
+    pub fn byte_width(self) -> u32 {
+        match self {
+            WgslScalar::I32 | WgslScalar::U32 | WgslScalar::F32 | WgslScalar::Bool => 4,
+            WgslScalar::F16 => 2,
+            WgslScalar::F64 => 8,
+        }
+    }
 }
 
 impl From<DeviceScalar> for WgslScalar {
@@ -184,7 +195,7 @@ pub fn buffer_element(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
 }
 
 /// Full WGSL element-type spelling for a buffer-like collection: a scalar
-/// (`f32`) or, for an inline vector element, the vector form (`vec3<f32>`).
+/// (`f32`) or, for a vector element, the vector form (`vec3<f32>`).
 ///
 /// Used for the `array<...>` storage-buffer declaration. The plain
 /// [`buffer_element`] returns only the component scalar (e.g. the `f32` of a
@@ -195,6 +206,27 @@ pub fn buffer_element_typename(kind: &TypeKind) -> Result<String, CodegenError> 
         Some(vec_spelling) => Ok(vec_spelling),
         None => Ok(component_scalar(inner)?.name().to_string()),
     }
+}
+
+/// The stride WGSL spaces the elements of the storage buffer for `buffer` by
+/// (`array<E>`, `E` its element's spelling): the element's size rounded up to
+/// its alignment, `roundUp(AlignOf(E), SizeOf(E))`. A scalar spans and aligns
+/// to its own width; a `vec2` spans two components and aligns to two, a `vec3`
+/// spans three and aligns to four, and a `vec4` spans and aligns to four.
+///
+/// This is the device side of a buffer's layout, read off its WGSL spelling
+/// alone, so it can be held against the stride the host lays the same
+/// elements out at.
+pub fn buffer_array_stride(buffer: &TypeKind) -> Result<u32, CodegenError> {
+    let inner = buffer_element_inner_kind(buffer)?;
+    let component = component_scalar(inner)?.byte_width();
+    let (size, align) = match crate::ast::types::vec_type_dim(inner) {
+        None => (component, component),
+        Some(2) => (2 * component, 2 * component),
+        Some(3) => (3 * component, 4 * component),
+        Some(dim) => (u32::from(dim) * component, 4 * component),
+    };
+    Ok(size.next_multiple_of(align))
 }
 
 /// Whether `kind` is a buffer-like collection of `Atomic<T>` elements.

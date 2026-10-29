@@ -9,9 +9,7 @@
 //! a named type is, not only how it is spelled: a value held as its bytes is
 //! laid out inline by those bytes.
 
-use crate::ast::types::{
-    atomic_inner_kind, inline_element_layout, scalar_width, TypeKind, VALUE_WORD_BYTES,
-};
+use crate::ast::types::{atomic_inner_kind, scalar_width, TypeKind, VALUE_WORD_BYTES};
 use crate::type_checker::value_class::{held_value_layout, LayoutScope};
 
 /// How a collection holds an element of one type and how that element travels
@@ -24,10 +22,6 @@ pub struct ElementLayout {
     /// Spacing between consecutive elements of a list or an array, which is
     /// what an index read strides by. Never less than `payload`.
     pub stride: i64,
-    /// Whether the operand carrying the element is already the address of its
-    /// bytes. An inline vector is; every other element is a value, whose
-    /// address is taken to hand it over.
-    pub is_address: bool,
 }
 
 impl ElementLayout {
@@ -36,7 +30,6 @@ impl ElementLayout {
         Self {
             payload: bytes,
             stride: bytes,
-            is_address: false,
         }
     }
 }
@@ -48,13 +41,6 @@ impl ElementLayout {
 /// call must take the element's address all come from here, so a store and the
 /// read or lookup that must match it cannot disagree.
 pub fn element_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> ElementLayout {
-    if let Some(inline) = inline_element_layout(kind) {
-        return ElementLayout {
-            payload: inline.payload,
-            stride: inline.stride,
-            is_address: true,
-        };
-    }
     if let Some(inner) = atomic_inner_kind(kind) {
         return element_layout(inner, scope);
     }
@@ -79,16 +65,16 @@ fn held_scalar_bytes(kind: &TypeKind) -> Option<i64> {
 /// The layout of an element that is not a scalar as spelled.
 ///
 /// A value held as its bytes is held inline, one value after another at its
-/// own alignment, and handed over as the address of those bytes; its operand
-/// is the value, whose address is taken to hand it over. Every other such
+/// [`ValueLayout::stride`](crate::type_checker::value_class::ValueLayout::stride),
+/// and handed over as the address of those bytes; its operand is the value,
+/// whose address is taken to hand it over. Every other such
 /// element is held in one value word: a reference, a type parameter, a name
 /// that resolves to a scalar.
 fn word_or_value_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> ElementLayout {
     match held_value_layout(kind, scope) {
         Some(layout) => ElementLayout {
             payload: i64::from(layout.size),
-            stride: i64::from(layout.size.next_multiple_of(layout.align.max(1))),
-            is_address: false,
+            stride: i64::from(layout.stride()),
         },
         None => ElementLayout::held_by_value(VALUE_WORD_BYTES),
     }

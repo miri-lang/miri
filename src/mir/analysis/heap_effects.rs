@@ -771,7 +771,6 @@ fn entry_borrows(body: &Body, types: &PlaceTypes) -> HashSet<Local> {
 /// collection's keeps the entry alive, until the collection is replaced,
 /// emptied or released.
 pub fn borrowed_entries(body: &Body) -> impl Iterator<Item = (Local, Option<&Place>)> + '_ {
-    let scope = body.layout_scope();
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.as_ref())
@@ -789,10 +788,8 @@ pub fn borrowed_entries(body: &Body) -> impl Iterator<Item = (Local, Option<&Pla
             | TerminatorKind::GpuLaunch { .. }
             | TerminatorKind::VirtualCall { .. } => None,
         })
-        .filter(move |(name, _, destination)| {
-            let result = body.local_decls.get(destination.local.0);
-            destination.projection.is_empty()
-                && result.is_some_and(|decl| hands_back_a_borrow(name, &decl.ty.kind, scope))
+        .filter(|(name, _, destination)| {
+            destination.projection.is_empty() && hands_back_a_borrow(name)
         })
         .map(|(_, args, destination)| (destination.local, args.first().and_then(Operand::place)))
 }

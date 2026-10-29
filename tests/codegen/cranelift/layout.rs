@@ -275,6 +275,37 @@ fn test_struct_field_layout_with_padding() {
     assert_eq!(ty, Member::Word(types::I64));
 }
 
+/// A `Vec3<f32>` field of a struct held as its bytes sits inline at the
+/// vector's sixteen-byte alignment and spans twelve bytes, so the field after
+/// it takes the vector's fourth slot.
+#[test]
+fn test_vector_field_sits_inline_at_its_alignment() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+    let vector = TypeKind::Custom(
+        "Vec3".to_string(),
+        Some(vec![create_type_expr(TypeKind::F32)]),
+    );
+    let struct_def = make_struct(vec![
+        ("w", TypeKind::F32),
+        ("v", vector.clone()),
+        ("z", TypeKind::F32),
+    ]);
+    type_defs.insert("Body".to_string(), TypeDefinition::Struct(struct_def));
+    let body = TypeKind::Custom("Body".to_string(), None);
+    let scope = LayoutScope::program(&type_defs);
+
+    let (offset, member) = field_layout(&body, 1, scope, ptr).expect("the field has a layout");
+    assert_eq!(offset, 16);
+    assert_eq!(
+        member,
+        Member::Inline(held_value_layout(&vector, scope).expect("a vector is held as its bytes"))
+    );
+    let (offset, member) = field_layout(&body, 2, scope, ptr).expect("the field has a layout");
+    assert_eq!(offset, 28);
+    assert_eq!(member, Member::Word(types::F32));
+}
+
 #[test]
 fn test_struct_aggregate_size() {
     let mut type_defs = HashMap::new();

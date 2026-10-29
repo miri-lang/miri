@@ -15,7 +15,6 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
-use crate::type_checker::element_layout::element_layout;
 use crate::type_checker::CalleeKind;
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
@@ -840,10 +839,6 @@ pub(super) fn spill_operand_to_address(
 /// the value is then released, so the net effect is one reference handed over:
 /// the caller keeps releasing whatever it already owned, and the container
 /// releases the donated one through its drop callback.
-///
-/// An element the container lays out inline is copied as bytes and never
-/// referenced, so nothing is donated: the operand is handed over as it is and
-/// the caller goes on owning it.
 pub(super) fn donate_operand_to_container(
     ctx: &mut LoweringContext,
     op: Operand,
@@ -851,9 +846,6 @@ pub(super) fn donate_operand_to_container(
     span: Span,
 ) -> (Operand, Option<Local>) {
     let src = operand_src_local(&op);
-    if element_layout(&ty.kind, ctx.body.layout_scope()).is_address {
-        return (move_to_copy(op), src);
-    }
     let local = store_operand_temp(ctx, move_to_copy(op), ty, span);
     (Operand::Copy(Place::new(local)), src)
 }

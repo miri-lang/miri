@@ -586,7 +586,7 @@ fn type_has_destructor(
     has_drop_types: &HashSet<String>,
 ) -> bool {
     match &local_decls[local.0].mir_ty {
-        MirType::Custom(name) | MirType::Vector(name) => has_drop_types.contains(name.as_str()),
+        MirType::Custom(name) => has_drop_types.contains(name.as_str()),
         _ => false,
     }
 }
