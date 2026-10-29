@@ -21,17 +21,29 @@ fn test_hex_bit_pattern_literals() {
 
 #[test]
 fn test_integer_types_signed() {
-    assert_runs("let x i8 = 127");
-    assert_runs("let x i16 = 32767");
-    assert_runs("let x i32 = 2147483647");
-    assert_runs("let x i64 = 9223372036854775807");
+    assert_runs_with_output(
+        r#"
+let a i8 = 127
+let b i16 = 32767
+let c i32 = 2147483647
+let d i64 = 9223372036854775807
+println(f"{a} {b} {c} {d}")
+"#,
+        "127 32767 2147483647 9223372036854775807",
+    );
 }
 
 #[test]
 fn test_integer_types_unsigned() {
-    assert_runs("let x u8 = 255");
-    assert_runs("let x u16 = 65535");
-    assert_runs("let x u32 = 4294967295");
+    assert_runs_with_output(
+        r#"
+let a u8 = 255
+let b u16 = 65535
+let c u32 = 4294967295
+println(f"{a} {b} {c}")
+"#,
+        "255 65535 4294967295",
+    );
 }
 
 #[test]
@@ -68,8 +80,14 @@ println(f"{x}")
 
 #[test]
 fn test_negative_integers() {
-    assert_runs("let x i8 = -128");
-    assert_runs("let x i32 = -2147483648");
+    assert_runs_with_output(
+        r#"
+let a i8 = -128
+let b i32 = -2147483648
+println(f"{a} {b}")
+"#,
+        "-128 -2147483648",
+    );
 }
 
 #[test]

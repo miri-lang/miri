@@ -5,15 +5,24 @@ use super::utils::*;
 
 #[test]
 fn test_float_types() {
-    assert_runs("let x f32 = 3.14");
-    assert_runs("let x f64 = 3.14159265358979");
+    assert_runs_with_output(
+        r#"
+let x f32 = 3.14
+let y f64 = 3.14159265358979
+println(f"{x} {y}")
+"#,
+        "3.14 3.14159265358979",
+    );
 }
 
 #[test]
 fn test_float_operations() {
-    assert_runs("1.5 + 2.5");
-    assert_runs("3.0 * 2.0");
-    assert_runs("10.0 / 4.0");
+    assert_runs_with_output(
+        r#"
+println(f"{1.5 + 2.5} {3.0 * 2.0} {10.0 / 4.0}")
+"#,
+        "4.0 6.0 2.5",
+    );
 }
 
 #[test]
