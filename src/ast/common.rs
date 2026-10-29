@@ -131,12 +131,13 @@ impl RuntimeKind {
     }
 
     /// Whether `make runtimes` also builds this runtime with frame pointers,
-    /// into `target/frame-pointers`, for a profile build to link. The GPU
-    /// runtime is built once, without them.
+    /// into `target/frame-pointers`, for a profile build to link. Every
+    /// runtime has one: a profiler walking frame pointers loses the rest of
+    /// a stack at the first runtime frame without them, and a GPU program
+    /// spends its host time inside the GPU runtime.
     pub fn has_frame_pointer_build(&self) -> bool {
         match self {
-            Self::Core => true,
-            Self::Gpu => false,
+            Self::Core | Self::Gpu => true,
         }
     }
 

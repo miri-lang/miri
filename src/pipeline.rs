@@ -4730,13 +4730,60 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
 const FRAME_POINTER_TARGET: &str = "frame-pointers";
 
 /// Resolve the directory holding a runtime's static library built with frame
-/// pointers, `src/runtime/<name>/target/frame-pointers/release`, searched for
-/// as [`runtime_library_dir`] searches for the standard one: up from the
-/// compiler binary, then under the working directory. `MIRI_RUNTIME_DIR` names
-/// the standard libraries and is not consulted. A missing library, or one
-/// older than the standard library built beside it, is an error rather than a
+/// pointers. Where `MIRI_RUNTIME_DIR` names the standard libraries, as an
+/// installed toolchain does, the copies live in its `frame-pointers`
+/// directory and nowhere else, so a profile build never pairs them with a
+/// runtime from another tree. Otherwise it is
+/// `src/runtime/<name>/target/frame-pointers/release`, searched for as
+/// [`runtime_library_dir`] searches for the standard one: up from the
+/// compiler binary, then under the working directory. A missing library, or
+/// one older than the standard library beside it, is an error rather than a
 /// reason to link the standard one or stale code.
 fn frame_pointer_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> {
+    match std::env::var_os("MIRI_RUNTIME_DIR").map(PathBuf::from) {
+        Some(dir) if dir.exists() => installed_frame_pointer_library_dir(runtime, &dir),
+        _ => built_frame_pointer_library_dir(runtime),
+    }
+}
+
+/// The `frame-pointers` directory of the runtime directory `runtime_dir`,
+/// holding `runtime`'s frame-pointer copy no older than the standard library
+/// beside it.
+fn installed_frame_pointer_library_dir(
+    runtime: &RuntimeKind,
+    runtime_dir: &Path,
+) -> Result<PathBuf, CompilerError> {
+    let library = format!("lib{}.a", runtime.library_name());
+    let dir = runtime_dir.join(FRAME_POINTER_TARGET);
+    if !dir.join(&library).is_file() {
+        return Err(frame_pointer_library_error(
+            runtime,
+            format!(
+                "MIRI_RUNTIME_DIR names {}, so the copy belongs in {}; `make runtimes` builds \
+                 it into src/runtime/{}/{}/release.",
+                runtime_dir.display(),
+                dir.display(),
+                runtime.name(),
+                Path::new("target").join(FRAME_POINTER_TARGET).display()
+            ),
+        ));
+    }
+    if is_older(&dir.join(&library), &runtime_dir.join(&library)) {
+        return Err(frame_pointer_library_error(
+            runtime,
+            format!(
+                "The copy in {} is older than the standard runtime beside it; run `make runtimes` \
+                 and copy it there again.",
+                dir.display()
+            ),
+        ));
+    }
+    Ok(dir)
+}
+
+/// The frame-pointer copy `make runtimes` builds into a source tree, found up
+/// from the compiler binary or under the working directory.
+fn built_frame_pointer_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> {
     let target = Path::new("src")
         .join("runtime")
         .join(runtime.name())

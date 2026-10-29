@@ -1050,6 +1050,69 @@ fn test_a_profile_build_without_the_frame_pointer_runtime_is_refused() {
     );
 }
 
+/// An installed layout names its runtimes with `MIRI_RUNTIME_DIR` and keeps
+/// their frame-pointer copies in its `frame-pointers` directory, which a
+/// profile build links from there; without that directory it refuses.
+#[test]
+fn test_a_profile_build_links_the_frame_pointer_runtime_beside_miri_runtime_dir() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = tempfile::tempdir().unwrap();
+    let compiler = root.path().join("miri");
+    std::fs::copy(assert_cmd::cargo_bin!("miri"), &compiler).unwrap();
+    let runtime = root.path().join("runtime");
+    let frame_pointers = runtime.join("frame-pointers");
+    std::fs::create_dir_all(&frame_pointers).unwrap();
+    let library = "libmiri_runtime_core.a";
+    std::fs::copy(
+        manifest
+            .join("src/runtime/core/target/release")
+            .join(library),
+        runtime.join(library),
+    )
+    .unwrap();
+    let source = create_test_file(HASH_COMBINE);
+    let build = || {
+        Command::new(&compiler)
+            .arg("build")
+            .arg(source.path())
+            .arg("--out")
+            .arg(root.path().join("profiled"))
+            .arg("--profile")
+            .current_dir(root.path())
+            .env("MIRI_RUNTIME_DIR", &runtime)
+            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"))
+            .output()
+            .unwrap()
+    };
+
+    let refused = build();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        !refused.status.success(),
+        "linked without a frame-pointer copy"
+    );
+    assert!(
+        stderr.contains(&frame_pointers.display().to_string()),
+        "stderr: {stderr}"
+    );
+
+    std::fs::copy(
+        manifest
+            .join("src/runtime/core/target/frame-pointers/release")
+            .join(library),
+        frame_pointers.join(library),
+    )
+    .unwrap();
+    let linked = build();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    let run = Command::new(root.path().join("profiled")).output().unwrap();
+    assert!(run.status.success(), "the profiled program failed");
+}
+
 /// A copy of the compiler in a temporary directory that also holds
 /// `src/runtime/core/target`, where the compiler looks for its runtimes.
 struct RuntimeLayout {

@@ -22,7 +22,7 @@ TEST_THREADS ?= 8
 # per-runtime command in this file is followed by `|| exit 1` to fail the recipe
 # on the first broken runtime.
 #
-# The core runtime is built a second time with frame pointers, into
+# Every runtime is built a second time with frame pointers, into
 # `target/frame-pointers`, and only `miri build --profile` links that copy: a
 # profiler that walks frame pointers (`perf record --call-graph fp`, macOS
 # `sample`) then follows a sample taken inside the runtime back to the Miri
@@ -30,7 +30,7 @@ TEST_THREADS ?= 8
 # measured with. Flags already in RUSTFLAGS are kept for both builds. The
 # runtimes listed here must be the ones `RuntimeKind::has_frame_pointer_build`
 # names in src/ast/common.rs.
-FRAME_POINTER_RUNTIMES := src/runtime/core
+FRAME_POINTER_RUNTIMES := src/runtime/core src/runtime/gpu
 FRAME_POINTER_RUSTFLAGS := $(strip $(RUSTFLAGS) -C force-frame-pointers=yes)
 
 runtimes:

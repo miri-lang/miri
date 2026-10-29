@@ -408,6 +408,12 @@ def stage_toolchain(scratch):
     (building / "runtime").mkdir()
     for library in REPO.glob("src/runtime/*/target/release/libmiri_runtime_*.a"):
         shutil.copy(library, building / "runtime" / library.name)
+    # A `--profile` build under `MIRI_RUNTIME_DIR` links the frame-pointer
+    # copies from its `frame-pointers` directory. They are copied after the
+    # standard libraries, so none is older than the library it profiles.
+    (building / "runtime" / "frame-pointers").mkdir()
+    for library in REPO.glob("src/runtime/*/target/frame-pointers/release/libmiri_runtime_*.a"):
+        shutil.copy(library, building / "runtime" / "frame-pointers" / library.name)
     shutil.rmtree(target, ignore_errors=True)
     try:
         building.rename(target)

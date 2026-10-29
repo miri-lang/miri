@@ -2809,6 +2809,54 @@ fn test_a_pruned_staged_stdlib_is_staged_again() {
     assert_eq!(printed, "False\nTrue", "a pruned staged stdlib was reused");
 }
 
+/// A staged toolchain carries each runtime's frame-pointer copy in its
+/// runtime directory's `frame-pointers` directory, where a `--profile` build
+/// run under `MIRI_RUNTIME_DIR` looks for it.
+#[test]
+fn test_a_staged_toolchain_carries_the_frame_pointer_runtimes() {
+    if !available("python3") {
+        println!("skipping: python3 is not on PATH, so staging was not run");
+        return;
+    }
+    let scratch = std::env::temp_dir().join("miri-field-staging-frame-pointers");
+    let _ = fs::remove_dir_all(&scratch);
+    let bin = scratch.join("bin");
+    fs::create_dir_all(&bin).expect("cannot create a fake miri directory");
+    fs::write(bin.join("miri"), "#!/bin/sh\necho frame pointers\n")
+        .expect("cannot write a fake miri");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(bin.join("miri"), fs::Permissions::from_mode(0o755))
+            .expect("cannot make the fake miri executable");
+    }
+    let code = [
+        "import os".to_string(),
+        format!(
+            "os.environ['PATH'] = {:?} + os.pathsep + os.environ['PATH']",
+            bin.display().to_string()
+        ),
+        format!(
+            "target = bench.stage_toolchain({:?})",
+            scratch.display().to_string()
+        ),
+        "print(sorted(p.name for p in (target / 'runtime' / 'frame-pointers').glob('*.a')))"
+            .to_string(),
+        "print(sorted(p.name for p in bench.REPO.glob('src/runtime/*/target/frame-pointers/release/libmiri_runtime_*.a')))"
+            .to_string(),
+    ]
+    .join("\n");
+    let printed = with_bench(&code);
+    let _ = fs::remove_dir_all(&scratch);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines.len(), 2, "unexpected output: {printed}");
+    assert_ne!(lines[1], "[]", "no frame-pointer runtime is built to stage");
+    assert_eq!(
+        lines[0], lines[1],
+        "the staged frame-pointer runtimes differ from the built ones"
+    );
+}
+
 /// The fold publishes, per Miri arm and per run, what the subject did on the
 /// way: the codes the compiler reported and how many carried a repair, the
 /// repairs applied, the lookups made and the failed compile cycles by cause.
