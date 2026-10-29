@@ -34,7 +34,7 @@ mod vtable;
 
 use crate::ast::types::{BuiltinCollectionKind, TypeKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::codegen::backend::{
-    ArtifactFormat, Backend, CodeRange, CompiledArtifact, FunctionCodeMap,
+    ArtifactFormat, Backend, CodeRange, CompiledArtifact, FunctionCodeMap, SourcePosition,
 };
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::error::CodegenError;
@@ -962,8 +962,9 @@ impl CraneliftBackend {
 
     /// Where the code `ctx` holds for the function `name` came from: every
     /// run Cranelift recorded a location for, read off `source_points`, with
-    /// the calls it was inlined through, and the unlocated code heading a
-    /// machine block, charged as the block's first run.
+    /// the calls it was inlined through, and the code it left unlocated
+    /// charged to the function's signature or a run beside it, so every byte
+    /// of a function compiled from source lies on a line.
     fn function_code_map(
         name: &str,
         ctx: &Context,
@@ -997,10 +998,15 @@ impl CraneliftBackend {
         let block_starts: Vec<u32> = (block_starts.into_iter())
             .filter_map(|start| u32::try_from(start).ok())
             .collect();
+        let code_size = compiled.code_info().total_size;
+        let signature = source_points.function_point().map(|point| SourcePosition {
+            source: point.source,
+            offset: point.offset,
+        });
         Ok(FunctionCodeMap {
             symbol: name.to_string(),
-            code_size: compiled.code_info().total_size,
-            ranges: code_map::charge_block_heads(ranges, &block_starts),
+            code_size,
+            ranges: code_map::cover_function(ranges, &block_starts, code_size, signature),
         })
     }
 

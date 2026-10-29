@@ -33,6 +33,10 @@ pub(crate) struct SourcePoint {
 pub(crate) struct SourcePoints {
     points: Vec<SourcePoint>,
     locations: HashMap<SourcePoint, u32>,
+    /// Where the function itself is written, the place its code before its
+    /// first statement is charged to; `None` for a function synthesized
+    /// with no source.
+    function: Option<SourcePoint>,
 }
 
 impl SourcePoints {
@@ -54,6 +58,19 @@ impl SourcePoints {
         self.points.push(point);
         self.locations.insert(point, location.bits());
         Some(location)
+    }
+
+    /// The location of `point`, listed as where the function itself is
+    /// written; `None`, and nothing listed, as [`Self::location_of`] says.
+    pub(crate) fn locate_function(&mut self, point: SourcePoint) -> Option<SourceLoc> {
+        let location = self.location_of(point)?;
+        self.function = Some(point);
+        Some(location)
+    }
+
+    /// Where the function itself is written, when it was listed.
+    pub(crate) fn function_point(&self) -> Option<SourcePoint> {
+        self.function
     }
 
     /// The point `location` indexes, `None` for the default location and

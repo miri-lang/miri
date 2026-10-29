@@ -297,6 +297,42 @@ fn test_line_map_leaves_release_object_code_unchanged() {
     );
 }
 
+/// Every byte of a function compiled from source is charged to a line, so a
+/// sample taken anywhere in it lands on one: the frame setup before its
+/// first statement on the line its signature is written on, and the code
+/// the optimizer re-creates between two statements, which the backend
+/// leaves unlocated, on a statement beside it.
+#[test]
+fn test_profile_line_map_covers_every_byte_of_a_function() {
+    let dir = tempfile::tempdir().unwrap();
+    let executable = build_program(dir.path(), &["--profile"]);
+    let (text, map) = read_line_map(&executable);
+
+    let program = map.file_index("prog.mi");
+    let signature = line_of(HASH_LOOP, "fn mix_all");
+    let head = map.function("mix_all").ranges.first();
+    assert!(
+        head.is_some_and(|head| head.start == 0 && (head.file, head.line) == (program, signature)),
+        "the frame setup of mix_all is not charged to prog.mi:{signature}:\n{text}"
+    );
+    for function in map.functions.iter().filter(|f| !f.ranges.is_empty()) {
+        let mut covered = 0;
+        for range in &function.ranges {
+            assert_eq!(
+                range.start, covered,
+                "bytes {covered}..{} of {} are on no line:\n{text}",
+                range.start, function.symbol
+            );
+            covered = range.end;
+        }
+        assert_eq!(
+            covered, function.size,
+            "the end of {} is on no line:\n{text}",
+            function.symbol
+        );
+    }
+}
+
 /// A program that does not compile leaves no line map behind.
 #[test]
 fn test_emit_lines_writes_nothing_for_a_refused_program() {

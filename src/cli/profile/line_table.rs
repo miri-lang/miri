@@ -96,11 +96,11 @@ impl LineTable {
     /// to the statement before it; before the first run, in the prologue,
     /// the first run. Empty only for a function the map lists no run for.
     ///
-    /// The unlocated code heading a machine block already has a run of its
-    /// own: the backend charges it to the block's first run when it writes
-    /// the map, since a constant the optimizer re-creates at the head of a
-    /// loop block belongs to the statement it feeds, not to whatever block
-    /// is laid out before it.
+    /// A map the backend writes covers every byte of a function compiled
+    /// from source: it charges the code it left unlocated when it writes the
+    /// map, the frame setup to the function's signature and a constant the
+    /// optimizer re-creates to the statement of its block it feeds, so the
+    /// nearest run before an offset is only the reading of a map with gaps.
     ///
     /// The line is followed by the lines of the calls its code was inlined
     /// through, innermost first.

@@ -279,6 +279,7 @@ impl<'a> FunctionTranslator<'a> {
         let values = ValueLocals::of(body)?;
         self.start_source_points(emission.source_locations);
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
+        Self::mark_function_source(&mut builder, self.source_points.as_mut(), body);
 
         let (locals, blocks) = Self::declare_locals_and_blocks(&mut builder, body, self.ptr_type);
         let entry = EntryBinding {
@@ -518,23 +519,46 @@ impl<'a> FunctionTranslator<'a> {
         source: Option<SourceId>,
         span: Span,
     ) {
-        if span.is_empty() {
+        let (Some(points), Some(point)) = (source_points, Self::source_point(source, span)) else {
             return;
-        }
-        let (Some(points), Some(source)) = (source_points, source) else {
-            return;
-        };
-        let Ok(offset) = u32::try_from(span.start) else {
-            return;
-        };
-        let point = SourcePoint {
-            source,
-            offset,
-            inlined_at: None,
         };
         if let Some(location) = points.location_of(point) {
             builder.set_srcloc(location);
         }
+    }
+
+    /// Record where `body` itself is written, the start of its span, as
+    /// where the instructions built next came from and as the place the
+    /// function's frame setup is charged to, when `source_points` records
+    /// them. The code that binds the parameters and sets up the entry block
+    /// then lies on the function's signature rather than on no line.
+    fn mark_function_source(
+        builder: &mut FunctionBuilder,
+        source_points: Option<&mut SourcePoints>,
+        body: &Body,
+    ) {
+        let (Some(points), Some(point)) =
+            (source_points, Self::source_point(body.source, body.span))
+        else {
+            return;
+        };
+        if let Some(location) = points.locate_function(point) {
+            builder.set_srcloc(location);
+        }
+    }
+
+    /// The point the start of `span` in `source` names; `None` for a span
+    /// covering no text, which was synthesized rather than written, and for
+    /// a body with no source, which was synthesized whole.
+    fn source_point(source: Option<SourceId>, span: Span) -> Option<SourcePoint> {
+        if span.is_empty() {
+            return None;
+        }
+        Some(SourcePoint {
+            source: source?,
+            offset: u32::try_from(span.start).ok()?,
+            inlined_at: None,
+        })
     }
 
     /// Load initial scalar `out` param values from their caller-provided

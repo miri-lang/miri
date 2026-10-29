@@ -30,8 +30,11 @@
 //! the function from another one lists, after its own line, each call it was
 //! inlined through as ` <- <file>:<line>`, innermost first: the line calling
 //! the function the code was written in, then the line calling the function
-//! that call was written in, out to a line of the function itself. A
-//! function the compiler synthesized with no source lists no runs. Lines are
+//! that call was written in, out to a line of the function itself. The runs
+//! of a function compiled from source cover every byte of its code, the
+//! code the backend left unlocated included: its frame setup is on the line
+//! its signature is written on. A function the compiler synthesized with
+//! no source lists no runs. Lines are
 //! 1-based and count `\n` bytes, as diagnostics do.
 
 use crate::codegen::FunctionCodeMap;
