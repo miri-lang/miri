@@ -117,6 +117,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_080 | Triggers MER_TYP_080: a type set is written as the type of a binding. |
 | MER_TYP_081 | Triggers MER_TYP_081: a closure capturing self is stored in a field of self. |
 | MER_TYP_082 | Triggers MER_TYP_082: a format spec gives a precision without its type. |
+| MER_TYP_083 | Triggers MER_TYP_083: a for loop walks a tuple whose elements differ in type. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -253,6 +254,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_080 | Accepted counterpart of MER_TYP_080: the set bounds a type parameter, and the binding takes one member. |
 | MER_TYP_081 | Accepted counterpart of MER_TYP_081: the closure takes the object as a parameter instead of capturing it. |
 | MER_TYP_082 | Accepted counterpart of MER_TYP_082: the precision carries type f. |
+| MER_TYP_083 | Accepted counterpart of MER_TYP_083: the loop walks a tuple whose elements share one type. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

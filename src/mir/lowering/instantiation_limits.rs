@@ -28,7 +28,7 @@
 use super::instantiation_argument;
 use crate::ast::expression::Expression;
 use crate::ast::formatter::expression_text;
-use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind, TUPLE_TYPE_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -87,6 +87,16 @@ pub fn has_value_argument(args: &[Type]) -> bool {
         .any(|arg| extract_value_generic_kind(&arg.kind).is_some())
 }
 
+/// Whether an instance of `class` at `args` takes a value that a program can
+/// compute afresh on every call, and so counts toward its class's bound.
+///
+/// The tuple class's value is a tuple type's length, which only the program's
+/// text writes: substituting a type for a parameter replaces an element, never
+/// adds one, so a program reaches no more lengths than it spells.
+fn grows_by_value(class: &str, args: &[Type]) -> bool {
+    class != TUPLE_TYPE_NAME && has_value_argument(args)
+}
+
 /// The bound an instance of `class` at `args` passes, if it passes one.
 ///
 /// `value_instances` counts the distinct instantiations of `class` at value
@@ -101,7 +111,7 @@ pub fn exceeded_limit(
     if depth > MAX_INSTANCE_TYPE_DEPTH {
         return Some(ExceededLimit::TypeDepth(depth));
     }
-    if value_instances > MAX_VALUE_INSTANCES_PER_CLASS && has_value_argument(args) {
+    if value_instances > MAX_VALUE_INSTANCES_PER_CLASS && grows_by_value(class, args) {
         return Some(ExceededLimit::ValueInstances {
             parameter: value_parameter(class, args, type_defs),
         });

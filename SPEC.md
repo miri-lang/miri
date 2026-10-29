@@ -396,6 +396,17 @@ println(f"{t[1]}")   // hello
 
 A tuple's elements are fixed when it is built: `t[0] = 5` and `t.0 = 5` are refused (MER_TYP_042). To change one, build a new tuple and assign it to a `var`: `t = (5, t.1)`. Binding a tuple to a second name therefore never lets a write through one name be seen through the other.
 
+A tuple whose elements all have one type is homogeneous. Only a homogeneous tuple can be walked by a `for` loop, indexed by a computed value (`t[i]`), sliced, or given the methods of `system.collections.tuple` (`length`, `element_at`, `contains`, `index_of`, `first`, `last`, `is_empty`). Elements share a type only when their types are the same type: with `a` an `i32`, `(a, 2, 3)` mixes `i32` and `int` and is not homogeneous, though each value would fit the other. A `for` loop over a tuple that is not homogeneous is refused (MER_TYP_083); its elements are read by position (`t.0`, `t.1`) instead.
+
+```miri
+use system.collections.tuple
+
+let t = (1, 2, 3)
+for x in t
+    println(f"{x}")
+println(f"{t.length()} {t.contains(2)}")   // 3 true
+```
+
 Tuples support destructuring in match expressions:
 
 ```miri

@@ -13,7 +13,7 @@ miri_rt_{type}_{operation}
 ```
 
 All lowercase, words separated by underscores. The type segment identifies the runtime
-type (e.g. `array`, `list`, `set`, `map`, `string`, `tuple`). The operation segment
+type (e.g. `array`, `list`, `set`, `map`, `string`). The operation segment
 describes what the function does.
 
 **Exception**: allocator functions use the prefix `miri_alloc` (no `_rt_` segment) to
@@ -199,7 +199,6 @@ at module level are private and may change without notice.
 | `string`     | `string::ffi`               | `miri_rt_string_new`, `miri_rt_string_free`, `miri_rt_string_len`, … |
 | `time`       | `time::ffi`                 | `miri_rt_nanotime`, `miri_rt_sleep_nanos`         |
 | `profile`    | `profile::ffi`              | `miri_rt_profile_init` (called by a `--profile` build's entry point, not declared in stdlib) |
-| `tuple`      | `tuple::ffi`                | `miri_rt_tuple_len`                                |
 
 All symbols are also re-exported at the crate root via `pub use {module}::ffi::*` in
 `lib.rs` so that both `crate::miri_rt_list_new()` and `miri_runtime_core::miri_rt_list_new()`

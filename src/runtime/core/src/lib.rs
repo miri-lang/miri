@@ -17,7 +17,6 @@
 //! - `slot_cursor` — Positional access into a hash table without a rescan per step.
 //! - [`string`] — UTF-8 string type ([`MiriString`]) with full FFI interface.
 //! - [`time`] — Time utilities.
-//! - [`tuple`] — Tuple length helper.
 //!
 //! All public FFI functions use `#[no_mangle] extern "C"` for C-compatible FFI,
 //! allowing compiled Miri code to call them via the linker.
@@ -48,7 +47,6 @@ pub(crate) mod slot_cursor;
 pub mod string;
 pub mod time;
 pub(crate) mod trap;
-pub mod tuple;
 
 // Internal RC helpers (used by other runtime modules)
 pub use rc::*;
@@ -81,4 +79,3 @@ pub use regex::ffi::*;
 pub use set::ffi::*;
 pub use string::ffi::*;
 pub use time::ffi::*;
-pub use tuple::ffi::*;

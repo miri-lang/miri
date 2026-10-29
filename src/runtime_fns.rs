@@ -129,9 +129,6 @@ pub mod rt {
     /// sorting, not in stdlib.
     pub const ARRAY_SET_ELEM_ORDER_KIND: &str = "miri_rt_array_set_elem_order_kind";
 
-    // Tuple
-    pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
-
     // List
     pub const LIST_NEW: &str = "miri_rt_list_new";
     pub const LIST_FREE: &str = "miri_rt_list_free";
@@ -461,8 +458,6 @@ pub mod rt {
         ARRAY_SET_ELEM_CLONE_FN,
         ARRAY_SET_ELEM_COMPARE_FN,
         ARRAY_SET_ELEM_ORDER_KIND,
-        // Tuple
-        TUPLE_LEN,
         // List
         LIST_NEW,
         LIST_FREE,
@@ -714,7 +709,6 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
 pub fn only_reads_argument(name: &str, position: usize) -> bool {
     match name {
         rt::ARRAY_LEN
-        | rt::TUPLE_LEN
         | rt::LIST_LEN
         | rt::LIST_IS_EMPTY
         | rt::MAP_LEN

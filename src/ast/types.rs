@@ -80,10 +80,11 @@ pub const RESULT_TYPE_NAME: &str = "Result";
 
 /// Canonical class name for homogeneous tuples (`system.collections.tuple`).
 ///
-/// Heterogeneous tuples use [`TypeKind::Tuple`]; the type checker normalizes
-/// homogeneous tuples to `TypeKind::Custom(TUPLE_TYPE_NAME, [elem_ty])` so
-/// they pick up the `Tuple<T>` class methods. Use [`TypeKind::is_tuple`] to
-/// recognize both forms instead of string-matching on this constant.
+/// A tuple's type is [`TypeKind::Tuple`]; the type checker gives a tuple whose
+/// elements share one type the methods of `Tuple<T, Size>`, reached as
+/// `TypeKind::Custom(TUPLE_TYPE_NAME, [elem_ty, length])`. Use
+/// [`TypeKind::is_tuple`] to recognize both forms instead of string-matching
+/// on this constant.
 pub const TUPLE_TYPE_NAME: &str = "Tuple";
 
 /// Canonical class name for the built-in `Option<T>` sum type.

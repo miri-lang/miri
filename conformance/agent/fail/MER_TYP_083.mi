@@ -1,0 +1,6 @@
+// expect: MER_TYP_083
+// summary: Triggers MER_TYP_083: a for loop walks a tuple whose elements differ in type.
+fn main()
+    let pair = (1, "one")
+    for part in pair
+        println(f"{part}")

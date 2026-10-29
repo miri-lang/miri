@@ -36,7 +36,7 @@ fn main()
 #[test]
 fn test_first_and_last_on_a_string_tuple_reach_bodies_of_their_own() {
     let names = body_names(STRING_ENDS);
-    for suffix in ["Tuple$String.first", "Tuple$String.last"] {
+    for suffix in ["Tuple$String$3.first", "Tuple$String$3.last"] {
         assert!(
             names.iter().any(|name| name.ends_with(suffix)),
             "no body named *{suffix} among {names:?}"

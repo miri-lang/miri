@@ -67,9 +67,6 @@ use miri_runtime_core::{
 // Time
 use miri_runtime_core::{miri_rt_nanotime, miri_rt_sleep_nanos};
 
-// Tuple
-use miri_runtime_core::miri_rt_tuple_len;
-
 // Tests
 
 #[test]
@@ -538,16 +535,4 @@ fn test_time_ffi_abi() {
 
     // Verify that time advanced after sleep (allowing for timer granularity).
     assert!(after >= before, "time should advance after sleep");
-}
-
-#[test]
-fn test_tuple_ffi_abi() {
-    unsafe {
-        // A null pointer returns 0.
-        assert_eq!(miri_rt_tuple_len(std::ptr::null()), 0);
-
-        // A valid usize on the stack is read back.
-        let count: usize = 3;
-        assert_eq!(miri_rt_tuple_len(&count as *const usize), 3);
-    }
 }

@@ -90,3 +90,105 @@ fn main()
         "a1\na1\nb2",
     );
 }
+
+/// A program that evaluates `condition` a thousand times over the tuple
+/// `t = (1, 2, 3)`, with `declarations` above `main`, and prints how often it
+/// held. The one allocation such a program makes is the printed text.
+fn thousand_calls(declarations: &str, condition: &str) -> String {
+    format!(
+        "use system.io\nuse system.collections.tuple\n{declarations}\nfn main()\n    let t = (1, 2, 3)\n    var s = 0\n    var i = 0\n    while i < 1000\n        if {condition}: s += 1\n        i += 1\n    println(f\"{{s}}\")\n"
+    )
+}
+
+/// A tuple held as its bytes is its methods' receiver as it is: a call
+/// allocates nothing, however often it is made.
+#[test]
+fn test_tuple_methods_on_a_held_tuple_allocate_nothing() {
+    for condition in [
+        "t.length() == 3",
+        "t.contains(i % 5)",
+        "(t.index_of(i % 5) ?? -1) >= 0",
+        "(t.first() ?? 0) == 1",
+        "(t.last() ?? 0) == 3",
+        "not t.is_empty()",
+        "t.element_at(i % 3) == 2",
+    ] {
+        assert_allocation_count(&thousand_calls("", condition), 1);
+    }
+}
+
+#[test]
+fn test_a_for_loop_over_a_held_tuple_allocates_nothing() {
+    for condition in ["sum_of(t) == 6", "sum_of((1, 2, 3)) == 6"] {
+        assert_allocation_count(
+            &thousand_calls(
+                "fn sum_of(t (int, int, int)) int\n    var s = 0\n    for v in t\n        s += v\n    return s\n",
+                condition,
+            ),
+            1,
+        );
+    }
+}
+
+#[test]
+fn test_a_tuple_method_on_a_parameter_allocates_nothing() {
+    assert_allocation_count(
+        &thousand_calls(
+            "fn has(t (int, int, int), x int) bool\n    return t.contains(x) and not t.is_empty() and t.length() == 3\n",
+            "has((i, 2, 3), 3)",
+        ),
+        1,
+    );
+}
+
+#[test]
+fn test_a_tuple_method_on_a_class_field_allocates_nothing_per_call() {
+    // The instance is the one allocation beside the printed text.
+    assert_allocation_count(
+        r#"
+use system.io
+use system.collections.tuple
+
+class Holder
+    t (int, int, int)
+
+fn main()
+    let h = Holder(t: (1, 2, 3))
+    var s = 0
+    var i = 0
+    while i < 1000
+        if h.t.contains(i % 5) and h.t.length() == 3: s += 1
+        i += 1
+    println(f"{s}")
+"#,
+        2,
+    );
+}
+
+/// No tuple held as its bytes is copied into an allocation for a method call:
+/// the lowered `main` builds no tuple into an untyped pointer.
+#[test]
+fn test_a_tuple_method_call_builds_no_boxed_receiver() {
+    use miri::ast::types::TypeKind;
+    use miri::mir::{AggregateKind, Rvalue, StatementKind};
+    let source = thousand_calls("", "t.contains(i % 5) and t.length() == 3");
+    let bodies = miri::pipeline::Pipeline::new()
+        .get_mir_bodies_with_rc(&source)
+        .expect("pipeline should lower the program");
+    let (_, main) = bodies
+        .iter()
+        .find(|(name, _)| name.ends_with("main"))
+        .expect("a main body");
+    let boxed = main
+        .basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .any(|statement| {
+            matches!(
+                &statement.kind,
+                StatementKind::Assign(place, Rvalue::Aggregate(AggregateKind::Tuple(_), _))
+                    if main.local_decls[place.local.0].ty.kind == TypeKind::RawPtr
+            )
+        });
+    assert!(!boxed, "main boxes a tuple receiver:\n{main:?}");
+}

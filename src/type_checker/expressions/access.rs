@@ -56,9 +56,11 @@ use crate::error::syntax::Span;
 use crate::type_checker::context::{inherited_trait_default, Context, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::expressions::identifiers::declares_type_parameters;
+use crate::type_checker::generics::value_generic_marker_type;
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
 use crate::type_checker::type_mismatch::TypeSides;
+use crate::type_checker::utils::{tuple_class_arguments, uniform_element_type};
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -223,16 +225,14 @@ impl TypeChecker {
                 Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
             ));
         }
-        let first = self.resolve_type_expression(&elements[0], context);
-        let is_homogeneous = elements.iter().all(|e| {
-            let t = self.resolve_type_expression(e, context);
-            self.are_compatible(&t, &first, context)
-        });
-
-        if is_homogeneous {
+        let element_types: Vec<Type> = elements
+            .iter()
+            .map(|element| self.resolve_type_expression(element, context))
+            .collect();
+        if let Some(first) = uniform_element_type(&element_types) {
             make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
-                Some(vec![self.create_type_expression(first)]),
+                Some(vec![self.create_type_expression(first.clone())]),
             ))
         } else {
             self.report_error(
@@ -602,11 +602,7 @@ impl TypeChecker {
                 .iter()
                 .map(|t| self.resolve_type_expression(t, context))
                 .collect();
-
-            let first_type = &resolved_types[0];
-            resolved_types
-                .iter()
-                .all(|t| self.are_compatible(t, first_type, context))
+            uniform_element_type(&resolved_types).is_some()
         };
 
         if is_homogeneous {
@@ -1225,22 +1221,27 @@ impl TypeChecker {
             .iter()
             .map(|t| self.resolve_type_expression(t, context))
             .collect();
-        let first_type = &resolved_types[0];
-        let is_homogeneous = resolved_types
-            .iter()
-            .all(|t| self.are_compatible(t, first_type, context));
-
-        if is_homogeneous {
-            // The tuple class's methods are compiled per element type like any
-            // generic class's, so the instantiation a call reaches is recorded.
-            self.record_generic_class_instantiation(TUPLE_TYPE_NAME, vec![first_type.clone()]);
-            (
-                Some(TUPLE_TYPE_NAME.to_string()),
-                Some(vec![self.create_type_expression(first_type.clone())]),
-            )
-        } else {
-            (None, None)
-        }
+        let Some(first_type) = uniform_element_type(&resolved_types) else {
+            return (None, None);
+        };
+        let [element, length] = tuple_class_arguments(
+            self.create_type_expression(first_type.clone()),
+            resolved_types.len(),
+        );
+        // The tuple class's methods are compiled per element type and length
+        // like any generic class's, so the instantiation a call reaches is
+        // recorded.
+        self.record_generic_class_instantiation(
+            TUPLE_TYPE_NAME,
+            vec![
+                first_type.clone(),
+                value_generic_marker_type(length.clone()),
+            ],
+        );
+        (
+            Some(TUPLE_TYPE_NAME.to_string()),
+            Some(vec![element, length]),
+        )
     }
 
     /// Extracts member type from a constrained generic.

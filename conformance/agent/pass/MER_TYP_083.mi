@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_TYP_083: the loop walks a tuple whose elements share one type.
+// expect-stdout: 6
+fn main()
+    var total = 0
+    for part in (1, 2, 3)
+        total += part
+    println(f"{total}")

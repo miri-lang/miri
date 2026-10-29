@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (82 codes: 001-082)
+    // TYP — Type checker (83 codes: 001-083)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1068,6 +1068,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
+    "TYP",
+    "083",
+    TypLoopOverMixedTuple,
+    "Loop Over Mixed Tuple",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // OWN — Ownership and resource management (5 codes: 001-005)
     "OWN",
     "001",

@@ -20,7 +20,7 @@ use crate::ast::types::{
     TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
     GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
     LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
-    SET_LOWERCASE_ALIAS, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
+    SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -40,6 +40,32 @@ use crate::type_checker::value_class::LayoutScope;
 /// still being checked, or in one the parser already reported on. Standing in
 /// the trait's own parameter keeps the loop variable typed as something rather
 /// than collapsing it to the iterable's own type.
+/// The one type every element of a tuple has, or `None` when two differ.
+///
+/// Elements of one type sit at one stride, which is how indexing by a value, a
+/// `for` loop and the tuple class's methods reach them. Types count as one only
+/// when they are the same type, not merely compatible: an `i32` and an `int`
+/// are laid out at different widths. A type an earlier error left unknown
+/// matches any, so the earlier error is not reported twice.
+pub(crate) fn uniform_element_type(element_types: &[Type]) -> Option<&Type> {
+    let (first, rest) = element_types.split_first()?;
+    let is_unknown = |ty: &Type| matches!(ty.kind, TypeKind::Error);
+    rest.iter()
+        .all(|ty| ty.kind == first.kind || is_unknown(ty) || is_unknown(first))
+        .then_some(first)
+}
+
+/// The arguments the tuple class is reached at for a tuple of `length`
+/// elements of the type `element` spells: the element type, then the length
+/// as the class's value parameter. Each shape of tuple is its own instance,
+/// so a method's `self` is that tuple as it is held.
+pub(crate) fn tuple_class_arguments(element: Expression, length: usize) -> [Expression; 2] {
+    [
+        element,
+        crate::ast::factory::int_literal_expression(length as i128),
+    ]
+}
+
 fn unspecified_element_type() -> Type {
     make_type(TypeKind::Generic(
         "T".to_string(),
@@ -1747,6 +1773,43 @@ impl TypeChecker {
         )
     }
 
+    /// The type a `for` loop over the tuple `tuple` binds its variable at.
+    ///
+    /// A loop variable has one type, so only a tuple whose elements all have
+    /// one type ([`uniform_element_type`]) can be walked; any other is refused
+    /// rather than read at its first element's type.
+    fn tuple_loop_element_type(
+        &mut self,
+        tuple: &Type,
+        elements: &[Expression],
+        span: Span,
+    ) -> Type {
+        let element_types: Vec<Type> = elements
+            .iter()
+            .map(|element| {
+                self.extract_type_from_expression(element)
+                    .unwrap_or_else(|_| Self::error_type())
+            })
+            .collect();
+        if element_types.is_empty() {
+            return Self::error_type();
+        }
+        if let Some(element_type) = uniform_element_type(&element_types) {
+            return element_type.clone();
+        }
+        self.report_error_with_help(
+            DiagnosticCode::TypLoopOverMixedTuple,
+            format!(
+                "a for loop cannot walk the tuple '{tuple}': its elements are not all one type"
+            ),
+            span,
+            "a loop variable has one type; read each element by position (`t.0`, `t.1`), or \
+             convert the elements with `as` so every one has the same type"
+                .to_string(),
+        );
+        Self::error_type()
+    }
+
     /// Extracts the element type from an iterable type.
     ///
     /// Supports: List<T>, Set<T>, Map<K,V>, String, Range<T>, and any custom class
@@ -1759,16 +1822,10 @@ impl TypeChecker {
                 unreachable!("collection types are normalized to Custom before this point")
             }
             TypeKind::Tuple(element_type_exprs) => {
-                // For homogeneous tuples, return the element type
-                if element_type_exprs.is_empty() {
-                    Self::error_type()
-                } else {
-                    self.extract_type_from_expression(&element_type_exprs[0])
-                        .unwrap_or_else(|_| Self::error_type())
-                }
+                self.tuple_loop_element_type(ty, element_type_exprs, span)
             }
             TypeKind::Custom(name, args)
-                if BuiltinCollectionKind::from_name(name).is_some() || name == "Tuple" =>
+                if BuiltinCollectionKind::from_name(name).is_some() || name == TUPLE_TYPE_NAME =>
             {
                 if let Some(args) = args {
                     if !args.is_empty() {
@@ -1966,7 +2023,7 @@ impl TypeChecker {
     /// would be rejected, or stays silent where it would be accepted, is worse
     /// than no hint.
     pub(crate) fn type_is_iterable(&self, type_name: &str, context: &Context) -> bool {
-        use crate::ast::types::{RANGE_TYPE_NAME, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
+        use crate::ast::types::STRING_TYPE_NAME;
 
         // String is iterable
         if type_name == STRING_TYPE_NAME {

@@ -16,6 +16,7 @@ use crate::type_checker::context::{
     class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
     TypeDefinition,
 };
+use crate::type_checker::utils::tuple_class_arguments;
 use crate::type_checker::value_class::LayoutScope;
 
 use super::class_instantiations::is_registered_instantiation;
@@ -516,24 +517,16 @@ fn emit_resolved_method_call(
     let return_ty = call_result_type(ctx, &m, &mono);
     let arg_types = method_argument_types(ctx, &m);
     let obj_watermark = ctx.body.local_decls.len();
-    let (self_op, obj_temp_local, boxed) =
+    let (self_op, obj_temp_local) =
         prepare_method_self(ctx, m.obj, m.obj_ty, (m.class_name, m.method_name), *m.span)?;
     let (destination, op) = super::dispatch::call_destination(ctx, return_ty, dest, *m.span);
-    let span = *m.span;
-    let result = emit_method_call(
+    emit_method_call(
         ctx,
         &m,
         mono,
         (self_op, obj_temp_local, obj_watermark),
         (&destination, &op, &arg_types),
-    );
-    if let Some(boxed) = boxed {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Dealloc(Place::new(boxed)),
-            span,
-        });
-    }
-    result
+    )
 }
 
 /// Emit the call `m` resolves to — through its vtable slot when it is
@@ -1106,14 +1099,16 @@ fn receiver_instantiation(ctx: &LoweringContext, obj_ty: &Type) -> Option<(Strin
 
 /// The class type a method call on `obj_ty` is dispatched at.
 ///
-/// A tuple keeps its per-element type, while the type checker gives it the
-/// methods of the tuple class at its first element's type — the type every
-/// element is compatible with. Every other receiver is its own class type.
+/// A tuple keeps its per-element type, while the type checker gives a tuple
+/// whose elements share one type the methods of the tuple class at that type
+/// and its length. Every other receiver is its own class type.
 fn receiver_class_type(obj_ty: &Type) -> Cow<'_, Type> {
     let TypeKind::Tuple(elements) = &obj_ty.kind else {
         return Cow::Borrowed(obj_ty);
     };
-    let args = elements.first().map(|first| vec![first.clone()]);
+    let args = elements
+        .first()
+        .map(|first| tuple_class_arguments(first.clone(), elements.len()).to_vec());
     Cow::Owned(Type::new(
         TypeKind::Custom(TUPLE_TYPE_NAME.to_string(), args),
         obj_ty.span,
@@ -1207,59 +1202,19 @@ fn prepare_method_self<'e>(
     obj_ty: &Type,
     (class_name, method_name): (&str, &str),
     span: Span,
-) -> Result<(Receiver<'e>, Option<Local>, Option<Local>), LoweringError> {
+) -> Result<(Receiver<'e>, Option<Local>), LoweringError> {
     if let Some(cow) = call_writes_receiver(ctx, obj_ty, class_name, method_name) {
         let (pending, temporary) = lower_pending_receiver(ctx, obj, Some((obj_ty, cow)), span)?;
         let temporary = temporary.map(|temporary| temporary.local());
-        return Ok((Receiver::Pending(pending), temporary, None));
+        return Ok((Receiver::Pending(pending), temporary));
     }
-    let receiver = lower_method_receiver(ctx, obj)?;
-    let (self_op, boxed) = box_value_tuple_receiver(ctx, receiver, obj_ty, span);
+    let self_op = lower_method_receiver(ctx, obj)?;
     let obj_temp_local = if let Operand::Copy(ref p) = self_op {
         Some(p.local)
     } else {
         None
     };
-    Ok((Receiver::Ready(self_op), obj_temp_local, boxed))
-}
-
-/// The receiver a tuple's methods take, for a tuple held as its bytes.
-///
-/// The tuple class's methods read their receiver as a tuple allocation — its
-/// element count, then its elements — so a tuple held as its bytes is copied
-/// into one for the call, and the copy is returned beside the receiver for
-/// the caller to free once the call is over. The copy holds no reference, so
-/// it is a raw allocation nothing counts. Any other receiver is passed as it
-/// is.
-fn box_value_tuple_receiver(
-    ctx: &mut LoweringContext,
-    receiver: Operand,
-    obj_ty: &Type,
-    span: Span,
-) -> (Operand, Option<Local>) {
-    let TypeKind::Tuple(elements) = &obj_ty.kind else {
-        return (receiver, None);
-    };
-    if ctx.body.value_layout(&obj_ty.kind).is_none() {
-        return (receiver, None);
-    }
-    let tuple = crate::mir::lowering::helpers::ensure_place(ctx, receiver, span);
-    let operands = (0..elements.len())
-        .map(|index| {
-            let mut element = tuple.clone();
-            element.projection.push(crate::mir::PlaceElem::Field(index));
-            Operand::Copy(element)
-        })
-        .collect();
-    let boxed = ctx.push_temp(Type::new(TypeKind::RawPtr, span), span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: crate::mir::StatementKind::Assign(
-            Place::new(boxed),
-            Rvalue::Aggregate(crate::mir::AggregateKind::Tuple(obj_ty.clone()), operands),
-        ),
-        span,
-    });
-    (Operand::Copy(Place::new(boxed)), Some(boxed))
+    Ok((Receiver::Ready(self_op), obj_temp_local))
 }
 
 /// Lower a method receiver, resolving `super` to the `self` binding.

@@ -43,7 +43,7 @@ mod written_receiver;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
-use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
+use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::mir::lambda::LambdaInfo;
@@ -826,6 +826,11 @@ pub fn monomorphized_self_type(
     let Some(generics) = generics.filter(|g| !g.is_empty()) else {
         return Type::new(TypeKind::Custom(class_name.to_string(), None), span);
     };
+    if class_name == TUPLE_TYPE_NAME {
+        if let Some(tuple) = held_tuple_type(generics, subs, span) {
+            return tuple;
+        }
+    }
     let args = generics
         .iter()
         .map(|g| match subs.get(&g.name) {
@@ -842,6 +847,35 @@ pub fn monomorphized_self_type(
         })
         .collect();
     Type::new(TypeKind::Custom(class_name.to_string(), Some(args)), span)
+}
+
+/// The tuple a method of the tuple class instantiated at `subs` takes as
+/// `self`: as many elements of the class's element type as its length says,
+/// held as any tuple of that shape is, so a call passes the receiver it has.
+/// `None` when `subs` does not settle both.
+fn held_tuple_type(
+    generics: &[GenericDefinition],
+    subs: &HashMap<String, Type>,
+    span: crate::error::syntax::Span,
+) -> Option<Type> {
+    let [element, length] = generics else {
+        return None;
+    };
+    let element = subs.get(&element.name)?;
+    let length = crate::type_checker::generics::extract_value_generic(subs.get(&length.name)?)?;
+    let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(length)) = &length.node
+    else {
+        return None;
+    };
+    let element = Expression {
+        id: 0,
+        span,
+        node: ExpressionKind::Type(Box::new(element.clone()), false),
+    };
+    Some(Type::new(
+        TypeKind::Tuple(vec![element; length.to_usize()]),
+        span,
+    ))
 }
 
 fn lower_class_method_impl(
