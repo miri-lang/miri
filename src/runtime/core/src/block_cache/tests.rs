@@ -304,3 +304,65 @@ fn child_releases_too_large() {
         release_block(block, LARGEST_CACHED_BLOCK);
     }
 }
+
+#[test]
+fn blocks_parked_on_one_thread_are_invisible_to_a_concurrent_one() {
+    let (status, stderr) = run_child("child_parks_beside_a_second_thread", &[]);
+    assert!(status.success(), "{stderr}");
+}
+
+#[test]
+#[ignore = "run by blocks_parked_on_one_thread_are_invisible_to_a_concurrent_one in a child process"]
+fn child_parks_beside_a_second_thread() {
+    assert!(is_child());
+    unsafe {
+        let first = alloc_block(48);
+        release_block(first, 48);
+    }
+    assert_eq!(parked_count(48), 1);
+    let second = std::thread::spawn(|| {
+        let seen = parked_count(48);
+        let block = unsafe { alloc_block(48) };
+        unsafe { release_block(block, 48) };
+        (seen, parked_count(48))
+    });
+    let Ok((seen, parked_after)) = second.join() else {
+        panic!("the second thread panicked");
+    };
+    assert_eq!(seen, 0, "the second thread saw the first thread's block");
+    assert_eq!(parked_after, 1, "the second thread did not park its block");
+    assert_eq!(parked_count(48), 1, "the second thread took a parked block");
+}
+
+#[test]
+fn thread_exit_leaves_its_cache_to_no_later_thread() {
+    let (status, stderr) = run_child("child_outlives_the_first_thread", &[]);
+    assert!(status.success(), "{stderr}");
+}
+
+/// The first thread to reach the cache parks a block and exits; a thread
+/// started after it, which on Apple arm64 may be handed the same thread
+/// storage, must find an empty cache that still parks.
+#[test]
+#[ignore = "run by thread_exit_leaves_its_cache_to_no_later_thread in a child process"]
+fn child_outlives_the_first_thread() {
+    assert!(is_child());
+    let park_one = || {
+        let seen = parked_count(48);
+        unsafe {
+            let block = alloc_block(48);
+            release_block(block, 48);
+        }
+        (seen, parked_count(48))
+    };
+    let Ok(first) = std::thread::spawn(park_one).join() else {
+        panic!("the first thread panicked");
+    };
+    assert_eq!(first, (0, 1));
+    #[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
+    assert!(is_owner_retired(), "the exiting owner kept its cache");
+    let Ok(later) = std::thread::spawn(park_one).join() else {
+        panic!("the later thread panicked");
+    };
+    assert_eq!(later, (0, 1), "the later thread inherited a cache");
+}

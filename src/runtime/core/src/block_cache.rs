@@ -32,6 +32,8 @@
 //!
 //! A thread's parked blocks are returned to the system when the thread exits;
 //! a block released on a thread other than its allocating one is parked there.
+//! On Apple arm64 the first thread to reach the cache keeps its lists in a
+//! static rather than a thread-local, which costs a call to reach there.
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::Cell;
@@ -293,14 +295,25 @@ impl BlockCache {
 
 impl Drop for CacheCleanup {
     fn drop(&mut self) {
-        CACHE.with(|cache| {
-            cache.cleanup.set(Cleanup::Done);
-            cache.release_all();
-        });
+        let cache = this_thread_cache();
+        cache.cleanup.set(Cleanup::Done);
+        cache.release_all();
+        retire_owner_cache(cache);
     }
 }
 
 /// This thread's cache.
+#[cfg(not(all(target_vendor = "apple", target_arch = "aarch64")))]
+#[inline(always)]
+fn this_thread_cache() -> &'static BlockCache {
+    thread_local_cache()
+}
+
+/// Every thread's cache is its own `CACHE`, which nothing outlives.
+#[cfg(not(all(target_vendor = "apple", target_arch = "aarch64")))]
+fn retire_owner_cache(_cache: &BlockCache) {}
+
+/// This thread's cache in `CACHE`.
 ///
 /// `CACHE` is initialised by a constant and has no destructor, so its storage
 /// lives exactly as long as the thread and is never torn down: a reference to
@@ -308,11 +321,112 @@ impl Drop for CacheCleanup {
 /// the work out of the closure `with` runs, which would otherwise be too large
 /// to inline into every allocation.
 #[inline(always)]
-fn this_thread_cache() -> &'static BlockCache {
+fn thread_local_cache() -> &'static BlockCache {
     let cache = CACHE.with(std::ptr::from_ref);
     // SAFETY: see above; the reference never leaves this thread, since
     // `BlockCache` is not `Sync`.
     unsafe { &*cache }
+}
+
+#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
+use owner::{retire_owner_cache, this_thread_cache};
+
+/// The cache of the first thread to reach the block cache, on Apple arm64.
+///
+/// There a thread-local is reached through a call to its descriptor's thunk,
+/// and the block cache is reached on every allocation and release. The thread
+/// that reaches it first — a program's main thread — instead finds its cache
+/// in a static, recognised by its thread storage base, which one instruction
+/// reads. Every other thread uses `CACHE`.
+#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
+mod owner {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{thread_local_cache, BlockCache};
+
+    struct OwnerCache(BlockCache);
+
+    // SAFETY: only the thread whose storage base `OWNER` holds reaches the
+    // cache inside (see `this_thread_cache`), and no two live threads share a
+    // base, so its cells are never touched by two threads.
+    unsafe impl Sync for OwnerCache {}
+
+    static OWNER_CACHE: OwnerCache = OwnerCache(BlockCache::new());
+
+    /// The storage base of the thread `OWNER_CACHE` belongs to, [`NO_OWNER`]
+    /// until a thread claims it, or [`RETIRED_OWNER`] once that thread has
+    /// exited.
+    static OWNER: AtomicUsize = AtomicUsize::new(NO_OWNER);
+
+    const NO_OWNER: usize = 0;
+
+    /// Odd, so no storage base, which is word-aligned, equals it.
+    const RETIRED_OWNER: usize = 1;
+
+    /// The low bits of `tpidrro_el0` that may carry the CPU number rather
+    /// than part of the storage base.
+    const CPU_NUMBER_BITS: usize = 0b111;
+
+    /// This thread's cache.
+    ///
+    /// Every thread reads a base no other live thread has, so a match with
+    /// `OWNER` names the owning thread alone. A thread whose base is not
+    /// `OWNER` claims the cache if no one has, and otherwise uses its own
+    /// `CACHE`.
+    #[inline(always)]
+    pub(super) fn this_thread_cache() -> &'static BlockCache {
+        let base = thread_storage_base();
+        // Only this thread stores its own base in `OWNER`. A thread that had
+        // the same base before retired it as it exited, and its exit happens
+        // before this thread started, so a relaxed load cannot read that
+        // thread's base back.
+        if OWNER.load(Ordering::Relaxed) == base {
+            return &OWNER_CACHE.0;
+        }
+        claim_owner_cache(base)
+    }
+
+    /// Claims `OWNER_CACHE` for the thread with storage `base` if no thread
+    /// has, or answers the thread's own `CACHE`.
+    #[cold]
+    #[inline(never)]
+    fn claim_owner_cache(base: usize) -> &'static BlockCache {
+        match OWNER.compare_exchange(NO_OWNER, base, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => &OWNER_CACHE.0,
+            Err(_) => thread_local_cache(),
+        }
+    }
+
+    /// Gives up `OWNER_CACHE` when `cache` is it, so a thread started later
+    /// with the exiting thread's storage base, which Darwin hands out again,
+    /// does not take over a cache marked done.
+    pub(super) fn retire_owner_cache(cache: &BlockCache) {
+        if std::ptr::eq(cache, &OWNER_CACHE.0) {
+            OWNER.store(RETIRED_OWNER, Ordering::Relaxed);
+        }
+    }
+
+    /// The calling thread's storage base, which no other live thread shares.
+    #[inline(always)]
+    fn thread_storage_base() -> usize {
+        let register: usize;
+        // SAFETY: `tpidrro_el0` is readable at user level on every Apple
+        // arm64 system; reading it touches no memory, stack or flags.
+        unsafe {
+            std::arch::asm!(
+                "mrs {}, tpidrro_el0",
+                out(reg) register,
+                options(nomem, nostack, preserves_flags, pure)
+            )
+        };
+        register & !CPU_NUMBER_BITS
+    }
+
+    /// Whether the thread that owned `OWNER_CACHE` has exited and given it up.
+    #[cfg(test)]
+    pub(crate) fn is_owner_retired() -> bool {
+        OWNER.load(Ordering::Relaxed) == RETIRED_OWNER
+    }
 }
 
 /// The bytes every block of `class` has.
@@ -658,23 +772,24 @@ pub mod ffi {
 #[cfg(test)]
 pub(crate) fn parked_count(size: usize) -> usize {
     let class = (size - 1) / CLASS_GRANULE;
-    CACHE.with(|cache| {
-        let mut length = 0;
-        let mut block = cache.heads[class].get();
-        while !block.is_null() {
-            length += 1;
-            // SAFETY: every listed block carries the link a push wrote.
-            block = unsafe { (*block).next };
-        }
-        length
-    })
+    let mut length = 0;
+    let mut block = this_thread_cache().heads[class].get();
+    while !block.is_null() {
+        length += 1;
+        // SAFETY: every listed block carries the link a push wrote.
+        block = unsafe { (*block).next };
+    }
+    length
 }
 
 /// How many bytes this thread has parked.
 #[cfg(test)]
 pub(crate) fn parked_bytes() -> usize {
-    CACHE.with(|cache| cache.parked_bytes.get())
+    this_thread_cache().parked_bytes.get()
 }
+
+#[cfg(all(test, target_vendor = "apple", target_arch = "aarch64"))]
+pub(crate) use owner::is_owner_retired;
 
 #[cfg(test)]
 mod tests;
