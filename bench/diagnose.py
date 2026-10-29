@@ -13,14 +13,17 @@ For each lost cell it writes `diagnosis/<workload>-<size>/` beside the run:
   Linux; elsewhere the reason they are unavailable);
 - `profile.<language>.txt`, `folded.<language>.txt`, `flamegraph.<language>.svg`
   and `top.<language>.json`: a sampled profile of a hot run, its stacks folded,
-  drawn, and its top self-time symbols. Miri is sampled from its `--profile`
-  build, which keeps a frame pointer in every function so the profiler sees
-  every caller; the counters stay on the release build that was timed;
+  drawn, and its top self-time symbols. The profiler is `sample` on macOS and
+  `perf record` on Linux; both fold into the same stacks. Miri is sampled from
+  its `--profile` build, which keeps a frame pointer in every function so the
+  profiler sees every caller; the counters stay on the release build that was
+  timed;
 - `miri.mir` and `miri.clif`: what the compiler made of the Miri port, and
   `hot.clif` and `hot.asm`: the CLIF and machine code of its hottest functions;
 - `runtime.json`: the Miri runtime's allocation counts;
 - `DIAGNOSIS.md`: the evidence side by side, with an empty hypothesis and an
-  empty task for the engineer to fill. The tool gathers evidence; a person
+  empty task for the engineer to fill, and the build each artifact came
+  from. The tool gathers evidence; a person
   names the mechanism, files the work, and adds it to `diagnosis/CATALOG.md`.
 
 Standard library only; the profiler is the operating system's own.
@@ -29,6 +32,7 @@ Standard library only; the profiler is the operating system's own.
 import argparse
 import html
 import json
+import os
 import platform
 import re
 import shutil
@@ -42,6 +46,7 @@ import run
 LANGUAGES = ("miri", "c", "rust")
 PERF_EVENTS = "cycles,instructions,branches,branch-misses,cache-misses,L1-dcache-load-misses"
 SAMPLE_SECONDS = 3
+SAMPLE_HZ = 999
 TOP_SYMBOLS = 15
 HOT_FUNCTIONS = 3
 
@@ -134,19 +139,193 @@ def perf_values(stderr):
 # Sampling a hot run.
 
 
+@dataclass
+class Sampled:
+    """A sampled profile of a hot run: the profiler's own report, and its
+    stacks folded."""
+
+    report: str
+    folded: dict
+
+
 def sample_profile(port, input_path, env, work_dir):
-    """A sampled call graph of the port's hot run, as the profiler printed
-    it, or None when no profiler is available."""
-    sampler = shutil.which("sample")
-    if sampler is None:
-        return None
+    """A sampled call graph of the port's hot run, or why there is none."""
+    system = platform.system()
+    if system == "Darwin":
+        return sample_on_macos(port, input_path, env, work_dir)
+    if system == "Linux":
+        return sample_on_linux(port, input_path, env, work_dir)
+    return f"no sampling profiler is supported on {system}"
+
+
+def start_hot_run(port, input_path, env, work_dir):
+    """The port's hot run, started and given a moment to get past start-up."""
     child = subprocess.Popen([*port.run_words, str(input_path), "hot"], env=env, cwd=work_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.2)
-    out = work_dir / f"sample.{child.pid}.txt"
-    subprocess.run([sampler, str(child.pid), str(SAMPLE_SECONDS), "-mayDie", "-file", str(out)], capture_output=True, check=False)
+    return child
+
+
+def stop_hot_run(child):
     child.kill()
     child.wait()
-    return out.read_text() if out.is_file() else None
+
+
+def sample_on_macos(port, input_path, env, work_dir):
+    sampler = shutil.which("sample")
+    if sampler is None:
+        return "`sample` is not installed"
+    child = start_hot_run(port, input_path, env, work_dir)
+    out = work_dir / f"sample.{child.pid}.txt"
+    subprocess.run([sampler, str(child.pid), str(SAMPLE_SECONDS), "-mayDie", "-file", str(out)], capture_output=True, check=False)
+    stop_hot_run(child)
+    if not out.is_file():
+        return "`sample` wrote no profile"
+    report = out.read_text()
+    return sampled_or_reason(scrubbed(report, work_dir), folded_stacks(call_tree(report)))
+
+
+def sample_on_linux(port, input_path, env, work_dir):
+    """`perf record` of the hot run's user-space stacks, walked by frame
+    pointer; `perf script` folds it and `perf report` is its readable form."""
+    problem = perf_problem()
+    if problem is not None:
+        return problem
+    child = start_hot_run(port, input_path, env, work_dir)
+    data = work_dir / f"perf.{child.pid}.data"
+    record = ["perf", "record", "--all-user", "-F", str(SAMPLE_HZ), "--call-graph", "fp", "-o", str(data), "-p", str(child.pid), "--", "sleep", str(SAMPLE_SECONDS)]
+    recorded = subprocess.run(record, capture_output=True, text=True, check=False)
+    stop_hot_run(child)
+    # perf also exits non-zero when the process it is attached to ends inside
+    # the window, so its samples, not its exit status, decide.
+    script = subprocess.run(["perf", "script", "-i", str(data), "-F", "comm,tid,ip,sym,dso"], capture_output=True, text=True, check=False) if data.is_file() else None
+    stacks, note = demangled(script.stdout) if script else ("", "")
+    folded = folded_perf_stacks(stacks)
+    if not folded and (recorded.returncode != 0 or script is None):
+        return f"perf record failed{paranoid_note()}: {first_lines(scrubbed(recorded.stderr, work_dir))}"
+    if not folded:
+        return "perf recorded no samples of the hot run"
+    report_words = ["perf", "report", "-i", str(data), "--stdio", "--no-children", "--sort", "dso,symbol", "-g", "none", "--percent-limit", "0.5"]
+    report, _ = demangled(subprocess.run(report_words, capture_output=True, text=True, check=False).stdout)
+    return Sampled(scrubbed(f"# {note}\n{report}" if note else report, work_dir), folded)
+
+
+def demangled(text):
+    """`text` with its Rust (legacy and v0) and C++ symbol names demangled by
+    `c++filt`, and a note when they could not be, in which case the text is
+    returned as it was. perf demangles C++ itself but not Rust's v0 scheme."""
+    filt = shutil.which("c++filt")
+    if filt is None:
+        return text, "symbols are left mangled: c++filt is not installed"
+    done = subprocess.run([filt], input=text, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        return text, "symbols are left mangled: c++filt failed"
+    return done.stdout, ""
+
+
+def sampled_or_reason(report, folded):
+    return Sampled(report, folded) if folded else "the profiler recorded no samples of the hot run"
+
+
+def scrubbed(text, work_dir):
+    """`text` without this machine's scratch, checkout and home directories,
+    which profilers, compilers and disassemblers print in the paths they
+    name. The longest is replaced first, since one may hold another."""
+    names = {str(work_dir): "<work>", str(run.REPO): "<repo>", str(Path.home()): "~"}
+    for path in sorted((path for path in names if path not in ("", "/")), key=len, reverse=True):
+        text = text.replace(path, names[path])
+    return text
+
+
+def scrub_bundle(out_dir, work_dir):
+    """Every text artifact of the bundle, scrubbed of this machine's paths."""
+    for path in out_dir.iterdir():
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if (clean := scrubbed(text, work_dir)) != text:
+            path.write_text(clean)
+
+
+def first_lines(text, count=3):
+    return " ".join([line.strip() for line in text.splitlines() if line.strip()][:count]) or "no message"
+
+
+# Whether `perf` may sample here. Sampling another process's user-space
+# stacks needs `kernel.perf_event_paranoid` at 2 or less; Debian and Ubuntu
+# kernels add levels above 2 that refuse unprivileged users altogether.
+PERF_PARANOID = Path("/proc/sys/kernel/perf_event_paranoid")
+PERF_USER_SAMPLING_LEVEL = 2
+
+
+def perf_problem(paranoid_file=PERF_PARANOID):
+    """Why `perf` cannot sample a process's user stacks here, or None when
+    nothing stands in its way that can be seen before trying."""
+    if shutil.which("perf") is None:
+        return "perf is not installed"
+    level = paranoid_level(paranoid_file)
+    if level is not None and level > PERF_USER_SAMPLING_LEVEL:
+        return f"kernel.perf_event_paranoid is {level}; sampling a process's user stacks needs {PERF_USER_SAMPLING_LEVEL} or less (as root: sysctl kernel.perf_event_paranoid={PERF_USER_SAMPLING_LEVEL})"
+    return None
+
+
+def paranoid_level(paranoid_file=PERF_PARANOID):
+    try:
+        return int(paranoid_file.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def paranoid_note():
+    level = paranoid_level()
+    return f" (kernel.perf_event_paranoid is {level})" if level is not None else ""
+
+
+# `perf script -F comm,tid,ip,sym,dso` prints each sample as a `comm tid`
+# line followed by its frames, innermost first, one `address symbol (dso)`
+# line each. An address in the upper half belongs to the kernel, which
+# user-space sampling reaches only through the entry into it.
+PERF_FRAME = re.compile(r"^\s+(?P<address>[0-9a-f]+) (?P<symbol>.*) \((?P<dso>[^)]*)\)$")
+KERNEL_FRAME = "[kernel]"
+KERNEL_ADDRESSES = 1 << 63
+UNKNOWN_SYMBOL = "[unknown]"
+
+
+def folded_perf_stacks(script):
+    """`perf script` output in the folded format `folded_stacks` writes: the
+    thread's name at the root, then every frame outermost first."""
+    folded = {}
+    for thread, frames in perf_samples(script):
+        if frames:
+            key = ";".join([thread, *reversed(frames)])
+            folded[key] = folded.get(key, 0) + 1
+    return folded
+
+
+def perf_samples(script):
+    """(thread name, frames innermost first) of every sample."""
+    samples = []
+    for line in script.splitlines():
+        if not line.strip():
+            continue
+        if not line[0].isspace():
+            samples.append((line.rsplit(maxsplit=1)[0].strip(), []))
+        elif samples and (match := PERF_FRAME.match(line)):
+            frame = perf_frame_name(match.group("address"), match.group("symbol"), match.group("dso"))
+            frames = samples[-1][1]
+            if not (frame == KERNEL_FRAME and frames and frames[-1] == KERNEL_FRAME):
+                frames.append(frame)
+    return samples
+
+
+def perf_frame_name(address, symbol, dso):
+    """A frame's name in a folded stack: its symbol, or the library it is in
+    when perf could not name it, never a path."""
+    if int(address, 16) >= KERNEL_ADDRESSES:
+        return KERNEL_FRAME
+    if symbol != UNKNOWN_SYMBOL:
+        return symbol.replace(";", ":")
+    return f"[{Path(dso).name}]" if dso != UNKNOWN_SYMBOL else UNKNOWN_SYMBOL
 
 
 # A sample whose stack the profiler could not walk past the loader's entry
@@ -286,15 +465,51 @@ def hot_miri_functions(top):
 
 def disassembly(binary, symbols):
     """Machine code of `symbols` in `binary`, through objdump."""
-    objdump = shutil.which("objdump")
-    if objdump is None:
+    tool = disassembler()
+    if tool is None:
         return "unavailable: objdump is not installed\n"
     prefix = "_" if platform.system() == "Darwin" else ""
-    names = ",".join(prefix + s for s in symbols)
-    done = subprocess.run([objdump, "-d", f"--disassemble-symbols={names}", str(binary)], capture_output=True, text=True, check=False)
+    listings = []
+    for words in disassembly_commands(*tool, binary, [prefix + s for s in symbols]):
+        done = subprocess.run(words, capture_output=True, text=True, check=False)
+        listings.append(done.stdout or f"unavailable: {done.stderr.strip()}\n")
     # objdump names the binary by its path, which is a scratch directory of
     # this machine's; the bundle names it by the workload instead.
-    return done.stdout.replace(str(binary), binary.name) or f"unavailable: {done.stderr.strip()}\n"
+    return "".join(listings).replace(str(binary), binary.name)
+
+
+def disassembler():
+    """(objdump, flavour): llvm-objdump when installed, under its own name or
+    a versioned one, else the system objdump, `gnu` when it is GNU's. None
+    when there is neither."""
+    llvm = shutil.which("llvm-objdump") or newest_versioned("llvm-objdump")
+    if llvm is not None:
+        return llvm, "llvm"
+    objdump = shutil.which("objdump")
+    if objdump is None:
+        return None
+    version = subprocess.run([objdump, "--version"], capture_output=True, text=True, check=False).stdout
+    return objdump, "gnu" if "GNU" in version else "llvm"
+
+
+def newest_versioned(name):
+    """The `name-<major>` executable on PATH with the highest major version."""
+    found = []
+    for directory in filter(None, os.environ.get("PATH", "").split(os.pathsep)):
+        for path in Path(directory).glob(f"{name}-[0-9]*"):
+            suffix = path.name[len(name) + 1 :]
+            if suffix.isdigit() and os.access(path, os.X_OK):
+                found.append((int(suffix), str(path)))
+    return max(found)[1] if found else None
+
+
+def disassembly_commands(objdump, flavour, binary, symbols):
+    """The objdump runs that print `symbols`: llvm-objdump takes them in one
+    list, GNU objdump only one `--disassemble=` at a time (a second replaces
+    the first)."""
+    if flavour == "gnu":
+        return [[objdump, "-d", f"--disassemble={symbol}", str(binary)] for symbol in symbols]
+    return [[objdump, "-d", f"--disassemble-symbols={','.join(symbols)}", str(binary)]]
 
 
 # The Miri runtime's own counters.
@@ -314,7 +529,41 @@ def runtime_counts(ctx, workload, input_path):
 # The bundle.
 
 
-def diagnosis_markdown(workload, size, summary, tops, counter_data, runtime):
+# Which build of the ports each artifact of the bundle came from. The profile
+# build is the charter's build line with `--profile` in place of `--release`
+# for Miri and the one release build for every other language; the release
+# build is the one that was timed; the counted build is Miri's without
+# `--release`, which keeps the runtime's counters.
+ARTIFACT_BUILDS = (
+    ("profile.<language>.txt", "profile", "the profiler's own report of a hot run"),
+    ("folded.<language>.txt", "profile", "its stacks, folded"),
+    ("flamegraph.<language>.svg", "profile", "its stacks, drawn"),
+    ("top.<language>.json", "profile", "its top self-time symbols"),
+    ("counters.json", "release", "hardware counters of a whole run"),
+    ("miri.mir", "release", "the Miri port's MIR"),
+    ("miri.clif", "release", "the Miri port's CLIF"),
+    ("hot.clif", "release", "the CLIF of the hottest Miri functions the profile names"),
+    ("hot.asm", "release", "their machine code, deliberately the timed code"),
+    ("runtime.json", "counted", "the Miri runtime's allocation and reference counts"),
+)
+
+
+def artifact_builds_markdown():
+    lines = ["## Builds", "", "| Artifact | Build | What it is |", "|---|---|---|"]
+    lines += [f"| `{artifact}` | {build} | {what} |" for artifact, build, what in ARTIFACT_BUILDS]
+    lines += [
+        "",
+        "The profile build is Miri's `--profile` build, the release code with a frame pointer kept in every function, "
+        "and every other language's release build; release is the build that was timed; counted is Miri's build "
+        "without `--release`, which keeps the runtime's counters.",
+        "",
+    ]
+    return lines
+
+
+def diagnosis_markdown(workload, size, summary, profiles, counter_data, runtime):
+    """The bundle's summary. `profiles` maps a language to its top symbols, or
+    to the reason it has no profile."""
     lines = [f"# {workload.name} at size {size}: diagnosis", "", f"Feature tags: {', '.join(workload.manifest.get('tags', []))}.", ""]
     lines += ["| Language | Median wall (ms) | × C | Max RSS (MB) |", "|---|---|---|---|"]
     for cell in summary["cells"]:
@@ -323,11 +572,15 @@ def diagnosis_markdown(workload, size, summary, tops, counter_data, runtime):
             vs_c = ((cell.get("vs_c") or {}).get("time") or {}).get("value")
             rss = cell["metrics"]["max_rss_bytes"]["median"] / 2**20
             lines.append(f"| {cell['language']} | {wall:.1f} | {vs_c:.2f} | {rss:.1f} |" if vs_c else f"| {cell['language']} | {wall:.1f} | — | {rss:.1f} |")
-    lines += ["", "## Top self-time symbols", ""]
-    for language, top in tops.items():
-        lines.append(f"**{language}**: " + ", ".join(f"`{t['symbol']}` {t['share']:.0%}" for t in top[:8]))
+    lines += ["", *artifact_builds_markdown(), "## Top self-time symbols", ""]
+    for language, top in profiles.items():
+        if isinstance(top, str):
+            lines.append(f"**{language}**: unavailable: {top}")
+        else:
+            lines.append(f"**{language}** (profile build): " + ", ".join(f"`{t['symbol']}` {t['share']:.0%}" for t in top[:8]))
         lines.append("")
-    lines += ["## Counters", "", "```json", json.dumps(counter_data, indent=1), "```", "", "## Miri runtime", "", "```json", json.dumps(runtime, indent=1), "```", ""]
+    lines += ["## Counters (release build)", "", "```json", json.dumps(counter_data, indent=1), "```", ""]
+    lines += ["## Miri runtime (counted build)", "", "```json", json.dumps(runtime, indent=1), "```", ""]
     lines += ["## Verdict", "", "Hypothesis: ", "", "Task: ", ""]
     return "\n".join(lines)
 
@@ -338,25 +591,33 @@ def diagnose_cell(ctx, summary, workload, size, out_dir):
     ports = build_ports(ctx, workload, ctx.work_dir)
     env = run.child_environment(ctx.work_dir)
     (out_dir / "counters.json").write_text(json.dumps(counter_data := counters(ports.timed, input_path, env), indent=1) + "\n")
-    tops = {}
+    profiles = {}
     for language, port in ports.sampled.items():
-        if not isinstance(port, run.Built):
-            (out_dir / f"profile.{language}.txt").write_text(f"unavailable: the profile build of the port: {port}\n")
-            continue
-        profile = sample_profile(port, input_path, env, ctx.work_dir)
-        if profile is None:
-            (out_dir / f"profile.{language}.txt").write_text("unavailable: no sampling profiler on this machine\n")
-            continue
-        folded = folded_stacks(call_tree(profile))
-        tops[language] = top_symbols(folded)
-        (out_dir / f"profile.{language}.txt").write_text(profile)
-        (out_dir / f"folded.{language}.txt").write_text("".join(f"{k} {v}\n" for k, v in sorted(folded.items())))
-        (out_dir / f"flamegraph.{language}.svg").write_text(flamegraph_svg(folded, f"{workload.name} {size} {language}"))
-        (out_dir / f"top.{language}.json").write_text(json.dumps(tops[language], indent=1) + "\n")
-    copy_listings(ports.listing, out_dir, hot_miri_functions(tops.get("miri", [])))
+        profiles[language] = profile_artifacts(port, input_path, env, ctx.work_dir, out_dir / language, f"{workload.name} {size} {language}")
+    miri_top = profiles.get("miri")
+    copy_listings(ports.listing, out_dir, hot_miri_functions(miri_top if isinstance(miri_top, list) else []))
     runtime = runtime_counts(ctx, workload, input_path) if "miri" in ports.timed else {}
     (out_dir / "runtime.json").write_text(json.dumps(runtime, indent=1) + "\n")
-    (out_dir / "DIAGNOSIS.md").write_text(diagnosis_markdown(workload, size, summary, tops, counter_data, runtime))
+    (out_dir / "DIAGNOSIS.md").write_text(diagnosis_markdown(workload, size, summary, profiles, counter_data, runtime))
+    scrub_bundle(out_dir, ctx.work_dir)
+
+
+def profile_artifacts(port, input_path, env, work_dir, stem, title):
+    """Sample one port's profile build and write its profile, folded stacks,
+    flamegraph and top symbols beside `stem`, whose name is the language.
+    Returns the top symbols, or the reason there is no profile, which
+    `profile.<language>.txt` then carries."""
+    out_dir, language = stem.parent, stem.name
+    sampled = sample_profile(port, input_path, env, work_dir) if isinstance(port, run.Built) else f"the profile build of the port: {port}"
+    if not isinstance(sampled, Sampled):
+        (out_dir / f"profile.{language}.txt").write_text(f"unavailable: {sampled}\n")
+        return str(sampled)
+    top = top_symbols(sampled.folded)
+    (out_dir / f"profile.{language}.txt").write_text(sampled.report)
+    (out_dir / f"folded.{language}.txt").write_text("".join(f"{k} {v}\n" for k, v in sorted(sampled.folded.items())))
+    (out_dir / f"flamegraph.{language}.svg").write_text(flamegraph_svg(sampled.folded, title))
+    (out_dir / f"top.{language}.json").write_text(json.dumps(top, indent=1) + "\n")
+    return top
 
 
 def copy_listings(miri_listing, out_dir, hot):

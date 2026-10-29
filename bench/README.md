@@ -126,11 +126,16 @@ Every Miri cell past the charter's diagnosis thresholds gets a bundle under
 `<run>/diagnosis/<workload>-<size>/`, comparing Miri with C and Rust:
 hardware counters (`perf stat` on Linux, and the reason they are unavailable
 elsewhere); a sampled profile of a hot run, from the operating system's own
-`sample` on macOS, folded into stacks, drawn as a flamegraph and ranked into
-its top self-time symbols; the Miri port's MIR and CLIF from
-`miri build --emit mir --emit clif`, with the CLIF and machine code of its
-hottest functions; and the runtime's allocation counts. `DIAGNOSIS.md` lays
-the evidence side by side and leaves the hypothesis and the task empty. The
+`sample` on macOS or `perf record` on Linux, folded into stacks, drawn as a
+flamegraph and ranked into its top self-time symbols; the Miri port's MIR and
+CLIF from `miri build --emit mir --emit clif`, with the CLIF and machine code
+of its hottest functions; and the runtime's allocation counts. On Linux the
+profile needs `perf` and `kernel.perf_event_paranoid` at 2 or less; when
+either is missing, or perf records nothing, the profile files say why.
+`DIAGNOSIS.md` lays the evidence side by side, names the build each artifact
+came from (the `--profile` build for the profile, the timed release build for
+the counters and listings, the counted build for the runtime's counts), and
+leaves the hypothesis and the task empty. The
 tool gathers evidence; the engineer names the mechanism, files the work, and
 records it in [`diagnosis/CATALOG.md`](diagnosis/CATALOG.md), which the next
 diagnosis reads first.
