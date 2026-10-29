@@ -408,6 +408,66 @@ fn test_profile_charges_library_time_to_the_library_and_its_caller() {
     assert_library_time_reaches_its_caller(LIBRARY_LOOP, LIBRARY_FILE, LIBRARY_CALL_LINE);
 }
 
+/// A program that spends most of its time allocating and releasing class
+/// instances, which happens in the runtime rather than on any source line.
+const ALLOCATING_LOOP: &str = r#"use system.io
+
+class Node
+    var left Node?
+    var right Node?
+
+    fn init(left Node?, right Node?)
+        self.left = left
+        self.right = right
+
+fn bottom_up(depth int) Node
+    if depth == 0
+        return Node(None, None)
+    Node(bottom_up(depth - 1), bottom_up(depth - 1))
+
+fn check(node Node) int
+    match node.left
+        Some(l)
+            match node.right
+                Some(r): return 1 + check(l) + check(r)
+                None: return 1
+        None: return 1
+
+fn main()
+    var total = 0
+    var i = 0
+    while i < 128
+        total += check(bottom_up(16))
+        i += 1
+    println(f"{total}")
+"#;
+
+/// Time spent in the runtime's allocator is charged to its functions by
+/// name, and next to none is left unnamed: on Linux the loader names only
+/// the symbols an executable exports.
+#[test]
+fn test_profile_names_the_runtime_functions_a_program_spends_time_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let envelope = profile_envelope(dir.path(), ALLOCATING_LOOP, &["--top", "100"]);
+    assert_eq!(envelope["ok"], true, "{envelope:#}");
+    let runtime = &envelope["profile"]["runtime"];
+    let is_named = |entry: &serde_json::Value| {
+        entry["symbol"]
+            .as_str()
+            .is_some_and(|symbol| symbol.contains("miri_rt_block_"))
+    };
+    let named = self_share_of(runtime, is_named);
+    assert!(
+        named > 0.0,
+        "no time is charged to the block allocator: {envelope:#}"
+    );
+    let unknown = self_share_of(runtime, |entry| entry["symbol"] == "(unknown)");
+    assert!(
+        unknown < 0.1,
+        "{unknown} of the time is in functions left unnamed: {envelope:#}"
+    );
+}
+
 /// In the pretty form the program's own output comes through unchanged and
 /// the report follows it on stderr.
 #[test]

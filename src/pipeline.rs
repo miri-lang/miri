@@ -732,6 +732,18 @@ impl RuntimeBuild {
             Self::Standard
         }
     }
+
+    /// The linker arguments a program linking this build adds. A profile
+    /// build on Linux exports its symbols, so the sampler's `dladdr`, which
+    /// there reads only an executable's exported symbols, names the runtime
+    /// and compiled functions a sample lands in; macOS reads the whole
+    /// symbol table and needs nothing.
+    fn executable_link_args(self) -> &'static [&'static str] {
+        match self {
+            Self::FramePointers if cfg!(target_os = "linux") => &["-rdynamic"],
+            Self::FramePointers | Self::Standard => &[],
+        }
+    }
 }
 
 /// Orchestrates the full compilation pipeline from source to executable.
@@ -4311,6 +4323,7 @@ impl Pipeline {
 
         // Link the math library (required for sin, cos, pow, etc. on Linux)
         cmd.arg("-lm");
+        cmd.args(runtime_build.executable_link_args());
 
         // Link required runtime libraries
         for runtime in required_runtimes {

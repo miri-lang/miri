@@ -145,6 +145,9 @@ impl RuntimeKind {
     /// that adding a new runtime does not force a pipeline edit.
     pub fn extra_link_args(&self) -> &'static [&'static str] {
         match self {
+            // Linux: the profiler's `timer_create` lives in librt before
+            // glibc 2.34, and in libc after it, where librt is an empty stub.
+            Self::Core if cfg!(target_os = "linux") => &["-lrt"],
             Self::Core => &[],
             Self::Gpu => {
                 if cfg!(target_os = "macos") {
