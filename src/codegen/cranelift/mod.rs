@@ -545,6 +545,11 @@ fn isa_flags(options: &CraneliftOptions) -> Result<settings::Flags, String> {
         // Where each machine block starts, which the code map reads; it
         // leaves the machine code unchanged.
         ("machine_code_cfg_info", flag_value(options.code_map)),
+        // Every function starts on a 64-byte cache line, so where a hot loop
+        // falls against cache lines and fetch windows no longer depends on the
+        // size of the code linked before it: an unrelated change elsewhere
+        // cannot move a loop's speed by moving its address.
+        ("log2_min_function_alignment", "6"),
     ];
     for (name, value) in requested {
         builder.set(name, value).map_err(|e| e.to_string())?;

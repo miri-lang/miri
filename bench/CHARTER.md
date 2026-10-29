@@ -20,7 +20,7 @@ of this document, and the prose refers to values by key rather than restating
 them. `tests/bench/charter.rs` fails the build when the two files disagree on a
 number, a build line, a tier or a key.
 
-**Charter version: 4.**
+**Charter version: 5.**
 
 ## 1. Identity of a result
 
@@ -253,6 +253,17 @@ except `hot_ns`, which only the program can know.
   two ratio CVs, the verdict is `faster` when `r < 1 − t`, `slower` when
   `r > 1 + t` and `same` otherwise. A change smaller than the noise is `same`;
   it is never reported as a win.
+- **Code placement.** Every function the Miri compiler emits starts on a
+  64-byte cache line, so a change elsewhere in a program cannot move a loop's
+  timing by moving its address. Placement still moves a short-loop cell
+  through code the compiler does not lay out: the runtime library, the C
+  library and the order the linker places them in. A verdict that calls a
+  cell `faster` or `slower` and credits a change to the generated code is
+  therefore checked against placement before it is reported: the cell is
+  rebuilt in several layouts that differ only in padding placed ahead of the
+  program's code, and the verdict stands only when the change is larger than
+  the spread those layouts give. The padded builds are a check, never a
+  published result.
 - **Time cap.** A run — measured or warm-up — longer than
   `timeout.c_median_factor` times the C median for that cell, or
   `timeout.floor_s` seconds if that is longer, is killed and retried
@@ -415,7 +426,7 @@ checks the two files agree reads this table.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `charter_version` | `4` | The version every record carries (section 1). |
+| `charter_version` | `5` | The version every record carries (section 1). |
 | `runs.process_warmup_runs` | `2` | Discarded runs at the start of each cell. |
 | `runs.hot_warmup_iterations` | `5` | Untimed kernel iterations at the start of a hot run. |
 | `runs.hot_timed_iterations` | `5` | Timed kernel iterations in a hot run; `hot_ns` is their median. |
@@ -439,6 +450,14 @@ checks the two files agree reads this table.
 | `diagnosis.net_rss_vs_rust` | `1.5` | Ratio to Rust at which a Miri memory cell is diagnosed. |
 
 ## Changelog
+
+- **Version 5, 2026-10-29** — added the code-placement rule (section 6).
+  On the rented x86-64 machine, padding alone moved the time of a short-loop
+  cell by 12.5–13.8% between builds of the same program, larger than most
+  changes a compiler release makes to it. The compiler now starts every
+  function on a 64-byte cache line, which cut that spread to 3.4–6.6%; the
+  rest comes from code it does not lay out, so a verdict credited to the
+  generated code must now clear the spread of a padding sweep.
 
 - **Version 4, 2026-10-25** — added the machine profile `preliminary-vps`
   (section 8), so a first result can be published from a rented virtual
