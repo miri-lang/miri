@@ -21,7 +21,9 @@
 use crate::ast::literal::Literal;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
-use crate::codegen::cranelift::value_locals::{clear_value, copy_value, scalar_type, ValueBuild};
+use crate::codegen::cranelift::value_locals::{
+    clear_value, copy_value, load_at, scalar_type, store_at, ValueBuild,
+};
 use crate::error::CodegenError;
 use crate::mir::option_layout::is_absent_placeholder;
 use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
@@ -56,12 +58,7 @@ impl FunctionTranslator<'_> {
         };
         let offset = tag.offset as i32;
         let address = Self::value_operand_address(builder, ctx, operand, locals, type_ctx, None)?;
-        Ok(Some(builder.ins().load(
-            cl_types::I8,
-            MemFlagsData::new(),
-            address,
-            offset,
-        )))
+        Ok(Some(load_at(builder, cl_types::I8, address, offset)))
     }
 
     /// Fill the bytes `target` describes with `operand` cast to their type.
@@ -125,21 +122,11 @@ impl FunctionTranslator<'_> {
         else {
             return None;
         };
-        let presence = builder.ins().load(
-            cl_types::I8,
-            MemFlagsData::new(),
-            source,
-            from_tag.offset as i32,
-        );
-        builder.ins().store(
-            MemFlagsData::new(),
-            presence,
-            target.address,
-            to_tag.offset as i32,
-        );
-        let payload = builder.ins().load(
+        let presence = load_at(builder, cl_types::I8, source, from_tag.offset as i32);
+        store_at(builder, presence, target.address, to_tag.offset as i32);
+        let payload = load_at(
+            builder,
             scalar_type(*from_scalar),
-            MemFlagsData::new(),
             source,
             from.offset as i32,
         );
@@ -278,9 +265,7 @@ impl FunctionTranslator<'_> {
             ));
         }
         let value = builder.ins().iconst(cl_types::I8, i64::from(is_present));
-        builder
-            .ins()
-            .store(MemFlagsData::new(), value, address, tag.offset as i32);
+        store_at(builder, value, address, tag.offset as i32);
         Ok(())
     }
 }

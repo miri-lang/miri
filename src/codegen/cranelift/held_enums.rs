@@ -19,13 +19,13 @@ use crate::ast::types::Type;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type_kind;
 use crate::codegen::cranelift::value_locals::{
-    repr_scalar_members, scalar_type, zero_scalar, ValueBuild,
+    load_at, repr_scalar_members, scalar_type, store_at, zero_scalar, ValueBuild,
 };
 use crate::error::CodegenError;
 use crate::mir::type_facts::{FieldRepr, LayoutShape, ScalarKind, TypeDefinition, ValueLayout};
 use crate::mir::{Local, Operand, PlaceElem};
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{types as cl_types, InstBuilder, MemFlagsData, Value};
+use cranelift_codegen::ir::{types as cl_types, InstBuilder, Value};
 use cranelift_frontend::{FunctionBuilder, Variable};
 use std::collections::HashMap;
 
@@ -126,9 +126,7 @@ pub(crate) fn load_tag(
     };
     let at =
         i32::try_from(offset + at).map_err(|_| enum_error("an enum's tag offset overflows"))?;
-    Ok(builder
-        .ins()
-        .load(scalar_type(*tag), MemFlagsData::new(), address, at))
+    Ok(load_at(builder, scalar_type(*tag), address, at))
 }
 
 /// Which member of each column the variant numbered `discriminant` stores
@@ -296,9 +294,7 @@ fn clear_column_around(
 fn clear_member(builder: &mut FunctionBuilder, address: Value, offset: u32, repr: &FieldRepr) {
     for (at, scalar) in repr_scalar_members(repr) {
         let zero = zero_scalar(builder, scalar);
-        builder
-            .ins()
-            .store(MemFlagsData::new(), zero, address, (offset + at) as i32);
+        store_at(builder, zero, address, (offset + at) as i32);
     }
 }
 

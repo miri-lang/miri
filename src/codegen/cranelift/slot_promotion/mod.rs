@@ -22,6 +22,7 @@ mod ssa;
 
 use super::pass_through::forward_where;
 use crate::error::CodegenError;
+pub(super) use cells::constant;
 use cells::Cells;
 use cranelift_codegen::flowgraph::ControlFlowGraph;
 use cranelift_codegen::ir::{

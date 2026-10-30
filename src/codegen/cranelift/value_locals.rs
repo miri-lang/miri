@@ -27,6 +27,7 @@ use crate::codegen::cranelift::held_enums::{
     collect_column_members, member_read_as, projected_column_value,
 };
 use crate::codegen::cranelift::inline_optionals::is_absent;
+use crate::codegen::cranelift::slot_promotion::constant;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::value_abi::HeldResult;
 use crate::error::CodegenError;
@@ -35,7 +36,8 @@ use crate::mir::type_facts::{FieldRepr, ScalarKind, ValueField, ValueLayout};
 use crate::mir::{AggregateKind, Body, Local, Operand, Place, PlaceElem, Rvalue};
 use cranelift_codegen::ir::immediates::Ieee16;
 use cranelift_codegen::ir::{
-    types as cl_types, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Value,
+    types as cl_types, Function, InstBuilder, InstructionData, MemFlagsData, Opcode, StackSlotData,
+    StackSlotKind, Value, ValueDef,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use std::collections::{HashMap, HashSet};
@@ -121,9 +123,7 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
         };
-        Ok(builder
-            .ins()
-            .load(scalar_type(scalar), MemFlagsData::new(), address, 0))
+        Ok(load_at(builder, scalar_type(scalar), address, 0))
     }
 
     /// The address of the bytes of the whole value `operand` reads — in a
@@ -247,11 +247,7 @@ impl<'a> FunctionTranslator<'a> {
             reached = ReachedRepr::of(repr, elem)?;
         }
         Ok(match reached {
-            ReachedRepr::Scalar(scalar) => {
-                builder
-                    .ins()
-                    .load(scalar_type(scalar), MemFlagsData::new(), address, 0)
-            }
+            ReachedRepr::Scalar(scalar) => load_at(builder, scalar_type(scalar), address, 0),
             ReachedRepr::Value(_) => address,
         })
     }
@@ -610,9 +606,7 @@ impl<'a> FunctionTranslator<'a> {
         let offset = i32::try_from(offset).map_err(|_| {
             CodegenError::Internal(format!("value member offset {offset} overflows"))
         })?;
-        builder
-            .ins()
-            .store(MemFlagsData::new(), value, address, offset);
+        store_at(builder, value, address, offset);
         Ok(())
     }
 }
@@ -891,10 +885,74 @@ pub fn copy_chunks(
     chunks: impl IntoIterator<Item = (i32, cl_types::Type)>,
 ) {
     for (offset, chunk) in chunks {
-        let word = builder
-            .ins()
-            .load(chunk, MemFlagsData::new(), source, offset);
-        builder.ins().store(MemFlagsData::new(), word, dest, offset);
+        let word = load_at(builder, chunk, source, offset);
+        store_at(builder, word, dest, offset);
+    }
+}
+
+/// Load a `ty` from `offset` bytes past `address`, addressed as
+/// [`folded_address`] folds it.
+pub(crate) fn load_at(
+    builder: &mut FunctionBuilder,
+    ty: cl_types::Type,
+    address: Value,
+    offset: i32,
+) -> Value {
+    let (base, offset) = folded_address(builder.func, address, offset);
+    builder.ins().load(ty, MemFlagsData::new(), base, offset)
+}
+
+/// Store `value` at `offset` bytes past `address`, addressed as
+/// [`folded_address`] folds it.
+pub(crate) fn store_at(builder: &mut FunctionBuilder, value: Value, address: Value, offset: i32) {
+    let (base, offset) = folded_address(builder.func, address, offset);
+    builder
+        .ins()
+        .store(MemFlagsData::new(), value, base, offset);
+}
+
+/// The byte at `offset` past `address`, as the address `address` is a
+/// constant distance from and the whole distance to that byte.
+///
+/// A member of a value held as its bytes is reached by adding its offset to
+/// the address of the value holding it. Cranelift forwards a store to a later
+/// load, and drops a load that repeats an earlier one, only when both name
+/// the same address value, immediate offset and type, so every access of a
+/// member names the outermost address and carries every constant distance in
+/// its offset: a member copied in and then read back is the same location
+/// both times. A distance that does not fit an offset stays in the address.
+fn folded_address(function: &Function, address: Value, offset: i32) -> (Value, i32) {
+    let mut folded = (address, offset);
+    while let Some((base, distance)) = constant_addition(function, folded.0) {
+        let Some(offset) = i64::from(folded.1)
+            .checked_add(distance)
+            .and_then(|total| i32::try_from(total).ok())
+        else {
+            break;
+        };
+        folded = (base, offset);
+    }
+    folded
+}
+
+/// The operands of the `iadd` defining `address` when one of them is a
+/// constant: the other one, and the constant.
+fn constant_addition(function: &Function, address: Value) -> Option<(Value, i64)> {
+    let dfg = &function.dfg;
+    let ValueDef::Result(inst, _) = dfg.value_def(dfg.resolve_aliases(address)) else {
+        return None;
+    };
+    let InstructionData::Binary {
+        opcode: Opcode::Iadd,
+        args: [left, right],
+    } = dfg.insts[inst]
+    else {
+        return None;
+    };
+    match (constant(function, left), constant(function, right)) {
+        (None, Some(distance)) => Some((left, distance)),
+        (Some(distance), None) => Some((right, distance)),
+        (Some(_), Some(_)) | (None, None) => None,
     }
 }
 
@@ -919,9 +977,7 @@ pub fn copy_value(builder: &mut FunctionBuilder, source: Value, dest: Value, lay
 pub fn clear_value(builder: &mut FunctionBuilder, dest: Value, layout: &ValueLayout) {
     for (offset, scalar) in scalar_members(layout) {
         let zero = zero_scalar(builder, scalar);
-        builder
-            .ins()
-            .store(MemFlagsData::new(), zero, dest, offset as i32);
+        store_at(builder, zero, dest, offset as i32);
     }
 }
 

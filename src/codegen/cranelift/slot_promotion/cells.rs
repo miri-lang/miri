@@ -169,7 +169,7 @@ fn is_explicit(function: &Function, slot: StackSlot) -> bool {
 
 /// The constant `value` is defined as by an `iconst`, sign-extended from
 /// the width of its type.
-fn constant(function: &Function, value: Value) -> Option<i64> {
+pub(in crate::codegen::cranelift) fn constant(function: &Function, value: Value) -> Option<i64> {
     let ValueDef::Result(inst, _) = function.dfg.value_def(value) else {
         return None;
     };

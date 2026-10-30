@@ -106,3 +106,35 @@ fn main()
         "1 pos true",
     );
 }
+
+#[test]
+fn test_a_copied_padded_struct_compares_and_hashes_as_its_source() {
+    assert_heap_guard_output(
+        r#"
+use system.io
+use system.collections.set
+
+struct Key
+    tag i8
+    id int
+
+fn dirty() int
+    let junk = (-1, -1, -1, -1)
+    junk.0 + junk.2
+
+fn key(tag i8, id int) Key
+    let d = dirty()
+    Key(tag: tag, id: id + d - d)
+
+fn main()
+    let k = key(1, 2)
+    var c = k
+    let maybe Key? = c
+    var s = Set<Key>()
+    s.add(k)
+    s.add(c)
+    println(f"{c == k} {c == key(1, 3)} {s.length()} {s.contains(key(1, 2))} {maybe == k}")
+"#,
+        "true false 1 true true",
+    );
+}

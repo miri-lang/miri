@@ -664,3 +664,44 @@ fn a_member_picked_by_a_runtime_index_reaching_codegen_uncopied_is_refused() {
         "{error}"
     );
 }
+
+/// `probe` copies its parameter into `r`, whose address then goes to a
+/// call `depth` that recursion keeps out of line, so `r` stays in a slot of
+/// the frame; `r.z`, the member the copy stores last, is read between the
+/// copy and the call.
+const COPY_THEN_FIELD_READ: &str = r#"use system.io
+
+struct Vec3
+    x float
+    y float
+    z float
+
+fn depth(v Vec3, n int) float
+    if n == 0
+        return v.x
+    depth(v, n - 1)
+
+fn probe(a Vec3, n int) float
+    var r = a
+    let z = r.z
+    z + depth(r, n)
+
+fn main()
+    println(f"{probe(Vec3(x: 1.0, y: 2.0, z: 3.0), 3)}")
+"#;
+
+#[test]
+fn a_field_read_after_a_copy_takes_the_stored_value_without_a_load() {
+    let (listing, output) = super::slot_promotion::listing_and_output(COPY_THEN_FIELD_READ, "3");
+    assert_eq!(output, "4.0\n");
+    let probe = super::slot_promotion::function_text(&listing, "miri.probe");
+    let loads = probe
+        .lines()
+        .filter(|line| line.contains(" = load."))
+        .count();
+    assert_eq!(
+        loads, 3,
+        "the copy loads each of `a`'s three fields, and `r.z` is taken from \
+         the store the copy made rather than loaded again:\n{probe}"
+    );
+}
