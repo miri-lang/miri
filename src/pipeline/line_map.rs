@@ -34,7 +34,9 @@
 //! of a function compiled from source cover every byte of its code, the
 //! code the backend left unlocated included: its frame setup is on the line
 //! its signature is written on. A function the compiler synthesized with
-//! no source lists no runs. Lines are
+//! no source lists no runs, and so does each function the backend generated
+//! itself, a drop thunk or a closure trampoline, listed after the rest: a
+//! profiler charges the time spent in one to the line that called it. Lines are
 //! 1-based and count `\n` bytes, as diagnostics do.
 
 use crate::codegen::FunctionCodeMap;

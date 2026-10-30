@@ -468,6 +468,35 @@ fn test_profile_names_the_runtime_functions_a_program_spends_time_in() {
     );
 }
 
+/// The line of `ALLOCATING_LOOP` that releases each tree it builds.
+const RELEASING_LINE: usize = 28;
+
+/// The code that releases a class instance runs in a function the compiler
+/// generated, which has no line of its own: its time is charged to the line
+/// the release happens on, not listed beside the runtime's functions.
+#[test]
+fn test_profile_charges_time_releasing_instances_to_the_releasing_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = ALLOCATING_LOOP.replace("i < 128", "i < 256");
+    let envelope = profile_envelope(dir.path(), &source, &["--top", "100"]);
+    assert_eq!(envelope["ok"], true, "{envelope:#}");
+    let helpers = self_share_of(&envelope["profile"]["runtime"], |entry| {
+        entry["symbol"]
+            .as_str()
+            .is_some_and(|symbol| symbol.contains("$drop"))
+    });
+    assert_eq!(
+        helpers, 0.0,
+        "a drop helper is charged by name: {envelope:#}"
+    );
+    let releasing = reported_line(&envelope, "prog.mi", RELEASING_LINE)
+        .and_then(|line| line["selfShare"].as_f64());
+    assert!(
+        releasing.is_some_and(|share| share > 0.0),
+        "no time is charged to the releasing line: {envelope:#}"
+    );
+}
+
 /// In the pretty form the program's own output comes through unchanged and
 /// the report follows it on stderr.
 #[test]

@@ -11,6 +11,7 @@ mod closure_trampolines;
 mod code_map;
 pub mod collection_header;
 mod element_method_thunks;
+mod generated_functions;
 mod gpu_launch;
 mod held_enums;
 mod inline_optionals;
@@ -49,7 +50,8 @@ use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_module::{DataDescription, Linkage, Module};
-use cranelift_object::{ObjectBuilder, ObjectModule};
+use cranelift_object::{ObjectBuilder, ObjectModule, ObjectProduct};
+use generated_functions::GeneratedFunctions;
 use source_points::SourcePoints;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -127,9 +129,10 @@ pub struct CraneliftOptions {
     /// the offsets leaves the machine code unchanged.
     pub code_map: bool,
     /// Whether to define `miri_profile_functions`, the address and code size
-    /// of every user function in the order the code map lists them, and have
-    /// the entry point hand it to the runtime's sampler. Only a profile build
-    /// asks for it.
+    /// of every user function and then of every function the backend
+    /// generated, in the order the code map lists them, and have the entry
+    /// point hand it to the runtime's sampler. Only a profile build asks for
+    /// it.
     pub profile_table: bool,
     /// Whether small, loop-free user functions are inlined into their
     /// callers. An optimizing build asks for it.
@@ -460,12 +463,13 @@ impl Backend for CraneliftBackend {
             &isa,
             &cpu_bodies,
         )?;
+        let generated = GeneratedFunctions::of(&module, &cpu_bodies);
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
         let mut string_literals = BTreeMap::new();
         let profile_table = options
             .profile_table
-            .then(|| Self::declare_profile_table(&mut module, cpu_bodies.len()))
+            .then(|| Self::declare_profile_table(&mut module, cpu_bodies.len() + generated.len()))
             .transpose()?;
         let mut env = TranslationEnv {
             module: &mut module,
@@ -480,14 +484,31 @@ impl Backend for CraneliftBackend {
         } else {
             self.compile_each(&mut env, &mut ctx, &cpu_bodies, emission, &mut reports)?;
         }
-        let reports = reports.finish();
+        let mut reports = reports.finish();
 
         self.define_vtables(&mut module, &isa, &cpu_bodies)?;
         Self::define_string_literals(&mut module, &isa, string_literals)?;
-        if let (Some(table), Some(functions)) = (profile_table, &reports.profile_functions) {
+        let user_count = reports.profile_functions.as_ref().map_or(0, Vec::len);
+        if let (Some(table), Some(functions)) = (profile_table, &mut reports.profile_functions) {
+            functions.extend(generated.unsized_entries());
             Self::define_profile_table(&mut module, &isa, table, functions)?;
         }
-        let object = self.finalize_object(module)?;
+        let mut product = module.finish();
+        let sizes = generated.sizes(&product)?;
+        if let Some(table) = profile_table {
+            let pointer = isa.pointer_type().bytes() as usize;
+            generated_functions::fill_table_sizes(
+                &mut product,
+                table,
+                user_count,
+                &sizes,
+                pointer,
+            )?;
+        }
+        if options.code_map {
+            reports.code_map.extend(generated.code_maps(&sizes));
+        }
+        let object = self.emit_object(product)?;
 
         Ok(CompiledArtifact {
             bytes: object,
@@ -800,11 +821,10 @@ impl CraneliftBackend {
         data
     }
 
-    /// Finish the object module and inject the macOS build-version load command
-    /// when targeting Darwin (cranelift-object doesn't do this automatically).
-    fn finalize_object(&self, module: ObjectModule) -> Result<Vec<u8>, CodegenError> {
-        let mut product = module.finish();
-
+    /// Write the finished object, the macOS build-version load command
+    /// injected when targeting Darwin (cranelift-object doesn't do this
+    /// automatically).
+    fn emit_object(&self, mut product: ObjectProduct) -> Result<Vec<u8>, CodegenError> {
         if matches!(
             self.target().operating_system,
             OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_)

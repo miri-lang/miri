@@ -34,7 +34,10 @@ impl Attribution {
     /// Charge every stack of `record` against `table`: its first frame's line
     /// gets the samples as its own, or, outside any line, its function does;
     /// every distinct line in the stack gets them inclusively, the lines of
-    /// the calls a frame's code was inlined through among them.
+    /// the calls a frame's code was inlined through among them. A first
+    /// frame in a function the map lists with no line, a helper the compiler
+    /// generated, charges its own samples to the nearest caller's line
+    /// ([`own_line`]).
     pub(crate) fn of(record: &ProfileRecord, table: &LineTable) -> Self {
         let mut attribution = Self::default();
         let mut seen: HashSet<SourceLine> = HashSet::new();
@@ -46,7 +49,7 @@ impl Attribution {
                 .iter()
                 .map(|frame| lines_of(frame, table))
                 .collect();
-            let own = lines.first().and_then(|lines| lines.first()).copied();
+            let own = own_line(&stack.frames, &lines);
             match (own, stack.frames.first()) {
                 (Some(line), _) => {
                     let samples = attribution.lines.entry(line).or_default();
@@ -68,6 +71,20 @@ impl Attribution {
             }
         }
         attribution
+    }
+}
+
+/// The line a stack's samples are charged to as its own, given the lines of
+/// its `frames`: the first frame's line, or, when the first frame is in a
+/// function the line map lists with no line, such as a drop thunk the
+/// compiler generated, the line of the nearest frame calling it that has
+/// one, since the helper does the work of the line that called it. `None`
+/// for a first frame outside the line map, a runtime or system function,
+/// whose time is its own.
+fn own_line(frames: &[RecordedFrame], lines: &[&[SourceLine]]) -> Option<SourceLine> {
+    match frames.first()? {
+        RecordedFrame::Function { .. } => lines.iter().find_map(|lines| lines.first()).copied(),
+        RecordedFrame::Other { .. } => None,
     }
 }
 
@@ -293,6 +310,22 @@ mod tests {
         );
         assert_eq!(profile.lines[0].self_samples, 0);
         assert_eq!(profile.lines[0].inclusive_samples, 7);
+    }
+
+    /// A helper the compiler generated, such as a drop thunk, has no line
+    /// of its own: its time is the calling line's own, found through every
+    /// frame between them that has no line either, and the line is charged
+    /// inclusively once.
+    #[test]
+    fn time_in_a_helper_with_no_line_is_charged_to_the_line_calling_it() {
+        let charged = attribution(
+            "miri-profile 1\nhz 1\n3 f2+0 f0+10\n2 f2+4 f2+0 0x10:miri_rt_list_free+4 f0+12\n",
+        );
+        let profile = shaped(&charged, 10);
+        assert!(profile.runtime.is_empty(), "{:?}", profile.runtime);
+        let caller = &profile.lines[0];
+        assert_eq!((caller.path.as_str(), caller.line), ("prog.mi", 8));
+        assert_eq!((caller.self_samples, caller.inclusive_samples), (5, 5));
     }
 
     #[test]
