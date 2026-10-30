@@ -30,7 +30,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::{
-    ArgMode, BasicBlock, BasicBlockData, Body, Constant, LocalDecl, MirType, Operand, Place,
+    ArgMode, BasicBlock, BasicBlockData, Body, Constant, Local, LocalDecl, MirType, Operand, Place,
     Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 pub use crate::type_checker::element_layout::{element_layout, ElementLayout};
@@ -80,6 +80,35 @@ fn element_call(body: &Body, block: usize) -> Option<(&'static [usize], Vec<Oper
         return None;
     }
     Some((positions, args.clone(), terminator.span))
+}
+
+/// Whether the call `kind` hands `address` to a runtime entry point as the
+/// address of an element argument: one this pass spelled as an address and a
+/// byte count.
+///
+/// The entry point copies the element's bytes out during the call and never
+/// writes them, so the place whose address was taken is only read.
+pub fn reads_element_through(kind: &TerminatorKind, address: Local) -> bool {
+    let TerminatorKind::Call { func, args, .. } = kind else {
+        return false;
+    };
+    let Some(name) = func.called_runtime_name() else {
+        return false;
+    };
+    let is_address = |arg: &Operand| {
+        matches!(arg, Operand::Copy(place) | Operand::Move(place)
+            if place.local == address && place.projection.is_empty())
+    };
+    expanded_element_positions(name).any(|position| args.get(position).is_some_and(is_address))
+}
+
+/// The position of each element address in the expanded arguments of a call
+/// to `name`: every element before it gained a byte count after it.
+fn expanded_element_positions(name: &str) -> impl Iterator<Item = usize> {
+    crate::runtime_fns::element_positions(name)
+        .iter()
+        .enumerate()
+        .map(|(earlier, position)| position + earlier)
 }
 
 /// Install `expanded` as the arguments of the call ending `block`, widening its

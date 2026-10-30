@@ -126,3 +126,46 @@ fn a_field_of_a_value_parameter_is_read_in_place_once_inlined() {
         "hit holds `oc` alone, with no copy of `sphere.center`:\n{hit}"
     );
 }
+
+/// Callees that hand their value parameter to a set and a map only as the
+/// element or key they look up, which the runtime reads and never writes.
+const LOOKED_UP: &str = r#"use system.collections.map
+use system.collections.set
+
+struct Key
+    a int
+    b int
+
+fn has(s Set<Key>, k Key) bool
+    s.contains(k)
+
+fn lookup(m Map<Key, int>, k Key) int
+    if m.contains_key(k)
+        return m[k]
+    0
+
+fn main()
+    var m = Map<Key, int>()
+    m[Key(a: 1, b: 2)] = 7
+    var s = Set<Key>()
+    s.add(Key(a: 3, b: 4))
+    let k = Key(a: 1, b: 2)
+    println(f"{lookup(m, k)} {has(s, Key(a: 3, b: 4))} {has(s, k)}")
+"#;
+
+#[test]
+fn a_value_parameter_only_looked_up_is_not_copied_on_entry() {
+    let (listing, output) = optimized_listing_and_output(LOOKED_UP);
+    assert_eq!(output, "7 true false\n");
+    let has = function_text(&listing, "miri.has");
+    assert!(
+        !has.contains("explicit_slot"),
+        "has copies its value parameter into a slot of its own:\n{has}"
+    );
+    let lookup = function_text(&listing, "miri.lookup");
+    assert_eq!(
+        lookup.matches("explicit_slot").count(),
+        1,
+        "lookup holds only the int the map hands back, with no copy of `k`:\n{lookup}"
+    );
+}

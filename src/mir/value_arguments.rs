@@ -35,16 +35,20 @@
 //! A runtime entry point is spelled by the element ABI instead, and an `out`
 //! argument names the place the callee writes, so neither is copied. The
 //! address the element ABI takes of a value local for such a call is read or
-//! written only during that call, so it never exposes a later argument.
+//! written only during that call, so it never exposes a later argument. An
+//! address it takes to hand over an element the runtime stores or looks up is
+//! only read, so taking it does not write the value parameter it reaches.
 
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
-use crate::mir::block::BasicBlockData;
-use crate::mir::place::PlaceElem;
+use crate::mir::block::{BasicBlock, BasicBlockData};
+use crate::mir::element_abi::reads_element_through;
+use crate::mir::place::{PlaceContext, PlaceElem};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
+use crate::mir::visitor::Visitor;
 use crate::mir::{Body, Local, LocalDecl, Operand, Place, Rvalue, Statement, StatementKind};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Copy every value argument of every call in `body` that needs a copy into
 /// a whole local of its own ahead of the call.
@@ -284,7 +288,8 @@ fn copy_argument(body: &mut Body, copy: ArgCopy) {
 /// The value parameters of `body` — its parameters held as their bytes, not
 /// declared `out` — that it writes: the root of an assignment's destination,
 /// of a call's destination or `out` argument, of a launch's destination or
-/// buffer, of a release, or of a place whose address is taken.
+/// buffer, of a release, or of a place whose address is taken for anything
+/// but an element the runtime only reads ([`read_element_addresses`]).
 ///
 /// A caller passes a value parameter as its own bytes, which the callee may
 /// only read, so a callee copies each parameter named here on entry and
@@ -302,19 +307,92 @@ pub fn written_value_params(body: &Body) -> HashSet<Local> {
                 .get(local.0)
                 .is_some_and(|decl| body.value_layout(&decl.ty.kind).is_some())
     };
+    let read_only = read_element_addresses(body);
     body.basic_blocks
         .iter()
-        .flat_map(written_roots)
+        .flat_map(|block| written_roots(block, &read_only))
         .filter(is_value_param)
         .collect()
 }
 
-/// The root local of every place `block` writes or takes the address of.
-fn written_roots(block: &BasicBlockData) -> Vec<Local> {
+/// Every local `body` assigns the address of a place to that is mentioned
+/// only there and as an element argument of the call ending the same block:
+/// the element ABI's spelling of an element a runtime entry point copies out
+/// of those bytes during the call and never writes.
+fn read_element_addresses(body: &Body) -> HashSet<Local> {
+    let candidates: HashSet<Local> = body
+        .basic_blocks
+        .iter()
+        .flat_map(element_addresses_taken)
+        .collect();
+    if candidates.is_empty() {
+        return candidates;
+    }
+    let mut mentions = Mentions::of(candidates);
+    mentions.visit_body(body);
+    mentions.mentioned_twice()
+}
+
+/// Each whole local `block` assigns an address to that its call takes as an
+/// element argument.
+fn element_addresses_taken(block: &BasicBlockData) -> Vec<Local> {
+    let Some(terminator) = &block.terminator else {
+        return Vec::new();
+    };
+    block
+        .statements
+        .iter()
+        .filter_map(|statement| match &statement.kind {
+            StatementKind::Assign(address, Rvalue::Ref(_)) => Some(address),
+            StatementKind::Assign(..)
+            | StatementKind::Reassign(..)
+            | StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::IncRef(_)
+            | StatementKind::DecRef(_)
+            | StatementKind::Dealloc(_)
+            | StatementKind::Nop => None,
+        })
+        .filter(|address| {
+            address.projection.is_empty() && reads_element_through(&terminator.kind, address.local)
+        })
+        .map(|address| address.local)
+        .collect()
+}
+
+/// How often a body mentions each of a set of locals.
+struct Mentions(HashMap<Local, usize>);
+
+impl Mentions {
+    fn of(locals: HashSet<Local>) -> Self {
+        Self(locals.into_iter().map(|local| (local, 0)).collect())
+    }
+
+    /// The locals mentioned exactly twice: where the address is taken and
+    /// where the call reads it.
+    fn mentioned_twice(self) -> HashSet<Local> {
+        self.0
+            .into_iter()
+            .filter_map(|(local, count)| (count == 2).then_some(local))
+            .collect()
+    }
+}
+
+impl Visitor for Mentions {
+    fn visit_local(&mut self, local: Local, _context: PlaceContext, _location: BasicBlock) {
+        if let Some(count) = self.0.get_mut(&local) {
+            *count += 1;
+        }
+    }
+}
+
+/// The root local of every place `block` writes or takes the address of,
+/// leaving out the place behind each address in `read_only`.
+fn written_roots(block: &BasicBlockData, read_only: &HashSet<Local>) -> Vec<Local> {
     let mut roots: Vec<Local> = block
         .statements
         .iter()
-        .flat_map(|statement| statement_written_roots(&statement.kind))
+        .flat_map(|statement| statement_written_roots(&statement.kind, read_only))
         .flatten()
         .collect();
     if let Some(terminator) = &block.terminator {
@@ -323,12 +401,17 @@ fn written_roots(block: &BasicBlockData) -> Vec<Local> {
     roots
 }
 
-/// The root locals `statement` writes or takes the address of. A storage
-/// marker or a retain leaves a value's bytes alone.
-fn statement_written_roots(statement: &StatementKind) -> [Option<Local>; 2] {
+/// The root locals `statement` writes or takes the address of, unless it
+/// takes it into an address in `read_only`. A storage marker or a retain
+/// leaves a value's bytes alone.
+fn statement_written_roots(
+    statement: &StatementKind,
+    read_only: &HashSet<Local>,
+) -> [Option<Local>; 2] {
     match statement {
         StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
-            [Some(place.local), referenced_root(rvalue)]
+            let referenced = referenced_root(rvalue).filter(|_| !read_only.contains(&place.local));
+            [Some(place.local), referenced]
         }
         StatementKind::DecRef(place) | StatementKind::Dealloc(place) => [Some(place.local), None],
         StatementKind::StorageLive(_)

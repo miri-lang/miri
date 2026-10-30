@@ -674,3 +674,67 @@ fn main()
         "{arguments:?}"
     );
 }
+
+/// `collect(v, f)` pushes its value parameter, read in place from the
+/// caller's bytes, into a list; neither the closure the callee runs between
+/// the pushes nor the caller writing `v` afterwards reaches the elements.
+#[test]
+fn a_value_parameter_pushed_into_a_list_keeps_its_bytes_when_the_original_changes() {
+    assert_runs_with_output(
+        r#"use system.collections.list
+
+struct V
+    x float
+    y float
+
+fn collect(a V, f fn() float) [V]
+    var xs = List<V>()
+    xs.push(a)
+    let seen = f()
+    xs.push(a)
+    xs.push(V(x: seen, y: a.y))
+    xs
+
+fn main()
+    var v = V(x: 1.0, y: 2.0)
+    let f = fn() float
+        v = V(x: 50.0, y: 60.0)
+        v.x
+    let xs = collect(v, f)
+    v = V(x: 7.0, y: 8.0)
+    let first = xs[0]
+    let second = xs[1]
+    let third = xs[2]
+    println(f"{first.x} {first.y} {second.x} {third.x} {third.y} {v.x}")
+"#,
+        "1.0 2.0 1.0 50.0 2.0 7.0",
+    );
+}
+
+/// `has(s, k)` looks its value parameter up in a set, read in place from
+/// the caller's bytes; the caller writing `k` between the calls changes
+/// what the next call finds and nothing the set holds.
+#[test]
+fn a_value_parameter_looked_up_in_place_sees_the_callers_current_bytes() {
+    assert_runs_with_output(
+        r#"use system.collections.set
+
+struct Key
+    a int
+    b int
+
+fn has(s Set<Key>, k Key) bool
+    s.contains(k)
+
+fn main()
+    var s = Set<Key>()
+    var k = Key(a: 1, b: 2)
+    s.add(k)
+    let before = has(s, k)
+    k = Key(a: 9, b: 9)
+    let after = has(s, k)
+    println(f"{before} {after} {has(s, Key(a: 1, b: 2))} {s.length()}")
+"#,
+        "true false true 1",
+    );
+}

@@ -29,7 +29,8 @@ pub fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
+/// The type expression naming `kind`.
+pub fn type_expr(kind: TypeKind) -> Expression {
     Expression {
         id: 0,
         node: ExpressionKind::Type(Box::new(ty(kind)), false),
