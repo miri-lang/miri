@@ -281,12 +281,37 @@ def summarize(records, charter, expected_hash, manifests, env=None, reproduces=N
         "port_notes": port_notes(cells, manifests),
         "explanations": explanations(cells, manifests),
         "compile": compile_times(records),
+        "coverage": coverage(records),
         "label": profile_label(first["machine_profile"]),
         "max_steal_share": max((c["steal_share"] for c in cells.values() if "steal_share" in c), default=None),
     }
     if reproduces is not None:
         mark_reproduction(summary, reproduces, charter)
     return summary
+
+
+def coverage(records):
+    """Per language, the workloads it was measured on and every cell it was
+    not, with the status and the reason the runner recorded: a released
+    compiler that cannot build a port is listed here, never dropped."""
+    measured = defaultdict(set)
+    unmeasured = defaultdict(list)
+    for record in records:
+        if record["mode"] in ("alloc-count", "compile"):
+            continue
+        language = record["language"]
+        if record.get("run_index") is not None:
+            measured[language].add(record["workload"])
+        else:
+            entry = {key: record[key] for key in ("workload", "size", "mode", "status")}
+            unmeasured[language].append(entry | ({"reason": record["reason"]} if record.get("reason") else {}))
+    return {
+        language: {
+            "measured": sorted(measured[language]),
+            "unmeasured": sorted(unmeasured[language], key=lambda e: (e["workload"], e["size"], e["mode"])),
+        }
+        for language in sorted(measured.keys() | unmeasured.keys())
+    }
 
 
 def compile_times(records):
@@ -401,20 +426,68 @@ def cell_identity_dict(cell):
     return {k: cell[k] for k in ("workload", "language", "variant", "size", "mode")}
 
 
+def history_order(summary):
+    """Where a run stands on the version line: by the commit time of the
+    compiler it measured when the run recorded one (bench/history.py does),
+    else by when it ran."""
+    return (summary["provenance"].get("commit_time") or "", summary["run_id"])
+
+
+def history_point(index, summary):
+    """What every point of one run carries: its place, its label (the release
+    tag, or the tree it measured) and whether its compiler's optimisation
+    level reached the code generator, as the run recorded it."""
+    provenance = summary["provenance"]
+    version = provenance.get("miri_version")
+    return {
+        "index": index,
+        "run_id": summary["run_id"],
+        "miri_version": version,
+        "label": provenance.get("point_label") or version or summary["run_id"],
+        "codegen_optimized": provenance.get("codegen_optimized"),
+    }
+
+
+def coverage_counts(summary):
+    """Per language, how many workloads were measured and how many were
+    unsupported in any cell."""
+    return {
+        language: {
+            "measured": len(seen["measured"]),
+            "unsupported": len({e["workload"] for e in seen["unmeasured"] if e["status"] == "unsupported"}),
+        }
+        for language, seen in summary.get("coverage", {}).items()
+    }
+
+
 def history(summaries):
-    """Each cell's time ratio to C over runs, in run order, for the version
-    chart; one profile only."""
+    """Each cell's time ratio to C over runs, in version order, for the
+    version chart; each language's geometric mean over all workloads as a
+    series marked `aggregate: geomean` whose points carry the workloads they
+    cover; and one point per run in a series marked `aggregate: runs`, with
+    how many workloads each language was measured on and how many it could
+    not build, so a run with no ratio still has its place on the line. One
+    profile only."""
     profiles = {s["machine_profile"] for s in summaries}
     if len(profiles) > 1:
         raise SystemExit("refusing a history across machine profiles")
     series = defaultdict(list)
-    for summary in sorted(summaries, key=lambda s: s["run_id"]):
-        version = summary["provenance"].get("miri_version")
+    for index, summary in enumerate(sorted(summaries, key=history_order)):
+        point = history_point(index, summary)
+        series[("runs", None, None, None, None, None)].append(point | {"coverage": coverage_counts(summary)})
         for cell in summary["cells"]:
             time = (cell.get("vs_c") or {}).get("time")
             if time:
-                series[cell_identity(cell)].append({"run_id": summary["run_id"], "miri_version": version, "vs_c": time["value"]})
-    return [{**dict(zip(("workload", "language", "variant", "size", "mode"), key)), "points": points} for key, points in sorted(series.items())]
+                series[("", *cell_identity(cell))].append(point | {"vs_c": time["value"]})
+        for row in summary["aggregates"]:
+            if row["tag"] == "all":
+                key = ("geomean", None, row["language"], row["variant"], row["size"], row["mode"])
+                series[key].append(point | {"vs_c": row["geomean_vs_c"], "coverage": row["coverage"]})
+    names = ("aggregate", "workload", "language", "variant", "size", "mode")
+    return [
+        {key: value for key, value in zip(names, identity) if key != "aggregate" or value} | {"points": points}
+        for identity, points in sorted(series.items(), key=lambda item: tuple(str(part) for part in item[0]))
+    ]
 
 
 # Markdown.
@@ -455,6 +528,11 @@ def markdown(summary):
         for workload, levels in compiled.items():
             for level, best in levels.items():
                 lines.append(f"| {workload} | {level} | {fmt(best['wall_ns'] / 1e6, 1)} | {fmt(best['max_rss_bytes'] / 2**20, 1)} |")
+    if unmeasured := [(language, entry) for language, seen in summary.get("coverage", {}).items() for entry in seen["unmeasured"]]:
+        lines += ["", "## Not measured", "", "| Workload | Language | Size | Mode | Status | Reason |", "|---|---|---|---|---|---|"]
+        for language, entry in unmeasured:
+            reason = entry.get("reason", "").replace("|", "\\|")
+            lines.append(f"| {entry['workload']} | {language_label(language)} | {entry['size']} | {entry['mode']} | {entry['status']} | {reason} |")
     if reasons := summary.get("explanations"):
         lines += ["", "## Why each language lands where it does", ""]
         lines += [f"- **{workload}**, {language}: {reason}" for workload, by_language in reasons.items() for language, reason in by_language.items()]

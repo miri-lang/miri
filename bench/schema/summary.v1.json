@@ -79,6 +79,25 @@
         }
       }
     },
+    "coverage": {
+      "description": "Per language, the workloads it was measured on and every cell it was not, with the status and the reason the runner recorded (a blocked port's manifest reason, or the first diagnostic of a port that did not build).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["measured", "unmeasured"],
+        "properties": {
+          "measured": {"type": "array", "items": {"type": "string"}},
+          "unmeasured": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["workload", "size", "mode", "status"],
+              "properties": {"workload": {"type": "string"}, "size": {"type": "string"}, "mode": {"type": "string"}, "status": {"type": "string"}, "reason": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
     "label": {"description": "The label a publishable profile's charts carry, such as preliminary; null otherwise.", "type": ["string", "null"]},
     "max_steal_share": {"description": "The largest steal share of any cell in the run; null where steal time was not read.", "type": ["number", "null"]},
     "reproduction": {

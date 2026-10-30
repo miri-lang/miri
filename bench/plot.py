@@ -13,8 +13,10 @@ Writes, each as SVG and as PNG at twice the size:
   runtime floor) as a ratio to Rust;
 - `time-memory-scatter`: each language's geometric-mean time ratio against
   its geometric-mean memory ratio;
-- `miri-history`: Miri's time ratio to C per workload across runs (with
-  `--history`).
+- `miri-history`: Miri's time ratio to C per workload and its geometric
+  mean, one point per run in version order (with `--history`, such as the
+  points `bench/history.py` writes), footnoting every release whose
+  optimisation level did not reach the code generator.
 
 and `where-miri-lost.md`, the table of every Miri cell past the charter's
 diagnosis thresholds with the mechanism its diagnosis names.
@@ -249,25 +251,73 @@ def scatter_chart(summary, out_dir, size):
     save(fig, out_dir, "time-memory-scatter")
 
 
-def history_chart(series, summary, out_dir):
-    """Miri's time ratio to C per workload, run by run."""
-    fig, ax = plt.subplots(figsize=(11, 5))
-    miri = [s for s in series if s["language"] == "miri" and s["mode"] == "cold"]
-    for s in miri:
-        xs = list(range(len(s["points"])))
-        ax.plot(xs, [p["vs_c"] for p in s["points"]], linewidth=2, marker="o", markersize=4, color=MUTED)
-        if s["points"]:
-            ax.annotate(s["workload"], (xs[-1], s["points"][-1]["vs_c"]), xytext=(4, 0), textcoords="offset points", fontsize=7, color=SECONDARY_INK)
-    labels = [p.get("miri_version") or p["run_id"] for p in (miri[0]["points"] if miri else [])]
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=30, ha="right")
+def history_chart(series, summary, out_dir, size):
+    """Miri's time ratio to C per workload at `size`, one point per run in
+    version order, with the geometric mean over every workload drawn in
+    Miri's colour and labelled with how many workloads it covers. A run whose
+    compiler's optimisation level did not reach the code generator, as the
+    run recorded it, is named in the footnote."""
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    miri = [s for s in series if s["language"] == "miri" and s["mode"] == "cold" and s["size"] == size and s["variant"] == "default"]
+    draw_history_lines(ax, miri)
+    points = next((s["points"] for s in series if s.get("aggregate") == "runs"), None) or history_points(miri)
+    label_unbuilt_points(ax, points)
+    ax.set_xticks([p["index"] for p in points])
+    ax.set_xticklabels([p["label"] for p in points], rotation=30, ha="right")
+    ax.set_xlim(-0.5, max((p["index"] for p in points), default=0) + 1.0)
     ax.set_yscale("log", base=2)
     ratio_axis(ax.yaxis)
     ax.axhline(1.0, color=INK, linewidth=1.0)
-    ax.set_title("Miri wall time × C, run by run (log₂)", loc="left", fontsize=10)
+    ax.set_title(f"Miri wall time × C by version, size {size.upper()} (log₂; bold: geometric mean, workloads in brackets)", loc="left", fontsize=10)
+    if note := unoptimized_note(points):
+        fig.text(0.01, 0.045, note, fontsize=7, color=SECONDARY_INK, ha="left", va="bottom")
     footer(fig, summary)
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
     save(fig, out_dir, "miri-history")
+
+
+def draw_history_lines(ax, miri):
+    """Each workload's line in grey, labelled at its last point, and the
+    geometric mean in Miri's colour, each point labelled with its value and
+    the workloads it covers."""
+    for s in miri:
+        xs = [p["index"] for p in s["points"]]
+        ys = [p["vs_c"] for p in s["points"]]
+        if s.get("aggregate"):
+            ax.plot(xs, ys, linewidth=2.5, marker="o", markersize=6, color=LANGUAGE_COLORS["miri"], zorder=3)
+            for x, p in zip(xs, s["points"]):
+                ax.annotate(f"{p['vs_c']:.2f}× ({p['coverage']})", (x, p["vs_c"]), xytext=(6, -10), textcoords="offset points", fontsize=8, color=LANGUAGE_COLORS["miri"])
+        else:
+            ax.plot(xs, ys, linewidth=1.2, marker="o", markersize=3, color=MUTED)
+            ax.annotate(s["workload"], (xs[-1], ys[-1]), xytext=(4, 0), textcoords="offset points", fontsize=7, color=SECONDARY_INK)
+
+
+def label_unbuilt_points(ax, points):
+    """A run where Miri built no port has no ratio to draw: say so at its
+    place on the line instead of leaving a gap."""
+    for p in points:
+        miri = (p.get("coverage") or {}).get("miri", {})
+        if not miri.get("measured") and miri.get("unsupported"):
+            label = f"no port compiles\n({miri['unsupported']} unsupported)"
+            ax.annotate(label, (p["index"], 1.0), xytext=(0, 8), textcoords="offset points", fontsize=7, color=MUTED, ha="center")
+
+
+def history_points(series):
+    """Every point on the version line once, in order: its index and label."""
+    seen = {p["index"]: p for s in series for p in s["points"]}
+    return [seen[i] for i in sorted(seen)]
+
+
+def unoptimized_note(points):
+    """The footnote naming the points whose runs recorded that the compiler's
+    optimisation level did not reach its code generator, or None."""
+    labels = [p["label"] for p in points if p.get("codegen_optimized") is False]
+    if not labels:
+        return None
+    return (
+        f"{', '.join(labels)}: measured as released, when --release and --opt-level did not yet reach the code generator, "
+        "so Cranelift compiled every program unoptimised."
+    )
 
 
 def hypothesis(diagnosis_dir, workload, size):
@@ -316,7 +366,7 @@ def plot(summary, out_dir, size=None, history=None, diagnosis_dir=None):
     scatter_chart(summary, out_dir, size)
     checks_chart(summary, out_dir, size)
     if history is not None:
-        history_chart(history, summary, out_dir)
+        history_chart(history, summary, out_dir, size)
     lost_table(summary, out_dir, diagnosis_dir or out_dir / "diagnosis")
 
 

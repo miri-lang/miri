@@ -384,12 +384,17 @@ class Context:
     miri: Path
     records: list = field(default_factory=list)
     profile: dict = field(default_factory=dict)
+    # The standard library the measured compiler reads: this tree's, unless
+    # the compiler comes from another tree (`--miri-stdlib`).
+    stdlib: Path = REPO / "src" / "stdlib"
+    # The first diagnostic of every port that failed to build, by port path.
+    build_errors: dict = field(default_factory=dict)
 
     def programs(self):
         return {"miri": self.miri}
 
     def build_env(self, language):
-        extra = {"MIRI_STDLIB_PATH": str(REPO / "src" / "stdlib")} if language == "miri" else {}
+        extra = {"MIRI_STDLIB_PATH": str(self.stdlib)} if language == "miri" else {}
         return child_environment(self.work_dir, extra)
 
 
@@ -524,8 +529,12 @@ def environment(ctx, languages):
 def runtime_profile():
     """The build profile of the runtime library every Miri program links, as
     its manifest sets it: the profile's name and each setting it overrides."""
-    manifest = tomllib.loads((REPO / "src" / "runtime" / "core" / "Cargo.toml").read_text())
-    return {"name": "release", **manifest.get("profile", {}).get("release", {})}
+    return runtime_profile_of((REPO / "src" / "runtime" / "core" / "Cargo.toml").read_text())
+
+
+def runtime_profile_of(manifest_text):
+    """The release build profile a runtime manifest's text sets."""
+    return {"name": "release", **tomllib.loads(manifest_text).get("profile", {}).get("release", {})}
 
 
 # Building and verifying.
@@ -609,8 +618,36 @@ def build_with_line(ctx, language, line, src, out):
         return "toolchain-missing"
     done = subprocess.run(words, env=ctx.build_env(language) | assignments, cwd=ctx.work_dir, capture_output=True, check=False)
     if done.returncode != 0:
+        ctx.build_errors[src] = first_diagnostic(done.stderr.decode(errors="replace") or done.stdout.decode(errors="replace"))
         return "build-failed"
     return built_port(ctx, language, src, out)
+
+
+DIAGNOSTIC_CODE = re.compile(r"\b(MER_[A-Z]+_\d+|E\d{4})\b")
+DIAGNOSTIC_LOCATION = re.compile(r"(?:\S*/)?([\w.-]+):(\d+)(?::\d+)?")
+ABSOLUTE_PATH = re.compile(r"(?:/[^\s/:]+)+/([^\s/:]+)")
+DIAGNOSTIC_DETAIL = re.compile(r"^(?:\|?\s*\^+|=)\s+(?!help:)(.+)$")
+
+
+def first_diagnostic(text):
+    """The first error a failed build printed, as one line that names its
+    code and source line and no directory: a record never carries a path."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return "no diagnostic was printed"
+    first = next((i for i, line in enumerate(lines) if "error" in line.lower()), 0)
+    message = ABSOLUTE_PATH.sub(r"\1", lines[first])
+    code = DIAGNOSTIC_CODE.search(lines[first])
+    location = next((m for line in lines[first:] if (m := DIAGNOSTIC_LOCATION.search(line)) and m.group(1).endswith(".mi")), None)
+    detail = next((m.group(1) for line in lines[first + 1 :] if (m := DIAGNOSTIC_DETAIL.match(line))), None)
+    parts = [message[:200]]
+    if code and code.group(1) not in message[:200]:
+        parts.append(code.group(1))
+    if detail:
+        parts.append(ABSOLUTE_PATH.sub(r"\1", detail)[:200])
+    if location:
+        parts.append(f"at {location.group(1)} line {location.group(2)}")
+    return " · ".join(parts)
 
 
 def built_port(ctx, language, src, out):
@@ -682,11 +719,14 @@ def base_record(ctx, env, workload, language, variant, size, mode):
 
 
 def status_record(ctx, env, workload, language, variant, size, status, mode="cold"):
-    """A cell that produced no measurements, and why."""
+    """A cell that produced no measurements, and why: the manifest's reason
+    for a blocked port, the first diagnostic for one that did not build."""
     record = base_record(ctx, env, workload, language, variant, size, mode)
     record.update(status=status, run_index=None, attempt=None)
     if status == "unsupported" and workload.blocked(language):
         record["reason"] = workload.blocked(language)
+    elif status == "build-failed" and workload.port(language) in ctx.build_errors:
+        record["reason"] = ctx.build_errors[workload.port(language)]
     return record
 
 
@@ -953,8 +993,15 @@ def refuse_if_unfit(ctx):
         raise SystemExit("stopping the publishable run:\n  " + "\n  ".join(problems))
 
 
-def results_directory(profile):
-    """A fresh directory under bench/results; an existing one is never reused."""
+def results_directory(profile, requested=None):
+    """A fresh directory under bench/results, or `requested`; an existing one
+    is never reused."""
+    if requested:
+        path = Path(requested)
+        if path.exists():
+            raise SystemExit(f"refusing to overwrite the results in {path}")
+        path.mkdir(parents=True)
+        return path
     stem = f"{datetime.date.today().isoformat()}-{profile}"
     root = BENCH / "results"
     candidate = root / stem
@@ -977,7 +1024,7 @@ def preflight(ctx):
 
 
 def write_results(ctx, env):
-    out = results_directory(ctx.args.profile)
+    out = results_directory(ctx.args.profile, getattr(ctx.args, "results_dir", None))
     (out / "env.json").write_text(json.dumps(env, indent=2, sort_keys=True) + "\n")
     with open(out / "results.jsonl", "w") as f:
         for record in ctx.records:
@@ -994,13 +1041,15 @@ def run(args):
     miri, compiler_problem = built_compiler(args)
     if compiler_problem is not None:
         raise SystemExit(f"refusing to run: {compiler_problem}")
-    ctx = Context(args, charter, charter_hash(), run_id, work, miri, profile=load_profile(args.profile))
+    stdlib = Path(args.miri_stdlib).resolve() if args.miri_stdlib else REPO / "src" / "stdlib"
+    ctx = Context(args, charter, charter_hash(), run_id, work, miri, profile=load_profile(args.profile), stdlib=stdlib)
     if problems := preflight(ctx):
         raise SystemExit("refusing to run:\n  " + "\n  ".join(problems))
-    if not opt_level_reaches_codegen(ctx):
+    optimized = opt_level_reaches_codegen(ctx)
+    if not optimized and not args.allow_unoptimized:
         raise SystemExit("refusing to run: --opt-level 3 emits the same machine code as --opt-level 0")
     languages = selected_languages(ctx)
-    env = environment(ctx, languages)
+    env = environment(ctx, languages) | {"opt_level_reaches_codegen": optimized}
     floors = measure_floors(ctx, languages, args.variant)
     for workload in load_workloads(args.only.split(",") if args.only else None):
         ready = built_ports(ctx, env, workload, languages, args.variant)
@@ -1012,7 +1061,7 @@ def run(args):
     shutil.rmtree(inputs_dir(ctx), ignore_errors=True)
     if keep_dir is None:
         shutil.rmtree(work, ignore_errors=True)
-    print(f"wrote {len(ctx.records)} records to {out.relative_to(REPO)}")
+    print(f"wrote {len(ctx.records)} records to {out}")
     finish(out, args, miri)
     return out
 
@@ -1044,6 +1093,13 @@ def parse_args(argv=None):
     parser.add_argument("--allow-dirty", action="store_true", help="run from a tree with uncommitted changes")
     parser.add_argument("--diagnose", action="store_true", help="gather the evidence for every cell Miri loses")
     parser.add_argument("--miri", help="the compiler to measure (default: this tree's, rebuilt with `make release`)")
+    parser.add_argument("--miri-stdlib", help="the standard library that compiler reads (default: this tree's src/stdlib)")
+    parser.add_argument(
+        "--allow-unoptimized",
+        action="store_true",
+        help="measure a compiler whose --opt-level does not reach its code generator, recording that in env.json",
+    )
+    parser.add_argument("--results-dir", help="where the records go (default: a fresh bench/results/<date>-<profile>/)")
     args = parser.parse_args(argv)
     if args.smoke and args.runs is None:
         args.runs = SMOKE_RUNS

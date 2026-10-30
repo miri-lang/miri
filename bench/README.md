@@ -14,6 +14,7 @@ machine-readable twin [`charter.toml`](charter.toml).
 | `toolchains.toml`, `Dockerfile` | The pinned toolchain versions, and an image that installs exactly those. |
 | `run.py` | The runner. |
 | `summarize.py` | Statistics, ratios and verdicts, from the runner's records. |
+| `history.py` | Each release tag measured on today's workloads, for the version line. |
 | `schema/summary.v1.json` | The schema of `summary.json`, which charts and the website read and nothing else. |
 | `diagnose.py` | The evidence for every cell Miri loses. |
 | `diagnosis/CATALOG.md` | Every mechanism a loss has been traced to, and where its work stands. |
@@ -113,6 +114,35 @@ charter's rule: the change in ratio to C must exceed the larger of 5 % and
 three times the ratio's coefficient of variation. It refuses two runs from
 different machine profiles or charter versions. `summary.md` is generated
 from `summary.json`; neither is edited by hand.
+
+## The version line
+
+```bash
+python3 bench/history.py --tags 0.6.0-beta.4 0.7.0-beta.5 --profile preliminary-vps --sizes s,m
+python3 bench/summarize.py history bench/results/history/
+python3 bench/plot.py bench/results/history/current-preliminary-vps/summary.json out/ --history bench/results/history/
+```
+
+"Is the newer version faster?" is answered by measuring each release as it
+shipped on today's workloads. `history.py` exports each tag's source with
+`git archive` into a scratch directory, builds its release compiler and
+runtimes with that tag's own `make release`, and runs this tree's `run.py`
+for Miri alone with that compiler and the tag's standard library
+(`--miri`, `--miri-stdlib`). C and Rust are measured once, beside this
+tree's compiler, and every tag's ratios use those same-day references, kept
+in its records with the run they came from. Each point lands in
+`results/history/<tag>-<profile>/`, the current tree in
+`results/history/current-<profile>/`, with `env.json` naming the tag, its
+commit, the sizes measured and `codegen_optimized`: whether that tree holds
+the change that made `--release` and `--opt-level` reach the code generator,
+read from the commit graph at run time. Every release up to 0.7.0-beta.5
+predates it and compiled unoptimised; the runner's opt-level probe is
+recorded rather than refused for them (`--allow-unoptimized`), and the chart
+footnotes them. A port a release cannot compile is recorded `unsupported`
+with the tag and its first diagnostic, and appears in the summary's
+`coverage` block, so a release's geometric mean covers fewer workloads than
+the current tree's when the ports use newer syntax; the chart labels each
+mean with how many it covers. Only a publishable profile records a point.
 
 ## Diagnosing a loss
 
