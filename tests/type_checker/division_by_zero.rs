@@ -75,3 +75,52 @@ fn test_divide_by_variable() {
         ],
     );
 }
+
+#[test]
+fn test_divide_and_modulo_by_bare_negative_zero_literals() {
+    type_checker_error_test("let x = 10 / -0", "Division by zero");
+    type_checker_error_test("let x = 10.0 / -0.0", "Division by zero");
+    type_checker_error_test("let x = 10 % -0", "Division by zero");
+    type_checker_error_test("let x = 10.0 % -0.0", "Division by zero");
+}
+
+#[test]
+fn test_division_by_zero_across_numeric_type_widths() {
+    type_checker_error_test("let x u8 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x u16 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x u32 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x u64 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x u128 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x i16 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x i32 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x i64 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x i128 = 10 / 0", "Division by zero");
+    type_checker_error_test("let x f16 = 1.0 / 0.0", "Division by zero");
+    type_checker_error_test("let x f32 = 1.0 / -0.0", "Division by zero");
+    type_checker_error_test("let x f64 = 1.0 / +0.0", "Division by zero");
+}
+
+#[test]
+fn test_division_by_zero_in_nested_subexpressions_and_collections() {
+    type_checker_error_test("let x = 1 + (10 / 0)", "Division by zero");
+    type_checker_error_test("let arr = [10 / 0]", "Division by zero");
+    type_checker_error_test("let m = {\"key\": 10 / 0}", "Division by zero");
+    type_checker_error_test("let t = (1, 10 / 0)", "Division by zero");
+}
+
+#[test]
+fn test_divide_by_near_zero_and_non_zero_expressions() {
+    type_checker_vars_type_test(
+        "let x = 10.0 / 1e-300",
+        vec![("x", make_type(TypeKind::Float))],
+    );
+    type_checker_vars_type_test(
+        "let x = 10.0 / 0.0001",
+        vec![("x", make_type(TypeKind::Float))],
+    );
+    type_checker_vars_type_test(
+        "let x = 10 / (1 - 0)",
+        vec![("x", make_type(TypeKind::Int))],
+    );
+    type_checker_vars_type_test("let x = 10 / 1", vec![("x", make_type(TypeKind::Int))]);
+}
