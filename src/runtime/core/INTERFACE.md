@@ -215,14 +215,22 @@ symbol it trusts its arguments: `table` must point to `count` readable entries
 (or be null with a count of zero), and nothing checks them. It installs nothing
 unless `MIRI_PROFILE_OUT` is set.
 
-The `SIGPROF` handler runs on the stack of the thread it interrupts: it is
-installed without `SA_ONSTACK`, and its frame array (512 bytes) and the walk's
-locals sit there, below the interrupted frame. On Linux the timer signals the
-main thread alone (`SIGEV_THREAD_ID`), so no other thread is interrupted. On macOS
-`setitimer(ITIMER_PROF)` is process-wide and the kernel may deliver the signal
-to any thread, a GPU driver's included; such a sample records its instruction
-alone, and the system call it interrupts is restarted (`SA_RESTART`). A
-profiled GPU run can be perturbed by the signals either way.
+On Linux a timer on the process CPU clock raises `SIGPROF` on the main thread
+alone (`SIGEV_THREAD_ID`), so no other thread is interrupted. The handler runs
+on the stack of the thread it interrupts: it is installed without
+`SA_ONSTACK`, and its frame array (512 bytes) and the walk's locals sit there,
+below the interrupted frame. A profiled GPU run can be perturbed by the
+signals.
+
+On macOS, whose process-wide `ITIMER_PROF` delivers far fewer signals than
+asked for, the runtime starts a sampler thread instead. Each time the main
+thread has used another period of CPU time (`thread_info`), the sampler
+suspends it (`thread_suspend`), reads its registers (`thread_get_state`),
+walks its frames and appends the sample, then resumes it. While the main
+thread is suspended the sampler allocates nothing and takes no lock. Its rate
+counts the main thread's CPU time alone; the time the sampler thread itself
+uses is not sampled. At exit the sampler is stopped before the record is
+read.
 
 The record is written at exit, from the `atexit` hook, `exit`, a runtime trap,
 or a leak report that ends the process, but not after the heap guard finds the

@@ -176,6 +176,54 @@ fn test_profile_binary_writes_its_record_where_the_variable_says() {
     assert!(!record.contains('/'), "the record names a path:\n{record}");
 }
 
+/// Run `executable` with its record written to `record`, returning the CPU
+/// time, user and system, the process spent, as its parent's wait reports it.
+#[cfg(target_os = "macos")]
+fn run_for_cpu_seconds(executable: &Path, record: &Path) -> f64 {
+    let child = Command::new(executable)
+        .env_remove("MIRI_PROFILE_HZ")
+        .env_remove("MIRI_HEAP_GUARD")
+        .env_remove("MIRI_LEAK_CHECK")
+        .env("MIRI_PROFILE_OUT", record)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = libc::pid_t::try_from(child.id()).unwrap();
+    let mut status = 0;
+    // SAFETY: an all-zero `rusage` is a valid value for `wait4` to fill.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `pid` is this process's own unwaited child, and `status` and
+    // `usage` are valid for the call to write.
+    let waited = unsafe { libc::wait4(pid, &mut status, 0, &mut usage) };
+    assert_eq!(waited, pid, "wait4 failed");
+    assert!(
+        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+        "status {status}"
+    );
+    let seconds = |time: libc::timeval| time.tv_sec as f64 + time.tv_usec as f64 / 1e6;
+    seconds(usage.ru_utime) + seconds(usage.ru_stime)
+}
+
+/// A program computing for about a second takes the samples it asks for:
+/// within a fifth of the requested rate per second of CPU time it spent.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_profile_samples_at_the_requested_rate_of_cpu_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = HOT_LOOP.replace("spin(100000000)", "spin(200000000)");
+    let executable = build(dir.path(), &source, &["--profile"]);
+    let record_path = dir.path().join("prog.profile");
+    let cpu_seconds = run_for_cpu_seconds(&executable, &record_path);
+    let record = std::fs::read_to_string(&record_path).unwrap();
+    let hz = record_header(&record, "hz") as f64;
+    let rate = record_header(&record, "samples") as f64 / cpu_seconds;
+    assert!(
+        (hz * 0.8..=hz * 1.2).contains(&rate),
+        "{rate:.0} samples per CPU second at {hz} Hz over {cpu_seconds:.2} s:\n{record}"
+    );
+}
+
 /// A program whose loop calls a library method on line 9. The method holds a
 /// loop of its own, which keeps an optimized build from inlining it, so the
 /// call stays a call a stack walk passes through.

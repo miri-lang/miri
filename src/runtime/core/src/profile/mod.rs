@@ -5,22 +5,27 @@
 //!
 //! A profile build's entry point hands [`ffi::miri_rt_profile_init`] the
 //! table of its compiled functions. When `MIRI_PROFILE_OUT` names a file, the
-//! runtime arms a CPU-time timer whose `SIGPROF` handler records the
-//! interrupted instruction and, on the main thread, the frame-pointer chain
-//! above it; at exit it writes the samples to that file (see [`record`]).
-//! Without the variable nothing is installed and the program runs as a
-//! release build does. `MIRI_PROFILE_HZ` sets the rate, 1000 by default.
+//! runtime starts a sampler (see [`sampler`]) that, at a rate of CPU time,
+//! records the sampled instruction and, on the main thread, the frame-pointer
+//! chain above it; at exit it writes the samples to that file (see
+//! [`record`]). Without the variable nothing is installed and the program
+//! runs as a release build does. `MIRI_PROFILE_HZ` sets the rate, 1000 by
+//! default.
 //!
 //! A sample on a thread other than the main one records its instruction
 //! alone: only the main thread's stack bounds are known, and they are read
-//! once, at start-up, because the calls that read them are not safe in a
-//! signal handler.
+//! once, at start-up, because the calls that read them are not safe while a
+//! sample is taken.
 
 mod frame_walk;
 mod function_table;
+#[cfg(target_os = "macos")]
+mod mach_sampler;
 mod record;
 mod sample_buffer;
 mod sampler;
+#[cfg(target_os = "linux")]
+mod signal_sampler;
 
 use frame_walk::{LeafCode, Registers, Sample, StackBounds, MAX_FRAMES};
 use function_table::FunctionTable;
@@ -52,8 +57,8 @@ const BUFFER_WORDS: usize = 1 << 22;
 struct Profiler {
     table: FunctionTable,
     buffer: SampleBuffer,
-    /// The thread the entry point ran on, whose stack a sample walks.
-    main_thread: usize,
+    /// The stack of the thread the entry point ran on, which a sample of
+    /// that thread walks.
     main_stack: Option<StackBounds>,
     out_path: PathBuf,
     hz: u32,
@@ -77,10 +82,11 @@ fn sampling_rate(requested: Option<&str>) -> Result<u32, &str> {
     }
 }
 
-/// Record one sample from the interrupted `registers`. Runs in the signal
-/// handler: it allocates nothing, takes no lock, and reads only the stack
-/// its bounds checks admit.
-fn record_sample(registers: Registers) {
+/// Record one sample from the sampled thread's `registers`, walking its
+/// frames when `on_main_thread` says they are the main thread's. Runs in a
+/// signal handler, or while the main thread is suspended: it allocates
+/// nothing, takes no lock, and reads only the stack its bounds checks admit.
+fn record_sample(registers: Registers, on_main_thread: bool) {
     let Some(profiler) = PROFILER.get() else {
         return;
     };
@@ -88,7 +94,7 @@ fn record_sample(registers: Registers) {
     let main_stack = profiler
         .main_stack
         .filter(|stack| stack.contains(registers.sp))
-        .filter(|_| sampler::current_thread() == profiler.main_thread);
+        .filter(|_| on_main_thread);
     let leaf = profiler
         .table
         .code_of(registers.pc)
@@ -104,8 +110,8 @@ fn record_sample(registers: Registers) {
             Sample { registers, leaf },
             stack,
             // SAFETY: `walk_frames` asks only for aligned words inside the
-            // interrupted thread's own stack, at or above its stack pointer,
-            // which the handler is running on and which stays mapped.
+            // main thread's stack, at or above its stack pointer, which stays
+            // mapped while the thread is interrupted or suspended.
             |address| unsafe { *(address as *const usize) },
             &mut frames,
         ),
@@ -117,8 +123,8 @@ fn record_sample(registers: Registers) {
     profiler.buffer.push(&frames[..count]);
 }
 
-/// Write the record once, when the program exits: stop the timer, ignore any
-/// sample it already raised, and write what the buffer holds. Called by the
+/// Write the record once, when the program exits: stop the sampler, and
+/// write what the buffer holds. Called by the
 /// `atexit` hook and by the runtime's `exit`, which skips `atexit`.
 pub(crate) fn finish() {
     let Some(profiler) = PROFILER.get() else {
@@ -127,8 +133,7 @@ pub(crate) fn finish() {
     if RECORD_WRITTEN.swap(true, Ordering::AcqRel) {
         return;
     }
-    sampler::stop_timer();
-    sampler::ignore_signal();
+    sampler::stop();
     let mut stacks = StackCounts::default();
     let incomplete = profiler
         .buffer
@@ -189,7 +194,6 @@ fn start(out_path: PathBuf, functions: &[ProfileFunction]) {
     let profiler = Profiler {
         table: FunctionTable::new(functions),
         buffer: SampleBuffer::with_capacity(BUFFER_WORDS),
-        main_thread: sampler::current_thread(),
         main_stack: sampler::current_stack(),
         out_path,
         hz,
@@ -200,12 +204,12 @@ fn start(out_path: PathBuf, functions: &[ProfileFunction]) {
     // SAFETY: `finish_at_exit` is an `extern "C"` function with no
     // arguments, as `atexit` requires.
     let registered = unsafe { libc::atexit(finish_at_exit) } == 0;
-    if !registered || !sampler::install_handler() {
-        report_not_profiled("the profiling signal handler could not be installed");
+    if !registered {
+        report_not_profiled("the hook that writes the record at exit could not be registered");
         return;
     }
-    if !sampler::start_timer(hz) {
-        report_not_profiled("the profiling timer could not be started");
+    if let Err(reason) = sampler::start(hz) {
+        report_not_profiled(reason);
     }
 }
 
