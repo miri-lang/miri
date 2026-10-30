@@ -525,6 +525,102 @@ fn main()
 }
 
 #[test]
+fn test_a_list_built_empty_and_pushed_to_in_a_loop_asks_nothing() {
+    // A constructor hands back a list nothing else holds, and a push keeps
+    // nothing it writes, so no push in the loop asks to copy the list.
+    let source = with_cell(
+        r#"
+fn times(v [float]) [float]
+    let n = v.length()
+    var out = List<float>()
+    var i = 0
+    while i < n
+        var sum = 0.0
+        var j = 0
+        while j < n
+            sum = sum + v[j]
+            j += 1
+        out.push(sum)
+        i += 1
+    out
+"#,
+    );
+    let body = body_named(&source, ".times");
+    assert_eq!(reachable_copy_on_writes(&body), 0, "{body}");
+}
+
+#[test]
+fn test_a_push_after_binding_the_list_in_the_loop_still_asks() {
+    let source = with_cell(
+        r#"
+fn collect(n int) int
+    var out = List<int>()
+    var total = 0
+    var i = 0
+    while i < n
+        out.push(i)
+        let seen = out
+        total += seen.length()
+        i += 1
+    total
+"#,
+    );
+    let body = body_named(&source, ".collect");
+    assert_eq!(calls_in_loops(&body, rt::LIST_COW), 1, "{body}");
+}
+
+#[test]
+fn test_a_push_after_handing_the_list_to_a_function_still_asks() {
+    let source = with_cell(
+        r#"
+fn keep(into [[int]], l [int]) [[int]]
+    var kept = into
+    kept.push(l)
+    kept
+
+fn collect(n int) int
+    var out = List<int>()
+    var snaps = List<[int]>()
+    out.push(n)
+    snaps = keep(snaps, out)
+    out.push(n)
+    snaps.length() + out.length()
+"#,
+    );
+    let body = body_named(&source, ".collect");
+    assert_eq!(reachable_copy_on_writes(&body), 1, "{body}");
+}
+
+#[test]
+fn test_pushes_after_a_binding_or_a_call_keep_value_semantics() {
+    crate::integration::utils::assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn keep(into [[int]], l [int]) [[int]]
+    var kept = into
+    kept.push(l)
+    kept
+
+fn main()
+    var a = List<int>()
+    a.push(1)
+    let b = a
+    a.push(2)
+    var snaps = List<[int]>()
+    var i = 0
+    while i < 3
+        a.push(i)
+        snaps = keep(snaps, a)
+        i += 1
+    println(f"{b.length()} {a.length()} {snaps[0].length()} {snaps[1].length()} {snaps[2].length()}")
+"#,
+        "1 5 3 4 5",
+    );
+}
+
+#[test]
 fn test_an_owned_parameter_written_twice_checks_each_place_once() {
     // A parameter cannot be written through, so a body that writes its
     // elements binds it first; an owned one is moved into the binding, whose
@@ -1482,4 +1578,27 @@ fn test_an_outer_loop_replacing_the_list_whole_keeps_the_copy_on_write_before_th
         hoisted_before(nest_writing_a_list(vec![replace])),
         INNER_HEADER
     );
+}
+
+/// A runtime write to a list keeps the list known but not its elements: an
+/// entry point writing a list in place may move or replace any element
+/// (insert, set, remove), so the element the code asked about before the
+/// write is asked about again after it.
+#[test]
+fn test_a_runtime_write_to_a_list_forgets_what_its_elements_were_known_to_be() {
+    let with_write = with_cell(
+        r#"
+fn grow(a [int], b [int], c [int], i int) int
+    var outer = List<[int]>()
+    outer.push(a)
+    outer.push(b)
+    outer[i].push(1)
+    outer.push(c)
+    outer[i].push(2)
+    outer[i].length()
+"#,
+    );
+    let without_write = with_write.replace("    outer.push(c)\n", "");
+    let checks = |source: &str| reachable_checks(&body_named(source, ".grow"));
+    assert_eq!(checks(&with_write), checks(&without_write) + 1);
 }

@@ -13,12 +13,16 @@
 //! it shared again until the program retains, copies, moves, hands to a call or
 //! replaces what it holds — so a later check on the same place before any of
 //! those answers no, and is replaced by a jump to the path that answer takes.
+//! A runtime entry point that writes a place in place keeps nothing it writes,
+//! so handing the place to one leaves it known and forgets only what is
+//! reached through it.
 //!
 //! A forward must-analysis carries the set of places known to hold a value
 //! nothing else holds. A place enters it on the edge a check takes when the
 //! answer is no, and when it is assigned a struct just built, the result of a
-//! runtime call that allocates ([`returns_unshared`]) or of a copy-on-write
-//! entry point ([`is_copy_on_write`]), or a value moved out of
+//! runtime call that allocates ([`returns_unshared`],
+//! [`allocates_collection`]) or of a copy-on-write entry point
+//! ([`is_copy_on_write`]), or a value moved out of
 //! a whole local known unshared that nothing else reads — no retain, release,
 //! copy or second move of that local anywhere in the body — so no alias of the
 //! value outlives the move. A place enters only while every place it is
@@ -63,7 +67,7 @@ use crate::mir::{
     AggregateKind, BasicBlock, Body, Discriminant, Local, Operand, Place, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{is_copy_on_write, returns_unshared, rt};
+use crate::runtime_fns::{allocates_collection, is_copy_on_write, returns_unshared, rt};
 use dataflow::Dataflow;
 use effects::Program;
 use places::PlaceTable;
@@ -383,8 +387,9 @@ fn is_struct(kind: &AggregateKind) -> bool {
 /// hands back — its argument when its count was 1, and a copy only the caller
 /// holds otherwise, an immortal argument included.
 fn hands_back_unshared(func: &Operand) -> bool {
-    func.called_runtime_name()
-        .is_some_and(|name| returns_unshared(name) || is_copy_on_write(name))
+    func.called_runtime_name().is_some_and(|name| {
+        returns_unshared(name) || allocates_collection(name) || is_copy_on_write(name)
+    })
 }
 
 /// How many times each local is written, and — counted only when first asked

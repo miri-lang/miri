@@ -3,9 +3,9 @@
 
 use miri::ast::types::BuiltinCollectionKind;
 use miri::runtime_fns::{
-    copies_collection, cow_fn, is_copy_on_write, leaves_collection_headers_unchanged,
-    only_reads_argument, preserves_length, reads_reference_count, returns_unshared, rt,
-    taken_argument_positions, writes_in_place,
+    allocates_collection, copies_collection, cow_fn, is_copy_on_write,
+    leaves_collection_headers_unchanged, only_reads_argument, preserves_length,
+    reads_reference_count, returns_unshared, rt, taken_argument_positions, writes_in_place,
 };
 
 #[test]
@@ -223,5 +223,21 @@ fn a_runtime_write_keeps_nothing_it_is_handed() {
                 "{name} both keeps and writes in place argument {position}"
             );
         }
+    }
+}
+
+/// An empty collection just built is one nothing else holds: the elision and
+/// the unshared-writes verifier both rely on it. Only the constructors of the
+/// four collections qualify; a copy-on-write or clone hands back its argument
+/// or a copy and is classified elsewhere.
+#[test]
+fn only_a_collection_constructor_allocates_a_fresh_collection() {
+    let constructors = [rt::LIST_NEW, rt::MAP_NEW, rt::SET_NEW, rt::ARRAY_NEW];
+    for &name in rt::ALL {
+        assert_eq!(
+            allocates_collection(name),
+            constructors.contains(&name),
+            "{name}"
+        );
     }
 }

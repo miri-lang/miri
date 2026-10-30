@@ -50,8 +50,8 @@ use crate::mir::{
     Statement, StatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::{
-    closure_positions, element_positions, is_copy_on_write, returns_unshared, rt,
-    taken_argument_positions, writes_in_place,
+    allocates_collection, closure_positions, element_positions, is_copy_on_write, returns_unshared,
+    rt, taken_argument_positions, writes_in_place,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -462,7 +462,7 @@ impl<'a> Model<'a> {
     ) -> Vec<Fact> {
         let place_at = |position: usize| args.get(position).and_then(Operand::place);
         let key_at = |position: usize| args.get(position).and_then(Operand::bare_local);
-        if is_copy_on_write(name) || returns_unshared(name) {
+        if is_copy_on_write(name) || returns_unshared(name) || allocates_collection(name) {
             return vec![Fact::Unshared(destination.clone())];
         }
         if name == rt::RECEIVER_UNIQUE {

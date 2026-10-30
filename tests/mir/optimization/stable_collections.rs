@@ -1108,11 +1108,14 @@ fn test_a_loop_writing_an_alias_of_the_list_it_reads_records_the_list() {
 }
 
 #[test]
-fn test_a_register_machine_records_its_program_but_not_its_registers() {
+fn test_a_register_machine_records_its_program_and_its_registers() {
+    // The registers are built empty and filled by pushes, which keep them the
+    // body's own, so the stores in the loop ask nothing and leave the header
+    // as it was: both lists are read from headers loaded before the loop.
     let body = body_named(REGISTER_MACHINE, ".run");
     let code = named_local(&body, "code");
     let regs = named_local(&body, "regs");
     let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
     assert!(recorded.contains(&code), "{body}");
-    assert!(!recorded.contains(&regs), "{body}");
+    assert!(recorded.contains(&regs), "{body}");
 }

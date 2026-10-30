@@ -814,6 +814,18 @@ pub fn returns_unshared(name: &str) -> bool {
     )
 }
 
+/// Whether `name` builds an empty collection: a block it has just
+/// allocated, whose count is 1, so asking whether it is shared answers no.
+///
+/// Kept apart from [`returns_unshared`], whose callers also read it as "copies
+/// the collection it is handed".
+pub fn allocates_collection(name: &str) -> bool {
+    matches!(
+        name,
+        rt::LIST_NEW | rt::MAP_NEW | rt::SET_NEW | rt::ARRAY_NEW
+    )
+}
+
 /// Whether `name` hands back a collection with exactly as many elements as
 /// the one it is given: a copy-on-write entry point or a clone of an array or
 /// a list. A length known of its argument holds of its result.

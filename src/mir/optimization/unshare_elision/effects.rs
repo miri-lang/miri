@@ -15,6 +15,7 @@ use crate::mir::{
     arg_mode, ArgMode, BasicBlock, Body, GpuIntrinsic, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
+use crate::runtime_fns::{taken_argument_positions, writes_in_place};
 
 /// A mask in [`Program`]'s arena.
 #[derive(Debug, Clone, Copy)]
@@ -153,12 +154,20 @@ impl Program {
     }
 }
 
+/// Whether the runtime entry point `name` leaves the count of what it is
+/// handed at `position` as it found it: it writes the argument in place and
+/// does not take it over.
+fn keeps_count_of(name: &str, position: usize) -> bool {
+    writes_in_place(name, position) && !taken_argument_positions(name).contains(&position)
+}
+
 /// What a mask is built for. A read or write reaches the same tracked places
 /// whichever locals index it, so masks that do not depend on those locals are
 /// keyed by the place with every index spelled alike ([`index_blind`]).
 #[derive(PartialEq, Eq, Hash)]
 enum MaskKey {
     Reached(Place),
+    Within(Place),
     Replaced(Place),
     ReplacedByFresh(Place),
     Indexed(Local),
@@ -217,7 +226,7 @@ impl ProgramBuilder<'_> {
                 param_types: _,
                 target: _,
             } => {
-                let reads = self.argument_reads(args, arg_modes);
+                let reads = self.argument_reads(None, args, arg_modes);
                 self.store(destination, Freshness::Never, reads)
             }
             TerminatorKind::GpuLaunch { .. } => self.launch(block, terminator),
@@ -239,13 +248,11 @@ impl ProgramBuilder<'_> {
     /// result into `destination`, fresh when `func` hands back a value nothing
     /// else holds.
     ///
-    /// TODO: a place handed to a runtime entry point at a position it writes
-    /// in place is forgotten like any other argument, though the entry point
-    /// keeps nothing it writes (`runtime_fns::writes_in_place`), so the place
-    /// is as unshared after the call as before it. Keeping it would let the
-    /// copy-on-write lowering puts before `miri_rt_list_sort_by` in
-    /// `List.sorted_by` — on a list the body built and pushed to itself — be
-    /// answered here and removed; today it stays, one runtime call per sort.
+    /// A place a runtime entry point writes in place keeps what is known of
+    /// it: the entry point keeps nothing it writes
+    /// (`runtime_fns::writes_in_place`), so the count it found is the count
+    /// it leaves. Only what is reached through the place is forgotten, since
+    /// its elements may move, be released or be replaced.
     fn call(
         &mut self,
         func: &Operand,
@@ -259,7 +266,7 @@ impl ProgramBuilder<'_> {
             Freshness::Never
         };
         let mut reads = self.operand_reads([func]);
-        reads.extend(self.argument_reads(args, arg_modes));
+        reads.extend(self.argument_reads(func.called_runtime_name(), args, arg_modes));
         self.store(destination, fresh, reads)
     }
 
@@ -336,11 +343,26 @@ impl ProgramBuilder<'_> {
             .collect()
     }
 
-    /// The facts a call's arguments forget: every place each reaches, and
-    /// every place indexed by a local an `out` argument names, since the
-    /// callee writes it.
-    fn argument_reads(&mut self, args: &[Operand], modes: &[ArgMode]) -> Vec<MaskId> {
-        let mut reads = self.operand_reads(args);
+    /// The facts a call's arguments forget: every place each reaches — only
+    /// what is reached through it, for an argument the runtime entry point
+    /// `runtime` writes in place ([`keeps_count_of`]) — and every place
+    /// indexed by a local an `out` argument names, since the callee writes it.
+    fn argument_reads(
+        &mut self,
+        runtime: Option<&str>,
+        args: &[Operand],
+        modes: &[ArgMode],
+    ) -> Vec<MaskId> {
+        let mut reads: Vec<MaskId> = (args.iter().enumerate())
+            .filter_map(|(position, arg)| {
+                let place = arg.place()?;
+                if runtime.is_some_and(|name| keeps_count_of(name, position)) {
+                    self.within(place)
+                } else {
+                    self.reached(place)
+                }
+            })
+            .collect();
         let written = args
             .iter()
             .enumerate()
@@ -370,6 +392,18 @@ impl ProgramBuilder<'_> {
     fn reached(&mut self, reach: &Place) -> Option<MaskId> {
         self.mask(MaskKey::Reached(index_blind(reach)), |table| {
             table.covered_by(reach).map(|(id, _)| id).collect()
+        })
+    }
+
+    /// The tracked places reached through `place`, which a runtime entry
+    /// point writes in place, without `place` itself.
+    fn within(&mut self, place: &Place) -> Option<MaskId> {
+        self.mask(MaskKey::Within(index_blind(place)), |table| {
+            let depth = place.projection.len();
+            (table.covered_by(place))
+                .filter(|(_, fact)| fact.projection.len() > depth)
+                .map(|(id, _)| id)
+                .collect()
         })
     }
 

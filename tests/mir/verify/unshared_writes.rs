@@ -299,11 +299,22 @@ fn a_list_copied_on_write_then_pushed_is_clean() {
 #[test]
 fn a_list_pushed_with_no_copy_on_write_is_flagged() {
     let blocks = vec![
-        block(Vec::new(), runtime(rt::LIST_NEW, vec![constant(8)], 1, 1)),
+        block(Vec::new(), program(Vec::new(), 1, 1)),
         block(Vec::new(), push(local(1), 3, 2)),
         returning(Vec::new()),
     ];
     assert_one_finding(&body_of(&list_locals(), 0, blocks), "_1", rt::LIST_PUSH);
+}
+
+#[test]
+fn a_list_just_built_and_pushed_to_twice_is_clean() {
+    let blocks = vec![
+        block(Vec::new(), runtime(rt::LIST_NEW, vec![constant(8)], 1, 1)),
+        block(Vec::new(), push(local(1), 3, 2)),
+        block(Vec::new(), push(local(1), 3, 3)),
+        returning(Vec::new()),
+    ];
+    assert_clean(&body_of(&list_locals(), 0, blocks));
 }
 
 #[test]
@@ -684,7 +695,7 @@ fn round_trip(is_copied: bool) -> Body {
     let made = if is_copied {
         runtime(rt::LIST_COW, vec![moved(local(1))], 2, 2)
     } else {
-        runtime(rt::LIST_NEW, vec![constant(8)], 2, 2)
+        program(Vec::new(), 2, 2)
     };
     let blocks = vec![
         block(Vec::new(), runtime(rt::LIST_NEW, vec![constant(8)], 1, 1)),
@@ -781,10 +792,7 @@ fn unknown_writer(made: Vec<BasicBlockData>) -> Body {
 
 #[test]
 fn an_unknown_entry_point_handed_an_unchecked_list_is_flagged() {
-    let made = vec![block(
-        Vec::new(),
-        runtime(rt::LIST_NEW, vec![constant(8)], 1, 1),
-    )];
+    let made = vec![block(Vec::new(), program(Vec::new(), 1, 1))];
     assert_one_finding(&unknown_writer(made), "_1", UNKNOWN);
 }
 
