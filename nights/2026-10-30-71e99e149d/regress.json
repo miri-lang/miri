@@ -1,0 +1,43 @@
+{
+ "run_id": "20261030T110755Z",
+ "suspect": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.109388768760859,
+   "baseline": 1.2281991879149088,
+   "tonight": 1.3625503848740077
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1295711677975082,
+   "baseline": 1.2026039638244819,
+   "tonight": 1.3584267638151324
+  },
+  {
+   "cell": "nbody/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0614768004388195,
+   "baseline": 1.7105679494999855,
+   "tonight": 1.8157281939684367
+  }
+ ],
+ "regressed": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.109388768760859,
+   "baseline": 1.2281991879149088,
+   "tonight": 1.3625503848740077
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1295711677975082,
+   "baseline": 1.2026039638244819,
+   "tonight": 1.3584267638151324
+  }
+ ],
+ "recovered": []
+}
