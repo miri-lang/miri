@@ -16,8 +16,11 @@ arch = "x86_64"
 # The core every benchmark process tree is pinned to. The VM has at least two
 # vCPUs, so the pinned one has an idle neighbour for the runner itself.
 pinned_core = 1
-# Inputs are written here so the page cache never depends on run order.
-input_dir = "/dev/shm"
+# Inputs are written here so the page cache never depends on run order: a
+# tmpfs the run mounts, outside /dev, whose files Deno refuses to read with
+# only --allow-read. Where it is absent the runner falls back to its own
+# work directory.
+input_dir = "/run/miri-bench"
 # The exact machine, filled in when the run is made.
 model = "recorded in env.json by the run"
 # The coefficient of variation of the C reference's wall time on this VM

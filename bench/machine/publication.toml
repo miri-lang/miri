@@ -16,8 +16,11 @@ pinned_core = 2
 governor = "performance"
 turbo = false
 smt_sibling_offline = true
-# Inputs are written here so the page cache never depends on run order.
-input_dir = "/dev/shm"
+# Inputs are written here so the page cache never depends on run order: a
+# tmpfs the run mounts, outside /dev, whose files Deno refuses to read with
+# only --allow-read. Where it is absent the runner falls back to its own
+# work directory.
+input_dir = "/run/miri-bench"
 # Set from bench/machine/noise.py on this box: the C reference's coefficient
 # of variation over 50 runs must be under the charter's noisy_cv.
 measured_noise_cv = "not yet measured: the box is not provisioned"

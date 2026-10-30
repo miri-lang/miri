@@ -17,7 +17,7 @@ ARG GO_VERSION=1.25.5
 ARG DENO_VERSION=2.9.7
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gnupg unzip build-essential pkg-config \
+ && apt-get install -y --no-install-recommends ca-certificates curl git gnupg unzip build-essential pkg-config \
  && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg \
  && echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${CLANG_MAJOR} main" > /etc/apt/sources.list.d/llvm.list \
  && apt-get update \
@@ -26,8 +26,13 @@ RUN apt-get update \
  && ln -s /usr/bin/clang++-${CLANG_MAJOR} /usr/local/bin/clang++ \
  && rm -rf /var/lib/apt/lists/*
 
-ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/usr/local/go/bin:/opt/deno/bin:$PATH
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION} \
+# The toolchain's own bin directory comes first on PATH, through a link with
+# no target triple in its name: the runner hands a child only PATH and HOME
+# (bench/CHARTER.md section 8), and rustup's proxies would look for their
+# toolchains under that HOME.
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/rust/bin:/opt/cargo/bin:/usr/local/go/bin:/opt/deno/bin:$PATH
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION} --component rustfmt --component clippy \
+ && ln -s "$(echo /opt/rustup/toolchains/${RUST_VERSION}-*)" /opt/rust \
  && rustc --version
 
 RUN arch="$(dpkg --print-architecture)" \

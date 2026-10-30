@@ -216,7 +216,7 @@ class PreliminaryVpsTest(unittest.TestCase):
         self.assertTrue(profile["publishable"])
         self.assertEqual(profile["label"], "preliminary")
         self.assertGreaterEqual(profile["pinned_core"], 0)
-        self.assertEqual(profile["input_dir"], "/dev/shm")
+        self.assertEqual(profile["input_dir"], "/run/miri-bench")
         self.assertEqual(run.parse_args(["--profile", "preliminary-vps"]).profile, "preliminary-vps")
 
     def test_a_vm_is_judged_only_on_the_state_its_profile_declares(self):

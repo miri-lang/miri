@@ -102,6 +102,18 @@ python3 bench/run.py --full --profile preliminary-vps          # session two, ho
 python3 bench/summarize.py bench/results/<two>/ --reproduces bench/results/<one>/summary.json
 ```
 
+Both sessions run inside the pinned image, as the charter requires, with the
+profile's input directory mounted as a tmpfs (outside `/dev`, which Deno will
+not read with `--allow-read` alone):
+
+```bash
+docker build -f bench/Dockerfile -t miri-bench bench/
+docker run --rm --tmpfs /run/miri-bench:size=2g,uid=$(id -u),gid=$(id -g) \
+  --user "$(id -u):$(id -g)" -v "$PWD":/miri -v "$HOME/.cache/miri-bench":/cache -w /miri \
+  -e HOME=/cache/home -e CARGO_HOME=/cache/cargo \
+  miri-bench python3 bench/run.py --full --profile preliminary-vps
+```
+
 Each cell of the second session is then marked `reproduced` when its ratio to
 C agrees with the first session's under the verdict rule; the charts show an
 unreproduced cell as a label, and the summary's `reproduction` gives the
