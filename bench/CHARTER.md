@@ -20,7 +20,7 @@ of this document, and the prose refers to values by key rather than restating
 them. `tests/bench/charter.rs` fails the build when the two files disagree on a
 number, a build line, a tier or a key.
 
-**Charter version: 5.**
+**Charter version: 6.**
 
 ## 1. Identity of a result
 
@@ -52,9 +52,10 @@ under different charter versions are never drawn on the same chart
 | Tier | Languages | Role |
 |---|---|---|
 | Subject | Miri `miri` | What is measured. |
-| Headline | C `c`, C++ `cpp`, Rust `rust`, Go `go`, Python `python`, TypeScript on Deno `typescript` | Mandatory. Every published chart shows all six. A run missing one of them is not a publication run. |
+| Headline | C `c`, C++ `cpp`, Rust `rust` | Mandatory. Every published chart shows all three. A run missing one of them is not a publication run. Rust and C++ are what Miri is held against (the scoreboard, section 6); C stays as the reference every ratio and time cap is taken against. |
 | Diagnostic | Swift `swift`, Koka `koka`, checked Rust `rust-checked` | Opt-in, skipped cleanly when the toolchain is absent. Swift shares Miri's memory model (reference counting with copy-on-write collections); Koka is the reference implementation of Perceus, the reference-counting scheme Miri uses, and tells us whether Miri's Perceus does what the original does. `rust-checked` builds the Rust port with integer overflow checks on, which gives it exactly Miri's run-time checks (section 4) with the same standard containers: Miri's distance from it is the compiler's, and Rust's distance from it is the price of the checks. They explain results; they are not the headline. |
 | Optional | PyPy `pypy` | A second Python arm, shown beside CPython and never in its place. CPython is the Python people run. |
+| Retired | Go `go`, Python `python`, TypeScript on Deno `typescript` | Headline languages up to version 5. Their ports stay reviewed and in the output-identity gate, and a run measures them when named (`--langs`), but the default run leaves them out and no published chart of a version 6 run shows them. |
 
 Python means CPython in its default build: with the global interpreter lock and
 with the experimental JIT off (`PYTHON_JIT` unset).
@@ -233,7 +234,8 @@ except `hot_ns`, which only the program can know.
   metric. Quantiles use the nearest-rank method. Charts show the median.
 - **Noisy cells.** A cell whose CV of `process_wall_ns`, `hot_ns` or
   `max_rss_bytes` exceeds `statistics.noisy_cv` is re-run from its warm-up, up
-  to `statistics.noisy_max_reruns` times. Every attempt's runs are kept and
+  to `statistics.noisy_max_reruns` times, unless the machine profile sets its
+  own `noisy_max_reruns` (section 8). Every attempt's runs are kept and
   published; the last attempt is the one charted. A cell still noisy after the
   last re-run is published with a `noisy` flag, never dropped.
 - **Steal time.** Where the kernel reports it, the runner reads the pinned
@@ -246,6 +248,15 @@ except `hot_ns`, which only the program can know.
   across runs — across days, machines or CI hosts — use these ratios, never
   absolute nanoseconds. The CV of a ratio is taken as
   `√(CV_cell² + CV_C²)`.
+- **Ratio to Rust and the scoreboard.** The same division against the Rust
+  cell gives each cell's time over Rust's, and against the C++ cell its time
+  over C++'s. The summary's scoreboard lists, for each build variant, size and
+  mode, Miri's time over Rust's and over C++'s per workload, the geometric
+  mean over Rust, and how many workloads sit at or under `scoreboard.floor`
+  times Rust and at or under `scoreboard.parity` times Rust. Parity is not 1:
+  a ratio within the noise of the machine is a tie, never a win or a loss. A
+  workload whose Miri or Rust cell has no ratio is left off the scoreboard,
+  and the count says of how many workloads it is.
 - **Cross-version verdict.** Comparing Miri version A with version B on a cell
   is allowed only between runs on the same machine profile. With `r` the ratio
   of B's median ratio-to-C over A's, and `t` the larger of
@@ -315,7 +326,11 @@ run (section 6). The whole suite runs twice, hours apart or on two days, and
 the second session's summary is made against the first: a cell whose ratio
 to C does not agree between them under the verdict rule (section 6) is marked
 unreproduced and is shown as such, never as a bar, and the largest drift
-between the sessions is published as the run's noise. Ratios to C stay
+between the sessions is published as the run's noise. That second session is
+the profile's noise check, so it does not re-run noisy cells (its
+`noisy_max_reruns` is 0): with the machine's noise above
+`statistics.noisy_cv`, nearly every cell counted as noisy, and re-running them
+tripled the run without making it quieter. Ratios to C stay
 meaningful on such a machine because each is taken between cells measured
 side by side in one session, so a slower host moves both. The sizes keep the
 parameters set on the developer's workstation and the article says they were
@@ -324,9 +339,9 @@ skipped. Memory is published from this run, Linux only: the macOS allocator
 keeps freed blocks of grown buffers for every language, so a workstation's
 peak memory is indicative only.
 
-Two disclosures go with every run, whichever profile: the TypeScript arm is
-named "TypeScript (V8 via Deno)", because Deno strips the type annotations and
-the number is V8's; and a language's built-ins that are implemented natively
+Two disclosures go with every run that measures the retired tier: the
+TypeScript arm is named "TypeScript (V8 via Deno)", because Deno strips the
+type annotations and the number is V8's; and a language's built-ins that are implemented natively
 (V8's JSON, Python's json module, dictionaries and sort) are what that
 language gives a programmer, and are counted as such, said once in the
 article.
@@ -426,7 +441,7 @@ checks the two files agree reads this table.
 
 | Key | Value | Meaning |
 |---|---|---|
-| `charter_version` | `5` | The version every record carries (section 1). |
+| `charter_version` | `6` | The version every record carries (section 1). |
 | `runs.process_warmup_runs` | `2` | Discarded runs at the start of each cell. |
 | `runs.hot_warmup_iterations` | `5` | Untimed kernel iterations at the start of a hot run. |
 | `runs.hot_timed_iterations` | `5` | Timed kernel iterations in a hot run; `hot_ns` is their median. |
@@ -446,10 +461,23 @@ checks the two files agree reads this table.
 | `timeout.c_median_factor` | `300` | A run longer than this many C medians is killed. |
 | `timeout.floor_s` | `10` | The time cap never falls below this many seconds. |
 | `timeout.retries` | `1` | Retries of a killed run before the cell is marked `timeout`. |
+| `scoreboard.floor` | `1.5` | Ratio to Rust at or under which a Miri workload counts as within the floor. |
+| `scoreboard.parity` | `1.05` | Ratio to Rust at or under which a Miri workload counts as at parity; above 1 because a smaller gap is within the noise of the rented machine. |
 | `diagnosis.time_vs_c` | `1.5` | Ratio to C at which a Miri time cell is diagnosed. |
 | `diagnosis.net_rss_vs_rust` | `1.5` | Ratio to Rust at which a Miri memory cell is diagnosed. |
 
 ## Changelog
+
+- **Version 6, 2026-10-31** — Miri is held against Rust and C++. The
+  headline tier is now C, C++ and Rust; Go, Python and TypeScript move to a
+  new retired tier, whose ports stay reviewed and gated but leave the default
+  run (section 2). The summary carries every cell's time over Rust's and over
+  C++'s and a scoreboard of Miri against Rust, counted against
+  `scoreboard.floor` and `scoreboard.parity` (section 6). A machine profile
+  may set its own noisy re-run budget, and `preliminary-vps` sets none: its
+  noise sits above `statistics.noisy_cv`, so re-runs tripled a session
+  without quieting it, and the second session is that profile's noise check
+  (section 8).
 
 - **Version 5, 2026-10-29** — added the code-placement rule (section 6).
   On the rented x86-64 machine, padding alone moved the time of a short-loop

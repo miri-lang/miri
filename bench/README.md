@@ -24,7 +24,7 @@ machine-readable twin [`charter.toml`](charter.toml).
 
 ```bash
 make bench-smoke                                    # size S; Miri, C and Rust; five measured runs
-make bench-full                                     # every workload, language and size
+make bench-full                                     # every workload and size; every language but the retired tier
 python3 bench/run.py --only nbody --langs miri,c --sizes s,m --runs 5
 ```
 
@@ -44,8 +44,10 @@ lands on all of them alike. Each run is a fresh process, executed directly
 with no shell, in an environment holding only `PATH`, `HOME`,
 `PYTHONHASHSEED=0` and a pinned `DENO_DIR`. Wall time is taken around fork and
 exit, and CPU time and peak memory come from the child's `wait4` resource usage.
-A noisy cell is re-run from its warm-up as the charter allows, and every
-attempt is kept. Sizes S and M also run in hot mode. Each Miri cell gets one
+A noisy cell is re-run from its warm-up as the charter allows (or as the
+machine profile allows: `preliminary-vps` does not re-run), and every
+attempt is kept. Go, Python and TypeScript are in the charter's retired tier:
+their ports stay gated, and they run only when `--langs` names them. Sizes S and M also run in hot mode. Each Miri cell gets one
 extra, untimed run with the runtime's allocation counter on, from a build of
 the same line without `--release`: a release build leaves the counters out. Each Miri port is also built
 three times at the charter's `--opt-level 3` line and three times at the same
@@ -81,9 +83,12 @@ python3 bench/summarize.py history bench/results/    # each cell's ratio to C, r
 median, minimum, the upper quantile by nearest rank, the median absolute
 deviation and the coefficient of variation of every metric, and a `noisy`
 flag past the charter's threshold. A noisy cell is published flagged, never
-dropped. It adds each cell's ratio to C (time and peak memory), to Rust (peak
-and net memory, net being the peak above the runtime floor, or `≤ floor`), and
-to Miri. It marks the Miri cells past the charter's diagnosis thresholds, and
+dropped. It adds each cell's ratio to C (time and peak memory), to Rust (time,
+peak and net memory, net being the peak above the runtime floor, or `≤ floor`),
+to C++ (time) and to Miri. Its `scoreboard`, which also leads `summary.md`,
+holds Miri against Rust: per build variant, size and mode, each workload's
+time over Rust's and C++'s, the geometric mean over Rust, and how many
+workloads sit within the charter's floor and at its parity. It marks the Miri cells past the charter's diagnosis thresholds, and
 takes the geometric mean of each language's time ratio to C, overall and per
 feature tag, with how many workloads it covers, and carries each measured
 workload's manifest `notes` into `port_notes` and each measured cell's
@@ -118,7 +123,7 @@ Each cell of the second session is then marked `reproduced` when its ratio to
 C agrees with the first session's under the verdict rule; the charts show an
 unreproduced cell as a label, and the summary's `reproduction` gives the
 largest drift between the sessions. The runner reads the pinned core's steal
-time around every run and re-runs a cell the hypervisor took too much from.
+time around every run and flags a cell the hypervisor took too much from.
 Every chart of such a run carries its profile's label, `PRELIMINARY`.
 
 `compare` gives a verdict per cell, `faster`, `same` or `slower`, by the

@@ -101,7 +101,8 @@ def load_charter():
 
 
 def language_order(charter):
-    """Every language the charter names, subject first."""
+    """Every language the default run measures, subject first. The retired
+    tier keeps its ports and runs only when named with --langs."""
     tiers = charter["tiers"]
     return [*tiers["subject"], *tiers["headline"], *tiers["diagnostic"], *tiers["optional"]]
 
@@ -860,11 +861,17 @@ def noisy(ctx, measurements, mode):
     return any(coefficient_of_variation(values) > threshold for values in metrics)
 
 
+def noisy_reruns(ctx):
+    """How many times a noisy cell is re-run: the charter's budget, unless the
+    machine profile sets its own."""
+    return ctx.profile.get("noisy_max_reruns", ctx.charter["statistics"]["noisy_max_reruns"])
+
+
 def measure_cells(ctx, env, cells, cap_s, floors):
     """Measure a group of cells (one workload, size and mode, every language),
-    re-running noisy cells from their warm-up as the charter allows."""
+    re-running noisy cells from their warm-up as the profile allows."""
     pending = list(range(len(cells)))
-    for attempt in range(1 + ctx.charter["statistics"]["noisy_max_reruns"]):
+    for attempt in range(1 + noisy_reruns(ctx)):
         group = [cells[i] for i in pending]
         results, timed_out = run_rounds(ctx, group, attempt, cap_s)
         still_noisy = []

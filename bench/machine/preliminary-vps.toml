@@ -27,6 +27,11 @@ model = "recorded in env.json by the run"
 # (bench/machine/noise.py, pinned to the core above, the machine otherwise
 # idle): nbody size s over 50 runs, and size m over 30. It is above the
 # charter's statistics.noisy_cv, so a single run here says little; the
-# numbers rest on medians, the re-runs of noisy cells and the second session
-# that must reproduce the first.
+# numbers rest on medians and on the second session that must reproduce the
+# first.
 measured_noise_cv = "0.108 (nbody s, 50 runs); 0.123 (nbody m, 30 runs)"
+# No re-runs of noisy cells. With the noise above statistics.noisy_cv nearly
+# every cell counts as noisy, so re-runs tripled the run without making it
+# any less noisy; the second session is this profile's noise check instead
+# (bench/CHARTER.md sections 6 and 8).
+noisy_max_reruns = 0

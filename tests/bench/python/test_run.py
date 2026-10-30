@@ -143,6 +143,29 @@ class StderrTest(unittest.TestCase):
         )
 
 
+class LanguageSelectionTest(unittest.TestCase):
+    def test_the_default_run_measures_every_tier_but_the_retired_one(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            selected = run.selected_languages(context(work_dir))
+        self.assertTrue({"miri", "rust", "cpp", "c", "rust-checked"} <= set(selected))
+        self.assertFalse(set(run.load_charter()["tiers"]["retired"]) & set(selected))
+
+    def test_a_retired_language_still_runs_when_named(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            ctx = context(work_dir)
+            ctx.args.langs = "miri,go"
+            self.assertEqual(run.selected_languages(ctx), ["miri", "go"])
+
+
+class NoisyRerunTest(unittest.TestCase):
+    def test_a_profile_may_set_its_own_rerun_budget(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            ctx = context(work_dir)
+            self.assertEqual(run.noisy_reruns(ctx), ctx.charter["statistics"]["noisy_max_reruns"])
+            ctx.profile = run.load_profile("preliminary-vps")
+            self.assertEqual(run.noisy_reruns(ctx), 0)
+
+
 class OrderTest(unittest.TestCase):
     def test_languages_interleave_within_every_round(self):
         self.assertEqual(

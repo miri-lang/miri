@@ -128,6 +128,45 @@ class RatioTest(unittest.TestCase):
         self.assertEqual(overall["coverage"], 2)
 
 
+class ScoreboardTest(unittest.TestCase):
+    def hot(self, workload, language, median):
+        return records(workload, language, [median] * 3, mode="hot")
+
+    def board(self, recs):
+        return next(b for b in summarize_records(recs)["scoreboard"] if (b["size"], b["mode"]) == ("s", "hot"))
+
+    def test_every_cell_carries_its_time_over_rust_and_over_cpp(self):
+        recs = self.hot("w", "c", 80) + self.hot("w", "rust", 100) + self.hot("w", "cpp", 120) + self.hot("w", "miri", 150)
+        miri = cell(summarize_records(recs), "w", "miri", "hot")
+        self.assertAlmostEqual(miri["vs_rust"]["time"]["value"], 1.5)
+        self.assertAlmostEqual(miri["vs_cpp"]["time"]["value"], 1.25)
+
+    def test_the_scoreboard_counts_miri_within_the_floor_and_at_parity_with_rust(self):
+        recs = []
+        for workload, miri in (("w", 150), ("v", 104), ("u", 300)):
+            recs += self.hot(workload, "c", 90) + self.hot(workload, "rust", 100) + self.hot(workload, "miri", miri)
+        board = self.board(recs)
+        self.assertEqual((board["floor"], board["parity"]), (CHARTER["scoreboard"]["floor"], CHARTER["scoreboard"]["parity"]))
+        self.assertEqual((board["of"], board["within_floor"], board["at_parity"]), (3, 2, 1))
+        self.assertAlmostEqual(board["geomean_vs_rust"], (1.5 * 1.04 * 3.0) ** (1 / 3))
+        self.assertAlmostEqual(board["workloads"]["v"]["vs_rust"], 1.04)
+        self.assertIsNone(board["workloads"]["v"]["vs_cpp"])
+
+    def test_a_workload_rust_did_not_measure_is_left_off_the_scoreboard(self):
+        recs = self.hot("w", "c", 90) + self.hot("w", "rust", 100) + self.hot("w", "miri", 100)
+        recs += self.hot("v", "c", 90) + self.hot("v", "miri", 100)
+        board = self.board(recs)
+        self.assertEqual(sorted(board["workloads"]), ["w"])
+        self.assertEqual(board["of"], 1)
+
+    def test_the_summary_markdown_leads_with_the_scoreboard(self):
+        recs = self.hot("w", "c", 90) + self.hot("w", "rust", 100) + self.hot("w", "miri", 150)
+        text = summarize.markdown(summarize_records(recs))
+        self.assertIn("## Miri against Rust", text)
+        self.assertIn("| w | 1.50 |", text)
+        self.assertLess(text.index("## Miri against Rust"), text.index("| Workload | Language |"))
+
+
 class VerdictTest(unittest.TestCase):
     def summary_with(self, miri_median, cv, run_id):
         recs = records("w", "c", steady(1000, cv)) + records("w", "miri", steady(miri_median, cv))

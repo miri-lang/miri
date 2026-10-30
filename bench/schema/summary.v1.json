@@ -43,6 +43,7 @@
           "vs_c": {"type": "object"},
           "vs_miri": {"type": "object"},
           "vs_rust": {"type": "object"},
+          "vs_cpp": {"type": "object"},
           "diagnose": {"type": "boolean"},
           "steal_share": {"description": "The share of the cell's CPU time the hypervisor took from the pinned core.", "type": "number"},
           "reproduced": {"description": "Whether the cell's ratio to C agrees with the first session's under the verdict rule; present only on a second session.", "type": "boolean"}
@@ -64,6 +65,33 @@
           "coverage": {"type": "integer"},
           "geomean_max_rss_vs_c": {"type": "number"},
           "memory_coverage": {"type": "integer"}
+        }
+      }
+    },
+    "scoreboard": {
+      "description": "Miri's time over Rust's and C++'s per workload, for each build variant, size and mode, with the geometric mean over Rust and the counts within the charter's floor and at its parity.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["variant", "size", "mode", "floor", "parity", "workloads", "geomean_vs_rust", "of", "within_floor", "at_parity"],
+        "properties": {
+          "variant": {"type": "string"},
+          "size": {"type": "string"},
+          "mode": {"type": "string"},
+          "floor": {"type": "number"},
+          "parity": {"type": "number"},
+          "workloads": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["vs_rust", "vs_cpp"],
+              "properties": {"vs_rust": {"type": "number"}, "vs_cpp": {"type": ["number", "null"]}}
+            }
+          },
+          "geomean_vs_rust": {"type": "number"},
+          "of": {"type": "integer"},
+          "within_floor": {"type": "integer"},
+          "at_parity": {"type": "integer"}
         }
       }
     },

@@ -6,13 +6,14 @@
 # value it has. `tests/bench/charter.rs` fails when the two disagree on any
 # number or any build line, so neither can be changed alone.
 
-charter_version = 5
+charter_version = 6
 
 [tiers]
 subject = ["miri"]
-headline = ["c", "cpp", "rust", "go", "python", "typescript"]
+headline = ["c", "cpp", "rust"]
 diagnostic = ["swift", "koka", "rust-checked"]
 optional = ["pypy"]
+retired = ["go", "python", "typescript"]
 
 # `{src}` is the port's source file, `{out}` the executable the build writes.
 # A language with no `build` runs from source. A language with no
@@ -108,6 +109,10 @@ cv_multiplier = 3
 c_median_factor = 300
 floor_s = 10
 retries = 1
+
+[scoreboard]
+floor = 1.5
+parity = 1.05
 
 [diagnosis]
 time_vs_c = 1.5
