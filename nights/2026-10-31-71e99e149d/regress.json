@@ -1,0 +1,23 @@
+{
+ "run_id": "20261031T104124Z",
+ "suspect": [
+  {
+   "cell": "binary-trees/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.1069529037387356,
+   "baseline": 1.2968089961683176,
+   "tonight": 1.435506483903034
+  }
+ ],
+ "regressed": [],
+ "recovered": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c"
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c"
+  }
+ ]
+}
