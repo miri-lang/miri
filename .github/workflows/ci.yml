@@ -70,11 +70,6 @@ jobs:
       - name: Build project (release)
         run: make release
 
-      # Every test outside the integration binary; the `test` job runs that
-      # binary, spread over parallel runners.
-      - name: Run unit, doc and runtime tests
-        run: make test-units
-
   # The integration binary, in three slices on three runners. Together the
   # slices run every test it holds exactly once (tools/test_shard.py).
   #
@@ -113,6 +108,12 @@ jobs:
 
       - name: Run integration tests (slice ${{ matrix.shard }} of 3)
         run: make test-shard SHARD=${{ matrix.shard }}/3
+
+      # Every test outside the integration binary, on the runner whose slice
+      # is lightest.
+      - name: Run unit, doc and runtime tests
+        if: matrix.shard == 3
+        run: make test-units
 
   gpu-browser-gate:
     runs-on: ubuntu-24.04
