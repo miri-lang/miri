@@ -98,7 +98,7 @@ When writing tests or standard library code, remember Miri's syntax:
 `PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (Perceus, runtime/stdlib alignment, exhaustive visitors).
 
 - Before writing code: read `PRINCIPLES.md` for the binding standards on architecture, SOLID, and TDD.
-- After writing code: run `make audit` (mechanical sweep) to verify layer rules, stdlib independence, function size, naming, comments, and exhaustive matching.
+- After writing code: run `make audit` (mechanical sweep) to verify layer rules, stdlib independence, function size, naming, comments, and exhaustive matching. It is a gate, not advice: it fails on a cross-layer import outside the allow-list in `tools/check_layering.py`, on planning vocabulary, and when a count in `tools/audit_baseline.json` grows (`unwrap`/`expect` in library code, `_ =>` arms in the compiler's own stages, functions past 80 lines). Fix the new hits; never raise the baseline. CI runs it on every push.
 
 **Which skill to run (pick the cheapest that fits — slow panels are not the default):**
 - **`miri-task`** — *default for everyday features and fixes.* A single agent (no subagents) implements with TDD, then self-reviews through every specialist lens, QAs its own work, and runs the full gate. Fast, keeps context, no subagent over-reporting. Done only when the gate is green and self-QA is clean.
@@ -107,6 +107,11 @@ When writing tests or standard library code, remember Miri's syntax:
 - **`miri-reviewer`** agent — lightweight single diff-level review when you don't need the panel.
 
 If you disagree with a principle, **say so** in the PR description. Do not silently deviate.
+
+## 3.7 Optimization placement (BINDING)
+Performance work is where logic drifts into the wrong stage and where one decision gets made twice. `PRINCIPLES.md` §1.4 is binding for every optimization: before writing it, **name the stage that owns the decision and the one authority it reads from.** Facts a later stage consumes live in the IR, never in a `Body` side table keyed by position; one question has one authority (is-counted, intrinsic effects, header layout, element identity, drop plan); codegen executes plans and decides no semantics; the compiler learns what an intrinsic does from its declaration, not its name; a verifier shares only specification tables with the pass it checks; pass order is data; dead or unsound code is deleted when found.
+
+A violation kept for performance is a **placement exception**: measured (hot time and peak RSS before→after), impossible to place in the owning stage, and marked at the site with a comment beginning `Placement exception:` that names the owning stage, the measured gain and the guard test. `make audit` lists every such comment. Every landed performance change reports, beside its numbers, **the stage that owns the fix** (a MIR pass, a backend setting or lowering, the runtime, the stdlib) and whether it added a placement exception.
 
 ---
 

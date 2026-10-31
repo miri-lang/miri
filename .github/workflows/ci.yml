@@ -54,6 +54,11 @@ jobs:
       - name: Run linting (fmt & clippy)
         run: make lint
 
+      # The mechanical principle audit: layer rules, planning vocabulary and the
+      # ratchet on advisory counts fail it; everything else it prints is a list.
+      - name: Run the principle audit
+        run: make audit
+
       - name: Build project (debug)
         run: make build
 

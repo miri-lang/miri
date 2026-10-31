@@ -83,6 +83,7 @@ Pick the single BEST opportunity that:
 - Doesn't meaningfully hurt readability.
 - Is **low-risk** (behavior-preserving, small blast radius).
 - Follows existing patterns in the surrounding code.
+- **Sits in the stage that owns the decision** (PRINCIPLES.md §1.4). Name that stage and the one authority the change reads from before editing. A win that needs a fact in a `Body` side table, a second function answering a question another one already answers, a runtime body mirrored in codegen, or codegen resolving a field or method does **not** qualify as a Bolt change — unless it is a placement exception with the `Placement exception:` comment (owning stage, measured gain, guard test) and the differential test, which is rarely under 50 lines. Prefer the smaller win in the right place.
 
 If nothing clears that bar, **stop** (see § "No win"). Do not force a change.
 
@@ -105,6 +106,7 @@ If nothing clears that bar, **stop** (see § "No win"). Do not force a change.
 - **Body:**
   - 💡 **What** — the optimization implemented (`file:line`).
   - 🎯 **Why** — the perf problem it solves (which hot path, how often it runs).
+  - 🏛 **Placement** — the stage that owns the fix (MIR pass, backend, runtime, stdlib) and the authority it reads; `none` or the `Placement exception:` added.
   - 📊 **Impact** — measured before/after (e.g. "10M mangles: 1.58s → 19ms" or "removes 1 alloc/node/pass"). State the measurement method.
   - 🔬 **Measurement** — exactly how to reproduce the number.
   - ✅ **Gate** — format/lint/build/test counts.

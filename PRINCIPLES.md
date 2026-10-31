@@ -53,6 +53,24 @@ Miri's architecture is a *pipeline of pure transformations* with an inner core (
 - [ ] No stdlib type name appears as a string literal in compiler control flow (search: `"List"`, `"Set"`, `"Option"`, `"Map"`, `"String"` inside `src/` excluding `src/stdlib/`).
 - [ ] No `panic!` / `unwrap` / `expect` in library code (`src/` excluding tests and `main.rs` argument parsing).
 - [ ] Every new MIR variant is updated in **every** visitor (`perceus.rs`, codegen, analysis passes) — no wildcard arm swallows it.
+- [ ] No new field on `Body` keyed by block or statement index (§1.4).
+- [ ] No new function answering a question another function already answers: is-counted, intrinsic effects, header layout, element identity, drop plan (§1.4).
+- [ ] No `crate::ast::expression` import under `src/codegen/`; no `mir::optimization` import under `src/mir/verify/`; no `runtime_fns` import under `src/type_checker/` (`tools/check_layering.py` enforces these; its allow-list names the known debt and the reason each entry still exists).
+- [ ] Every duplicate kept for performance carries a `Placement exception:` comment naming the owning stage, the measured gain and the guard test (§1.4).
+
+### 1.4 Optimization placement (MUST)
+
+An optimization changes *where* and *when* a decision is made, so it is the change most likely to put logic in the wrong stage or to make one decision twice. Placement is decided before the code is written: name the stage that owns the decision and the one authority it reads from.
+
+- **Facts live in the IR.** A fact a later stage consumes (an index proven in bounds, a header a loop leaves unchanged, a call that touches no heap, a parameter a callee takes over) is encoded on the IR node it describes: a flag on a `Place`, `Rvalue`, `Statement` or `Terminator`. A `Body` side table keyed by block or statement index is forbidden: a later rewrite keeps the table and loses its meaning, and a backend that ignores the IR stays correct while one that ignores a table does not.
+- **One question, one authority.** "Is this value counted", "what does this intrinsic do to its arguments", "where is this header word", "how does this container match its elements", "what does dropping this type release" each have exactly one function or table that answers them, and every stage reads it. A second function answering the same question is a defect even on the day it agrees.
+- **Codegen executes plans; it does not decide semantics.** The backend reads MIR and `mir::type_facts`. It does not resolve fields, methods or traits from a `TypeDefinition`, run CFG analyses (dominance, reachability, loop nesting), or read AST expressions. A backend-local pass over the backend's own IR (inlining, slot promotion, block-parameter cleanup) is allowed only when it compensates for a property of that backend, and its module doc names the property.
+- **The compiler learns what an intrinsic does from its declaration, never from its name.** A fast path that mirrors a runtime function body is a placement exception (below): it names the runtime function, takes every layout number from the shared layout authority, and has a differential test comparing the inline path with the runtime path.
+- **A verifier shares nothing with the pass it checks except specification tables.** It is a second, cruder derivation, and ships a mutation test that injects the defect it guards. Every fact the backend trusts is verified on the bodies the backend receives, after the last MIR rewrite.
+- **Pass order is data.** A pass declares what it requires and what it invalidates; the pipeline orchestrates and never transforms.
+- **Dead or self-declared-unsound code is deleted in the change that finds it**, together with the IR variants only it produces.
+
+**Placement exception — the only way to keep a violation.** A rule above may be broken only when the change is measured (hot time and peak RSS, before and after, on the benchmark workloads), no placement in the owning stage can deliver the gain, and the site carries a comment beginning `Placement exception:` that names the owning stage, the measured gain, and the test that guards the duplicate. `make audit` lists every such comment, and a reviewer reads them all. An exception without the comment is a violation; a comment without the measurement or the guard test is a violation.
 
 ---
 
@@ -275,6 +293,11 @@ Auto-flag in audit if seen:
 | Public function with no test | Untested contract. | Add test before merge. |
 | `_var` rename to silence unused warnings | Hides dead code. | Delete the binding (or the parameter, if safe). |
 | Section comment "removed X" left in source | Comment rot. | Delete it. |
+| `Body.<fact>: Vec<…>` keyed by block or statement index | The fact outlives the rewrite that moves it (§1.4). | A flag on the IR node it describes. |
+| A second `fn is_*_managed` / `fn *_counted`, or `matches!(name, rt::…)` outside the one effect table | Two authorities drift (§1.4). | Route through the one authority. |
+| Codegen resolving a field, method or trait, or walking the CFG | Semantics decided in the backend (§1.4). | Compute the plan in MIR; codegen executes it. |
+| An inline mirror of a runtime body with no `Placement exception:` comment | Undocumented, unguarded duplicate (§1.4). | Add the record and the differential test, or call the runtime. |
+| A verifier importing the pass it verifies | Cannot catch the pass's own bug (§1.4). | A separate, cruder derivation plus a mutation test. |
 
 ---
 
@@ -324,9 +347,9 @@ Redundant review is the main source of conflicting findings and adjudication ove
 
 | Axis | Sole owner |
 |------|-----------|
-| `unwrap()`/`expect()`/`panic!` in `src/`, stdlib-name string leaks, `_ =>` over Miri enums, function > 80 lines, `// ── banner ──`, comment rot | **`make audit`** (mechanical sweep — agents trust its output, do not re-grep) |
-| Layer boundaries, SOLID *judgment*, DRY, God-objects, altitude | **Lead Software Architect** |
-| IR/`Place`/terminator design, visitor-contract completeness, monomorphization, residency/effect model, lowering-seam placement | **Lead Compiler Architect** |
+| `unwrap()`/`expect()`/`panic!` in `src/`, stdlib-name string leaks, `_ =>` over Miri enums, function > 80 lines, `// ── banner ──`, comment rot, cross-layer imports (`tools/check_layering.py`), the ratchet counts (`tools/check_audit_ratchet.py`), the list of `Placement exception:` comments | **`make audit`** (mechanical sweep — agents trust its output, do not re-grep) |
+| Layer boundaries, SOLID *judgment*, DRY (including the same question answered in two stages), God-objects, altitude | **Lead Software Architect** |
+| IR/`Place`/terminator design, visitor-contract completeness, monomorphization, residency/effect model, lowering-seam placement, **optimization placement** (§1.4: facts in the IR, one authority per question, codegen executes plans, verifier independence, pass order as data) and the verdict on every `Placement exception:` | **Lead Compiler Architect** |
 | Perceus RC correctness (UAF/double-free), runtime/FFI ABI match, bounds/overflow, `unsafe` soundness, user-input panics | **Lead Security Engineer** |
 | Ownership/borrow ergonomics, clone/alloc hygiene, iterator-vs-loop, perf, error-handling *shape* | **Lead Rust Engineer** |
 | Test coverage, error-path tests, green-washing, duplicate/misnamed tests, edge cases | **Lead QA Engineer** |
@@ -356,7 +379,7 @@ A finding the owner cannot reproduce at a cited `file:line` is **not a finding**
 - **Workflow**: `miri-task` skill classifies the change into Trivial/Standard/Major tiers, drives Red-Green-Refactor cycle, and runs `make audit` at the end.
 - **Review**: `miri-reviewer` agent is the sole reviewer for **Standard**-tier changes; it validates Clean Architecture, SOLID, and Clean Code principles against canonical severities.
 - **On-demand audit**: `miri-audit` skill runs the **Major**-tier specialist panel (architecture, compiler, security, Rust, QA, GPU, CTO) against any path/branch, proposing diffs.
-- **Mechanical**: `make audit` enforces mechanical rules via `clippy.toml` and `Cargo.toml` `[lints.clippy]` (function size, argument count, complexity, `unwrap_used` in `src/`). `make lint` is part of every verification gate.
+- **Mechanical**: `make audit` enforces mechanical rules via `clippy.toml` and `Cargo.toml` `[lints.clippy]` (function size, argument count, complexity, `unwrap_used` in `src/`). `make lint` is part of every verification gate. `make audit` runs in CI on every push and pull request; it fails on a cross-layer import outside the allow-list in `tools/check_layering.py`, on planning vocabulary, and when a count in `tools/audit_baseline.json` grows (`tools/check_audit_ratchet.py`): a change may lower a baseline count, never raise one.
 - **Memory**: `MEMORY.md` references this file so future sessions inherit the standard.
 
 When in doubt, optimize for the next reader. The next reader is often you.

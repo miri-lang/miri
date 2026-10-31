@@ -47,7 +47,7 @@ Status: DONE | NOT DONE (blockers open) | DONE-WITH-DEFERRED-MINORS
 Gate: format <clean> | lint <clean> | build <clean> | test <N passing / M failing / K ignored> | audit <clean>
 
 ## Mechanical sweep (make audit)
-<unwrap/stdlib-name/_=>/oversize/banner counts — clean or list>
+<unwrap/stdlib-name/_=>/oversize/banner counts — clean or list; layer rules and ratchet pass/fail; placement exceptions listed>
 
 ## Specialist roll-up
 Lead Software Architect: <grades A/B/C/F per dimension + headline>

@@ -205,6 +205,16 @@ audit:
 	@echo "        in tools/check_planning_vocabulary.py for the domain names it permits:"
 	@python3 tools/check_planning_vocabulary.py
 	@echo
+	@echo "§1.4 — cross-layer imports (fails the audit): codegen reading AST expressions,"
+	@echo "        a verifier importing the pass it checks, the type checker reading"
+	@echo "        runtime_fns; the allow-list in tools/check_layering.py names the known"
+	@echo "        debt. Also lists every 'Placement exception:' comment, for review:"
+	@python3 tools/check_layering.py
+	@echo
+	@echo "§1.4 — ratchet (fails the audit): the advisory counts below may not grow past"
+	@echo "        tools/audit_baseline.json; lower the baseline with --update, never raise it:"
+	@python3 tools/check_audit_ratchet.py
+	@echo
 	@echo "§4.3 — panic(...) inside src/stdlib/**/*.mi (stdlib must not panic):"
 	@grep -rn --include='*.mi' 'panic(' src/stdlib/ 2>/dev/null \
 		| awk -F: '{print "  "$$1":"$$2}' \
