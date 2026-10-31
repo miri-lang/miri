@@ -178,6 +178,113 @@ fn test_slot_size_sits_where_compiled_code_reads_it() {
 /// The width of a value word, the payload every word-sized test element has.
 const W: usize = std::mem::size_of::<usize>();
 
+/// Compiled code reads a list's data pointer, length and capacity straight
+/// out of its header, at words 0, 1 and 2 (`HEADER_DATA`, `HEADER_LEN` and
+/// `LIST_CAPACITY` in the Cranelift backend's collection header module).
+#[test]
+fn test_list_header_words_sit_where_compiled_code_reads_them() {
+    let word = |v: &usize| v as *const usize as *const u8;
+    unsafe {
+        let list = miri_rt_list_new(W);
+        for value in [10usize, 20, 30] {
+            miri_rt_list_push(list, word(&value), W);
+        }
+        let header = list as *const usize;
+        assert_eq!(*header as *const u8, miri_rt_list_get(list, 0));
+        assert_eq!(*header.add(1), miri_rt_list_len(list));
+        assert_eq!(*header.add(2), miri_rt_list_capacity(list));
+        miri_rt_list_free(list);
+    }
+}
+
+/// Compiled code reads an array's data pointer and length at words 0 and 1
+/// (`HEADER_DATA` and `HEADER_LEN`), and the GPU launch hands the same two
+/// words to the device.
+#[test]
+fn test_array_header_words_sit_where_compiled_code_reads_them() {
+    unsafe {
+        let array = miri_rt_array_new(3, W);
+        let header = array as *const usize;
+        assert_eq!(*header as *const u8, miri_rt_array_data(array));
+        assert_eq!(*header.add(1), miri_rt_array_len(array));
+        assert_eq!(*header.add(1), 3);
+        miri_rt_array_free(array);
+    }
+}
+
+/// Compiled code reads a map's length at word 3, after the state, key and
+/// value pointers (`translate_len` in the Cranelift backend).
+#[test]
+fn test_map_length_sits_where_compiled_code_reads_it() {
+    let word = |v: &usize| v as *const usize as *const u8;
+    unsafe {
+        let map = miri_rt_map_new(W, W, 0);
+        miri_rt_map_set(map, word(&1), W, word(&100), W);
+        miri_rt_map_set(map, word(&2), W, word(&200), W);
+        assert_eq!(*(map as *const usize).add(3), miri_rt_map_len(map));
+        assert_eq!(miri_rt_map_len(map), 2);
+        miri_rt_map_free(map);
+    }
+}
+
+/// Compiled code reads a set's length at word 1, after its data pointer
+/// (`translate_len` in the Cranelift backend).
+#[test]
+fn test_set_length_sits_where_compiled_code_reads_it() {
+    let word = |v: &usize| v as *const usize as *const u8;
+    unsafe {
+        let set = miri_rt_set_new(W);
+        miri_rt_set_add(set, word(&10), W);
+        miri_rt_set_add(set, word(&20), W);
+        assert_eq!(*(set as *const usize).add(1), miri_rt_set_len(set));
+        assert_eq!(miri_rt_set_len(set), 2);
+        miri_rt_set_free(set);
+    }
+}
+
+/// Compiled code finds a value's reference count one word before its payload,
+/// and inlines the immortality test as "the count is negative".
+#[test]
+fn test_reference_count_sits_one_word_before_the_payload() {
+    assert_eq!(miri_runtime_core::rc::RC_HEADER_SIZE, W);
+    use miri_runtime_core::rc::{alloc_with_rc, free_with_rc, incref, miri_rt_rc_is_shared};
+    unsafe {
+        let payload = alloc_with_rc(W);
+        assert_eq!(*(payload as *const isize).sub(1), 1);
+        incref(payload);
+        assert_eq!(*(payload as *const isize).sub(1), 2);
+        assert!(miri_rt_rc_is_shared(payload));
+        *(payload as *mut isize).sub(1) = 1;
+        free_with_rc(payload, W);
+    }
+}
+
+/// Compiled code skips the heap guard's report when the tracking state reads
+/// 1 (`rt::TRACKING_STATE_OFF` in the compiler's runtime symbol table).
+#[test]
+fn test_tracking_states_are_the_values_compiled_code_compares() {
+    use miri_runtime_core::guard::{TRACKING_OFF, TRACKING_ON, TRACKING_UNSET};
+    assert_eq!(TRACKING_UNSET, 0);
+    assert_eq!(TRACKING_OFF, 1);
+    assert_eq!(TRACKING_ON, 2);
+}
+
+/// Compiled code states a set's or a map's element identity as a word whose
+/// low eight bits name the rule (`predicates.rs` in the Cranelift backend);
+/// the rule numbers and the optional depth it can state are pinned here.
+#[test]
+fn test_element_kinds_are_the_values_compiled_code_states() {
+    use miri_runtime_core::element_identity::{
+        BY_BYTES, BY_F16_VALUE, BY_F32_VALUE, BY_F64_VALUE, BY_STRING_CONTENT, MAX_OPTIONAL_DEPTH,
+    };
+    assert_eq!(BY_BYTES, 0);
+    assert_eq!(BY_STRING_CONTENT, 1);
+    assert_eq!(BY_F16_VALUE, 2);
+    assert_eq!(BY_F32_VALUE, 3);
+    assert_eq!(BY_F64_VALUE, 4);
+    assert_eq!(MAX_OPTIONAL_DEPTH, 255);
+}
+
 /// Compiled code reads a string's length one word in, and writes each string
 /// literal as `[RC][data][len][capacity][ascii]` with the rest of the ascii
 /// word zeroed (`build_miri_string_struct_bytes` in the Cranelift backend,
