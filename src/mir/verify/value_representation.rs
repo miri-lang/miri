@@ -185,8 +185,7 @@ impl<'a> Representations<'a> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => None,
+            | Rvalue::AtomicOp { .. } => None,
         }
     }
 
@@ -328,8 +327,7 @@ impl<'a> Representations<'a> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => Vec::new(),
+            | Rvalue::AtomicOp { .. } => Vec::new(),
         }
     }
 

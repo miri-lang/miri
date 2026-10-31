@@ -127,8 +127,7 @@ impl Check<'_> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => Vec::new(),
+            | Rvalue::AtomicOp { .. } => Vec::new(),
         }
     }
 

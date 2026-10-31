@@ -1759,8 +1759,7 @@ impl<'a> BodyEmitter<'a> {
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
             | Rvalue::AtomicOp { .. }
-            | Rvalue::Aggregate(..)
-            | Rvalue::Phi(_) => return None,
+            | Rvalue::Aggregate(..) => return None,
         };
         let helper = CheckedHelper::new(arith, self.computed_lane(place, &operands)?)?;
         Some(CheckedCall { helper, operands })
@@ -2034,9 +2033,10 @@ impl<'a> BodyEmitter<'a> {
                 value,
                 compare_expected,
             } => self.render_atomic_op(*op, buffer, index, value, compare_expected.as_deref()),
-            Rvalue::Len(_) | Rvalue::Ref(_) | Rvalue::Phi(_) => Err(CodegenError::Internal(
-                format!("WGSL backend: rvalue {:?} not yet supported", rvalue),
-            )),
+            Rvalue::Len(_) | Rvalue::Ref(_) => Err(CodegenError::Internal(format!(
+                "WGSL backend: rvalue {:?} not yet supported",
+                rvalue
+            ))),
         }
     }
 
@@ -2192,8 +2192,7 @@ fn computes_new_value(rvalue: &Rvalue) -> bool {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::AtomicOp { .. }
-        | Rvalue::Aggregate(..)
-        | Rvalue::Phi(_) => false,
+        | Rvalue::Aggregate(..) => false,
     }
 }
 

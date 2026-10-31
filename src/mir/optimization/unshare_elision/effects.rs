@@ -326,9 +326,6 @@ impl ProgramBuilder<'_> {
                 let operands = [buffer, index, value].into_iter().chain(compare_expected);
                 self.operand_reads(operands.map(|operand| &**operand))
             }
-            Rvalue::Phi(incoming) => {
-                self.operand_reads(incoming.iter().map(|(operand, _)| operand))
-            }
         }
     }
 

@@ -342,7 +342,6 @@ impl<'a> Flow<'a> {
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
             | Rvalue::Aggregate(..)
-            | Rvalue::Phi(_)
             | Rvalue::AtomicOp { .. } => Vec::new(),
         };
         state.retain(|fact| !fact.mentions(dest.0));

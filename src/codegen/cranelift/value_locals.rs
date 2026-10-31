@@ -305,8 +305,7 @@ impl<'a> FunctionTranslator<'a> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => return Ok(()),
+            | Rvalue::AtomicOp { .. } => return Ok(()),
         };
         for operand in operands {
             if type_ctx.values.operand_value(operand)?.is_some() {
@@ -510,8 +509,7 @@ impl<'a> FunctionTranslator<'a> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => Err(CodegenError::Internal(format!(
+            | Rvalue::AtomicOp { .. } => Err(CodegenError::Internal(format!(
                 "`{rvalue}` is assigned to a value held as its bytes"
             ))),
         }

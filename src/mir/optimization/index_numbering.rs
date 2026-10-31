@@ -66,8 +66,7 @@ impl Expression {
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
             | Rvalue::AtomicOp { .. }
-            | Rvalue::Aggregate(..)
-            | Rvalue::Phi(_) => None,
+            | Rvalue::Aggregate(..) => None,
         }
     }
 

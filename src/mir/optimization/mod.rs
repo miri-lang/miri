@@ -1,25 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! MIR optimization passes and driver.
+//! MIR-to-MIR passes over lowered bodies.
 //!
-//! This module provides an iterative optimization framework for MIR transformations.
-//! Passes are run in sequence until a fixpoint is reached (no pass makes changes)
-//! or a maximum iteration count is exceeded.
-//!
-//! Perceus RC insertion is intentionally *not* part of the fixpoint loop. It runs
-//! exactly once, after all optimizations are complete, via [`insert_rc`]. Running
-//! Perceus inside the loop would cause duplicate IncRef/DecRef insertions and allow
-//! later passes (DCE, copy propagation) to invalidate the RC annotations.
-//!
-//! # Available Passes
-//!
-//! | Pass | Description |
-//! |------|-------------|
-//! | [`SimplifyCfg`] | Removes empty blocks, threads unconditional jumps |
-//! | [`ConstantPropagation`] | Replaces variables with known constant values |
-//! | [`CopyPropagation`] | Eliminates redundant copy operations |
-//! | [`DeadCodeElimination`] | Removes unused assignments and unreachable code |
+//! Perceus RC insertion runs exactly once per body via [`insert_rc`]; every
+//! other pass here reads or rewrites the reference-counted body it leaves.
 //!
 //! [`owned_params::decide_owned_parameters`] runs over the whole program before
 //! Perceus and decides which parameters each function takes over from its
@@ -35,23 +20,8 @@
 //! generation reads that header once before the loop.
 //! [`in_bounds::record_in_bounds`] runs after it, and records each access a
 //! loop guard proves in bounds, which code generation emits unchecked.
-//!
-//! # Usage
-//!
-//! ```no_run
-//! use miri::mir::optimization::{optimize, insert_rc};
-//! use miri::mir::Body;
-//!
-//! fn example(body: &mut Body) {
-//!     optimize(body);   // Runs all passes to fixpoint
-//!     insert_rc(body);  // Insert RC operations exactly once, after optimizations
-//! }
-//! ```
 
 pub mod branch_threading;
-pub mod constant_propagation;
-pub mod copy_propagation;
-pub mod dead_code;
 pub mod in_bounds;
 pub mod index_numbering;
 mod lent_arguments;
@@ -61,18 +31,13 @@ pub mod loop_versioning;
 pub mod owned_params;
 pub mod perceus;
 pub mod rc_elision;
-pub mod simplify_cfg;
 pub mod stable_collections;
 pub mod unshare_elision;
 
 use crate::mir::{Body, ExecutionModel};
-use constant_propagation::ConstantPropagation;
-use copy_propagation::CopyPropagation;
-use dead_code::DeadCodeElimination;
 use perceus::Perceus;
 use rc_elision::RcElision;
 pub use rc_elision::{count_all_rc_ops, count_rc_ops};
-use simplify_cfg::SimplifyCfg;
 use unshare_elision::UnshareElision;
 
 /// Defines an optimization pass for MIR transformations.
@@ -111,61 +76,16 @@ pub trait OptimizationPass {
     /// Apply the optimization pass to the function body.
     ///
     /// Returns `true` if any modifications were made to the body.
-    /// The optimizer uses this to determine when a fixpoint has been reached.
     fn run(&mut self, body: &mut Body) -> bool;
 
     /// Human-readable name for this pass, used in debugging and logging.
     fn name(&self) -> &'static str;
 }
 
-/// Run all optimization passes on the MIR body until a fixpoint is reached.
-///
-/// Passes are applied in a fixed order (SimplifyCfg → ConstantPropagation →
-/// CopyPropagation → DeadCodeElimination) and the sequence repeats until
-/// no pass makes changes or `MAX_ITERATIONS` (10) is reached.
-///
-/// Perceus RC insertion is **not** included here. Call [`insert_rc`] after
-/// this function to insert IncRef/DecRef exactly once on the optimized body.
-///
-/// # Arguments
-///
-/// * `body` - The MIR function body to optimize (mutated in place)
-///
-/// Note: This function is currently not invoked in the primary compilation pipeline.
-/// The early optimization passes in this module and SSA construction in `crate::mir::ssa`
-/// operate under specific assumptions (e.g. constant propagation tracks single constant
-/// assignments without full reaching-definition analysis, and SSA renaming targets whole
-/// local assignments).
-pub fn optimize(body: &mut Body) {
-    let mut passes: Vec<Box<dyn OptimizationPass>> = vec![
-        Box::new(SimplifyCfg),
-        Box::new(ConstantPropagation),
-        Box::new(CopyPropagation),
-        Box::new(DeadCodeElimination),
-    ];
-
-    let mut changed = true;
-    let mut iteration = 0;
-    const MAX_ITERATIONS: usize = 10;
-
-    while changed && iteration < MAX_ITERATIONS {
-        changed = false;
-        iteration += 1;
-
-        for pass in &mut passes {
-            if pass.run(body) {
-                changed = true;
-            }
-        }
-    }
-}
-
 /// Insert Perceus reference-counting operations into the MIR body.
 ///
-/// This must be called exactly once, after all optimization passes have
-/// converged. Running RC insertion inside the fixpoint loop would cause
-/// duplicate IncRef/DecRef and allow later passes to invalidate the RC
-/// annotations.
+/// This must be called exactly once per body: a second run would insert
+/// duplicate IncRef/DecRef.
 ///
 /// A body that runs on a GPU is left alone. There is no heap to count
 /// references into: every value a kernel holds lives in a register or in a

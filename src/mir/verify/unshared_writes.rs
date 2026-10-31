@@ -350,8 +350,7 @@ impl<'a> Model<'a> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => Vec::new(),
+            | Rvalue::AtomicOp { .. } => Vec::new(),
         }
     }
 
@@ -816,7 +815,6 @@ fn read_places(rvalue: &Rvalue) -> Vec<&Place> {
         Rvalue::Aggregate(_, operands) | Rvalue::MathIntrinsic(_, operands) => {
             operands.iter().collect()
         }
-        Rvalue::Phi(arms) => arms.iter().map(|(operand, _)| operand).collect(),
         Rvalue::AtomicOp {
             buffer,
             value,

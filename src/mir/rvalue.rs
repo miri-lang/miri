@@ -96,10 +96,6 @@ pub enum Rvalue {
     /// - Map: operands alternate key1, val1, key2, val2, ...
     /// - Struct: operands are field values in declaration order
     Aggregate(AggregateKind, Vec<Operand>),
-    /// SSA Phi node: merges values from predecessor blocks.
-    /// Accesses predecessor blocks by index (usize).
-    /// Vector of (value, predecessor_block_index).
-    Phi(Vec<(Operand, crate::mir::BasicBlock)>),
 }
 
 fn write_comma_separated(f: &mut fmt::Formatter<'_>, ops: &[Operand]) -> fmt::Result {
@@ -210,16 +206,6 @@ impl fmt::Display for Rvalue {
                 write!(f, ")")
             }
             Rvalue::Aggregate(kind, ops) => write_aggregate(f, kind, ops),
-            Rvalue::Phi(args) => {
-                write!(f, "phi(")?;
-                if let Some((first, rest)) = args.split_first() {
-                    write!(f, "[ {}, {} ]", first.0, first.1)?;
-                    for (op, block) in rest {
-                        write!(f, ", [ {}, {} ]", op, block)?;
-                    }
-                }
-                write!(f, ")")
-            }
         }
     }
 }

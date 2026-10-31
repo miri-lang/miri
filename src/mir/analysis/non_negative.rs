@@ -121,7 +121,6 @@ fn is_non_negative_rvalue(rvalue: &Rvalue, body: &Body, known: &HashSet<usize>) 
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
         | Rvalue::Aggregate(..)
-        | Rvalue::Phi(_)
         | Rvalue::AtomicOp { .. } => false,
     }
 }

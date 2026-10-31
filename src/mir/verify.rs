@@ -996,8 +996,7 @@ fn stores_place_in_a_value(dest: &Place, rvalue: &Rvalue, place: &Place) -> bool
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => false,
+        | Rvalue::AtomicOp { .. } => false,
     }
 }
 
@@ -1293,8 +1292,7 @@ fn reads_place_without_owning(rvalue: &Rvalue, place: &Place) -> bool {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => false,
+        | Rvalue::AtomicOp { .. } => false,
     }
 }
 
@@ -1322,8 +1320,7 @@ fn rvalue_is_owning(rvalue: &Rvalue) -> bool {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => false,
+        | Rvalue::AtomicOp { .. } => false,
     }
 }
 
@@ -1356,8 +1353,7 @@ fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(_, _)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => moved_bare_locals(rvalue),
+        | Rvalue::AtomicOp { .. } => moved_bare_locals(rvalue),
     }
 }
 
@@ -1378,8 +1374,7 @@ fn moved_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
         | Rvalue::AtomicOp { .. }
         | Rvalue::Ref(_)
         | Rvalue::Len(_)
-        | Rvalue::GpuIntrinsic(_)
-        | Rvalue::Phi(_) => Vec::new(),
+        | Rvalue::GpuIntrinsic(_) => Vec::new(),
     }
 }
 
@@ -1718,8 +1713,7 @@ impl HostRead {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => HostRead::Operand(dest.local),
+            | Rvalue::AtomicOp { .. } => HostRead::Operand(dest.local),
         })
     }
 

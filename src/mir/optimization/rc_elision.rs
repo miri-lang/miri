@@ -366,8 +366,7 @@ fn stored_operands(rvalue: &Rvalue) -> &[Operand] {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => &[],
+        | Rvalue::AtomicOp { .. } => &[],
     }
 }
 
@@ -383,8 +382,7 @@ fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => &mut [],
+        | Rvalue::AtomicOp { .. } => &mut [],
     }
 }
 

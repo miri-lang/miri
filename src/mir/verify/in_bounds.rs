@@ -410,7 +410,6 @@ impl<'a> Check<'a> {
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
             | Rvalue::Aggregate(..)
-            | Rvalue::Phi(_)
             | Rvalue::AtomicOp { .. } => Vec::new(),
         }
     }
@@ -698,7 +697,6 @@ fn keeps_non_negative(body: &Body, rvalue: &Rvalue, known: &HashSet<usize>) -> b
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
         | Rvalue::Aggregate(..)
-        | Rvalue::Phi(_)
         | Rvalue::AtomicOp { .. } => false,
     }
 }

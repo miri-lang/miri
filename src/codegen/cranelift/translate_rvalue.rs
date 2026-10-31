@@ -171,11 +171,6 @@ impl<'a> FunctionTranslator<'a> {
                 Self::translate_math_intrinsic(builder, ctx, *intrinsic, args, locals, type_ctx)
             }
 
-            Rvalue::Phi(_) => Err(CodegenError::Internal(
-                "Phi nodes must be eliminated before codegen. Run SSA destruction pass."
-                    .to_string(),
-            )),
-
             Rvalue::AtomicOp { .. } => Err(CodegenError::Internal(
                 "Atomic operations are GPU-only and not supported in CPU backend".to_string(),
             )),

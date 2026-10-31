@@ -196,11 +196,6 @@ pub trait Visitor {
                     self.visit_operand(op, location);
                 }
             }
-            Rvalue::Phi(args) => {
-                for (op, _) in args {
-                    self.visit_operand(op, location);
-                }
-            }
             Rvalue::AtomicOp {
                 buffer,
                 index,
@@ -412,11 +407,6 @@ pub trait MutVisitor {
             }
             Rvalue::Aggregate(_, ops) => {
                 for op in ops {
-                    self.visit_operand(op, location);
-                }
-            }
-            Rvalue::Phi(args) => {
-                for (op, _) in args {
                     self.visit_operand(op, location);
                 }
             }

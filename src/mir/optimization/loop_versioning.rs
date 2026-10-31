@@ -39,7 +39,7 @@
 //! closure captures; no list is guarded that the bound simply measures; and
 //! the loop is innermost, indexes a list whose header it or a loop around it
 //! leaves unchanged, calls nothing but runtime entry points that leave every
-//! header as it was, holds no `Phi`, nor do the blocks it exits to, and is
+//! header as it was, and is
 //! small: at most [`MAX_BLOCKS`] blocks, [`MAX_STATEMENTS`] statements and
 //! [`MAX_GUARDS`] lists, one guard each.
 //!
@@ -56,7 +56,7 @@
 //! already carries either record is left alone, since copying would move the
 //! blocks they name. A body that runs on a GPU is left alone.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
@@ -182,7 +182,7 @@ impl<'a> BodyFacts<'a> {
     }
 
     /// Whether `found` may be copied: small, entered only through its
-    /// header, free of `Phi`, and calling nothing that may change a header.
+    /// header, and calling nothing that may change a header.
     fn is_copyable(&self, found: &NaturalLoop) -> bool {
         let statements: usize = (found.blocks.iter())
             .filter_map(|block| self.body.basic_blocks.get(*block))
@@ -192,7 +192,6 @@ impl<'a> BodyFacts<'a> {
             && found.blocks.len() <= MAX_BLOCKS
             && statements <= MAX_STATEMENTS
             && is_single_entry(found, &self.predecessors)
-            && !holds_phi(self.body, found)
             && calls_keep_headers(self.body, found)
     }
 
@@ -324,7 +323,6 @@ fn copied_local(rvalue: &Rvalue) -> Option<Local> {
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
         | Rvalue::Aggregate(..)
-        | Rvalue::Phi(_)
         | Rvalue::AtomicOp { .. } => None,
     }
 }
@@ -402,25 +400,6 @@ fn is_innermost(found: &NaturalLoop, loops: &[NaturalLoop]) -> bool {
     !loops
         .iter()
         .any(|other| other.header != found.header && found.blocks.contains(&other.header))
-}
-
-/// Whether a block of `found`, or a block it exits to, holds a `Phi`: one
-/// names the blocks it is entered from, which a copy would add to.
-fn holds_phi(body: &Body, found: &NaturalLoop) -> bool {
-    let exits = (found.blocks.iter())
-        .flat_map(|block| successors_of(body, *block))
-        .filter(|successor| !found.blocks.contains(successor));
-    let blocks: BTreeSet<usize> = found.blocks.iter().copied().chain(exits).collect();
-    (blocks.iter())
-        .filter_map(|block| body.basic_blocks.get(*block))
-        .flat_map(|data| &data.statements)
-        .any(|statement| {
-            matches!(
-                &statement.kind,
-                StatementKind::Assign(_, Rvalue::Phi(_))
-                    | StatementKind::Reassign(_, Rvalue::Phi(_))
-            )
-        })
 }
 
 fn successors_of(body: &Body, block: usize) -> Vec<usize> {

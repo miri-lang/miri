@@ -147,8 +147,7 @@ fn statement_seams(
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => Vec::new(),
+        | Rvalue::AtomicOp { .. } => Vec::new(),
     }
 }
 
@@ -401,8 +400,7 @@ fn absent_writes_only(body: &Body, local: crate::mir::Local) -> bool {
                         | Rvalue::Len(_)
                         | Rvalue::GpuIntrinsic(_)
                         | Rvalue::MathIntrinsic(..)
-                        | Rvalue::AtomicOp { .. }
-                        | Rvalue::Phi(_) => false,
+                        | Rvalue::AtomicOp { .. } => false,
                     }
             }
             StatementKind::Assign(..)
@@ -597,7 +595,6 @@ fn replace_statement_operand(kind: &mut StatementKind, operand: usize, replaceme
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => {}
+        | Rvalue::AtomicOp { .. } => {}
     }
 }

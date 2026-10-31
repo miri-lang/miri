@@ -16,7 +16,7 @@
 //!   address is taken — through value steps and class fields only;
 //! - the local is never rebound, released, written into a call's result,
 //!   handed to a runtime entry point that keeps it or asks whether it is
-//!   shared, passed `out`, launched over or merged in a phi; and unless its
+//!   shared, passed `out` or launched over; and unless its
 //!   type is a reference by design, never written through nor handed to any
 //!   callee but a runtime entry point that only reads it — except that a value
 //!   a write copies (`type_facts::unsharing`) may be lent whole, by copy, to a
@@ -558,12 +558,6 @@ fn rvalue_accesses(rvalue: &Rvalue, accesses: &mut Vec<(Local, Access)>) {
                 .iter()
                 .for_each(|operand| operand_accesses(operand, accesses));
         }
-        // Perceus funds no operand of a phi.
-        Rvalue::Phi(arms) => accesses.extend(
-            arms.iter()
-                .filter_map(|(operand, _)| operand.place())
-                .map(|place| (place.local, Access::Handed)),
-        ),
         Rvalue::Ref(place) => {
             push_place(accesses, place, Access::AddressTaken, Access::AddressTaken)
         }

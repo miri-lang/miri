@@ -168,8 +168,7 @@ fn spelled_types(rvalue: &Rvalue) -> Vec<&Type> {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => {}
+        | Rvalue::AtomicOp { .. } => {}
     }
     types
 }

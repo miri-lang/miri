@@ -398,8 +398,7 @@ fn refused_by_statement(statement: &Statement, is_read: impl Fn(Local) -> bool) 
     }
 }
 
-/// The locals `rvalue` takes the address of, hands to a GPU operation, or
-/// merges in a phi.
+/// The locals `rvalue` takes the address of or hands to a GPU operation.
 fn refused_by_rvalue(rvalue: &Rvalue) -> Vec<Local> {
     match rvalue {
         Rvalue::Ref(place) => vec![place.local],
@@ -408,13 +407,6 @@ fn refused_by_rvalue(rvalue: &Rvalue) -> Vec<Local> {
             mentions.visit_rvalue(rvalue, BasicBlock(0));
             mentions.locals
         }
-        // Perceus funds no operand of a phi, so a borrow must not flow
-        // through one.
-        Rvalue::Phi(arms) => arms
-            .iter()
-            .filter_map(|(operand, _)| operand.place())
-            .map(|place| place.local)
-            .collect(),
         Rvalue::Use(_)
         | Rvalue::BinaryOp(..)
         | Rvalue::UnaryOp(..)
@@ -688,7 +680,6 @@ fn rvalue_changes(rvalue: &Rvalue, owners: &[Local]) -> bool {
         Rvalue::Aggregate(_, operands) | Rvalue::MathIntrinsic(_, operands) => {
             operands.iter().any(operand_changes)
         }
-        Rvalue::Phi(arms) => arms.iter().any(|(operand, _)| operand_changes(operand)),
         Rvalue::Ref(place) => owners.contains(&place.local),
         Rvalue::Len(_) => false,
         Rvalue::GpuIntrinsic(_) | Rvalue::AtomicOp { .. } => {

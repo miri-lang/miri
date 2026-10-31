@@ -543,8 +543,7 @@ impl<'a> FunctionTranslator<'a> {
             | Rvalue::Len(_)
             | Rvalue::GpuIntrinsic(_)
             | Rvalue::MathIntrinsic(..)
-            | Rvalue::AtomicOp { .. }
-            | Rvalue::Phi(_) => return Ok(()),
+            | Rvalue::AtomicOp { .. } => return Ok(()),
         };
         if !matches!(source_kind, TypeKind::Option(_))
             || Self::is_absent_value(rvalue)

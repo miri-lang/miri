@@ -4489,11 +4489,6 @@ impl Pipeline {
                     Self::narrow_operand_floats(a);
                 }
             }
-            mir::Rvalue::Phi(pairs) => {
-                for (o, _) in pairs {
-                    Self::narrow_operand_floats(o);
-                }
-            }
             mir::Rvalue::Ref(_) | mir::Rvalue::Len(_) | mir::Rvalue::GpuIntrinsic(_) => {}
             mir::Rvalue::AtomicOp {
                 buffer,

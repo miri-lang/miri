@@ -185,19 +185,6 @@ fn test_a_loop_pushing_onto_its_list_is_left_alone() {
 }
 
 #[test]
-fn test_a_loop_holding_a_phi_is_left_alone() {
-    let mut body = loop_bounded_by(BinOp::Lt);
-    let phi = Rvalue::Phi(vec![
-        (int(0), BasicBlock(0)),
-        (int(1), BasicBlock(LOOP_BODY)),
-    ]);
-    body.basic_blocks[LOOP_HEADER]
-        .statements
-        .insert(0, assign(Place::new(SPARE), phi));
-    assert!(is_left_alone(body));
-}
-
-#[test]
 fn test_a_gpu_body_is_left_alone() {
     let mut body = loop_bounded_by(BinOp::Lt);
     body.execution_model = ExecutionModel::GpuKernel;

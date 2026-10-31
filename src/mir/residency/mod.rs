@@ -168,7 +168,6 @@ pub(crate) fn host_read_operands(rvalue: &Rvalue) -> Vec<&Operand> {
         Rvalue::MathIntrinsic(_, operands) | Rvalue::Aggregate(_, operands) => {
             operands.iter().collect()
         }
-        Rvalue::Phi(incoming) => incoming.iter().map(|(operand, _)| operand).collect(),
         Rvalue::Ref(_) | Rvalue::Len(_) | Rvalue::GpuIntrinsic(_) | Rvalue::AtomicOp { .. } => {
             Vec::new()
         }

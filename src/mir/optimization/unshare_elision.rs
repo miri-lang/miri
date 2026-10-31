@@ -357,8 +357,7 @@ fn fresh_source(rvalue: &Rvalue) -> FreshSource<'_> {
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => FreshSource::Neither,
+        | Rvalue::AtomicOp { .. } => FreshSource::Neither,
     }
 }
 

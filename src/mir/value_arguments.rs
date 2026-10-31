@@ -433,8 +433,7 @@ fn referenced_root(rvalue: &Rvalue) -> Option<Local> {
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
         | Rvalue::AtomicOp { .. }
-        | Rvalue::Aggregate(..)
-        | Rvalue::Phi(_) => None,
+        | Rvalue::Aggregate(..) => None,
     }
 }
 

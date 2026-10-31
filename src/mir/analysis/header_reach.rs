@@ -360,15 +360,12 @@ fn statement_flows(
 }
 
 /// The places whose value `rvalue` may hand on: every operand of a copy, a
-/// cast, a phi or an aggregate, and the place a reference points at.
+/// cast or an aggregate, and the place a reference points at.
 fn carried_places(rvalue: &Rvalue) -> Vec<&Place> {
     match rvalue {
         Rvalue::Use(operand) => operand.place().into_iter().collect(),
         Rvalue::Cast(operand, _) => operand.place().into_iter().collect(),
         Rvalue::Aggregate(_, operands) => operands.iter().filter_map(Operand::place).collect(),
-        Rvalue::Phi(incoming) => (incoming.iter())
-            .filter_map(|(operand, _)| operand.place())
-            .collect(),
         Rvalue::Ref(place) => vec![place],
         Rvalue::BinaryOp(..)
         | Rvalue::UnaryOp(..)
@@ -537,8 +534,7 @@ fn is_uncounted_definition(
         | Rvalue::Len(_)
         | Rvalue::GpuIntrinsic(_)
         | Rvalue::MathIntrinsic(..)
-        | Rvalue::AtomicOp { .. }
-        | Rvalue::Phi(_) => true,
+        | Rvalue::AtomicOp { .. } => true,
     }
 }
 
