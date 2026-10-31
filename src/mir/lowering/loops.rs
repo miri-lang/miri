@@ -752,7 +752,7 @@ fn emit_loop_body_element_load(
         let mut indexed_place = Place::new(list_local);
         indexed_place
             .projection
-            .push(crate::mir::PlaceElem::Index(idx_var));
+            .push(crate::mir::PlaceElem::index(idx_var));
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(
                 Place::new(loop_var),

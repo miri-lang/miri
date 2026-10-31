@@ -69,16 +69,16 @@ fn a_tuple_field_reaches_its_element() {
 #[test]
 fn a_collection_index_reaches_its_element() {
     let body = body();
-    let element = place(3, vec![PlaceElem::Index(Local(2))]);
+    let element = place(3, vec![PlaceElem::index(Local(2))]);
     assert_eq!(declared(&body, &element), Some(TypeKind::String));
 }
 
 #[test]
 fn a_tuple_picked_by_a_value_reaches_its_element() {
     let body = body();
-    let element = place(4, vec![PlaceElem::Index(Local(2))]);
+    let element = place(4, vec![PlaceElem::index(Local(2))]);
     assert_eq!(declared(&body, &element), Some(TypeKind::String));
-    let class_element = place(5, vec![PlaceElem::Index(Local(2))]);
+    let class_element = place(5, vec![PlaceElem::index(Local(2))]);
     assert_eq!(declared(&body, &class_element), Some(TypeKind::String));
 }
 

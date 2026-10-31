@@ -144,7 +144,7 @@ fn resolve_place_mir_type(place: &Place, body: &Body) -> Option<MirType> {
                 // Pointer target type is not accessible; cannot resolve further.
                 return None;
             }
-            PlaceElem::Index(_) => {
+            PlaceElem::Index(_, _) => {
                 // Extract element type from collection.
                 current = match current {
                     MirType::Array(elem) | MirType::List(elem) | MirType::Set(elem) => *elem,

@@ -156,7 +156,7 @@ fn is_at_fixed_offset_of_value_root(body: &Body, place: &Place) -> bool {
         .is_some_and(|decl| body.value_layout(&decl.ty.kind).is_some())
         && place.projection.iter().all(|elem| match elem {
             PlaceElem::Field(_) => true,
-            PlaceElem::Deref | PlaceElem::Index(_) => false,
+            PlaceElem::Deref | PlaceElem::Index(_, _) => false,
         })
 }
 

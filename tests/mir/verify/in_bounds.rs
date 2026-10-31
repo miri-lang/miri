@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Tests for the check that every access recorded in bounds is proven so.
-//! Each entry is forged onto a body that does not prove it.
+//! Tests for the check that every index marked proven is proven so. Each
+//! mark is forged onto a body that does not prove it.
 
 use crate::mir::optimization::in_bounds::{
     compare, loop_under_a_gap, loop_under_a_guard, proofs_of, reading_at_an_offset, stepped,
@@ -13,26 +13,31 @@ use crate::mir::optimization::stable_collections::{
     LOOP_HEADER, SPARE, SPARE_LIST,
 };
 use miri::error::syntax::Span;
+use miri::mir::element_abi::pass_elements_by_address;
 use miri::mir::optimization::in_bounds::record_in_bounds;
 use miri::mir::optimization::stable_collections::record_stable_collections;
+use miri::mir::proven_indexes::{mark_in_bounds, proven_indexes};
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::verify_in_bounds;
 use miri::mir::{
-    BasicBlock, BasicBlockData, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, Rvalue,
-    StatementKind, TerminatorKind,
+    BasicBlock, BasicBlockData, BinOp, Body, Discriminant, InBounds, Local, Operand, Place,
+    PlaceElem, Rvalue, StatementKind, TerminatorKind,
 };
 
 /// `body` with its stable collections recorded and `proof` forged on.
 fn forged(mut body: Body, proof: InBounds) -> Body {
     record_stable_collections(&mut body);
-    body.in_bounds = vec![proof];
+    assert!(
+        mark_in_bounds(&mut body, proof),
+        "nothing indexes the list there"
+    );
     body
 }
 
 fn read_at(position: usize) -> InBounds {
     InBounds {
         block: BasicBlock(LOOP_BODY),
-        statement_index: position,
+        position: position,
         collection: LIST,
         index: INDEX,
     }
@@ -50,7 +55,7 @@ fn test_an_entry_the_pass_made_has_no_violation() {
     let mut body = loop_over_a_list();
     record_stable_collections(&mut body);
     record_in_bounds(&mut body);
-    assert_eq!(body.in_bounds.len(), 1);
+    assert_eq!(proven_indexes(&body).len(), 1);
     assert_eq!(messages(&body), Vec::<String>::new());
 }
 
@@ -103,7 +108,10 @@ fn test_an_entry_against_a_bound_that_is_not_the_length_is_flagged() {
 #[test]
 fn test_an_entry_no_stable_record_covers_is_flagged() {
     let mut body = loop_over_a_list();
-    body.in_bounds = vec![read_at(0)];
+    assert!(
+        mark_in_bounds(&mut body, read_at(0)),
+        "nothing indexes the list there"
+    );
     let found = messages(&body);
     assert!(
         found.iter().any(|m| m.contains("no stable record")),
@@ -111,13 +119,51 @@ fn test_an_entry_no_stable_record_covers_is_flagged() {
     );
 }
 
+/// A proven index past the first projection reaches a collection held
+/// inside another value, whose length no guard of the body bounds.
 #[test]
-fn test_an_entry_where_nothing_indexes_the_list_is_flagged() {
-    let found = messages(&forged(loop_over_a_list(), read_at(1)));
+fn test_a_proven_index_below_another_projection_is_flagged() {
+    let mut body = loop_over_a_list();
+    record_stable_collections(&mut body);
+    record_in_bounds(&mut body);
+    let StatementKind::Assign(_, Rvalue::Use(Operand::Copy(read))) =
+        &mut body.basic_blocks[LOOP_BODY].statements[0].kind
+    else {
+        panic!("the loop body reads the list first:\n{body}");
+    };
+    read.projection.insert(0, PlaceElem::Field(0));
+    let found = messages(&body);
     assert!(
-        found.iter().any(|m| m.contains("nothing there indexes it")),
+        found.iter().any(|m| m.contains("does not index")),
         "{found:?}"
     );
+}
+
+/// The check runs on the bodies code generation receives: a proof marked
+/// after the element ABI rewrites a body is re-derived like any other.
+#[test]
+fn test_an_unproven_index_marked_after_the_element_abi_is_flagged() {
+    let mut body = loop_over_a_list();
+    body.basic_blocks[LOOP_HEADER].statements[0] = assign(Place::new(LENGTH), Rvalue::Use(int(3)));
+    record_stable_collections(&mut body);
+    pass_elements_by_address(&mut body).expect("the element ABI applies");
+    assert!(mark_in_bounds(&mut body, read_at(0)), "{body}");
+    let found = messages(&body);
+    assert!(
+        found.iter().any(|m| m.contains("no guard proves it")),
+        "{found:?}"
+    );
+}
+
+/// A proof the pass made survives the element ABI and still checks clean.
+#[test]
+fn test_a_proof_carried_through_the_element_abi_has_no_violation() {
+    let mut body = loop_over_a_list();
+    record_stable_collections(&mut body);
+    record_in_bounds(&mut body);
+    pass_elements_by_address(&mut body).expect("the element ABI applies");
+    assert_eq!(proven_indexes(&body).len(), 1, "{body}");
+    assert_eq!(messages(&body), Vec::<String>::new());
 }
 
 /// Whether the verifier flags the read of the guarded test loop that `body`
@@ -133,7 +179,7 @@ fn test_an_entry_proven_by_a_bound_no_greater_than_the_length_has_no_violation()
     let mut body = loop_under_a_guard(compare(BinOp::Le, BOUND, LENGTH), BinOp::Lt);
     record_stable_collections(&mut body);
     record_in_bounds(&mut body);
-    assert_eq!(body.in_bounds.len(), 1);
+    assert_eq!(proven_indexes(&body).len(), 1);
     assert_eq!(messages(&body), Vec::<String>::new());
 }
 
@@ -142,7 +188,7 @@ fn test_an_entry_proven_by_a_bound_below_the_length_has_no_violation() {
     let mut body = loop_under_a_guard(compare(BinOp::Lt, BOUND, LENGTH), BinOp::Le);
     record_stable_collections(&mut body);
     record_in_bounds(&mut body);
-    assert_eq!(body.in_bounds.len(), 1);
+    assert_eq!(proven_indexes(&body).len(), 1);
     assert_eq!(messages(&body), Vec::<String>::new());
 }
 
@@ -215,7 +261,7 @@ fn test_an_entry_after_a_call_between_the_guard_and_the_loop_is_flagged() {
 fn checks_clean(mut body: Body, expected: usize) {
     record_stable_collections(&mut body);
     record_in_bounds(&mut body);
-    assert_eq!(body.in_bounds.len(), expected, "{body}");
+    assert_eq!(proven_indexes(&body).len(), expected, "{body}");
     assert_eq!(messages(&body), Vec::<String>::new());
 }
 
@@ -357,7 +403,7 @@ fn test_an_entry_resting_on_an_order_of_a_local_before_its_last_write_is_flagged
     };
     let proof = InBounds {
         block: BasicBlock(READ_ONE_PAST),
-        statement_index: 1,
+        position: 1,
         collection: LIST,
         index: ONE_PAST,
     };

@@ -807,7 +807,7 @@ fn is_value_step(
     definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
     match step {
-        PlaceElem::Index(_) => matches!(
+        PlaceElem::Index(_, _) => matches!(
             container.as_builtin_collection(),
             Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
         ),

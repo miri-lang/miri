@@ -535,7 +535,7 @@ fn lower_collection_element_access(
     let mut indexed_place = Place::new(obj_local);
     indexed_place
         .projection
-        .push(crate::mir::PlaceElem::Index(index_local));
+        .push(crate::mir::PlaceElem::index(index_local));
 
     let elem_ty = ctx
         .type_checker
@@ -1217,7 +1217,7 @@ fn emit_collection_set(
     let mut indexed_place = Place::new(obj_local);
     indexed_place
         .projection
-        .push(crate::mir::PlaceElem::Index(index_local));
+        .push(crate::mir::PlaceElem::index(index_local));
 
     let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
 

@@ -230,7 +230,7 @@ impl LoweredPath {
             match step {
                 LoweredStep::Root(_) => {}
                 LoweredStep::Field(idx, _) => place.projection.push(PlaceElem::Field(*idx)),
-                LoweredStep::Element(index, _) => place.projection.push(PlaceElem::Index(*index)),
+                LoweredStep::Element(index, _) => place.projection.push(PlaceElem::index(*index)),
                 LoweredStep::Entry(key, value_ty) => {
                     let map_op = Operand::Copy(place);
                     let key_op = Operand::Copy(key.place.clone());
@@ -259,7 +259,7 @@ impl LoweredPath {
                     ty
                 }
                 LoweredStep::Element(index, ty) => {
-                    place.projection.push(PlaceElem::Index(index));
+                    place.projection.push(PlaceElem::index(index));
                     ty
                 }
                 LoweredStep::Entry(key, value_ty) => {
@@ -677,7 +677,7 @@ fn emit_unshare(
     // An element slot releases the element it replaces as part of the store,
     // the way every element write does; any other place releases it through
     // `Reassign`.
-    let kind = if matches!(place.projection.last(), Some(PlaceElem::Index(_))) {
+    let kind = if matches!(place.projection.last(), Some(PlaceElem::Index(_, _))) {
         StatementKind::Assign(place.clone(), write_back)
     } else {
         StatementKind::Reassign(place.clone(), write_back)

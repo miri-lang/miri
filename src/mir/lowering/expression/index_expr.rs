@@ -49,7 +49,7 @@ pub(crate) fn lower_index_expr(
     let index_local = ensure_index_local(ctx, index_expr, index_operand);
 
     let mut indexed_place = obj_place.clone();
-    indexed_place.projection.push(PlaceElem::Index(index_local));
+    indexed_place.projection.push(PlaceElem::index(index_local));
 
     finish_index_read(
         ctx,

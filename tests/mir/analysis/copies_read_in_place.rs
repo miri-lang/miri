@@ -27,7 +27,7 @@ fn element_copies(body: &Body) -> Vec<Local> {
         .filter_map(|statement| match &statement.kind {
             StatementKind::Assign(dest, Rvalue::Use(Operand::Copy(source)))
                 if dest.projection.is_empty()
-                    && matches!(source.projection.last(), Some(PlaceElem::Index(_))) =>
+                    && matches!(source.projection.last(), Some(PlaceElem::Index(_, _))) =>
             {
                 Some(dest.local)
             }

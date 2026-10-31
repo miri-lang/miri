@@ -991,7 +991,7 @@ fn assign_to_index_array(
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
     let mut target_place = obj_place;
-    target_place.projection.push(PlaceElem::Index(index_local));
+    target_place.projection.push(PlaceElem::index(index_local));
 
     let val = match val {
         Operand::Move(p) => Operand::Copy(p),

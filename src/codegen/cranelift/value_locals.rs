@@ -80,7 +80,7 @@ impl<'a> FunctionTranslator<'a> {
         if place
             .projection
             .iter()
-            .any(|elem| matches!(elem, PlaceElem::Index(_)))
+            .any(|elem| matches!(elem, PlaceElem::Index(_, _)))
         {
             return Err(CodegenError::Internal(format!(
                 "`{place}` picks an element of a value by a value, which has no fixed address"
@@ -232,7 +232,7 @@ impl<'a> FunctionTranslator<'a> {
                     let next = builder.ins().iadd_imm_s(address, i64::from(field.offset));
                     (next, &field.repr)
                 }
-                PlaceElem::Index(index) => {
+                PlaceElem::Index(index, _) => {
                     let index_var = locals.get(index).ok_or_else(|| {
                         CodegenError::Internal(format!("Unknown index local: {index:?}"))
                     })?;
@@ -780,7 +780,7 @@ fn locate<'l>(
             }
             // An element picked by a value has no offset known here; only
             // what it holds is.
-            PlaceElem::Index(_) => (0, uniform_element(outer)?.1),
+            PlaceElem::Index(_, _) => (0, uniform_element(outer)?.1),
             PlaceElem::Deref => return Err(projection_error(elem, "a value held as its bytes")),
         };
         spot = ValueSpot::of(offset + field_offset, repr, elem)?;

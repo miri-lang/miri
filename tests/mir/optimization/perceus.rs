@@ -72,7 +72,7 @@ fn field(local: usize, index: usize) -> Place {
 fn index(local: usize, index_local: usize) -> Place {
     Place {
         local: Local(local),
-        projection: vec![PlaceElem::Index(Local(index_local))],
+        projection: vec![PlaceElem::index(Local(index_local))],
     }
 }
 
@@ -1183,7 +1183,7 @@ fn probe() String
         all_statements(&body).iter().any(|kind| matches!(
             kind,
             StatementKind::IncRef(p)
-                if p.projection.iter().any(|e| matches!(e, PlaceElem::Index(_)))
+                if p.projection.iter().any(|e| matches!(e, PlaceElem::Index(_, _)))
         )),
         "the element read out of the tuple must be retained: {:?}",
         all_statements(&body)
@@ -1230,7 +1230,7 @@ fn retain_and_releases(body: &Body, local: Local) -> (bool, usize) {
 }
 
 fn is_index(elem: &PlaceElem) -> bool {
-    matches!(elem, PlaceElem::Index(_))
+    matches!(elem, PlaceElem::Index(_, _))
 }
 
 fn is_field(elem: &PlaceElem) -> bool {

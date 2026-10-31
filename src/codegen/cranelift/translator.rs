@@ -23,7 +23,7 @@ use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::{TypeDefinition, TypeFacts};
 use crate::mir::value_arguments::written_value_params;
-use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
+use crate::mir::{BasicBlock, Body, Bounds, Local, Place, PlaceElem};
 use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
@@ -479,8 +479,7 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             type_ctx.stable_headers.enter_block(idx);
-            for (position, stmt) in block_data.statements.iter().enumerate() {
-                type_ctx.stable_headers.enter_statement(position);
+            for stmt in &block_data.statements {
                 Self::mark_source(
                     builder,
                     source_points.as_deref_mut(),
@@ -489,9 +488,6 @@ impl<'a> FunctionTranslator<'a> {
                 );
                 Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
-            type_ctx
-                .stable_headers
-                .enter_statement(block_data.statements.len());
             Self::read_stable_headers(builder, idx, locals, type_ctx)?;
             if let Some(ref terminator) = block_data.terminator {
                 Self::mark_source(
@@ -682,7 +678,7 @@ impl<'a> FunctionTranslator<'a> {
                     }
                     current_type = Self::type_after_projection(reached, &current_type);
                 }
-                PlaceElem::Index(local) => {
+                PlaceElem::Index(local, _) => {
                     let idx_var = locals.get(local).ok_or_else(|| {
                         CodegenError::Internal(format!("Unknown index local: {:?}", local))
                     })?;
@@ -723,7 +719,7 @@ impl<'a> FunctionTranslator<'a> {
         let is_indexed = place
             .projection
             .iter()
-            .any(|elem| matches!(elem, PlaceElem::Index(_)));
+            .any(|elem| matches!(elem, PlaceElem::Index(_, _)));
         if is_indexed && type_ctx.values.layout(place.local).is_some() {
             return Self::read_indexed_value_place(builder, ctx, place, locals, type_ctx).map(Some);
         }
@@ -997,7 +993,7 @@ impl<'a> FunctionTranslator<'a> {
                 )?;
                 Ok(builder.ins().iadd_imm_s(addr, i64::from(offset)))
             }
-            Some(PlaceElem::Index(index)) => {
+            Some(PlaceElem::Index(index, _)) => {
                 let index_var = locals.get(index).ok_or_else(|| {
                     CodegenError::Internal(format!("Unknown index local: {index:?}"))
                 })?;
@@ -1063,7 +1059,7 @@ impl<'a> FunctionTranslator<'a> {
                         addr = builder.ins().load(ptr_type, MemFlagsData::new(), addr, 0);
                     }
                 }
-                PlaceElem::Index(local) => {
+                PlaceElem::Index(local, _) => {
                     let idx_var = locals.get(local).ok_or_else(|| {
                         CodegenError::Internal(format!("Unknown index local: {:?}", local))
                     })?;
@@ -1171,7 +1167,7 @@ impl<'a> FunctionTranslator<'a> {
                     .ins()
                     .store(MemFlagsData::new(), value, addr, offset);
             }
-            PlaceElem::Index(local) => {
+            PlaceElem::Index(local, _) => {
                 let idx_var = locals.get(local).ok_or_else(|| {
                     CodegenError::Internal(format!("Unknown index local: {:?}", local))
                 })?;
@@ -2122,11 +2118,10 @@ impl<'a> FunctionTranslator<'a> {
         let Some(header) = hoisted else {
             return CollectionBase::Address(value);
         };
-        let is_proven = matches!(
+        if matches!(
             place.projection.first(),
-            Some(PlaceElem::Index(index)) if type_ctx.stable_headers.is_proven(place.local, *index)
-        );
-        if is_proven {
+            Some(PlaceElem::Index(_, Bounds::Proven))
+        ) {
             CollectionBase::Proven(header)
         } else {
             CollectionBase::Hoisted(header)

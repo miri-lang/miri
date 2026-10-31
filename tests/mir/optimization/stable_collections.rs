@@ -25,6 +25,7 @@ use miri::mir::analysis::dominators::DominatorTree;
 use miri::mir::analysis::loops::natural_loops;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::optimization::stable_collections::record_stable_collections;
+use miri::mir::proven_indexes::proven_indexes;
 use miri::mir::symbol::Symbol;
 use miri::mir::{
     AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Constant, Discriminant, ExecutionModel,
@@ -90,7 +91,7 @@ fn goto(target: usize) -> Terminator {
 pub(crate) fn indexed(local: Local) -> Place {
     Place {
         local,
-        projection: vec![PlaceElem::Index(INDEX)],
+        projection: vec![PlaceElem::index(INDEX)],
     }
 }
 
@@ -960,7 +961,9 @@ fn recorded_local(source: &str, suffix: &str) -> (Body, Local) {
 fn test_a_loop_over_spheres_calling_functions_records_the_list_and_its_access() {
     let (body, local) = recorded_local(SPHERES, ".shade");
     assert!(
-        body.in_bounds.iter().any(|entry| entry.collection == local),
+        proven_indexes(&body)
+            .iter()
+            .any(|entry| entry.collection == local),
         "the element read is proven in bounds:\n{body}"
     );
 }
@@ -985,7 +988,9 @@ fn test_a_loop_over_a_list_a_holder_handed_out_through_a_call_is_recorded() {
 fn test_an_index_a_call_writes_through_out_is_not_proven_in_bounds() {
     let (body, local) = recorded_local(INDEX_WRITTEN_THROUGH_OUT, "main");
     assert!(
-        body.in_bounds.iter().all(|entry| entry.collection != local),
+        proven_indexes(&body)
+            .iter()
+            .all(|entry| entry.collection != local),
         "{body}"
     );
 }

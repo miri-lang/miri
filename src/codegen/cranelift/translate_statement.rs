@@ -2193,7 +2193,7 @@ impl<'p> ProjectedKind<'p> {
                         &self.kind, *idx, self.place, type_ctx,
                     )?;
                 }
-                PlaceElem::Index(_) => {
+                PlaceElem::Index(_, _) => {
                     self.kind = FunctionTranslator::extract_collection_elem_type_kind(&self.kind);
                 }
                 PlaceElem::Deref => self.stopped = true,

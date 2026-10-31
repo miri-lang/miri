@@ -652,7 +652,7 @@ fn a_field_of_the_calls_destination_reaching_codegen_uncopied_is_refused() {
 fn a_member_picked_by_a_runtime_index_reaching_codegen_uncopied_is_refused() {
     let picked = Place {
         local: Local(1),
-        projection: vec![PlaceElem::Index(Local(2))],
+        projection: vec![PlaceElem::index(Local(2))],
     };
     let error = refused_shift_call(
         &[TypeKind::Int, twin_points(), TypeKind::Int, point()],

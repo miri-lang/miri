@@ -117,7 +117,7 @@ fn append_scalar_readback(
 
     let index = body.new_local(LocalDecl::new(Type::new(TypeKind::Int, span), span));
     let mut element = Place::new(wrapper);
-    element.projection.push(PlaceElem::Index(index));
+    element.projection.push(PlaceElem::index(index));
     body.basic_blocks[next.0].statements.extend([
         Statement {
             kind: StatementKind::Assign(Place::new(index), Rvalue::Use(int_constant(0, span))),

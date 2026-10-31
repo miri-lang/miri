@@ -202,7 +202,7 @@ fn a_projection_of_a_parameter_a_runtime_writer_is_handed_is_flagged() {
     let mut element = Place::new(Local(1));
     element
         .projection
-        .push(miri::mir::PlaceElem::Index(Local(2)));
+        .push(miri::mir::PlaceElem::index(Local(2)));
     let body = handing_to_runtime(
         "miri_rt_list_push",
         vec![Operand::Copy(element), int_constant()],

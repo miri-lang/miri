@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Checks that every access a body records as in bounds is proven so.
+//! Checks that every index a body marks [`Bounds::Proven`] is proven so.
 //!
-//! Code generation emits a recorded access without comparing its index to
-//! the collection's length, so a record nothing proves reads or writes past
-//! the end. Each entry is re-derived here from the body alone, with a
+//! Code generation emits a proven access without comparing its index to the
+//! collection's length, so a mark nothing proves reads or writes past the
+//! end. The check runs on the bodies the backend receives, after the last
+//! rewrite of them, and re-derives each mark from the body alone, with a
 //! dataflow of its own over three kinds of fact:
 //!
 //! - a length is known of a collection from `Len` until the length local or
@@ -28,9 +29,9 @@
 //!   the length and `i` never negative.
 //!
 //! The guard of a switch holds only along its true edge; an `otherwise`
-//! leading to the same block does not carry it. The access must also sit
-//! where the entry says and lie in a block a stable-collection record of the
-//! collection covers, since it is that record's length code generation
+//! leading to the same block does not carry it. The proven index must be
+//! the first projection of its place, and the access lie in a block a
+//! stable-collection record of the collection covers, since it is that record's length code generation
 //! compares against no more.
 
 use super::VerificationViolation;
@@ -38,10 +39,11 @@ use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
 use crate::mir::place::PlaceContext;
+use crate::mir::proven_indexes::proven_indexes;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    BasicBlock, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, PlaceElem, Rvalue,
-    Statement, StatementKind, Terminator, TerminatorKind,
+    BasicBlock, BinOp, Body, Bounds, Discriminant, InBounds, Local, Operand, Place, PlaceElem,
+    Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::preserves_length;
 use std::collections::{HashMap, HashSet};
@@ -118,28 +120,62 @@ struct Guard {
     strict: bool,
 }
 
-/// Every entry of [`Body::in_bounds`] the body does not prove.
+/// Every index of `body` marked proven that the body does not prove,
+/// wherever it stands: one past a collection's own index is never proven.
 pub fn verify_in_bounds(body: &Body) -> Vec<VerificationViolation> {
-    if body.in_bounds.is_empty() {
-        return Vec::new();
+    let mut violations = misplaced_proofs(body);
+    let proofs = proven_indexes(body);
+    if proofs.is_empty() {
+        return violations;
     }
     let check = Check::of(body);
     let entries = check.entry_states();
-    body.in_bounds
-        .iter()
-        .filter_map(|proof| {
-            check
-                .failure(proof, &entries)
-                .map(|reason| VerificationViolation {
-                    local: proof.collection,
-                    local_name: proof.collection.to_string(),
-                    message: format!(
-                        "`{}[{}]` at {}[{}] is recorded in bounds, but {reason}",
-                        proof.collection, proof.index, proof.block, proof.statement_index
-                    ),
-                })
-        })
-        .collect()
+    violations.extend(proofs.iter().filter_map(|proof| {
+        check
+            .failure(proof, &entries)
+            .map(|reason| VerificationViolation {
+                local: proof.collection,
+                local_name: proof.collection.to_string(),
+                message: format!(
+                    "`{}[{}]` at {}[{}] is recorded in bounds, but {reason}",
+                    proof.collection, proof.index, proof.block, proof.position
+                ),
+            })
+    }));
+    violations
+}
+
+/// An index marked proven past the first projection of its place: what it
+/// indexes is reached through another value, whose length no guard of
+/// this body bounds.
+fn misplaced_proofs(body: &Body) -> Vec<VerificationViolation> {
+    let mut found = MisplacedProofs::default();
+    found.visit_body(body);
+    found.violations
+}
+
+#[derive(Default)]
+struct MisplacedProofs {
+    violations: Vec<VerificationViolation>,
+}
+
+impl Visitor for MisplacedProofs {
+    fn visit_place(&mut self, place: &Place, _context: PlaceContext, location: BasicBlock) {
+        let nested = place.projection.iter().skip(1);
+        if nested
+            .into_iter()
+            .any(|elem| matches!(elem, PlaceElem::Index(_, Bounds::Proven)))
+        {
+            self.violations.push(VerificationViolation {
+                local: place.local,
+                local_name: place.local.to_string(),
+                message: format!(
+                    "`{place}` in {location} marks an index proven that does not index `{}` itself",
+                    place.local
+                ),
+            });
+        }
+    }
 }
 
 struct Check<'a> {
@@ -478,13 +514,10 @@ impl<'a> Check<'a> {
                 proof.collection
             ));
         }
-        if !indexes_at(data, proof) {
-            return Some("nothing there indexes it".to_string());
-        }
         let Some(mut facts) = entries.get(block).cloned().flatten() else {
             return Some("its block is never reached".to_string());
         };
-        for statement in data.statements.iter().take(proof.statement_index) {
+        for statement in data.statements.iter().take(proof.position) {
             self.step(statement, &mut facts);
         }
         let known = Known::Index {
@@ -566,42 +599,6 @@ fn step_terminator(body: &Body, terminator: &Terminator, facts: &mut HashSet<Kno
         | TerminatorKind::SwitchInt { .. }
         | TerminatorKind::Return
         | TerminatorKind::Unreachable => {}
-    }
-}
-
-/// Whether the statement or terminator `proof` names indexes its collection
-/// by its index at the first projection.
-fn indexes_at(data: &crate::mir::BasicBlockData, proof: &InBounds) -> bool {
-    let mut found = FindsIndex {
-        collection: proof.collection,
-        index: proof.index,
-        found: false,
-    };
-    match data.statements.get(proof.statement_index) {
-        Some(statement) => found.visit_statement(proof.block, statement),
-        None if proof.statement_index == data.statements.len() => {
-            if let Some(terminator) = &data.terminator {
-                found.visit_terminator(proof.block, terminator);
-            }
-        }
-        None => {}
-    }
-    found.found
-}
-
-struct FindsIndex {
-    collection: Local,
-    index: Local,
-    found: bool,
-}
-
-impl Visitor for FindsIndex {
-    fn visit_place(&mut self, place: &Place, _context: PlaceContext, _location: BasicBlock) {
-        if place.local == self.collection
-            && place.projection.first() == Some(&PlaceElem::Index(self.index))
-        {
-            self.found = true;
-        }
     }
 }
 

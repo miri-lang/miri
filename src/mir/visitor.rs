@@ -229,7 +229,7 @@ pub trait Visitor {
 
     fn visit_projection(&mut self, place: &Place, _context: PlaceContext, location: BasicBlock) {
         for elem in &place.projection {
-            if let PlaceElem::Index(local) = elem {
+            if let PlaceElem::Index(local, _) = elem {
                 self.visit_local(*local, PlaceContext::NonMutatingUse, location);
             }
         }
@@ -448,7 +448,7 @@ pub trait MutVisitor {
         location: BasicBlock,
     ) {
         for elem in &mut place.projection {
-            if let PlaceElem::Index(local) = elem {
+            if let PlaceElem::Index(local, _) = elem {
                 self.visit_local(local, PlaceContext::NonMutatingUse, location);
             }
         }

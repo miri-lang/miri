@@ -56,9 +56,11 @@ pub(super) fn reach_of(body: &Body, place: &Place) -> Option<Reach> {
         let kind = types.declared(&container)?.kind;
         match (&place.projection[depth], container_of(&kind, definitions)) {
             (PlaceElem::Field(_), Container::FieldsByValue)
-            | (PlaceElem::Index(_), Container::ElementsByValue) => {}
+            | (PlaceElem::Index(_, _), Container::ElementsByValue) => {}
             (PlaceElem::Field(_), Container::Instance) => reach = Reach::ThroughField,
-            (PlaceElem::Field(_) | PlaceElem::Index(_), _) | (PlaceElem::Deref, _) => return None,
+            (PlaceElem::Field(_) | PlaceElem::Index(_, _), _) | (PlaceElem::Deref, _) => {
+                return None
+            }
         }
     }
     Some(reach)

@@ -101,7 +101,10 @@ struct Chosen {
 /// prove, entering the copy through that guard. Returns true if any loop
 /// was copied.
 pub fn version_bounded_loops(body: &mut Body) -> bool {
-    if body.is_gpu() || !body.stable_collections.is_empty() || !body.in_bounds.is_empty() {
+    if body.is_gpu()
+        || !body.stable_collections.is_empty()
+        || !crate::mir::proven_indexes::proven_indexes(body).is_empty()
+    {
         return false;
     }
     let chosen = chosen_loops(body);
@@ -520,7 +523,7 @@ struct IndexedBy<'a> {
 
 impl Visitor for IndexedBy<'_> {
     fn visit_place(&mut self, place: &Place, _context: PlaceContext, _location: BasicBlock) {
-        let Some(PlaceElem::Index(index)) = place.projection.first() else {
+        let Some(PlaceElem::Index(index, _)) = place.projection.first() else {
             return;
         };
         if let Some(offset) = self.offsets.get(index) {

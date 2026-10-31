@@ -2054,7 +2054,7 @@ impl Pipeline {
             .emit
             .contains(&Listing::Mir)
             .then(|| mir_listing(&mir_bodies));
-        let object = Self::compile_object(pipeline_result, mir_bodies, opts)?;
+        let object = Self::compile_object(pipeline_result, mir_bodies, opts, self.verify_mode())?;
         let (work_dir, out_path) = Self::output_paths(out_override)?;
         fs::create_dir_all(&work_dir)?;
 
@@ -2143,6 +2143,7 @@ impl Pipeline {
         pipeline_result: &PipelineResult,
         mut mir_bodies: Vec<(String, mir::Body)>,
         opts: &BuildOptions,
+        verify_mode: Option<String>,
     ) -> Result<ObjectCode, CompilerError> {
         // Spell the element and closure ABIs at the hand-off: reference
         // counting, verification and every MIR reader before this point see an
@@ -2150,12 +2151,23 @@ impl Pipeline {
         // backend takes an element as an address and a byte count, and a
         // closure as itself and the trampoline the runtime calls it through.
         for (name, body) in &mut mir_bodies {
-            let before = mir::optimization::in_bounds::statement_counts(body);
             mir::element_abi::pass_elements_by_address(body)
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
             mir::closure_abi::pass_closures_with_trampolines(body)
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
-            mir::optimization::in_bounds::forget_changed_blocks(body, &before);
+        }
+        // An access emitted without its bounds check is re-proven on the very
+        // bodies the backend receives, after every rewrite of them.
+        if let Some(mode) = verify_mode {
+            let violations = mir_bodies
+                .iter()
+                .flat_map(|(name, body)| {
+                    mir::verify::verify_in_bounds(body)
+                        .into_iter()
+                        .map(move |v| (name.clone(), v))
+                })
+                .collect();
+            Self::report_violations(violations, &mode)?;
         }
         match opts.cpu_backend {
             CpuBackend::Cranelift => {
@@ -3388,7 +3400,6 @@ impl Pipeline {
             violations.extend(mir::verify::verify_value_arguments(body));
             violations.extend(mir::verify::verify_bound_names(body));
             violations.extend(mir::verify::verify_stable_collections(body, Some(harmless)));
-            violations.extend(mir::verify::verify_in_bounds(body));
             // TODO: this check runs only under --verify-mir; a normal build does
             // not check that in-place writes land on unshared collections.
             violations.extend(mir::verify::verify_unshared_writes(body));
@@ -3399,14 +3410,35 @@ impl Pipeline {
                 all_violations.push(format!("  fn {}: {}", name, v));
             }
         }
-        if all_violations.is_empty() {
+        Self::fail_or_warn(all_violations, functions_with_violations, mode)
+    }
+
+    /// Report `violations`, each naming the function it was found in, the
+    /// way [`Self::report_mir_violations`] reports its own.
+    fn report_violations(
+        violations: Vec<(String, mir::verify::VerificationViolation)>,
+        mode: &str,
+    ) -> Result<(), CompilerError> {
+        let functions = (violations.iter().map(|(name, _)| name))
+            .collect::<HashSet<_>>()
+            .len();
+        let lines = (violations.iter())
+            .map(|(name, v)| format!("  fn {}: {}", name, v))
+            .collect();
+        Self::fail_or_warn(lines, functions, mode)
+    }
+
+    /// Print `lines` under `warn` mode, fail with them otherwise; nothing
+    /// when there are none.
+    fn fail_or_warn(lines: Vec<String>, functions: usize, mode: &str) -> Result<(), CompilerError> {
+        if lines.is_empty() {
             return Ok(());
         }
         let message = format!(
             "{} MIR invariant violation(s) in {} function(s):\n{}",
-            all_violations.len(),
-            functions_with_violations,
-            all_violations.join("\n")
+            lines.len(),
+            functions,
+            lines.join("\n")
         );
         if mode == "warn" {
             eprintln!("{}", message);

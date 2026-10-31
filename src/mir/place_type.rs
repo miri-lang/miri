@@ -303,7 +303,7 @@ impl<'a> PlaceTypes<'a> {
         for elem in &place.projection {
             let (next, next_declared) = match elem {
                 PlaceElem::Deref => None,
-                PlaceElem::Index(_) => project_index(&current, &declared),
+                PlaceElem::Index(_, _) => project_index(&current, &declared),
                 PlaceElem::Field(i) => self.project_field(place, &current, &declared, *i),
             }?;
             current = next;

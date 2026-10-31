@@ -1862,7 +1862,7 @@ impl<'a> BodyEmitter<'a> {
         if place.projection.is_empty() {
             return Some(Cow::Borrowed(declared));
         }
-        if let [PlaceElem::Index(_)] = place.projection.as_slice() {
+        if let [PlaceElem::Index(_, _)] = place.projection.as_slice() {
             return collection_element_kind(declared).map(Cow::Owned);
         }
         None
@@ -1905,7 +1905,7 @@ impl<'a> BodyEmitter<'a> {
                         write!(rendered, ".{}", idx).map_err(emit_err)?;
                     }
                 }
-                PlaceElem::Index(local) => {
+                PlaceElem::Index(local, _) => {
                     // naga rejects indexing `array<T>` with an `i64` value — array indices
                     // must be 32-bit. The narrowing policy (identity for `Int`, saturate for
                     // `I64`, none otherwise) is backend-neutral and lives in `mir::backend`;
@@ -1967,7 +1967,7 @@ impl<'a> BodyEmitter<'a> {
         if !place
             .projection
             .iter()
-            .any(|e| matches!(e, PlaceElem::Index(_)))
+            .any(|e| matches!(e, PlaceElem::Index(_, _)))
         {
             return false;
         }
@@ -2542,7 +2542,7 @@ mod tests {
         // Create a place with an I64 index projection.
         let place = Place {
             local: target_local,
-            projection: vec![PlaceElem::Index(i64_local)],
+            projection: vec![PlaceElem::index(i64_local)],
         };
 
         // Create a minimal BodyEmitter. Empty bindings and empty output buffer.
@@ -2604,7 +2604,7 @@ mod tests {
         // Create a place with an Int index projection.
         let place = Place {
             local: target_local,
-            projection: vec![PlaceElem::Index(int_local)],
+            projection: vec![PlaceElem::index(int_local)],
         };
 
         // Create a minimal BodyEmitter.
@@ -2665,7 +2665,7 @@ mod tests {
         // Create a place with an F32 index projection.
         let place = Place {
             local: target_local,
-            projection: vec![PlaceElem::Index(f32_local)],
+            projection: vec![PlaceElem::index(f32_local)],
         };
 
         // Create a minimal BodyEmitter.

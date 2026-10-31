@@ -152,7 +152,7 @@ impl Visitor for AccessedCollections {
     }
 
     fn visit_place(&mut self, place: &Place, _context: PlaceContext, _location: BasicBlock) {
-        if matches!(place.projection.first(), Some(PlaceElem::Index(_))) {
+        if matches!(place.projection.first(), Some(PlaceElem::Index(_, _))) {
             self.locals.insert(place.local.0);
         }
     }

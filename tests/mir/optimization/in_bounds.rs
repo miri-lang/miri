@@ -13,6 +13,7 @@ use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::optimization::in_bounds::{record_in_bounds, INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW};
 use miri::mir::optimization::stable_collections::record_stable_collections;
+use miri::mir::proven_indexes::proven_indexes;
 use miri::mir::symbol::Symbol;
 use miri::mir::{
     BasicBlock, BinOp, Body, Discriminant, ExecutionModel, InBounds, Local, LocalDecl, Operand,
@@ -25,7 +26,7 @@ use miri::pipeline::Pipeline;
 pub(crate) fn proofs_of(mut body: Body) -> Vec<InBounds> {
     record_stable_collections(&mut body);
     record_in_bounds(&mut body);
-    body.in_bounds
+    proven_indexes(&body)
 }
 
 /// The bound the loop of [`loop_under_a_guard`] compares its index with.
@@ -80,7 +81,7 @@ fn test_a_read_below_the_guarded_length_is_proven_in_bounds() {
         proofs,
         vec![InBounds {
             block: BasicBlock(LOOP_BODY),
-            statement_index: 0,
+            position: 0,
             collection: LIST,
             index: INDEX,
         }]
@@ -195,7 +196,7 @@ fn proofs_after_copying_a_list_of(element: TypeKind) -> Vec<InBounds> {
         record.blocks.push(BasicBlock(read));
     }
     record_in_bounds(&mut body);
-    body.in_bounds
+    proven_indexes(&body)
 }
 
 #[test]
@@ -216,7 +217,7 @@ fn test_an_index_below_a_bound_no_greater_than_the_length_is_proven() {
         proofs_of(body),
         vec![InBounds {
             block: BasicBlock(LOOP_BODY),
-            statement_index: 0,
+            position: 0,
             collection: LIST,
             index: INDEX,
         }]
@@ -304,9 +305,9 @@ fn test_every_access_of_the_nbody_step_is_proven_in_bounds() {
             if text.contains("_4[") {
                 accesses += 1;
                 assert!(
-                    body.in_bounds
+                    proven_indexes(&body)
                         .iter()
-                        .any(|p| p.block.0 == index && p.statement_index == position),
+                        .any(|p| p.block.0 == index && p.position == position),
                     "bb{index}[{position}] `{text}` is not proven:\n{body}"
                 );
             }
@@ -336,7 +337,7 @@ pub(crate) fn stepped(op: BinOp, local: Local, value: i64) -> Rvalue {
 pub(crate) fn element_at(index: Local) -> Rvalue {
     Rvalue::Use(Operand::Copy(Place {
         local: LIST,
-        projection: vec![miri::mir::PlaceElem::Index(index)],
+        projection: vec![miri::mir::PlaceElem::index(index)],
     }))
 }
 
@@ -366,7 +367,7 @@ pub(crate) fn loop_under_a_gap(gap: i64, op: BinOp) -> Body {
 fn offset_read() -> InBounds {
     InBounds {
         block: BasicBlock(LOOP_BODY),
-        statement_index: 1,
+        position: 1,
         collection: LIST,
         index: OFFSET_INDEX,
     }
@@ -450,14 +451,14 @@ pub(crate) fn with_two_pointers(mut body: Body, step: BinOp) -> Body {
 }
 
 /// The indexes `proofs` records reads of `list` at.
-fn proven_indexes(proofs: &[InBounds]) -> Vec<Local> {
+fn indexes_of(proofs: &[InBounds]) -> Vec<Local> {
     proofs.iter().map(|proof| proof.index).collect()
 }
 
 #[test]
 fn test_both_pointers_of_a_reversal_below_the_length_are_proven() {
     let proofs = proofs_of(two_pointer_loop(BinOp::Lt, BinOp::Sub));
-    assert_eq!(proven_indexes(&proofs), vec![INDEX, BOUND]);
+    assert_eq!(indexes_of(&proofs), vec![INDEX, BOUND]);
 }
 
 #[test]
@@ -465,7 +466,7 @@ fn test_a_high_pointer_starting_at_the_length_is_not_proven() {
     // `hi <= L` admits `hi == L` on the first iteration; `i < hi <= L` still
     // keeps the low pointer inside.
     let proofs = proofs_of(two_pointer_loop(BinOp::Le, BinOp::Sub));
-    assert_eq!(proven_indexes(&proofs), vec![INDEX]);
+    assert_eq!(indexes_of(&proofs), vec![INDEX]);
 }
 
 #[test]

@@ -45,12 +45,15 @@
 //! operands, which overflow-checked arithmetic keeps non-negative
 //! ([`INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW`]).
 //!
-//! An access is recorded on [`Body::in_bounds`] when its index is the first
-//! projection of a place rooted at a collection a stable-collection record
-//! covers in that block: code generation reads that collection's length once
-//! before the loop, and it is that length the guard compared against. The
-//! pass runs last among the MIR passes; any pass that later changes a block
-//! must drop the entries in it, and `--verify-mir` re-derives every entry.
+//! An access has its index marked [`Bounds::Proven`] when that index is the
+//! first projection of a place rooted at a collection a stable-collection
+//! record covers in that block: code generation reads that collection's
+//! length once before the loop, and it is that length the guard compared
+//! against. The mark lives on the access, so a later pass that moves or
+//! copies it carries the mark, and `--verify-mir` re-derives every mark on
+//! the bodies the backend receives.
+//!
+//! [`Bounds::Proven`]: crate::mir::Bounds::Proven
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -59,6 +62,7 @@ use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
 use crate::mir::analysis::loops::{comparison_before_switch, Comparison};
 use crate::mir::analysis::non_negative::{constant_step, is_integer, non_negative_locals, Step};
 use crate::mir::place::PlaceContext;
+use crate::mir::proven_indexes::mark_in_bounds;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, PlaceElem, Rvalue,
@@ -138,33 +142,17 @@ impl Fact {
 
 type Facts = BTreeSet<Fact>;
 
-/// Records on [`Body::in_bounds`] every access of `body` its loop guard
-/// proves in bounds. Returns true if any was recorded.
+/// Marks proven every access of `body` its loop guard proves in bounds, on
+/// the index of the access itself. Returns true if any was marked.
 pub fn record_in_bounds(body: &mut Body) -> bool {
-    body.in_bounds = if body.is_gpu() || body.stable_collections.is_empty() {
-        Vec::new()
-    } else {
-        proven_accesses(body)
-    };
-    !body.in_bounds.is_empty()
-}
-
-/// How many statements each block of `body` holds, to tell afterwards which
-/// blocks a later pass changed.
-pub fn statement_counts(body: &Body) -> Vec<usize> {
-    body.basic_blocks
-        .iter()
-        .map(|data| data.statements.len())
-        .collect()
-}
-
-/// Drops every [`Body::in_bounds`] entry in a block whose statement count is
-/// no longer `before`'s: a pass that inserted or removed statements there
-/// moved the positions the entries name.
-pub fn forget_changed_blocks(body: &mut Body, before: &[usize]) {
-    let after = statement_counts(body);
-    body.in_bounds
-        .retain(|proof| before.get(proof.block.0) == after.get(proof.block.0));
+    if body.is_gpu() || body.stable_collections.is_empty() {
+        return false;
+    }
+    let mut marked = false;
+    for site in proven_accesses(body) {
+        marked |= mark_in_bounds(body, site);
+    }
+    marked
 }
 
 /// Every access of `body` the dataflow proves in bounds and a stable record
@@ -200,7 +188,7 @@ struct IndexRoots {
 
 impl Visitor for IndexRoots {
     fn visit_place(&mut self, place: &Place, _context: PlaceContext, _location: BasicBlock) {
-        if let Some(PlaceElem::Index(index)) = place.projection.first() {
+        if let Some(PlaceElem::Index(index, _)) = place.projection.first() {
             self.roots.push((place.local, *index));
         }
     }
@@ -281,7 +269,7 @@ impl<'a> Flow<'a> {
             .filter(|root| seen.insert(**root))
             .map(|(collection, index)| InBounds {
                 block: BasicBlock(block),
-                statement_index: position,
+                position,
                 collection: *collection,
                 index: *index,
             })

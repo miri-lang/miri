@@ -185,33 +185,6 @@ pub struct Body {
     /// `crate::mir::optimization::stable_collections`, re-derived by
     /// `crate::mir::verify::verify_stable_collections`.
     pub stable_collections: Vec<StableCollection>,
-    /// The element accesses a loop guard proves in bounds, which code
-    /// generation emits without comparing the index to the length. Decided by
-    /// `crate::mir::optimization::in_bounds`, the last MIR pass, and
-    /// re-derived by `crate::mir::verify::verify_in_bounds`; any pass that
-    /// changes a block afterwards must drop the entries in it.
-    pub in_bounds: Vec<InBounds>,
-}
-
-/// An index into a collection proven below its length and non-negative at
-/// one statement: `collection[index]` at `statement_index` of `block`, the
-/// terminator counted as the statement after the last.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct InBounds {
-    pub block: BasicBlock,
-    pub statement_index: usize,
-    pub collection: Local,
-    pub index: Local,
-}
-
-impl fmt::Display for InBounds {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "in_bounds {}[{}]: {}[{}]",
-            self.block, self.statement_index, self.collection, self.index
-        )
-    }
 }
 
 /// An array or a list a loop indexes without changing its header: the data
@@ -317,7 +290,6 @@ impl Body {
             device_stale_flags: HashMap::new(),
             allocator: None,
             stable_collections: Vec::new(),
-            in_bounds: Vec::new(),
         }
     }
 
@@ -729,9 +701,6 @@ impl fmt::Display for Body {
         }
         for stable in &self.stable_collections {
             writeln!(f, "    {stable};")?;
-        }
-        for proven in &self.in_bounds {
-            writeln!(f, "    {proven};")?;
         }
         Ok(())
     }

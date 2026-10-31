@@ -22,6 +22,7 @@ use miri::mir::analysis::loops::{natural_loops, NaturalLoop};
 use miri::mir::optimization::in_bounds::record_in_bounds;
 use miri::mir::optimization::loop_versioning::version_bounded_loops;
 use miri::mir::optimization::stable_collections::record_stable_collections;
+use miri::mir::proven_indexes::proven_indexes;
 use miri::mir::{
     BasicBlock, BasicBlockData, BinOp, Body, Discriminant, ExecutionModel, InBounds, Local,
     LocalDecl, Operand, Place, Rvalue, StatementKind, TerminatorKind,
@@ -101,7 +102,7 @@ fn guard_comparison(body: &Body, block: usize) -> (BinOp, String, String) {
 fn proofs_of(mut body: Body) -> Vec<InBounds> {
     record_stable_collections(&mut body);
     record_in_bounds(&mut body);
-    body.in_bounds
+    proven_indexes(&body)
 }
 
 #[test]
@@ -133,7 +134,7 @@ fn test_only_the_copy_entered_through_the_guard_is_proven_in_bounds() {
         proofs,
         vec![InBounds {
             block: BasicBlock(COPY_BODY),
-            statement_index: 0,
+            position: 0,
             collection: LIST,
             index: INDEX,
         }]
@@ -280,11 +281,11 @@ fn proven_statements(body: &Body) -> Vec<String> {
         .map(ToString::to_string)
         .collect();
     assert!(violations.is_empty(), "{violations:?}\n{body}");
-    (body.in_bounds.iter())
+    (proven_indexes(&body).iter())
         .filter_map(|proof| {
             body.basic_blocks[proof.block.0]
                 .statements
-                .get(proof.statement_index)
+                .get(proof.position)
                 .map(ToString::to_string)
         })
         .collect()
@@ -339,7 +340,7 @@ fn test_matmul_reads_its_three_lists_headers_outside_the_innermost_loop() {
     let [a, b, row] = ["a", "b", "row"].map(|name| named_local(&body, name));
     let k = named_local(&body, "k");
     let proof_of = |collection: Local| {
-        (body.in_bounds.iter())
+        (proven_indexes(&body).into_iter())
             .find(|proof| proof.collection == collection && proof.index == k)
             .unwrap_or_else(|| panic!("{collection}[{k}] is not proven:\n{body}"))
     };
@@ -382,7 +383,7 @@ fn checked_proofs_of(body: Body) -> Vec<InBounds> {
         .map(ToString::to_string)
         .collect();
     assert!(violations.is_empty(), "{violations:?}\n{body}");
-    body.in_bounds
+    proven_indexes(&body)
 }
 
 #[test]
@@ -397,7 +398,7 @@ fn test_a_loop_reading_one_past_its_index_is_guarded_by_a_bound_below_the_length
         checked_proofs_of(loop_),
         vec![InBounds {
             block: BasicBlock(COPY_BODY),
-            statement_index: 1,
+            position: 1,
             collection: LIST,
             index: OFFSET_INDEX,
         }]

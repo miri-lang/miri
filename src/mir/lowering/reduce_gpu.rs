@@ -548,7 +548,7 @@ fn emit_grid_stride_body(
     let mut elem_place = Place::new(input_local);
     elem_place
         .projection
-        .push(crate::mir::PlaceElem::Index(loop_idx));
+        .push(crate::mir::PlaceElem::index(loop_idx));
     let elem_op = Operand::Copy(elem_place);
 
     push_assign(
@@ -630,7 +630,7 @@ fn emit_sdata_store_and_barrier(
     let mut sdata_store_place = Place::new(sdata_local);
     sdata_store_place
         .projection
-        .push(crate::mir::PlaceElem::Index(thread_idx));
+        .push(crate::mir::PlaceElem::index(thread_idx));
     push_assign_place(
         ctx,
         sdata_store_place,
@@ -696,7 +696,7 @@ fn compute_tree_reduction_result(
     let mut other_sdata_place = Place::new(sdata_local);
     other_sdata_place
         .projection
-        .push(crate::mir::PlaceElem::Index(other_idx));
+        .push(crate::mir::PlaceElem::index(other_idx));
     push_assign(
         ctx,
         other_val,
@@ -707,7 +707,7 @@ fn compute_tree_reduction_result(
     let mut my_indexed_place = Place::new(sdata_local);
     my_indexed_place
         .projection
-        .push(crate::mir::PlaceElem::Index(thread_idx));
+        .push(crate::mir::PlaceElem::index(thread_idx));
 
     let result_val = ctx.push_temp(elem_ty.clone(), span);
     push_assign(
@@ -724,7 +724,7 @@ fn compute_tree_reduction_result(
     let mut result_place = Place::new(sdata_local);
     result_place
         .projection
-        .push(crate::mir::PlaceElem::Index(thread_idx));
+        .push(crate::mir::PlaceElem::index(thread_idx));
     push_assign_place(
         ctx,
         result_place,
@@ -879,12 +879,12 @@ fn emit_lane_zero_output_write(
     let mut sdata_result_place = Place::new(sdata_local);
     sdata_result_place
         .projection
-        .push(crate::mir::PlaceElem::Index(zero_idx));
+        .push(crate::mir::PlaceElem::index(zero_idx));
 
     let mut output_place = Place::new(output_local);
     output_place
         .projection
-        .push(crate::mir::PlaceElem::Index(zero_idx));
+        .push(crate::mir::PlaceElem::index(zero_idx));
 
     push_assign_place(
         ctx,
@@ -1171,7 +1171,7 @@ fn extract_reduce_result(ctx: &mut LoweringContext, output_local: Local, span: S
     let mut output_elem_place = Place::new(output_local);
     output_elem_place
         .projection
-        .push(crate::mir::PlaceElem::Index(zero_idx));
+        .push(crate::mir::PlaceElem::index(zero_idx));
     Operand::Copy(output_elem_place)
 }
 

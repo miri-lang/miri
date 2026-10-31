@@ -664,7 +664,7 @@ pub fn crosses_heap_field(types: &PlaceTypes, place: &Place) -> bool {
                 };
                 is_shared_holder(types.declared(&holder).as_ref(), types.definitions)
             }
-            PlaceElem::Index(_) => false,
+            PlaceElem::Index(_, _) => false,
         })
 }
 

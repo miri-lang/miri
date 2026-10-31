@@ -143,7 +143,7 @@ fn test_a_record_of_a_borrowed_list_over_a_loop_storing_a_list_elsewhere_is_flag
         kind: StatementKind::Assign(
             Place {
                 local: rows,
-                projection: vec![PlaceElem::Index(Local(2))],
+                projection: vec![PlaceElem::index(Local(2))],
             },
             Rvalue::Use(Operand::Move(Place::new(SPARE_LIST))),
         ),

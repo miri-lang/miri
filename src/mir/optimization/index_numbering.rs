@@ -381,7 +381,7 @@ struct IndexRenamer<'r>(&'r HashMap<Local, Local>);
 impl MutVisitor for IndexRenamer<'_> {
     fn visit_place(&mut self, place: &mut Place, _context: PlaceContext, _location: BasicBlock) {
         for elem in &mut place.projection {
-            if let PlaceElem::Index(local) = elem {
+            if let PlaceElem::Index(local, _) = elem {
                 if let Some(earlier) = self.0.get(local) {
                     *local = *earlier;
                 }

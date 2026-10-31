@@ -155,7 +155,8 @@ pub(crate) enum CollectionBase {
     /// before the loop the access is in.
     Hoisted(ElementHeader),
     /// A hoisted header, with the index proven below its length and
-    /// non-negative (`Body::in_bounds`), so the access needs no bounds check.
+    /// non-negative (`Bounds::Proven` on its index), so the access needs no
+    /// bounds check.
     Proven(ElementHeader),
 }
 

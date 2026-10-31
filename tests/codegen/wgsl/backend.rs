@@ -91,7 +91,7 @@ fn build_copy_kernel() -> Body {
             val_place.clone(),
             Rvalue::Use(Operand::Copy(Place {
                 local: Local(1),
-                projection: vec![PlaceElem::Index(idx_local)],
+                projection: vec![PlaceElem::index(idx_local)],
             })),
         ),
         span,
@@ -100,7 +100,7 @@ fn build_copy_kernel() -> Body {
         kind: StatementKind::Assign(
             Place {
                 local: Local(2),
-                projection: vec![PlaceElem::Index(idx_local)],
+                projection: vec![PlaceElem::index(idx_local)],
             },
             Rvalue::Use(Operand::Copy(val_place)),
         ),
@@ -272,7 +272,7 @@ fn math_intrinsic_maps_to_wgsl_sqrt() {
             Place::new(in_local),
             Rvalue::Use(Operand::Copy(Place {
                 local: Local(1),
-                projection: vec![PlaceElem::Index(idx_local)],
+                projection: vec![PlaceElem::index(idx_local)],
             })),
         ),
         span,
@@ -291,7 +291,7 @@ fn math_intrinsic_maps_to_wgsl_sqrt() {
         kind: StatementKind::Assign(
             Place {
                 local: Local(1),
-                projection: vec![PlaceElem::Index(idx_local)],
+                projection: vec![PlaceElem::index(idx_local)],
             },
             Rvalue::Use(Operand::Copy(Place::new(out_local))),
         ),
@@ -560,7 +560,7 @@ fn move_operand_renders_like_copy() {
                 Place::new(val),
                 Rvalue::Use(Operand::Move(Place {
                     local: Local(1),
-                    projection: vec![PlaceElem::Index(idx)],
+                    projection: vec![PlaceElem::index(idx)],
                 })),
             ),
         ],

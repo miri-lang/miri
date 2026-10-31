@@ -11,7 +11,7 @@ fn place(local: usize, projection: Vec<PlaceElem>) -> Place {
 }
 
 fn index(local: usize) -> PlaceElem {
-    PlaceElem::Index(Local(local))
+    PlaceElem::index(Local(local))
 }
 
 #[test]

@@ -136,7 +136,7 @@ fn field(index: usize, at: usize) -> Place {
 fn element(index: usize, by: usize) -> Place {
     Place {
         local: Local(index),
-        projection: vec![PlaceElem::Index(Local(by))],
+        projection: vec![PlaceElem::index(Local(by))],
     }
 }
 

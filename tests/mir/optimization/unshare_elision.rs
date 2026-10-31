@@ -1016,7 +1016,7 @@ fn projected(base: usize, elem: PlaceElem) -> Place {
 }
 
 fn element(base: usize, index: usize) -> Place {
-    projected(base, PlaceElem::Index(Local(index)))
+    projected(base, PlaceElem::index(Local(index)))
 }
 
 fn assign(place: Place, rvalue: Rvalue) -> StatementKind {
@@ -1509,7 +1509,7 @@ fn nest_writing_a_list(outer_step: Vec<StatementKind>) -> Body {
     };
     let element = Place {
         local: NEST_LIST,
-        projection: vec![PlaceElem::Index(INNER_INDEX)],
+        projection: vec![PlaceElem::index(INNER_INDEX)],
     };
     body.basic_blocks = vec![
         block(Vec::new(), goto(OUTER_HEADER)),

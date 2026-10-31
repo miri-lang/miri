@@ -32,6 +32,7 @@ pub mod option_layout;
 pub mod optional_conformance;
 pub mod place;
 pub mod place_type;
+pub mod proven_indexes;
 pub mod rc;
 pub mod representation;
 pub mod residency;
@@ -50,9 +51,7 @@ pub use backend::{
     GpuKernelArg, GpuMemoryAccess, GpuMemoryScope, I32_INDEX_MAX,
 };
 pub use block::{BasicBlock, BasicBlockData};
-pub use body::{
-    BindingResidency, Body, ExecutionModel, InBounds, LocalDecl, StableCollection, StorageClass,
-};
+pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StableCollection, StorageClass};
 pub use declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
     VariantDecl,
@@ -60,7 +59,8 @@ pub use declaration::{
 pub use lambda::{CapturedVar, LambdaInfo};
 pub use module::{Import, ImportItem, ImportKind, ImportSource};
 pub use operand::{Constant, FunctionConstant, Operand};
-pub use place::{Local, Place, PlaceElem};
+pub use place::{Bounds, Local, Place, PlaceElem};
+pub use proven_indexes::InBounds;
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};
 pub use terminator::{

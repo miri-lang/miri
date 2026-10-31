@@ -35,7 +35,7 @@ fn int_ty() -> Type {
 fn element() -> Place {
     Place {
         local: Local(1),
-        projection: vec![PlaceElem::Index(Local(2))],
+        projection: vec![PlaceElem::index(Local(2))],
     }
 }
 
@@ -479,7 +479,7 @@ fn entry_borrowing_body(
             place(3),
             Rvalue::Use(Operand::Copy(Place {
                 local: Local(4),
-                projection: vec![PlaceElem::Index(Local(2))],
+                projection: vec![PlaceElem::index(Local(2))],
             })),
         )),
     ];

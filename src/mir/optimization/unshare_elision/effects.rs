@@ -419,7 +419,7 @@ impl ProgramBuilder<'_> {
     /// collection leaves its sibling elements known unshared — the elements
     /// stored before it are still held by the collection alone.
     fn replaced_by_fresh(&mut self, place: &Place) -> Option<MaskId> {
-        if !matches!(place.projection.last(), Some(PlaceElem::Index(_))) {
+        if !matches!(place.projection.last(), Some(PlaceElem::Index(_, _))) {
             return self.replaced(place);
         }
         self.mask(MaskKey::ReplacedByFresh(place.clone()), |table| {
@@ -466,7 +466,7 @@ fn index_blind(place: &Place) -> Place {
         .projection
         .iter()
         .map(|elem| match elem {
-            PlaceElem::Index(_) => PlaceElem::Index(Local(usize::MAX)),
+            PlaceElem::Index(_, _) => PlaceElem::index(Local(usize::MAX)),
             PlaceElem::Deref | PlaceElem::Field(_) => elem.clone(),
         })
         .collect();

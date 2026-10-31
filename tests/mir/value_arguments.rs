@@ -108,7 +108,7 @@ fn a_field_of_a_counted_holder_is_copied() {
 
 #[test]
 fn a_member_of_a_value_picked_by_a_runtime_index_is_copied() {
-    let picked = projected(5, vec![PlaceElem::Index(Local(6))]);
+    let picked = projected(5, vec![PlaceElem::index(Local(6))]);
     let args = vec![Operand::Copy(picked)];
     assert_eq!(
         holder_needing_copy(call(args, Vec::new(), place(0))),
@@ -153,7 +153,7 @@ fn exposure_of_names_why_each_place_needs_a_copy() {
     assert_eq!(exposure(&place(2)), Some(Exposure::Out));
     assert_eq!(exposure(&field(2, 0)), Some(Exposure::Out));
     assert_eq!(exposure(&field(4, 0)), Some(Exposure::Projected));
-    let picked = projected(5, vec![PlaceElem::Index(Local(6))]);
+    let picked = projected(5, vec![PlaceElem::index(Local(6))]);
     assert_eq!(exposure(&picked), Some(Exposure::Projected));
 }
 
