@@ -4,13 +4,14 @@
 //! Removal of the block parameters a function's translation leaves that
 //! every branch hands one value.
 //!
-//! The translator seals its blocks only once every block is translated, so
-//! when Cranelift's frontend completes a loop header it can meet a variable
-//! the loop never writes in a predecessor not yet sealed. The frontend then
-//! gives the header a parameter for the variable, which every branch from
-//! inside the loop hands back unchanged, and it never removes the parameter
-//! once the predecessor is sealed and the value turns out to be the one the
-//! loop is entered with. A loop nested in another so receives the outer
+//! A loop header is reached along its back edge from a latch translated
+//! after it, so the header cannot be sealed before the latch is, in any
+//! sealing order. When Cranelift's frontend reads a variable in the header
+//! before that edge is known, it gives the header a parameter for the
+//! variable, which every branch from inside the loop hands back unchanged
+//! when the loop never writes it, and it never removes the parameter once the
+//! latch is sealed and the value turns out to be the one the loop is entered
+//! with. A loop nested in another so receives the outer
 //! loop's counter as a fresh value on every inner iteration, and nothing
 //! computed from it is invariant to the inner loop. Cranelift's own removal
 //! of constant parameters keeps such a parameter too, since the value it
