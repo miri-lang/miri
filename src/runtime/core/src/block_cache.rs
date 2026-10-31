@@ -50,11 +50,12 @@ const CLASS_COUNT: usize = 16;
 /// The largest block, in bytes, the cache parks.
 pub const LARGEST_CACHED_BLOCK: usize = CLASS_GRANULE * CLASS_COUNT;
 
-/// The most bytes one thread keeps parked; a release past it goes back to the
-/// system, so a program that once held many values does not keep their memory.
-/// The limit is per thread: a process can hold up to its thread count times
-/// this much in parked blocks.
-const PARKED_BYTES_LIMIT: usize = 16 << 20;
+/// The fewest bytes one thread may keep parked. Above it a thread parks no more
+/// than the most bytes of blocks it has held live at once, and a release past
+/// that goes back to the system: a program that builds and drops a large
+/// structure over and over rebuilds it from parked blocks, while parked memory
+/// never grows past what the program already held. The limit is per thread.
+const PARKED_BYTES_FLOOR: usize = 16 << 20;
 
 /// Alignment of every block. Inline blocks used to come straight from `malloc`,
 /// which aligns to 16 on every 64-bit target the runtime supports, and their
@@ -138,6 +139,12 @@ struct BlockCache {
     heads: [Cell<*mut ParkedBlock>; CLASS_COUNT],
     queues: [ClassQueue; CLASS_COUNT],
     parked_bytes: Cell<usize>,
+    /// Bytes of blocks this thread took from the system and has not given
+    /// back: those live and those parked, less any parked from other threads.
+    held_bytes: Cell<usize>,
+    /// The most bytes of blocks this thread has held live at once, as seen
+    /// when a block is released.
+    peak_live_bytes: Cell<usize>,
     cleanup: Cell<Cleanup>,
 }
 
@@ -164,6 +171,8 @@ impl BlockCache {
             heads: [const { Cell::new(std::ptr::null_mut()) }; CLASS_COUNT],
             queues: [const { ClassQueue::new() }; CLASS_COUNT],
             parked_bytes: Cell::new(0),
+            held_bytes: Cell::new(0),
+            peak_live_bytes: Cell::new(0),
             cleanup: Cell::new(Cleanup::Unregistered),
         }
     }
@@ -247,7 +256,7 @@ impl BlockCache {
     #[inline(always)]
     fn park(&self, base: *mut u8, class: usize, mode: CacheMode) -> bool {
         let parked = self.parked_bytes.get() + class_size(class);
-        if parked > PARKED_BYTES_LIMIT || !self.is_cleanup_arranged() {
+        if parked > self.parked_limit() || !self.is_cleanup_arranged() {
             return false;
         }
         let block = base.cast::<ParkedBlock>();
@@ -260,6 +269,31 @@ impl BlockCache {
         unsafe { mark_parked(base, class_size(class), mode) };
         self.parked_bytes.set(parked);
         true
+    }
+
+    /// The most bytes this thread may keep parked: [`PARKED_BYTES_FLOOR`], or
+    /// the most it has held live at once if that is more. Bytes still live
+    /// are those held and not parked; a block being released counts as live.
+    #[inline(always)]
+    fn parked_limit(&self) -> usize {
+        let live = (self.held_bytes.get()).saturating_sub(self.parked_bytes.get());
+        let peak = self.peak_live_bytes.get().max(live);
+        self.peak_live_bytes.set(peak);
+        peak.max(PARKED_BYTES_FLOOR)
+    }
+
+    /// Counts a block of `class` taken from the system as held.
+    #[inline(always)]
+    fn hold(&self, class: usize) {
+        self.held_bytes
+            .set(self.held_bytes.get().saturating_add(class_size(class)));
+    }
+
+    /// Counts a block of `class` given back to the system as no longer held.
+    #[inline(always)]
+    fn let_go(&self, class: usize) {
+        self.held_bytes
+            .set(self.held_bytes.get().saturating_sub(class_size(class)));
     }
 
     /// Whether the thread will empty this cache on exit, arranging it on the
@@ -289,6 +323,9 @@ impl BlockCache {
             queue.tail.set(std::ptr::null_mut());
             queue.count.set(0);
         }
+        let parked = self.parked_bytes.get();
+        self.held_bytes
+            .set(self.held_bytes.get().saturating_sub(parked));
         self.parked_bytes.set(0);
     }
 }
@@ -662,13 +699,19 @@ pub unsafe fn alloc_block(size: usize) -> *mut u8 {
     let Some(class) = cached_class(size, mode) else {
         return take_from_system(size);
     };
-    let parked = this_thread_cache().take(class, mode);
-    match parked {
+    let cache = this_thread_cache();
+    match cache.take(class, mode) {
         Some(block) => {
             count_reuse(mode);
             block
         }
-        None => take_new_block(class, mode),
+        None => {
+            let block = take_new_block(class, mode);
+            if !block.is_null() {
+                cache.hold(class);
+            }
+            block
+        }
     }
 }
 
@@ -695,7 +738,9 @@ pub unsafe fn release_block(base: *mut u8, size: usize) {
         system_block_size(base).is_none_or(|size| size >= class_size(class)),
         "a block released at a class larger than the block"
     );
-    if !this_thread_cache().park(base, class, mode) {
+    let cache = this_thread_cache();
+    if !cache.park(base, class, mode) {
+        cache.let_go(class);
         // SAFETY: a cached block was allocated at its class size.
         unsafe { release_to_system(base, class_size(class)) };
     }

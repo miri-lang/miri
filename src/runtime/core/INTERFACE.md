@@ -175,8 +175,9 @@ bytes into a heap buffer of its own.
   every handed-out block with `0xAA`, and refuses a release that names a size
   class larger than the block the system gave. A release build is never
   poisoned.
-- Parked memory is per thread, at most 16 MiB each, so a process can hold its
-  thread count times that. `MIRI_ALLOC_COUNT` also prints
+- Parked memory is per thread: at most 16 MiB, or the most bytes of blocks
+  the thread has held live at once if that is more, so parked memory never
+  grows past what the program already held. `MIRI_ALLOC_COUNT` also prints
   `MIRI_ALLOC_REUSED: <n> block(s) handed out again from released ones`.
 
 ---

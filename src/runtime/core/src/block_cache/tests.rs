@@ -131,24 +131,44 @@ fn every_class_is_sixteen_byte_sized_and_aligned() {
 }
 
 #[test]
-fn releases_past_the_parked_limit_go_back_to_the_system() {
-    let capacity = PARKED_BYTES_LIMIT / LARGEST_CACHED_BLOCK;
-    let blocks: Vec<*mut u8> = (0..=capacity)
+fn a_thread_parks_every_block_it_held_live_even_past_the_floor() {
+    let count = PARKED_BYTES_FLOOR / LARGEST_CACHED_BLOCK + 100;
+    let blocks: Vec<*mut u8> = (0..count)
         .map(|_| unsafe { alloc_block(LARGEST_CACHED_BLOCK) })
         .collect();
-    let start = parked_count(LARGEST_CACHED_BLOCK);
     let spare = parked_bytes();
     for &block in &blocks {
         unsafe { release_block(block, LARGEST_CACHED_BLOCK) };
     }
-    assert_eq!(parked_bytes(), PARKED_BYTES_LIMIT);
-    let parked = parked_count(LARGEST_CACHED_BLOCK) - start;
-    assert_eq!(parked, (PARKED_BYTES_LIMIT - spare) / LARGEST_CACHED_BLOCK);
+    assert_eq!(parked_bytes(), spare + count * LARGEST_CACHED_BLOCK);
     let taken = unsafe { alloc_block(LARGEST_CACHED_BLOCK) };
     assert!(blocks.contains(&taken), "a parked block was not handed out");
-    assert_eq!(parked_bytes(), PARKED_BYTES_LIMIT - LARGEST_CACHED_BLOCK);
     unsafe { release_block(taken, LARGEST_CACHED_BLOCK) };
-    assert_eq!(parked_bytes(), PARKED_BYTES_LIMIT);
+}
+
+#[test]
+fn blocks_released_past_what_the_thread_held_live_go_back_to_the_system() {
+    // Blocks another thread allocated count towards nothing this thread held,
+    // so this thread parks them only up to the floor.
+    let count = PARKED_BYTES_FLOOR / LARGEST_CACHED_BLOCK + 1;
+    let addresses: Vec<usize> = match std::thread::spawn(move || {
+        (0..count)
+            .map(|_| unsafe { alloc_block(LARGEST_CACHED_BLOCK) } as usize)
+            .collect()
+    })
+    .join()
+    {
+        Ok(addresses) => addresses,
+        Err(_) => panic!("the allocating thread failed"),
+    };
+    let start = parked_count(LARGEST_CACHED_BLOCK);
+    let spare = parked_bytes();
+    for &address in &addresses {
+        unsafe { release_block(address as *mut u8, LARGEST_CACHED_BLOCK) };
+    }
+    assert_eq!(parked_bytes(), PARKED_BYTES_FLOOR);
+    let parked = parked_count(LARGEST_CACHED_BLOCK) - start;
+    assert_eq!(parked, (PARKED_BYTES_FLOOR - spare) / LARGEST_CACHED_BLOCK);
 }
 
 #[test]
