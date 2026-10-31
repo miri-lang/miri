@@ -1442,7 +1442,7 @@ pub fn verify_collection_element_ownership(
             continue;
         };
         let decl = &body.local_decls[receiver.0];
-        if !holds_reference_counted_elements(&decl.ty.kind) {
+        if !holds_reference_counted_elements(body, &decl.ty.kind) {
             continue;
         }
         violations.push(VerificationViolation {
@@ -1604,7 +1604,8 @@ fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::
 }
 
 /// Whether `kind` is a built-in collection whose elements — or, for a `Map`,
-/// whose keys or values — the drop site releases one by one, the release that a
+/// whose keys or values — are counted slots (the classifier's
+/// [`crate::mir::rc::is_slot_counted`]) the drop site releases one by one, the release that a
 /// borrowed element cannot survive, and that a per-instantiation body could be
 /// named for.
 ///
@@ -1614,14 +1615,15 @@ fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::
 /// or `Option` element, and a receiver written as a canonical variant rather than
 /// a class reference. An `Array`'s size argument is a value, not a type, so it is
 /// never mistaken for an element.
-fn holds_reference_counted_elements(kind: &crate::ast::types::TypeKind) -> bool {
+fn holds_reference_counted_elements(body: &Body, kind: &crate::ast::types::TypeKind) -> bool {
     use crate::ast::expression::ExpressionKind;
     let crate::ast::types::TypeKind::Custom(name, Some(args)) = kind else {
         return false;
     };
     BuiltinCollectionKind::from_name(name).is_some()
         && args.iter().any(|arg| {
-            matches!(&arg.node, ExpressionKind::Type(ty, _) if crate::mir::rc::is_field_managed(&ty.kind))
+            matches!(&arg.node, ExpressionKind::Type(ty, _)
+                if crate::mir::rc::is_slot_counted(&ty.kind, body.layout_scope()))
         })
         && crate::mir::lowering::can_be_monomorphized_at(kind)
 }

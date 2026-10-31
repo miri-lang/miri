@@ -18,7 +18,7 @@ use crate::codegen::cranelift::value_abi::{miri_signature, Passing, Returning};
 use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
 use crate::mir::option_layout::{resolve_alias, OptionalLayers};
-use crate::mir::rc::{is_element_counted, is_slot_counted};
+use crate::mir::rc::is_slot_counted;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::TypeFacts;
 use crate::mir::type_facts::{EnumDefinition, TypeDefinition, ValueLayout};
@@ -963,7 +963,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         if let Some(val_expr) = Self::map_val_expr(kind) {
             if let ExpressionKind::Type(val_ty, _) = &val_expr.node {
-                if is_element_counted(&val_ty.kind, type_ctx.layout_scope()) {
+                if is_slot_counted(&val_ty.kind, type_ctx.layout_scope()) {
                     let ptr_type = type_ctx.ptr_type;
                     let ptr_size = ptr_type.bytes() as i32;
                     let states = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
@@ -1005,7 +1005,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         if let Some(inner_expr) = Self::collection_elem_expr(kind) {
             if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
-                if is_element_counted(&inner_ty.kind, type_ctx.layout_scope()) {
+                if is_slot_counted(&inner_ty.kind, type_ctx.layout_scope()) {
                     let ptr_type = type_ctx.ptr_type;
                     let ptr_size = ptr_type.bytes() as i32;
                     let data = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
@@ -1848,7 +1848,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Routing: built-in collections / String use their per-shape runtime decref
     /// helper (the fast path); user classes call `miri.TypeName.$decref`; Tuple,
     /// Option and function values (the only `ElementShape::Other` variants that
-    /// `is_field_managed` reports as managed) inline through
+    /// the classifier counts, `is_slot_counted`) inline through
     /// `emit_decref_value`, which dispatches to `emit_type_drop` and
     /// recursively releases nested managed fields. Primitive `Other` shapes are
     /// the explicit no-op branch.
@@ -1933,11 +1933,10 @@ impl<'a> FunctionTranslator<'a> {
             builder.ins().call(local_func, &[old_val]);
             return Ok(());
         }
-        // `Other` shapes that `is_field_managed` flags as managed (Tuple, Option,
-        // function values)
-        // are heap-allocated with an RC header. Route through the inline
+        // `Other` shapes the classifier counts (a boxed tuple or optional, a
+        // function value) are heap-allocated with an RC header. Route through the inline
         // decref-and-drop emitter so nested managed payloads are released.
-        if is_element_counted(elem_type_kind, type_ctx.layout_scope()) {
+        if is_slot_counted(elem_type_kind, type_ctx.layout_scope()) {
             let old_val = builder
                 .ins()
                 .load(ptr_type, MemFlagsData::new(), elem_addr, 0);

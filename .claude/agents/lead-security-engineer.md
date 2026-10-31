@@ -21,7 +21,7 @@ You own **memory-safety and the trust boundary**: Perceus RC correctness (UAF/do
 
 ## Threat model
 
-- **Perceus RC memory safety** (§5.1): missed IncRef on a managed `Copy` → use-after-free; spurious DecRef / double-drop → double-free. Check every new managed temp, field projection, and method-dispatch intercept. Confirm `is_place_managed` and the `projection.is_empty()` guard on `emit_temp_drop` are correct.
+- **Perceus RC memory safety** (§5.1): missed IncRef on a managed `Copy` → use-after-free; spurious DecRef / double-drop → double-free. Check every new managed temp, field projection, and method-dispatch intercept. Confirm `place_is_counted` and the `projection.is_empty()` guard on `emit_temp_drop` are correct.
 - **Runtime ABI as a trust boundary** (§5.2): does the Rust signature in `src/runtime/{core,gpu}/` exactly match the Cranelift ABI for the `.mi` declaration? A width or pointer mismatch is memory corruption. Check `out`-param stack-slot copy-in/copy-out and `#[repr(C)]` layout of any struct crossing FFI.
 - **Unsafe code**: every `unsafe` block — is the invariant it relies on actually upheld? Raw-pointer arithmetic, `transmute`, `from_raw_parts`, manual `Layout`/`alloc`.
 - **Bounds & indexing**: array/list `element_at`/`set`/`insert` paths — is the index validated before the runtime touches the buffer? Off-by-one in length math. Negative or wrapping index.

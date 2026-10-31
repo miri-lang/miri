@@ -149,7 +149,7 @@ fn emit_enum_variant_string(
 
             // Drop the payload temp (which held the reference from the field read).
             // This balances the reference created by the assignment from the projected field.
-            if ctx.is_perceus_managed(&payload_ty.kind) {
+            if ctx.is_counted(&payload_ty.kind) {
                 ctx.emit_temp_drop(payload_temp, watermark, *span);
             }
 
@@ -211,7 +211,7 @@ fn emit_option_some_block(
 
     // Drop the payload temp (which held the reference from the field read).
     // This balances the reference created by the assignment from the projected field.
-    if ctx.is_perceus_managed(&inner_ty.kind) {
+    if ctx.is_counted(&inner_ty.kind) {
         ctx.emit_temp_drop(payload_temp, render_ctx.watermark, render_ctx.span);
     }
 

@@ -340,7 +340,7 @@ fn emit_option_payload_compare(
     let lhs_payload = materialize_field(ctx, &lhs_place, payload.clone(), inner_ty, span);
     let rhs_payload = materialize_field(ctx, &rhs_place, payload, inner_ty, span);
 
-    if ctx.is_perceus_managed(&inner_ty.kind) {
+    if ctx.is_counted(&inner_ty.kind) {
         ctx.register_scope_temp(lhs_payload);
         ctx.register_scope_temp(rhs_payload);
     }
@@ -784,7 +784,7 @@ fn emit_variant_payload_equality(
             true,
         )?;
 
-        if ctx.is_perceus_managed(&payload_ty.kind) {
+        if ctx.is_counted(&payload_ty.kind) {
             ctx.emit_temp_drop(lhs_payload, vctx.watermark, span);
             ctx.emit_temp_drop(rhs_payload, vctx.watermark, span);
         }
@@ -1015,7 +1015,7 @@ fn emit_field_equality(
     let lhs_field = materialize_field(ctx, lhs_place, field.clone(), field_ty, span);
     let rhs_field = materialize_field(ctx, rhs_place, field, field_ty, span);
 
-    if ctx.is_perceus_managed(&field_ty.kind) {
+    if ctx.is_counted(&field_ty.kind) {
         ctx.register_scope_temp(lhs_field);
         ctx.register_scope_temp(rhs_field);
     }

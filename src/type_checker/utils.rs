@@ -30,7 +30,9 @@ use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
-use crate::type_checker::value_class::{held_value_layout, LayoutScope};
+use crate::type_checker::value_class::{
+    held_value_layout, value_class, LayoutScope, ValueClass, WordRole,
+};
 
 /// The element type a definition that names `Iterable` without an argument
 /// yields.
@@ -255,123 +257,30 @@ fn is_resource_inner<'a>(
 /// zero word is a null pointer, so a string, a collection, a closure and every
 /// user-defined struct, enum and class are refused.
 ///
-/// [`is_perceus_managed`] alone is not that question: it calls a struct managed
-/// only when one of its fields is, so a struct of plain scalars passes it while
-/// still being reached through a reference.
+/// The answer is read off the type's value class: a scalar, an open type
+/// parameter, an untracked word and a value held as its bytes with no
+/// managed interior are valid at zero; a counted reference or a nullable
+/// pointer to one is not. A bare name the program does not define is a type
+/// parameter (`Self` among them), instantiated at a type answering here.
 pub fn is_zero_fillable_element(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
     if vec_type_dim(kind).is_some() && held_value_layout(kind, scope).is_some() {
         return true;
     }
-    if let TypeKind::Custom(name, _) = kind {
+    if let TypeKind::Custom(name, args) = kind {
         if name == ATOMIC_TYPE_NAME {
             return true;
         }
-        if matches!(
-            scope.definitions.get(name),
-            Some(TypeDefinition::Struct(_) | TypeDefinition::Enum(_))
-        ) {
-            return false;
+        match scope.definitions.get(name) {
+            Some(TypeDefinition::Struct(_) | TypeDefinition::Enum(_)) => return false,
+            None if args.is_none() => return true,
+            Some(_) | None => {}
         }
     }
-    !is_perceus_managed(kind, scope.definitions)
-}
-
-/// Determines whether a type requires Perceus reference counting.
-///
-/// A type is Perceus-managed when it holds references to heap-allocated data
-/// and cannot be bitwise-copied. This includes:
-/// - Collections: `List<T>`, `Array<T>`, `Map<K,V>`, `Set<T>`
-/// - Strings: heap-allocated via `alloc_with_rc`
-/// - Options and Results over managed types
-/// - Tuples containing managed types
-/// - Closures/function values (heap-allocated)
-/// - User-defined classes (which may hold managed fields)
-/// - Structs with Perceus-managed fields
-///
-/// Pure scalar types (Int, Float, Bool, etc.) and generic parameters are NOT managed.
-/// Auto-copy types (those in the `auto_copy_types` set) bypass RC.
-pub fn is_perceus_managed(
-    kind: &TypeKind,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
-) -> bool {
-    is_perceus_managed_inner(
-        kind,
-        type_definitions,
-        &mut std::collections::HashSet::new(),
-    )
-}
-
-fn expr_type_is_perceus_managed(
-    expr: &Expression,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
-    visited: &mut std::collections::HashSet<String>,
-    default_if_unknown: bool,
-) -> bool {
-    if let ExpressionKind::Type(elem, _) = &expr.node {
-        is_perceus_managed_inner(&elem.kind, type_definitions, visited)
-    } else {
-        default_if_unknown
-    }
-}
-
-fn is_custom_type_perceus_managed(
-    name: &str,
-    args: Option<&[Expression]>,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
-    visited: &mut std::collections::HashSet<String>,
-) -> bool {
-    if name == "Self" || name == crate::ast::types::ATOMIC_TYPE_NAME {
-        return false;
-    }
-
-    if BuiltinCollectionKind::from_name(name).is_some() {
-        return args.is_some();
-    }
-
-    if visited.contains(name) {
-        return true;
-    }
-    visited.insert(name.to_string());
-
-    match type_definitions.get(name) {
-        Some(TypeDefinition::Struct(def)) => def.fields.iter().any(|(_, field_ty, _)| {
-            is_perceus_managed_inner(&field_ty.kind, type_definitions, visited)
-        }),
-        Some(TypeDefinition::Class(_)) => true,
-        Some(
-            TypeDefinition::Enum(_)
-            | TypeDefinition::Generic(_)
-            | TypeDefinition::Alias(_)
-            | TypeDefinition::Trait(_),
-        )
-        | None => false,
-    }
-}
-
-fn is_perceus_managed_inner(
-    kind: &TypeKind,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
-    visited: &mut std::collections::HashSet<String>,
-) -> bool {
-    match kind {
-        TypeKind::Option(elem_ty) => {
-            is_perceus_managed_inner(&elem_ty.kind, type_definitions, visited)
-        }
-        TypeKind::Tuple(elems) => elems
-            .iter()
-            .any(|e| expr_type_is_perceus_managed(e, type_definitions, visited, false)),
-        TypeKind::List(elem_expr) | TypeKind::Array(elem_expr, _) => {
-            expr_type_is_perceus_managed(elem_expr, type_definitions, visited, true)
-        }
-        TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::String | TypeKind::Function(_) => true,
-        TypeKind::Result(ok_expr, err_expr) => {
-            expr_type_is_perceus_managed(ok_expr, type_definitions, visited, false)
-                || expr_type_is_perceus_managed(err_expr, type_definitions, visited, false)
-        }
-        TypeKind::Custom(name, args) => {
-            is_custom_type_perceus_managed(name, args.as_deref(), type_definitions, visited)
-        }
-        _ => false,
+    match value_class(kind, scope) {
+        ValueClass::Scalar(_)
+        | ValueClass::Word(WordRole::Parameter | WordRole::Untracked)
+        | ValueClass::Bitwise(_) => true,
+        ValueClass::Word(WordRole::NullablePointer) | ValueClass::Managed => false,
     }
 }
 

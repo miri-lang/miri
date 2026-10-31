@@ -35,7 +35,7 @@ pub(super) struct PerceusContext<'a> {
     /// The parameters the body leaves open; see [`Body::open_params`].
     open_params: &'a std::collections::HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
-    /// Used by `is_place_managed` to resolve `closure.Field(i)` projections so that
+    /// Used by `place_is_counted` to resolve `closure.Field(i)` projections so that
     /// `handle_aggregate` can IncRef managed captures when building a closure aggregate.
     closure_capture_types:
         &'a std::collections::HashMap<crate::mir::Local, Vec<crate::ast::types::Type>>,
@@ -167,7 +167,7 @@ impl OptimizationPass for Perceus {
         // are no non-parameter managed locals, a closure aggregate may capture a
         // managed parameter (e.g. `fn make_counter(items [int]) fn() int`). In that
         // case `handle_aggregate` must still IncRef the parameter; it uses
-        // `is_place_managed` rather than `managed_locals`, so it works correctly.
+        // `place_is_counted` rather than `managed_locals`, so it works correctly.
         // Exiting early when managed_locals is empty would skip that IncRef, causing
         // the parameter's RC to remain at 1 while the closure holds a dangling ref.
         //
@@ -432,7 +432,7 @@ impl Perceus {
         lhs: &Place,
     ) -> Option<Place> {
         let param_place = get_move_from_borrowed_place(rvalue, ctx.borrowed)?;
-        let is_managed = |place: &Place| is_place_managed(place, ctx);
+        let is_managed = |place: &Place| place_is_counted(place, ctx);
         (is_managed(&param_place) && is_managed(lhs)).then_some(param_place)
     }
 
@@ -452,7 +452,7 @@ impl Perceus {
         }
 
         // Direct managed place?
-        if is_place_managed(source, ctx) {
+        if place_is_counted(source, ctx) {
             return true;
         }
 
@@ -481,7 +481,7 @@ impl Perceus {
     ) -> bool {
         let mut changed = false;
         for place in operands.iter().filter_map(Operand::place) {
-            if is_place_managed(place, ctx) {
+            if place_is_counted(place, ctx) {
                 new_stmts.push(Statement {
                     kind: StatementKind::IncRef(place.clone()),
                     span,
@@ -508,7 +508,7 @@ impl Perceus {
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
         if let Operand::Copy(place) = operand {
-            let aliases_managed_source = is_place_managed(place, ctx)
+            let aliases_managed_source = place_is_counted(place, ctx)
                 || place
                     .projection
                     .iter()
@@ -535,7 +535,7 @@ impl Perceus {
         let overwrites_borrowed_value = lhs.projection.is_empty()
             && ctx.borrowed.contains(lhs.local)
             && !ctx.borrowed.written_back.contains(&lhs.local);
-        lhs.local.0 != 0 && !overwrites_borrowed_value && is_place_managed(lhs, ctx)
+        lhs.local.0 != 0 && !overwrites_borrowed_value && place_is_counted(lhs, ctx)
     }
 }
 
@@ -633,7 +633,7 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// carried through every projection, because `MirType::Custom` names a class
 /// without its type arguments; whether the place is counted is asked of that
 /// declared type.
-fn is_place_managed(place: &Place, ctx: &PerceusContext) -> bool {
+fn place_is_counted(place: &Place, ctx: &PerceusContext) -> bool {
     place_declared_type(place, ctx).is_some_and(|declared| ctx.is_counted(&declared.kind))
 }
 

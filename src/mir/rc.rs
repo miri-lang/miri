@@ -154,8 +154,8 @@ fn is_never_counted(kind: &TypeKind) -> bool {
 
 /// Returns true if a field/element type is managed (heap-allocated, needs DecRef
 /// on drop), before asking whether it is held as its bytes: a struct, tuple,
-/// optional or enum answers `true` here, and [`is_slot_counted`] and
-/// [`is_element_counted`] rule out the ones held inline.
+/// optional or enum answers `true` here, and [`is_slot_counted`] rules out
+/// the ones held inline.
 ///
 /// A function value is a closure allocation of its own wherever it is held, so
 /// a collection element or an aggregate field holding one releases it.
@@ -166,7 +166,7 @@ fn is_never_counted(kind: &TypeKind) -> bool {
 /// local left at the native kind, while an `async` call is typed at its
 /// result, so a `Future` slot is only ever written as an annotation and never
 /// holds a value.
-pub fn is_field_managed(kind: &TypeKind) -> bool {
+fn is_field_managed(kind: &TypeKind) -> bool {
     if let TypeKind::Custom(name, args) = kind {
         // The atomic element wrapper (`Atomic<scalar>`) is stored as its
         // scalar, never reference-counted — exclude it from the
@@ -207,20 +207,13 @@ pub fn atomic_component(args: Option<&[Expression]>) -> Option<&Expression> {
         .filter(|arg| matches!(arg.node, ExpressionKind::Type(_, _)))
 }
 
-/// Whether a slot of an aggregate — an optional's or an enum's payload, a
-/// tuple element, a field of a class or struct, or a closure's capture —
+/// Whether a slot — a collection element, an optional's or an enum's payload,
+/// a tuple element, a field of a class or struct, or a closure's capture —
 /// holding a value of `kind`, read against `scope`, holds a counted reference
 /// its holder releases.
 ///
 /// A value held as its bytes sits inline in its holder instead: it is no
 /// reference, and its holder's release has nothing to release in it.
 pub fn is_slot_counted(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    is_field_managed(kind) && held_value_layout(kind, scope).is_none()
-}
-
-/// Whether a collection element of `kind`, read against `scope`, is a counted
-/// reference the collection releases; see [`is_field_managed`]. A value held
-/// as its bytes is laid out inline and is not.
-pub fn is_element_counted(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
     is_field_managed(kind) && held_value_layout(kind, scope).is_none()
 }

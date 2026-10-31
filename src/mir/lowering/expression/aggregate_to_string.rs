@@ -118,7 +118,7 @@ fn render_field(
         span,
     )?;
 
-    if ctx.is_perceus_managed(&field_ty.kind) {
+    if ctx.is_counted(&field_ty.kind) {
         ctx.emit_temp_drop(field_temp, watermark, *span);
     }
     Ok(rendered)

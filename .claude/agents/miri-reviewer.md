@@ -18,7 +18,7 @@ Skeptical compiler reviewer. Your output is a findings list, not a fix. You are 
 1. Inspect the change: `git diff` (or the range the caller specifies).
 2. For every touched file, run the Miri threat model **and** the principles model:
    - **MIR visitor completeness** (PRINCIPLES.md §5.4): new `MirInstruction` / `Place` variant? Every visitor updated (`perceus.rs`, codegen, analyses)? No `_ =>` swallowing it?
-   - **Perceus RC correctness** (PRINCIPLES.md §5.1): new temp copies of managed objects, field projections, method dispatch? `is_place_managed` correct? `obj_op_is_copy` / `emit_temp_drop` guarded on `projection.is_empty()` where needed? A missed IncRef = UAF; spurious DecRef = double-free.
+   - **Perceus RC correctness** (PRINCIPLES.md §5.1): new temp copies of managed objects, field projections, method dispatch? `place_is_counted` correct? `obj_op_is_copy` / `emit_temp_drop` guarded on `projection.is_empty()` where needed? A missed IncRef = UAF; spurious DecRef = double-free.
    - **Runtime/stdlib alignment** (PRINCIPLES.md §5.2): new intrinsic exported in `src/runtime/core/` AND declared in stdlib `.mi` with `runtime` keyword? Rust signature matches Cranelift ABI? Runtime rebuilt in release?
    - **Stdlib independence** (PRINCIPLES.md §1.1, §5.3): compiler paths special-casing a stdlib type name? Critical.
    - **Architecture / layer rules** (PRINCIPLES.md §1.1–§1.2): cross-layer imports going the wrong way? `codegen` types leaking into `mir/` or `type_checker/`?

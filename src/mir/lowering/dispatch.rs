@@ -1783,7 +1783,7 @@ fn resolve_param_types(
 /// that nothing else releases — there the coerced temp is the only holder left, and
 /// retaining would strand the extra reference.
 fn retain_still_held_value(ctx: &mut LoweringContext, op: &Operand, op_ty: &Type, span: Span) {
-    if !ctx.is_perceus_managed(&op_ty.kind) {
+    if !ctx.is_counted(&op_ty.kind) {
         return;
     }
     let (Operand::Copy(place) | Operand::Move(place)) = op else {

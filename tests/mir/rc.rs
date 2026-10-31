@@ -4,7 +4,7 @@
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
-use miri::mir::rc::{is_element_counted, is_field_managed, is_slot_counted};
+use miri::mir::rc::is_slot_counted;
 use miri::type_checker::value_class::LayoutScope;
 use std::collections::HashMap;
 
@@ -17,29 +17,35 @@ fn expr_ty(kind: TypeKind) -> Expression {
 }
 
 #[test]
-fn is_field_managed_classifies_heap_types() {
+fn a_slot_holding_a_heap_value_is_counted() {
+    let definitions = HashMap::new();
+    let scope = LayoutScope::program(&definitions);
     let int_expr = Box::new(expr_ty(TypeKind::Int));
-    assert!(is_field_managed(&TypeKind::String));
-    assert!(is_field_managed(&TypeKind::List(int_expr.clone())));
-    assert!(is_field_managed(&TypeKind::Custom(
-        "MyClass".to_string(),
-        None
-    )));
-    assert!(!is_field_managed(&TypeKind::Int));
-    assert!(!is_field_managed(&TypeKind::Boolean));
+    assert!(is_slot_counted(&TypeKind::String, scope));
+    assert!(is_slot_counted(&TypeKind::List(int_expr.clone()), scope));
+    assert!(is_slot_counted(
+        &TypeKind::Custom("MyClass".to_string(), None),
+        scope
+    ));
+    assert!(!is_slot_counted(&TypeKind::Int, scope));
+    assert!(!is_slot_counted(&TypeKind::Boolean, scope));
 }
 
 /// A function value is a closure allocation of its own, so a field or element
 /// holding one must release it.
 #[test]
-fn is_field_managed_includes_function_values() {
+fn a_slot_holding_a_function_value_is_counted() {
     use miri::ast::types::FunctionTypeData;
     let fn_kind = TypeKind::Function(Box::new(FunctionTypeData {
         generics: None,
         params: Vec::new(),
         return_type: None,
     }));
-    assert!(is_field_managed(&fn_kind));
+    let definitions = HashMap::new();
+    assert!(is_slot_counted(
+        &fn_kind,
+        LayoutScope::program(&definitions)
+    ));
 }
 
 /// A vector is held as its bytes, inline in the collection or aggregate
@@ -50,7 +56,6 @@ fn a_vector_held_as_its_bytes_is_no_counted_element_or_slot() {
     let definitions = HashMap::new();
     let scope = LayoutScope::program(&definitions);
     let vec3 = TypeKind::Custom("Vec3".to_string(), Some(vec![expr_ty(TypeKind::F32)]));
-    assert!(!is_element_counted(&vec3, scope));
     assert!(!is_slot_counted(&vec3, scope));
 }
 

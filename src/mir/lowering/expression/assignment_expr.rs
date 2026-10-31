@@ -150,7 +150,7 @@ fn assign_to_var_simple(
         Rvalue::Use(val.clone())
     };
 
-    if ctx.is_perceus_managed(&lhs_ty.kind) {
+    if ctx.is_counted(&lhs_ty.kind) {
         let rhs_place = match &rvalue {
             Rvalue::Use(Operand::Copy(p)) | Rvalue::Use(Operand::Move(p)) => Some(p.clone()),
             _ => None,
@@ -200,7 +200,7 @@ fn handle_managed_place_assign(
     let should_upload = lhs_decl.residency == MirResidency::Gpu
         && !shares_the_device_buffer
         && rhs_place.projection.is_empty()
-        && ctx.is_perceus_managed(&lhs_ty.kind);
+        && ctx.is_counted(&lhs_ty.kind);
 
     if should_upload {
         // Emit upload BEFORE the assignment so the host bytes are transferred to device first.
@@ -289,7 +289,7 @@ fn assign_to_var_compound(
     // takes its reference counting: the target releases what it held and takes
     // the combined value, which is a fresh allocation when the operator was a
     // method call.
-    if ctx.is_perceus_managed(&result_ty.kind) {
+    if ctx.is_counted(&result_ty.kind) {
         assign_to_var_simple(ctx, local, combined, expr, None, &watermark)?;
         return Ok(());
     }
@@ -594,7 +594,7 @@ fn assign_to_member_simple(
     val: Operand,
     expr: &Expression,
 ) -> Result<(), LoweringError> {
-    let field_is_managed = slot_ty.is_some_and(|ty| ctx.is_perceus_managed(&ty.kind));
+    let field_is_managed = slot_ty.is_some_and(|ty| ctx.is_counted(&ty.kind));
 
     if field_is_managed {
         ctx.push_statement(crate::mir::Statement {
@@ -641,7 +641,7 @@ fn assign_to_member_compound(
     // The store into the field is the plain one, for the reason the variable
     // target gives: a managed field releases what it held and takes the
     // combined value rather than copying it again.
-    if ctx.is_perceus_managed(&result_ty.kind) {
+    if ctx.is_counted(&result_ty.kind) {
         assign_to_member_simple(ctx, target_place, slot_ty, combined.clone(), expr)?;
     } else {
         ctx.push_statement(crate::mir::Statement {
@@ -667,7 +667,7 @@ pub(crate) fn inc_ref_if_managed(
     ty: &Type,
     expr: &Expression,
 ) {
-    if ctx.is_perceus_managed(&ty.kind) {
+    if ctx.is_counted(&ty.kind) {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::IncRef(place.clone()),
@@ -944,7 +944,7 @@ pub(crate) fn emit_map_get_checked_call(
     // so the temp holding it is a borrow: releasing it would take a reference
     // away from the entry the map is still holding.
     let temp = ctx.push_temp(value_ty.clone(), expr.span);
-    if ctx.is_perceus_managed(&value_ty.kind)
+    if ctx.is_counted(&value_ty.kind)
         && crate::runtime_fns::hands_back_a_borrow(rt::MAP_GET_CHECKED)
     {
         ctx.mark_borrowed_temp(temp);

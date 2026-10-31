@@ -14,7 +14,7 @@ Research-only agent. Never edits. Answers structural questions about the Miri co
 - `src/lexer/`, `src/parser/` — tokenization, AST
 - `src/type_checker/` — inference, generics, trait resolution
 - `src/mir/lowering/` — AST → MIR; `control_flow.rs` holds intercepted method dispatch
-- `src/mir/optimization/perceus.rs` — RC insertion (`is_place_managed`, `obj_op_is_copy`, `emit_temp_drop`)
+- `src/mir/optimization/perceus.rs` — RC insertion (`place_is_counted`, `obj_op_is_copy`, `emit_temp_drop`)
 - `src/codegen/` — Cranelift lowering
 - `src/runtime/{core,gpu}/` — Rust runtimes (separate crates, built as release staticlibs)
 - `src/stdlib/**/*.mi` — Miri stdlib (nested dirs); `runtime "core"/"gpu" fn` = FFI declarations

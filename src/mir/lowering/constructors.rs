@@ -709,7 +709,7 @@ pub(crate) fn lower_list_constructor(
                 let array_ty = ctx.recorded_type(array.id)?;
                 sequence_elem_kind(ctx, &array_ty)
             });
-            let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_perceus_managed(&kind));
+            let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_counted(&kind));
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
         _ => emit_empty_list(ctx, span, &list_ty, destination),
@@ -1065,7 +1065,7 @@ pub(crate) fn lower_array_constructor(
     // with one is a compiler bug. An element held as its bytes lives in the
     // array's own bytes, so the zeroed storage the runtime hands back is
     // already a valid value of its type.
-    if ctx.is_perceus_managed(&elem_type.kind) {
+    if ctx.is_counted(&elem_type.kind) {
         return Err(LoweringError::unsupported_expression(
             format!(
                 "Array<T, N>() with managed element type '{}' should have been rejected at type-check time",

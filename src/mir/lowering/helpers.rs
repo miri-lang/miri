@@ -232,7 +232,7 @@ pub fn bind_pattern(
                         span: *span,
                     });
                     // Perceus now handles Field(0) projections on Option types via
-                    // is_place_managed, so no explicit IncRef needed here.
+                    // place_is_counted, so no explicit IncRef needed here.
                 }
                 return Ok(());
             }

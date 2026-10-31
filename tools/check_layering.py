@@ -49,7 +49,20 @@ RULES = [
         "what an intrinsic does to its arguments is stated on its declaration, "
         "which the type checker already reads",
     ),
+    (
+        "one classifier decides what is reference counted",
+        "src/",
+        re.compile(r"\bfn is_\w*_(managed|counted)\b"),
+        "whether a value, slot or element is counted is asked of mir::rc; a "
+        "second predicate falls back its own way and drifts from the first",
+    ),
 ]
+
+# The file a rule's question belongs to: it may define what the rule refuses
+# everywhere else.
+OWNERS = {
+    "one classifier decides what is reference counted": "src/mir/rc.rs",
+}
 
 # (path, rule name, why the import is still there). Known debt: each entry is
 # removed by the change that repairs the file, and no entry is added without
@@ -111,7 +124,7 @@ def violations():
     for rule_name, prefix, pattern, _ in RULES:
         for path in rust_files(prefix):
             relative = path.relative_to(ROOT).as_posix()
-            if not relative.startswith(prefix):
+            if not relative.startswith(prefix) or OWNERS.get(rule_name) == relative:
                 continue
             for number, code in code_lines(path):
                 if pattern.search(code) and not is_allowed(relative, rule_name):

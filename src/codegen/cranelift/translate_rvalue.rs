@@ -1325,10 +1325,8 @@ impl<'a> FunctionTranslator<'a> {
                             if crate::mir::instantiation::is_open_parameter(
                                 &kind,
                                 enum_def.generics.as_ref(),
-                            ) || crate::mir::rc::is_element_counted(
-                                &kind,
-                                type_ctx.layout_scope(),
-                            ) {
+                            ) || crate::mir::rc::is_slot_counted(&kind, type_ctx.layout_scope())
+                            {
                                 None
                             } else {
                                 Some(crate::ast::types::Type::new(kind, ty.span))

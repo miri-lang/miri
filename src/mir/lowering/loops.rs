@@ -338,7 +338,7 @@ fn bind_loop_variables(
     let mut per_pass = Vec::new();
     let mut per_pass_names = Vec::new();
     let mut bind = |ctx: &mut LoweringContext, decl: &VariableDeclaration, ty: Type| {
-        let is_managed = ctx.is_perceus_managed(&ty.kind);
+        let is_managed = ctx.is_counted(&ty.kind);
         let local = setup_loop_variable(ctx, decl, ty, is_managed, span);
         if is_managed {
             per_pass.push(local);

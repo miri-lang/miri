@@ -22,7 +22,7 @@
 use crate::ast::expression::Expression;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::{apply_generic_sub, instantiation_argument};
-use crate::mir::rc::is_field_managed;
+use crate::mir::rc::is_builtin_atomic;
 use crate::type_checker::context::TypeDefinition;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -276,7 +276,8 @@ pub fn payload_is_nullable_pointer(kind: &TypeKind, scope: LayoutScope<'_>) -> b
         TypeKind::Custom(name, args) => match resolve_alias(kind, scope.definitions) {
             Some(target) => payload_is_nullable_pointer(&target.kind, scope),
             None => {
-                is_field_managed(kind) && names_allocation(name, args.as_deref(), scope.definitions)
+                !is_builtin_atomic(name, args.as_deref())
+                    && names_allocation(name, args.as_deref(), scope.definitions)
             }
         },
         TypeKind::Int

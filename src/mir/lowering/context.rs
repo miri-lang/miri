@@ -629,7 +629,7 @@ impl<'a> LoweringContext<'a> {
     /// statement no pass reads.
     fn emit_managed_temp_dead(&mut self, local: Local, span: Span) {
         let kind = self.body.local_decls[local.0].ty.kind.clone();
-        if self.is_perceus_managed(&kind) {
+        if self.is_counted(&kind) {
             self.push_statement(crate::mir::Statement {
                 kind: StatementKind::StorageDead(Place::new(local)),
                 span,
@@ -834,7 +834,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Returns `true` if `kind` requires reference-count management, as the
     /// body's classifier decides it (see [`crate::mir::rc::RcClassifier`]).
-    pub fn is_perceus_managed(&self, kind: &crate::ast::types::TypeKind) -> bool {
+    pub fn is_counted(&self, kind: &crate::ast::types::TypeKind) -> bool {
         self.body.is_counted(kind)
     }
 
@@ -858,7 +858,7 @@ impl<'a> LoweringContext<'a> {
             return;
         }
         let kind = self.body.local_decls[local.0].ty.kind.clone();
-        if self.is_perceus_managed(&kind) {
+        if self.is_counted(&kind) {
             self.push_statement(crate::mir::Statement {
                 kind: StatementKind::StorageDead(Place::new(local)),
                 span,

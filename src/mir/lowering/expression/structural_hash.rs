@@ -173,7 +173,7 @@ fn emit_option_hash(
 
     ctx.set_current_block(some_bb);
     let payload = materialize_field(ctx, &place, PlaceElem::Field(0), inner_ty, span);
-    if ctx.is_perceus_managed(&inner_ty.kind) {
+    if ctx.is_counted(&inner_ty.kind) {
         ctx.register_scope_temp(payload);
     }
     let hashed = emit_structural_hash(
@@ -281,7 +281,7 @@ fn emit_enum_hash(
                 &payload_ty.kind,
                 Operand::Copy(Place::new(payload)),
             )?;
-            if ctx.is_perceus_managed(&payload_ty.kind) {
+            if ctx.is_counted(&payload_ty.kind) {
                 ctx.emit_temp_drop(payload, watermark, span);
             }
             hash = combine(ctx, hash, part, span);
@@ -324,7 +324,7 @@ fn emit_struct_hash(
     let mut hash = int_constant(ctx, field_types.len() as i128, span);
     for (field_idx, field_ty) in field_types.iter().enumerate() {
         let field = materialize_field(ctx, &place, PlaceElem::Field(field_idx), field_ty, span);
-        if ctx.is_perceus_managed(&field_ty.kind) {
+        if ctx.is_counted(&field_ty.kind) {
             ctx.register_scope_temp(field);
         }
         let part =
