@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::mir::analysis::dominators::DominatorTree;
+use crate::mir::analysis::traversal::successors_of;
 use crate::mir::{BasicBlock, BinOp, Body, Local, Rvalue, Statement, StatementKind};
 
 /// A natural loop: its header and every block of it, the header included.
@@ -52,7 +53,7 @@ pub fn natural_loops(body: &Body, dominators: &DominatorTree) -> Vec<NaturalLoop
     };
     let mut latches: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for &block in &reachable {
-        for successor in successors(body, block) {
+        for successor in successors_of(body, block) {
             if dominators.dominates(BasicBlock(successor), BasicBlock(block)) {
                 latches.entry(successor).or_default().push(block);
             }
@@ -77,20 +78,11 @@ pub fn natural_loops(body: &Body, dominators: &DominatorTree) -> Vec<NaturalLoop
         .collect()
 }
 
-/// The blocks `block`'s terminator may continue to.
-pub fn successors(body: &Body, block: usize) -> Vec<usize> {
-    body.basic_blocks
-        .get(block)
-        .and_then(|data| data.terminator.as_ref())
-        .map(|terminator| terminator.successors().iter().map(|b| b.0).collect())
-        .unwrap_or_default()
-}
-
 /// The blocks with an edge into each block, by block index.
 pub fn predecessors(body: &Body) -> Vec<Vec<usize>> {
     let mut predecessors = vec![Vec::new(); body.basic_blocks.len()];
     for block in 0..body.basic_blocks.len() {
-        for successor in successors(body, block) {
+        for successor in successors_of(body, block) {
             if let Some(list) = predecessors.get_mut(successor) {
                 list.push(block);
             }

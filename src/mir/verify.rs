@@ -657,7 +657,7 @@ fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpo
         let mut state = entries.get(&bb).cloned().unwrap_or_default();
         run_block(body, bb, tracked, &mut state, &mut Vec::new());
 
-        for successor in successors_of(body, bb) {
+        for successor in followed_successors(body, bb) {
             if !is_reachable[successor] {
                 continue;
             }
@@ -706,7 +706,7 @@ fn reachable_predecessors(body: &Body, reachable: &[usize]) -> HashMap<usize, Ve
     let is_reachable = block_mask(body, reachable);
     let mut predecessors: HashMap<usize, Vec<usize>> = HashMap::new();
     for candidate in reachable {
-        for successor in successors_of(body, *candidate) {
+        for successor in followed_successors(body, *candidate) {
             if !is_reachable[successor] {
                 continue;
             }
@@ -725,7 +725,7 @@ fn reachable_predecessors(body: &Body, reachable: &[usize]) -> HashMap<usize, Ve
 /// the terminator names: the path stops at the call, so what the caller was still
 /// holding is not a leak. The block itself stays reachable — every one of these
 /// sits on a failure branch that some other edge also reaches.
-fn successors_of(body: &Body, bb: usize) -> Vec<usize> {
+fn followed_successors(body: &Body, bb: usize) -> Vec<usize> {
     let Some(terminator) = body.basic_blocks[bb].terminator.as_ref() else {
         return Vec::new();
     };
@@ -1932,7 +1932,7 @@ fn fences_on_entry(body: &Body, carriers: &HandleCarriers) -> BTreeMap<usize, Fe
             continue;
         };
         exit.apply_terminator(carriers, &terminator.kind);
-        for successor in successors_of(body, bb) {
+        for successor in followed_successors(body, bb) {
             let along = exit.along_edge(body, &terminator.kind, successor);
             let changed = match entries.get_mut(&successor) {
                 Some(state) => state.join(&along),

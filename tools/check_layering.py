@@ -69,11 +69,8 @@ ALLOWED = [
     ("src/codegen/wgsl/emitter.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
     ("src/codegen/wgsl/types.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
     # The borrow verifier reuses the borrow inference; gone once it has its
-    # own conservative derivation. The in-bounds verifier reads one
-    # specification constant (whether integer arithmetic traps on overflow)
-    # that belongs in a specification module, not in the pass.
+    # own conservative derivation.
     ("src/mir/verify/local_borrows.rs", "a verifier shares no analysis with the pass it checks", "reuses the borrow inference's reach"),
-    ("src/mir/verify/in_bounds.rs", "a verifier shares no analysis with the pass it checks", "reads the overflow-trap specification constant from the pass"),
     # The type checker reads effect facts keyed by symbol name; gone once the
     # facts are attributes on the runtime declarations.
     ("src/type_checker/receiver_writes.rs", "the type checker learns nothing from a runtime symbol name", "asks which argument positions an intrinsic only reads"),

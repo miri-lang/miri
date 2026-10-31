@@ -686,7 +686,7 @@ fn keeps_non_negative(body: &Body, rvalue: &Rvalue, known: &HashSet<usize>) -> b
         Rvalue::Use(operand) => operand_ok(operand),
         Rvalue::Len(_) => true,
         Rvalue::BinaryOp(BinOp::Add | BinOp::Mul, lhs, rhs) => {
-            crate::mir::optimization::in_bounds::INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW
+            crate::mir::analysis::non_negative::INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW
                 && operand_ok(lhs)
                 && operand_ok(rhs)
         }

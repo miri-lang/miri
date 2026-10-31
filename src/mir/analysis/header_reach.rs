@@ -410,7 +410,7 @@ fn uncounted_root(body: &Body, local: Local, aliases: &HashSet<Local>) -> Option
     if !is_counted {
         return Some(UncountedRoot::NotCounted);
     }
-    let address_taken = address_taken_locals(body);
+    let address_taken = crate::mir::analysis::traversal::address_taken(body);
     let mut sorted: Vec<Local> = aliases.iter().copied().collect();
     sorted.sort_by_key(|alias| alias.0);
     sorted
@@ -457,25 +457,6 @@ fn holder_failure(
     address_taken
         .contains(&local)
         .then_some(UncountedRoot::AddressTaken(local))
-}
-
-/// The root of every place whose address `body` takes.
-fn address_taken_locals(body: &Body) -> HashSet<Local> {
-    (body.basic_blocks.iter())
-        .flat_map(|data| &data.statements)
-        .filter_map(|statement| match &statement.kind {
-            StatementKind::Assign(_, Rvalue::Ref(place))
-            | StatementKind::Reassign(_, Rvalue::Ref(place)) => Some(place.local),
-            StatementKind::Assign(..)
-            | StatementKind::Reassign(..)
-            | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
-            | StatementKind::IncRef(_)
-            | StatementKind::DecRef(_)
-            | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
-        })
-        .collect()
 }
 
 /// The first block giving the whole of `local` a value it holds no

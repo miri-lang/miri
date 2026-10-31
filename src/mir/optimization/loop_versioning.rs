@@ -68,6 +68,7 @@ use crate::mir::analysis::loops::{
 };
 use crate::mir::analysis::non_negative::{constant_step, non_negative_locals, Step};
 use crate::mir::analysis::stable_headers::{is_single_entry, StableHeaders};
+use crate::mir::analysis::traversal::{address_taken, successors_of};
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -402,13 +403,6 @@ fn is_innermost(found: &NaturalLoop, loops: &[NaturalLoop]) -> bool {
         .any(|other| other.header != found.header && found.blocks.contains(&other.header))
 }
 
-fn successors_of(body: &Body, block: usize) -> Vec<usize> {
-    (body.basic_blocks.get(block))
-        .and_then(|data| data.terminator.as_ref())
-        .map(|terminator| terminator.successors().iter().map(|b| b.0).collect())
-        .unwrap_or_default()
-}
-
 /// Whether every block of `found` ends in a jump, a switch, a trap, or a
 /// call of a runtime entry point that leaves every header as it was — the
 /// only calls across which the in-bounds pass keeps a length.
@@ -443,25 +437,6 @@ fn writes_in_loop(body: &Body, found: &NaturalLoop, local: Local) -> bool {
                     .flat_map(Terminator::written_places)
                     .any(|place| place.local == local)
         })
-}
-
-/// The locals whose address `body` takes anywhere.
-fn address_taken(body: &Body) -> HashSet<Local> {
-    (body.basic_blocks.iter())
-        .flat_map(|data| &data.statements)
-        .filter_map(|statement| match &statement.kind {
-            StatementKind::Assign(_, Rvalue::Ref(place))
-            | StatementKind::Reassign(_, Rvalue::Ref(place)) => Some(place.local),
-            StatementKind::Assign(..)
-            | StatementKind::Reassign(..)
-            | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
-            | StatementKind::IncRef(_)
-            | StatementKind::DecRef(_)
-            | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
-        })
-        .collect()
 }
 
 /// Whether every definition of `bound` in `body` measures `collection`, so

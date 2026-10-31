@@ -139,7 +139,10 @@ fn retain_rooted_reads(
         .flatten()
         .map(|(_, source)| source.local)
         .collect();
-    let address_taken = address_taken_locals(body, &roots);
+    let address_taken: HashSet<Local> = (crate::mir::analysis::traversal::address_taken(body))
+        .into_iter()
+        .filter(|local| roots.contains(local))
+        .collect();
     let mut exposed_sites = HashSet::new();
     reads.retain(|&local, sources| {
         sources.iter().all(|(site, source)| {
@@ -520,27 +523,6 @@ fn written_through_values(
         .filter(|place| !place.projection.is_empty() && reads.contains_key(&place.local))
         .map(|place| place.local)
         .filter(|&local| !is_reference(local))
-        .collect()
-}
-
-/// The `roots` whose address `body` takes anywhere.
-fn address_taken_locals(body: &Body, roots: &HashSet<Local>) -> HashSet<Local> {
-    body.basic_blocks
-        .iter()
-        .flat_map(|data| &data.statements)
-        .filter_map(|statement| match &statement.kind {
-            StatementKind::Assign(_, Rvalue::Ref(place))
-            | StatementKind::Reassign(_, Rvalue::Ref(place)) => Some(place.local),
-            StatementKind::Assign(..)
-            | StatementKind::Reassign(..)
-            | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
-            | StatementKind::IncRef(_)
-            | StatementKind::DecRef(_)
-            | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
-        })
-        .filter(|local| roots.contains(local))
         .collect()
 }
 

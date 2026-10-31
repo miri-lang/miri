@@ -2709,7 +2709,7 @@ impl<'a> FunctionTranslator<'a> {
         // non-negative because this traps on overflow; arithmetic that wraps
         // must clear the constant, which turns that rule off.
         const _: () =
-            assert!(crate::mir::optimization::in_bounds::INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW);
+            assert!(crate::mir::analysis::non_negative::INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW);
         if op == BinOp::Mul && ty == cl_types::I128 {
             let name = if is_unsigned {
                 rt::U128_MUL
