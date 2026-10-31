@@ -8,15 +8,21 @@ fn map_for_loop_custom_type() {
     assert_runs_with_output(
         r#"
 use system.collections.map
+use system.collections.list
 
 let items = Map<int, int>()
 for i in 0..10
     items.set(i, i * 100)
 
+// A map's order is unspecified, so the entries are sorted before printing.
+var lines = List<String>()
 for k, v in items
-    println(f"{k} = {v}")
+    lines.push(f"{k} = {v}")
+lines.sort()
+for line in lines
+    println(line)
 "#,
-        "5 = 500\n4 = 400\n7 = 700\n6 = 600\n1 = 100\n0 = 0\n3 = 300\n2 = 200\n9 = 900\n8 = 800\n",
+        "0 = 0\n1 = 100\n2 = 200\n3 = 300\n4 = 400\n5 = 500\n6 = 600\n7 = 700\n8 = 800\n9 = 900\n",
     );
 }
 

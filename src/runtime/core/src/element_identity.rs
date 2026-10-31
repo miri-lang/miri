@@ -287,7 +287,7 @@ impl ElementIdentity {
             // what separates them.
             Resolved::Missing(opened) => {
                 let depth = opened.to_ne_bytes();
-                crate::hash::fnv1a(depth.as_ptr(), depth.len())
+                crate::hash::hash_bytes(depth.as_ptr(), depth.len())
             }
         }
     }
@@ -300,17 +300,17 @@ impl ElementIdentity {
             }
             let hash: ElementHashFn = std::mem::transmute(self.hash_fn);
             let value = hash(self.callback_argument(at)).to_ne_bytes();
-            return crate::hash::fnv1a(value.as_ptr(), value.len());
+            return crate::hash::hash_bytes(value.as_ptr(), value.len());
         }
         if self.rule() == BY_STRING_CONTENT {
             let (data, len) = string_content(at);
-            return crate::hash::fnv1a(data, len);
+            return crate::hash::hash_bytes(data, len);
         }
         if let Some(width) = float_width(self.rule()) {
             let bits = float_value_bits(at, width).to_ne_bytes();
-            return crate::hash::fnv1a(bits.as_ptr(), bits.len());
+            return crate::hash::hash_bytes(bits.as_ptr(), bits.len());
         }
-        crate::hash::fnv1a(at, size)
+        crate::hash::hash_bytes(at, size)
     }
 
     /// True when the elements stored at `a` and `b`, each occupying a slot of

@@ -1,18 +1,52 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Hashing: FNV-1a over raw byte sequences, which `MiriSet` and `MiriMap`
-//! place their elements by, and the helpers a program's `hash` methods are
-//! built from.
+//! Hashing: the byte hash `MiriSet` and `MiriMap` place their elements by,
+//! and the helpers a program's `hash` methods are built from.
 
-/// FNV-1a hash for raw byte sequences.
-pub(crate) fn fnv1a(data: *const u8, len: usize) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for i in 0..len {
-        hash ^= unsafe { *data.add(i) } as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+/// Odd multipliers whose products spread every input bit over the whole word.
+const SPREAD: u64 = 0x9e37_79b9_7f4a_7c15;
+const STIR: u64 = 0xd6e8_feb8_6659_fd93;
+
+/// The low and high halves of the 128-bit product of `a` and `b`, folded into
+/// one word, so a change in any bit of either reaches the top and bottom bits.
+#[inline]
+fn fold(a: u64, b: u64) -> u64 {
+    let product = u128::from(a) * u128::from(b);
+    (product as u64) ^ ((product >> 64) as u64)
+}
+
+/// The hash of the `len` bytes at `data`, read eight at a time. The length is
+/// mixed in first, so a sequence and the same sequence padded with zero bytes
+/// differ, and the result is folded once more so both its low bits (the slot)
+/// and its high bits (the slot tag) depend on every byte.
+///
+/// `data` must point at `len` readable bytes; it may be null when `len` is 0.
+#[inline]
+pub(crate) fn hash_bytes(data: *const u8, len: usize) -> u64 {
+    let mut hash = (len as u64).wrapping_mul(SPREAD) ^ STIR;
+    // SAFETY: every read below lies inside the `len` bytes at `data`.
+    unsafe {
+        let word = |at: usize| (data.add(at) as *const u64).read_unaligned();
+        let half = |at: usize| u64::from((data.add(at) as *const u32).read_unaligned());
+        let tail = match len {
+            0 => 0,
+            1..=3 => {
+                let byte = |at: usize| u64::from(*data.add(at));
+                byte(0) | byte(len / 2) << 8 | byte(len - 1) << 16
+            }
+            4..=8 => half(0) | half(len - 4) << 32,
+            _ => {
+                let mut at = 0;
+                while len - at > 8 {
+                    hash = fold(hash ^ word(at), SPREAD);
+                    at += 8;
+                }
+                word(len - 8)
+            }
+        };
+        fold(fold(hash ^ tail, SPREAD), STIR)
     }
-    hash
 }
 
 /// The helpers compiled code hashes values through: the hash a type derives
@@ -41,9 +75,9 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_string_hash(string: *const MiriString) -> i64 {
         guard::guard_check(string as *mut u8);
         if string.is_null() || (*string).data.is_null() {
-            return super::fnv1a(std::ptr::null(), 0) as i64;
+            return super::hash_bytes(std::ptr::null(), 0) as i64;
         }
-        super::fnv1a((*string).data, (*string).len) as i64
+        super::hash_bytes((*string).data, (*string).len) as i64
     }
 
     /// The hash of a float's number: `-0.0` and `0.0` hash alike, as does every
