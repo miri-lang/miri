@@ -537,12 +537,10 @@ impl fmt::Display for ExecutionModel {
 /// Universal classes are unprefixed; backend-specific classes are prefixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum StorageClass {
-    // === Universal (all backends) ===
     /// Stack-allocated local variable (default for CPU functions)
     #[default]
     Stack,
 
-    // === GPU-specific memory spaces ===
     /// GPU shared memory (per-workgroup, accessible by all threads in block)
     /// - CUDA: __shared__
     /// - Metal: threadgroup
@@ -564,7 +562,6 @@ pub enum StorageClass {
     /// - SPIR-V: Private
     GpuPrivate,
 
-    // === Buffer bindings (GPU/accelerator APIs) ===
     /// Uniform buffer (read-only, for small frequently-accessed data)
     /// - Metal: constant buffer
     /// - SPIR-V/WebGPU: uniform

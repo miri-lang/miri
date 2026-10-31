@@ -805,13 +805,9 @@ fn emit_aggregate_copy(
 
 /// The runtime copy a shared collection is replaced with before a write.
 ///
-/// TODO: a collection passed to a callee that does not take the parameter
-/// over (`optimization::owned_params` declines methods, closures and every
-/// function it cannot prove has one body and plain callers) arrives here
-/// shared even when the caller never uses it again (`xs = step(xs)`), because
-/// the copy the callee binds on entry for a parameter it writes takes a
-/// reference of its own, so the first write copies the whole collection and
-/// then every element it writes.
+/// Note: When a collection parameter is borrowed rather than taken over, entry binding
+/// retains a reference that increases reference counts, causing subsequent mutation paths
+/// to copy the collection before modifying it.
 fn collection_clone_fn(kind: BuiltinCollectionKind) -> &'static str {
     match kind {
         BuiltinCollectionKind::List => rt::LIST_CLONE,

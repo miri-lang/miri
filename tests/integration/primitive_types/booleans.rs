@@ -5,8 +5,13 @@ use super::utils::*;
 
 #[test]
 fn test_boolean_literals() {
-    assert_runs("true");
-    assert_runs("false");
+    assert_runs_with_output(
+        r#"
+println(f"{true}")
+println(f"{false}")
+"#,
+        "true\nfalse",
+    );
 }
 
 #[test]

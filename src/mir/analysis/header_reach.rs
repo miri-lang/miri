@@ -293,11 +293,10 @@ fn is_same_type(a: &Type, b: &Type) -> bool {
             .all(|(a, b)| is_same_type(a, b))
 }
 
-// TODO: a class-typed element (counted, an opaque declared type) is assumed
-// to hold any collection, so a loop like `for s in shapes` that hands `s` to
-// a call keeps no stable header. Reading the class's field types through the
-// type table would fix that, but the answer must cover every subclass too,
-// since a subclass may add a field holding the list.
+// Note: A class-typed element (counted, an opaque declared type) is assumed
+// to potentially hold any collection, so loop iterations passing such elements
+// to calls may conservatively invalidate stable collection headers unless
+// field types and subclass hierarchies are fully resolved.
 /// [`may_hold_type`], except that a value `body` holds as its bytes holds
 /// nothing counted, so no collection.
 fn may_hold_counted(body: &Body, ty: &Type, target: &Type) -> bool {

@@ -95,13 +95,9 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
 /// than a type (the size of a value generic) leaves its parameter
 /// unsubstituted, and a nullable argument (`T` at `int?`) substitutes as the
 /// option it denotes.
-// TODO: a class declaring both a value parameter and a type parameter — a
-// `Buf<T, Size>` holding `Array<T, Size>` alongside a bare `T` — leaks the bare
-// field's value at a managed instantiation, while either field alone is
-// balanced. Lowering reaches this rule with the value argument written as a
-// literal, which leaves its parameter unbound, while a drop thunk reaches it
-// with the value carried as its marker type, which binds it; whether that
-// difference is what misaligns the release is unproven.
+// Note: When a class declares both value and type parameters (for example, `Buf<T, Size>`),
+// parameter bindings must align consistently whether value arguments arrive as literals
+// or as marker types to ensure proper field drop and release behavior.
 pub(crate) fn instantiated_member_type<'a>(
     params: impl IntoIterator<Item = &'a str>,
     args: &[Expression],

@@ -161,18 +161,23 @@ fn resolve_operand(op: &mut Operand, constants: &HashMap<Local, Constant>) {
 }
 
 fn is_unsigned(c: &Constant) -> bool {
-    match &c.literal {
-        Literal::Integer(lit) => matches!(
-            lit,
-            IntegerLiteral::U8(_)
-                | IntegerLiteral::U16(_)
-                | IntegerLiteral::U32(_)
-                | IntegerLiteral::U64(_)
-                | IntegerLiteral::U128(_)
-        ),
+    match &c.ty.kind {
+        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128 => true,
+        TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::Int => false,
         _ => matches!(
-            c.ty.kind,
-            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+            &c.literal,
+            Literal::Integer(
+                IntegerLiteral::U8(_)
+                    | IntegerLiteral::U16(_)
+                    | IntegerLiteral::U32(_)
+                    | IntegerLiteral::U64(_)
+                    | IntegerLiteral::U128(_)
+            )
         ),
     }
 }
@@ -201,7 +206,7 @@ fn fold_binary(op: crate::mir::BinOp, lhs: &Constant, rhs: &Constant) -> Option<
     let literal = if is_comparison {
         Literal::Boolean(res != 0)
     } else {
-        reconstruct_integer_literal(&lhs.literal, res)
+        reconstruct_integer_literal_from_type(&lhs.ty.kind, &lhs.literal, res)
     };
     Some(Constant {
         span: lhs.span,
@@ -306,8 +311,30 @@ fn fold_unary(op: crate::mir::UnOp, operand: &Constant) -> Option<Constant> {
     Some(Constant {
         span: operand.span,
         ty: operand.ty.clone(),
-        literal: reconstruct_integer_literal(&operand.literal, res),
+        literal: reconstruct_integer_literal_from_type(&operand.ty.kind, &operand.literal, res),
     })
+}
+
+/// Reconstruct a typed integer literal from a computed `i128` value,
+/// using the type kind of the constant if numeric, or preserving the source literal variant.
+fn reconstruct_integer_literal_from_type(
+    ty_kind: &TypeKind,
+    source: &Literal,
+    value: i128,
+) -> Literal {
+    match ty_kind {
+        TypeKind::I8 => Literal::Integer(IntegerLiteral::I8(value as i8)),
+        TypeKind::I16 => Literal::Integer(IntegerLiteral::I16(value as i16)),
+        TypeKind::I32 => Literal::Integer(IntegerLiteral::I32(value as i32)),
+        TypeKind::I64 | TypeKind::Int => Literal::Integer(IntegerLiteral::I64(value as i64)),
+        TypeKind::I128 => Literal::Integer(IntegerLiteral::I128(value)),
+        TypeKind::U8 => Literal::Integer(IntegerLiteral::U8(value as u8)),
+        TypeKind::U16 => Literal::Integer(IntegerLiteral::U16(value as u16)),
+        TypeKind::U32 => Literal::Integer(IntegerLiteral::U32(value as u32)),
+        TypeKind::U64 => Literal::Integer(IntegerLiteral::U64(value as u64)),
+        TypeKind::U128 => Literal::Integer(IntegerLiteral::U128(value as u128)),
+        _ => reconstruct_integer_literal(source, value),
+    }
 }
 
 /// Reconstruct a typed integer literal from a computed `i128` value,
@@ -348,8 +375,8 @@ fn reconstruct_integer_literal(source: &Literal, value: i128) -> Literal {
 }
 
 fn get_int(c: &Constant) -> Option<i128> {
-    match &c.literal {
-        Literal::Integer(lit) => Some(match lit {
+    let raw = match &c.literal {
+        Literal::Integer(lit) => match lit {
             IntegerLiteral::I8(v) => *v as i128,
             IntegerLiteral::I16(v) => *v as i128,
             IntegerLiteral::I32(v) => *v as i128,
@@ -360,15 +387,23 @@ fn get_int(c: &Constant) -> Option<i128> {
             IntegerLiteral::U32(v) => *v as i128,
             IntegerLiteral::U64(v) => *v as i128,
             IntegerLiteral::U128(v) => *v as i128,
-        }),
-        Literal::Boolean(b) => Some(if *b { 1 } else { 0 }),
-        _ => None,
-    }
+        },
+        Literal::Boolean(b) => return Some(if *b { 1 } else { 0 }),
+        _ => return None,
+    };
+
+    Some(match &c.ty.kind {
+        TypeKind::I8 => (raw as i8) as i128,
+        TypeKind::I16 => (raw as i16) as i128,
+        TypeKind::I32 => (raw as i32) as i128,
+        TypeKind::I64 | TypeKind::Int => (raw as i64) as i128,
+        _ => raw,
+    })
 }
 
 fn get_uint(c: &Constant) -> Option<u128> {
-    match &c.literal {
-        Literal::Integer(lit) => Some(match lit {
+    let raw = match &c.literal {
+        Literal::Integer(lit) => match lit {
             IntegerLiteral::I8(v) => *v as u128,
             IntegerLiteral::I16(v) => *v as u128,
             IntegerLiteral::I32(v) => *v as u128,
@@ -379,8 +414,16 @@ fn get_uint(c: &Constant) -> Option<u128> {
             IntegerLiteral::U32(v) => *v as u128,
             IntegerLiteral::U64(v) => *v as u128,
             IntegerLiteral::U128(v) => *v,
-        }),
-        Literal::Boolean(b) => Some(if *b { 1 } else { 0 }),
-        _ => None,
-    }
+        },
+        Literal::Boolean(b) => return Some(if *b { 1 } else { 0 }),
+        _ => return None,
+    };
+
+    Some(match &c.ty.kind {
+        TypeKind::U8 => (raw as u8) as u128,
+        TypeKind::U16 => (raw as u16) as u128,
+        TypeKind::U32 => (raw as u32) as u128,
+        TypeKind::U64 => (raw as u64) as u128,
+        _ => raw,
+    })
 }

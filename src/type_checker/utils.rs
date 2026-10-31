@@ -301,93 +301,69 @@ pub fn is_perceus_managed(
     )
 }
 
+fn expr_type_is_perceus_managed(
+    expr: &Expression,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<String>,
+    default_if_unknown: bool,
+) -> bool {
+    if let ExpressionKind::Type(elem, _) = &expr.node {
+        is_perceus_managed_inner(&elem.kind, type_definitions, visited)
+    } else {
+        default_if_unknown
+    }
+}
+
+fn is_custom_type_perceus_managed(
+    name: &str,
+    args: Option<&[Expression]>,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<String>,
+) -> bool {
+    if name == "Self" || name == crate::ast::types::ATOMIC_TYPE_NAME {
+        return false;
+    }
+
+    if BuiltinCollectionKind::from_name(name).is_some() {
+        return args.is_some();
+    }
+
+    if visited.contains(name) {
+        return true;
+    }
+    visited.insert(name.to_string());
+
+    match type_definitions.get(name) {
+        Some(TypeDefinition::Struct(def)) => def.fields.iter().any(|(_, field_ty, _)| {
+            is_perceus_managed_inner(&field_ty.kind, type_definitions, visited)
+        }),
+        Some(TypeDefinition::Class(_)) => true,
+        _ => false,
+    }
+}
+
 fn is_perceus_managed_inner(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     visited: &mut std::collections::HashSet<String>,
 ) -> bool {
     match kind {
-        // An Option is managed exactly when its payload is.
         TypeKind::Option(elem_ty) => {
             is_perceus_managed_inner(&elem_ty.kind, type_definitions, visited)
         }
-        TypeKind::Tuple(elems) => elems.iter().any(|elem_expr| {
-            if let ExpressionKind::Type(elem, _) = &elem_expr.node {
-                is_perceus_managed_inner(&elem.kind, type_definitions, visited)
-            } else {
-                false
-            }
-        }),
-        TypeKind::List(elem_expr) => {
-            if let ExpressionKind::Type(elem, _) = &elem_expr.node {
-                is_perceus_managed_inner(&elem.kind, type_definitions, visited)
-            } else {
-                true // If we can't determine, assume managed
-            }
+        TypeKind::Tuple(elems) => elems
+            .iter()
+            .any(|e| expr_type_is_perceus_managed(e, type_definitions, visited, false)),
+        TypeKind::List(elem_expr) | TypeKind::Array(elem_expr, _) => {
+            expr_type_is_perceus_managed(elem_expr, type_definitions, visited, true)
         }
-        TypeKind::Array(elem_expr, _) => {
-            if let ExpressionKind::Type(elem, _) = &elem_expr.node {
-                is_perceus_managed_inner(&elem.kind, type_definitions, visited)
-            } else {
-                true // If we can't determine, assume managed
-            }
-        }
-        TypeKind::Map(_key_expr, _val_expr) => {
-            // Maps are always managed regardless of key/value types
-            true
-        }
-        TypeKind::Set(_elem_expr) => {
-            // Sets are always managed
-            true
-        }
-        TypeKind::String => true,
-        TypeKind::Function(_) => true,
+        TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::String | TypeKind::Function(_) => true,
         TypeKind::Result(ok_expr, err_expr) => {
-            let ok_managed = if let ExpressionKind::Type(t, _) = &ok_expr.node {
-                is_perceus_managed_inner(&t.kind, type_definitions, visited)
-            } else {
-                false
-            };
-            let err_managed = if let ExpressionKind::Type(t, _) = &err_expr.node {
-                is_perceus_managed_inner(&t.kind, type_definitions, visited)
-            } else {
-                false
-            };
-            ok_managed || err_managed
+            expr_type_is_perceus_managed(ok_expr, type_definitions, visited, false)
+                || expr_type_is_perceus_managed(err_expr, type_definitions, visited, false)
         }
-        TypeKind::Generic(_, _, _) => false,
         TypeKind::Custom(name, args) => {
-            // Exclude generic placeholders and "Self"
-            if name == "Self" {
-                return false;
-            }
-
-            // Atomic<u32> and Atomic<i32> are NOT managed - they are scalar wrappers
-            if name == crate::ast::types::ATOMIC_TYPE_NAME {
-                return false;
-            }
-
-            // After normalization, builtin collection types are Custom("List", Some([...]))
-            if BuiltinCollectionKind::from_name(name).is_some() {
-                return args.is_some();
-            }
-
-            // Check user-defined types (classes and structs)
-            if visited.contains(name) {
-                return true; // Assume managed in cycles to be safe
-            }
-            visited.insert(name.clone());
-
-            match type_definitions.get(name) {
-                Some(TypeDefinition::Struct(def)) => def.fields.iter().any(|(_, field_ty, _)| {
-                    is_perceus_managed_inner(&field_ty.kind, type_definitions, visited)
-                }),
-                Some(TypeDefinition::Class(_def)) => {
-                    // All classes are managed (they have heap-allocated identity)
-                    true
-                }
-                _ => false,
-            }
+            is_custom_type_perceus_managed(name, args.as_deref(), type_definitions, visited)
         }
         _ => false,
     }

@@ -107,6 +107,170 @@ fn test_const_fold_binary() {
 }
 
 #[test]
+fn test_const_fold_signed_i64_bitpattern_comparison() {
+    let mut body = create_test_body();
+    // _1 = -1_i64 (stored as U64 bit pattern 0xFFFF_FFFF_FFFF_FFFF)
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::I64, Span::default()),
+        Span::default(),
+    ));
+    // _2 = 5_i64
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::I64, Span::default()),
+        Span::default(),
+    ));
+    // _3 = _1 < _2 (-1_i64 < 5_i64 should be true)
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::Boolean, Span::default()),
+        Span::default(),
+    ));
+
+    let mut bb0 = BasicBlockData::new(None);
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::I64, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U64(u64::MAX)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(2)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::I64, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::I64(5)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(3)),
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Box::new(Operand::Copy(Place::new(Local(1)))),
+                Box::new(Operand::Copy(Place::new(Local(2)))),
+            ),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.terminator = Some(Terminator {
+        kind: TerminatorKind::Return,
+        span: Span::default(),
+    });
+
+    body.basic_blocks.push(bb0);
+
+    let mut pass = ConstantPropagation;
+    let changed = pass.run(&mut body);
+
+    assert!(changed);
+
+    let bb0 = &body.basic_blocks[0];
+    let stmt2 = &bb0.statements[2];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt2.kind {
+        if let Literal::Boolean(val) = c.literal {
+            assert_eq!(val, true, "-1_i64 < 5_i64 must evaluate to true");
+        } else {
+            panic!("Expected Boolean literal, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment, got {:?}", stmt2.kind);
+    }
+}
+
+#[test]
+fn test_const_fold_u128_with_i32_literal_left() {
+    let mut body = create_test_body();
+    // _1 = 1 (constant with ty=U128 but literal=I32)
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _2 = u128::MAX
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::U128, Span::default()),
+        Span::default(),
+    ));
+    // _3 = _1 < _2 (1_u128 < u128::MAX should be true)
+    body.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::Boolean, Span::default()),
+        Span::default(),
+    ));
+
+    let mut bb0 = BasicBlockData::new(None);
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::I32(1)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(2)),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: Span::default(),
+                ty: Type::new(TypeKind::U128, Span::default()),
+                literal: Literal::Integer(IntegerLiteral::U128(u128::MAX)),
+            }))),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(3)),
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Box::new(Operand::Copy(Place::new(Local(1)))),
+                Box::new(Operand::Copy(Place::new(Local(2)))),
+            ),
+        ),
+        span: Span::default(),
+    });
+
+    bb0.terminator = Some(Terminator {
+        kind: TerminatorKind::Return,
+        span: Span::default(),
+    });
+
+    body.basic_blocks.push(bb0);
+
+    let mut pass = ConstantPropagation;
+    let changed = pass.run(&mut body);
+
+    assert!(changed);
+
+    let bb0 = &body.basic_blocks[0];
+    let stmt2 = &bb0.statements[2];
+    if let StatementKind::Assign(_, Rvalue::Use(Operand::Constant(c))) = &stmt2.kind {
+        if let Literal::Boolean(val) = c.literal {
+            assert_eq!(val, true, "1_u128 < u128::MAX must evaluate to true");
+        } else {
+            panic!("Expected Boolean literal, got {:?}", c.literal);
+        }
+    } else {
+        panic!("Expected constant assignment, got {:?}", stmt2.kind);
+    }
+}
+
+#[test]
 fn test_const_fold_unary_i128_negation() {
     use miri::mir::UnOp;
 
