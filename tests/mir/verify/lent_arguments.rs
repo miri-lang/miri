@@ -69,6 +69,17 @@ fn a_field_lent_unretained_to_a_callee_that_may_release_it_is_reported() {
     );
 }
 
+/// A call the pass stamped quiet (`Body::quiet_calls`) is no credit to the
+/// check, which decides on its own which callees are harmless: a false stamp
+/// — the defect it guards — is still reported.
+#[test]
+fn a_field_lent_to_a_call_the_pass_falsely_stamped_quiet_is_reported() {
+    let mut main = caller("callee", copy(field(1, 0)), Vec::new());
+    main.quiet_calls.insert(BasicBlock(0));
+    let found = violations(field_writing_method_taking_node(), main);
+    assert_eq!(found.len(), 1, "{found:?}");
+}
+
 #[test]
 fn a_field_lent_to_a_callee_that_only_reads_is_not_reported() {
     let found = violations(
@@ -237,6 +248,49 @@ fn a_field_set_lent_unretained_to_a_search_running_program_code_is_reported() {
         "{}",
         found[0].1.message
     );
+}
+
+/// `Map<int, Node>.get`'s search, its receiver spelled as the class a
+/// monomorphized method names it by, so only the key type decides what the
+/// search runs.
+fn map_slot_of_spelled_as_its_class() -> Body {
+    use miri::ast::expression::{Expression, ExpressionKind};
+    use miri::ast::types::Type;
+    let argument = |kind| {
+        Expression::new(
+            0,
+            ExpressionKind::Type(Box::new(Type::new(kind, span())), false),
+            span(),
+        )
+    };
+    let map = TypeKind::Custom(
+        "Map".to_string(),
+        Some(vec![argument(TypeKind::Int), argument(node())]),
+    );
+    let mut body = body_of(
+        &[TypeKind::Int, map, TypeKind::Int],
+        2,
+        vec![
+            block(
+                Vec::new(),
+                runtime_call(rt::MAP_SLOT_OF, vec![copy(local(1)), copy(local(2))]),
+            ),
+            returning(Vec::new()),
+        ],
+    );
+    body.receiver = Some(Local(1));
+    body
+}
+
+/// A map is searched by its keys: a field map from ints to class values,
+/// lent to a search, runs no code that could release it.
+#[test]
+fn a_field_map_from_ints_lent_to_a_key_search_is_not_reported() {
+    let found = violations(
+        map_slot_of_spelled_as_its_class(),
+        set_searching_caller(registry(), TypeKind::Int),
+    );
+    assert!(found.is_empty(), "{found:?}");
 }
 
 #[test]

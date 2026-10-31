@@ -48,7 +48,7 @@ fn forge_record(mut body: Body) -> Body {
 }
 
 fn messages(body: &Body) -> Vec<String> {
-    verify_stable_collections(body)
+    verify_stable_collections(body, None)
         .into_iter()
         .map(|violation| violation.message)
         .collect()

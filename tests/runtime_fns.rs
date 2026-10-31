@@ -241,3 +241,66 @@ fn only_a_collection_constructor_allocates_a_fresh_collection() {
         );
     }
 }
+
+/// The string, text-pattern, console, file-system and environment entry
+/// points take their strings as `*const MiriString` and copy out of them, so
+/// none writes in place what it is handed: a check that credits a call as
+/// writing nothing a caller holds must not stop at one of these.
+#[test]
+fn the_string_and_io_entry_points_only_read_their_strings() {
+    let readers = [
+        (rt::STRING_CHAR_AT, 1),
+        (rt::STRING_CODE_AT, 1),
+        (rt::STRING_INDEX_OF_ANY, 2),
+        (rt::STRING_LINE_COUNT, 1),
+        (rt::STRING_LINE_TEXT, 1),
+        (rt::STRING_NEXT_CHAR_BOUNDARY, 1),
+        (rt::STRING_PARSE_FLOAT, 1),
+        (rt::STRING_PARSE_INT, 1),
+        (rt::STRING_PIECE_COUNT, 2),
+        (rt::STRING_PIECE_END, 2),
+        (rt::STRING_REPEAT, 1),
+        (rt::STRING_REPLACE, 3),
+        (rt::STRING_SLICE_BYTES, 1),
+        (rt::STRING_SPLIT, 2),
+        (rt::STRING_SUBSTRING, 1),
+        (rt::STRING_TO_LOWER, 1),
+        (rt::STRING_TO_UPPER, 1),
+        (rt::STRING_TRIM, 1),
+        (rt::STRING_TRIM_END, 1),
+        (rt::STRING_TRIM_START, 1),
+        (rt::REGEX_COMPILE, 1),
+        (rt::REGEX_FROM_VALIDATED_PATTERN, 1),
+        (rt::REGEX_FIND, 2),
+        (rt::REGEX_FIND_FROM, 2),
+        (rt::REGEX_MATCHES, 2),
+        (rt::REGEX_REPLACE, 3),
+        (rt::PRINT, 1),
+        (rt::PRINTLN, 1),
+        (rt::EPRINT, 1),
+        (rt::EPRINTLN, 1),
+        (rt::PANIC, 1),
+        (rt::FS_READ_FILE, 1),
+        (rt::FS_WRITE_FILE, 2),
+        (rt::FS_APPEND_FILE, 2),
+        (rt::FS_CREATE_DIR, 1),
+        (rt::FS_DELETE, 1),
+        (rt::FS_EXISTS, 1),
+        (rt::FS_LIST_DIR, 1),
+        (rt::ENV_GET, 1),
+        (rt::ENV_HAS, 1),
+        (rt::ENV_SET, 2),
+    ];
+    for (name, arity) in readers {
+        for position in 0..arity {
+            assert!(
+                !writes_in_place(name, position),
+                "{name} only reads argument {position}"
+            );
+        }
+        assert!(
+            taken_argument_positions(name).is_empty(),
+            "{name} takes nothing over"
+        );
+    }
+}

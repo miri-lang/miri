@@ -38,7 +38,7 @@ RULES = [
     (
         "a verifier shares no analysis with the pass it checks",
         "src/mir/verify",
-        re.compile(r"\bmir::optimization::|\bsuper::optimization::"),
+        re.compile(r"\bmir::optimization::|\bsuper::optimization::|\banalysis::heap_effects\b"),
         "a verifier is a second derivation; one that calls the pass's own "
         "analysis passes whenever the analysis is wrong",
     ),
@@ -81,9 +81,6 @@ ALLOWED = [
     ("src/codegen/cranelift/value_abi.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
     ("src/codegen/wgsl/emitter.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
     ("src/codegen/wgsl/types.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    # The borrow verifier reuses the borrow inference; gone once it has its
-    # own conservative derivation.
-    ("src/mir/verify/local_borrows.rs", "a verifier shares no analysis with the pass it checks", "reuses the borrow inference's reach"),
     # The type checker reads effect facts keyed by symbol name; gone once the
     # facts are attributes on the runtime declarations.
     ("src/type_checker/receiver_writes.rs", "the type checker learns nothing from a runtime symbol name", "asks which argument positions an intrinsic only reads"),

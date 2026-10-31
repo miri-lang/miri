@@ -3320,19 +3320,18 @@ impl Pipeline {
         violations
     }
 
-    /// The calls of each of `bodies` to a function of the program that may
-    /// release nothing another name holds, worked out again over the program
-    /// with every retain and release in place.
-    fn quiet_calls_after_rc(
+    /// The calls of each of `bodies` to a function of the program the
+    /// verifiers' own rule finds harmless, over the program with every retain
+    /// and release in place.
+    fn harmless_calls_after_rc(
         result: &PipelineResult,
         bodies: &[(String, mir::Body)],
     ) -> Vec<HashSet<mir::BasicBlock>> {
-        use mir::analysis::heap_effects::{HeapEffects, Phase};
         let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
-        let effects = HeapEffects::of(bodies, String::clone, Phase::Counted, &hooks);
+        let harmless = mir::verify::HarmlessCallees::of(bodies, String::clone, &hooks);
         bodies
             .iter()
-            .map(|(_, body)| effects.call_facts(body, Phase::Counted, &hooks).quiet)
+            .map(|(_, body)| harmless.calls_in(body))
             .collect()
     }
 
@@ -3369,9 +3368,9 @@ impl Pipeline {
                 .into_iter()
                 .map(|(name, v)| format!("  fn {}: {}", name, v)),
         );
-        let quiet_calls = Self::quiet_calls_after_rc(result, bodies);
-        for ((name, body), quiet) in bodies.iter().zip(&quiet_calls) {
-            let mut violations = mir::verify::verify_body_with_quiet_calls(body, Some(quiet));
+        let harmless_calls = Self::harmless_calls_after_rc(result, bodies);
+        for ((name, body), harmless) in bodies.iter().zip(&harmless_calls) {
+            let mut violations = mir::verify::verify_body_with_harmless_calls(body, Some(harmless));
             violations.extend(mir::verify::verify_collection_element_ownership(
                 body,
                 &shared_collection_methods,
@@ -3388,7 +3387,7 @@ impl Pipeline {
             ));
             violations.extend(mir::verify::verify_value_arguments(body));
             violations.extend(mir::verify::verify_bound_names(body));
-            violations.extend(mir::verify::verify_stable_collections(body));
+            violations.extend(mir::verify::verify_stable_collections(body, Some(harmless)));
             violations.extend(mir::verify::verify_in_bounds(body));
             // TODO: this check runs only under --verify-mir; a normal build does
             // not check that in-place writes land on unshared collections.

@@ -11,8 +11,10 @@
 //! nothing there can change a header: no call outside the runtime entry
 //! points that leave headers unchanged — among them a copy of an array or a
 //! list whose elements run no `clone` method of the program — except a call
-//! to a function of the program that `analysis::header_reach` finds cannot
-//! reach the collection (the same authority the pass asks), no store
+//! to a function of the program the verifiers' own rule finds harmless
+//! ([`super::callee_effects`]), or one handed nothing that may hold the
+//! collection while it holds a reference of its own — worked out here by a
+//! cruder walk of its own, never the alias reach the pass asks — no store
 //! through a dereference, no
 //! release that may run a drop hook, and — for a parameter the body borrows —
 //! no release, other than through the parameter, of a value that may hold a
@@ -22,21 +24,27 @@
 
 use super::VerificationViolation;
 use crate::ast::types::BuiltinCollectionKind;
-use crate::mir::analysis::header_reach::{may_hold_type, HeaderReach, UncountedRoot};
+use crate::mir::analysis::header_reach::{may_hold_type, runtime_call_leaves_headers};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, StableCollection, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
+use std::collections::HashSet;
 
 /// Every way a record on [`Body::stable_collections`] fails to keep its
-/// collection's header.
-pub fn verify_stable_collections(body: &Body) -> Vec<VerificationViolation> {
+/// collection's header. `harmless_calls` are the body's calls to the program
+/// found harmless by [`super::callee_effects`]; `None` takes every such call
+/// as one that may change a header.
+pub fn verify_stable_collections(
+    body: &Body,
+    harmless_calls: Option<&HashSet<BasicBlock>>,
+) -> Vec<VerificationViolation> {
     if body.stable_collections.is_empty() {
         return Vec::new();
     }
-    let checker = RecordCheck::of(body);
+    let checker = RecordCheck::of(body, harmless_calls);
     body.stable_collections
         .iter()
         .flat_map(|record| checker.failures(record))
@@ -61,10 +69,11 @@ struct RecordCheck<'a> {
     places: PlaceTypes<'a>,
     hooks: DropHookReach<'a>,
     predecessors: Vec<Vec<usize>>,
+    harmless_calls: Option<&'a HashSet<BasicBlock>>,
 }
 
 impl<'a> RecordCheck<'a> {
-    fn of(body: &'a Body) -> Self {
+    fn of(body: &'a Body, harmless_calls: Option<&'a HashSet<BasicBlock>>) -> Self {
         let mut predecessors = vec![Vec::new(); body.basic_blocks.len()];
         for (index, data) in body.basic_blocks.iter().enumerate() {
             for successor in data.terminator.iter().flat_map(Terminator::successors) {
@@ -78,18 +87,18 @@ impl<'a> RecordCheck<'a> {
             places: PlaceTypes::of(body),
             hooks: DropHookReach::new(body.rc_classifier.definitions()),
             predecessors,
+            harmless_calls,
         }
     }
 
     /// Every failure of `record`, each with the local it concerns.
     fn failures(&self, record: &StableCollection) -> Vec<(Local, String)> {
         let local = record.local;
-        let reach = HeaderReach::of(self.body, local);
         let mut found: Vec<String> = Vec::new();
         found.extend(self.binding_failure(local));
         found.extend(self.shape_failures(record));
         for block in &record.blocks {
-            found.extend(self.block_failures(record, &reach, block.0));
+            found.extend(self.block_failures(record, block.0));
         }
         found
             .into_iter()
@@ -191,12 +200,7 @@ impl<'a> RecordCheck<'a> {
     }
 
     /// What in `block` may change the recorded collection's header.
-    fn block_failures(
-        &self,
-        record: &StableCollection,
-        reach: &HeaderReach,
-        block: usize,
-    ) -> Vec<String> {
+    fn block_failures(&self, record: &StableCollection, block: usize) -> Vec<String> {
         let Some(data) = self.body.basic_blocks.get(block) else {
             return vec![format!("bb{block} does not exist")];
         };
@@ -212,7 +216,7 @@ impl<'a> RecordCheck<'a> {
         match &data.terminator {
             None => found.push(format!("bb{block} has no terminator")),
             Some(terminator) => {
-                found.extend(self.terminator_failure(record.local, reach, block, terminator))
+                found.extend(self.terminator_failure(record.local, block, terminator))
             }
         }
         found
@@ -285,11 +289,10 @@ impl<'a> RecordCheck<'a> {
     }
 
     /// What `terminator`, ending `block`, does that may change the header of
-    /// `local`'s collection, whose aliases `reach` holds.
+    /// `local`'s collection.
     fn terminator_failure(
         &self,
         local: Local,
-        reach: &HeaderReach,
         block: usize,
         terminator: &Terminator,
     ) -> Option<String> {
@@ -304,23 +307,148 @@ impl<'a> RecordCheck<'a> {
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::Return
             | TerminatorKind::Unreachable => None,
-            TerminatorKind::Call { func, .. } => (!reach.call_leaves_header(terminator))
-                .then(|| match (func.called_runtime_name(), reach.uncounted_root()) {
-                    (Some(name), _) => format!("bb{block} calls `{name}`, which may change a header"),
-                    (None, Some(root)) => format!(
-                        "bb{block} calls a function of the program while {}",
-                        uncounted_reason(root)
-                    ),
-                    (None, None) => format!(
-                        "bb{block} calls a function of the program handed something that may hold it"
-                    ),
-                }),
+            TerminatorKind::Call { func, args, .. } => match func.called_runtime_name() {
+                Some(name) => (!runtime_call_leaves_headers(self.body, name, args))
+                    .then(|| format!("bb{block} calls `{name}`, which may change a header")),
+                None => self.program_call_failure(local, block, terminator),
+            },
             TerminatorKind::VirtualCall { .. } => Some(format!(
                 "bb{block} calls through a vtable, which may change a header"
             )),
             TerminatorKind::GpuLaunch { .. } => Some(format!(
                 "bb{block} launches a kernel, which may change a header"
             )),
+        }
+    }
+
+    /// What the call to a function of the program ending `block` may do to
+    /// the header of `local`'s collection.
+    ///
+    /// A callee found harmless changes no header. Any other callee changes
+    /// this one only by writing the collection in place through a name that
+    /// holds it without a reference of its own — a write through a name
+    /// holding one copies first while another reference lives. So the call
+    /// also leaves the header when `local` holds a reference of its own and
+    /// the call is handed, and writes its result to, nothing rooted at
+    /// `local` or at a local a value of `local` was copied or moved into.
+    fn program_call_failure(
+        &self,
+        local: Local,
+        block: usize,
+        terminator: &Terminator,
+    ) -> Option<String> {
+        let is_harmless =
+            (self.harmless_calls).is_some_and(|calls| calls.contains(&BasicBlock(block)));
+        if is_harmless {
+            return None;
+        }
+        if let Some(reason) = self.uncounted_reason(local) {
+            return Some(format!(
+                "bb{block} calls a function of the program while {reason}"
+            ));
+        }
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &terminator.kind
+        else {
+            return None;
+        };
+        let holders = self.holders_of(local);
+        let is_handed = std::iter::once(func)
+            .chain(args)
+            .filter_map(Operand::place)
+            .chain(std::iter::once(destination))
+            .any(|place| holders.contains(&place.local));
+        is_handed.then(|| {
+            format!("bb{block} calls a function of the program handed something that may hold it")
+        })
+    }
+
+    /// Why `local` may hold its collection without a reference of its own,
+    /// worded to follow "while"; `None` when it holds one.
+    fn uncounted_reason(&self, local: Local) -> Option<String> {
+        let body = self.body;
+        if !body.is_counted_local(local) {
+            return Some("it is not reference counted".to_string());
+        }
+        if body.borrowed_locals.contains_key(&local) {
+            return Some("it holds no reference of its own".to_string());
+        }
+        if (1..=body.arg_count).contains(&local.0) && !body.is_owned_param(local) {
+            return Some("it is a parameter the body borrows".to_string());
+        }
+        (body.basic_blocks.iter().enumerate()).find_map(|(block, data)| {
+            let uncounted = (data.statements.iter()).any(|statement| {
+                let (StatementKind::Assign(place, Rvalue::Use(operand))
+                | StatementKind::Reassign(place, Rvalue::Use(operand))) = &statement.kind
+                else {
+                    return false;
+                };
+                let Some(source) = operand.place() else {
+                    return false;
+                };
+                *place == Place::new(local)
+                    && !self.moves_an_owned_value(operand, source)
+                    && !is_retained_in(&data.statements, source, local)
+            });
+            uncounted.then(|| format!("bb{block} gives it a value it holds no reference to"))
+        })
+    }
+
+    /// Whether `operand` moves the whole of `source`, which the body owns
+    /// outright: a parameter it takes over, or a local that is neither a
+    /// capture nor a borrow.
+    fn moves_an_owned_value(&self, operand: &Operand, source: &Place) -> bool {
+        let body = self.body;
+        let root = source.local;
+        let is_owned = if (1..=body.arg_count).contains(&root.0) {
+            body.is_owned_param(root)
+        } else {
+            !body.env_capture_locals.contains(&root) && !body.borrowed_locals.contains_key(&root)
+        };
+        matches!(operand, Operand::Move(_)) && source.projection.is_empty() && is_owned
+    }
+
+    /// `local` and every local a value of it is copied or moved into, through
+    /// any chain of such copies, and every borrow read out of one of them. A
+    /// value read out of a holder through a projection is a holder only when
+    /// its type may hold a collection of `local`'s type.
+    fn holders_of(&self, local: Local) -> HashSet<Local> {
+        let body = self.body;
+        let target = body.local_decls.get(local.0).map(|decl| &decl.ty);
+        let may_hold = |source: &Place| {
+            source.projection.is_empty()
+                || (self.places.declared(source))
+                    .is_none_or(|ty| target.is_none_or(|target| may_hold_type(&ty, target)))
+        };
+        let mut holders = HashSet::from([local]);
+        loop {
+            let before = holders.len();
+            let statements = body.basic_blocks.iter().flat_map(|data| &data.statements);
+            for statement in statements {
+                let (StatementKind::Assign(dest, Rvalue::Use(operand))
+                | StatementKind::Reassign(dest, Rvalue::Use(operand))) = &statement.kind
+                else {
+                    continue;
+                };
+                let holds = operand
+                    .place()
+                    .is_some_and(|source| holders.contains(&source.local) && may_hold(source));
+                if holds {
+                    holders.insert(dest.local);
+                }
+            }
+            for (borrow, owners) in &body.borrowed_locals {
+                if owners.iter().any(|owner| holders.contains(owner)) {
+                    holders.insert(*borrow);
+                }
+            }
+            if holders.len() == before {
+                return holders;
+            }
         }
     }
 
@@ -392,28 +520,11 @@ fn whole_move(statement: &Statement) -> Option<(Local, Local)> {
     }
 }
 
-/// Why a recorded collection's local holds no reference of its own that
-/// only its aliases reach, worded to follow "while".
-fn uncounted_reason(root: UncountedRoot) -> String {
-    match root {
-        UncountedRoot::NotCounted => "it is not reference counted".to_string(),
-        UncountedRoot::Parameter(alias) => {
-            format!("`{alias}`, which may hold it, is a parameter the body borrows")
-        }
-        UncountedRoot::Borrowed(alias) => {
-            format!("`{alias}`, which may hold it, holds no reference of its own")
-        }
-        UncountedRoot::Captured(alias) => {
-            format!("`{alias}`, which may hold it, is a captured binding")
-        }
-        UncountedRoot::DeviceResident(alias) => {
-            format!("`{alias}`, which may hold it, is a gpu-resident binding")
-        }
-        UncountedRoot::AddressTaken(alias) => {
-            format!("`{alias}`, which may hold it, has its address taken")
-        }
-        UncountedRoot::UncountedDefinition(block) => {
-            format!("{block} gives it a value it holds no reference to")
-        }
-    }
+/// Whether `statements` retain `source` or `local` anywhere: a copy of
+/// `source` into `local` in the same block is then funded.
+fn is_retained_in(statements: &[Statement], source: &Place, local: Local) -> bool {
+    statements.iter().any(|statement| {
+        matches!(&statement.kind,
+            StatementKind::IncRef(place) if place == source || *place == Place::new(local))
+    })
 }

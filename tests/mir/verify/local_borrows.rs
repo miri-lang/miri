@@ -254,10 +254,20 @@ fn a_borrow_of_a_parameter_element_across_a_call_with_no_heap_facts_is_refused()
     assert_refused(&body, "a call with no heap facts");
 }
 
-/// The same call found quiet keeps the borrow; facts that do not name it
-/// leave it loud.
+/// A call the pass stamped quiet (`Body::quiet_calls`) is no credit to the
+/// check: it reads only the harmless calls its own rule found, so a false
+/// stamp — the defect it guards — still refuses the borrow.
 #[test]
-fn a_borrow_of_a_parameter_element_holds_only_across_a_call_found_quiet() {
+fn a_borrow_across_a_call_the_pass_falsely_stamped_quiet_is_refused() {
+    let mut body = parameter_borrowing_body(unrelated_call(), Vec::new());
+    body.quiet_calls.insert(BasicBlock(0));
+    assert_refused(&body, "a call only the pass found quiet");
+}
+
+/// The same call found harmless keeps the borrow; facts that do not name it
+/// leave it harmful.
+#[test]
+fn a_borrow_of_a_parameter_element_holds_only_across_a_call_found_harmless() {
     let body = parameter_borrowing_body(unrelated_call(), Vec::new());
     let quiet = HashSet::from([BasicBlock(0)]);
     let violations = verify_local_borrows(&body, Some(&quiet));
@@ -532,4 +542,14 @@ fn a_borrow_out_of_a_map_entry_whose_map_is_rebound_is_refused() {
     let rebind = stmt(StatementKind::Reassign(place(1), super::fresh_string()));
     let body = entry_borrowing_body(vec![rebind], goto(2), vec![Local(4), Local(1)]);
     assert_refused(&body, "rebinding the map inside the range");
+}
+
+/// A forged record of a borrow read out of a map: a map's entry is not part
+/// of the map's own value, so the check's own reach refuses the borrow
+/// without asking the inference.
+#[test]
+fn a_borrow_recorded_out_of_a_map_entry_is_refused() {
+    let mut body = single_block(Vec::new());
+    body.local_decls[1].ty = collection_ty("Map", &[TypeKind::Int, TypeKind::String]);
+    assert_refused(&body, "a map entry's borrow");
 }

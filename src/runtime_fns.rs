@@ -708,6 +708,7 @@ pub fn taken_argument_positions(name: &str) -> &'static [usize] {
 /// handed, as every mutating collection entry point does to its receiver in
 /// place (`push`, `pop`, `set`, `remove`, `clear`, …). A string append
 /// writes its receiver at position 0 and only reads what it appends.
+/// Every entry point [`copies_out_of_its_strings`] names is listed too.
 /// `map_get_checked` is listed although, for an inline value, it hands back an
 /// uncounted address into the entry the map still owns: the call itself only
 /// reads, and that address is valid only until the map is next written, the
@@ -755,8 +756,59 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         | rt::F32_TO_STRING
         | rt::RECEIVER_UNIQUE => true,
         rt::STRING_APPEND | rt::STRING_APPEND_INT | rt::STRING_APPEND_UINT => position > 0,
-        _ => false,
+        _ => copies_out_of_its_strings(name),
     }
+}
+
+/// Whether `name` is a string, text-pattern, console, file-system or
+/// environment entry point: each takes its strings as `*const MiriString`
+/// and copies out of them, handing back a fresh value or a status, so it
+/// only reads every argument.
+fn copies_out_of_its_strings(name: &str) -> bool {
+    matches!(
+        name,
+        rt::ENV_GET
+            | rt::ENV_HAS
+            | rt::ENV_SET
+            | rt::EPRINT
+            | rt::EPRINTLN
+            | rt::FS_APPEND_FILE
+            | rt::FS_CREATE_DIR
+            | rt::FS_DELETE
+            | rt::FS_EXISTS
+            | rt::FS_LIST_DIR
+            | rt::FS_READ_FILE
+            | rt::FS_WRITE_FILE
+            | rt::PANIC
+            | rt::PRINT
+            | rt::PRINTLN
+            | rt::REGEX_COMPILE
+            | rt::REGEX_FIND
+            | rt::REGEX_FIND_FROM
+            | rt::REGEX_FROM_VALIDATED_PATTERN
+            | rt::REGEX_MATCHES
+            | rt::REGEX_REPLACE
+            | rt::STRING_CHAR_AT
+            | rt::STRING_CODE_AT
+            | rt::STRING_INDEX_OF_ANY
+            | rt::STRING_LINE_COUNT
+            | rt::STRING_LINE_TEXT
+            | rt::STRING_NEXT_CHAR_BOUNDARY
+            | rt::STRING_PARSE_FLOAT
+            | rt::STRING_PARSE_INT
+            | rt::STRING_PIECE_COUNT
+            | rt::STRING_PIECE_END
+            | rt::STRING_REPEAT
+            | rt::STRING_REPLACE
+            | rt::STRING_SLICE_BYTES
+            | rt::STRING_SPLIT
+            | rt::STRING_SUBSTRING
+            | rt::STRING_TO_LOWER
+            | rt::STRING_TO_UPPER
+            | rt::STRING_TRIM
+            | rt::STRING_TRIM_END
+            | rt::STRING_TRIM_START
+    )
 }
 
 /// Whether `name` writes, in place, what it is handed at `position`: anything

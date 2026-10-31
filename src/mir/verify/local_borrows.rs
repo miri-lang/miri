@@ -35,30 +35,29 @@
 //!   borrow read out of one counts the locals holding the collection among
 //!   its owners, and other code may reach it;
 //! - when what it reads is reached through a class field, out of a
-//!   parameter or out of a lent entry — directly or through a borrowed parent — nothing on such a
-//!   path may release a value another name holds, by the rule of
-//!   [`crate::mir::analysis::heap_effects`] read over the counted body, with
-//!   the calls to the program the caller found quiet: this check is handed
-//!   them, worked out again over the counted program rather than read from
-//!   `Body::quiet_calls`, and with none every such call is taken as loud;
+//!   parameter or out of a lent entry — directly or through a borrowed
+//!   parent — every operation on such a path is harmless by the verifiers'
+//!   own rule ([`super::callee_effects`]), with the calls to the program its
+//!   caller found harmless by that rule: never the pass's own answer,
+//!   `Body::quiet_calls`, and with none every such call is taken as harmful;
 //! - every owner it shows is recorded, since RC elision keeps the retains of
 //!   exactly the recorded owners.
 //!
 //! What a runtime entry point does to its arguments is read from
 //! `runtime_fns`, the ground truth both this check and the inference use. The
 //! type predicates — how a step reaches what it reads and whether a type is
-//! a reference by design — are shared with the inference too
-//! (`optimization::local_borrows`), so a defect in either passes both.
+//! a reference by design — are worked out again here
+//! ([`super::borrow_reach`]), never asked of the inference, so a defect in
+//! one is caught by the other.
 //!
 //! An entry that passes is a borrow, and the ownership check leaves the local
 //! untracked, as it does a borrowed parameter. One that fails is a violation.
 
+use super::borrow_reach::{is_reference_by_design, reach_of, Reach};
+use super::callee_effects::BodyHarm;
 use super::{local_display_name, VerificationViolation};
 use crate::ast::types::Type;
-use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
-use crate::mir::optimization::local_borrows::{has_reference_semantics, reach_of, Reach};
 use crate::mir::place::PlaceContext;
-use crate::mir::place_type::PlaceTypes;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::DropHookReach;
@@ -66,7 +65,8 @@ use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
 use crate::runtime_fns::{
-    is_copy_on_write, only_reads_argument, reads_reference_count, taken_argument_positions,
+    hands_back_a_borrow, is_copy_on_write, only_reads_argument, reads_reference_count,
+    taken_argument_positions,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -114,12 +114,12 @@ enum Access {
 }
 
 /// Every local `body` records as borrowing that the body bears out, and a
-/// violation for each record it does not. `quiet_calls` are the calls to the
-/// program found to release nothing another name holds; `None` takes every
-/// such call as one that may.
+/// violation for each record it does not. `harmless_calls` are the calls to
+/// the program found harmless by [`super::callee_effects`]; `None` takes
+/// every such call as harmful.
 pub(super) fn held_borrows(
     body: &Body,
-    quiet_calls: Option<&HashSet<BasicBlock>>,
+    harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> (HashSet<Local>, Vec<VerificationViolation>) {
     let mut held = HashSet::new();
     let mut violations = Vec::new();
@@ -129,7 +129,7 @@ pub(super) fn held_borrows(
     let hooks = DropHookReach::new(body.rc_classifier.definitions());
     let mut checker = Checker {
         body,
-        noise: BodyNoise::of(body, Phase::Counted, &hooks, quiet_calls),
+        harm: BodyHarm::of(body, &hooks, harmless_calls),
         entries: entry_collections(body),
         decided: HashMap::new(),
     };
@@ -154,12 +154,12 @@ pub(super) fn held_borrows(
 }
 
 /// Every record of a borrowed local in `body` the body does not bear out,
-/// with `quiet_calls` as for [`held_borrows`].
+/// with `harmless_calls` as for [`held_borrows`].
 pub fn verify_local_borrows(
     body: &Body,
-    quiet_calls: Option<&HashSet<BasicBlock>>,
+    harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> Vec<VerificationViolation> {
-    held_borrows(body, quiet_calls).1
+    held_borrows(body, harmless_calls).1
 }
 
 /// The owners a borrow's value is held by, with whether other code may
@@ -170,8 +170,8 @@ type Owners = (Vec<Local>, bool);
 /// borrowed local reads that local's owners once.
 struct Checker<'b> {
     body: &'b Body,
-    /// What may release a value another name holds.
-    noise: BodyNoise<'b>,
+    /// Which operations are harmless.
+    harm: BodyHarm<'b>,
     /// Each local holding an entry a collection lends, with the locals
     /// holding that collection.
     entries: HashMap<Local, Vec<Local>>,
@@ -244,11 +244,7 @@ impl Checker<'_> {
             if !is_root(body, source.local) {
                 return None;
             }
-            let reach = reach_of(
-                &source,
-                |place| PlaceTypes::of(body).declared(place),
-                body.rc_classifier.definitions(),
-            )?;
+            let reach = reach_of(body, &source)?;
             let mut owners = vec![source.local];
             let mut read_exposed = reach == Reach::ThroughField || is_parameter(body, source.local);
             if let Some(collections) = self.entries.get(&source.local) {
@@ -259,8 +255,8 @@ impl Checker<'_> {
                 owners.extend(parents);
                 read_exposed |= parent_exposed;
             }
-            let noise = read_exposed.then_some(&self.noise);
-            if !stays_over_range(body, local, site, &owners, noise) {
+            let harm = read_exposed.then_some(&self.harm);
+            if !stays_over_range(body, local, site, &owners, harm) {
                 return None;
             }
             all_owners.extend(owners);
@@ -275,9 +271,31 @@ impl Checker<'_> {
 /// entry holds no reference, so a change to that collection may free it.
 fn entry_collections(body: &Body) -> HashMap<Local, Vec<Local>> {
     let mut entries: HashMap<Local, Vec<Local>> = HashMap::new();
-    for (entry, collection) in borrowed_entries(body) {
+    let terminators = body
+        .basic_blocks
+        .iter()
+        .filter_map(|data| data.terminator.as_ref());
+    for terminator in terminators {
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &terminator.kind
+        else {
+            continue;
+        };
+        let lends_entry = func.called_runtime_name().is_some_and(hands_back_a_borrow);
+        if !lends_entry || !destination.projection.is_empty() {
+            continue;
+        }
+        let entry = destination.local;
+        let collection = args
+            .first()
+            .and_then(Operand::place)
+            .map(|place| place.local);
         let roots = entries.entry(entry).or_default();
-        roots.extend(collection.map(|place| place.local).filter(|&c| c != entry));
+        roots.extend(collection.filter(|&c| c != entry));
     }
     entries
 }
@@ -306,7 +324,7 @@ enum Writes {
 
 /// How a write reaches a value of type `ty` held in `body`.
 fn written_as(body: &Body, ty: &Type) -> Writes {
-    if has_reference_semantics(&ty.kind, body.rc_classifier.definitions()) {
+    if is_reference_by_design(&ty.kind, body.rc_classifier.definitions()) {
         Writes::Shared
     } else if is_copied_on_write(body, ty) {
         Writes::CopiedOnEntry
@@ -413,15 +431,15 @@ fn ends_lent_parameter(body: &Body, statement: &Statement) -> bool {
 
 /// Whether, on every path from the definition of `local` at `site` to the end
 /// of its storage, each of `owners` is reached only in ways that leave it as
-/// it was, and — given `noise`, for a value other code may reach — nothing
-/// runs that may release a value another name holds. A path reaching the
+/// it was, and — given `harm`, for a value other code may reach — every
+/// operation that runs is harmless. A path reaching the
 /// body's end first does not end the range.
 fn stays_over_range(
     body: &Body,
     local: Local,
     site: (usize, usize),
     owners: &[Local],
-    noise: Option<&BodyNoise>,
+    harm: Option<&BodyHarm>,
 ) -> bool {
     let changes = |accesses: Vec<(Local, Access)>| {
         accesses
@@ -438,7 +456,7 @@ fn stays_over_range(
             if ends {
                 continue 'blocks;
             }
-            let is_loud = noise.is_some_and(|noise| noise.is_loud_statement(&statement.kind));
+            let is_loud = harm.is_some_and(|harm| !harm.is_harmless_statement(&statement.kind));
             let changes_owner =
                 !ends_lent_parameter(body, statement) && changes(statement_accesses(statement));
             if changes_owner || is_loud {
@@ -449,7 +467,7 @@ fn stays_over_range(
             return false;
         };
         let is_loud =
-            noise.is_some_and(|noise| noise.is_loud_terminator(BasicBlock(block), terminator));
+            harm.is_some_and(|harm| !harm.is_harmless_terminator(BasicBlock(block), terminator));
         if matches!(terminator.kind, TerminatorKind::Return)
             || changes(terminator_accesses(terminator))
             || is_loud
