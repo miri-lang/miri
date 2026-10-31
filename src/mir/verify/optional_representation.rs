@@ -129,7 +129,8 @@ impl<'a> Layouts<'a> {
             | StatementKind::StorageDead(_)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
-            | StatementKind::Nop => Vec::new(),
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => Vec::new(),
         }
     }
 

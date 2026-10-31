@@ -66,7 +66,7 @@ use crate::mir::proven_indexes::mark_in_bounds;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, PlaceElem, Rvalue,
-    Statement, StatementKind, Terminator, TerminatorKind,
+    StableCollection, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::preserves_length;
 
@@ -145,7 +145,7 @@ type Facts = BTreeSet<Fact>;
 /// Marks proven every access of `body` its loop guard proves in bounds, on
 /// the index of the access itself. Returns true if any was marked.
 pub fn record_in_bounds(body: &mut Body) -> bool {
-    if body.is_gpu() || body.stable_collections.is_empty() {
+    if body.is_gpu() || body.stable_collections().is_empty() {
         return false;
     }
     let mut marked = false;
@@ -198,6 +198,7 @@ impl Visitor for IndexRoots {
 struct Flow<'a> {
     body: &'a Body,
     non_negative: HashSet<usize>,
+    stable: Vec<StableCollection>,
 }
 
 impl<'a> Flow<'a> {
@@ -205,6 +206,7 @@ impl<'a> Flow<'a> {
         Self {
             body,
             non_negative: non_negative_locals(body),
+            stable: body.stable_collections(),
         }
     }
 
@@ -278,8 +280,7 @@ impl<'a> Flow<'a> {
 
     /// Whether a stable-collection record of `collection` covers `block`.
     fn is_covered(&self, block: usize, collection: Local) -> bool {
-        self.body
-            .stable_collections
+        self.stable
             .iter()
             .any(|record| record.local == collection && record.blocks.contains(&BasicBlock(block)))
     }
@@ -299,7 +300,7 @@ impl<'a> Flow<'a> {
                     state.retain(|fact| !fact.mentions_collection(place.local.0));
                 }
             }
-            StatementKind::IncRef(_) | StatementKind::Nop => {}
+            StatementKind::IncRef(_) | StatementKind::Nop | StatementKind::ReadHeader(_) => {}
         }
     }
 

@@ -106,6 +106,7 @@ pub fn constructed_vtable_symbols<'b>(
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::Nop
+            | StatementKind::ReadHeader(_)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_) => None,

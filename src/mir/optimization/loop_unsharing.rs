@@ -179,7 +179,8 @@ fn may_share(body: &Body, found: &NaturalLoop, local: Local) -> bool {
                 | StatementKind::Dealloc(_)
                 | StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_)
-                | StatementKind::Nop => {}
+                | StatementKind::Nop
+                | StatementKind::ReadHeader(_) => {}
             }
         }
         if let Some(terminator) = data.terminator.as_ref().filter(|t| !is_question_call(t)) {
@@ -366,7 +367,8 @@ fn is_written_only_by_its_questions(body: &Body, found: &NaturalLoop, local: Loc
                 StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
-                | StatementKind::Nop => true,
+                | StatementKind::Nop
+                | StatementKind::ReadHeader(_) => true,
             });
         let terminator_ok = (data.terminator.iter())
             .flat_map(Terminator::written_places)

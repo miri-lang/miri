@@ -1714,7 +1714,8 @@ impl<'a> BodyEmitter<'a> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => Ok(()),
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => Ok(()),
         }
     }
 

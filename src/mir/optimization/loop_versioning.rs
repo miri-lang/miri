@@ -102,7 +102,7 @@ struct Chosen {
 /// was copied.
 pub fn version_bounded_loops(body: &mut Body) -> bool {
     if body.is_gpu()
-        || !body.stable_collections.is_empty()
+        || !body.stable_collections().is_empty()
         || !crate::mir::proven_indexes::proven_indexes(body).is_empty()
     {
         return false;
@@ -288,7 +288,8 @@ fn written_value(statement: &Statement) -> Option<&Rvalue> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 
@@ -460,7 +461,8 @@ fn is_length_of(body: &Body, bound: Local, collection: Local) -> bool {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         })
         .peekable();
     definitions.peek().is_some()

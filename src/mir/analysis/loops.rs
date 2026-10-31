@@ -154,7 +154,8 @@ fn copied_local(statement: &Statement) -> Option<Local> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 
@@ -172,7 +173,8 @@ fn compared_locals(statement: &Statement) -> Option<(BinOp, Local, Local)> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 
@@ -187,6 +189,7 @@ pub fn writes_whole(statement: &Statement, local: Local) -> bool {
         StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => false,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => false,
     }
 }

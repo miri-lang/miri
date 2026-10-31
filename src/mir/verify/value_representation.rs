@@ -168,7 +168,8 @@ impl<'a> Representations<'a> {
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
-                | StatementKind::Nop => None,
+                | StatementKind::Nop
+                | StatementKind::ReadHeader(_) => None,
             })
     }
 
@@ -230,9 +231,10 @@ impl<'a> Representations<'a> {
             StatementKind::IncRef(place) => self.count_violation(place, "IncRef"),
             StatementKind::DecRef(place) => self.count_violation(place, "DecRef"),
             StatementKind::Dealloc(place) => self.count_violation(place, "Dealloc"),
-            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) | StatementKind::Nop => {
-                Vec::new()
-            }
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => Vec::new(),
         }
     }
 

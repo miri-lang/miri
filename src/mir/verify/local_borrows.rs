@@ -525,7 +525,7 @@ fn statement_accesses(statement: &Statement) -> Vec<(Local, Access)> {
         StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {
             push_place(&mut accesses, place, Access::Released, Access::Released);
         }
-        StatementKind::Nop => {}
+        StatementKind::Nop | StatementKind::ReadHeader(_) => {}
     }
     accesses
 }

@@ -96,7 +96,8 @@ fn excluded_locals(body: &Body) -> HashSet<usize> {
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
-                | StatementKind::Nop => {}
+                | StatementKind::Nop
+                | StatementKind::ReadHeader(_) => {}
             }
         }
         let written = data.terminator.iter().flat_map(Terminator::written_places);

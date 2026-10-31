@@ -187,7 +187,8 @@ fn statement_leaves_headers(statement: &Statement, facts: &ReleaseFacts) -> bool
         StatementKind::StorageLive(_)
         | StatementKind::StorageDead(_)
         | StatementKind::IncRef(_)
-        | StatementKind::Nop => true,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => true,
     }
 }
 
@@ -226,7 +227,8 @@ fn releases_nothing_it_borrows(
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::IncRef(_)
-            | StatementKind::Nop => true,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => true,
         })
 }
 
@@ -264,7 +266,7 @@ fn rebinds(statement: &Statement, local: Local) -> bool {
         StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
             place.local == local
         }
-        StatementKind::IncRef(_) | StatementKind::Nop => false,
+        StatementKind::IncRef(_) | StatementKind::Nop | StatementKind::ReadHeader(_) => false,
     }
 }
 

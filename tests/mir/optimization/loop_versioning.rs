@@ -348,7 +348,7 @@ fn test_matmul_reads_its_three_lists_headers_outside_the_innermost_loop() {
     assert_eq!(b_k.block, row_k.block, "{body}");
     let innermost = innermost_loop_holding(&body, b_k.block);
     for list in [a, b, row] {
-        let record = (body.stable_collections.iter())
+        let record = (body.stable_collections().into_iter())
             .find(|record| record.local == list)
             .unwrap_or_else(|| panic!("{list} is not recorded:\n{body}"));
         assert!(

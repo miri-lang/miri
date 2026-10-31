@@ -192,8 +192,12 @@ fn proofs_after_copying_a_list_of(element: TypeKind) -> Vec<InBounds> {
         miri::mir::BasicBlockData::new(Some(copy)),
     );
     body.basic_blocks.push(step);
-    for record in &mut body.stable_collections {
-        record.blocks.push(BasicBlock(read));
+    for data in &mut body.basic_blocks {
+        for statement in &mut data.statements {
+            if let miri::mir::StatementKind::ReadHeader(header_read) = &mut statement.kind {
+                header_read.blocks.push(BasicBlock(read));
+            }
+        }
     }
     record_in_bounds(&mut body);
     proven_indexes(&body)

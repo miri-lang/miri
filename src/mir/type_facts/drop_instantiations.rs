@@ -220,6 +220,7 @@ fn held_types(body: &Body) -> impl Iterator<Item = &Type> {
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::Nop
+            | StatementKind::ReadHeader(_)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_) => None,

@@ -310,7 +310,7 @@ impl<'a> Model<'a> {
                 forget_moves(facts);
                 forget_local(place.local, facts);
             }
-            StatementKind::Nop => {}
+            StatementKind::Nop | StatementKind::ReadHeader(_) => {}
         }
     }
 
@@ -856,7 +856,8 @@ fn shared_roots(body: &Body) -> HashSet<Local> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         });
     roots.extend(address_taken);
     roots

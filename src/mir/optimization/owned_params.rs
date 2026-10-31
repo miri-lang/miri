@@ -413,7 +413,8 @@ fn remove_discarded_copies(body: &mut Body, discarded: &HashSet<Local>) {
             StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => false,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => false,
         };
         if names_discarded {
             statement.kind = StatementKind::Nop;

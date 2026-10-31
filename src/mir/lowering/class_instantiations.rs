@@ -289,6 +289,7 @@ fn naming_span(body: &Body, class: &str, args: &[Type]) -> Span {
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::Nop
+            | StatementKind::ReadHeader(_)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_) => false,

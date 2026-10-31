@@ -197,7 +197,8 @@ fn writes_receiver_in_place(body: &Body) -> bool {
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
-                | StatementKind::Nop => false,
+                | StatementKind::Nop
+                | StatementKind::ReadHeader(_) => false,
             }
         });
     let hands_to_writer = (body
@@ -258,7 +259,8 @@ impl<'b> BodyHarm<'b> {
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::IncRef(_)
-            | StatementKind::Nop => true,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => true,
         }
     }
 

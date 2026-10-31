@@ -45,7 +45,8 @@
 //! For each such loop the pass gives the loop a preheader of its own — a block
 //! every entry into the header passes through, placed after any copy-on-write
 //! hoisted in front of the loop — and records the collection, the preheader
-//! and the loop's blocks on [`Body::stable_collections`]. Where loops nest,
+//! and the loop's blocks as a `ReadHeader` statement at the end of the
+//! preheader. Where loops nest,
 //! only the outermost loop a collection is stable in is recorded for it. A
 //! body that runs on a GPU keeps no header and is left alone.
 //!
@@ -65,8 +66,8 @@ use crate::mir::analysis::stable_headers::StableHeaders;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
-    BasicBlock, BasicBlockData, Body, Local, Place, PlaceElem, Rvalue, StableCollection,
-    Terminator, TerminatorKind,
+    BasicBlock, BasicBlockData, Body, HeaderRead, Local, Place, PlaceElem, Rvalue,
+    StableCollection, Statement, StatementKind, Terminator, TerminatorKind,
 };
 
 /// Records every collection a loop of `body` leaves the header of unchanged,
@@ -81,11 +82,23 @@ pub fn record_stable_collections(body: &mut Body) -> bool {
         return false;
     }
     let preheaders = insert_preheaders(body, &found);
-    body.stable_collections = found
+    let records: Vec<StableCollection> = found
         .iter()
         .filter_map(|(found_loop, local)| record(found_loop, *local, &preheaders))
         .collect();
-    !body.stable_collections.is_empty()
+    for record in &records {
+        if let Some(preheader) = body.basic_blocks.get_mut(record.preheader.0) {
+            preheader.statements.push(Statement {
+                kind: StatementKind::ReadHeader(HeaderRead {
+                    collection: Place::new(record.local),
+                    header: record.header,
+                    blocks: record.blocks.clone(),
+                }),
+                span: body.span,
+            });
+        }
+    }
+    !records.is_empty()
 }
 
 /// Every loop of `body` paired with a collection it leaves unchanged, the

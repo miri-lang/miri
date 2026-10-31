@@ -162,7 +162,8 @@ fn candidates<'a>(body: &'a Body, asked: &'a [&'a Place]) -> impl Iterator<Item 
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         });
     let allocated = body
         .basic_blocks
@@ -267,6 +268,7 @@ fn referenced_places(body: &Body) -> impl Iterator<Item = &Place> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         })
 }

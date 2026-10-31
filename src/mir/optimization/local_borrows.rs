@@ -397,7 +397,8 @@ fn refused_by_statement(statement: &Statement, is_read: impl Fn(Local) -> bool) 
         StatementKind::StorageLive(_)
         | StatementKind::StorageDead(_)
         | StatementKind::IncRef(_)
-        | StatementKind::Nop => Vec::new(),
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => Vec::new(),
     }
 }
 
@@ -629,7 +630,8 @@ fn ends_range(statement: &Statement, local: Local) -> bool {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => false,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => false,
     }
 }
 
@@ -647,7 +649,7 @@ fn statement_changes(statement: &Statement, owners: &[Local]) -> bool {
         StatementKind::IncRef(place) => {
             owners.contains(&place.local) && place.projection.is_empty()
         }
-        StatementKind::Nop => false,
+        StatementKind::Nop | StatementKind::ReadHeader(_) => false,
     }
 }
 

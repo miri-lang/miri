@@ -14,31 +14,44 @@ use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::verify_stable_collections;
 use miri::mir::{
-    BasicBlock, BasicBlockData, Body, Local, LocalDecl, Operand, Place, PlaceElem, Rvalue,
-    StableCollection, Statement, StatementKind, Terminator, TerminatorKind,
+    BasicBlock, BasicBlockData, Body, HeaderRead, Local, LocalDecl, Operand, Place, PlaceElem,
+    Rvalue, StableCollection, Statement, StatementKind, Terminator, TerminatorKind,
 };
 
 const LIST: Local = Local(1);
 const SPARE_LIST: Local = Local(6);
 const SPARE: Local = Local(7);
 
-/// `body` with a bare preheader appended and a record of the list over the
+/// A read of `local`'s header over the test loop's blocks.
+fn header_read(local: Local) -> Statement {
+    Statement {
+        kind: StatementKind::ReadHeader(HeaderRead {
+            collection: Place::new(local),
+            header: BasicBlock(1),
+            blocks: vec![BasicBlock(1), BasicBlock(2)],
+        }),
+        span: Span::default(),
+    }
+}
+
+/// `body` with a preheader appended reading the list's header over the
 /// loop, the entry left as it was.
 fn forge_record(mut body: Body) -> Body {
     let preheader = body.basic_blocks.len();
-    body.basic_blocks
-        .push(BasicBlockData::new(Some(Terminator::new(
-            TerminatorKind::Goto {
-                target: BasicBlock(1),
-            },
-            Span::default(),
-        ))));
+    let mut block = BasicBlockData::new(Some(Terminator::new(
+        TerminatorKind::Goto {
+            target: BasicBlock(1),
+        },
+        Span::default(),
+    )));
+    block.statements.push(header_read(LIST));
+    body.basic_blocks.push(block);
     body.basic_blocks[0]
         .terminator
         .as_mut()
         .unwrap()
         .replace_successor(BasicBlock(1), BasicBlock(preheader));
-    body.stable_collections.push(StableCollection {
+    body.stable_collections().push(StableCollection {
         local: LIST,
         preheader: BasicBlock(preheader),
         header: BasicBlock(1),
@@ -85,7 +98,7 @@ fn test_a_record_over_a_loop_calling_a_function_of_the_program_is_flagged() {
 #[test]
 fn test_a_record_whose_preheader_does_not_dominate_the_loop_is_flagged() {
     let mut body = forge_record(loop_over_a_list());
-    let preheader = body.stable_collections[0].preheader;
+    let preheader = body.stable_collections()[0].preheader;
     body.basic_blocks[0]
         .terminator
         .as_mut()
@@ -96,6 +109,24 @@ fn test_a_record_whose_preheader_does_not_dominate_the_loop_is_flagged() {
         found
             .iter()
             .any(|message| message.contains("does not dominate bb1, which is entered from bb0")),
+        "{found:?}"
+    );
+}
+
+/// Two reads of one list's header covering one block leave code generation
+/// a choice MIR must make.
+#[test]
+fn test_two_records_covering_one_block_for_one_list_are_flagged() {
+    let mut body = forge_record(loop_over_a_list());
+    let preheader = body.basic_blocks.len() - 1;
+    body.basic_blocks[preheader]
+        .statements
+        .push(header_read(LIST));
+    let found = messages(&body);
+    assert!(
+        found
+            .iter()
+            .any(|message| message.contains("is read once in both")),
         "{found:?}"
     );
 }
@@ -121,8 +152,10 @@ fn test_a_record_over_a_loop_rebinding_the_list_is_flagged() {
 
 #[test]
 fn test_a_record_of_a_local_that_holds_no_collection_is_flagged() {
-    let mut body = forge_record(loop_over_a_list());
-    body.stable_collections[0].local = Local(2);
+    let mut body = loop_over_a_list();
+    body = forge_record(body);
+    let preheader = body.basic_blocks.len() - 1;
+    body.basic_blocks[preheader].statements[0] = header_read(Local(2));
     let found = messages(&body);
     assert!(
         found

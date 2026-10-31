@@ -41,6 +41,7 @@ use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
 use crate::mir::place::PlaceContext;
 use crate::mir::proven_indexes::proven_indexes;
 use crate::mir::visitor::Visitor;
+use crate::mir::StableCollection;
 use crate::mir::{
     BasicBlock, BinOp, Body, Bounds, Discriminant, InBounds, Local, Operand, Place, PlaceElem,
     Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
@@ -182,6 +183,7 @@ struct Check<'a> {
     body: &'a Body,
     never_negative: HashSet<usize>,
     predecessors: Vec<Vec<(usize, Option<Guard>)>>,
+    stable: Vec<StableCollection>,
 }
 
 impl<'a> Check<'a> {
@@ -191,6 +193,7 @@ impl<'a> Check<'a> {
             body,
             never_negative,
             predecessors: vec![Vec::new(); body.basic_blocks.len()],
+            stable: body.stable_collections(),
         };
         check.predecessors = check.edges();
         check
@@ -408,7 +411,8 @@ impl<'a> Check<'a> {
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
             | StatementKind::IncRef(_)
-            | StatementKind::Nop => {}
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => {}
         }
     }
 
@@ -504,10 +508,10 @@ impl<'a> Check<'a> {
         let Some(data) = self.body.basic_blocks.get(block) else {
             return Some("its block does not exist".to_string());
         };
-        let covered =
-            self.body.stable_collections.iter().any(|record| {
-                record.local == proof.collection && record.blocks.contains(&proof.block)
-            });
+        let covered = self
+            .stable
+            .iter()
+            .any(|record| record.local == proof.collection && record.blocks.contains(&proof.block));
         if !covered {
             return Some(format!(
                 "no stable record of `{}` covers it",
@@ -613,7 +617,8 @@ fn assigns(statement: &Statement, local: Local) -> bool {
         StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => false,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => false,
     }
 }
 
@@ -786,7 +791,8 @@ fn whole_copy_of(statement: &Statement) -> Option<Local> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 

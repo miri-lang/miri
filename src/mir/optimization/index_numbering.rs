@@ -144,7 +144,8 @@ fn candidates(body: &Body) -> Vec<Candidate> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         })
         .filter(|(local, expression)| {
             writes.get(local.0) == Some(&1)
@@ -173,7 +174,8 @@ fn addressed_locals(body: &Body) -> HashSet<Local> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         })
         .collect()
 }
@@ -196,7 +198,8 @@ fn storage_changed(statement: &Statement) -> Option<Local> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 

@@ -410,7 +410,8 @@ fn absent_writes_only(body: &Body, local: crate::mir::Local) -> bool {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => true,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => true,
         })
 }
 

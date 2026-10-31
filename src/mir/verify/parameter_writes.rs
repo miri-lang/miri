@@ -89,7 +89,8 @@ fn replaces_whole(block: &BasicBlockData, whole: &Place) -> bool {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => false,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => false,
         });
     stored
         || block
@@ -146,7 +147,8 @@ fn stored_local(kind: &StatementKind) -> Option<Local> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 

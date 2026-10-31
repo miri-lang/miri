@@ -3,28 +3,28 @@
 
 //! The collection headers a function reads once per loop.
 //!
-//! MIR records, on `Body::stable_collections`, each array or list a loop
-//! leaves the header of unchanged, with a preheader every entry into the loop
-//! passes through. At the end of that preheader the header is read once:
+//! MIR marks, with a `ReadHeader` statement at the end of a loop's
+//! preheader, each array or list the loop leaves the header of unchanged.
+//! There the header is read once:
 //! null-guarded, so a collection never allocated reads as no data and no
 //! elements, as `Len` reads it; and, for elements held at a stride of their
 //! own, with the slot-size check run only when there is an element to check.
 //! An element access or a length inside the loop rooted at the collection
 //! then reads the two words from the variables those loads defined.
 //!
-//! Where a collection is recorded over nested loops, the outermost record
-//! covers the blocks they share, so the header is read once for the whole
-//! nest. Each record's preheader must dominate its blocks; a record that does
-//! not would read a variable some path never defined, and is reported rather
-//! than compiled.
+//! Where a collection is read over nested loops, the outermost read covers
+//! the blocks they share, so the header is read once for the whole nest. MIR
+//! guarantees one read per block and collection and that each preheader
+//! dominates its blocks: code generation looks the read up and decides
+//! nothing about the control flow.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::codegen::cranelift::collection_header::ElementHeader;
 use crate::codegen::cranelift::translator::{inline_stride, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
-use crate::mir::{Body, Local, StableCollection};
+use crate::mir::{Body, Local, Place};
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{InstBuilder, Value};
@@ -56,17 +56,16 @@ impl StableHeaders {
         Self::default()
     }
 
-    /// The headers `body` records, each given its two variables, after
-    /// checking that every record's preheader dominates its blocks.
+    /// The headers `body` reads once, each given its two variables. MIR
+    /// guarantees one read per block and collection, and that its
+    /// preheader dominates its blocks; the verifier checks both.
     pub(crate) fn declare(
         builder: &mut FunctionBuilder,
         body: &Body,
         ptr_type: cl_types::Type,
-    ) -> Result<Self, CodegenError> {
+    ) -> Self {
         let mut headers = Self::default();
-        let mut widest: HashMap<(usize, Local), usize> = HashMap::new();
-        for (index, record) in body.stable_collections.iter().enumerate() {
-            check_preheader_dominates(body, record)?;
+        for (index, record) in body.stable_collections().iter().enumerate() {
             headers.hoisted.push(HoistedHeader {
                 local: record.local,
                 preheader: record.preheader.0,
@@ -74,17 +73,21 @@ impl StableHeaders {
                 len: builder.declare_var(ptr_type),
             });
             for block in &record.blocks {
-                let key = (block.0, record.local);
-                let is_wider = widest
-                    .get(&key)
-                    .is_none_or(|covered| record.blocks.len() > *covered);
-                if is_wider {
-                    widest.insert(key, record.blocks.len());
-                    headers.covering.insert(key, index);
-                }
+                headers
+                    .covering
+                    .entry((block.0, record.local))
+                    .or_insert(index);
             }
         }
-        Ok(headers)
+        headers
+    }
+
+    /// The read of `local`'s header made in the block being translated.
+    fn read_here(&self, local: Local) -> Option<HoistedHeader> {
+        let block = self.current_block.get()?;
+        (self.hoisted.iter())
+            .find(|hoisted| hoisted.preheader == block && hoisted.local == local)
+            .copied()
     }
 
     /// Note that the MIR block `block` is being translated.
@@ -107,66 +110,27 @@ impl StableHeaders {
             len: builder.use_var(hoisted.len),
         })
     }
-
-    fn read_in(&self, block: usize) -> impl Iterator<Item = &HoistedHeader> {
-        self.hoisted
-            .iter()
-            .filter(move |hoisted| hoisted.preheader == block)
-    }
-}
-
-/// Fails unless every path from the entry into a block of `record` passes
-/// through its preheader.
-fn check_preheader_dominates(body: &Body, record: &StableCollection) -> Result<(), CodegenError> {
-    let preheader = record.preheader.0;
-    let mut reached: HashSet<usize> = HashSet::from([0]);
-    let mut pending = vec![0];
-    while let Some(block) = pending.pop() {
-        if block == preheader {
-            continue;
-        }
-        let successors = (body.basic_blocks.get(block))
-            .and_then(|data| data.terminator.as_ref())
-            .map(|terminator| terminator.successors())
-            .unwrap_or_default();
-        pending.extend(
-            successors
-                .into_iter()
-                .map(|successor| successor.0)
-                .filter(|successor| reached.insert(*successor)),
-        );
-    }
-    match record
-        .blocks
-        .iter()
-        .find(|block| reached.contains(&block.0))
-    {
-        Some(block) => Err(CodegenError::Internal(format!(
-            "`{}` is read once in {} for the loop at {}, which does not dominate {block}",
-            record.local, record.preheader, record.header
-        ))),
-        None => Ok(()),
-    }
 }
 
 impl FunctionTranslator<'_> {
-    /// Read, at the end of the MIR block `block`, the header of every
-    /// collection recorded with it as preheader.
+    /// Read the header of `collection`, where a `ReadHeader` statement of
+    /// the MIR block being translated reads it.
     pub(crate) fn read_stable_headers(
         builder: &mut FunctionBuilder,
-        block: usize,
+        collection: &Place,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let headers: Vec<HoistedHeader> = type_ctx.stable_headers.read_in(block).copied().collect();
-        for hoisted in headers {
-            let var = locals.get(&hoisted.local).ok_or_else(|| {
-                CodegenError::Internal(format!("Unknown local: {:?}", hoisted.local))
-            })?;
-            let base = builder.use_var(*var);
-            Self::read_stable_header(builder, base, hoisted, type_ctx)?;
-        }
-        Ok(())
+        let Some(hoisted) = type_ctx.stable_headers.read_here(collection.local) else {
+            return Err(CodegenError::Internal(format!(
+                "`{collection}` is read once in a block no read of it names"
+            )));
+        };
+        let var = locals
+            .get(&hoisted.local)
+            .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", hoisted.local)))?;
+        let base = builder.use_var(*var);
+        Self::read_stable_header(builder, base, hoisted, type_ctx)
     }
 
     /// Define `hoisted`'s variables from the header at `base`: zero for a

@@ -59,7 +59,8 @@ pub fn address_taken(body: &Body) -> HashSet<Local> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         })
         .collect()
 }

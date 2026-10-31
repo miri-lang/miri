@@ -79,7 +79,8 @@ impl Visitor for ReferencedLocals {
             }
             MirStatementKind::StorageLive(_)
             | MirStatementKind::StorageDead(_)
-            | MirStatementKind::Nop => {}
+            | MirStatementKind::Nop
+            | MirStatementKind::ReadHeader(_) => {}
         }
     }
 }

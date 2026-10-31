@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::error::syntax::Span;
+use crate::mir::block::BasicBlock;
 use crate::mir::place::Place;
 use crate::mir::rvalue::Rvalue;
 use std::fmt;
@@ -24,6 +25,7 @@ impl Statement {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
+            | StatementKind::ReadHeader(_)
             | StatementKind::Nop => None,
         }
     }
@@ -41,6 +43,7 @@ impl fmt::Display for Statement {
             StatementKind::IncRef(place) => write!(f, "IncRef({})", place),
             StatementKind::DecRef(place) => write!(f, "DecRef({})", place),
             StatementKind::Dealloc(place) => write!(f, "Dealloc({})", place),
+            StatementKind::ReadHeader(read) => write!(f, "{read}"),
             StatementKind::Nop => write!(f, "nop"),
         }
     }
@@ -68,6 +71,35 @@ pub enum StatementKind {
     DecRef(Place),
     /// Explicit deallocation (used when optimization proves uniqueness).
     Dealloc(Place),
+    /// Reads the header of the array or list `read.collection` — its data
+    /// pointer, length and slot size — once, at the end of the preheader of
+    /// a loop that leaves the header unchanged, for every access in
+    /// `read.blocks` to use. Changes nothing.
+    ReadHeader(HeaderRead),
     /// No-op.
     Nop,
+}
+
+/// What a [`StatementKind::ReadHeader`] reads and for which blocks: the
+/// collection, the loop's header and every block of the loop, the header
+/// included, in ascending order. The block holding the statement is the
+/// loop's preheader. At most one read covers a block for one collection.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct HeaderRead {
+    pub collection: Place,
+    pub header: BasicBlock,
+    pub blocks: Vec<BasicBlock>,
+}
+
+impl fmt::Display for HeaderRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let blocks: Vec<String> = self.blocks.iter().map(ToString::to_string).collect();
+        write!(
+            f,
+            "ReadHeader({}) over {}: [{}]",
+            self.collection,
+            self.header,
+            blocks.join(", ")
+        )
+    }
 }

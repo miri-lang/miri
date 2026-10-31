@@ -158,7 +158,7 @@ pub(crate) fn loop_over_a_list() -> Body {
 /// The records `body` gets.
 fn records_of(mut body: Body) -> Vec<StableCollection> {
     record_stable_collections(&mut body);
-    body.stable_collections
+    body.stable_collections()
 }
 
 pub(crate) fn call(
@@ -195,7 +195,7 @@ fn test_a_list_a_loop_only_reads_is_recorded_with_a_preheader_of_its_own() {
     assert!(record_stable_collections(&mut body));
     let preheader = body.basic_blocks.len() - 1;
     assert_eq!(
-        body.stable_collections,
+        body.stable_collections(),
         vec![StableCollection {
             local: LIST,
             preheader: BasicBlock(preheader),
@@ -218,9 +218,15 @@ fn test_a_list_a_loop_only_reads_is_recorded_with_a_preheader_of_its_own() {
             .map(|t| t.successors()),
         Some(vec![BasicBlock(LOOP_HEADER)])
     );
-    assert!(body.to_string().contains(&format!(
-        "stable _1 from bb{preheader} over bb1: [bb1, bb2];"
-    )));
+    assert_eq!(
+        body.basic_blocks[preheader]
+            .statements
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["ReadHeader(_1) over bb1: [bb1, bb2]".to_string()],
+        "the preheader reads the list's header and does nothing else"
+    );
 }
 
 #[test]
@@ -384,7 +390,7 @@ fn test_a_gpu_body_records_nothing() {
     let mut body = loop_over_a_list();
     body.execution_model = ExecutionModel::GpuKernel;
     assert!(!record_stable_collections(&mut body));
-    assert!(body.stable_collections.is_empty());
+    assert!(body.stable_collections().is_empty());
     assert_eq!(body.basic_blocks.len(), 4, "a GPU body gains no block");
 }
 
@@ -448,11 +454,12 @@ fn energy(bodies [Body]) float
     );
     let body = body_named(&source, ".energy");
     assert_eq!(
-        body.stable_collections.len(),
+        body.stable_collections().len(),
         1,
         "one record, for the outer loop:\n{body}"
     );
-    let record = &body.stable_collections[0];
+    let records = body.stable_collections();
+    let record = &records[0];
     assert_eq!(record.local, Local(1));
 }
 
@@ -472,7 +479,7 @@ fn grow(n int) int
 "#,
     );
     let body = body_named(&source, ".grow");
-    assert!(body.stable_collections.is_empty(), "{body}");
+    assert!(body.stable_collections().is_empty(), "{body}");
 }
 
 #[test]
@@ -492,7 +499,7 @@ fn sum(l [int]) int
 "#,
     );
     let body = body_named(&source, ".sum");
-    assert!(body.stable_collections.is_empty(), "{body}");
+    assert!(body.stable_collections().is_empty(), "{body}");
 }
 
 /// A loop building and dropping an instance of `class` every iteration while
@@ -516,13 +523,13 @@ fn count(start [int]) int
 #[test]
 fn test_releasing_an_instance_with_a_drop_hook_in_the_loop_leaves_its_list_unrecorded() {
     let body = body_named(&releasing_loop("Noisy"), ".count");
-    assert!(body.stable_collections.is_empty(), "{body}");
+    assert!(body.stable_collections().is_empty(), "{body}");
 }
 
 #[test]
 fn test_releasing_an_instance_without_a_drop_hook_keeps_its_list_recorded() {
     let body = body_named(&releasing_loop("Plain"), ".count");
-    assert_eq!(body.stable_collections.len(), 1, "{body}");
+    assert_eq!(body.stable_collections().len(), 1, "{body}");
 }
 
 #[test]
@@ -545,7 +552,8 @@ fn step(start [Body], dt float) [Body]
 "#,
     );
     let body = body_named(&source, ".step");
-    let [record] = body.stable_collections.as_slice() else {
+    let records = body.stable_collections();
+    let [record] = records.as_slice() else {
         panic!("one record, for the outer loop:\n{body}");
     };
     assert!(
@@ -609,7 +617,7 @@ fn go(h Holder, l [int], repl [int]) int
 "#,
     );
     let body = body_named(&source, ".go");
-    assert!(body.stable_collections.is_empty(), "{body}");
+    assert!(body.stable_collections().is_empty(), "{body}");
 }
 
 #[test]
@@ -629,7 +637,7 @@ fn go(start Holder, repl [int]) int
 "#,
     );
     let body = body_named(&source, ".go");
-    assert_eq!(body.stable_collections.len(), 1, "{body}");
+    assert_eq!(body.stable_collections().len(), 1, "{body}");
 }
 
 #[test]
@@ -648,7 +656,7 @@ fn go(l [int], names [String]) int
     );
     let body = body_named(&source, ".go");
     assert!(
-        body.stable_collections
+        body.stable_collections()
             .iter()
             .any(|record| record.local == Local(1)),
         "{body}"
@@ -908,7 +916,7 @@ fn test_an_owned_list_moved_out_of_a_device_resident_local_is_unrecorded_across_
 /// loop.
 fn assert_unrecorded(source: &str, suffix: &str) {
     let body = body_named(source, suffix);
-    assert!(body.stable_collections.is_empty(), "{body}");
+    assert!(body.stable_collections().is_empty(), "{body}");
 }
 
 #[test]
@@ -950,7 +958,8 @@ fn test_a_loop_making_a_virtual_call_is_unrecorded() {
 /// The local of the one record of the body of `source` named `suffix`.
 fn recorded_local(source: &str, suffix: &str) -> (Body, Local) {
     let body = body_named(source, suffix);
-    let [record] = body.stable_collections.as_slice() else {
+    let records = body.stable_collections();
+    let [record] = records.as_slice() else {
         panic!("one record:\n{body}");
     };
     let local = record.local;
@@ -1097,7 +1106,7 @@ fn test_a_loop_writing_another_list_on_some_iterations_records_the_list_it_reads
     let body = body_named(COPY_ON_WRITE_OF_ANOTHER_LIST, ".mix");
     let read = named_local(&body, "a");
     let written = named_local(&body, "b");
-    let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
+    let recorded: Vec<Local> = body.stable_collections().iter().map(|r| r.local).collect();
     assert!(recorded.contains(&read), "{body}");
     assert!(!recorded.contains(&written), "{body}");
 }
@@ -1107,7 +1116,7 @@ fn test_a_loop_writing_an_alias_of_the_list_it_reads_records_the_list() {
     let body = body_named(COPY_ON_WRITE_OF_AN_ALIAS, ".mix");
     let read = named_local(&body, "a");
     let written = named_local(&body, "b");
-    let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
+    let recorded: Vec<Local> = body.stable_collections().iter().map(|r| r.local).collect();
     assert!(recorded.contains(&read), "{body}");
     assert!(!recorded.contains(&written), "{body}");
 }
@@ -1120,7 +1129,7 @@ fn test_a_register_machine_records_its_program_and_its_registers() {
     let body = body_named(REGISTER_MACHINE, ".run");
     let code = named_local(&body, "code");
     let regs = named_local(&body, "regs");
-    let recorded: Vec<Local> = body.stable_collections.iter().map(|r| r.local).collect();
+    let recorded: Vec<Local> = body.stable_collections().iter().map(|r| r.local).collect();
     assert!(recorded.contains(&code), "{body}");
     assert!(recorded.contains(&regs), "{body}");
 }

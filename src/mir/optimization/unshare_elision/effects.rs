@@ -194,7 +194,7 @@ impl ProgramBuilder<'_> {
             StatementKind::IncRef(place)
             | StatementKind::DecRef(place)
             | StatementKind::Dealloc(place) => self.reached(place).map(Effect::Forget),
-            StatementKind::Nop => None,
+            StatementKind::Nop | StatementKind::ReadHeader(_) => None,
         }
     }
 

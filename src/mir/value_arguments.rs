@@ -351,7 +351,8 @@ fn element_addresses_taken(block: &BasicBlockData) -> Vec<Local> {
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         })
         .filter(|address| {
             address.projection.is_empty() && reads_element_through(&terminator.kind, address.local)
@@ -417,7 +418,8 @@ fn statement_written_roots(
         StatementKind::StorageLive(_)
         | StatementKind::StorageDead(_)
         | StatementKind::IncRef(_)
-        | StatementKind::Nop => [None, None],
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => [None, None],
     }
 }
 

@@ -85,6 +85,9 @@ pub trait Visitor {
                 self.visit_place(place, PlaceContext::StorageDead, block);
             }
             StatementKind::Nop => {}
+            StatementKind::ReadHeader(read) => {
+                self.visit_place(&read.collection, PlaceContext::NonMutatingUse, block);
+            }
             StatementKind::IncRef(place) => {
                 self.visit_place(place, PlaceContext::NonMutatingUse, block);
             }
@@ -299,6 +302,9 @@ pub trait MutVisitor {
                 self.visit_place(place, PlaceContext::StorageDead, block);
             }
             StatementKind::Nop => {}
+            StatementKind::ReadHeader(read) => {
+                self.visit_place(&mut read.collection, PlaceContext::NonMutatingUse, block);
+            }
             StatementKind::IncRef(place) => {
                 self.visit_place(place, PlaceContext::NonMutatingUse, block);
             }

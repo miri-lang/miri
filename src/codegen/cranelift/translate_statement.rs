@@ -164,6 +164,9 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::StorageDead(place) => {
                 Self::translate_gpu_buffer_release(builder, ctx, place, body)
             }
+            StatementKind::ReadHeader(read) => {
+                Self::read_stable_headers(builder, &read.collection, locals, type_ctx)
+            }
             StatementKind::Nop | StatementKind::StorageLive(_) => Ok(()),
         }
     }

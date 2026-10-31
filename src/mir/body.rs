@@ -8,7 +8,7 @@ use crate::mir::backend::BackendMetadata;
 use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
-use crate::mir::statement::Statement;
+use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
@@ -179,17 +179,12 @@ pub struct Body {
     /// allocator, so the WGSL backend drops this parameter and every argument
     /// read from it.
     pub allocator: Option<Local>,
-    /// The collections whose header a loop of this body leaves unchanged, so
-    /// code generation reads it once, in the loop's preheader, rather than at
-    /// every element access. Decided by
-    /// `crate::mir::optimization::stable_collections`, re-derived by
-    /// `crate::mir::verify::verify_stable_collections`.
-    pub stable_collections: Vec<StableCollection>,
 }
 
 /// An array or a list a loop indexes without changing its header: the data
 /// pointer, the length and the slot size read on entry hold on every
-/// iteration.
+/// iteration. A view of a `ReadHeader` statement, with the block holding it
+/// as the preheader, read off the body by [`Body::stable_collections`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StableCollection {
     /// The local holding the collection.
@@ -289,7 +284,6 @@ impl Body {
             generic_class_instantiations: Vec::new(),
             device_stale_flags: HashMap::new(),
             allocator: None,
-            stable_collections: Vec::new(),
         }
     }
 
@@ -379,6 +373,27 @@ impl Body {
     }
 
     /// Returns true if this function runs on a GPU.
+    /// Every collection a loop of this body leaves the header of unchanged,
+    /// one per `ReadHeader` statement, in block order. Decided by
+    /// `crate::mir::optimization::stable_collections`, re-derived by
+    /// `crate::mir::verify::verify_stable_collections`.
+    pub fn stable_collections(&self) -> Vec<StableCollection> {
+        let mut found = Vec::new();
+        for (block, data) in self.basic_blocks.iter().enumerate() {
+            for statement in &data.statements {
+                if let StatementKind::ReadHeader(read) = &statement.kind {
+                    found.push(StableCollection {
+                        local: read.collection.local,
+                        preheader: BasicBlock(block),
+                        header: read.header,
+                        blocks: read.blocks.clone(),
+                    });
+                }
+            }
+        }
+        found
+    }
+
     pub fn is_gpu(&self) -> bool {
         matches!(
             self.execution_model,
@@ -698,9 +713,6 @@ impl fmt::Display for Body {
             }
             writeln!(f, "    }}")?;
             writeln!(f)?;
-        }
-        for stable in &self.stable_collections {
-            writeln!(f, "    {stable};")?;
         }
         Ok(())
     }

@@ -20,7 +20,7 @@
 //! no release, other than through the parameter, of a value that may hold a
 //! collection of its type. Each record is re-derived here from the body
 //! alone, without the pass's loop search, and every way it fails is
-//! reported.
+//! reported, as is a block two reads of one collection cover.
 
 use super::VerificationViolation;
 use crate::ast::types::BuiltinCollectionKind;
@@ -31,9 +31,9 @@ use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, StableCollection, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-/// Every way a record on [`Body::stable_collections`] fails to keep its
+/// Every way a header read ([`Body::stable_collections`]) fails to keep its
 /// collection's header. `harmless_calls` are the body's calls to the program
 /// found harmless by [`super::callee_effects`]; `None` takes every such call
 /// as one that may change a header.
@@ -41,19 +41,42 @@ pub fn verify_stable_collections(
     body: &Body,
     harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> Vec<VerificationViolation> {
-    if body.stable_collections.is_empty() {
+    let records = body.stable_collections();
+    if records.is_empty() {
         return Vec::new();
     }
     let checker = RecordCheck::of(body, harmless_calls);
-    body.stable_collections
-        .iter()
+    (records.iter())
         .flat_map(|record| checker.failures(record))
+        .chain(overlaps(&records))
         .map(|(local, message)| VerificationViolation {
             local,
             local_name: display_name(body, local),
             message,
         })
         .collect()
+}
+
+/// Every block two reads of one collection's header cover: code generation
+/// takes one read per block and collection, so a second is a choice MIR
+/// left open.
+fn overlaps(records: &[StableCollection]) -> Vec<(Local, String)> {
+    let mut covered: HashMap<(BasicBlock, Local), BasicBlock> = HashMap::new();
+    let mut found = Vec::new();
+    for record in records {
+        for block in &record.blocks {
+            if let Some(first) = covered.insert((*block, record.local), record.preheader) {
+                found.push((
+                    record.local,
+                    format!(
+                        "`{}` is read once in both {first} and {} for {block}",
+                        record.local, record.preheader
+                    ),
+                ));
+            }
+        }
+    }
+    found
 }
 
 fn display_name(body: &Body, local: Local) -> String {
@@ -153,7 +176,8 @@ impl<'a> RecordCheck<'a> {
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
-                | StatementKind::Nop => false,
+                | StatementKind::Nop
+                | StatementKind::ReadHeader(_) => false,
             });
         is_address_taken.then(|| "its address is taken".to_string())
     }
@@ -170,9 +194,11 @@ impl<'a> RecordCheck<'a> {
                     data.terminator.as_ref().map(|terminator| &terminator.kind),
                     Some(TerminatorKind::Goto { target }) if *target == record.header
                 );
-                if !data.statements.is_empty() || !jumps_to_header {
+                let only_reads_headers = (data.statements.iter())
+                    .all(|statement| matches!(statement.kind, StatementKind::ReadHeader(_)));
+                if !only_reads_headers || !jumps_to_header {
                     found.push(format!(
-                        "its preheader {} is not a bare jump to the header",
+                        "its preheader {} is not a jump to the header that only reads headers",
                         record.preheader
                     ));
                 }
@@ -254,7 +280,7 @@ impl<'a> RecordCheck<'a> {
             StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
                 (place.local == local).then(|| format!("{block} starts or ends its storage"))
             }
-            StatementKind::IncRef(_) | StatementKind::Nop => None,
+            StatementKind::IncRef(_) | StatementKind::Nop | StatementKind::ReadHeader(_) => None,
         }
     }
 
@@ -277,7 +303,8 @@ impl<'a> RecordCheck<'a> {
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::IncRef(_)
-            | StatementKind::Nop => None,
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         }?;
         let may_free = is_borrowed
             && released.local != local
@@ -516,7 +543,8 @@ fn whole_move(statement: &Statement) -> Option<(Local, Local)> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => None,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => None,
     }
 }
 

@@ -62,7 +62,7 @@ pub use operand::{Constant, FunctionConstant, Operand};
 pub use place::{Bounds, Local, Place, PlaceElem};
 pub use proven_indexes::InBounds;
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
-pub use statement::{Statement, StatementKind};
+pub use statement::{HeaderRead, Statement, StatementKind};
 pub use terminator::{
     arg_mode, ArgMode, Discriminant, GpuLaunchArgs, GpuLaunchArgsError, Terminator, TerminatorKind,
 };

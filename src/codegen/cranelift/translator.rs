@@ -298,7 +298,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Some(table) = emission.profile_table.filter(|_| emission.is_entry) {
             Self::call_rt_profile_init(&mut builder, &mut module_ctx, table, self.ptr_type)?;
         }
-        let stable_headers = StableHeaders::declare(&mut builder, body, self.ptr_type)?;
+        let stable_headers = StableHeaders::declare(&mut builder, body, self.ptr_type);
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
             facts: self.facts,
@@ -488,7 +488,6 @@ impl<'a> FunctionTranslator<'a> {
                 );
                 Self::translate_statement(builder, module_ctx, stmt, body, locals, type_ctx)?;
             }
-            Self::read_stable_headers(builder, idx, locals, type_ctx)?;
             if let Some(ref terminator) = block_data.terminator {
                 Self::mark_source(
                     builder,

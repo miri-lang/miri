@@ -482,7 +482,10 @@ impl<'b> Classifier<'b> {
             StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {
                 self.may_run_drop_hook(place)
             }
-            StatementKind::StorageLive(_) | StatementKind::IncRef(_) | StatementKind::Nop => false,
+            StatementKind::StorageLive(_)
+            | StatementKind::IncRef(_)
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => false,
         }
     }
 

@@ -971,7 +971,10 @@ fn reader_of(statements: &[Statement], index: usize, retained: &Place) -> Option
                     return None;
                 }
             }
-            StatementKind::StorageLive(_) | StatementKind::IncRef(_) | StatementKind::Nop => {}
+            StatementKind::StorageLive(_)
+            | StatementKind::IncRef(_)
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => {}
         }
     }
     None
@@ -1069,7 +1072,7 @@ fn apply_statement(
                 release(body, &Place::new(consumed), tracked, state, violations);
             }
         }
-        StatementKind::Nop => {}
+        StatementKind::Nop | StatementKind::ReadHeader(_) => {}
     }
 }
 

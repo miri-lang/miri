@@ -201,9 +201,10 @@ impl Flow<'_> {
                 None
             }
             // Starting or ending a local's storage reads nothing of it.
-            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) | StatementKind::Nop => {
-                None
-            }
+            StatementKind::StorageLive(_)
+            | StatementKind::StorageDead(_)
+            | StatementKind::Nop
+            | StatementKind::ReadHeader(_) => None,
         };
         named
             .locals
@@ -236,7 +237,7 @@ impl Flow<'_> {
                 }
             }
             StatementKind::DecRef(_) | StatementKind::Dealloc(_) => valid.clear(),
-            StatementKind::IncRef(_) | StatementKind::Nop => {}
+            StatementKind::IncRef(_) | StatementKind::Nop | StatementKind::ReadHeader(_) => {}
         }
     }
 

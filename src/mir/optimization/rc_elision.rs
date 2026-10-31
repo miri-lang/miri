@@ -535,7 +535,8 @@ fn dying_release(statements: &[Statement], local: Local) -> Option<usize> {
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
-        | StatementKind::Nop => false,
+        | StatementKind::Nop
+        | StatementKind::ReadHeader(_) => false,
     };
     ends_value.then_some(release)
 }
