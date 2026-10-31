@@ -1871,6 +1871,67 @@ fn expected_code_sums() -> String {
     )
 }
 
+const APPENDS: &str = r#"
+use system.io
+
+fn grow(start String, piece String, times int) String
+    var text = start
+    var i = 0
+    while i < times
+        text += piece
+        i += 1
+    return text
+
+fn main()
+    let small = grow("ab", "c", 3)
+    let long = grow("", "0123456789", 50)
+    let wide = grow("x", "é", 2)
+    let after_wide = grow(wide, "y", 2)
+    let held = grow("s", "t", 1)
+    var copy = held
+    copy += "u"
+    var twice = grow("ab", "c", 1)
+    twice += twice
+    let from_literal = grow("lit", "", 0) + "x"
+    println(f"{small} {long.length()} {wide} {after_wide} {held} {copy} {twice} {from_literal}")
+"#;
+
+/// A release build appends to a string it holds alone, with room for the
+/// piece, by copying the piece's bytes in place; anything else — a shared or
+/// literal left side, a full buffer, a left side not marked ASCII, the same
+/// string on both sides — still asks the runtime.
+#[test]
+fn test_string_append_in_place_skips_the_runtime_append() {
+    let source = create_test_file(APPENDS);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("appends");
+    miri_cmd()
+        .arg("build")
+        .arg(source.path())
+        .arg("--out")
+        .arg(&out)
+        .args(["--release", "--emit", "clif"])
+        .assert()
+        .success();
+    let listing = std::fs::read_to_string(out_dir.path().join("appends.clif")).unwrap();
+    let (blocks, names) = clif_function(&listing, "miri.grow");
+    assert!(
+        names
+            .values()
+            .any(|name| *name == "miri_rt_string_copy_bytes"),
+        "grow copies no piece inline:\n{blocks:?}"
+    );
+    assert!(
+        names.values().any(|name| *name == "miri_rt_string_append"),
+        "grow no longer asks the runtime for the appends it cannot do in place"
+    );
+    let run = Command::new(&out).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "abccc 500 xéé xééyy st stu abcabc litx"
+    );
+}
+
 const OPTIONAL_RESULT: &str = r#"
 use system.io
 

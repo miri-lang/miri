@@ -15,6 +15,7 @@ mod generated_functions;
 mod gpu_launch;
 mod held_enums;
 mod inline_optionals;
+mod inline_strings;
 mod inliner;
 pub mod layout;
 mod pass_through;

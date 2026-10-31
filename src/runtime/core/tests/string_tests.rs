@@ -1161,3 +1161,28 @@ fn test_ffi_index_of_any_finds_every_control_character() {
         assert_eq!(index_of_any("no controls here", &controls, 0), -1);
     }
 }
+
+#[test]
+fn test_a_non_ascii_string_appended_in_place_answers_lookups_from_its_new_text() {
+    unsafe {
+        let text = make_str("éa");
+        let mut grown = miri_rt_string_append(text, make_str(""));
+        assert_eq!(miri_rt_string_code_at(grown, 1), 'a' as isize);
+        let tail = make_str("bé");
+        grown = miri_rt_string_append(grown, tail);
+        assert_eq!(miri_rt_string_code_at(grown, 2), 'b' as isize);
+        assert_eq!(miri_rt_string_code_at(grown, 3), 'é' as isize);
+        assert_eq!(miri_rt_string_char_count(grown), 4);
+        let ascii = make_str("xy");
+        let mut plain = miri_rt_string_append(ascii, make_str("z"));
+        plain = miri_rt_string_append(plain, tail);
+        assert!(
+            !(*plain).ascii,
+            "a right side marked non-ASCII clears the mark"
+        );
+        assert_eq!(miri_rt_string_code_at(plain, 4), 'é' as isize);
+        miri_rt_string_free(plain);
+        miri_rt_string_free(tail);
+        miri_rt_string_free(grown);
+    }
+}

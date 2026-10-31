@@ -210,6 +210,16 @@ fn test_position_counts_lines()
     assert_eq(failure_position("[\n  1,\n  ?\n]"), "3:3",
         "the column restarts at each newline")
 
+fn test_position_after_earlier_lines_and_escapes()
+    assert_eq(failure_position("[\"a\\nb\",\n \"c\",\n\n  \"d\\t\", ?]"), "4:10",
+        "lines counted past earlier strings and escapes")
+    assert_eq(failure_position("{\"k\": [1,\n2],\n\"m\": \"" + ("z" * 40)), "3:6",
+        "an unterminated string after earlier lines reports its opening quote")
+    assert_eq(failure_position("[\n\"a\\tb"), "2:1",
+        "an unterminated string reports its opening quote after an escape inside it was read")
+    assert_eq(failure_position("[1,\n  -x]"), "2:3",
+        "a malformed number reports where it begins")
+
 fn test_control_character_after_a_long_run_reports_its_own_position()
     let control = String.from_code_point(1) ?? ""
     let run = "aé" * 50
@@ -303,6 +313,7 @@ fn main()
     test_bad_escape_is_rejected()
     test_structural_errors_are_rejected()
     test_position_counts_lines()
+    test_position_after_earlier_lines_and_escapes()
     test_control_character_after_a_long_run_reports_its_own_position()
     test_unterminated_string_after_a_long_run_reports_its_opening_quote()
     test_deep_nesting_is_bounded()

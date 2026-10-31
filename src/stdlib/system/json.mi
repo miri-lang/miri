@@ -66,8 +66,14 @@ enum ElementSeparator
 class JsonParser
     private var source String
     private var position int
-    private var line int
-    private var column int
+    /// Line and column are counted only when asked for, from the furthest
+    /// offset counted so far: the characters before `counted_to` are counted,
+    /// `counted_line` is the line at `counted_to`, and `line_start` is the
+    /// offset where that line begins. Positions are asked for in reading
+    /// order, so the whole input is counted at most once.
+    private var counted_to int
+    private var counted_line int
+    private var line_start int
     private var error JsonError?
     /// The code point under the cursor, read once as the cursor arrives.
     private var current int
@@ -75,8 +81,9 @@ class JsonParser
     fn init(source String)
         self.source = source
         self.position = 0
-        self.line = 1
-        self.column = 1
+        self.counted_to = 0
+        self.counted_line = 1
+        self.line_start = 0
         self.error = None
         self.current = source.code_at(0) ?? -1
 
@@ -88,17 +95,11 @@ class JsonParser
     public fn has_more() bool
         self.position < self.source.length()
 
-    /// Moves past the current character, keeping line and column current.
+    /// Moves past the current character.
     public fn advance()
-        let passed = self.current
-        if passed >= 0
+        if self.current >= 0
             self.position = self.position + 1
             self.current = self.source.code_at(self.position) ?? -1
-            if passed == 10
-                self.line = self.line + 1
-                self.column = 1
-            else
-                self.column = self.column + 1
 
     /// The character index of the cursor.
     public fn offset() int
@@ -118,11 +119,36 @@ class JsonParser
             else
                 scanning = false
 
+    /// The line of the cursor, counting from 1.
     public fn line_number() int
-        self.line
+        self.line_at(self.position)
 
+    /// The column of the cursor in characters, counting from 1.
     public fn column_number() int
-        self.column
+        self.column_at(self.position)
+
+    /// The line of character `offset`, counting from 1.
+    public fn line_at(offset int) int
+        self.count_to(offset)
+        self.counted_line
+
+    /// The column of character `offset`, counting from 1.
+    public fn column_at(offset int) int
+        self.count_to(offset)
+        offset - self.line_start + 1
+
+    /// Counts lines up to character `offset`, from the furthest offset counted
+    /// so far, or from the start when `offset` lies before it.
+    private fn count_to(offset int)
+        if offset < self.counted_to
+            self.counted_to = 0
+            self.counted_line = 1
+            self.line_start = 0
+        while self.counted_to < offset
+            if (self.source.code_at(self.counted_to) ?? -1) == 10
+                self.counted_line = self.counted_line + 1
+                self.line_start = self.counted_to + 1
+            self.counted_to = self.counted_to + 1
 
     /// Records a failure unless one was already recorded.
     public fn fail(reason JsonError)
@@ -408,8 +434,7 @@ public enum Json
         ElementSeparator.Invalid
 
     private static fn string_body(parser JsonParser) String?
-        let open_line = parser.line_number()
-        let open_column = parser.column_number()
+        let opening = parser.offset()
         parser.advance()
         var out = ""
         var escaped = false
@@ -421,7 +446,7 @@ public enum Json
         while reading
             let current = parser.peek()
             if current < 0
-                parser.fail(JsonError.UnterminatedString(open_line, open_column))
+                parser.fail(JsonError.UnterminatedString(parser.line_at(opening), parser.column_at(opening)))
                 return None
             if current == 34
                 let tail = parser.text_since(run)
@@ -541,24 +566,22 @@ public enum Json
     /// Reads a number, taking its lexeme as one slice of the source once the
     /// last digit is passed. A malformed number reports the text read so far.
     private static fn number_value(parser JsonParser) Json?
-        let line = parser.line_number()
-        let column = parser.column_number()
         let begin = parser.offset()
         if parser.peek() == 45
             parser.advance()
         let leading = parser.peek()
         if Json.is_digit(leading) == false
-            return Json.invalid_number(parser, begin, line, column)
+            return Json.invalid_number(parser, begin)
         parser.advance()
         if leading == 48
             if Json.is_digit(parser.peek())
-                return Json.invalid_number(parser, begin, line, column)
+                return Json.invalid_number(parser, begin)
         else
             Json.skip_digits(parser)
         if Json.fraction(parser) == false
-            return Json.invalid_number(parser, begin, line, column)
+            return Json.invalid_number(parser, begin)
         if Json.exponent(parser) == false
-            return Json.invalid_number(parser, begin, line, column)
+            return Json.invalid_number(parser, begin)
         Some(Json.Number(parser.text_since(begin)))
 
     /// Moves past an optional fraction, reporting false when the point is not
@@ -591,8 +614,8 @@ public enum Json
         while Json.is_digit(parser.peek())
             parser.advance()
 
-    private static fn invalid_number(parser JsonParser, begin int, line int, column int) Json?
-        parser.fail(JsonError.InvalidNumber(parser.text_since(begin), line, column))
+    private static fn invalid_number(parser JsonParser, begin int) Json?
+        parser.fail(JsonError.InvalidNumber(parser.text_since(begin), parser.line_at(begin), parser.column_at(begin)))
         None
 
     private static fn unit_text(code int) String

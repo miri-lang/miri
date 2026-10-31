@@ -7,6 +7,9 @@ use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::collection_header::{
     HEADER_DATA, HEADER_LEN, LIST_CAPACITY, LIST_SLOT_SIZE,
 };
+use crate::codegen::cranelift::inline_strings::{
+    Append, STRING_ASCII_WORD, STRING_DATA_WORD, STRING_LEN_WORD,
+};
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
     CallSite, ElementShape, FunctionTranslator, ModuleCtx, RuntimeChecks, TypeCtx,
@@ -59,14 +62,6 @@ struct PreparedCall {
     out_slots: Vec<(cranelift_codegen::ir::Value, Local)>,
     result: CallResult,
 }
-
-/// Where a `MiriString` header keeps its bytes, its byte length and its
-/// ASCII flag, in pointer-sized words from its start. The runtime's
-/// `test_string_header_sits_where_compiled_code_reads_and_writes_it` holds the
-/// header to these.
-const STRING_DATA_WORD: i32 = 0;
-const STRING_LEN_WORD: i32 = 1;
-const STRING_ASCII_WORD: i32 = 3;
 
 /// The fewest targets a `SwitchInt` dispatches through a jump table or a
 /// search tree; fewer are compared one by one, which is as fast.
@@ -1257,6 +1252,13 @@ impl<'a> FunctionTranslator<'a> {
         {
             let code = Self::emit_inline_code_at(builder, ctx, callee, &arg_values, &sig)?;
             return Self::define_call_destination(builder, locals, destination, code);
+        }
+        if Self::is_inline_string_append(ctx, callee) {
+            if let [left, right] = arg_values[..] {
+                let append = Append { left, right };
+                let joined = Self::emit_inline_string_append(builder, ctx, callee, append, &sig)?;
+                return Self::define_call_destination(builder, locals, destination, joined);
+            }
         }
         if callee.runtime_name() == Some(rt::LIST_PUSH) {
             if let Some(push) = ListPush::of(builder, &arg_values) {

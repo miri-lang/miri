@@ -82,17 +82,18 @@ pub unsafe extern "C" fn miri_rt_string_append(
     guard::guard_check(left as *mut u8);
     guard::guard_check(right as *mut u8);
     if right.is_null() || (*right).len == 0 {
-        return append_bytes(left, &[]);
+        return append_bytes(left, &[], true);
     }
     if std::ptr::eq(right, left) {
         // Appending a string to itself reads bytes the append may move; read
         // them first.
         let copy = (*right).as_str().as_bytes().to_vec();
-        return append_bytes(left, &copy);
+        return append_bytes(left, &copy, (*right).ascii);
     }
     append_bytes(
         left,
         std::slice::from_raw_parts((*right).data, (*right).len),
+        (*right).ascii,
     )
 }
 
@@ -112,7 +113,7 @@ pub unsafe extern "C" fn miri_rt_string_append_int(
     guard::guard_check(left as *mut u8);
     let mut digits = DecimalDigits::new();
     let _ = write!(digits, "{value}");
-    append_bytes(left, digits.as_bytes())
+    append_bytes(left, digits.as_bytes(), true)
 }
 
 /// The unsigned twin of [`miri_rt_string_append_int`].
@@ -128,7 +129,7 @@ pub unsafe extern "C" fn miri_rt_string_append_uint(
     guard::guard_check(left as *mut u8);
     let mut digits = DecimalDigits::new();
     let _ = write!(digits, "{value}");
-    append_bytes(left, digits.as_bytes())
+    append_bytes(left, digits.as_bytes(), true)
 }
 
 /// The decimal text of a 64-bit integer, written on the stack.
@@ -162,17 +163,20 @@ impl std::fmt::Write for DecimalDigits {
 
 /// Appends `bytes` to `left`, taking over the caller's reference to `left`:
 /// in place when nothing else holds it, into a new string otherwise.
+/// `bytes_ascii` is what the caller knows of `bytes` (a string's own mark),
+/// so the bytes are never scanned for it; `false` is always sound.
 ///
 /// # Safety
 /// `left` is a valid `MiriString` pointer the caller owns a reference to, or
-/// null; `bytes` is valid UTF-8 and lies outside `left`'s buffer.
-unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
+/// null; `bytes` is valid UTF-8 and lies outside `left`'s buffer, and is all
+/// ASCII when `bytes_ascii` says so.
+unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8], bytes_ascii: bool) -> *mut MiriString {
     if left.is_null() {
         return new_string(std::str::from_utf8_unchecked(bytes));
     }
     let count = (left as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
     if *count as isize != 1 {
-        let joined = joined_copy(&*left, bytes);
+        let joined = joined_copy(&*left, bytes, bytes_ascii);
         if *count as isize > 1 {
             *count -= 1;
         }
@@ -190,18 +194,36 @@ unsafe fn append_bytes(left: *mut MiriString, bytes: &[u8]) -> *mut MiriString {
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), string.data.add(string.len), bytes.len());
     string.len = total;
-    string.ascii = string.ascii && bytes.is_ascii();
-    super::char_index::forget(string);
+    // Only a string marked non-ASCII is ever looked up through the character
+    // index cache, and a mark never turns from non-ASCII back to ASCII, so an
+    // ASCII string has no entry to forget.
+    if !string.ascii {
+        super::char_index::forget(string);
+    }
+    string.ascii = string.ascii && bytes_ascii;
     left
 }
 
+/// Copies `size` bytes from `source` to `dest`, for the append compiled
+/// inline: compiled code reaches the runtime by a direct call, where the C
+/// library's own copy would be called through the global offset table.
+///
+/// # Safety
+/// `source` and `dest` must each be valid for `size` bytes and must not
+/// overlap.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_copy_bytes(dest: *mut u8, source: *const u8, size: usize) {
+    std::ptr::copy_nonoverlapping(source, dest, size);
+}
+
 /// A new string holding the text of `left` followed by `bytes`.
-unsafe fn joined_copy(left: &MiriString, bytes: &[u8]) -> *mut MiriString {
+unsafe fn joined_copy(left: &MiriString, bytes: &[u8], bytes_ascii: bool) -> *mut MiriString {
     let Some(total) = left.len.checked_add(bytes.len()) else {
         return miri_rt_string_new();
     };
     // SAFETY: both parts are copied in below, filling all `total` bytes.
-    let joined = alloc_string(total, left.ascii && bytes.is_ascii());
+    let joined = alloc_string(total, left.ascii && bytes_ascii);
     if joined.is_null() || total == 0 {
         return joined;
     }

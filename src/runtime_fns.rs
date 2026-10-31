@@ -282,6 +282,9 @@ pub mod rt {
     pub const STRING_APPEND_INT: &str = "miri_rt_string_append_int";
     /// Compiler-internal: the unsigned twin of [`STRING_APPEND_INT`].
     pub const STRING_APPEND_UINT: &str = "miri_rt_string_append_uint";
+    /// Compiler-internal: the byte copy of an append compiled inline, not in
+    /// stdlib.
+    pub const STRING_COPY_BYTES: &str = "miri_rt_string_copy_bytes";
     pub const STRING_CLONE: &str = "miri_rt_string_clone";
     pub const STRING_EQUALS: &str = "miri_rt_string_equals";
     pub const STRING_HASH: &str = "miri_rt_string_hash";
@@ -576,6 +579,7 @@ pub mod rt {
         STRING_APPEND,
         STRING_APPEND_INT,
         STRING_APPEND_UINT,
+        STRING_COPY_BYTES,
         STRING_CLONE,
         STRING_EQUALS,
         STRING_HASH,
