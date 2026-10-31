@@ -152,45 +152,6 @@ fn is_never_counted(kind: &TypeKind) -> bool {
     }
 }
 
-/// Returns true if a field/element type is managed (heap-allocated, needs DecRef
-/// on drop), before asking whether it is held as its bytes: a struct, tuple,
-/// optional or enum answers `true` here, and [`is_slot_counted`] rules out
-/// the ones held inline.
-///
-/// A function value is a closure allocation of its own wherever it is held, so
-/// a collection element or an aggregate field holding one releases it.
-///
-/// The native `Result` and `Future` kinds answer `false` because no value of
-/// either reaches a body: the type checker spells every `Result` as the
-/// `Result` enum (a `Custom`, managed here) and `Body::validate` refuses a
-/// local left at the native kind, while an `async` call is typed at its
-/// result, so a `Future` slot is only ever written as an annotation and never
-/// holds a value.
-fn is_field_managed(kind: &TypeKind) -> bool {
-    if let TypeKind::Custom(name, args) = kind {
-        // The atomic element wrapper (`Atomic<scalar>`) is stored as its
-        // scalar, never reference-counted — exclude it from the
-        // managed-element drop path. It is recognized by its component, so a
-        // user type that merely reuses the name stays managed and its
-        // allocation is released.
-        if is_builtin_atomic(name, args.as_deref()) {
-            return false;
-        }
-    }
-    matches!(
-        kind,
-        TypeKind::Option(_)
-            | TypeKind::String
-            | TypeKind::List(_)
-            | TypeKind::Array(_, _)
-            | TypeKind::Map(_, _)
-            | TypeKind::Set(_)
-            | TypeKind::Tuple(_)
-            | TypeKind::Function(_)
-            | TypeKind::Custom(_, _)
-    )
-}
-
 /// Whether `name<args>` is the compiler-known atomic element type.
 ///
 /// That type is always written with its scalar component (`Atomic<u32>`), and
@@ -215,5 +176,5 @@ pub fn atomic_component(args: Option<&[Expression]>) -> Option<&Expression> {
 /// A value held as its bytes sits inline in its holder instead: it is no
 /// reference, and its holder's release has nothing to release in it.
 pub fn is_slot_counted(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    is_field_managed(kind) && held_value_layout(kind, scope).is_none()
+    is_counted_in(kind, scope) && held_value_layout(kind, scope).is_none()
 }

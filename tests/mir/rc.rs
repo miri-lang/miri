@@ -156,3 +156,105 @@ fn rc_classifier_never_counts_void_or_self() {
     assert!(!classifier.is_counted(&TypeKind::Void, &open));
     assert!(!classifier.is_counted(&TypeKind::Custom("Self".to_string(), None), &open));
 }
+
+/// Every kind a test asks the two classifier queries about, written in the
+/// program `COUNTED_DECLARATIONS` declares.
+fn every_kind() -> Vec<TypeKind> {
+    use miri::ast::types::FunctionTypeData;
+    let ty = |kind: TypeKind| Type::new(kind, Span::default());
+    let custom = |name: &str, args: Vec<TypeKind>| {
+        TypeKind::Custom(
+            name.to_string(),
+            (!args.is_empty()).then(|| args.into_iter().map(expr_ty).collect()),
+        )
+    };
+    let scalars = [
+        TypeKind::Int,
+        TypeKind::I8,
+        TypeKind::I16,
+        TypeKind::I32,
+        TypeKind::I64,
+        TypeKind::I128,
+        TypeKind::U8,
+        TypeKind::U16,
+        TypeKind::U32,
+        TypeKind::U64,
+        TypeKind::U128,
+        TypeKind::Float,
+        TypeKind::F16,
+        TypeKind::F32,
+        TypeKind::F64,
+        TypeKind::Boolean,
+        TypeKind::RawPtr,
+    ];
+    let int = || Box::new(expr_ty(TypeKind::Int));
+    let text = || Box::new(expr_ty(TypeKind::String));
+    let mut kinds: Vec<TypeKind> = scalars.to_vec();
+    kinds.extend([
+        TypeKind::String,
+        TypeKind::Void,
+        TypeKind::List(int()),
+        TypeKind::List(text()),
+        TypeKind::Array(int(), Box::new(expr_ty(TypeKind::Int))),
+        TypeKind::Map(text(), int()),
+        TypeKind::Set(int()),
+        TypeKind::Tuple(vec![expr_ty(TypeKind::Int), expr_ty(TypeKind::Int)]),
+        TypeKind::Tuple(vec![expr_ty(TypeKind::Int), expr_ty(TypeKind::String)]),
+        TypeKind::Result(int(), text()),
+        TypeKind::Future(int()),
+        TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: Vec::new(),
+            return_type: None,
+        })),
+        TypeKind::Option(Box::new(ty(TypeKind::Int))),
+        TypeKind::Option(Box::new(ty(TypeKind::String))),
+        TypeKind::Option(Box::new(ty(custom("Node", vec![])))),
+        TypeKind::Linear(Box::new(ty(TypeKind::String))),
+        custom("P", vec![]),
+        custom("Pair", vec![TypeKind::Int, TypeKind::Float]),
+        custom("Pair", vec![TypeKind::String, TypeKind::Int]),
+        custom("Node", vec![]),
+        custom("V", vec![]),
+        custom("Meters", vec![]),
+        custom("T", vec![]),
+        custom("Self", vec![]),
+        custom("Vec3", vec![TypeKind::F32]),
+    ]);
+    kinds
+}
+
+/// What Perceus counts (`is_counted_in`) and what a drop releases out of a
+/// slot (`is_slot_counted`, which every drop thunk asks of each field and
+/// element) agree on every kind, with no type parameter open and with one
+/// open: a disagreement is a retain no release balances, or a release of a
+/// reference never taken.
+#[test]
+fn a_slot_is_counted_exactly_when_its_value_is() {
+    use miri::mir::rc::is_counted_in;
+    use std::collections::HashSet;
+    let result = crate::type_checker::utils::type_checker_result(COUNTED_DECLARATIONS);
+    let definitions = result.type_checker.type_definitions().clone();
+    let open: HashSet<String> = HashSet::from(["T".to_string()]);
+    let scopes = [
+        ("closed", LayoutScope::program(&definitions)),
+        ("open T", LayoutScope::new(&definitions, &open)),
+    ];
+    let disagreements: Vec<String> = every_kind()
+        .iter()
+        .flat_map(|kind| {
+            scopes
+                .iter()
+                .map(move |(label, scope)| (kind, label, *scope))
+        })
+        .filter(|(kind, _, scope)| is_counted_in(kind, *scope) != is_slot_counted(kind, *scope))
+        .map(|(kind, label, scope)| {
+            format!(
+                "{kind:?} ({label}): value counted {}, slot counted {}",
+                is_counted_in(kind, scope),
+                is_slot_counted(kind, scope)
+            )
+        })
+        .collect();
+    assert!(disagreements.is_empty(), "{disagreements:#?}");
+}
