@@ -3,7 +3,7 @@
 
 use super::OptimizationPass;
 use crate::ast::literal::{IntegerLiteral, Literal};
-use crate::ast::types::TypeKind;
+use crate::ast::types::{is_signed_number, TypeKind};
 use crate::mir::{Body, Constant, Local, Operand, Rvalue, StatementKind, TerminatorKind};
 use std::collections::HashMap;
 
@@ -322,19 +322,9 @@ fn reconstruct_integer_literal_from_type(
     source: &Literal,
     value: i128,
 ) -> Literal {
-    match ty_kind {
-        TypeKind::I8 => Literal::Integer(IntegerLiteral::I8(value as i8)),
-        TypeKind::I16 => Literal::Integer(IntegerLiteral::I16(value as i16)),
-        TypeKind::I32 => Literal::Integer(IntegerLiteral::I32(value as i32)),
-        TypeKind::I64 | TypeKind::Int => Literal::Integer(IntegerLiteral::I64(value as i64)),
-        TypeKind::I128 => Literal::Integer(IntegerLiteral::I128(value)),
-        TypeKind::U8 => Literal::Integer(IntegerLiteral::U8(value as u8)),
-        TypeKind::U16 => Literal::Integer(IntegerLiteral::U16(value as u16)),
-        TypeKind::U32 => Literal::Integer(IntegerLiteral::U32(value as u32)),
-        TypeKind::U64 => Literal::Integer(IntegerLiteral::U64(value as u64)),
-        TypeKind::U128 => Literal::Integer(IntegerLiteral::U128(value as u128)),
-        _ => reconstruct_integer_literal(source, value),
-    }
+    IntegerLiteral::from_type_kind(ty_kind, value)
+        .map(Literal::Integer)
+        .unwrap_or_else(|| reconstruct_integer_literal(source, value))
 }
 
 /// Reconstruct a typed integer literal from a computed `i128` value,
@@ -392,13 +382,26 @@ fn get_int(c: &Constant) -> Option<i128> {
         _ => return None,
     };
 
-    Some(match &c.ty.kind {
-        TypeKind::I8 => (raw as i8) as i128,
-        TypeKind::I16 => (raw as i16) as i128,
-        TypeKind::I32 => (raw as i32) as i128,
-        TypeKind::I64 | TypeKind::Int => (raw as i64) as i128,
-        _ => raw,
-    })
+    Some(narrowed_to_signed(&c.ty.kind, raw))
+}
+
+/// `raw` read back at the width of the signed integer `kind`, through the
+/// literal that kind holds, so a value computed at 128 bits wraps and
+/// sign-extends the way the narrower type does; any other kind keeps `raw`.
+fn narrowed_to_signed(kind: &TypeKind, raw: i128) -> i128 {
+    match IntegerLiteral::from_type_kind(kind, raw) {
+        Some(literal) if is_signed_number(kind) == Some(true) => literal.to_i128(),
+        Some(_) | None => raw,
+    }
+}
+
+/// `raw` read back at the width of the unsigned integer `kind`, the way
+/// [`narrowed_to_signed`] does for a signed one; any other kind keeps `raw`.
+fn narrowed_to_unsigned(kind: &TypeKind, raw: u128) -> u128 {
+    match IntegerLiteral::from_type_kind(kind, raw as i128) {
+        Some(literal) if is_signed_number(kind) == Some(false) => literal.to_i128() as u128,
+        Some(_) | None => raw,
+    }
 }
 
 fn get_uint(c: &Constant) -> Option<u128> {
@@ -419,11 +422,5 @@ fn get_uint(c: &Constant) -> Option<u128> {
         _ => return None,
     };
 
-    Some(match &c.ty.kind {
-        TypeKind::U8 => (raw as u8) as u128,
-        TypeKind::U16 => (raw as u16) as u128,
-        TypeKind::U32 => (raw as u32) as u128,
-        TypeKind::U64 => (raw as u64) as u128,
-        _ => raw,
-    })
+    Some(narrowed_to_unsigned(&c.ty.kind, raw))
 }

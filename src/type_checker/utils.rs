@@ -338,7 +338,13 @@ fn is_custom_type_perceus_managed(
             is_perceus_managed_inner(&field_ty.kind, type_definitions, visited)
         }),
         Some(TypeDefinition::Class(_)) => true,
-        _ => false,
+        Some(
+            TypeDefinition::Enum(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_)
+            | TypeDefinition::Trait(_),
+        )
+        | None => false,
     }
 }
 

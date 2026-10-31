@@ -1,5 +1,5 @@
 {
   "unwrap_expect_in_library_code": 118,
-  "wildcard_arms_in_mir_type_checker_codegen": 437,
-  "functions_over_80_lines": 162
+  "wildcard_arms_in_mir_type_checker_codegen": 436,
+  "functions_over_80_lines": 160
 }
