@@ -1,4 +1,4 @@
-.PHONY: build release install test lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full bench-regress
+.PHONY: build release install test test-shard test-units lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full bench-regress
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -62,8 +62,20 @@ install: release
 	@echo "Installed: $(BINDIR)/miri -> $(CURDIR)/target/release/miri"
 	@case ":$$PATH:" in *":$(BINDIR):"*) ;; *) echo "Add $(BINDIR) to your PATH: export PATH=\"$(BINDIR):\$$PATH\"";; esac
 
-test: runtimes
-	cargo test -- --test-threads=$(TEST_THREADS)
+test: test-units
+	cargo test --test mod -- --test-threads=$(TEST_THREADS)
+
+# One slice of the integration binary, `make test-shard SHARD=2/3`, so CI can
+# spread it over parallel runners. tools/test_shard.py cuts the slices from the
+# binary's own test list, so together they run every test it holds exactly once.
+test-shard: runtimes
+	python3 tools/test_shard.py $(SHARD) --test-threads=$(TEST_THREADS)
+
+# Every test outside the integration binary: the library's and the binary's
+# unit tests, the doc tests, and each runtime's own suite.
+test-units: runtimes
+	cargo test --lib --bins -- --test-threads=$(TEST_THREADS)
+	cargo test --doc
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Testing $$rt"; \

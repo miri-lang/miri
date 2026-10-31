@@ -891,75 +891,74 @@ fn verify_doc_against_fixtures(corpus_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The `.mi` fixtures directly inside `dir`, none when it does not exist.
+fn fixtures_in(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(Vec::new());
+    };
+    let mut fixtures = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|err| err.to_string())?.path();
+        if path.extension().is_some_and(|s| s == "mi") {
+            fixtures.push(path);
+        }
+    }
+    Ok(fixtures)
+}
+
+/// A fixture's verdict: how many of its diagnostics were checked for a
+/// location, or why it failed.
+type FixtureCheck = fn(&Path) -> Result<usize, String>;
+
+/// Judges every fixture, spread over a few threads. Each fixture is a compiler
+/// process of its own, so they are independent, and the verdicts come back in
+/// the order the fixtures were listed.
+fn judge_fixtures(fixtures: &[(PathBuf, FixtureCheck)]) -> Vec<Result<usize, String>> {
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(4));
+    let chunk = fixtures.len().div_ceil(workers).max(1);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = fixtures
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    part.iter()
+                        .map(|(path, check)| check(path))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("a fixture worker panicked"))
+            .collect()
+    })
+}
+
 /// Run all conformance fixtures in a given root directory.
 fn run_conformance_tests(corpus_root: &Path) -> Result<(), String> {
-    let fail_dir = corpus_root.join("fail");
-    let warn_dir = corpus_root.join("warn");
-    let pass_dir = corpus_root.join("pass");
+    let pass_check: FixtureCheck = |path| test_pass_fixture(path).map(|()| 0);
+    let mut fixtures: Vec<(PathBuf, FixtureCheck)> = Vec::new();
+    for (dir, check) in [
+        ("fail", test_fail_fixture as FixtureCheck),
+        ("warn", test_warn_fixture),
+        ("pass", pass_check),
+    ] {
+        let found = fixtures_in(&corpus_root.join(dir))?;
+        fixtures.extend(found.into_iter().map(|path| (path, check)));
+    }
 
     let mut pass_count = 0;
     let mut fail_count = 0;
     let mut located_count = 0;
-
-    // Test fail/ fixtures
-    if fail_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&fail_dir) {
-            for entry in entries {
-                let e = entry.map_err(|err| err.to_string())?;
-                let path = e.path();
-                if path.extension().map(|s| s == "mi").unwrap_or(false) {
-                    match test_fail_fixture(&path) {
-                        Ok(inspected) => {
-                            pass_count += 1;
-                            located_count += inspected;
-                        }
-                        Err(err) => {
-                            eprintln!("FAIL: {}: {}", path.display(), err);
-                            fail_count += 1;
-                        }
-                    }
-                }
+    for ((path, _), verdict) in fixtures.iter().zip(judge_fixtures(&fixtures)) {
+        match verdict {
+            Ok(inspected) => {
+                pass_count += 1;
+                located_count += inspected;
             }
-        }
-    }
-
-    // Test warn/ fixtures
-    if warn_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&warn_dir) {
-            for entry in entries {
-                let e = entry.map_err(|err| err.to_string())?;
-                let path = e.path();
-                if path.extension().map(|s| s == "mi").unwrap_or(false) {
-                    match test_warn_fixture(&path) {
-                        Ok(inspected) => {
-                            pass_count += 1;
-                            located_count += inspected;
-                        }
-                        Err(err) => {
-                            eprintln!("FAIL: {}: {}", path.display(), err);
-                            fail_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Test pass/ fixtures
-    if pass_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&pass_dir) {
-            for entry in entries {
-                let e = entry.map_err(|err| err.to_string())?;
-                let path = e.path();
-                if path.extension().map(|s| s == "mi").unwrap_or(false) {
-                    match test_pass_fixture(&path) {
-                        Ok(()) => pass_count += 1,
-                        Err(err) => {
-                            eprintln!("FAIL: {}: {}", path.display(), err);
-                            fail_count += 1;
-                        }
-                    }
-                }
+            Err(err) => {
+                eprintln!("FAIL: {}: {}", path.display(), err);
+                fail_count += 1;
             }
         }
     }

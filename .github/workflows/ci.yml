@@ -23,6 +23,11 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src/runtime/core -> target
+            src/runtime/gpu -> target
 
       - name: Install LLVM/Clang 21.1.8 (apt.llvm.org)
         shell: bash
@@ -65,18 +70,49 @@ jobs:
       - name: Build project (release)
         run: make release
 
-      # GitHub-hosted Linux runners have no GPU, so the GPU-execution tests are
-      # compiled out here (they are gated behind the `gpu_hardware` feature and
-      # marked `ignore` without it). They run on the macos-14 hardware job
-      # (.github/workflows/gpu-hardware.yml). Everything else — including WGSL
-      # validity (naga, no device needed) — runs here on every PR.
-      # This also runs the agent-loop replay gate (tests/evals), which measures
-      # what a tool-driven job costs against the current compiler and fails when
-      # that cost stops matching evals/results/baseline.json. It needs no step of
-      # its own — `make evals-replay` is the named entry point for running it
-      # alone, the same way conformance-agent and grammar-check are.
-      - name: Run tests
-        run: make test
+      # Every test outside the integration binary; the `test` job runs that
+      # binary, spread over parallel runners.
+      - name: Run unit, doc and runtime tests
+        run: make test-units
+
+  # The integration binary, in three slices on three runners. Together the
+  # slices run every test it holds exactly once (tools/test_shard.py).
+  #
+  # GitHub-hosted Linux runners have no GPU, so the GPU-execution tests are
+  # compiled out here (they are gated behind the `gpu_hardware` feature and
+  # marked `ignore` without it). They run on the macos-14 hardware job
+  # (.github/workflows/gpu-hardware.yml). Everything else — including WGSL
+  # validity (naga, no device needed) — runs here on every PR.
+  # This also runs the agent-loop replay gate (tests/evals), which measures
+  # what a tool-driven job costs against the current compiler and fails when
+  # that cost stops matching evals/results/baseline.json. It needs no step of
+  # its own — `make evals-replay` is the named entry point for running it
+  # alone, the same way conformance-agent and grammar-check are.
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src/runtime/core -> target
+            src/runtime/gpu -> target
+
+      - name: Run integration tests (slice ${{ matrix.shard }} of 3)
+        run: make test-shard SHARD=${{ matrix.shard }}/3
 
   gpu-browser-gate:
     runs-on: ubuntu-24.04

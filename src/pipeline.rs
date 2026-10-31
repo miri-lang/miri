@@ -714,6 +714,18 @@ impl CodegenMode {
     }
 }
 
+/// The linker argument that drops every section nothing in the program reaches.
+///
+/// A runtime library carries the whole of its standard library, and a program
+/// reaches a small part of it. Without this the linker copies the rest into
+/// every executable, with its debug information, and that copying is most of
+/// what a link costs. Rust links its own executables the same way.
+const DEAD_CODE_LINK_ARG: &str = if cfg!(target_os = "macos") {
+    "-Wl,-dead_strip"
+} else {
+    "-Wl,--gc-sections"
+};
+
 /// Which build of a runtime's static library a program links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBuild {
@@ -2101,6 +2113,9 @@ impl Pipeline {
 
     /// The directory the build works in and the executable's path: `out`
     /// when given, otherwise a unique temporary `a.out`.
+    // TODO: the temporary directory is kept so the artifact outlives the
+    // process, and nothing ever removes it, so every build without `-o`
+    // (the test suite's included) leaves a `miri_build_*` directory behind.
     fn output_paths(out: Option<PathBuf>) -> Result<(PathBuf, PathBuf), CompilerError> {
         if let Some(out) = out {
             let work_dir = out
@@ -4323,6 +4338,7 @@ impl Pipeline {
 
         // Link the math library (required for sin, cos, pow, etc. on Linux)
         cmd.arg("-lm");
+        cmd.arg(DEAD_CODE_LINK_ARG);
         cmd.args(runtime_build.executable_link_args());
 
         // Link required runtime libraries

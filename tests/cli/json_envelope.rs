@@ -612,14 +612,23 @@ fn test_run_json_round_trip_error() {
     assert!(!envelope.diagnostics.is_empty());
 }
 
+/// The envelope's shape is what is under test, not the corpus a run walks, so
+/// the run gets a directory of its own holding one passing test.
 #[test]
 fn test_test_json_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("math.mi"),
+        "use system.testing\n\n@test\nfn test_adds()\n    assert(1 + 1 == 2)\n",
+    )
+    .unwrap();
+
     let output = miri_cmd()
         .arg("test")
         .arg("--format")
         .arg("json")
         .arg("--dir")
-        .arg(".")
+        .arg(dir.path())
         .output()
         .unwrap();
 
@@ -629,7 +638,11 @@ fn test_test_json_round_trip() {
 
     assert_eq!(envelope.schema_version, 1);
     assert_eq!(envelope.command, miri::diagnostics::json::JsonCommand::Test);
-    assert!(envelope.tests.is_some());
+    assert!(envelope.ok, "envelope: {stdout}");
+    let tests = envelope.tests.expect("a test run carries its summary");
+    assert_eq!((tests.total, tests.passed, tests.files_read), (1, 1, 1));
+    assert_eq!(tests.results.len(), 1);
+    assert_eq!(tests.results[0].outcome, "passed");
 }
 
 /// A directory named where a file belongs is reported under one registry code

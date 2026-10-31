@@ -18,6 +18,7 @@ use miri::diagnostics::DiagnosticCode;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 /// Codes whose `Before` example is verified through `miri check` to emit
 /// that code first.
@@ -653,6 +654,43 @@ struct Example {
     subject: Option<Diagnostic>,
 }
 
+/// One host-verified code, the command it is verified through, and what its
+/// documented example reported there.
+type HostExample = (&'static str, Surface, Result<Example, String>);
+
+/// Every example verified on this host, each run once.
+///
+/// Two gates judge the same reports, one the code and message and one the
+/// help, so the examples run once for both and the second gate to ask waits
+/// for the first. Each example is its own compiler process, so they are spread
+/// over a few threads, except the `profile` ones: whether a run is long enough
+/// to sample is a matter of the CPU time it spends, which a sibling compile on
+/// the next core inflates, so those run one at a time after the rest.
+fn host_examples() -> &'static [HostExample] {
+    static EXAMPLES: OnceLock<Vec<HostExample>> = OnceLock::new();
+    EXAMPLES.get_or_init(|| {
+        let (sampled, gated): (Vec<_>, Vec<_>) =
+            verified_on_host().partition(|(_, surface)| surface.command() == "profile");
+        let report = |&(wire, surface): &(&'static str, Surface)| {
+            (wire, surface, reported_example(wire, surface))
+        };
+        let workers = std::thread::available_parallelism().map_or(4, |n| n.get().min(4));
+        let chunk = gated.len().div_ceil(workers).max(1);
+        let mut examples: Vec<HostExample> = std::thread::scope(|scope| {
+            let handles: Vec<_> = gated
+                .chunks(chunk)
+                .map(|part| scope.spawn(move || part.iter().map(report).collect::<Vec<_>>()))
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().expect("an example worker panicked"))
+                .collect()
+        });
+        examples.extend(sampled.iter().map(report));
+        examples
+    })
+}
+
 /// Hand the `Before` example on `wire`'s page to `surface`, and read what it
 /// reports.
 fn reported_example(wire: &str, surface: Surface) -> Result<Example, String> {
@@ -676,10 +714,14 @@ fn reported_example(wire: &str, surface: Surface) -> Result<Example, String> {
 /// What is wrong with one gated example: it must report its own code where
 /// its command puts it, in a message one of its page's declared shapes
 /// matches, and its page must spell the command it is verified through.
-fn example_failures(wire: &str, surface: Surface) -> Vec<String> {
-    let example = match reported_example(wire, surface) {
+fn example_failures(
+    wire: &str,
+    surface: Surface,
+    reported: &Result<Example, String>,
+) -> Vec<String> {
+    let example = match reported {
         Ok(found) => found,
-        Err(failure) => return vec![failure],
+        Err(failure) => return vec![failure.clone()],
     };
     let mut failures: Vec<String> = page_spelling_failure(example.code, surface)
         .into_iter()
@@ -746,8 +788,9 @@ fn page_spelling_failure(code: DiagnosticCode, surface: Surface) -> Option<Strin
 
 #[test]
 fn verified_examples_emit_the_code_they_document() {
-    let failures = verified_on_host()
-        .flat_map(|(wire, surface)| example_failures(wire, surface))
+    let failures = host_examples()
+        .iter()
+        .flat_map(|(wire, surface, reported)| example_failures(wire, *surface, reported))
         .collect();
     assert_no_failures("verified codes failed", failures);
 }
@@ -831,8 +874,9 @@ const NO_HELP_EMITTED: &[&str] = &[
 /// quotes it.
 #[test]
 fn verified_pages_declare_the_help_that_fires() {
-    let failures = verified_on_host()
-        .flat_map(|(wire, surface)| help_failures(wire, surface))
+    let failures = host_examples()
+        .iter()
+        .flat_map(|(wire, _, reported)| help_failures(wire, reported))
         .collect();
     assert_no_failures("pages disagree with the help that fires", failures);
 }
@@ -849,17 +893,17 @@ fn no_subject(wire: &str, reported: &[String]) -> String {
 
 /// What is wrong with the help one gated page declares, against the help its
 /// example really reports.
-fn help_failures(wire: &str, surface: Surface) -> Vec<String> {
-    let example = match reported_example(wire, surface) {
+fn help_failures(wire: &str, reported: &Result<Example, String>) -> Vec<String> {
+    let example = match reported {
         Ok(found) => found,
-        Err(failure) => return vec![failure],
+        Err(failure) => return vec![failure.clone()],
     };
-    let Some(subject) = example.subject.filter(|d| d.message.is_some()) else {
+    let Some(subject) = example.subject.as_ref().filter(|d| d.message.is_some()) else {
         return vec![no_subject(wire, &example.codes)];
     };
     let declared = example.code.explanation().helps;
     let silent = NO_HELP_EMITTED.contains(&wire);
-    match subject.help {
+    match subject.help.as_deref() {
         Some(help) if silent => vec![format!(
             "{} is listed as emitting no help, but it emitted '{}'; \
              remove it from NO_HELP_EMITTED and declare the help on its page",
@@ -873,7 +917,7 @@ fn help_failures(wire: &str, surface: Surface) -> Vec<String> {
         Some(help)
             if !declared
                 .iter()
-                .any(|shape| message_matches_shape(&help, shape)) =>
+                .any(|shape| message_matches_shape(help, shape)) =>
         {
             vec![format!(
                 "{}: the help that fires, '{}', matches no shape its page declares: {:?}",
@@ -917,8 +961,9 @@ fn gpu_examples_emit_the_code_and_help_they_document() {
     let failures = VERIFIED_BY_RUN_ON_GPU
         .iter()
         .flat_map(|wire| {
-            let mut failures = example_failures(wire, Surface::Run);
-            failures.extend(help_failures(wire, Surface::Run));
+            let reported = reported_example(wire, Surface::Run);
+            let mut failures = example_failures(wire, Surface::Run, &reported);
+            failures.extend(help_failures(wire, &reported));
             failures
         })
         .collect();

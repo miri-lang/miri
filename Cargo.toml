@@ -102,3 +102,11 @@ debug = "line-tables-only"
 # keeps running: it is what catches malformed IR coming out of this compiler.
 opt-level = 3
 debug-assertions = false
+
+[profile.test.package.miri]
+# Under `cargo test` the compiler is the program under test thousands of times
+# over: each integration test spawns it. Unoptimised, its own passes are most
+# of a spawn's CPU time; at level 1 a frontend pass costs a fifth as much and
+# the suite half as much on a CPU-bound runner. Debug assertions and overflow
+# checks are separate settings and stay on. `cargo build` keeps level 0.
+opt-level = 1
