@@ -3,7 +3,8 @@
 
 use by_address::{
     miri_rt_map_contains_key, miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_key_at,
-    miri_rt_map_remove, miri_rt_map_set, miri_rt_map_value_at,
+    miri_rt_map_remove, miri_rt_map_set, miri_rt_map_slot_of, miri_rt_map_value_at,
+    miri_rt_map_value_in_slot,
 };
 use miri_runtime_core::map::ffi::*;
 
@@ -64,6 +65,29 @@ mod by_address {
             &key as *const usize as *const u8,
             std::mem::size_of::<usize>(),
         )
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_slot_of(map: *const MiriMap, key: usize) -> i64 {
+        ffi::miri_rt_map_slot_of(
+            map,
+            &key as *const usize as *const u8,
+            std::mem::size_of::<usize>(),
+        )
+    }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_value_in_slot(map: *const MiriMap, slot: i64) -> usize {
+        let mut value = 0usize;
+        ffi::miri_rt_map_value_in_slot(
+            map,
+            slot,
+            &mut value as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        value
     }
 
     /// # Safety
@@ -175,6 +199,43 @@ fn test_map_contains_key() {
         miri_rt_map_set(map, 42, 1);
         assert_eq!(miri_rt_map_contains_key(map, 42), 1);
         assert_eq!(miri_rt_map_contains_key(map, 99), 0);
+
+        miri_rt_map_free(map);
+    }
+}
+
+#[test]
+fn test_map_slot_of_finds_the_slot_its_value_is_read_from() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        for key in 0..40 {
+            miri_rt_map_set(map, key, key * 10);
+        }
+
+        for key in 0..40 {
+            let slot = miri_rt_map_slot_of(map, key);
+            assert!(slot >= 0, "key {key} has no slot");
+            assert_eq!(miri_rt_map_value_in_slot(map, slot), key * 10);
+        }
+        assert_eq!(miri_rt_map_slot_of(map, 99), -1);
+
+        miri_rt_map_free(map);
+    }
+}
+
+#[test]
+fn test_map_value_in_a_slot_with_no_entry_reads_zero() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        miri_rt_map_set(map, 1, 7);
+        let slot = miri_rt_map_slot_of(map, 1);
+        miri_rt_map_remove(map, 1);
+
+        assert_eq!(miri_rt_map_value_in_slot(map, slot), 0);
+        assert_eq!(miri_rt_map_value_in_slot(map, -1), 0);
+        assert_eq!(miri_rt_map_value_in_slot(map, i64::MAX), 0);
+        assert_eq!(miri_rt_map_slot_of(std::ptr::null(), 1), -1);
+        assert_eq!(miri_rt_map_value_in_slot(std::ptr::null(), 0), 0);
 
         miri_rt_map_free(map);
     }

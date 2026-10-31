@@ -52,6 +52,10 @@ direct_escapes = []
 # contains_key(ptr *MiriMap, key usize) bool — key (param 1) is only compared
 direct_escapes = []
 
+[miri_rt_map_slot_of]
+# slot_of(ptr *MiriMap, key usize) int — key (param 1) is only compared
+direct_escapes = []
+
 [miri_rt_map_remove]
 # remove(ptr *MiriMap, key usize) bool — key (param 1) used for lookup/removal, not stored
 direct_escapes = []

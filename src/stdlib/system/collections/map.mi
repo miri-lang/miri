@@ -27,6 +27,8 @@ public class Map<K, V> implements Iterable<K>, Cloneable
     runtime "core" fn miri_rt_map_set(m Self, key K, value V)
     runtime "core" fn miri_rt_map_get(m Self, key K) V
     runtime "core" fn miri_rt_map_contains_key(m Self, key K) bool
+    runtime "core" fn miri_rt_map_slot_of(m Self, key K) int
+    runtime "core" fn miri_rt_map_value_in_slot(m Self, slot int) V
     runtime "core" fn miri_rt_map_remove(m Self, key K) bool
     runtime "core" fn miri_rt_map_clear(m Self)
     runtime "core" fn miri_rt_map_key_at(m Self, index int) K
@@ -50,9 +52,10 @@ public class Map<K, V> implements Iterable<K>, Cloneable
 
     /// Returns the value associated with the given key, or None if the key is not in the map.
     public fn get(key K) V?
-        if self.contains_key(key)
-            return Some(miri_rt_map_get(self, key))
-        return None
+        let slot = miri_rt_map_slot_of(self, key)
+        if slot < 0
+            return None
+        Some(miri_rt_map_value_in_slot(self, slot))
 
     /// Returns true if the map contains the given key.
     public fn contains_key(key K) bool: miri_rt_map_contains_key(self, key)

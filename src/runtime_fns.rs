@@ -172,6 +172,8 @@ pub mod rt {
     pub const MAP_SET: &str = "miri_rt_map_set";
     pub const MAP_GET: &str = "miri_rt_map_get";
     pub const MAP_CONTAINS_KEY: &str = "miri_rt_map_contains_key";
+    pub const MAP_SLOT_OF: &str = "miri_rt_map_slot_of";
+    pub const MAP_VALUE_IN_SLOT: &str = "miri_rt_map_value_in_slot";
     pub const MAP_REMOVE: &str = "miri_rt_map_remove";
     pub const MAP_CLEAR: &str = "miri_rt_map_clear";
     pub const MAP_KEY_AT: &str = "miri_rt_map_key_at";
@@ -494,6 +496,8 @@ pub mod rt {
         MAP_SET,
         MAP_GET,
         MAP_CONTAINS_KEY,
+        MAP_SLOT_OF,
+        MAP_VALUE_IN_SLOT,
         MAP_REMOVE,
         MAP_CLEAR,
         MAP_KEY_AT,
@@ -718,8 +722,10 @@ pub fn only_reads_argument(name: &str, position: usize) -> bool {
         | rt::MAP_GET
         | rt::MAP_GET_CHECKED
         | rt::MAP_CONTAINS_KEY
+        | rt::MAP_SLOT_OF
         | rt::MAP_KEY_AT
         | rt::MAP_VALUE_AT
+        | rt::MAP_VALUE_IN_SLOT
         | rt::SET_LEN
         | rt::SET_IS_EMPTY
         | rt::SET_CONTAINS
@@ -901,7 +907,11 @@ pub fn element_positions(name: &str) -> &'static [usize] {
     match name {
         rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
         rt::LIST_SET | rt::LIST_INSERT | rt::ARRAY_SET_VAL => &[2],
-        rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => &[1],
+        rt::MAP_GET
+        | rt::MAP_CONTAINS_KEY
+        | rt::MAP_SLOT_OF
+        | rt::MAP_REMOVE
+        | rt::MAP_GET_CHECKED => &[1],
         rt::MAP_SET => &[1, 2],
         _ => &[],
     }
@@ -928,9 +938,11 @@ pub fn element_roles(name: &str) -> &'static [(usize, ElementRole)] {
             &[(1, ElementRole::Element)]
         }
         rt::LIST_SET | rt::LIST_INSERT | rt::ARRAY_SET_VAL => &[(2, ElementRole::Element)],
-        rt::MAP_GET | rt::MAP_CONTAINS_KEY | rt::MAP_REMOVE | rt::MAP_GET_CHECKED => {
-            &[(1, ElementRole::Key)]
-        }
+        rt::MAP_GET
+        | rt::MAP_CONTAINS_KEY
+        | rt::MAP_SLOT_OF
+        | rt::MAP_REMOVE
+        | rt::MAP_GET_CHECKED => &[(1, ElementRole::Key)],
         rt::MAP_SET => &[(1, ElementRole::Key), (2, ElementRole::Value)],
         _ => &[],
     }
@@ -1108,6 +1120,7 @@ pub fn matches_its_elements(name: &str) -> bool {
             | rt::MAP_GET
             | rt::MAP_GET_CHECKED
             | rt::MAP_CONTAINS_KEY
+            | rt::MAP_SLOT_OF
             | rt::MAP_REMOVE
     )
 }
@@ -1122,7 +1135,12 @@ pub fn matches_its_elements(name: &str) -> bool {
 pub fn returns_element_value(name: &str) -> bool {
     matches!(
         name,
-        rt::MAP_GET | rt::MAP_GET_CHECKED | rt::MAP_KEY_AT | rt::MAP_VALUE_AT | rt::SET_ELEMENT_AT
+        rt::MAP_GET
+            | rt::MAP_GET_CHECKED
+            | rt::MAP_KEY_AT
+            | rt::MAP_VALUE_AT
+            | rt::MAP_VALUE_IN_SLOT
+            | rt::SET_ELEMENT_AT
     )
 }
 
