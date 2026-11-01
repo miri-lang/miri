@@ -296,6 +296,11 @@ pub fn every_runtime_record() -> Vec<RuntimeCallee> {
     owned
 }
 
+/// What every stdlib `runtime` declaration states, keyed by entry point.
+pub fn declared_runtime_effects() -> HashMap<String, Rc<RuntimeEffect>> {
+    STDLIB_RUNTIME_EFFECTS.with(HashMap::clone)
+}
+
 /// A callee for the runtime entry point `name`, doing what `params` say to
 /// its arguments and handing back a value its caller owns.
 pub fn runtime_callee_stating(name: &str, params: Vec<ParamUse>) -> RuntimeCallee {

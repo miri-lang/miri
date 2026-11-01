@@ -171,6 +171,12 @@ impl RuntimeEffect {
         )
     }
 
+    /// Positions carrying an element the container keeps, in ascending
+    /// order: the only arguments a call to the entry point lets escape.
+    pub fn stored_positions(&self) -> Vec<usize> {
+        self.positions(|use_| matches!(use_, ParamUse::Stores(_)))
+    }
+
     /// Whether the entry point writes, in place, what it is handed at
     /// `position`.
     pub fn writes_in_place(&self, position: usize) -> bool {

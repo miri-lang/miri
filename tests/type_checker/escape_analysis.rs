@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::utils::declared_runtime_effects;
 use miri::type_checker::escape_analysis::*;
 use std::collections::{BTreeSet, HashMap};
 
@@ -58,24 +59,53 @@ fn equality_and_clone() {
 
 // ── FFI summary loading tests ────────────────────────────────────────────────
 
+/// The escape summaries of every runtime entry point the stdlib declares,
+/// as its declaration states.
+fn declared_summaries() -> HashMap<FunctionId, EscapeSummary> {
+    runtime_escape_summaries(&declared_runtime_effects())
+}
+
+/// Every declared entry point has a summary, and in it exactly the elements
+/// it stores escape: nothing else it is handed is kept past the call.
 #[test]
-fn load_ffi_summaries_parses_without_panic() {
-    let summaries = load_ffi_summaries();
-    assert!(
-        !summaries.is_empty(),
-        "escape_summaries.toml should have at least one entry"
-    );
+fn a_runtime_entry_point_lets_escape_exactly_what_it_stores() {
+    let effects = declared_runtime_effects();
+    let summaries = runtime_escape_summaries(&effects);
+    assert_eq!(summaries.len(), effects.len());
+    for (name, effect) in &effects {
+        let summary = summaries
+            .get(&FunctionId::free(name))
+            .unwrap_or_else(|| panic!("{name} has no summary"));
+        let stored: BTreeSet<usize> = (effect.element_roles().into_iter())
+            .map(|(position, _)| position)
+            .filter(|position| effect.taken_positions().contains(position))
+            .collect();
+        assert_eq!(summary.direct_escapes, stored, "{name}");
+        assert!(summary.return_aliases.is_empty(), "{name}");
+        assert!(summary.conditional_escapes.is_empty(), "{name}");
+    }
+}
+
+/// A closure the runtime calls is called during the call and kept by
+/// nothing, so it does not escape.
+#[test]
+fn a_closure_the_runtime_calls_does_not_escape() {
+    let summaries = declared_summaries();
+    let s = summaries
+        .get(&FunctionId::free("miri_rt_list_sort_by"))
+        .expect("miri_rt_list_sort_by must have a summary");
+    assert!(s.is_empty(), "the comparator is only called");
 }
 
 #[test]
 fn list_push_escapes_element() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     let s = summaries
         .get(&FunctionId::free("miri_rt_list_push"))
         .expect("miri_rt_list_push must have a summary");
     // param 1 (val) escapes into the list
     assert!(s.directly_escapes(1), "val (param 1) must escape");
-    // param 0 (the raw list pointer) is unmanaged — not listed
+    // param 0, the list, is written in place and kept by nothing
     assert!(!s.directly_escapes(0));
     assert!(s.conditional_escapes.is_empty());
     assert!(s.return_aliases.is_empty());
@@ -83,7 +113,7 @@ fn list_push_escapes_element() {
 
 #[test]
 fn map_set_escapes_key_and_value() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     let s = summaries
         .get(&FunctionId::free("miri_rt_map_set"))
         .expect("miri_rt_map_set must have a summary");
@@ -94,7 +124,7 @@ fn map_set_escapes_key_and_value() {
 
 #[test]
 fn set_add_escapes_element() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     let s = summaries
         .get(&FunctionId::free("miri_rt_set_add"))
         .expect("miri_rt_set_add must have a summary");
@@ -104,7 +134,7 @@ fn set_add_escapes_element() {
 
 #[test]
 fn io_sinks_have_no_escapes() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     for name in &[
         "miri_rt_print",
         "miri_rt_println",
@@ -113,7 +143,7 @@ fn io_sinks_have_no_escapes() {
     ] {
         let s = summaries
             .get(&FunctionId::free(name))
-            .unwrap_or_else(|| panic!("{name} must have an explicit summary"));
+            .unwrap_or_else(|| panic!("{name} must have a summary"));
         assert!(
             s.is_empty(),
             "{name} is an IO sink — no parameters should escape"
@@ -123,7 +153,7 @@ fn io_sinks_have_no_escapes() {
 
 #[test]
 fn list_insert_and_set_escape_element() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     for name in &["miri_rt_list_insert", "miri_rt_list_set"] {
         let s = summaries
             .get(&FunctionId::free(name))
@@ -134,7 +164,7 @@ fn list_insert_and_set_escape_element() {
 
 #[test]
 fn array_set_val_escapes_element() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     let s = summaries
         .get(&FunctionId::free("miri_rt_array_set_val"))
         .expect("miri_rt_array_set_val must have a summary");
@@ -145,7 +175,7 @@ fn array_set_val_escapes_element() {
 
 #[test]
 fn map_read_only_accessors_have_no_escapes() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     for name in &[
         "miri_rt_map_get",
         "miri_rt_map_contains_key",
@@ -153,7 +183,7 @@ fn map_read_only_accessors_have_no_escapes() {
     ] {
         let s = summaries
             .get(&FunctionId::free(name))
-            .unwrap_or_else(|| panic!("{name} must have an explicit summary"));
+            .unwrap_or_else(|| panic!("{name} must have a summary"));
         assert!(
             s.is_empty(),
             "{name} is a read-only accessor — no parameters should escape"
@@ -163,11 +193,11 @@ fn map_read_only_accessors_have_no_escapes() {
 
 #[test]
 fn set_read_only_accessors_have_no_escapes() {
-    let summaries = load_ffi_summaries();
+    let summaries = declared_summaries();
     for name in &["miri_rt_set_contains", "miri_rt_set_remove"] {
         let s = summaries
             .get(&FunctionId::free(name))
-            .unwrap_or_else(|| panic!("{name} must have an explicit summary"));
+            .unwrap_or_else(|| panic!("{name} must have a summary"));
         assert!(
             s.is_empty(),
             "{name} is a read-only accessor — no parameters should escape"

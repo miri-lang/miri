@@ -723,12 +723,11 @@ impl TypeChecker {
         if !self.diagnostics.is_empty() {
             return;
         }
-        let ffi_summaries = std::mem::take(&mut context.escape_summaries);
         context.escape_summaries = escape_analysis::compute_escape_summaries(
             &program.body,
             &self.type_table.types,
             &self.type_table.global_type_definitions,
-            ffi_summaries,
+            escape_analysis::runtime_escape_summaries(&self.runtime_effects),
         );
     }
 

@@ -29,12 +29,11 @@
 //! method `c` of a type `A_b` and a method `b_c` of a type `A` never share a
 //! summary.
 //!
-//! # FFI summaries
+//! # Runtime entry points
 //!
-//! Escape summaries for `runtime "core" fn` declarations (FFI-only, no body)
-//! are hand-authored in `src/runtime/core/escape_summaries.toml` and loaded
-//! at startup via [`load_ffi_summaries`].  The TOML is embedded into the
-//! compiler binary with `include_str!`.
+//! A `runtime "core" fn` declaration has no body to analyse; its summary is
+//! read off what the declaration states ([`runtime_escape_summaries`]): the
+//! elements it stores escape, and nothing else it is handed does.
 //!
 //! # Generics strategy
 //!
@@ -64,12 +63,11 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use serde::Deserialize;
-
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Parameter;
+use crate::runtime_effects::RuntimeEffects;
 
 use super::context::TypeDefinition;
 use super::utils::is_auto_copy;
@@ -81,8 +79,8 @@ pub type ParamIndex = usize;
 /// [`super::context::Context::escape_summaries`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FunctionId {
-    /// A free function — or a runtime function, whose summary is hand-authored
-    /// — by its declared name.
+    /// A free function — or a runtime function, whose summary its declaration
+    /// states — by its declared name.
     Free(String),
     /// A method, by the type that declares it and its own name.
     Method { owner: String, method: String },
@@ -121,7 +119,7 @@ impl fmt::Display for FunctionId {
 /// Read as: *"my parameter `param` escapes through whichever function is
 /// passed as argument `via_fn_param`, specifically through that function's
 /// parameter slot `callee_param`."*
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConditionalEscape {
     /// Which managed-type parameter of this function flows through a fn-typed arg.
     pub param: ParamIndex,
@@ -162,8 +160,8 @@ pub enum EscapeNextHop {
 /// Escape summary for a single function.
 ///
 /// Computed bottom-up over the call graph by the escape analysis pass
-/// (`src/type_checker/escape_analysis.rs`).  Hand-authored entries
-/// for FFI-only declarations live in `src/runtime/core/escape_summaries.toml`.
+/// (`src/type_checker/escape_analysis.rs`).  A runtime entry point's summary
+/// is read off its declaration ([`runtime_escape_summaries`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EscapeSummary {
     /// Parameters that unconditionally escape (returned, stored, captured,
@@ -764,53 +762,20 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     }
 }
 
-/// Serde-friendly intermediate form for one entry in `escape_summaries.toml`.
-/// Uses `Vec` rather than `BTreeSet` because TOML arrays map naturally to Vec.
-#[derive(Debug, Deserialize)]
-struct TomlSummaryEntry {
-    #[serde(default)]
-    direct_escapes: Vec<ParamIndex>,
-    #[serde(default)]
-    return_aliases: Vec<ParamIndex>,
-    #[serde(default)]
-    conditional_escapes: Vec<ConditionalEscape>,
-}
-
-impl From<TomlSummaryEntry> for EscapeSummary {
-    fn from(e: TomlSummaryEntry) -> Self {
-        EscapeSummary {
-            direct_escapes: e.direct_escapes.into_iter().collect(),
-            conditional_escapes: e.conditional_escapes,
-            return_aliases: e.return_aliases.into_iter().collect(),
-            escape_next_hops: HashMap::new(),
-        }
-    }
-}
-
-/// Loads the hand-authored FFI escape summaries from the embedded TOML sidecar
-/// (`src/runtime/core/escape_summaries.toml`).
-///
-/// The TOML is embedded at compile time; no filesystem access occurs at
-/// runtime.  Returns an empty map if parsing fails (panics via `debug_assert!`
-/// in debug builds, silent in release) — this is safe because the escape
-/// analysis falls back to the conservative "all managed params escape" default
-/// for any unknown function.  In practice the embedded TOML is validated by
-/// `load_ffi_summaries_parses_without_panic` before release.
-pub fn load_ffi_summaries() -> HashMap<FunctionId, EscapeSummary> {
-    const TOML_SRC: &str = include_str!("../runtime/core/escape_summaries.toml");
-
-    match toml::from_str::<HashMap<String, TomlSummaryEntry>>(TOML_SRC) {
-        Ok(raw) => raw
-            .into_iter()
-            .map(|(name, entry)| (FunctionId::Free(name), entry.into()))
-            .collect(),
-        Err(e) => {
-            // Unreachable in normal builds — the TOML is embedded and tested.
-            // In debug mode, surface the error so it is caught early.
-            debug_assert!(false, "failed to parse escape_summaries.toml: {e}");
-            HashMap::new()
-        }
-    }
+/// The escape summary of every runtime entry point `effects` describes, as
+/// its record states it: a stored element escapes into the collection that
+/// keeps it, and nothing else an entry point is handed outlives the call —
+/// it is read, written in place, or a closure the runtime calls and drops.
+pub fn runtime_escape_summaries(effects: &RuntimeEffects) -> HashMap<FunctionId, EscapeSummary> {
+    (effects.iter())
+        .map(|(name, effect)| {
+            let summary = EscapeSummary {
+                direct_escapes: effect.stored_positions().into_iter().collect(),
+                ..EscapeSummary::default()
+            };
+            (FunctionId::free(name), summary)
+        })
+        .collect()
 }
 
 /// Captures a function's parameter list (with `self` at index 0 for methods)
@@ -821,19 +786,19 @@ struct FunctionDef<'a> {
 }
 
 /// Computes escape summaries for every user-defined function in `stmts`,
-/// merges them with the pre-loaded `ffi_summaries`, and returns the combined
+/// merges them with the runtime entry points' `runtime_summaries`, and returns the combined
 /// map.  Analysis is bottom-up over the call graph (Tarjan SCC + fixpoint
 /// within each SCC).
 ///
 /// Only user functions whose bodies are visible in `stmts` are analysed.
-/// Stdlib declarations are represented by their FFI summaries in `ffi_summaries`.
+/// A runtime declaration is represented by its summary in `runtime_summaries`.
 pub fn compute_escape_summaries(
     stmts: &[Statement],
     types: &HashMap<usize, Type>,
     type_definitions: &HashMap<String, super::context::TypeDefinition>,
-    ffi_summaries: HashMap<FunctionId, EscapeSummary>,
+    runtime_summaries: HashMap<FunctionId, EscapeSummary>,
 ) -> HashMap<FunctionId, EscapeSummary> {
-    let mut summaries = ffi_summaries;
+    let mut summaries = runtime_summaries;
 
     // Step 1: collect all user function definitions.
     let mut fn_defs: HashMap<FunctionId, FunctionDef<'_>> = HashMap::new();

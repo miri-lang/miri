@@ -33,7 +33,7 @@ use crate::ast::{literal::Literal, types::*, Expression, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use super::escape_analysis::{load_ffi_summaries, EscapeSummary, FunctionId};
+use super::escape_analysis::{EscapeSummary, FunctionId};
 
 /// Represents information about a symbol (variable, function, etc.) in the scope.
 #[derive(Debug, Clone)]
@@ -734,7 +734,7 @@ impl Context {
             current_class_type: None,
             in_static_method: false,
             in_field_initializer: false,
-            escape_summaries: load_ffi_summaries(),
+            escape_summaries: HashMap::new(),
             must_use_exempt_spans: HashSet::new(),
         }
     }
