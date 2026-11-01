@@ -35,6 +35,7 @@ fn caller(callee: &str, arg: Operand, setup: Vec<Statement>) -> Body {
                     args: vec![copy(local(1)), arg],
                     arg_modes: Vec::new(),
                     arg_handles: Vec::new(),
+                    flags: miri::mir::CallFlags::default(),
                     destination: local(0),
                     target: Some(BasicBlock(1)),
                 },
@@ -75,7 +76,7 @@ fn a_field_lent_unretained_to_a_callee_that_may_release_it_is_reported() {
 #[test]
 fn a_field_lent_to_a_call_the_pass_falsely_stamped_quiet_is_reported() {
     let mut main = caller("callee", copy(field(1, 0)), Vec::new());
-    main.quiet_calls.insert(BasicBlock(0));
+    crate::mir::analysis::heap_effects::stamp_quiet(&mut main, 0);
     let found = violations(field_writing_method_taking_node(), main);
     assert_eq!(found.len(), 1, "{found:?}");
 }

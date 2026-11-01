@@ -186,6 +186,7 @@ fn append_call(
             args,
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination,
             target: Some(next),
         },

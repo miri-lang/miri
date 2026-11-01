@@ -18,6 +18,7 @@
 //! dominates its blocks: code generation looks the read up and decides
 //! nothing about the control flow.
 
+use crate::mir::header_reads::stable_collections;
 use std::cell::Cell;
 use std::collections::HashMap;
 
@@ -65,7 +66,7 @@ impl StableHeaders {
         ptr_type: cl_types::Type,
     ) -> Self {
         let mut headers = Self::default();
-        for (index, record) in body.stable_collections().iter().enumerate() {
+        for (index, record) in stable_collections(body).iter().enumerate() {
             headers.hoisted.push(HoistedHeader {
                 local: record.local,
                 preheader: record.preheader.0,

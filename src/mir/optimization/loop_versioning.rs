@@ -56,6 +56,7 @@
 //! already carries either record is left alone, since copying would move the
 //! blocks they name. A body that runs on a GPU is left alone.
 
+use crate::mir::header_reads::stable_collections;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::literal::{IntegerLiteral, Literal};
@@ -102,7 +103,7 @@ struct Chosen {
 /// was copied.
 pub fn version_bounded_loops(body: &mut Body) -> bool {
     if body.is_gpu()
-        || !body.stable_collections().is_empty()
+        || !stable_collections(body).is_empty()
         || !crate::mir::proven_indexes::proven_indexes(body).is_empty()
     {
         return false;

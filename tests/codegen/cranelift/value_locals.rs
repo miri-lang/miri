@@ -134,6 +134,7 @@ fn call(callee: Symbol, args: Vec<Operand>, destination: usize, target: usize) -
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
     }
@@ -385,6 +386,7 @@ fn a_value_passed_to_a_runtime_function_is_refused() {
                     args: vec![copy(place(1))],
                     arg_modes: Vec::new(),
                     arg_handles: Vec::new(),
+                    flags: miri::mir::CallFlags::default(),
                     destination: place(0),
                     target: Some(BasicBlock(1)),
                 },
@@ -392,9 +394,7 @@ fn a_value_passed_to_a_runtime_function_is_refused() {
             block(Vec::new(), TerminatorKind::Return),
         ],
     );
-    let error = compile(&[("caller".to_string(), &body)])
-        .err()
-        .expect("the body must be refused");
+    let error = compile(&[("caller".to_string(), &body)]).expect_err("the body must be refused");
     assert!(error.contains("runtime function"), "{error}");
 }
 
@@ -621,6 +621,7 @@ fn refused_shift_call(kinds: &[TypeKind], arg: Place, destination: Place) -> Str
                     args: vec![copy(arg)],
                     arg_modes: Vec::new(),
                     arg_handles: Vec::new(),
+                    flags: miri::mir::CallFlags::default(),
                     destination,
                     target: Some(BasicBlock(1)),
                 },

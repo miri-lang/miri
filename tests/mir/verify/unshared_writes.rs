@@ -209,6 +209,7 @@ fn call(func: Operand, args: Vec<Operand>, dest: Place, target: usize) -> Termin
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: dest,
         target: Some(BasicBlock(target)),
     }

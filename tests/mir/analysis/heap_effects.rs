@@ -12,7 +12,7 @@ use miri::ast::common::MemberVisibility;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
-use miri::mir::analysis::heap_effects::{stamp_quiet_calls, HeapEffects, Phase};
+use miri::mir::analysis::heap_effects::{call_flags, stamp_quiet_calls, HeapEffects, Phase};
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::place::PlaceElem;
 use miri::mir::rc::RcClassifier;
@@ -207,6 +207,7 @@ pub fn call_into(
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination,
         target: Some(BasicBlock(target)),
     }
@@ -468,6 +469,20 @@ fn stamping_marks_each_call_to_a_quiet_callee_by_its_block() {
     let definitions = definitions();
     stamp_quiet_calls(&mut program, &DropHookReach::new(&definitions));
     let main = &program[2].1;
-    assert!(main.quiet_calls.contains(&BasicBlock(0)));
-    assert!(!main.quiet_calls.contains(&BasicBlock(1)));
+    let quiet = |block: usize| {
+        (main.basic_blocks[block].terminator.as_ref()).is_some_and(|call| call_flags(call).quiet)
+    };
+    assert!(quiet(0), "{main}");
+    assert!(!quiet(1), "{main}");
+}
+
+/// Stamps the call ending `block` of `body` quiet, as the heap-effects pass
+/// would.
+pub fn stamp_quiet(body: &mut Body, block: usize) {
+    let Some(TerminatorKind::Call { flags, .. }) =
+        (body.basic_blocks[block].terminator.as_mut()).map(|terminator| &mut terminator.kind)
+    else {
+        panic!("bb{block} ends in no call:\n{body}");
+    };
+    flags.quiet = true;
 }

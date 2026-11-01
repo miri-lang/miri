@@ -258,6 +258,7 @@ fn runtime_call(name: &str, args: Vec<Operand>, arg_modes: Vec<ArgMode>) -> Term
         args,
         arg_modes,
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(0),
         target: Some(BasicBlock(1)),
     }

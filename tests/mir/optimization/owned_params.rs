@@ -87,6 +87,7 @@ fn call(func: Symbol, args: Vec<Operand>, destination: usize, target: usize) -> 
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
     }
@@ -186,9 +187,11 @@ fn class_def(name: &str, field: Type, has_hook: bool, is_generic: bool) -> TypeD
                 initializer: None,
             },
         )],
-        methods: has_hook
-            .then(|| BTreeMap::from([("drop".to_string(), drop_hook)]))
-            .unwrap_or_default(),
+        methods: if has_hook {
+            BTreeMap::from([("drop".to_string(), drop_hook)])
+        } else {
+            Default::default()
+        },
         module: String::new(),
         is_abstract: false,
         runtime_settled_methods: BTreeSet::new(),

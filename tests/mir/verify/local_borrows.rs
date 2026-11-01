@@ -260,7 +260,7 @@ fn a_borrow_of_a_parameter_element_across_a_call_with_no_heap_facts_is_refused()
 #[test]
 fn a_borrow_across_a_call_the_pass_falsely_stamped_quiet_is_refused() {
     let mut body = parameter_borrowing_body(unrelated_call(), Vec::new());
-    body.quiet_calls.insert(BasicBlock(0));
+    crate::mir::analysis::heap_effects::stamp_quiet(&mut body, 0);
     assert_refused(&body, "a call only the pass found quiet");
 }
 
@@ -348,7 +348,7 @@ fn row_borrowing_body(call: Terminator) -> Body {
     let mut body = body_of(
         &[
             void_ty(),
-            collection_ty("List", &[row.kind.clone()]),
+            collection_ty("List", std::slice::from_ref(&row.kind)),
             int_ty(),
             row.clone(),
             row,
@@ -373,6 +373,7 @@ fn call(callee: Operand, args: Vec<(Operand, ArgMode)>) -> Terminator {
             args,
             arg_modes,
             arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
             destination: place(0),
             target: Some(BasicBlock(1)),
         },

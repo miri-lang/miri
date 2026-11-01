@@ -52,7 +52,7 @@ use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::{DropHookReach, TypeDefinition};
 use crate::mir::{ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, StatementKind};
-use crate::mir::{Terminator, TerminatorKind};
+use crate::mir::{CallFlags, Terminator, TerminatorKind};
 use crate::runtime_fns::{
     closure_positions, hands_back_a_borrow, matches_its_elements, orders_its_elements,
     reads_reference_count, writes_in_place,
@@ -207,24 +207,16 @@ impl HeapEffects {
 
 /// Which operations of one body may release a heap value another name holds:
 /// the per-operation rule, with each call to a function of the program loud
-/// unless `quiet_calls` names the block it ends — and every such call loud
-/// when there are no facts. A runtime search whose matching runs code of the
-/// program is taken as loud.
+/// unless its terminator is stamped quiet (`CallFlags::quiet`). A runtime
+/// search whose matching runs code of the program is taken as loud.
 pub struct BodyNoise<'b> {
     classifier: Classifier<'b>,
-    quiet_calls: Option<&'b HashSet<BasicBlock>>,
 }
 
 impl<'b> BodyNoise<'b> {
-    pub fn of(
-        body: &'b Body,
-        phase: Phase,
-        hooks: &'b DropHookReach<'b>,
-        quiet_calls: Option<&'b HashSet<BasicBlock>>,
-    ) -> Self {
+    pub fn of(body: &'b Body, phase: Phase, hooks: &'b DropHookReach<'b>) -> Self {
         BodyNoise {
             classifier: Classifier::of(body, phase, hooks),
-            quiet_calls,
         }
     }
 
@@ -233,27 +225,51 @@ impl<'b> BodyNoise<'b> {
         self.classifier.is_loud_statement(kind)
     }
 
-    /// Whether `terminator`, ending `block`, may release a value another name
-    /// holds.
-    pub fn is_loud_terminator(&self, block: BasicBlock, terminator: &Terminator) -> bool {
+    /// Whether `terminator` may release a value another name holds.
+    pub fn is_loud_terminator(&self, terminator: &Terminator) -> bool {
         match self.classifier.noise(terminator) {
             Noise::Quiet => false,
             Noise::Loud | Noise::Matches(_) => true,
-            Noise::Calls(..) => !self.quiet_calls.is_some_and(|quiet| quiet.contains(&block)),
+            Noise::Calls(..) => !call_flags(terminator).quiet,
         }
     }
 }
 
-/// Record, on every body of `program`, the calls to a quiet callee and the
-/// calls handing their callee a receiver it writes in place, keyed by the
-/// block each call ends. Read before reference counting, which funds every
-/// lent argument read through a class field that a loud call is handed.
+/// Stamp, on every call of every body of `program`, whether its callee is
+/// quiet and whether it is handed a receiver it writes in place
+/// ([`CallFlags`]). Read before reference counting, which funds every lent
+/// argument read through a class field that a loud call is handed.
 pub fn stamp_quiet_calls(program: &mut [(Symbol, Body)], hooks: &DropHookReach) {
     let effects = HeapEffects::of(program, Symbol::link_name, Phase::Lowered, hooks);
     for (_, body) in program.iter_mut() {
         let facts = effects.call_facts(body, Phase::Lowered, hooks);
-        body.quiet_calls = facts.quiet;
-        body.unique_receiver_calls = facts.unique_receivers;
+        for (index, data) in body.basic_blocks.iter_mut().enumerate() {
+            let at = BasicBlock(index);
+            if let Some(Terminator {
+                kind: TerminatorKind::Call { flags, .. },
+                ..
+            }) = &mut data.terminator
+            {
+                *flags = CallFlags {
+                    quiet: facts.quiet.contains(&at),
+                    unique_receiver: facts.unique_receivers.contains(&at),
+                };
+            }
+        }
+    }
+}
+
+/// What `terminator` was stamped with, if it is a call to a function of the
+/// program; nothing stamped otherwise.
+pub fn call_flags(terminator: &Terminator) -> CallFlags {
+    match &terminator.kind {
+        TerminatorKind::Call { flags, .. } => *flags,
+        TerminatorKind::Goto { .. }
+        | TerminatorKind::SwitchInt { .. }
+        | TerminatorKind::Return
+        | TerminatorKind::Unreachable
+        | TerminatorKind::VirtualCall { .. }
+        | TerminatorKind::GpuLaunch { .. } => CallFlags::default(),
     }
 }
 

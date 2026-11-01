@@ -55,6 +55,7 @@ fn handing_to_runtime(name: &str, args: Vec<Operand>) -> Body {
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: Place::new(Local(2)),
         target: Some(miri::mir::BasicBlock(1)),
     };
@@ -85,6 +86,7 @@ fn copied_in_place() -> Body {
         args: vec![Operand::Move(Place::new(Local(1)))],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: Place::new(Local(2)),
         target: Some(miri::mir::BasicBlock(1)),
     };

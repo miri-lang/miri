@@ -105,6 +105,7 @@ fn calling_sort_with(args: &[TypeKind]) -> Body {
             arg_modes: vec![ArgMode::Borrowed; operands.len()],
             args: operands,
             arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
             destination: Place::new(Local(0)),
             target: Some(BasicBlock(0)),
         },

@@ -5,10 +5,10 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::error::SourceId;
 use crate::mir::backend::BackendMetadata;
-use crate::mir::block::{BasicBlock, BasicBlockData};
+use crate::mir::block::BasicBlockData;
 use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
-use crate::mir::statement::{Statement, StatementKind};
+use crate::mir::statement::Statement;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
@@ -112,16 +112,6 @@ pub struct Body {
     /// (`crate::mir::optimization::local_borrows`); the verifier checks each
     /// entry again against the body.
     pub borrowed_locals: HashMap<Local, Vec<Local>>,
-    /// The calls, by the block each ends, to a function of the program that
-    /// may release nothing its caller lends it, so an argument read through a
-    /// class field is lent to it without a retain. Empty — every call may —
-    /// until `crate::mir::analysis::heap_effects` decides it over the whole
-    /// program.
-    pub quiet_calls: HashSet<BasicBlock>,
-    /// The calls, by the block each ends, whose callee writes the receiver
-    /// passed first in place as a value its caller copies on write: the
-    /// caller made it unique for the call, so it is never retained for it.
-    pub unique_receiver_calls: HashSet<BasicBlock>,
     /// Which parameters (indexed 1..=arg_count) the body actually writes.
     /// `param_written[i-1] == true` means parameter `_i` is written by this body.
     /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
@@ -179,37 +169,6 @@ pub struct Body {
     /// allocator, so the WGSL backend drops this parameter and every argument
     /// read from it.
     pub allocator: Option<Local>,
-}
-
-/// An array or a list a loop indexes without changing its header: the data
-/// pointer, the length and the slot size read on entry hold on every
-/// iteration. A view of a `ReadHeader` statement, with the block holding it
-/// as the preheader, read off the body by [`Body::stable_collections`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StableCollection {
-    /// The local holding the collection.
-    pub local: Local,
-    /// The block every entry into the loop passes through, ending in a jump
-    /// to `header`, where the header is read.
-    pub preheader: BasicBlock,
-    /// The loop's header.
-    pub header: BasicBlock,
-    /// Every block of the loop, the header included, in ascending order.
-    pub blocks: Vec<BasicBlock>,
-}
-
-impl fmt::Display for StableCollection {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let blocks: Vec<String> = self.blocks.iter().map(ToString::to_string).collect();
-        write!(
-            f,
-            "stable {} from {} over {}: [{}]",
-            self.local,
-            self.preheader,
-            self.header,
-            blocks.join(", ")
-        )
-    }
 }
 
 /// One generic class at concrete type arguments.
@@ -273,8 +232,6 @@ impl Body {
             receiver: None,
             owned_params: Vec::new(),
             borrowed_locals: HashMap::new(),
-            quiet_calls: HashSet::new(),
-            unique_receiver_calls: HashSet::new(),
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_workgroups: Vec::new(),
@@ -373,27 +330,6 @@ impl Body {
     }
 
     /// Returns true if this function runs on a GPU.
-    /// Every collection a loop of this body leaves the header of unchanged,
-    /// one per `ReadHeader` statement, in block order. Decided by
-    /// `crate::mir::optimization::stable_collections`, re-derived by
-    /// `crate::mir::verify::verify_stable_collections`.
-    pub fn stable_collections(&self) -> Vec<StableCollection> {
-        let mut found = Vec::new();
-        for (block, data) in self.basic_blocks.iter().enumerate() {
-            for statement in &data.statements {
-                if let StatementKind::ReadHeader(read) = &statement.kind {
-                    found.push(StableCollection {
-                        local: read.collection.local,
-                        preheader: BasicBlock(block),
-                        header: read.header,
-                        blocks: read.blocks.clone(),
-                    });
-                }
-            }
-        }
-        found
-    }
-
     pub fn is_gpu(&self) -> bool {
         matches!(
             self.execution_model,

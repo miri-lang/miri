@@ -338,6 +338,7 @@ fn a_call_through_a_constant_callee_is_an_internal_error() {
             args: Vec::new(),
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
             destination: Place::new(Local(1)),
             target: Some(miri::mir::BasicBlock(1)),
         },

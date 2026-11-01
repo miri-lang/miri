@@ -39,7 +39,7 @@
 //!   parent — every operation on such a path is harmless by the verifiers'
 //!   own rule ([`super::callee_effects`]), with the calls to the program its
 //!   caller found harmless by that rule: never the pass's own answer,
-//!   `Body::quiet_calls`, and with none every such call is taken as harmful;
+//!   the `CallFlags::quiet` stamp on a call, and with none every such call is taken as harmful;
 //! - every owner it shows is recorded, since RC elision keeps the retains of
 //!   exactly the recorded owners.
 //!

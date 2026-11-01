@@ -382,6 +382,7 @@ fn emit_integer_append(
             ],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(result),
             target: Some(target_bb),
         },

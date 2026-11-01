@@ -22,6 +22,7 @@ pub mod declaration;
 pub mod dispatch;
 pub mod element_abi;
 pub mod gpu_names;
+pub mod header_reads;
 pub mod instantiation;
 pub mod lambda;
 pub mod lowering;
@@ -51,11 +52,12 @@ pub use backend::{
     GpuKernelArg, GpuMemoryAccess, GpuMemoryScope, I32_INDEX_MAX,
 };
 pub use block::{BasicBlock, BasicBlockData};
-pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StableCollection, StorageClass};
+pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StorageClass};
 pub use declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
     VariantDecl,
 };
+pub use header_reads::StableCollection;
 pub use lambda::{CapturedVar, LambdaInfo};
 pub use module::{Import, ImportItem, ImportKind, ImportSource};
 pub use operand::{Constant, FunctionConstant, Operand};
@@ -64,6 +66,7 @@ pub use proven_indexes::InBounds;
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
 pub use statement::{HeaderRead, Statement, StatementKind};
 pub use terminator::{
-    arg_mode, ArgMode, Discriminant, GpuLaunchArgs, GpuLaunchArgsError, Terminator, TerminatorKind,
+    arg_mode, ArgMode, CallFlags, Discriminant, GpuLaunchArgs, GpuLaunchArgsError, Terminator,
+    TerminatorKind,
 };
 pub use types::MirType;

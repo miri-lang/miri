@@ -117,6 +117,7 @@ pub fn call(args: Vec<Operand>, arg_modes: Vec<ArgMode>, destination: Place) -> 
         args,
         arg_modes,
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination,
         target: Some(BasicBlock(1)),
     }

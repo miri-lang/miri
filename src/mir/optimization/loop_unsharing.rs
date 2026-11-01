@@ -433,6 +433,7 @@ fn make_own_before(body: &mut Body, loops: &[NaturalLoop], header: usize, local:
                 args: vec![Operand::Move(Place::new(local))],
                 arg_modes: Vec::new(),
                 arg_handles: Vec::new(),
+                flags: crate::mir::CallFlags::default(),
                 destination: Place::new(handed_back),
                 target: Some(write_back),
             },

@@ -619,6 +619,7 @@ mod owned_transfers {
             args,
             arg_modes: modes,
             arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
             destination: place(2),
             target: Some(BasicBlock(1)),
         }

@@ -22,7 +22,7 @@
 //! reads — `map`, `filter`, `reduce` on a list a field holds — is held like
 //! any other argument.
 
-use crate::mir::analysis::heap_effects::HeapLends;
+use crate::mir::analysis::heap_effects::{call_flags, HeapLends};
 use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, Terminator, TerminatorKind};
@@ -84,7 +84,7 @@ fn held_arguments(body: &Body) -> Vec<HeldArgument> {
         let Some(terminator) = &data.terminator else {
             continue;
         };
-        if body.quiet_calls.contains(&BasicBlock(index)) || call_target(terminator).is_none() {
+        if call_flags(terminator).quiet || call_target(terminator).is_none() {
             continue;
         }
         let Some((args, modes)) = lent_call_arguments(terminator) else {
@@ -94,7 +94,7 @@ fn held_arguments(body: &Body) -> Vec<HeldArgument> {
         // also runs code of the program that can free it — see
         // `heap_effects::writes_in_place_through` for why a retain cannot
         // close that.
-        let keeps_receiver = body.unique_receiver_calls.contains(&BasicBlock(index));
+        let keeps_receiver = call_flags(terminator).unique_receiver;
         for (position, arg) in args.iter().enumerate() {
             if position == 0 && keeps_receiver {
                 continue;

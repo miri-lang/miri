@@ -25,6 +25,7 @@
 use super::VerificationViolation;
 use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::analysis::header_reach::{may_hold_type, runtime_call_leaves_headers};
+use crate::mir::header_reads::stable_collections;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::{
@@ -33,7 +34,7 @@ use crate::mir::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Every way a header read ([`Body::stable_collections`]) fails to keep its
+/// Every way a header read ([`crate::mir::header_reads::stable_collections`]) fails to keep its
 /// collection's header. `harmless_calls` are the body's calls to the program
 /// found harmless by [`super::callee_effects`]; `None` takes every such call
 /// as one that may change a header.
@@ -41,7 +42,7 @@ pub fn verify_stable_collections(
     body: &Body,
     harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> Vec<VerificationViolation> {
-    let records = body.stable_collections();
+    let records = stable_collections(body);
     if records.is_empty() {
         return Vec::new();
     }

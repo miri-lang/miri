@@ -291,6 +291,7 @@ fn value_used_by_value_and_by_address_in_a_call_is_clean() {
         args: vec![copy(2)],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(0),
         target: Some(BasicBlock(1)),
     };
@@ -324,6 +325,7 @@ fn caller_body(argument: TypeKind, destination: TypeKind) -> Body {
         args: vec![copy(1)],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(2),
         target: Some(BasicBlock(1)),
     };
@@ -437,6 +439,7 @@ fn an_absent_constant_passed_to_an_optional_held_as_bytes_is_flagged() {
         args: vec![absent],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(0),
         target: Some(BasicBlock(1)),
     };

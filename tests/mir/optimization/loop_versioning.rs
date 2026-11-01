@@ -8,6 +8,7 @@
 //! Each hand-built body is the stable-collections test loop with its guard
 //! `i < n` or `i <= n` against a bound `n` the body does not compute.
 
+use crate::mir::analysis::heap_effects::stamp_quiet;
 use crate::mir::optimization::in_bounds::{
     compare, reading_at_an_offset, stepped, with_two_pointers, BOUND, GUARD, OFFSET_INDEX,
 };
@@ -19,6 +20,7 @@ use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
 use miri::mir::analysis::loops::{natural_loops, NaturalLoop};
+use miri::mir::header_reads::stable_collections;
 use miri::mir::optimization::in_bounds::record_in_bounds;
 use miri::mir::optimization::loop_versioning::version_bounded_loops;
 use miri::mir::optimization::stable_collections::record_stable_collections;
@@ -281,7 +283,7 @@ fn proven_statements(body: &Body) -> Vec<String> {
         .map(ToString::to_string)
         .collect();
     assert!(violations.is_empty(), "{violations:?}\n{body}");
-    (proven_indexes(&body).iter())
+    (proven_indexes(body).iter())
         .filter_map(|proof| {
             body.basic_blocks[proof.block.0]
                 .statements
@@ -348,7 +350,7 @@ fn test_matmul_reads_its_three_lists_headers_outside_the_innermost_loop() {
     assert_eq!(b_k.block, row_k.block, "{body}");
     let innermost = innermost_loop_holding(&body, b_k.block);
     for list in [a, b, row] {
-        let record = (body.stable_collections().into_iter())
+        let record = (stable_collections(&body).into_iter())
             .find(|record| record.local == list)
             .unwrap_or_else(|| panic!("{list} is not recorded:\n{body}"));
         assert!(
@@ -513,4 +515,28 @@ fn test_a_reversal_copying_its_high_pointer_from_a_step_made_after_the_copy_is_l
     let last = statements.len() - 1;
     statements.swap(last - 1, last);
     assert!(is_left_alone(body));
+}
+
+/// A call's stamp stays on it in both copies of a versioned loop: the stamp
+/// is part of the call, which the copy clones. Versioning copies only loops
+/// whose calls are runtime calls that leave headers alone, so the stamped
+/// call here is one of those, stamped by hand.
+#[test]
+fn test_a_stamped_call_in_a_versioned_loop_keeps_its_stamp_in_both_copies() {
+    let mut body = loop_bounded_by(BinOp::Lt);
+    body.basic_blocks[LOOP_BODY].terminator = Some(call(
+        Operand::runtime(miri::runtime_fns::rt::RC_STATS_DUP, Span::default()),
+        Vec::new(),
+        SPARE,
+        LOOP_HEADER,
+    ));
+    stamp_quiet(&mut body, LOOP_BODY);
+    let body = versioned(body);
+    let stamps: Vec<bool> = (body.basic_blocks.iter())
+        .filter_map(|data| match data.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::Call { flags, .. }) => Some(flags.quiet),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stamps, vec![true, true], "{body}");
 }

@@ -344,6 +344,7 @@ fn emit_void_runtime_call(
             args,
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },

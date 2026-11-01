@@ -1038,6 +1038,7 @@ fn runtime_call(
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination,
         target: Some(target),
     }
@@ -1403,6 +1404,7 @@ fn element_checks_around_a_call(mode: ArgMode) -> Body {
         args: vec![Operand::Copy(local(6))],
         arg_modes: vec![mode],
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: local(4),
         target: Some(next),
     });

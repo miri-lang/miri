@@ -86,6 +86,7 @@ impl Terminator {
                 arg_modes,
                 func: _,
                 arg_handles: _,
+                flags: _,
                 target: _,
             }
             | TerminatorKind::VirtualCall {
@@ -439,6 +440,20 @@ impl GpuLaunchArgs {
     }
 }
 
+/// What the program-wide heap-effects analysis found of one call to a
+/// function of the program, stamped before reference counting. Both default
+/// to false: a call nothing has stamped may release what it is lent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct CallFlags {
+    /// The callee may release nothing its caller lends it, so an argument
+    /// read through a class field is lent to it without a retain.
+    pub quiet: bool,
+    /// The callee writes the receiver passed first in place as a value its
+    /// caller copies on write: the caller made it unique for the call, so it
+    /// is never retained for it.
+    pub unique_receiver: bool,
+}
+
 /// How a call passes one argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArgMode {
@@ -507,6 +522,9 @@ pub enum TerminatorKind {
         /// call with no device-handle metadata; when non-empty it must equal
         /// `args.len()`. Validated by [`validate_call_arg_handles`].
         arg_handles: Vec<Option<DeviceHandleId>>,
+        /// What the heap-effects analysis found of the call; carried with
+        /// the terminator wherever a pass moves or copies it.
+        flags: CallFlags,
         destination: Place,
         target: Option<BasicBlock>,
     },

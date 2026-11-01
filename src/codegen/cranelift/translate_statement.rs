@@ -760,6 +760,7 @@ impl<'a> FunctionTranslator<'a> {
                 args,
                 arg_modes,
                 arg_handles: _,
+                flags: _,
                 destination,
                 target,
             } => Self::translate_call(

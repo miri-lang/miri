@@ -211,6 +211,7 @@ impl ProgramBuilder<'_> {
                 arg_modes,
                 destination,
                 arg_handles: _,
+                flags: _,
                 target: _,
             } => {
                 if is_check {

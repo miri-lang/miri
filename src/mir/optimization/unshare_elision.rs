@@ -203,6 +203,7 @@ fn recognize_copy_on_write(body: &Body, call: usize) -> Option<CopyOnWrite> {
         target: Some(target),
         arg_modes: _,
         arg_handles: _,
+        flags: _,
     } = &body.basic_blocks.get(call)?.terminator.as_ref()?.kind
     else {
         return None;
@@ -290,6 +291,7 @@ fn recognize_check(
         target: Some(switch),
         arg_modes: _,
         arg_handles: _,
+        flags: _,
     } = &body.basic_blocks.get(call)?.terminator.as_ref()?.kind
     else {
         return None;

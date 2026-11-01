@@ -56,7 +56,7 @@
 //!   holds an operation `analysis::heap_effects` finds loud: a store through a
 //!   class field or into a shared root, a release that may run a drop hook, a
 //!   virtual call, a closure call, a loud runtime call, or a call to a function
-//!   of the program not recorded quiet (`Body::quiet_calls`). That rule ignores
+//!   of the program not stamped quiet (`CallFlags::quiet`). That rule ignores
 //!   which value an operation touches, so an alias of the root changes nothing.
 //!   A value only the root's own value holds is reached by nothing else: any
 //!   other holder of it holds its own reference and copies before writing.
@@ -107,7 +107,7 @@ pub(super) fn infer_local_borrows(
     let entries = entry_collections(body);
     let hooks = DropHookReach::new(definitions(ctx));
     let noise = (!exposed_sites.is_empty() || !entries.is_empty())
-        .then(|| BodyNoise::of(body, Phase::Lowered, &hooks, Some(&body.quiet_calls)));
+        .then(|| BodyNoise::of(body, Phase::Lowered, &hooks));
     let mut settled = Settled {
         body,
         reads: &reads,
@@ -584,7 +584,7 @@ impl Watch<'_> {
             }
         }
         match data.terminator.as_ref() {
-            Some(terminator) if !self.is_changed_by_terminator(block, terminator) => {
+            Some(terminator) if !self.is_changed_by_terminator(terminator) => {
                 match &terminator.kind {
                     TerminatorKind::Return => Segment::Changed,
                     TerminatorKind::Goto { .. }
@@ -611,11 +611,11 @@ impl Watch<'_> {
                 .is_some_and(|noise| noise.is_loud_statement(&statement.kind))
     }
 
-    fn is_changed_by_terminator(&self, block: usize, terminator: &Terminator) -> bool {
+    fn is_changed_by_terminator(&self, terminator: &Terminator) -> bool {
         terminator_changes(terminator, self.owners)
             || self
                 .noise
-                .is_some_and(|noise| noise.is_loud_terminator(BasicBlock(block), terminator))
+                .is_some_and(|noise| noise.is_loud_terminator(terminator))
     }
 }
 

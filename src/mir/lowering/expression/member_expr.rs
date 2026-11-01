@@ -175,6 +175,7 @@ fn lower_zero_arg_method_as_property(
             args: call_args,
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination,
             target: Some(target_bb),
         },

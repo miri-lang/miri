@@ -129,6 +129,7 @@ fn call(args: Vec<Operand>, arg_modes: Vec<ArgMode>) -> TerminatorKind {
         args,
         arg_modes,
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: Place::new(Local(9)),
         target: Some(BasicBlock(1)),
     }

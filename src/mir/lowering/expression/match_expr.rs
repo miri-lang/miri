@@ -198,6 +198,7 @@ pub(super) fn emit_regex_predicate_test(
             ],
             arg_modes: vec![],
             arg_handles: vec![],
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(result_temp),
             target: Some(continuation_bb),
         },

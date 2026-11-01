@@ -1536,6 +1536,7 @@ fn emit_guard_fail_branch(
             args: vec![Operand::Copy(Place::new(message))],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(void_temp),
             target: Some(unreachable_bb),
         },

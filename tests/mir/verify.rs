@@ -139,6 +139,7 @@ fn call_returning_void(arg: usize, destination: usize, target: usize) -> Termina
         args: vec![Operand::Copy(place(arg))],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
     })
@@ -151,6 +152,7 @@ fn call_returning_string(destination: usize, target: usize) -> Terminator {
         args: Vec::new(),
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
     })
@@ -163,6 +165,7 @@ fn runtime_call(name: &str, args: Vec<Operand>, destination: usize, target: usiz
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: place(destination),
         target: Some(BasicBlock(target)),
     })
@@ -1501,6 +1504,7 @@ fn specialized_call_on_binding(handle: u64, target: usize) -> Terminator {
         args: vec![Operand::Copy(place(1))],
         arg_modes: Vec::new(),
         arg_handles: vec![Some(DeviceHandleId(handle))],
+        flags: miri::mir::CallFlags::default(),
         destination: place(3),
         target: Some(BasicBlock(target)),
     })
@@ -1785,6 +1789,7 @@ fn collection_call_body(receiver: Type, symbol: &str) -> Body {
                     args: vec![Operand::Copy(place(1))],
                     arg_modes: Vec::new(),
                     arg_handles: Vec::new(),
+                    flags: miri::mir::CallFlags::default(),
                     destination: place(2),
                     target: Some(BasicBlock(1)),
                 }),
@@ -2359,6 +2364,7 @@ fn body_calling(func: Operand) -> Body {
                 args: Vec::new(),
                 arg_modes: Vec::new(),
                 arg_handles: Vec::new(),
+                flags: miri::mir::CallFlags::default(),
                 destination: place(2),
                 target: Some(BasicBlock(1)),
             }),
@@ -2517,6 +2523,7 @@ fn caller_passing_temp(mode: ArgMode) -> Body {
                 args: vec![Operand::Copy(place(1))],
                 arg_modes: vec![mode],
                 arg_handles: Vec::new(),
+                flags: miri::mir::CallFlags::default(),
                 destination: place(2),
                 target: Some(BasicBlock(1)),
             }),

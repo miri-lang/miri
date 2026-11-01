@@ -55,6 +55,7 @@
 //!
 //! [`Bounds::Proven`]: crate::mir::Bounds::Proven
 
+use crate::mir::header_reads::stable_collections;
 use std::collections::{BTreeSet, HashSet};
 
 use crate::ast::types::BuiltinCollectionKind;
@@ -145,7 +146,7 @@ type Facts = BTreeSet<Fact>;
 /// Marks proven every access of `body` its loop guard proves in bounds, on
 /// the index of the access itself. Returns true if any was marked.
 pub fn record_in_bounds(body: &mut Body) -> bool {
-    if body.is_gpu() || body.stable_collections().is_empty() {
+    if body.is_gpu() || stable_collections(body).is_empty() {
         return false;
     }
     let mut marked = false;
@@ -206,7 +207,7 @@ impl<'a> Flow<'a> {
         Self {
             body,
             non_negative: non_negative_locals(body),
-            stable: body.stable_collections(),
+            stable: stable_collections(body),
         }
     }
 

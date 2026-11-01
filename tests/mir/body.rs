@@ -46,6 +46,7 @@ fn test_written_locals_counts_statement_and_terminator_writes() {
             ],
             arg_modes: vec![ArgMode::Borrowed, ArgMode::Out],
             arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
             destination: Place::new(Local(2)),
             target: Some(BasicBlock(0)),
         },

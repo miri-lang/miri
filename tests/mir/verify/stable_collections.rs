@@ -10,6 +10,7 @@ use crate::mir::optimization::stable_collections::{
 };
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
+use miri::mir::header_reads::stable_collections;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::verify_stable_collections;
@@ -51,7 +52,7 @@ fn forge_record(mut body: Body) -> Body {
         .as_mut()
         .unwrap()
         .replace_successor(BasicBlock(1), BasicBlock(preheader));
-    body.stable_collections().push(StableCollection {
+    stable_collections(&body).push(StableCollection {
         local: LIST,
         preheader: BasicBlock(preheader),
         header: BasicBlock(1),
@@ -83,6 +84,7 @@ fn test_a_record_over_a_loop_calling_a_function_of_the_program_is_flagged() {
             args: Vec::new(),
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
             destination: Place::new(SPARE),
             target: Some(BasicBlock(1)),
         },
@@ -98,7 +100,7 @@ fn test_a_record_over_a_loop_calling_a_function_of_the_program_is_flagged() {
 #[test]
 fn test_a_record_whose_preheader_does_not_dominate_the_loop_is_flagged() {
     let mut body = forge_record(loop_over_a_list());
-    let preheader = body.stable_collections()[0].preheader;
+    let preheader = stable_collections(&body)[0].preheader;
     body.basic_blocks[0]
         .terminator
         .as_mut()

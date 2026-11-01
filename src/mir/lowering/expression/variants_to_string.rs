@@ -418,6 +418,7 @@ pub(super) fn emit_enum_to_string(
             args: vec![panic_msg_op],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(void_temp),
             target: Some(join_block),
         },

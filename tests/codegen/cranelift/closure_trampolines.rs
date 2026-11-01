@@ -62,6 +62,7 @@ fn sorting_by(element: TypeKind) -> Body {
         ],
         arg_modes: vec![ArgMode::Borrowed; 2],
         arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
         destination: Place::new(Local(0)),
         target: Some(BasicBlock(1)),
     };

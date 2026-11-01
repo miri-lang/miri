@@ -248,6 +248,7 @@ fn build_forwarding_thunk(
                 .map(|param| ArgMode::from_out_flag(param.is_out))
                 .collect(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(RETURN_LOCAL),
             target: Some(after_call),
         },

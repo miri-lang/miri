@@ -428,6 +428,7 @@ fn call_into_int(
             args,
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
+            flags: crate::mir::CallFlags::default(),
             destination: Place::new(result),
             target: Some(next_bb),
         },

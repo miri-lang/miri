@@ -38,6 +38,7 @@ use super::VerificationViolation;
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::mir::analysis::header_reach::runtime_call_leaves_headers;
+use crate::mir::header_reads::stable_collections;
 use crate::mir::place::PlaceContext;
 use crate::mir::proven_indexes::proven_indexes;
 use crate::mir::visitor::Visitor;
@@ -193,7 +194,7 @@ impl<'a> Check<'a> {
             body,
             never_negative,
             predecessors: vec![Vec::new(); body.basic_blocks.len()],
-            stable: body.stable_collections(),
+            stable: stable_collections(body),
         };
         check.predecessors = check.edges();
         check

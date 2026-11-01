@@ -176,6 +176,7 @@ fn candidates<'a>(body: &'a Body, asked: &'a [&'a Place]) -> impl Iterator<Item 
                 args: _,
                 arg_modes: _,
                 arg_handles: _,
+                flags: _,
                 target: _,
             } => hands_back_unshared(func).then_some(destination),
             TerminatorKind::Goto { .. }
