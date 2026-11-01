@@ -2952,6 +2952,12 @@ impl Pipeline {
         // Check RC invariants, cross-residency readback fencing and optional
         // layouts after Perceus, and that every call passes an owned argument
         // exactly where its callee takes one over.
+        //
+        // TODO: these checks run before the element and closure ABI passes
+        // rewrite the bodies in `compile_object`, so they never see the MIR
+        // the backend consumes; only `verify_in_bounds` runs after them. Each
+        // verifier must first learn the by-address element spelling and the
+        // closure trampolines, or a post-ABI run reports false violations.
         if let Some(mode) = verify_mode {
             Self::report_mir_violations(result, &bodies, program_violations, &mode)?;
         }
