@@ -24,7 +24,7 @@ use crate::mir::symbol::Symbol;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::types::MirType;
 use crate::mir::{Body, Local, LocalDecl, Operand, Place, PlaceElem};
-use crate::runtime_fns::ElementRole;
+use crate::runtime_effects::{ElementRole, RuntimeEffect};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::{spells_where, Visit};
 use std::collections::HashMap;
@@ -596,7 +596,7 @@ impl PlaceTypes<'_> {
     /// What each argument of the call `kind` is passed as, by position.
     ///
     /// A runtime entry point takes its elements, keys and values at the
-    /// receiver collection's type arguments ([`crate::runtime_fns::element_roles`])
+    /// receiver collection's type arguments ([`RuntimeEffect::element_roles`])
     /// and every other argument as a word; a Miri function at its parameters; a function value at the parameters its
     /// type declares; a virtual call at the parameter types its call site
     /// recorded. An argument past the declared parameters — the allocator —
@@ -636,7 +636,7 @@ impl PlaceTypes<'_> {
     ) -> Vec<ArgumentSlot> {
         let declared = match func {
             Operand::Function(function) => {
-                if let Some(runtime) = function.symbol.runtime_name() {
+                if let Some(runtime) = function.symbol.runtime_effect() {
                     return self.element_argument_slots(runtime, args);
                 }
                 callees.of_callee(&function.symbol)
@@ -657,15 +657,19 @@ impl PlaceTypes<'_> {
             .collect()
     }
 
-    /// The runtime entry point `runtime`'s arguments: each element, key or
-    /// value at the receiver collection's type argument, every other one a
-    /// word.
-    fn element_argument_slots(&self, runtime: &str, args: &[Operand]) -> Vec<ArgumentSlot> {
+    /// The arguments of the runtime entry point doing `runtime`: each element,
+    /// key or value at the receiver collection's type argument, every other
+    /// one a word.
+    fn element_argument_slots(
+        &self,
+        runtime: &RuntimeEffect,
+        args: &[Operand],
+    ) -> Vec<ArgumentSlot> {
         let collection = args
             .first()
             .and_then(|receiver| self.operand_type(receiver));
         let mut slots = vec![ArgumentSlot::Word; args.len()];
-        for &(position, role) in crate::runtime_fns::element_roles(runtime) {
+        for (position, role) in runtime.element_roles() {
             let slot = collection
                 .as_ref()
                 .and_then(|collection| element_slot(collection, role))

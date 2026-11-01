@@ -740,7 +740,7 @@ fn lower_list_push(
     item_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let cow = Some((obj_ty, rt::LIST_COW));
+    let cow = Some((obj_ty, &crate::mir::compiler_intrinsics::LIST_COW));
     with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
         emit_list_push(ctx, obj_op, obj_ty, item_arg, span).map(Some)
     })
@@ -1000,7 +1000,7 @@ fn lower_map_set(
     value_arg: &Expression,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let cow = Some((obj_ty, rt::MAP_COW));
+    let cow = Some((obj_ty, &crate::mir::compiler_intrinsics::MAP_COW));
     with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
         emit_map_set(ctx, obj_op, obj_ty, key_arg, value_arg, span).map(Some)
     })
@@ -1064,7 +1064,7 @@ fn lower_set_add(
     dest: Option<Place>,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let cow = Some((obj_ty, rt::SET_COW));
+    let cow = Some((obj_ty, &crate::mir::compiler_intrinsics::SET_COW));
     with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
         emit_set_add(ctx, obj_op, obj_ty, elem_arg, dest, span).map(Some)
     })
@@ -1124,7 +1124,7 @@ fn lower_list_insert(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let item_watermark = ctx.body.local_decls.len();
-    let cow = Some((obj_ty, rt::LIST_COW));
+    let cow = Some((obj_ty, &crate::mir::compiler_intrinsics::LIST_COW));
     with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
         emit_list_insert(
             ctx,
@@ -1186,7 +1186,7 @@ fn lower_collection_set(
 ) -> Result<Option<Operand>, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
     let cow = builtin
-        .and_then(crate::runtime_fns::cow_fn)
+        .map(crate::mir::compiler_intrinsics::copy_on_write_of)
         .map(|cow| (obj_ty, cow));
     with_mutated_receiver(ctx, obj, cow, *span, |ctx, obj_op| {
         emit_collection_set(

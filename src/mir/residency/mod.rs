@@ -43,7 +43,8 @@ use std::collections::HashSet;
 /// `gpu`-resident buffer back to its host array.
 ///
 /// Note: This entry point and [`UPLOAD_FN`] are internal compiler intrinsics
-/// rather than standard functions declared in `runtime_fns`. Upload reads its
+/// rather than entry points a stdlib `runtime` declaration states; their
+/// records are in `mir::compiler_intrinsics`. Upload reads its
 /// host array while readback modifies it in place.
 pub(crate) const READBACK_FN: &str = "miri_gpu_readback";
 

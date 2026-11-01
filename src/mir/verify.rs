@@ -58,7 +58,7 @@
 //! its own, which its destination owns.
 //!
 //! **What a call does to its arguments and its result is a property of the callee**,
-//! recorded per intrinsic in [`crate::runtime_fns`]. A container insertion keeps
+//! recorded on the callee ([`Operand::called_runtime_effect`]). A container insertion keeps
 //! what it is handed; a copy-on-write entry point takes its receiver over; a failure
 //! reporter never returns; map indexing hands back a borrow of an entry the map
 //! still owns. On its own [`Operand::Move`] is a uniqueness witness for
@@ -103,7 +103,6 @@ use crate::mir::terminator::TerminatorKind;
 use crate::mir::terminator::{arg_mode, ArgMode};
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
-use crate::runtime_fns::{diverges, hands_back_a_borrow, taken_argument_positions};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
@@ -743,7 +742,9 @@ fn followed_successors(body: &Body, bb: usize) -> Vec<usize> {
 /// Whether a terminator hands control to a callee that never gives it back.
 fn terminator_diverges(kind: &TerminatorKind) -> bool {
     match kind {
-        TerminatorKind::Call { func, .. } => func.called_runtime_name().is_some_and(diverges),
+        TerminatorKind::Call { func, .. } => func
+            .called_runtime_effect()
+            .is_some_and(|effect| effect.diverges),
         TerminatorKind::VirtualCall { .. }
         | TerminatorKind::GpuLaunch { .. }
         | TerminatorKind::Goto { .. }
@@ -1237,8 +1238,8 @@ fn apply_terminator(
     }
 
     let borrows = func
-        .and_then(Operand::called_runtime_name)
-        .is_some_and(hands_back_a_borrow);
+        .and_then(Operand::called_runtime_effect)
+        .is_some_and(|effect| effect.hands_back_a_borrow());
     if destination.projection.is_empty() && !borrows {
         adjust(state, tracked, destination.local, 1);
     }
@@ -1259,11 +1260,11 @@ fn release_taken_args(
     state: &mut PathState,
     violations: &mut Vec<VerificationViolation>,
 ) {
-    let Some(name) = func.and_then(Operand::called_runtime_name) else {
+    let Some(effect) = func.and_then(Operand::called_runtime_effect) else {
         return;
     };
-    for position in taken_argument_positions(name) {
-        let Some(local) = args.get(*position).and_then(Operand::bare_local) else {
+    for position in effect.taken_positions() {
+        let Some(local) = args.get(position).and_then(Operand::bare_local) else {
             continue;
         };
         release(body, &Place::new(local), tracked, state, violations);
@@ -1488,25 +1489,25 @@ pub fn verify_collection_element_width(body: &Body) -> Vec<VerificationViolation
         let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
             continue;
         };
-        let Some(symbol) = func.called_runtime_name() else {
+        let Some(effect) = func.called_runtime_effect() else {
             continue;
         };
         let Some(receiver) = args.first().and_then(Operand::bare_local) else {
             continue;
         };
         let receiver_ty = &body.local_decls[receiver.0].ty;
-        for position in crate::runtime_fns::element_positions(symbol) {
-            let Some(operand) = args.get(*position) else {
+        for position in effect.element_positions() {
+            let Some(operand) = args.get(position) else {
                 continue;
             };
             violations.extend(element_width_violation(
                 body,
                 ElementArgument {
-                    symbol,
+                    symbol: func.called_runtime_name().unwrap_or_default(),
                     operand,
                     receiver,
                     receiver_ty,
-                    position: *position,
+                    position,
                 },
             ));
         }

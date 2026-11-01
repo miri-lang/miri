@@ -14,6 +14,13 @@
 //! A record states every fact. An argument that holds a reference has a stated
 //! use; nothing is assumed of an entry point the record does not describe.
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
+/// What every `runtime` declaration states, keyed by the entry point it
+/// declares.
+pub type RuntimeEffects = HashMap<String, Rc<RuntimeEffect>>;
+
 /// What an element argument of a collection entry point is to the
 /// collection it is handed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -173,6 +180,39 @@ impl RuntimeEffect {
     /// Whether this is the copy-on-write entry point of a collection.
     pub fn is_copy_on_write(&self) -> bool {
         self.params.contains(&ParamUse::CopiesOnWrite)
+    }
+
+    /// Whether the entry point asks whether the value it is handed is shared,
+    /// reading its count and nothing else.
+    pub fn asks_whether_shared(&self) -> bool {
+        self.params.first() == Some(&ParamUse::CountOf)
+    }
+
+    /// Whether the entry point stops the program unless the call holds what
+    /// it is handed alone, reading its count and nothing else.
+    pub fn insists_on_unique(&self) -> bool {
+        self.reads_count && !self.asks_whether_shared()
+    }
+
+    /// The positions of the key and the value a map entry point stores as
+    /// one entry; `None` when it stores no entry.
+    pub fn stored_entry(&self) -> Option<(usize, usize)> {
+        let at = |role| (self.params.iter()).position(|use_| *use_ == ParamUse::Stores(role));
+        at(ElementRole::Key).zip(at(ElementRole::Value))
+    }
+
+    /// Whether the entry point hands back a value nothing else holds: a
+    /// block it has just allocated or copied, or what a copy-on-write hands
+    /// back — its argument when its count was 1, a copy otherwise.
+    pub fn hands_back_unshared(&self) -> bool {
+        self.returns_copy() || self.allocates_collection() || self.is_copy_on_write()
+    }
+
+    /// Whether the entry point leaves the count of what it is handed at
+    /// `position` as it found it: it writes the argument in place and does
+    /// not take it over.
+    pub fn keeps_count_of(&self, position: usize) -> bool {
+        self.param(position) == ParamUse::Writes
     }
 
     /// Whether what the entry point hands back is a block nothing else holds,

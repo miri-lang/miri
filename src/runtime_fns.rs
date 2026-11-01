@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Runtime function name constants.
+//! Runtime function name constants, and how a runtime call's arguments are
+//! spelled for the runtime.
 //!
 //! Centralizes every `miri_rt_*` symbol name so that renaming a runtime
 //! function requires changing exactly one place in the compiler rather than
@@ -20,13 +21,20 @@
 //! Every symbol declared as `runtime "core" fn` in a stdlib `.mi` file must
 //! have a matching constant in [`rt`].  The test in
 //! `tests/stdlib/runtime_fns_sync.rs` enforces this automatically.
+//!
+//! # What an entry point does
+//!
+//! Nothing here says what an entry point does with its arguments: that is its
+//! record, a [`RuntimeEffect`] its `runtime` declaration states or the
+//! compiler's own table gives, carried on every call to it. Only how each
+//! argument travels follows from the record here ([`param_abi`]).
 
-/// Constants for all `miri_rt_*` runtime symbols.
 /// The prefix of every symbol a Miri runtime library exports. The libraries
 /// are linked statically into every program, so a call to such a symbol may be
 /// a direct branch rather than a load of its address from the GOT.
 pub const RUNTIME_SYMBOL_PREFIX: &str = "miri_rt_";
 
+/// Constants for all `miri_rt_*` runtime symbols.
 pub mod rt {
     // Closure
     /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure allocation, not in stdlib.
@@ -664,357 +672,7 @@ pub mod rt {
     pub const TRACKING_STATE_OFF: i64 = 1;
 }
 
-use crate::ast::types::BuiltinCollectionKind;
-pub use crate::runtime_effects::{ClosureContract, ElementRole};
-
-/// Argument positions whose reference `name` takes ownership of, in call order.
-///
-/// Two shapes reach the same place. A container intrinsic that stores what it is
-/// handed keeps that reference: the element is released later by the container's
-/// drop callback, never by the code that built it, and lowering pays for this by
-/// retaining the value into the temp it passes. A copy-on-write entry point takes
-/// its receiver over instead: it hands back either that same value or a fresh
-/// clone, releasing the original in the clone case, so exactly one reference goes
-/// in and one comes out.
-///
-/// Either way the caller stops owning what it passed, which is what anything
-/// reasoning about reference counts over MIR needs to know. The receiver of a
-/// storing intrinsic is not listed — those mutate in place, so the caller keeps
-/// holding the container after the call returns.
-///
-/// Empty for every other symbol: the readers borrow their arguments, and a call
-/// that builds something new out of what it is given leaves the originals with the
-/// caller to release.
-pub fn taken_argument_positions(name: &str) -> &'static [usize] {
-    match name {
-        rt::LIST_PUSH | rt::SET_ADD => &[1],
-        rt::LIST_INSERT => &[2],
-        rt::MAP_SET => &[1, 2],
-        rt::LIST_COW
-        | rt::MAP_COW
-        | rt::SET_COW
-        | rt::ARRAY_COW
-        | rt::STRING_APPEND
-        | rt::STRING_APPEND_INT
-        | rt::STRING_APPEND_UINT => &[0],
-        _ => &[],
-    }
-}
-
-/// Whether the runtime entry point `name` only reads the argument at
-/// `position`: it neither writes nor releases anything reached through it,
-/// and keeps no reference to it past the call.
-///
-/// An allow-list: an entry point not named here is taken to write what it is
-/// handed, as every mutating collection entry point does to its receiver in
-/// place (`push`, `pop`, `set`, `remove`, `clear`, …). A string append
-/// writes its receiver at position 0 and only reads what it appends.
-/// Every entry point [`copies_out_of_its_strings`] names is listed too.
-/// `map_get_checked` is listed although, for an inline value, it hands back an
-/// uncounted address into the entry the map still owns: the call itself only
-/// reads, and that address is valid only until the map is next written, the
-/// same contract its result has without any borrow involved.
-pub fn only_reads_argument(name: &str, position: usize) -> bool {
-    match name {
-        rt::ARRAY_LEN
-        | rt::LIST_LEN
-        | rt::LIST_IS_EMPTY
-        | rt::MAP_LEN
-        | rt::MAP_IS_EMPTY
-        | rt::MAP_GET
-        | rt::MAP_GET_CHECKED
-        | rt::MAP_CONTAINS_KEY
-        | rt::MAP_SLOT_OF
-        | rt::MAP_KEY_AT
-        | rt::MAP_VALUE_AT
-        | rt::MAP_VALUE_IN_SLOT
-        | rt::SET_LEN
-        | rt::SET_IS_EMPTY
-        | rt::SET_CONTAINS
-        | rt::SET_ELEMENT_AT
-        | rt::ARRAY_CLONE
-        | rt::LIST_CLONE
-        | rt::MAP_CLONE
-        | rt::SET_CLONE
-        | rt::STRING_LEN
-        | rt::STRING_CHAR_COUNT
-        | rt::STRING_IS_EMPTY
-        | rt::STRING_CONCAT
-        | rt::STRING_CLONE
-        | rt::STRING_JOIN
-        | rt::LIST_NEW_FROM_RAW
-        | rt::LIST_NEW_FROM_MANAGED_ARRAY
-        | rt::ARRAY_SLICE
-        | rt::STRING_EQUALS
-        | rt::STRING_HASH
-        | rt::STRING_COMPARE
-        | rt::STRING_CONTAINS
-        | rt::STRING_STARTS_WITH
-        | rt::STRING_ENDS_WITH
-        | rt::HASH_COMBINE
-        | rt::FLOAT_HASH
-        | rt::FLOAT_TO_STRING
-        | rt::F32_TO_STRING
-        | rt::RECEIVER_UNIQUE => true,
-        rt::STRING_APPEND | rt::STRING_APPEND_INT | rt::STRING_APPEND_UINT => position > 0,
-        _ => copies_out_of_its_strings(name),
-    }
-}
-
-/// Whether `name` is a string, text-pattern, console, file-system or
-/// environment entry point: each takes its strings as `*const MiriString`
-/// and copies out of them, handing back a fresh value or a status, so it
-/// only reads every argument.
-fn copies_out_of_its_strings(name: &str) -> bool {
-    matches!(
-        name,
-        rt::ENV_GET
-            | rt::ENV_HAS
-            | rt::ENV_SET
-            | rt::EPRINT
-            | rt::EPRINTLN
-            | rt::FS_APPEND_FILE
-            | rt::FS_CREATE_DIR
-            | rt::FS_DELETE
-            | rt::FS_EXISTS
-            | rt::FS_LIST_DIR
-            | rt::FS_READ_FILE
-            | rt::FS_WRITE_FILE
-            | rt::PANIC
-            | rt::PRINT
-            | rt::PRINTLN
-            | rt::REGEX_COMPILE
-            | rt::REGEX_FIND
-            | rt::REGEX_FIND_FROM
-            | rt::REGEX_FROM_VALIDATED_PATTERN
-            | rt::REGEX_MATCHES
-            | rt::REGEX_REPLACE
-            | rt::STRING_CHAR_AT
-            | rt::STRING_CODE_AT
-            | rt::STRING_INDEX_OF_ANY
-            | rt::STRING_LINE_COUNT
-            | rt::STRING_LINE_TEXT
-            | rt::STRING_NEXT_CHAR_BOUNDARY
-            | rt::STRING_PARSE_FLOAT
-            | rt::STRING_PARSE_INT
-            | rt::STRING_PIECE_COUNT
-            | rt::STRING_PIECE_END
-            | rt::STRING_REPEAT
-            | rt::STRING_REPLACE
-            | rt::STRING_SLICE_BYTES
-            | rt::STRING_SPLIT
-            | rt::STRING_SUBSTRING
-            | rt::STRING_TO_LOWER
-            | rt::STRING_TO_UPPER
-            | rt::STRING_TRIM
-            | rt::STRING_TRIM_END
-            | rt::STRING_TRIM_START
-    )
-}
-
-/// Whether `name` writes, in place, what it is handed at `position`: anything
-/// but an argument it only reads, an element it stores or looks up, a closure
-/// it calls, or the value a copy-on-write entry point or a count question is
-/// asked about.
-///
-/// It fails closed: an entry point no table classifies writes every argument
-/// it is handed, until a table says otherwise.
-///
-/// What an entry point writes in place it does not keep. The argument is lent
-/// for the call, and the runtime holds no reference to it once the call
-/// returns, so the count it found is the count it leaves: a value the caller
-/// made its own before the call is still its own after it. An argument the
-/// runtime does keep is one it takes over ([`taken_argument_positions`]), and
-/// the only one of those it also writes is a string append's receiver, which
-/// the call hands back as its result. A new entry point that stashes a value
-/// it writes would break this silently, since failing closed does not cover
-/// that direction.
-///
-/// The collection destructors (`miri_rt_list_free` and its siblings) are
-/// outside this contract. They release the block whatever its count, so they
-/// neither write in place nor take over one reference
-/// ([`taken_argument_positions`]); code generation calls them only once a
-/// count has reached zero. A program that declares and calls one itself is
-/// not supported: it is answered as a writer here, and freeing a value some
-/// other name still holds is wrong whatever is copied first.
-pub fn writes_in_place(name: &str, position: usize) -> bool {
-    !only_reads_argument(name, position)
-        && !element_positions(name).contains(&position)
-        && !closure_positions(name).contains(&position)
-        && !is_copy_on_write(name)
-        && !reads_reference_count(name)
-}
-
-/// Whether `name` is the copy-on-write entry point of a built-in collection:
-/// it hands back its argument when its count is 1, and otherwise — shared, or
-/// immortal — a copy only the caller holds, releasing its hold on a shared
-/// original. Either way what it hands back is held by the caller alone.
-pub fn is_copy_on_write(name: &str) -> bool {
-    matches!(
-        name,
-        rt::LIST_COW | rt::MAP_COW | rt::SET_COW | rt::ARRAY_COW
-    )
-}
-
-/// Whether `name` reads the count of the value it is handed: asks whether
-/// it is shared, or stops the program unless the call holds it alone. Either
-/// answers for whoever's count the value carries, so a value borrowed from
-/// another holder is never handed to one.
-pub fn reads_reference_count(name: &str) -> bool {
-    matches!(name, rt::RC_IS_SHARED | rt::RECEIVER_UNIQUE)
-}
-
-/// Whether `name` hands back a value nothing else holds: a block it has just
-/// allocated, whose count is 1, so asking whether it is shared answers no.
-///
-/// Only the collection clones qualify. A copy-on-write entry point hands back
-/// its receiver itself when nothing else holds it, so it allocates nothing and
-/// is not listed; [`is_copy_on_write`] names those.
-pub fn returns_unshared(name: &str) -> bool {
-    matches!(
-        name,
-        rt::LIST_CLONE | rt::MAP_CLONE | rt::SET_CLONE | rt::ARRAY_CLONE
-    )
-}
-
-/// Whether `name` builds an empty collection: a block it has just
-/// allocated, whose count is 1, so asking whether it is shared answers no.
-///
-/// Kept apart from [`returns_unshared`], whose callers also read it as "copies
-/// the collection it is handed".
-pub fn allocates_collection(name: &str) -> bool {
-    matches!(
-        name,
-        rt::LIST_NEW | rt::MAP_NEW | rt::SET_NEW | rt::ARRAY_NEW
-    )
-}
-
-/// Whether `name` hands back a collection with exactly as many elements as
-/// the one it is given: a copy-on-write entry point or a clone of an array or
-/// a list. A length known of its argument holds of its result.
-pub fn preserves_length(name: &str) -> bool {
-    matches!(
-        name,
-        rt::LIST_COW | rt::ARRAY_COW | rt::LIST_CLONE | rt::ARRAY_CLONE
-    )
-}
-
-/// Whether a call to `name` leaves the header of every collection as it found
-/// it: the data pointer, the length and the slot size.
-///
-/// A loop whose calls all qualify may read a collection's header once before
-/// it starts. The list is an allow-list of calls that read a count or bump a
-/// statistic and reach no code that could grow, shrink, replace or release a
-/// collection; any call not named here is taken to write a header, unless it
-/// is one [`copies_collection`] names and the copy runs no code of the
-/// program (`mir::analysis::header_reach::runtime_call_leaves_headers`).
-pub fn leaves_collection_headers_unchanged(name: &str) -> bool {
-    matches!(
-        name,
-        rt::RC_IS_SHARED
-            | rt::RECEIVER_UNIQUE
-            | rt::RC_STATS_DUP
-            | rt::RC_STATS_FREE
-            | rt::RC_STATS_COW_COPY
-    )
-}
-
-/// Whether `name` hands back the array or list it is given, or a fresh copy
-/// of it, and writes the header of no collection that already exists.
-///
-/// A copy-on-write entry point returns its argument untouched when nothing
-/// else holds it. Otherwise it, like a clone, reads the argument, allocates
-/// the copy and fills it, retaining every counted element; copy-on-write then
-/// takes one from the argument's count, which was above one, so the count
-/// never reaches zero and nothing is released or freed. The one thing such a
-/// call runs beyond the runtime is an element's own `clone` method, which a
-/// list or array of class instances calls on every element to copy it: code
-/// of the program that may reach any collection. The caller must rule that
-/// out from the element type before taking every other header as unchanged.
-pub fn copies_collection(name: &str) -> bool {
-    matches!(
-        name,
-        rt::LIST_COW | rt::ARRAY_COW | rt::LIST_CLONE | rt::ARRAY_CLONE
-    )
-}
-
-/// Argument positions of `name`, as a Miri call spells them, that carry an
-/// element the container stores or looks up.
-///
-/// Every such argument travels by address. The runtime entry point takes two
-/// arguments in its place — the address of the element's bytes and the number
-/// of those bytes that are the element — and lays the element out at the full
-/// width of the container's slot itself, zeroing what it does not cover. So an
-/// element of any width arrives whole, a store and the lookup that must match
-/// it see the same bytes, and a float is never converted into an integer on the
-/// way in.
-///
-/// The address-taking is spelled in MIR, by `mir::element_abi`, after
-/// reference counting has read the calls in this form; the runtime import is
-/// declared with the expanded parameters by [`abi_params`]. Both the
-/// storing entry points and the lookups are listed, because a lookup that
-/// reads an element differently from the store it must match is exactly the
-/// mismatch this prevents. Positions naming an index or a size are not listed;
-/// those really are numbers.
-pub fn element_positions(name: &str) -> &'static [usize] {
-    match name {
-        rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => &[1],
-        rt::LIST_SET | rt::LIST_INSERT | rt::ARRAY_SET_VAL => &[2],
-        rt::MAP_GET
-        | rt::MAP_CONTAINS_KEY
-        | rt::MAP_SLOT_OF
-        | rt::MAP_REMOVE
-        | rt::MAP_GET_CHECKED => &[1],
-        rt::MAP_SET => &[1, 2],
-        _ => &[],
-    }
-}
-
-/// Each argument position of `name` that carries an element (see
-/// [`element_positions`]), with what it is to the collection the call's first
-/// argument names. Exactly the positions [`element_positions`] lists.
-pub fn element_roles(name: &str) -> &'static [(usize, ElementRole)] {
-    match name {
-        rt::LIST_PUSH | rt::SET_ADD | rt::SET_CONTAINS | rt::SET_REMOVE => {
-            &[(1, ElementRole::Element)]
-        }
-        rt::LIST_SET | rt::LIST_INSERT | rt::ARRAY_SET_VAL => &[(2, ElementRole::Element)],
-        rt::MAP_GET
-        | rt::MAP_CONTAINS_KEY
-        | rt::MAP_SLOT_OF
-        | rt::MAP_REMOVE
-        | rt::MAP_GET_CHECKED => &[(1, ElementRole::Key)],
-        rt::MAP_SET => &[(1, ElementRole::Key), (2, ElementRole::Value)],
-        _ => &[],
-    }
-}
-
-/// The contract of the closure parameter `position` of the runtime entry
-/// point `name`; `None` when the runtime calls no closure through it.
-pub fn closure_contract(name: &str, position: usize) -> Option<ClosureContract> {
-    match (name, position) {
-        (rt::LIST_SORT_BY, 1) => Some(ClosureContract {
-            arity: 2,
-            elements_of: Some(0),
-        }),
-        // Frees the closure without ever calling it.
-        (rt::SIMULATE_CLOSURE_OVER_RELEASE, 0) => Some(ClosureContract {
-            arity: 0,
-            elements_of: None,
-        }),
-        _ => None,
-    }
-}
-
-/// Parameter positions of `name` that carry a closure, each described by
-/// [`closure_contract`].
-pub fn closure_positions(name: &str) -> &'static [usize] {
-    match name {
-        rt::LIST_SORT_BY => &[1],
-        rt::SIMULATE_CLOSURE_OVER_RELEASE => &[0],
-        _ => &[],
-    }
-}
+use crate::runtime_effects::{ClosureContract, RuntimeEffect};
 
 /// How one declared parameter of a runtime entry point crosses into the
 /// runtime: the one place this is decided, which the runtime import, the
@@ -1024,10 +682,10 @@ pub enum RuntimeParamAbi {
     /// One word, as the parameter is declared.
     Word,
     /// The address of an element's bytes and their count (see
-    /// [`element_positions`]).
+    /// [`RuntimeEffect::element_positions`]).
     Element,
     /// The closure and the address of the trampoline the runtime calls it
-    /// through (see [`closure_contract`]).
+    /// through (see [`RuntimeEffect::closure_contract`]).
     Closure(ClosureContract),
 }
 
@@ -1041,62 +699,38 @@ impl RuntimeParamAbi {
     }
 }
 
-/// How the declared parameter `position` of `name` crosses into the runtime.
-pub fn param_abi(name: &str, position: usize) -> RuntimeParamAbi {
-    if element_positions(name).contains(&position) {
+/// How the declared parameter `position` of the entry point doing `effect`
+/// crosses into the runtime.
+pub fn param_abi(effect: &RuntimeEffect, position: usize) -> RuntimeParamAbi {
+    if effect.element_positions().contains(&position) {
         return RuntimeParamAbi::Element;
     }
-    match closure_contract(name, position) {
+    match effect.closure_contract(position) {
         Some(contract) => RuntimeParamAbi::Closure(contract),
         None => RuntimeParamAbi::Word,
     }
 }
 
-/// The parameters of runtime entry points, as the passes that spell their
-/// ABI in MIR read them. [`RuntimeSurface`] is the runtime library's own.
-pub trait RuntimeParamTable {
-    /// How the declared parameter `position` of `name` crosses into the
-    /// runtime.
-    fn param_abi(&self, name: &str, position: usize) -> RuntimeParamAbi;
-
-    /// The declared parameter positions of `name` that carry a closure, in
-    /// ascending order.
-    fn closure_positions(&self, name: &str) -> &[usize];
-
-    /// Where the declared parameter `position` of `name` sits among the
-    /// arguments the entry point is called with: after every word each
-    /// earlier parameter travels as.
-    fn argument_index(&self, name: &str, position: usize) -> usize {
-        (0..position)
-            .map(|earlier| self.param_abi(name, earlier).words())
-            .sum()
-    }
+/// Where the declared parameter `position` of the entry point doing `effect`
+/// sits among the arguments the entry point is called with: after every word
+/// each earlier parameter travels as.
+pub fn argument_index(effect: &RuntimeEffect, position: usize) -> usize {
+    (0..position)
+        .map(|earlier| param_abi(effect, earlier).words())
+        .sum()
 }
 
-/// The runtime library's entry points, as this module lists them.
-pub struct RuntimeSurface;
-
-impl RuntimeParamTable for RuntimeSurface {
-    fn param_abi(&self, name: &str, position: usize) -> RuntimeParamAbi {
-        param_abi(name, position)
-    }
-
-    fn closure_positions(&self, name: &str) -> &[usize] {
-        closure_positions(name)
-    }
-}
-
-/// The parameter list the runtime entry point `name` really takes, given the
-/// one its Miri declaration spells.
+/// The parameter list the runtime entry point doing `effect` really takes,
+/// given the one its Miri declaration spells.
 ///
 /// Each parameter travels as [`param_abi`] says: an element or a closure as two
 /// pointer-sized words, any other as declared. An entry point that hands an
-/// element back (see [`returns_element_value`]) takes an address and a byte
-/// count for the storage it writes, after every other parameter.
-pub fn abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> Vec<T> {
+/// element back ([`RuntimeEffect::returns_element_value`]) takes an address
+/// and a byte count for the storage it writes, after every other parameter.
+pub fn abi_params<T: Clone>(effect: &RuntimeEffect, declared: &[T], pointer: T) -> Vec<T> {
     let mut params = Vec::with_capacity(declared.len() * 2 + 2);
     for (position, param) in declared.iter().enumerate() {
-        match param_abi(name, position) {
+        match param_abi(effect, position) {
             RuntimeParamAbi::Word => params.push(param.clone()),
             RuntimeParamAbi::Element | RuntimeParamAbi::Closure(_) => {
                 params.push(pointer.clone());
@@ -1104,116 +738,9 @@ pub fn abi_params<T: Clone>(name: &str, declared: &[T], pointer: T) -> Vec<T> {
             }
         }
     }
-    if returns_element_value(name) {
+    if effect.returns_element_value() {
         params.push(pointer.clone());
         params.push(pointer);
     }
     params
-}
-
-/// Whether `name` orders the elements of the container it is handed.
-///
-/// The runtime knows an element only by its size, so a sort it performs reads
-/// those bytes as a number. An element type whose bytes are a reference carries
-/// no order in them, and one that defines no ordering at all has none to read:
-/// a body that hands its container to one of these needs the element type to
-/// order its values, and the type checker answers that requirement wherever the
-/// element type is pinned.
-pub fn orders_its_elements(name: &str) -> bool {
-    matches!(name, rt::LIST_SORT | rt::ARRAY_SORT)
-}
-
-/// Whether `name` matches a value against the elements, or keys, of the
-/// container it is handed.
-///
-/// The runtime tells two elements apart only by the rule the compiler
-/// registered for their type, which for a class is the class's own `equals`.
-/// A body that hands its container to one of these therefore runs `equals` on
-/// the element type, and the type checker answers that wherever the element
-/// type is pinned.
-pub fn matches_its_elements(name: &str) -> bool {
-    matches!(
-        name,
-        rt::SET_ADD
-            | rt::SET_CONTAINS
-            | rt::SET_REMOVE
-            | rt::MAP_SET
-            | rt::MAP_GET
-            | rt::MAP_GET_CHECKED
-            | rt::MAP_CONTAINS_KEY
-            | rt::MAP_SLOT_OF
-            | rt::MAP_REMOVE
-    )
-}
-
-/// Whether `name` hands its caller an element.
-///
-/// These entry points return nothing: the element is written into storage the
-/// caller names, passed as two trailing arguments — its address and the number
-/// of bytes the element occupies there — the way an element argument travels
-/// in. A value word could carry neither an element wider than itself nor a
-/// float, whose register differs from the one integers come back in.
-pub fn returns_element_value(name: &str) -> bool {
-    matches!(
-        name,
-        rt::MAP_GET
-            | rt::MAP_GET_CHECKED
-            | rt::MAP_KEY_AT
-            | rt::MAP_VALUE_AT
-            | rt::MAP_VALUE_IN_SLOT
-            | rt::SET_ELEMENT_AT
-    )
-}
-
-/// Whether `name` hands back a reference its container keeps owning.
-///
-/// Indexing a map reads through to the entry the map still holds — `m[k]` is
-/// consumed in place by the expression around it, which never releases what it
-/// read. Treating that as a fresh reference would report it as one nobody released.
-///
-/// Every other call hands back something its caller owns: a reader that raises the
-/// count before returning, or a value built on the spot.
-pub fn hands_back_a_borrow(name: &str) -> bool {
-    name == rt::MAP_GET_CHECKED
-}
-
-/// Whether `name` never returns to its caller.
-///
-/// Each of these reports a failure and ends the process, or unwinds past the call
-/// through the trap the testing harness installs. Control does not come back, so
-/// the block the call names as its successor is not reached along that path and
-/// nothing the caller was still holding there is ever released — correctly, since
-/// there is no one left to release it for.
-pub fn diverges(name: &str) -> bool {
-    matches!(
-        name,
-        rt::PANIC
-            | rt::ASSERT_FAIL
-            | rt::ASSERT_EQ_FAIL
-            | rt::ASSERT_NE_FAIL
-            | rt::ARRAY_PANIC_OOB
-            | rt::DIV_BY_ZERO_PANIC
-            | rt::REM_BY_ZERO_PANIC
-            | rt::INTEGER_OVERFLOW_PANIC
-            | rt::GPU_LAUNCH_FAILED_PANIC
-            | rt::METHOD_NOT_CHECKED_PANIC
-            | rt::GUARD_FAILED_PANIC
-    )
-}
-
-/// Returns the Copy-on-Write runtime function for a built-in collection kind.
-///
-/// Every built-in collection is a value: a write through one binding copies a
-/// buffer another binding also holds before changing it. Returned as an
-/// `Option` so a collection kind without an entry point can be added without
-/// touching the callers.
-///
-/// Centralized so dispatch logic does not branch on string class names.
-pub fn cow_fn(kind: BuiltinCollectionKind) -> Option<&'static str> {
-    match kind {
-        BuiltinCollectionKind::List => Some(rt::LIST_COW),
-        BuiltinCollectionKind::Set => Some(rt::SET_COW),
-        BuiltinCollectionKind::Map => Some(rt::MAP_COW),
-        BuiltinCollectionKind::Array => Some(rt::ARRAY_COW),
-    }
 }

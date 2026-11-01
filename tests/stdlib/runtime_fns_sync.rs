@@ -320,7 +320,7 @@ fn runtime_decls(source: &str) -> Vec<RuntimeDecl> {
 /// the declaration it describes.
 #[test]
 fn runtime_element_arguments_are_classified() {
-    use miri::runtime_fns::{element_positions, returns_element_value};
+    use crate::mir::utils::runtime_callee;
     let stdlib_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("stdlib");
@@ -333,27 +333,27 @@ fn runtime_element_arguments_are_classified() {
             let declared: Vec<usize> = (0..decl.params.len())
                 .filter(|&i| is_element(&decl.params[i]))
                 .collect();
-            let classified = element_positions(&decl.name).to_vec();
+            let record = runtime_callee(&decl.name);
+            let classified = record.effect().element_positions();
             if declared != classified {
                 wrong.push(format!(
                     "{}: element arguments at {declared:?}, classified at {classified:?}",
                     decl.name
                 ));
             }
-            if is_element(&decl.returns) != returns_element_value(&decl.name) {
+            let hands_back_element = record.effect().returns_element_value();
+            if is_element(&decl.returns) != hands_back_element {
                 wrong.push(format!(
-                    "{}: returns `{}`, but returns_element_value says {}",
-                    decl.name,
-                    decl.returns,
-                    returns_element_value(&decl.name)
+                    "{}: returns `{}`, but its record says it hands back an element: {}",
+                    decl.name, decl.returns, hands_back_element
                 ));
             }
         }
     }
     assert!(
         wrong.is_empty(),
-        "runtime entry points whose element arguments disagree with \
-         `element_positions` / `returns_element_value` in src/runtime_fns.rs:\n  {}",
+        "runtime entry points whose element arguments disagree with what their \
+         records state:\n  {}",
         wrong.join("\n  ")
     );
 }

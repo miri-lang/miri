@@ -18,7 +18,7 @@
 
 use miri::mir::{Body, Local, Operand, Place, PlaceElem, TerminatorKind};
 use miri::pipeline::Pipeline;
-use miri::runtime_fns::{is_copy_on_write, rt};
+use miri::runtime_fns::rt;
 
 /// Every body `source` lowers to, by its symbol.
 fn lowered(source: &str) -> Vec<(String, Body)> {
@@ -77,6 +77,10 @@ fn hands(body: &Body, is_named: impl Fn(&str) -> bool, place: &Place) -> bool {
 
 fn receiver(body: &Body) -> Place {
     Place::new(body.receiver.expect("a method body names its receiver"))
+}
+
+fn is_copy_on_write(name: &str) -> bool {
+    [rt::LIST_COW, rt::MAP_COW, rt::SET_COW, rt::ARRAY_COW].contains(&name)
 }
 
 fn is_receiver_check(name: &str) -> bool {

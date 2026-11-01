@@ -335,9 +335,13 @@ impl<'a> RecordCheck<'a> {
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::Return
             | TerminatorKind::Unreachable => None,
-            TerminatorKind::Call { func, args, .. } => match func.called_runtime_name() {
-                Some(name) => (!runtime_call_leaves_headers(self.body, name, args))
-                    .then(|| format!("bb{block} calls `{name}`, which may change a header")),
+            TerminatorKind::Call { func, args, .. } => match func.called_runtime_effect() {
+                Some(effect) => {
+                    (!runtime_call_leaves_headers(self.body, effect, args)).then(|| {
+                        let name = func.called_runtime_name().unwrap_or_default();
+                        format!("bb{block} calls `{name}`, which may change a header")
+                    })
+                }
                 None => self.program_call_failure(local, block, terminator),
             },
             TerminatorKind::VirtualCall { .. } => Some(format!(

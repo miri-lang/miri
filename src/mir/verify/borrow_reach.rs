@@ -14,7 +14,6 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind, STRING_TYPE_NAME};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::{Body, Place, PlaceElem};
-use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::TypeDefinition;
 
 /// How a place is reached from its root.
@@ -131,9 +130,7 @@ fn ancestry<'d>(name: &'d str, definitions: &'d HashMap<String, TypeDefinition>)
 /// Whether no class in `name`'s ancestry copies on write.
 fn is_reference_class(name: &str, definitions: &HashMap<String, TypeDefinition>) -> bool {
     ancestry(name, definitions).into_iter().all(|class| {
-        let collection_copies = BuiltinCollectionKind::from_name(class)
-            .and_then(cow_fn)
-            .is_some();
+        let collection_copies = BuiltinCollectionKind::from_name(class).is_some();
         !collection_copies && class != STRING_TYPE_NAME
     })
 }

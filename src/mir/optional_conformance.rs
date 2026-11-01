@@ -456,8 +456,7 @@ fn released_placeholder(body: &Body, item: &Unconformed) -> Option<Statement> {
     let TerminatorKind::Call { func, .. } = &terminator.kind else {
         return None;
     };
-    let runtime = func.called_runtime_name()?;
-    crate::runtime_fns::taken_argument_positions(runtime)
+    (func.called_runtime_effect()?.taken_positions())
         .contains(&argument)
         .then(|| Statement {
             kind: StatementKind::StorageDead(Place::new(local)),

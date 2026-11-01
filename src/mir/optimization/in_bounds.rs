@@ -8,7 +8,8 @@
 //!
 //! - `n` holds the length of collection `l` — made by `n = Len(l)`, carried
 //!   to the result of a copy-on-write or a clone of `l`, which keep its
-//!   length (`runtime_fns::preserves_length`), and to a whole-local copy;
+//!   length ([`crate::runtime_effects::RuntimeEffect::preserves_length`]), and
+//!   to a whole-local copy;
 //!   lost when `n` or `l` is given another value, their storage ends, `l` is
 //!   released, or a call runs that
 //!   `analysis::header_reach::runtime_call_leaves_headers` does not clear;
@@ -69,7 +70,6 @@ use crate::mir::{
     BasicBlock, BinOp, Body, Discriminant, InBounds, Local, Operand, Place, PlaceElem, Rvalue,
     StableCollection, Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::preserves_length;
 
 /// Whether integer `+`, `-` and `*` stop the program on overflow rather than
 /// wrap; the non-negativity rule relies on it.
@@ -444,16 +444,17 @@ impl<'a> Flow<'a> {
 
     /// `state` after a call to `func` with `args` writing `destination`.
     fn call(&self, func: &Operand, args: &[Operand], destination: &Place, state: &mut Facts) {
-        let name = func.called_runtime_name();
+        let effect = func.called_runtime_effect();
+        let keeps_length = effect.is_some_and(|effect| effect.preserves_length());
         let copied = if let [argument] = args {
             argument
                 .place()
-                .filter(|source| source.projection.is_empty() && name.is_some_and(preserves_length))
+                .filter(|source| source.projection.is_empty() && keeps_length)
                 .map(|source| source.local)
         } else {
             None
         };
-        if !name.is_some_and(|name| runtime_call_leaves_headers(self.body, name, args)) {
+        if !effect.is_some_and(|effect| runtime_call_leaves_headers(self.body, effect, args)) {
             state.clear();
         }
         if !destination.projection.is_empty() {

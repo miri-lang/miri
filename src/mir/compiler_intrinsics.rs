@@ -17,6 +17,8 @@
 
 use std::rc::Rc;
 
+use crate::ast::types::BuiltinCollectionKind;
+
 use crate::mir::residency::{ACQUIRE_FN, READBACK_FN, RELEASE_FN, TRANSFER_FN, UPLOAD_FN};
 use crate::mir::symbol::RuntimeCallee;
 use crate::runtime_effects::{ElementRole, ParamUse, ResultUse, RuntimeEffect};
@@ -202,6 +204,16 @@ const INTRINSICS: &[&Intrinsic] = &[
     &METHOD_NOT_CHECKED_PANIC,
     &GUARD_FAILED_PANIC,
 ];
+
+/// The copy-on-write entry point of the built-in collection `kind`.
+pub fn copy_on_write_of(kind: BuiltinCollectionKind) -> &'static Intrinsic {
+    match kind {
+        BuiltinCollectionKind::List => &LIST_COW,
+        BuiltinCollectionKind::Set => &SET_COW,
+        BuiltinCollectionKind::Map => &MAP_COW,
+        BuiltinCollectionKind::Array => &ARRAY_COW,
+    }
+}
 
 /// The entry point only the compiler calls under `name`, if there is one.
 pub fn compiler_intrinsic(name: &str) -> Option<&'static Intrinsic> {

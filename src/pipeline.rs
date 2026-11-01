@@ -23,6 +23,8 @@ use crate::lexer::Lexer;
 use crate::mir;
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
+#[cfg(feature = "cranelift")]
+use crate::runtime_effects::RuntimeEffects;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -242,8 +244,9 @@ struct RuntimeInfo {
 fn collect_runtime_info(
     program: &Program,
     imported_stmts: &[Statement],
+    #[cfg(feature = "cranelift")] declared: &RuntimeEffects,
     #[cfg(feature = "cranelift")] ptr_ty: Option<cranelift_codegen::ir::Type>,
-) -> RuntimeInfo {
+) -> Result<RuntimeInfo, CompilerError> {
     #[cfg(feature = "cranelift")]
     let mut imports = Vec::new();
     let mut required_runtimes = BTreeSet::new();
@@ -275,8 +278,16 @@ fn collect_runtime_info(
 
         #[cfg(feature = "cranelift")]
         if let Some(ptr_ty) = ptr_ty {
+            let Some(effect) = declared.get(declaration.name) else {
+                return Err(CompilerError::Lowering(LoweringError::internal(
+                    DiagnosticCode::MirValidationFailed,
+                    format!("no record states what `{}` does", declaration.name),
+                    Span::default(),
+                )));
+            };
             imports.push(runtime_import(
                 declaration.name,
+                effect,
                 declaration.params,
                 declaration.return_type,
                 ptr_ty,
@@ -284,11 +295,11 @@ fn collect_runtime_info(
         }
     }
 
-    RuntimeInfo {
+    Ok(RuntimeInfo {
         #[cfg(feature = "cranelift")]
         imports,
         required_runtimes,
-    }
+    })
 }
 
 /// One `runtime` function declaration.
@@ -343,6 +354,7 @@ fn class_body(stmt: &Statement) -> &[Statement] {
 #[cfg(feature = "cranelift")]
 fn runtime_import(
     name: &str,
+    effect: &crate::runtime_effects::RuntimeEffect,
     params: &[crate::ast::common::Parameter],
     return_type: Option<&crate::ast::expression::Expression>,
     ptr_ty: cranelift_codegen::ir::Type,
@@ -356,9 +368,9 @@ fn runtime_import(
         .collect();
     crate::codegen::cranelift::RuntimeImport {
         name: name.to_string(),
-        param_types: crate::runtime_fns::abi_params(name, &declared, ptr_ty),
+        param_types: crate::runtime_fns::abi_params(effect, &declared, ptr_ty),
         return_type: return_type
-            .filter(|_| !crate::runtime_fns::returns_element_value(name))
+            .filter(|_| !effect.returns_element_value())
             .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))),
     }
 }
@@ -2181,8 +2193,10 @@ impl Pipeline {
                     &pipeline_result.ast,
                     &pipeline_result.type_checker.imported_statements,
                     #[cfg(feature = "cranelift")]
+                    &pipeline_result.type_checker.runtime_effects,
+                    #[cfg(feature = "cranelift")]
                     None,
-                );
+                )?;
 
                 let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
                     .iter()
@@ -2222,8 +2236,9 @@ impl Pipeline {
             let runtime_info = collect_runtime_info(
                 &pipeline_result.ast,
                 &pipeline_result.type_checker.imported_statements,
+                &pipeline_result.type_checker.runtime_effects,
                 Some(backend.pointer_type()),
-            );
+            )?;
             backend.set_runtime_imports(runtime_info.imports);
 
             let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies

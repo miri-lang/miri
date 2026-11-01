@@ -11,8 +11,8 @@
 //! compiler names no method of the standard library.
 //!
 //! A body writes its receiver when it
-//! - hands `self` to a runtime entry point at a position the runtime does
-//!   not only read ([`crate::runtime_fns::only_reads_argument`]), the way
+//! - hands `self` to a runtime entry point at a position its declaration
+//!   does not state it only reads ([`RuntimeEffect::only_reads`]), the way
 //!   every runtime entry point that mutates a collection is reached; a cast
 //!   of `self` is looked through,
 //! - assigns through `self`, to an element or a field of it,
@@ -33,6 +33,8 @@
 //! can reach is taken to write, and so is any method of a class this pass
 //! never analysed: a needless copy costs time, a missing one loses a write
 //! or frees a block another binding still holds.
+
+use crate::runtime_effects::{RuntimeEffect, RuntimeEffects};
 
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::{Statement, StatementKind};
@@ -61,15 +63,15 @@ impl ReceiverWrites {
     /// The receiver writers among the classes `statements` declare, at any
     /// depth of top-level blocks, each class and trait named by `identity`.
     pub(crate) fn of<'s>(
-        statements: impl Iterator<Item = &'s Statement> + Clone,
+        statements: impl Iterator<Item = &'s Statement>,
         identity: impl Fn(&Expression) -> Option<String>,
+        runtime: &RuntimeEffects,
     ) -> Self {
-        let runtime = runtime_function_names(statements.clone());
         let declarations = Declarations::of(statements, &identity);
         let mut writes = Self::default();
         for class in &declarations.classes {
             let methods = declarations.methods_of(class);
-            let writers = Analysis::of(&declarations, &methods, &runtime).writers();
+            let writers = Analysis::of(&declarations, &methods, runtime).writers();
             for (name, node) in &methods {
                 let key = (class.clone(), name.to_string());
                 if writers.contains(node) {
@@ -225,7 +227,7 @@ impl<'s, 'd> Analysis<'s, 'd> {
     fn of(
         declarations: &'d Declarations<'s>,
         methods: &'d HashMap<&'d str, Node<'d>>,
-        runtime: &HashSet<&str>,
+        runtime: &RuntimeEffects,
     ) -> Self {
         let mut facts = HashMap::new();
         let mut pending: Vec<Node<'d>> = methods.values().copied().collect();
@@ -324,45 +326,6 @@ fn bodies(body: &[Statement]) -> Vec<(&str, &Statement)> {
         .collect()
 }
 
-/// The name of every runtime entry point `statements` declare, at any depth
-/// of the classes, traits and blocks that declare them.
-fn runtime_function_names<'s>(statements: impl Iterator<Item = &'s Statement>) -> HashSet<&'s str> {
-    let mut names = HashSet::new();
-    let mut pending: Vec<&Statement> = statements.collect();
-    while let Some(statement) = pending.pop() {
-        match &statement.node {
-            StatementKind::RuntimeFunctionDeclaration(_, name, _, _, _) => {
-                names.insert(name.as_str());
-            }
-            StatementKind::Block(body) | StatementKind::Trait(_, _, _, body, _) => {
-                pending.extend(body);
-            }
-            StatementKind::Class(class) => pending.extend(&class.body),
-            StatementKind::Struct(_, _, _, body, _, _)
-            | StatementKind::Enum(_, _, _, body, _, _) => {
-                pending.extend(body);
-            }
-            StatementKind::Empty
-            | StatementKind::Break
-            | StatementKind::Continue
-            | StatementKind::Expression(_)
-            | StatementKind::Variable(..)
-            | StatementKind::If(..)
-            | StatementKind::While(..)
-            | StatementKind::For(..)
-            | StatementKind::Forall { .. }
-            | StatementKind::GpuFrame(..)
-            | StatementKind::GpuFrameBlock(_)
-            | StatementKind::FunctionDeclaration(_)
-            | StatementKind::Return(_)
-            | StatementKind::Use(..)
-            | StatementKind::Type(..)
-            | StatementKind::IntrinsicFunctionDeclaration(..) => {}
-        }
-    }
-    names
-}
-
 /// What one method body does with `self`.
 #[derive(Debug, Default)]
 struct BodyFacts<'b> {
@@ -379,7 +342,7 @@ struct BodyFacts<'b> {
 impl<'b> BodyFacts<'b> {
     /// The facts of the function body `body`, whose last expression, when it
     /// ends in one, is the value it returns.
-    fn of(body: &'b Statement, runtime: &HashSet<&str>) -> Self {
+    fn of(body: &'b Statement, runtime: &RuntimeEffects) -> Self {
         let mut facts = Self::default();
         let statements = if let StatementKind::Block(statements) = &body.node {
             statements.as_slice()
@@ -397,7 +360,7 @@ impl<'b> BodyFacts<'b> {
         facts
     }
 
-    fn statement(&mut self, statement: &'b Statement, runtime: &HashSet<&str>) {
+    fn statement(&mut self, statement: &'b Statement, runtime: &RuntimeEffects) {
         match &statement.node {
             StatementKind::Expression(expression) => self.expression(expression, runtime),
             StatementKind::Block(statements) => self.statements(statements, runtime),
@@ -448,19 +411,19 @@ impl<'b> BodyFacts<'b> {
         }
     }
 
-    fn statements(&mut self, statements: &'b [Statement], runtime: &HashSet<&str>) {
+    fn statements(&mut self, statements: &'b [Statement], runtime: &RuntimeEffects) {
         for statement in statements {
             self.statement(statement, runtime);
         }
     }
 
-    fn optional(&mut self, expression: Option<&'b Expression>, runtime: &HashSet<&str>) {
+    fn optional(&mut self, expression: Option<&'b Expression>, runtime: &RuntimeEffects) {
         if let Some(expression) = expression {
             self.expression(expression, runtime);
         }
     }
 
-    fn expressions(&mut self, expressions: &'b [Expression], runtime: &HashSet<&str>) {
+    fn expressions(&mut self, expressions: &'b [Expression], runtime: &RuntimeEffects) {
         for expression in expressions {
             self.expression(expression, runtime);
         }
@@ -468,7 +431,7 @@ impl<'b> BodyFacts<'b> {
 
     /// `expression` where it is only read: the receiver itself reads nothing
     /// into a write there.
-    fn read(&mut self, expression: &'b Expression, runtime: &HashSet<&str>) {
+    fn read(&mut self, expression: &'b Expression, runtime: &RuntimeEffects) {
         if is_receiver(expression) {
             self.mentions_receiver = true;
         } else {
@@ -478,7 +441,7 @@ impl<'b> BodyFacts<'b> {
 
     /// `expression` where the receiver, met anywhere the walk does not stop
     /// at a read, a runtime argument or a method call first, is written.
-    fn expression(&mut self, expression: &'b Expression, runtime: &HashSet<&str>) {
+    fn expression(&mut self, expression: &'b Expression, runtime: &RuntimeEffects) {
         match &expression.node {
             ExpressionKind::Identifier(..) | ExpressionKind::Super => {
                 if is_receiver(expression) {
@@ -552,7 +515,7 @@ impl<'b> BodyFacts<'b> {
         }
     }
 
-    fn entries(&mut self, entries: &'b [(Expression, Expression)], runtime: &HashSet<&str>) {
+    fn entries(&mut self, entries: &'b [(Expression, Expression)], runtime: &RuntimeEffects) {
         for (key, value) in entries {
             self.expression(key, runtime);
             self.expression(value, runtime);
@@ -561,7 +524,7 @@ impl<'b> BodyFacts<'b> {
 
     /// A closure with `body`: one that captures the receiver holds it past
     /// any one call and may write it whenever it runs, so it writes.
-    fn lambda(&mut self, body: &'b Statement, runtime: &HashSet<&str>) {
+    fn lambda(&mut self, body: &'b Statement, runtime: &RuntimeEffects) {
         let inner = Self::of(body, runtime);
         if inner.mentions_receiver {
             self.mentions_receiver = true;
@@ -577,13 +540,13 @@ impl<'b> BodyFacts<'b> {
         &mut self,
         callee: &'b Expression,
         arguments: &'b [Expression],
-        runtime: &HashSet<&str>,
+        runtime: &RuntimeEffects,
     ) {
-        if let Some(name) = runtime_callee(callee, runtime) {
+        if let Some(effect) = runtime_callee(callee, runtime) {
             for (position, argument) in arguments.iter().enumerate() {
                 if is_receiver_argument(argument) {
                     self.mentions_receiver = true;
-                    self.writes |= !crate::runtime_fns::only_reads_argument(name, position);
+                    self.writes |= !effect.only_reads(position);
                 } else {
                     self.expression(argument, runtime);
                 }
@@ -642,12 +605,15 @@ fn is_receiver_argument(expression: &Expression) -> bool {
     is_receiver(expression)
 }
 
-/// The runtime entry point `callee` names, when it names one of `runtime`.
-fn runtime_callee<'c>(callee: &'c Expression, runtime: &HashSet<&str>) -> Option<&'c str> {
+/// What the runtime entry point `callee` names does, when it names one.
+fn runtime_callee<'r>(
+    callee: &Expression,
+    runtime: &'r RuntimeEffects,
+) -> Option<&'r RuntimeEffect> {
     let ExpressionKind::Identifier(name, None) = &callee.node else {
         return None;
     };
-    runtime.contains(name.as_str()).then_some(name.as_str())
+    runtime.get(name.as_str()).map(|effect| &**effect)
 }
 
 /// The method `callee` calls on the receiver, when it is one, with the

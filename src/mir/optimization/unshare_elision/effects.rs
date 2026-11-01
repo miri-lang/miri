@@ -15,7 +15,7 @@ use crate::mir::{
     arg_mode, ArgMode, BasicBlock, Body, GpuIntrinsic, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{taken_argument_positions, writes_in_place};
+use crate::runtime_effects::RuntimeEffect;
 
 /// A mask in [`Program`]'s arena.
 #[derive(Debug, Clone, Copy)]
@@ -154,13 +154,6 @@ impl Program {
     }
 }
 
-/// Whether the runtime entry point `name` leaves the count of what it is
-/// handed at `position` as it found it: it writes the argument in place and
-/// does not take it over.
-fn keeps_count_of(name: &str, position: usize) -> bool {
-    writes_in_place(name, position) && !taken_argument_positions(name).contains(&position)
-}
-
 /// What a mask is built for. A read or write reaches the same tracked places
 /// whichever locals index it, so masks that do not depend on those locals are
 /// keyed by the place with every index spelled alike ([`index_blind`]).
@@ -251,7 +244,7 @@ impl ProgramBuilder<'_> {
     ///
     /// A place a runtime entry point writes in place keeps what is known of
     /// it: the entry point keeps nothing it writes
-    /// (`runtime_fns::writes_in_place`), so the count it found is the count
+    /// ([`RuntimeEffect::writes_in_place`]), so the count it found is the count
     /// it leaves. Only what is reached through the place is forgotten, since
     /// its elements may move, be released or be replaced.
     fn call(
@@ -267,7 +260,7 @@ impl ProgramBuilder<'_> {
             Freshness::Never
         };
         let mut reads = self.operand_reads([func]);
-        reads.extend(self.argument_reads(func.called_runtime_name(), args, arg_modes));
+        reads.extend(self.argument_reads(func.called_runtime_effect(), args, arg_modes));
         self.store(destination, fresh, reads)
     }
 
@@ -343,18 +336,18 @@ impl ProgramBuilder<'_> {
 
     /// The facts a call's arguments forget: every place each reaches — only
     /// what is reached through it, for an argument the runtime entry point
-    /// `runtime` writes in place ([`keeps_count_of`]) — and every place
+    /// `runtime` writes in place ([`RuntimeEffect::keeps_count_of`]) — and every place
     /// indexed by a local an `out` argument names, since the callee writes it.
     fn argument_reads(
         &mut self,
-        runtime: Option<&str>,
+        runtime: Option<&RuntimeEffect>,
         args: &[Operand],
         modes: &[ArgMode],
     ) -> Vec<MaskId> {
         let mut reads: Vec<MaskId> = (args.iter().enumerate())
             .filter_map(|(position, arg)| {
                 let place = arg.place()?;
-                if runtime.is_some_and(|name| keeps_count_of(name, position)) {
+                if runtime.is_some_and(|effect| effect.keeps_count_of(position)) {
                     self.within(place)
                 } else {
                     self.reached(place)

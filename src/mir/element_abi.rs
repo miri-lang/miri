@@ -18,8 +18,9 @@
 //! and at its own width. This pass spells that too: the destination becomes an
 //! `out` argument, or the address of the bytes of the value it is held as.
 //!
-//! The positions come from [`crate::runtime_fns::element_positions`] and
-//! [`crate::runtime_fns::returns_element_value`]; the width from
+//! The positions come from the callee's record,
+//! [`RuntimeEffect::element_positions`] and
+//! [`RuntimeEffect::returns_element_value`]; the width from
 //! [`crate::type_checker::element_layout::element_layout`], read against the
 //! body's own layout scope.
 //! The pass runs after reference counting, which has already accounted for the
@@ -33,6 +34,7 @@ use crate::mir::{
     ArgMode, BasicBlock, BasicBlockData, Body, Constant, Local, LocalDecl, MirType, Operand, Place,
     Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
+use crate::runtime_effects::RuntimeEffect;
 pub use crate::type_checker::element_layout::{element_layout, ElementLayout};
 
 /// Rewrite every element argument in `body` into its address and byte count,
@@ -64,18 +66,18 @@ fn pass_element_arguments(body: &mut Body, block: usize) -> Result<(), String> {
             expanded.push(arg);
         }
     }
-    replace_call_args(body, block, expanded, positions);
+    replace_call_args(body, block, expanded, &positions);
     Ok(())
 }
 
 /// The element positions, arguments and span of the call ending `block`, when
 /// it calls a runtime entry point that takes an element.
-fn element_call(body: &Body, block: usize) -> Option<(&'static [usize], Vec<Operand>, Span)> {
+fn element_call(body: &Body, block: usize) -> Option<(Vec<usize>, Vec<Operand>, Span)> {
     let terminator = body.basic_blocks[block].terminator.as_ref()?;
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return None;
     };
-    let positions = crate::runtime_fns::element_positions(func.called_runtime_name()?);
+    let positions = func.called_runtime_effect()?.element_positions();
     if positions.is_empty() {
         return None;
     }
@@ -92,21 +94,21 @@ pub fn reads_element_through(kind: &TerminatorKind, address: Local) -> bool {
     let TerminatorKind::Call { func, args, .. } = kind else {
         return false;
     };
-    let Some(name) = func.called_runtime_name() else {
+    let Some(effect) = func.called_runtime_effect() else {
         return false;
     };
     let is_address = |arg: &Operand| {
         matches!(arg, Operand::Copy(place) | Operand::Move(place)
             if place.local == address && place.projection.is_empty())
     };
-    expanded_element_positions(name).any(|position| args.get(position).is_some_and(is_address))
+    expanded_element_positions(effect).any(|position| args.get(position).is_some_and(is_address))
 }
 
 /// The position of each element address in the expanded arguments of a call
-/// to `name`: every element before it gained a byte count after it.
-fn expanded_element_positions(name: &str) -> impl Iterator<Item = usize> {
-    crate::runtime_fns::element_positions(name)
-        .iter()
+/// to the entry point doing `effect`: every element before it gained a byte
+/// count after it.
+fn expanded_element_positions(effect: &RuntimeEffect) -> impl Iterator<Item = usize> {
+    (effect.element_positions().into_iter())
         .enumerate()
         .map(|(earlier, position)| position + earlier)
 }
@@ -360,7 +362,7 @@ fn element_returning_call(body: &Body, block: usize) -> Option<(Place, Option<Ba
     else {
         return None;
     };
-    if !crate::runtime_fns::returns_element_value(func.called_runtime_name()?) {
+    if !func.called_runtime_effect()?.returns_element_value() {
         return None;
     }
     Some((destination.clone(), *target, terminator.span))

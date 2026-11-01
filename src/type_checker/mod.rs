@@ -147,7 +147,7 @@ pub struct TypeChecker {
     pub receiver_writes: receiver_writes::ReceiverWrites,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
-    pub runtime_effects: HashMap<String, std::rc::Rc<crate::runtime_effects::RuntimeEffect>>,
+    pub runtime_effects: crate::runtime_effects::RuntimeEffects,
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
@@ -651,6 +651,7 @@ impl TypeChecker {
         self.receiver_writes = receiver_writes::ReceiverWrites::of(
             top_level_statements(program).chain(&self.imported_statements),
             |name| self.type_identity_named_by(name).map(str::to_string),
+            &self.runtime_effects,
         );
         self.global_scope = Some(compiled_instances::GlobalScope(context));
 

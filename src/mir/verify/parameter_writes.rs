@@ -11,8 +11,8 @@
 //! it answers for the caller, and a store into it lands in the caller's value.
 //! Each of those is a finding here: assigning to it or through it, or handing
 //! it, whole or through a projection, to a runtime entry point at a position
-//! the entry point does not only read (`runtime_fns::only_reads_argument`) —
-//! asking whether it is shared, copying it on write, or any write the runtime
+//! the entry point does not only read
+//! ([`crate::runtime_effects::RuntimeEffect::only_reads`]) — asking whether it is shared, copying it on write, or any write the runtime
 //! makes in place, which a write lowered with no copy-on-write check at all
 //! would be. An element a collection stores or looks up is not written.
 //!
@@ -20,8 +20,8 @@
 //! body's own before calling a method that writes it; so is an `out`
 //! parameter, the caller's binding itself, and a parameter the body takes
 //! over from its callers. The receiver is checked for that instead
-//! (`runtime_fns::rt::RECEIVER_UNIQUE`), never copied on write, asked whether
-//! it is shared or replaced whole: each of those releases or replaces a
+//! ([`crate::runtime_effects::RuntimeEffect::insists_on_unique`]), never
+//! copied on write, asked whether it is shared or replaced whole: each of those releases or replaces a
 //! reference the caller still counts as its own, so each is a finding. A
 //! GPU body holds no count and is skipped.
 
@@ -30,7 +30,6 @@ use crate::mir::block::BasicBlockData;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::{Body, Local, Operand, Place, StatementKind};
-use crate::runtime_fns::{element_positions, is_copy_on_write, only_reads_argument, rt};
 use std::collections::BTreeSet;
 
 /// Every parameter of `body` whose value its caller still holds that the
@@ -117,8 +116,8 @@ fn call_replaces_whole(kind: &TerminatorKind, whole: &Place) -> bool {
         | TerminatorKind::VirtualCall { .. } => return false,
     };
     let is_copy_or_question = func
-        .called_runtime_name()
-        .is_some_and(|name| is_copy_on_write(name) || name == rt::RC_IS_SHARED);
+        .called_runtime_effect()
+        .is_some_and(|effect| effect.is_copy_on_write() || effect.asks_whether_shared());
     let hands_whole = args.iter().any(|arg| arg.place() == Some(whole));
     destination == whole || (is_copy_or_question && hands_whole)
 }
@@ -168,15 +167,13 @@ fn written_arguments(kind: &TerminatorKind) -> Vec<Local> {
         | TerminatorKind::GpuLaunch { .. }
         | TerminatorKind::VirtualCall { .. } => return Vec::new(),
     };
-    let Some(name) = func.called_runtime_name() else {
+    let Some(effect) = func.called_runtime_effect() else {
         return Vec::new();
     };
-    let elements = element_positions(name);
+    let elements = effect.element_positions();
     args.iter()
         .enumerate()
-        .filter(|(position, _)| {
-            !only_reads_argument(name, *position) && !elements.contains(position)
-        })
+        .filter(|(position, _)| !effect.only_reads(*position) && !elements.contains(position))
         .filter_map(|(_, arg)| match arg {
             Operand::Copy(place) | Operand::Move(place) => Some(place.local),
             Operand::Constant(_) | Operand::Function(_) => None,

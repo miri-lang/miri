@@ -5,8 +5,8 @@
 //!
 //! A runtime entry point a body calls by name — `miri_rt_list_clear(self)` in
 //! the standard library, or one a program declares itself — writes the
-//! collection it is handed at each position `runtime_fns::writes_in_place`
-//! names. That call is a write like a writing method's, so the argument is
+//! collection it is handed at each position its record says it writes in
+//! place. That call is a write like a writing method's, so the argument is
 //! lowered the way a writing method's receiver is
 //! (`written_receiver::lower_pending_receiver`): a whole binding is copied on
 //! write and the copy written back into it, the body's own receiver, which its
@@ -32,8 +32,9 @@ use crate::ast::expression::Expression;
 use crate::ast::types::Type;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics::copy_on_write_of;
 use crate::mir::{Local, Operand, Place, Rvalue, Statement, StatementKind};
-use crate::runtime_fns::{cow_fn, writes_in_place};
+use crate::runtime_effects::RuntimeEffect;
 
 use super::method_dispatch::emit_cow_check;
 use super::written_receiver::{lower_pending_receiver, PendingReceiver};
@@ -43,7 +44,7 @@ use super::{lower_expression, LoweringContext};
 /// of each parameter it declares.
 #[derive(Clone, Copy)]
 pub(crate) struct RuntimeCallee<'c> {
-    name: &'c str,
+    effect: &'c RuntimeEffect,
     parameters: &'c [Type],
 }
 
@@ -51,8 +52,8 @@ impl<'c> RuntimeCallee<'c> {
     /// The runtime entry point `func` names, declaring `parameters`; `None`
     /// when `func` names anything else.
     pub(crate) fn of(func: &'c Operand, parameters: &'c [Type]) -> Option<Self> {
-        let name = func.called_runtime_name()?;
-        Some(Self { name, parameters })
+        let effect = func.called_runtime_effect()?;
+        Some(Self { effect, parameters })
     }
 
     /// The collection type of the parameter at `position` when the entry
@@ -60,7 +61,7 @@ impl<'c> RuntimeCallee<'c> {
     fn written_parameter(self, position: usize) -> Option<&'c Type> {
         let parameter = self.parameters.get(position)?;
         let is_collection = parameter.kind.as_builtin_collection().is_some();
-        (is_collection && writes_in_place(self.name, position)).then_some(parameter)
+        (is_collection && self.effect.writes_in_place(position)).then_some(parameter)
     }
 }
 
@@ -95,7 +96,7 @@ pub(super) fn lower_call_argument<'e>(
     let Some(written) = callee.and_then(|callee| callee.written_parameter(position)) else {
         return lower_expression(ctx, value, None).map(CallArgument::Lowered);
     };
-    let cow = written.kind.as_builtin_collection().and_then(cow_fn);
+    let cow = written.kind.as_builtin_collection().map(copy_on_write_of);
     let (pending, _released_with_the_arguments) =
         lower_pending_receiver(ctx, value, cow.map(|cow| (written, cow)), value.span)?;
     Ok(CallArgument::Written(pending))
@@ -119,7 +120,7 @@ pub(crate) fn copy_forwarded_argument(
     let Some(written) = callee.and_then(|callee| callee.written_parameter(position)) else {
         return Ok((forwarded, None));
     };
-    let Some(cow) = written.kind.as_builtin_collection().and_then(cow_fn) else {
+    let Some(cow) = written.kind.as_builtin_collection().map(copy_on_write_of) else {
         return Ok((forwarded, None));
     };
     let copy = ctx.push_temp(written.clone(), span);

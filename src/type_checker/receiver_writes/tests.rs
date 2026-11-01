@@ -34,10 +34,54 @@ fn written_name(expression: &Expression) -> Option<String> {
     Some(name.clone())
 }
 
+/// What the list runtime entry points the fixtures declare do, as their
+/// stdlib declarations state it.
+fn list_runtime() -> RuntimeEffects {
+    use crate::runtime_effects::{ElementRole, ParamUse};
+    let stated = [
+        ("miri_rt_list_len", vec![ParamUse::Reads]),
+        (
+            "miri_rt_list_push",
+            vec![ParamUse::Writes, ParamUse::Stores(ElementRole::Element)],
+        ),
+        (
+            "miri_rt_list_reserve",
+            vec![ParamUse::Writes, ParamUse::Scalar],
+        ),
+    ];
+    (stated.into_iter())
+        .map(|(name, params)| {
+            (
+                name.to_string(),
+                std::rc::Rc::new(RuntimeEffect::new(params)),
+            )
+        })
+        .collect()
+}
+
+/// What every `runtime` declaration of the standard library's collection
+/// and string modules states.
+fn stdlib_runtime() -> RuntimeEffects {
+    let source = "
+use system.string
+use system.collections.list
+use system.collections.set
+use system.collections.map
+use system.collections.array
+
+fn main()
+    return
+";
+    match crate::pipeline::Pipeline::new().frontend(source) {
+        Ok(result) => result.type_checker.runtime_effects,
+        Err(error) => panic!("the standard library should type-check: {error:?}"),
+    }
+}
+
 /// The receiver writers `source` declares, as `Class.method`, sorted.
 fn writers(source: &str) -> Vec<String> {
     let program = parse(source);
-    let writes = ReceiverWrites::of(program.body.iter(), written_name);
+    let writes = ReceiverWrites::of(program.body.iter(), written_name, &list_runtime());
     let mut names: Vec<String> = (writes.writers.iter())
         .map(|(class, method)| format!("{class}.{method}"))
         .collect();
@@ -207,7 +251,7 @@ fn a_method_never_analysed_is_taken_to_write() {
     let writes = ReceiverWrites::default();
     assert!(writes.writes_receiver("List", "pop"));
     assert!(writes.writes_receiver("List", "length"));
-    let analysed = ReceiverWrites::of(parse(BAG).body.iter(), written_name);
+    let analysed = ReceiverWrites::of(parse(BAG).body.iter(), written_name, &list_runtime());
     assert!(!analysed.writes_receiver("Bag", "size"));
     assert!(analysed.writes_receiver("Bag", "no_such_method"));
     assert!(analysed.writes_receiver("Unseen", "size"));
@@ -283,7 +327,7 @@ fn split_of(writes: &ReceiverWrites, class: &str) -> (Vec<String>, Vec<String>) 
 fn the_standard_library_collections_write_only_through_their_writers() {
     let programs = standard_library();
     let statements = programs.iter().flat_map(|program| program.body.iter());
-    let writes = ReceiverWrites::of(statements, written_name);
+    let writes = ReceiverWrites::of(statements, written_name, &stdlib_runtime());
     for (class, expected) in [
         (
             "List",
@@ -347,7 +391,7 @@ const INTERCEPTED_WRITERS: [(&str, &str); 6] = [
 fn every_writer_lowering_intercepts_by_name_writes_its_receiver() {
     let programs = standard_library();
     let statements = programs.iter().flat_map(|program| program.body.iter());
-    let writes = ReceiverWrites::of(statements, written_name);
+    let writes = ReceiverWrites::of(statements, written_name, &stdlib_runtime());
     for (class, method) in INTERCEPTED_WRITERS {
         let key = (class.to_string(), method.to_string());
         assert!(writes.analysed.contains(&key), "{class}.{method} analysed");

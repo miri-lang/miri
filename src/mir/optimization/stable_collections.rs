@@ -16,9 +16,9 @@
 //!   its address is never taken, nor is it a capture or a gpu-resident
 //!   binding, any of which lets code this body does not show change it;
 //! - no call can write its header: every call into the runtime names an
-//!   entry point `runtime_fns::leaves_collection_headers_unchanged` lists,
-//!   or copies an array or a list whose elements run no `clone` method of
-//!   the program's own — a copy-on-write hands back its argument or a fresh
+//!   entry point whose record says it leaves every header alone, or copies
+//!   an array or a list whose elements run no `clone` method of the
+//!   program's own — a copy-on-write hands back its argument or a fresh
 //!   copy and writes no header of a collection that already exists, so a
 //!   loop writing another list stays recorded while the list it writes, which
 //!   takes the result, does not — and a call to a function of the program

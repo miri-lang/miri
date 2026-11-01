@@ -26,7 +26,6 @@ use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
-use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::TypeChecker;
 
@@ -103,7 +102,7 @@ impl TypeChecker {
         let Some(TypeKind::Custom(name, _)) = self.get_type(expr.id).map(|t| &t.kind) else {
             return false;
         };
-        if BuiltinCollectionKind::from_name(name).is_some_and(|kind| cow_fn(kind).is_some()) {
+        if BuiltinCollectionKind::from_name(name).is_some() {
             return false;
         }
         matches!(

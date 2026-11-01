@@ -43,7 +43,6 @@ use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::{
     Local, Operand, Place, Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
 };
-use crate::runtime_fns::writes_in_place;
 use crate::type_checker::CalleeKind;
 
 /// The scope the entry copies of a body's written parameters are bound in.
@@ -292,11 +291,14 @@ impl<'b> WrittenRoots<'_, '_, 'b> {
     }
 
     /// Records each of `arguments` the runtime entry point `callee` names
-    /// writes in place (`runtime_fns::writes_in_place`), as lowering the call
+    /// its declaration states it writes in place, as lowering the call
     /// makes it the call's own; nothing when `callee` names no runtime entry
     /// point.
     fn runtime_writes(&mut self, callee: &Expression, arguments: &'b [Expression]) {
         let Some(name) = runtime_entry_point(self.ctx, callee) else {
+            return;
+        };
+        let Some(effect) = self.ctx.type_checker.runtime_effects.get(name.as_str()) else {
             return;
         };
         let Some(TypeKind::Function(signature)) =
@@ -306,7 +308,7 @@ impl<'b> WrittenRoots<'_, '_, 'b> {
         };
         let parameters: Vec<&str> = signature.params.iter().map(|p| p.name.as_str()).collect();
         for (position, argument) in bind_arguments_to_parameters(arguments, &parameters) {
-            if writes_in_place(&name, position) {
+            if effect.writes_in_place(position) {
                 self.record(argument);
             }
         }

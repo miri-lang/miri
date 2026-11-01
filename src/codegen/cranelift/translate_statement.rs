@@ -27,7 +27,8 @@ use crate::mir::{
     arg_mode, AggregateKind, ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{is_copy_on_write, rt};
+use crate::runtime_effects::RuntimeEffect;
+use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
     condcodes::IntCC, Block, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind,
     TrapCode,
@@ -1240,7 +1241,10 @@ impl<'a> FunctionTranslator<'a> {
             let shared = Self::emit_inline_is_shared(builder, ctx, callee, &arg_values, sig)?;
             return Self::define_call_destination(builder, locals, destination, shared);
         }
-        if callee.runtime_name().is_some_and(is_copy_on_write) {
+        if callee
+            .runtime_effect()
+            .is_some_and(RuntimeEffect::is_copy_on_write)
+        {
             let unique = Self::emit_inline_copy_on_write(builder, ctx, callee, &arg_values, &sig)?;
             return Self::define_call_destination(builder, locals, destination, unique);
         }

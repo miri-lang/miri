@@ -30,10 +30,9 @@
 //! address-taken, and each of its definitions hands it a reference — and the
 //! call names none of its aliases, nor a borrow of one that may hold such a
 //! collection. A call into the runtime leaves every header unchanged when
-//! [`runtime_call_leaves_headers`] says so: the entry point is one
-//! `runtime_fns::leaves_collection_headers_unchanged` lists, or it copies an
-//! array or a list (`runtime_fns::copies_collection`) whose elements carry
-//! no `clone` method of the program's own. A call through a vtable or a
+//! [`runtime_call_leaves_headers`] says so: the entry point's record says it
+//! leaves every header alone, or it copies an array or a list whose elements
+//! carry no `clone` method of the program's own. A call through a vtable or a
 //! kernel launch is never known to.
 
 use std::cell::OnceCell;
@@ -48,7 +47,7 @@ use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
     TerminatorKind,
 };
-use crate::runtime_fns::{copies_collection, leaves_collection_headers_unchanged};
+use crate::runtime_effects::RuntimeEffect;
 
 /// Why a collection's local does not hold a reference of its own that only
 /// its aliases can reach, so a call to a function of the program may change
@@ -139,8 +138,8 @@ impl<'a> HeaderReach<'a> {
                 args,
                 destination,
                 ..
-            } => match func.called_runtime_name() {
-                Some(name) => runtime_call_leaves_headers(self.body, name, args),
+            } => match func.called_runtime_effect() {
+                Some(effect) => runtime_call_leaves_headers(self.body, effect, args),
                 None => {
                     let facts = self.facts();
                     facts.root.is_none()
@@ -154,18 +153,19 @@ impl<'a> HeaderReach<'a> {
     }
 }
 
-/// Whether a call in `body` to the runtime entry point `name`, handed
+/// Whether a call in `body` to the runtime entry point doing `effect`, handed
 /// `args`, leaves the header of every collection that exists before it as it
 /// found it.
 ///
-/// Besides the entry points `leaves_collection_headers_unchanged` lists,
-/// that holds of a copy of an array or a list (`copies_collection`) whose
-/// elements run no code of the program when copied. Such a call writes only
-/// the place its result goes to, which a reader of the header checks like
-/// any other write of a local.
-pub fn runtime_call_leaves_headers(body: &Body, name: &str, args: &[Operand]) -> bool {
-    leaves_collection_headers_unchanged(name)
-        || (copies_collection(name)
+/// Besides the entry points whose record says they leave every header alone
+/// ([`RuntimeEffect::leaves_headers`]), that holds of a copy of an array or a
+/// list ([`RuntimeEffect::copies_collection`]) whose elements run no code of
+/// the program when copied. Such a call writes only the place its result
+/// goes to, which a reader of the header checks like any other write of a
+/// local.
+pub fn runtime_call_leaves_headers(body: &Body, effect: &RuntimeEffect, args: &[Operand]) -> bool {
+    effect.leaves_headers
+        || (effect.copies_collection()
             && args
                 .first()
                 .is_some_and(|copied| copy_runs_no_program_code(body, copied)))

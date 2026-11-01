@@ -61,8 +61,9 @@
 //!   A value only the root's own value holds is reached by nothing else: any
 //!   other holder of it holds its own reference and copies before writing.
 //! - **An entry a collection lends is no owner on its own.** A runtime getter
-//!   that hands back an entry as a borrow (`runtime_fns::hands_back_a_borrow`,
-//!   `m[k]` on a map) leaves the local it defines holding no reference: the
+//!   that hands back an entry as a borrow
+//!   ([`crate::runtime_effects::RuntimeEffect::hands_back_a_borrow`], `m[k]`
+//!   on a map) leaves the local it defines holding no reference: the
 //!   collection's keeps the entry alive. A borrow read out of such a local
 //!   counts the locals holding the collection among its owners — rebinding,
 //!   emptying or releasing the map ends it — and is reached by other code,
@@ -79,9 +80,6 @@ use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
-};
-use crate::runtime_fns::{
-    cow_fn, is_copy_on_write, only_reads_argument, reads_reference_count, taken_argument_positions,
 };
 use crate::type_checker::context::TypeDefinition;
 use std::collections::{HashMap, HashSet};
@@ -474,11 +472,11 @@ fn refused_by_terminator(
 }
 
 /// Whether `func` is a runtime entry point that only reads the argument at
-/// `position` ([`only_reads_argument`]). Any other callee, a Miri function or
-/// method, a closure or a virtual call, may write it.
+/// `position` ([`crate::runtime_effects::RuntimeEffect::only_reads`]). Any other callee, a Miri
+/// function or method, a closure or a virtual call, may write it.
 fn only_reads(func: Option<&Operand>, position: usize) -> bool {
-    func.and_then(Operand::called_runtime_name)
-        .is_some_and(|name| only_reads_argument(name, position))
+    func.and_then(Operand::called_runtime_effect)
+        .is_some_and(|effect| effect.only_reads(position))
 }
 
 /// Whether the call to `func` lends `arg`, a whole local by copy and `mode`
@@ -502,11 +500,11 @@ fn lends_to_entry_copy(
 /// Whether the call to `func` keeps the argument at `position`, or asks
 /// whether it is shared.
 fn keeps_or_checks(func: Option<&Operand>, position: usize) -> bool {
-    func.and_then(Operand::called_runtime_name)
-        .is_some_and(|name| {
-            is_copy_on_write(name)
-                || reads_reference_count(name)
-                || taken_argument_positions(name).contains(&position)
+    func.and_then(Operand::called_runtime_effect)
+        .is_some_and(|effect| {
+            effect.is_copy_on_write()
+                || effect.reads_count
+                || effect.taken_positions().contains(&position)
         })
 }
 
@@ -911,11 +909,9 @@ fn class_chain<'a>(
 /// Whether neither the class `name` nor any class it extends copies on write.
 fn is_reference_class(name: &str, definitions: &HashMap<String, TypeDefinition>) -> bool {
     class_chain(name, definitions).all(|class| {
-        let copies_on_write = BuiltinCollectionKind::from_name(class)
-            .and_then(cow_fn)
-            .is_some();
+        let copies_on_write = BuiltinCollectionKind::from_name(class).is_some();
         // A string appends in place when nothing else holds it
-        // (`taken_argument_positions`), so it is a value too.
+        // ([`crate::runtime_effects::RuntimeEffect::taken_positions`]), so it is a value too.
         !copies_on_write && class != STRING_TYPE_NAME
     })
 }

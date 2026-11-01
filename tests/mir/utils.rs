@@ -32,7 +32,7 @@ use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
-use miri::mir::compiler_intrinsics::compiler_intrinsic;
+use miri::mir::compiler_intrinsics::{compiler_intrinsic, compiler_intrinsic_names};
 use miri::mir::lowering::lower_function;
 use miri::mir::symbol::RuntimeCallee;
 use miri::mir::{
@@ -279,6 +279,21 @@ pub fn runtime_callee(name: &str) -> RuntimeCallee {
         Some(effect) => RuntimeCallee::new(name, effect),
         None => panic!("neither the compiler nor the stdlib describes `{name}`"),
     }
+}
+
+/// Every runtime entry point a compiled program can call, with its record:
+/// the compiler's own, then the stdlib's, each sorted by name.
+pub fn every_runtime_record() -> Vec<RuntimeCallee> {
+    let mut declared: Vec<RuntimeCallee> = STDLIB_RUNTIME_EFFECTS.with(|declared| {
+        (declared.iter())
+            .map(|(name, effect)| RuntimeCallee::new(name, effect.clone()))
+            .collect()
+    });
+    declared.sort_by(|a, b| a.name().cmp(b.name()));
+    let mut owned: Vec<RuntimeCallee> = compiler_intrinsic_names().map(runtime_callee).collect();
+    owned.sort_by(|a, b| a.name().cmp(b.name()));
+    owned.extend(declared);
+    owned
 }
 
 /// A callee for the runtime entry point `name`, doing what `params` say to

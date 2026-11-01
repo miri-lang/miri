@@ -30,7 +30,7 @@ use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place};
-use crate::runtime_fns::hands_back_a_borrow;
+use crate::runtime_effects::RuntimeEffect;
 use std::collections::HashSet;
 
 /// Every argument a call in `program` lends unretained through a class field
@@ -128,7 +128,8 @@ fn reachable_entries(body: &Body) -> HashSet<Local> {
                 destination,
                 ..
             } if destination.projection.is_empty()
-                && func.called_runtime_name().is_some_and(hands_back_a_borrow) =>
+                && (func.called_runtime_effect())
+                    .is_some_and(RuntimeEffect::hands_back_a_borrow) =>
             {
                 Some((destination.local, args.first().and_then(Operand::place)))
             }

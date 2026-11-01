@@ -725,7 +725,7 @@ fn lower_index_assign_receiver<'e>(
         let cow = ty
             .kind
             .as_builtin_collection()
-            .and_then(crate::runtime_fns::cow_fn)?;
+            .map(crate::mir::compiler_intrinsics::copy_on_write_of)?;
         Some((ty, cow))
     });
     lower_pending_receiver(ctx, obj, cow, span)
@@ -949,7 +949,7 @@ pub(crate) fn emit_map_get_checked_call(
     // away from the entry the map is still holding.
     let temp = ctx.push_temp(value_ty.clone(), expr.span);
     if ctx.is_counted(&value_ty.kind)
-        && crate::runtime_fns::hands_back_a_borrow(rt::MAP_GET_CHECKED)
+        && (crate::mir::compiler_intrinsics::MAP_GET_CHECKED.effect()).hands_back_a_borrow()
     {
         ctx.mark_borrowed_temp(temp);
     }

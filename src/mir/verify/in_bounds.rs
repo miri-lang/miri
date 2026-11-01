@@ -47,7 +47,6 @@ use crate::mir::{
     BasicBlock, BinOp, Body, Bounds, Discriminant, InBounds, Local, Operand, Place, PlaceElem,
     Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::preserves_length;
 use std::collections::{HashMap, HashSet};
 
 /// What is known of the locals at a program point, by local index. Each
@@ -581,13 +580,13 @@ fn step_terminator(body: &Body, terminator: &Terminator, facts: &mut HashSet<Kno
             destination,
             ..
         } => {
-            let name = func.called_runtime_name();
-            let keeps_length = name.is_some_and(preserves_length);
+            let effect = func.called_runtime_effect();
+            let keeps_length = effect.is_some_and(|effect| effect.preserves_length());
             let source = args
                 .first()
                 .and_then(Operand::bare_local)
                 .filter(|_| keeps_length);
-            if !name.is_some_and(|name| runtime_call_leaves_headers(body, name, args)) {
+            if !effect.is_some_and(|effect| runtime_call_leaves_headers(body, effect, args)) {
                 facts.clear();
             }
             if destination.projection.is_empty() {

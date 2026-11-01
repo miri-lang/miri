@@ -4,7 +4,7 @@
 //! Checks that a runtime entry point writes a collection in place only where
 //! every path to the write made it the program's own.
 //!
-//! A runtime write (`runtime_fns::writes_in_place`) of a value a write copies
+//! A runtime write ([`RuntimeEffect::writes_in_place`]) of a value a write copies
 //! first (`type_facts::unsharing::is_copied_on_write`) lands in whatever block
 //! its argument names, so every other name holding that block would see it.
 //! Each such argument must therefore be known, on every path into the call,
@@ -33,7 +33,7 @@
 //!
 //! A runtime write keeps the place it writes known and forgets only what is
 //! reached through it: the runtime keeps no reference to what it writes in
-//! place (`runtime_fns::writes_in_place`, pinned by the contract test
+//! place ([`RuntimeEffect::writes_in_place`], pinned by the contract test
 //! `a_runtime_write_keeps_nothing_it_is_handed`), so the count it found is the
 //! count it leaves. A GPU body holds no count and is skipped.
 
@@ -49,10 +49,7 @@ use crate::mir::{
     AggregateKind, BasicBlock, Body, Discriminant, Local, Operand, Place, PlaceElem, Rvalue,
     Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{
-    allocates_collection, closure_positions, element_positions, is_copy_on_write, returns_unshared,
-    rt, taken_argument_positions, writes_in_place,
-};
+use crate::runtime_effects::RuntimeEffect;
 use std::collections::{HashMap, HashSet};
 
 /// Every runtime write in `body` of a value another name may hold.
@@ -232,14 +229,15 @@ impl<'a> Model<'a> {
         else {
             return Vec::new();
         };
-        let Some(name) = func.called_runtime_name() else {
+        let (Some(name), Some(effect)) = (func.called_runtime_name(), func.called_runtime_effect())
+        else {
             return Vec::new();
         };
         for statement in &data.statements {
             self.step(statement, &mut facts);
         }
         (args.iter().enumerate())
-            .filter(|(position, _)| writes_in_place(name, *position))
+            .filter(|(position, _)| effect.writes_in_place(*position))
             .filter_map(|(_, arg)| arg.place())
             .filter(|place| self.is_checked_write(name, place))
             .filter(|place| !facts.contains(&Fact::Unshared((*place).clone())))
@@ -265,7 +263,7 @@ impl<'a> Model<'a> {
     /// for a binding or for a buffer lowering built for one (the array a
     /// whole-array assignment uploads, a reduction's result buffer).
     // TODO: an upload only reads its host array and belongs in
-    // `runtime_fns::only_reads_argument`; a readback writes its host array
+    // the compiler's record of it as only reading; a readback writes its host array
     // in place, and whether a readback into a gpu-resident parameter's host
     // array leaves the caller's value as it was is undecided. Until both are
     // settled these arguments are not checked.
@@ -393,8 +391,8 @@ impl<'a> Model<'a> {
             | TerminatorKind::Unreachable => return,
             TerminatorKind::Call { func, args, .. } => {
                 forget_moves(facts);
-                match func.called_runtime_name() {
-                    Some(name) => return self.step_runtime_call(name, terminator, args, facts),
+                match func.called_runtime_effect() {
+                    Some(effect) => return self.step_runtime_call(effect, terminator, args, facts),
                     None => self.forget_handed(args.iter().chain([func]), facts),
                 }
             }
@@ -418,7 +416,7 @@ impl<'a> Model<'a> {
 
     fn step_runtime_call(
         &self,
-        name: &str,
+        effect: &RuntimeEffect,
         terminator: &Terminator,
         args: &[Operand],
         facts: &mut Facts,
@@ -426,17 +424,17 @@ impl<'a> Model<'a> {
         let TerminatorKind::Call { destination, .. } = &terminator.kind else {
             return;
         };
-        let made = self.runtime_facts(name, args, destination, facts);
-        let mut runs_program = !closure_positions(name).is_empty();
+        let made = self.runtime_facts(effect, args, destination, facts);
+        let mut runs_program = !effect.closure_positions().is_empty();
         for (position, arg) in args.iter().enumerate() {
             let Some(place) = arg.place() else {
                 continue;
             };
-            let is_kept = taken_argument_positions(name).contains(&position)
-                || element_positions(name).contains(&position);
+            let is_kept = effect.taken_positions().contains(&position)
+                || effect.element_positions().contains(&position);
             if is_kept {
                 self.forget(place, facts);
-            } else if writes_in_place(name, position) {
+            } else if effect.writes_in_place(position) {
                 self.forget_within(place, facts);
                 runs_program |= self.may_run_hook(place);
             }
@@ -450,36 +448,38 @@ impl<'a> Model<'a> {
         facts.extend(made);
     }
 
-    /// What a call to the runtime entry point `name` makes known once it
-    /// returns, given `facts` before it.
+    /// What a call to the runtime entry point doing `effect` makes known once
+    /// it returns, given `facts` before it.
     fn runtime_facts(
         &self,
-        name: &str,
+        effect: &RuntimeEffect,
         args: &[Operand],
         destination: &Place,
         facts: &Facts,
     ) -> Vec<Fact> {
         let place_at = |position: usize| args.get(position).and_then(Operand::place);
         let key_at = |position: usize| args.get(position).and_then(Operand::bare_local);
-        if is_copy_on_write(name) || returns_unshared(name) || allocates_collection(name) {
+        if effect.hands_back_unshared() {
             return vec![Fact::Unshared(destination.clone())];
         }
-        if name == rt::RECEIVER_UNIQUE {
+        if effect.insists_on_unique() {
             return place_at(0)
                 .cloned()
                 .map(Fact::Unshared)
                 .into_iter()
                 .collect();
         }
-        let map_and_key = place_at(0).zip(key_at(1));
-        if name == rt::MAP_GET_CHECKED {
-            return map_and_key
+        if effect.hands_back_a_borrow() {
+            return (place_at(0).zip(key_at(1)))
                 .map(|(map, key)| looked_up(destination, map, key, facts))
                 .unwrap_or_default();
         }
-        let is_stored_unshared = name == rt::MAP_SET
-            && place_at(2).is_some_and(|value| facts.contains(&Fact::Unshared(value.clone())));
-        map_and_key
+        let Some((key, value)) = effect.stored_entry() else {
+            return Vec::new();
+        };
+        let is_stored_unshared =
+            place_at(value).is_some_and(|value| facts.contains(&Fact::Unshared(value.clone())));
+        (place_at(0).zip(key_at(key)))
             .filter(|_| is_stored_unshared)
             .map(|(map, key)| entries_under(map, key, facts))
             .unwrap_or_default()
@@ -658,7 +658,9 @@ impl<'a> Model<'a> {
             let [arg] = args.as_slice() else {
                 continue;
             };
-            let is_check = func.called_runtime_name() == Some(rt::RC_IS_SHARED)
+            let is_check = func
+                .called_runtime_effect()
+                .is_some_and(RuntimeEffect::asks_whether_shared)
                 && destination.projection.is_empty()
                 && self.definitions.get(destination.local.0) == Some(&1)
                 && self.predecessors.get(switch.0).map(Vec::as_slice) == Some(&[call][..]);
@@ -874,7 +876,10 @@ fn lookups(body: &Body) -> HashMap<Local, Vec<Place>> {
                 args,
                 destination,
                 ..
-            } if func.called_runtime_name() == Some(rt::MAP_GET_CHECKED) => {
+            } if func
+                .called_runtime_effect()
+                .is_some_and(RuntimeEffect::hands_back_a_borrow) =>
+            {
                 Some((destination, args.first()?.place()?))
             }
             TerminatorKind::Call { .. }

@@ -8,10 +8,10 @@ use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics::{copy_on_write_of, Intrinsic};
 use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
-use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{
     class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
     TypeDefinition,
@@ -1163,14 +1163,14 @@ fn call_writes_receiver(
     obj_ty: &Type,
     class_name: &str,
     method_name: &str,
-) -> Option<&'static str> {
+) -> Option<&'static Intrinsic> {
     let writes_receiver =
         (ctx.type_checker.receiver_writes).writes_receiver(class_name, method_name);
     obj_ty
         .kind
         .as_builtin_collection()
         .filter(|_| writes_receiver)
-        .and_then(cow_fn)
+        .map(copy_on_write_of)
 }
 
 /// Whether calling `method_expr` on `obj` writes the collection `obj` names,
@@ -1250,7 +1250,7 @@ fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_na
 pub(super) fn with_mutated_receiver<R>(
     ctx: &mut LoweringContext,
     obj: &Expression,
-    cow: Option<(&Type, &'static str)>,
+    cow: Option<(&Type, &'static crate::mir::compiler_intrinsics::Intrinsic)>,
     span: Span,
     write: impl FnOnce(&mut LoweringContext, Receiver<'_>) -> Result<R, LoweringError>,
 ) -> Result<R, LoweringError> {
@@ -1293,7 +1293,7 @@ fn cow_checked_local(
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.
 ///
 /// If the receiver is a simple local variable (`Move` with no projection), emits a call to
-/// `cow_fn_name` that returns either the same pointer (RC ≤ 1 → no copy) or a fresh exclusive
+/// `cow` that returns either the same pointer (RC ≤ 1 → no copy) or a fresh exclusive
 /// clone (RC > 1 → clone + decrement old RC). The result is stored back into the receiver local
 /// so the subsequent mutation operates on an exclusively-owned collection.
 ///
@@ -1306,7 +1306,7 @@ pub(super) fn emit_cow_check(
     ctx: &mut LoweringContext,
     obj_op: Operand,
     obj_ty: &Type,
-    cow_fn_name: &str,
+    cow: &Intrinsic,
     span: Span,
 ) -> Result<Operand, LoweringError> {
     let Some(self_local) = cow_checked_local(ctx, &obj_op, span)? else {
@@ -1316,16 +1316,8 @@ pub(super) fn emit_cow_check(
         emit_receiver_unique_check(ctx, self_local, span);
         return Ok(obj_op);
     }
-    let Some(cow_intrinsic) = crate::mir::compiler_intrinsics::compiler_intrinsic(cow_fn_name)
-    else {
-        return Err(LoweringError::internal(
-            crate::diagnostics::DiagnosticCode::MirValidationFailed,
-            format!("`{cow_fn_name}` is no copy-on-write entry point the compiler describes"),
-            span,
-        ));
-    };
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
-    let cow_fn = Operand::runtime(cow_intrinsic.callee(), span);
+    let cow_fn = Operand::runtime(cow.callee(), span);
     let cow_target = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {

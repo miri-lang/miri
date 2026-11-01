@@ -17,9 +17,9 @@
 //! - a store whose destination crosses a class field or a dereference
 //!   ([`crosses_heap_field`]), or is rooted at the receiver, a parameter the
 //!   body takes over, an `out` parameter or a capture, is loud;
-//! - a call into the runtime is loud when it may call a closure, or writes in
-//!   place (`runtime_fns::writes_in_place`) an argument that is not a whole
-//!   counted local the body owns, or one whose release may run a drop hook;
+//! - a call into the runtime is loud when it may call a closure, or its record
+//!   says it writes in place an argument that is not a whole counted local the
+//!   body owns, or one whose release may run a drop hook;
 //! - a virtual call, a call through a closure value, a kernel launch and a
 //!   call to a symbol with no body of the program is loud;
 //! - a release that may run a drop hook is loud: before reference counting,
@@ -53,10 +53,7 @@ use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::type_facts::{DropHookReach, TypeDefinition};
 use crate::mir::{ArgMode, BasicBlock, Body, Local, Operand, Place, PlaceElem, StatementKind};
 use crate::mir::{CallFlags, Terminator, TerminatorKind};
-use crate::runtime_fns::{
-    closure_positions, hands_back_a_borrow, matches_its_elements, orders_its_elements,
-    reads_reference_count, writes_in_place,
-};
+use crate::runtime_effects::RuntimeEffect;
 use std::collections::{HashMap, HashSet};
 
 /// Whether a program is read before reference counting inserts its retains
@@ -455,12 +452,12 @@ fn hands_to_runtime_writer(terminator: &Terminator, local: Local) -> bool {
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return false;
     };
-    let Some(name) = func.called_runtime_name() else {
+    let Some(effect) = func.called_runtime_effect() else {
         return false;
     };
     args.iter().enumerate().any(|(position, arg)| {
         arg.place().is_some_and(|place| place.local == local)
-            && (writes_in_place(name, position) || reads_reference_count(name))
+            && (effect.writes_in_place(position) || effect.reads_count)
     })
 }
 
@@ -521,15 +518,15 @@ impl<'b> Classifier<'b> {
         let Some(symbol) = func.called_symbol() else {
             return Noise::Loud;
         };
-        let Some(name) = symbol.runtime_name() else {
+        let Some(effect) = symbol.runtime_effect() else {
             return Noise::Calls(symbol, args);
         };
-        if self.is_loud_runtime_call(name, args) {
+        if self.is_loud_runtime_call(effect, args) {
             return Noise::Loud;
         }
-        let question = if orders_its_elements(name) {
+        let question = if effect.orders.is_some() {
             Question::Orders
-        } else if matches_its_elements(name) {
+        } else if effect.matches.is_some() {
             Question::Matches
         } else {
             return Noise::Quiet;
@@ -580,17 +577,17 @@ impl<'b> Classifier<'b> {
         matching
     }
 
-    /// Whether the runtime entry point `name`, handed `args`, may release a
-    /// value another name holds.
-    fn is_loud_runtime_call(&self, name: &str, args: &[Operand]) -> bool {
-        if !closure_positions(name).is_empty() {
+    /// Whether the runtime entry point doing `effect`, handed `args`, may
+    /// release a value another name holds.
+    fn is_loud_runtime_call(&self, effect: &RuntimeEffect, args: &[Operand]) -> bool {
+        if !effect.closure_positions().is_empty() {
             return true;
         }
         args.iter().enumerate().any(|(position, arg)| {
             let Some(place) = arg.place() else {
                 return false;
             };
-            writes_in_place(name, position)
+            effect.writes_in_place(position)
                 && !self.holds_no_counted_contents(place)
                 && (!self.is_own_whole_local(place) || self.may_run_drop_hook(place))
         })
@@ -602,7 +599,7 @@ impl<'b> Classifier<'b> {
     /// whose release runs no drop hook.
     ///
     /// A runtime entry point keeps no reference to what it writes in place
-    /// and leaves its count as it found it (`runtime_fns::writes_in_place`),
+    /// and leaves its count as it found it ([`RuntimeEffect::writes_in_place`]),
     /// so all it can release is what the value holds.
     fn holds_no_counted_contents(&self, place: &Place) -> bool {
         let Some(ty) = self.types.declared(place) else {
@@ -770,7 +767,7 @@ impl<'b> HeapLends<'b> {
 }
 
 /// The locals of `body` a runtime getter hands an entry to as a borrow of
-/// the collection it reads (`runtime_fns::hands_back_a_borrow`), when that
+/// the collection it reads ([`RuntimeEffect::hands_back_a_borrow`]), when that
 /// collection is reached through a class field or a dereference, or is the
 /// receiver, an owned or `out` parameter or a capture.
 fn entry_borrows(body: &Body, types: &PlaceTypes) -> HashSet<Local> {
@@ -785,7 +782,7 @@ fn entry_borrows(body: &Body, types: &PlaceTypes) -> HashSet<Local> {
 }
 
 /// Each local of `body` a runtime getter hands an entry to as a borrow of
-/// the collection it reads (`runtime_fns::hands_back_a_borrow`), with the
+/// the collection it reads ([`RuntimeEffect::hands_back_a_borrow`]), with the
 /// place of that collection. The local holds no reference of its own: the
 /// collection's keeps the entry alive, until the collection is replaced,
 /// emptied or released.
@@ -799,7 +796,7 @@ pub fn borrowed_entries(body: &Body) -> impl Iterator<Item = (Local, Option<&Pla
                 args,
                 destination,
                 ..
-            } => Some((func.called_runtime_name()?, args, destination)),
+            } => Some((func.called_runtime_effect()?, args, destination)),
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::Return
@@ -807,8 +804,8 @@ pub fn borrowed_entries(body: &Body) -> impl Iterator<Item = (Local, Option<&Pla
             | TerminatorKind::GpuLaunch { .. }
             | TerminatorKind::VirtualCall { .. } => None,
         })
-        .filter(|(name, _, destination)| {
-            destination.projection.is_empty() && hands_back_a_borrow(name)
+        .filter(|(effect, _, destination)| {
+            destination.projection.is_empty() && effect.hands_back_a_borrow()
         })
         .map(|(_, args, destination)| (destination.local, args.first().and_then(Operand::place)))
 }

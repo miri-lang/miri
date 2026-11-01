@@ -9,7 +9,7 @@
 //! The runtime entry point takes that argument as two words — the closure,
 //! then the address of a trampoline the compiler generates for the closure's
 //! parameter types. Which parameters carry a closure, and what the runtime
-//! promises about calling it, is [`crate::runtime_fns::closure_contract`]; the
+//! promises about calling it, is [`RuntimeEffect::closure_contract`]; the
 //! type checker holds every `runtime` declaration to that contract, and this
 //! pass holds every call to it again, against the types the call is made at.
 //! The runtime calls the trampoline with the closure, the address of each
@@ -38,7 +38,8 @@ use crate::mir::instantiation::type_argument;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::{Symbol, TrampolineArgument, TrampolineShape, TrampolineWord};
 use crate::mir::{ArgMode, Body, FunctionConstant, Operand, TerminatorKind};
-use crate::runtime_fns::{ClosureContract, RuntimeParamAbi, RuntimeParamTable, RuntimeSurface};
+use crate::runtime_effects::{ClosureContract, RuntimeEffect};
+use crate::runtime_fns::{argument_index, param_abi, RuntimeParamAbi};
 
 /// Follow every closure argument of a runtime call in `body` with the address
 /// of the trampoline the runtime calls it through.
@@ -47,17 +48,11 @@ use crate::runtime_fns::{ClosureContract, RuntimeParamAbi, RuntimeParamTable, Ru
 /// result, parameters a collection element slot cannot be read as, a value
 /// that is not a closure — is reported.
 pub fn pass_closures_with_trampolines(body: &mut Body) -> Result<(), String> {
-    pass_closures_through(body, &RuntimeSurface)
-}
-
-/// [`pass_closures_with_trampolines`] against the runtime parameters `table`
-/// describes.
-pub fn pass_closures_through(body: &mut Body, table: &dyn RuntimeParamTable) -> Result<(), String> {
     if body.is_gpu() {
         return Ok(());
     }
     for block in 0..body.basic_blocks.len() {
-        let trampolines = closure_trampolines(body, block, table)?;
+        let trampolines = closure_trampolines(body, block)?;
         insert_trampolines(body, block, trampolines);
     }
     Ok(())
@@ -66,31 +61,28 @@ pub fn pass_closures_through(body: &mut Body, table: &dyn RuntimeParamTable) -> 
 /// Each closure argument of the runtime call ending `block`, by its index
 /// among the call's arguments, with the trampoline operand that follows it,
 /// in the order of the arguments.
-fn closure_trampolines(
-    body: &Body,
-    block: usize,
-    table: &dyn RuntimeParamTable,
-) -> Result<Vec<(usize, Operand)>, String> {
+fn closure_trampolines(body: &Body, block: usize) -> Result<Vec<(usize, Operand)>, String> {
     let Some(terminator) = body.basic_blocks[block].terminator.as_ref() else {
         return Ok(Vec::new());
     };
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return Ok(Vec::new());
     };
-    let Some(name) = func.called_runtime_name() else {
+    let (Some(name), Some(effect)) = (func.called_runtime_name(), func.called_runtime_effect())
+    else {
         return Ok(Vec::new());
     };
     let mut trampolines = Vec::new();
-    for &position in table.closure_positions(name) {
+    for position in effect.closure_positions() {
         let call = ClosureCall {
             body,
-            table,
+            effect,
             name,
             args,
             position,
         };
         let shape = call.checked_shape()?;
-        let index = table.argument_index(name, position);
+        let index = argument_index(effect, position);
         trampolines.push((index, trampoline_operand(shape, terminator.span)));
     }
     Ok(trampolines)
@@ -99,7 +91,7 @@ fn closure_trampolines(
 /// One closure argument of one runtime call.
 struct ClosureCall<'b> {
     body: &'b Body,
-    table: &'b dyn RuntimeParamTable,
+    effect: &'b RuntimeEffect,
     name: &'b str,
     args: &'b [Operand],
     position: usize,
@@ -109,8 +101,7 @@ impl ClosureCall<'_> {
     /// The shape of the trampoline the closure is called through, after
     /// checking it against the runtime's contract for the parameter.
     fn checked_shape(&self) -> Result<TrampolineShape, String> {
-        let RuntimeParamAbi::Closure(contract) = self.table.param_abi(self.name, self.position)
-        else {
+        let RuntimeParamAbi::Closure(contract) = param_abi(self.effect, self.position) else {
             return Err(self.refusal("names a closure parameter the runtime has no contract for"));
         };
         let function = self
@@ -173,13 +164,10 @@ impl ClosureCall<'_> {
     /// the call as this pass finds it: every element already two words, and
     /// no closure yet followed by its trampoline.
     fn argument(&self, position: usize) -> Option<&Operand> {
-        let trampolines_before = self
-            .table
-            .closure_positions(self.name)
-            .iter()
-            .filter(|&&closure| closure < position)
+        let trampolines_before = (self.effect.closure_positions().into_iter())
+            .filter(|&closure| closure < position)
             .count();
-        let index = self.table.argument_index(self.name, position) - trampolines_before;
+        let index = argument_index(self.effect, position) - trampolines_before;
         self.args.get(index)
     }
 

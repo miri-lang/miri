@@ -75,7 +75,7 @@ calls `trampoline(closure, &a, &b, &result)` for each pair. Like every runtime
 parameter of a function type, the closure arrives with the address of the
 trampoline the compiler generated for its parameter types (`list::ClosureCall2`
 for two of them). The callback contract, which the compiler holds every
-declaration and every call to (`runtime_fns::closure_contract`):
+declaration and every call to (`RuntimeEffect::closure_contract`):
 
 - `&a` and `&b` are the addresses of two element slots of `list`, read by the
   trampoline exactly as the list holds its elements;
@@ -257,4 +257,12 @@ Follow these four steps when adding a new runtime type:
 
 4. **Add a `.mi` stdlib file** under `src/stdlib/` that exposes the new type to Miri
    programs. Declare FFI-backed methods with `runtime "core" fn miri_rt_{name}_{op}(...)`
-   so the compiler generates the correct call sites.
+   so the compiler generates the correct call sites, and state on each declaration
+   what the entry point does with what it is handed: `@reads`, `@writes` or
+   `@stores` for every parameter that holds a reference, `@element`, `@key` or
+   `@value` for an element parameter, `@closure` for a closure it calls, and
+   `@copies`, `@allocates`, `@returns_element`, `@orders`, `@matches` or
+   `@diverges` where they apply (`src/ast/attributes.rs` documents each). The
+   compiler reads nothing else about the entry point: a declaration that leaves a
+   reference parameter unstated is refused, and every stage that reasons about a
+   call reads the record these attributes make.

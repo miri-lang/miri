@@ -368,7 +368,7 @@ fn lower_map_index_read(
     // what it holds, such as a `let` binding, takes a copy of it, which raises
     // the count for the binding to release.
     let borrows = ctx.is_counted(&result_ty.kind)
-        && crate::runtime_fns::hands_back_a_borrow(rt::MAP_GET_CHECKED);
+        && (crate::mir::compiler_intrinsics::MAP_GET_CHECKED.effect()).hands_back_a_borrow();
     let destination = match &dest {
         Some(d) if !borrows => d.clone(),
         Some(_) | None => {

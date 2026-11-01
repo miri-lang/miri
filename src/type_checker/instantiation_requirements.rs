@@ -838,13 +838,16 @@ impl TypeChecker {
         container: &Type,
         context: &Context,
     ) {
-        if crate::runtime_fns::orders_its_elements(callee) {
+        let Some(effect) = self.runtime_effects.get(callee).cloned() else {
+            return;
+        };
+        if effect.orders.is_some() {
             let sequences = [BuiltinCollectionKind::List, BuiltinCollectionKind::Array];
             if let Some(element) = self.container_element_type(container, &sequences) {
                 self.record_ordering_requirement(&element, context);
             }
         }
-        if crate::runtime_fns::matches_its_elements(callee) {
+        if effect.matches.is_some() {
             let keyed = [BuiltinCollectionKind::Set, BuiltinCollectionKind::Map];
             if let Some(element) = self.container_element_type(container, &keyed) {
                 let equals = crate::ast::implicit_methods::EQUALS_METHOD_NAME;

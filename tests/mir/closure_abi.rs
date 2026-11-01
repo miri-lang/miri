@@ -11,57 +11,28 @@ use miri::ast::common::Parameter;
 use miri::ast::factory::type_expr_non_null;
 use miri::ast::types::{FunctionTypeData, Type, TypeKind};
 use miri::error::syntax::Span;
-use miri::mir::closure_abi::pass_closures_through;
+use miri::mir::closure_abi::pass_closures_with_trampolines;
 use miri::mir::symbol::{TrampolineArgument, TrampolineShape, TrampolineWord};
 use miri::mir::{
     ArgMode, BasicBlock, BasicBlockData, Body, ExecutionModel, Local, LocalDecl, Operand, Place,
     Terminator, TerminatorKind,
 };
-use miri::runtime_fns::{ClosureContract, RuntimeParamAbi, RuntimeParamTable};
-
-/// A runtime surface of one entry point, `sort`, with the parameters `abis`.
-struct Table {
-    abis: Vec<RuntimeParamAbi>,
-    closures: Vec<usize>,
-}
-
-impl Table {
-    fn of(abis: &[RuntimeParamAbi]) -> Self {
-        let closures = abis
-            .iter()
-            .enumerate()
-            .filter(|(_, abi)| matches!(abi, RuntimeParamAbi::Closure(_)))
-            .map(|(position, _)| position)
-            .collect();
-        Self {
-            abis: abis.to_vec(),
-            closures,
-        }
-    }
-}
-
-impl RuntimeParamTable for Table {
-    fn param_abi(&self, name: &str, position: usize) -> RuntimeParamAbi {
-        match (name, self.abis.get(position)) {
-            ("sort", Some(abi)) => *abi,
-            _ => RuntimeParamAbi::Word,
-        }
-    }
-
-    fn closure_positions(&self, name: &str) -> &[usize] {
-        if name == "sort" {
-            &self.closures
-        } else {
-            &[]
-        }
-    }
-}
+use miri::runtime_effects::{ClosureContract, ElementRole, ParamUse};
 
 /// A closure over two elements of the list it sorts.
-const COMPARATOR: RuntimeParamAbi = RuntimeParamAbi::Closure(ClosureContract {
+const COMPARATOR: ParamUse = ParamUse::Closure(ClosureContract {
     arity: 2,
     elements_of: Some(0),
 });
+
+/// The list `sort` is handed, travelling as one word.
+const LIST: ParamUse = ParamUse::Reads;
+
+/// A word `sort` is handed.
+const WORD: ParamUse = ParamUse::Scalar;
+
+/// An element `sort` is handed, travelling as its address and byte count.
+const ELEMENT: ParamUse = ParamUse::LooksUp(ElementRole::Element);
 
 fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
@@ -88,8 +59,9 @@ fn function_returning(params: usize, result: TypeKind) -> TypeKind {
     }))
 }
 
-/// A body whose one block calls `sort` with a local of each of `args`.
-fn calling_sort_with(args: &[TypeKind]) -> Body {
+/// A body whose one block calls `sort`, declared with `params`, with a local
+/// of each of `args`.
+fn calling_sort_with(params: &[ParamUse], args: &[TypeKind]) -> Body {
     let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
     body.local_decls
         .push(LocalDecl::new(ty(TypeKind::Void), Span::default()));
@@ -102,7 +74,10 @@ fn calling_sort_with(args: &[TypeKind]) -> Body {
         .collect::<Vec<_>>();
     let terminator = Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(runtime_callee_stating("sort", Vec::new()), Span::default()),
+            func: Operand::runtime(
+                runtime_callee_stating("sort", params.to_vec()),
+                Span::default(),
+            ),
             arg_modes: vec![ArgMode::Borrowed; operands.len()],
             args: operands,
             arg_handles: Vec::new(),
@@ -148,14 +123,16 @@ fn word_comparator() -> Option<TrampolineShape> {
 
 #[test]
 fn a_trampoline_follows_a_closure_after_an_element_parameter_s_two_words() {
-    let table = Table::of(&[RuntimeParamAbi::Word, RuntimeParamAbi::Element, COMPARATOR]);
-    let mut body = calling_sort_with(&[
-        list_of_int(),
-        TypeKind::RawPtr,
-        TypeKind::Int,
-        function_of(2),
-    ]);
-    pass_closures_through(&mut body, &table).expect("the call keeps the contract");
+    let mut body = calling_sort_with(
+        &[LIST, ELEMENT, COMPARATOR],
+        &[
+            list_of_int(),
+            TypeKind::RawPtr,
+            TypeKind::Int,
+            function_of(2),
+        ],
+    );
+    pass_closures_with_trampolines(&mut body).expect("the call keeps the contract");
     assert_eq!(
         trampolines(&body),
         vec![None, None, None, None, word_comparator()]
@@ -164,9 +141,11 @@ fn a_trampoline_follows_a_closure_after_an_element_parameter_s_two_words() {
 
 #[test]
 fn a_closure_that_is_not_the_last_parameter_keeps_the_ones_after_it_in_order() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR, RuntimeParamAbi::Word]);
-    let mut body = calling_sort_with(&[list_of_int(), function_of(2), TypeKind::Int]);
-    pass_closures_through(&mut body, &table).expect("the call keeps the contract");
+    let mut body = calling_sort_with(
+        &[LIST, COMPARATOR, WORD],
+        &[list_of_int(), function_of(2), TypeKind::Int],
+    );
+    pass_closures_with_trampolines(&mut body).expect("the call keeps the contract");
     assert_eq!(
         trampolines(&body),
         vec![None, None, word_comparator(), None]
@@ -175,9 +154,11 @@ fn a_closure_that_is_not_the_last_parameter_keeps_the_ones_after_it_in_order() {
 
 #[test]
 fn each_of_two_closures_is_followed_by_its_own_trampoline() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR, COMPARATOR]);
-    let mut body = calling_sort_with(&[list_of_int(), function_of(2), function_of(2)]);
-    pass_closures_through(&mut body, &table).expect("the call keeps the contract");
+    let mut body = calling_sort_with(
+        &[LIST, COMPARATOR, COMPARATOR],
+        &[list_of_int(), function_of(2), function_of(2)],
+    );
+    pass_closures_with_trampolines(&mut body).expect("the call keeps the contract");
     assert_eq!(
         trampolines(&body),
         vec![None, None, word_comparator(), None, word_comparator()]
@@ -186,9 +167,8 @@ fn each_of_two_closures_is_followed_by_its_own_trampoline() {
 
 #[test]
 fn a_closure_of_another_arity_than_the_contract_is_refused() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR]);
-    let mut body = calling_sort_with(&[list_of_int(), function_of(3)]);
-    let refusal = pass_closures_through(&mut body, &table).expect_err("the arity is refused");
+    let mut body = calling_sort_with(&[LIST, COMPARATOR], &[list_of_int(), function_of(3)]);
+    let refusal = pass_closures_with_trampolines(&mut body).expect_err("the arity is refused");
     assert!(
         refusal.contains("taking 3 arguments, where the runtime passes 2"),
         "{refusal}"
@@ -197,10 +177,9 @@ fn a_closure_of_another_arity_than_the_contract_is_refused() {
 
 #[test]
 fn a_closure_over_values_wider_than_the_list_s_elements_is_refused() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR]);
     let narrow = TypeKind::List(Box::new(type_expr_non_null(ty(TypeKind::I32))));
-    let mut body = calling_sort_with(&[narrow, function_of(2)]);
-    let refusal = pass_closures_through(&mut body, &table).expect_err("the width is refused");
+    let mut body = calling_sort_with(&[LIST, COMPARATOR], &[narrow, function_of(2)]);
+    let refusal = pass_closures_with_trampolines(&mut body).expect_err("the width is refused");
     assert!(
         refusal.contains("not read as the collection holds"),
         "{refusal}"
@@ -212,10 +191,12 @@ fn a_closure_over_values_wider_than_the_list_s_elements_is_refused() {
 /// handed to the runtime that answers one is refused.
 #[test]
 fn a_closure_answering_a_value_held_as_its_bytes_is_refused() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR]);
     let answer = TypeKind::Option(Box::new(ty(TypeKind::Int)));
-    let mut body = calling_sort_with(&[list_of_int(), function_returning(2, answer)]);
-    let refusal = pass_closures_through(&mut body, &table).expect_err("a held result is refused");
+    let mut body = calling_sort_with(
+        &[LIST, COMPARATOR],
+        &[list_of_int(), function_returning(2, answer)],
+    );
+    let refusal = pass_closures_with_trampolines(&mut body).expect_err("a held result is refused");
     assert!(
         refusal.contains("which a trampoline cannot store"),
         "{refusal}"
@@ -224,16 +205,14 @@ fn a_closure_answering_a_value_held_as_its_bytes_is_refused() {
 
 #[test]
 fn a_parameter_the_table_calls_a_closure_but_the_call_does_not_hand_one_is_refused() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR]);
-    let mut body = calling_sort_with(&[list_of_int(), TypeKind::Int]);
-    let refusal = pass_closures_through(&mut body, &table).expect_err("a word is no closure");
+    let mut body = calling_sort_with(&[LIST, COMPARATOR], &[list_of_int(), TypeKind::Int]);
+    let refusal = pass_closures_with_trampolines(&mut body).expect_err("a word is no closure");
     assert!(refusal.contains("is not handed a closure"), "{refusal}");
 }
 
 #[test]
 fn a_call_to_an_entry_point_with_no_closure_parameter_is_left_alone() {
-    let table = Table::of(&[RuntimeParamAbi::Word, COMPARATOR]);
-    let mut body = calling_sort_with(&[list_of_int(), function_of(2)]);
+    let mut body = calling_sort_with(&[LIST, COMPARATOR], &[list_of_int(), function_of(2)]);
     let Some(TerminatorKind::Call { func, .. }) = body.basic_blocks[0]
         .terminator
         .as_mut()
@@ -245,6 +224,6 @@ fn a_call_to_an_entry_point_with_no_closure_parameter_is_left_alone() {
         runtime_callee_stating("reverse", Vec::new()),
         Span::default(),
     );
-    pass_closures_through(&mut body, &table).expect("nothing to check");
+    pass_closures_with_trampolines(&mut body).expect("nothing to check");
     assert_eq!(trampolines(&body), vec![None, None]);
 }

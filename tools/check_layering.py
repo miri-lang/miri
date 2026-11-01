@@ -81,11 +81,6 @@ ALLOWED = [
     ("src/codegen/cranelift/value_abi.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
     ("src/codegen/wgsl/emitter.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
     ("src/codegen/wgsl/types.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    # The type checker reads effect facts keyed by symbol name; gone once the
-    # facts are attributes on the runtime declarations.
-    ("src/type_checker/receiver_writes.rs", "the type checker learns nothing from a runtime symbol name", "asks which argument positions an intrinsic only reads"),
-    ("src/type_checker/instantiation_requirements.rs", "the type checker learns nothing from a runtime symbol name", "asks which intrinsics order or match elements"),
-    ("src/type_checker/reference_cycles.rs", "the type checker learns nothing from a runtime symbol name", "asks which collections copy on write"),
 ]
 
 PLACEMENT_EXCEPTION = "Placement exception:"

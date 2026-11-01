@@ -64,14 +64,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::mir::analysis::dominators::DominatorTree;
 use crate::mir::analysis::loops::{natural_loops, predecessors, NaturalLoop};
+use crate::mir::compiler_intrinsics::copy_on_write_of;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
     BasicBlock, BasicBlockData, Body, Local, LocalDecl, Operand, Place, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
-};
-use crate::runtime_fns::{
-    cow_fn, is_copy_on_write, leaves_collection_headers_unchanged, returns_unshared, rt,
 };
 
 /// What a block asks about a whole local.
@@ -196,8 +194,8 @@ fn is_question_call(terminator: &Terminator) -> bool {
     let TerminatorKind::Call { func, .. } = &terminator.kind else {
         return false;
     };
-    func.called_runtime_name().is_some_and(|name| {
-        is_copy_on_write(name) || returns_unshared(name) || name == rt::RC_IS_SHARED
+    func.called_runtime_effect().is_some_and(|effect| {
+        effect.is_copy_on_write() || effect.returns_copy() || effect.asks_whether_shared()
     })
 }
 
@@ -241,13 +239,13 @@ fn asked_whole_local(terminator: &Terminator) -> Option<(Local, Question)> {
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return None;
     };
-    let name = func.called_runtime_name()?;
+    let effect = func.called_runtime_effect()?;
     let [argument] = args.as_slice() else {
         return None;
     };
     let question = match argument {
-        Operand::Move(_) if is_copy_on_write(name) => Question::CopyOnWrite,
-        Operand::Copy(_) | Operand::Move(_) if name == rt::RC_IS_SHARED => Question::IsShared,
+        Operand::Move(_) if effect.is_copy_on_write() => Question::CopyOnWrite,
+        Operand::Copy(_) | Operand::Move(_) if effect.asks_whether_shared() => Question::IsShared,
         Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
             return None;
         }
@@ -273,7 +271,7 @@ fn calls_only_questions(
         .filter_map(|block| body.basic_blocks.get(*block)?.terminator.as_ref())
         .all(|terminator| match &terminator.kind {
             TerminatorKind::Call { func, args, .. } => {
-                let Some(name) = func.called_runtime_name() else {
+                let Some(effect) = func.called_runtime_effect() else {
                     return false;
                 };
                 let copies_an_asked_local = matches!(
@@ -282,8 +280,9 @@ fn calls_only_questions(
                         place.projection.is_empty() && asked.contains_key(&place.local.0)
                     })
                 );
-                leaves_collection_headers_unchanged(name)
-                    || ((is_copy_on_write(name) || returns_unshared(name)) && copies_an_asked_local)
+                effect.leaves_headers
+                    || ((effect.is_copy_on_write() || effect.returns_copy())
+                        && copies_an_asked_local)
             }
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }
@@ -389,8 +388,8 @@ fn handed_back_temps(body: &Body, found: &NaturalLoop) -> HashSet<Local> {
                 func, destination, ..
             } if destination.projection.is_empty()
                 && func
-                    .called_runtime_name()
-                    .is_some_and(|name| is_copy_on_write(name) || returns_unshared(name)) =>
+                    .called_runtime_effect()
+                    .is_some_and(|effect| effect.is_copy_on_write() || effect.returns_copy()) =>
             {
                 Some(destination.local)
             }
@@ -414,10 +413,7 @@ fn make_own_before(body: &mut Body, loops: &[NaturalLoop], header: usize, local:
     let Some(decl) = body.local_decls.get(local.0) else {
         return false;
     };
-    let Some(cow) = (decl.ty.kind.as_builtin_collection())
-        .and_then(cow_fn)
-        .and_then(crate::mir::compiler_intrinsics::compiler_intrinsic)
-    else {
+    let Some(cow) = decl.ty.kind.as_builtin_collection().map(copy_on_write_of) else {
         return false;
     };
     let ty = decl.ty.clone();

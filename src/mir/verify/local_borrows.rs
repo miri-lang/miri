@@ -31,7 +31,7 @@
 //!   to a runtime entry point that only reads it; the end of a lent
 //!   parameter's binding leaves its caller's reference in place;
 //! - an entry a runtime getter lends out of a collection
-//!   (`runtime_fns::hands_back_a_borrow`) holds no reference of its own: a
+//!   ([`RuntimeEffect::hands_back_a_borrow`]) holds no reference of its own: a
 //!   borrow read out of one counts the locals holding the collection among
 //!   its owners, and other code may reach it;
 //! - when what it reads is reached through a class field, out of a
@@ -43,8 +43,8 @@
 //! - every owner it shows is recorded, since RC elision keeps the retains of
 //!   exactly the recorded owners.
 //!
-//! What a runtime entry point does to its arguments is read from
-//! `runtime_fns`, the ground truth both this check and the inference use. The
+//! What a runtime entry point does to its arguments is read from the record
+//! its call carries, the ground truth both this check and the inference use. The
 //! type predicates — how a step reaches what it reads and whether a type is
 //! a reference by design — are worked out again here
 //! ([`super::borrow_reach`]), never asked of the inference, so a defect in
@@ -64,10 +64,7 @@ use crate::mir::type_facts::DropHookReach;
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, Rvalue, Statement, StatementKind};
-use crate::runtime_fns::{
-    hands_back_a_borrow, is_copy_on_write, only_reads_argument, reads_reference_count,
-    taken_argument_positions,
-};
+use crate::runtime_effects::RuntimeEffect;
 use std::collections::{HashMap, HashSet};
 
 /// How a statement or terminator reaches a local.
@@ -98,7 +95,7 @@ enum Access {
     /// Its address taken.
     AddressTaken,
     /// Handed to a runtime entry point that only reads it
-    /// (`runtime_fns::only_reads_argument`), or called as a closure.
+    /// ([`RuntimeEffect::only_reads`]), or called as a closure.
     ReadByCallee,
     /// Lent whole, by copy, to a parameter of a function of the program or of
     /// a method past its receiver: a body writing such a parameter binds a
@@ -285,7 +282,8 @@ fn entry_collections(body: &Body) -> HashMap<Local, Vec<Local>> {
         else {
             continue;
         };
-        let lends_entry = func.called_runtime_name().is_some_and(hands_back_a_borrow);
+        let lends_entry =
+            (func.called_runtime_effect()).is_some_and(RuntimeEffect::hands_back_a_borrow);
         if !lends_entry || !destination.projection.is_empty() {
             continue;
         }
@@ -650,7 +648,7 @@ fn terminator_accesses(terminator: &Terminator) -> Vec<(Local, Access)> {
         }
         Some(Operand::Constant(_) | Operand::Function(_)) | None => {}
     }
-    let runtime = func.and_then(Operand::called_runtime_name);
+    let runtime = func.and_then(Operand::called_runtime_effect);
     for (position, arg) in args.iter().enumerate() {
         let Some(place) = arg.place() else {
             continue;
@@ -687,16 +685,16 @@ fn is_lent_to_entry_copy(
 }
 
 /// How a call reaches its argument at `position`, passed `mode`, when its
-/// callee is the runtime entry point `runtime` (`None` for any other).
-fn argument_access(runtime: Option<&str>, position: usize, mode: ArgMode) -> Access {
-    let checked_or_kept = runtime.is_some_and(|name| {
-        is_copy_on_write(name)
-            || reads_reference_count(name)
-            || taken_argument_positions(name).contains(&position)
+/// callee is a runtime entry point doing `runtime` (`None` for any other).
+fn argument_access(runtime: Option<&RuntimeEffect>, position: usize, mode: ArgMode) -> Access {
+    let checked_or_kept = runtime.is_some_and(|effect| {
+        effect.is_copy_on_write()
+            || effect.reads_count
+            || effect.taken_positions().contains(&position)
     });
     // A move handed to such an entry point is a uniqueness witness at most;
     // the entry point still only reads it.
-    let only_read = runtime.is_some_and(|name| only_reads_argument(name, position));
+    let only_read = runtime.is_some_and(|effect| effect.only_reads(position));
     match mode {
         ArgMode::Borrowed | ArgMode::Owned | ArgMode::Out if checked_or_kept => Access::Handed,
         ArgMode::Borrowed if only_read => Access::ReadByCallee,

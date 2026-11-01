@@ -20,9 +20,9 @@
 //! A forward must-analysis carries the set of places known to hold a value
 //! nothing else holds. A place enters it on the edge a check takes when the
 //! answer is no, and when it is assigned a struct just built, the result of a
-//! runtime call that allocates ([`returns_unshared`],
-//! [`allocates_collection`]) or of a copy-on-write entry point
-//! ([`is_copy_on_write`]), or a value moved out of
+//! runtime call that allocates or copies, or of a copy-on-write entry point
+//! ([`crate::runtime_effects::RuntimeEffect::hands_back_unshared`]), or a
+//! value moved out of
 //! a whole local known unshared that nothing else reads — no retain, release,
 //! copy or second move of that local anywhere in the body — so no alias of the
 //! value outlives the move. A place enters only while every place it is
@@ -67,7 +67,6 @@ use crate::mir::{
     AggregateKind, BasicBlock, Body, Discriminant, Local, Operand, Place, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::{allocates_collection, is_copy_on_write, returns_unshared, rt};
 use dataflow::Dataflow;
 use effects::Program;
 use places::PlaceTable;
@@ -144,8 +143,8 @@ fn asks_whether_shared(body: &Body) -> bool {
         .filter_map(|block| block.terminator.as_ref())
         .any(|terminator| match &terminator.kind {
             TerminatorKind::Call { func, .. } => func
-                .called_runtime_name()
-                .is_some_and(|name| name == rt::RC_IS_SHARED || is_copy_on_write(name)),
+                .called_runtime_effect()
+                .is_some_and(|effect| effect.asks_whether_shared() || effect.is_copy_on_write()),
             TerminatorKind::Goto { .. }
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::Return
@@ -208,7 +207,10 @@ fn recognize_copy_on_write(body: &Body, call: usize) -> Option<CopyOnWrite> {
     else {
         return None;
     };
-    if !func.called_runtime_name().is_some_and(is_copy_on_write) {
+    if !func
+        .called_runtime_effect()
+        .is_some_and(|effect| effect.is_copy_on_write())
+    {
         return None;
     }
     let [Operand::Move(place)] = args.as_slice() else {
@@ -296,7 +298,10 @@ fn recognize_check(
     else {
         return None;
     };
-    if func.called_runtime_name() != Some(rt::RC_IS_SHARED) || !destination.projection.is_empty() {
+    let asks = func
+        .called_runtime_effect()
+        .is_some_and(|effect| effect.asks_whether_shared());
+    if !asks || !destination.projection.is_empty() {
         return None;
     }
     let [Operand::Copy(place)] = args.as_slice() else {
@@ -388,9 +393,8 @@ fn is_struct(kind: &AggregateKind) -> bool {
 /// hands back — its argument when its count was 1, and a copy only the caller
 /// holds otherwise, an immortal argument included.
 fn hands_back_unshared(func: &Operand) -> bool {
-    func.called_runtime_name().is_some_and(|name| {
-        returns_unshared(name) || allocates_collection(name) || is_copy_on_write(name)
-    })
+    func.called_runtime_effect()
+        .is_some_and(|effect| effect.hands_back_unshared())
 }
 
 /// How many times each local is written, and — counted only when first asked

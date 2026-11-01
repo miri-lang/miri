@@ -24,6 +24,7 @@ use crate::mir::Operand;
 use super::expression::unshare::{lower_written_path, LoweredPath, TemporaryRoot};
 use super::method_dispatch::emit_cow_check;
 use super::{lower_expression, LoweringContext};
+use crate::mir::compiler_intrinsics::Intrinsic;
 
 /// A write's receiver whose path is lowered and which is not yet made the
 /// write's own.
@@ -39,7 +40,7 @@ enum PendingForm {
     Path(LoweredPath),
     /// A binding or any other value, copied on write through `cow` when it
     /// names the collection's type and its copy-on-write entry point.
-    Value(Operand, Option<(Type, &'static str)>),
+    Value(Operand, Option<(Type, &'static Intrinsic)>),
 }
 
 impl PendingReceiver<'_> {
@@ -106,7 +107,7 @@ impl Receiver<'_> {
 pub(crate) fn lower_pending_receiver<'e>(
     ctx: &mut LoweringContext,
     obj: &'e Expression,
-    cow: Option<(&Type, &'static str)>,
+    cow: Option<(&Type, &'static crate::mir::compiler_intrinsics::Intrinsic)>,
     span: Span,
 ) -> Result<(PendingReceiver<'e>, Option<TemporaryRoot>), LoweringError> {
     let is_binding = matches!(obj.node, ExpressionKind::Identifier(..));

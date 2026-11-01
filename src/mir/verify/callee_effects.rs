@@ -7,8 +7,8 @@
 //! A verifier that credits a call as harmless must not ask the analysis that
 //! let the pass make the same credit: a defect the two share would pass both.
 //! This rule is deliberately cruder than that analysis and reads only the
-//! specification tables (`runtime_fns`, the drop hooks a type may run) and the
-//! bodies themselves.
+//! specification records (what each runtime entry point is stated to do, the
+//! drop hooks a type may run) and the bodies themselves.
 //!
 //! An operation is **harmless** when it can neither release a value nor change
 //! a collection's header that some name outside the body holds:
@@ -50,9 +50,7 @@ use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::{BasicBlock, Body, Local, Operand, Place, PlaceElem, StatementKind};
 use crate::mir::{Terminator, TerminatorKind};
-use crate::runtime_fns::{
-    closure_positions, matches_its_elements, orders_its_elements, writes_in_place,
-};
+use crate::runtime_effects::RuntimeEffect;
 
 /// The functions of a program found harmless, by the link name a call names
 /// its callee by.
@@ -206,12 +204,14 @@ fn writes_receiver_in_place(body: &Body) -> bool {
         .iter()
         .filter_map(|data| data.terminator.as_ref()))
     .any(|terminator| match &terminator.kind {
-        TerminatorKind::Call { func, args, .. } => func.called_runtime_name().is_some_and(|name| {
-            args.iter().enumerate().any(|(position, arg)| {
-                writes_in_place(name, position)
-                    && arg.place().is_some_and(|place| place.local == receiver)
+        TerminatorKind::Call { func, args, .. } => {
+            func.called_runtime_effect().is_some_and(|effect| {
+                args.iter().enumerate().any(|(position, arg)| {
+                    effect.writes_in_place(position)
+                        && arg.place().is_some_and(|place| place.local == receiver)
+                })
             })
-        }),
+        }
         TerminatorKind::Goto { .. }
         | TerminatorKind::SwitchInt { .. }
         | TerminatorKind::Return
@@ -306,8 +306,8 @@ fn operation_of(body: &Body, places: &PlaceTypes, terminator: &Terminator) -> Op
             if !stores_into_own_value(body, destination) {
                 return Operation::Done(Status::Harmful);
             }
-            match symbol.runtime_name() {
-                Some(name) => Operation::Done(runtime_call_status(body, places, name, args)),
+            match symbol.runtime_effect() {
+                Some(effect) => Operation::Done(runtime_call_status(body, places, effect, args)),
                 None => Operation::CallsProgram(symbol.link_name(), handed(body, places, args)),
             }
         }
@@ -372,21 +372,26 @@ fn is_own_local(body: &Body, local: Local) -> bool {
     (local.0 == 0 || local.0 > body.arg_count) && !body.env_capture_locals.contains(&local)
 }
 
-/// The harm of a call in `body` to the runtime entry point `name`, handed
+/// The harm of a call in `body` to a runtime entry point doing `effect`, handed
 /// `args`: harmful when it calls a closure or writes in place anything but a
 /// whole local the body owns; otherwise a search or sort is as harmful as
 /// the matching rule of what it is handed, and anything else is harmless.
-fn runtime_call_status(body: &Body, places: &PlaceTypes, name: &str, args: &[Operand]) -> Status {
+fn runtime_call_status(
+    body: &Body,
+    places: &PlaceTypes,
+    effect: &RuntimeEffect,
+    args: &[Operand],
+) -> Status {
     let writes_only_own = args.iter().enumerate().all(|(position, arg)| {
-        !writes_in_place(name, position)
+        !effect.writes_in_place(position)
             || arg
                 .place()
                 .is_none_or(|place| place.projection.is_empty() && is_own_local(body, place.local))
     });
-    if !closure_positions(name).is_empty() || !writes_only_own {
+    if !effect.closure_positions().is_empty() || !writes_only_own {
         return Status::Harmful;
     }
-    if !(matches_its_elements(name) || orders_its_elements(name)) {
+    if effect.matches.is_none() && effect.orders.is_none() {
         return Status::Harmless;
     }
     match handed(body, places, args) {

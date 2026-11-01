@@ -423,8 +423,8 @@ fn calls_keep_headers(body: &Body, found: &NaturalLoop) -> bool {
                 | TerminatorKind::SwitchInt { .. }
                 | TerminatorKind::Unreachable => true,
                 TerminatorKind::Call { func, args, .. } => func
-                    .called_runtime_name()
-                    .is_some_and(|name| runtime_call_leaves_headers(body, name, args)),
+                    .called_runtime_effect()
+                    .is_some_and(|effect| runtime_call_leaves_headers(body, effect, args)),
                 TerminatorKind::VirtualCall { .. }
                 | TerminatorKind::GpuLaunch { .. }
                 | TerminatorKind::Return => false,
