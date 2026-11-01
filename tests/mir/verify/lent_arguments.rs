@@ -225,6 +225,16 @@ fn shared_set_contains() -> Body {
     body
 }
 
+/// [`shared_set_contains`] with its receiver spelled as lowering spells it
+/// in the generic body: the bare class, with no type arguments, whose
+/// elements are the type the body leaves open.
+fn shared_set_contains_spelled_bare() -> Body {
+    let mut body = shared_set_contains();
+    body.local_decls[1].ty =
+        miri::ast::types::Type::new(TypeKind::Custom("Set".to_string(), None), span());
+    body
+}
+
 /// `main`, calling `callee(c.s, x)` with `c` a `holder_kind`, its local 1,
 /// and `x` an `element`.
 fn set_searching_caller(holder_kind: TypeKind, element: TypeKind) -> Body {
@@ -302,4 +312,26 @@ fn a_field_set_of_ints_lent_to_a_search_is_not_reported() {
         set_searching_caller(tally(), TypeKind::Int),
     );
     assert!(found.is_empty(), "{found:?}");
+}
+
+/// The receiver of the generic body is spelled as the bare class; the search
+/// is still decided by what the caller hands it, a set of ints.
+#[test]
+fn a_field_set_of_ints_lent_to_a_search_whose_receiver_is_spelled_bare_is_not_reported() {
+    let found = violations(
+        shared_set_contains_spelled_bare(),
+        set_searching_caller(tally(), TypeKind::Int),
+    );
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// The bare spelling hides nothing: a set of a class with its own `equals`
+/// handed to the same search is still reported.
+#[test]
+fn a_field_set_lent_to_a_search_whose_receiver_is_spelled_bare_running_program_code_is_reported() {
+    let found = violations(
+        shared_set_contains_spelled_bare(),
+        set_searching_caller(bag(), keyed()),
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
 }

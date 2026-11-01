@@ -462,6 +462,13 @@ fn built_of(kind: &TypeKind, open: &HashSet<String>) -> Handed {
         TypeKind::Custom(_, Some(arguments)) if kind.as_builtin_collection().is_some() => {
             arguments.first().map_or(Handed::Other, of_expression)
         }
+        // A built-in collection spelled as its bare class: the receiver of
+        // the collection's own generic method, whose elements are a type
+        // the body leaves open. A call to the body is decided by what its
+        // caller hands it.
+        TypeKind::Custom(_, None) if kind.as_builtin_collection().is_some() && !open.is_empty() => {
+            Handed::Open
+        }
         TypeKind::Generic(..)
         | TypeKind::Custom(..)
         | TypeKind::Identifier
