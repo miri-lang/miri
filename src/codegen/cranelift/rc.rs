@@ -961,31 +961,26 @@ impl<'a> FunctionTranslator<'a> {
         ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if let Some(val_expr) = Self::map_val_expr(kind) {
-            if let ExpressionKind::Type(val_ty, _) = &val_expr.node {
-                if is_slot_counted(&val_ty.kind, type_ctx.layout_scope()) {
-                    let ptr_type = type_ctx.ptr_type;
-                    let ptr_size = ptr_type.bytes() as i32;
-                    let states = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
-                    let values =
-                        builder
-                            .ins()
-                            .load(ptr_type, MemFlagsData::new(), ptr, 2 * ptr_size);
-                    let capacity =
-                        builder
-                            .ins()
-                            .load(ptr_type, MemFlagsData::new(), ptr, 4 * ptr_size);
-                    Self::emit_map_managed_values_drop_loop(
-                        builder,
-                        ctx,
-                        states,
-                        values,
-                        capacity,
-                        &val_ty.kind,
-                        type_ctx,
-                    )?;
-                }
-            }
+        let val_ty = resolved_argument(Self::map_val_expr(kind), kind)?;
+        if is_slot_counted(&val_ty.kind, type_ctx.layout_scope()) {
+            let ptr_type = type_ctx.ptr_type;
+            let ptr_size = ptr_type.bytes() as i32;
+            let states = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
+            let values = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), ptr, 2 * ptr_size);
+            let capacity = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), ptr, 4 * ptr_size);
+            Self::emit_map_managed_values_drop_loop(
+                builder,
+                ctx,
+                states,
+                values,
+                capacity,
+                &val_ty.kind,
+                type_ctx,
+            )?;
         }
         Self::call_rt_map_free(builder, ctx, ptr)
     }
@@ -1003,33 +998,30 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         is_list: bool,
     ) -> Result<(), CodegenError> {
-        if let Some(inner_expr) = Self::collection_elem_expr(kind) {
-            if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
-                if is_slot_counted(&inner_ty.kind, type_ctx.layout_scope()) {
-                    let ptr_type = type_ctx.ptr_type;
-                    let ptr_size = ptr_type.bytes() as i32;
-                    let data = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
-                    let len = builder
-                        .ins()
-                        .load(ptr_type, MemFlagsData::new(), ptr, ptr_size);
-                    Self::emit_managed_elements_drop_loop(
-                        builder,
-                        ctx,
-                        data,
-                        len,
-                        &inner_ty.kind,
-                        type_ctx,
-                    )?;
-                    if !is_list {
-                        // Array: zero elem_drop_fn (slot 3) so the runtime's free
-                        // path does not call decref a second time on already-
-                        // dropped elements.
-                        let zero = builder.ins().iconst(ptr_type, 0);
-                        builder
-                            .ins()
-                            .store(MemFlagsData::new(), zero, ptr, 3 * ptr_size);
-                    }
-                }
+        let inner_ty = resolved_argument(Self::collection_elem_expr(kind), kind)?;
+        if is_slot_counted(&inner_ty.kind, type_ctx.layout_scope()) {
+            let ptr_type = type_ctx.ptr_type;
+            let ptr_size = ptr_type.bytes() as i32;
+            let data = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
+            let len = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), ptr, ptr_size);
+            Self::emit_managed_elements_drop_loop(
+                builder,
+                ctx,
+                data,
+                len,
+                &inner_ty.kind,
+                type_ctx,
+            )?;
+            if !is_list {
+                // Array: zero elem_drop_fn (slot 3) so the runtime's free
+                // path does not call decref a second time on already-
+                // dropped elements.
+                let zero = builder.ins().iconst(ptr_type, 0);
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), zero, ptr, 3 * ptr_size);
             }
         }
         if is_list {
@@ -1053,15 +1045,14 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let tuple_type = kind.clone();
-        let managed_fields = element_exprs
+        let element_types = (element_exprs.iter())
+            .map(|expr| resolved_argument(Some(expr), kind))
+            .collect::<Result<Vec<&Type>, CodegenError>>()?;
+        let managed_fields = element_types
             .iter()
             .enumerate()
-            .filter_map(|(i, expr)| {
-                let ExpressionKind::Type(ty, _) = &expr.node else {
-                    return None;
-                };
-                is_slot_counted(&ty.kind, type_ctx.layout_scope()).then_some((i, &ty.kind))
-            })
+            .filter(|(_, ty)| is_slot_counted(&ty.kind, type_ctx.layout_scope()))
+            .map(|(i, ty)| (i, &ty.kind))
             .map(|(i, field_kind)| {
                 let (offset, _) =
                     layout::field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
@@ -2664,6 +2655,24 @@ impl<'a> FunctionTranslator<'a> {
     /// directly or through a trait that extends it.
     pub fn class_implements_cloneable(type_name: &str, facts: &TypeFacts) -> bool {
         facts.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
+    }
+}
+
+/// The type a drop reads off the type argument `argument` of `kind`.
+///
+/// Lowering hands the backend every type argument substituted. One that is
+/// missing or spelled as anything but a type means it did not, and a drop
+/// that skipped it would leak every counted element, so it is refused.
+fn resolved_argument<'k>(
+    argument: Option<&'k Expression>,
+    kind: &TypeKind,
+) -> Result<&'k Type, CodegenError> {
+    match argument.map(|argument| &argument.node) {
+        Some(ExpressionKind::Type(ty, _)) => Ok(ty),
+        Some(_) | None => Err(CodegenError::Internal(format!(
+            "a `{kind}` value is released with an unresolved type argument, so its \
+             counted elements cannot be found"
+        ))),
     }
 }
 

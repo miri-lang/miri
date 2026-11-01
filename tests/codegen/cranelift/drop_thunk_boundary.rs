@@ -113,3 +113,55 @@ fn a_release_the_settled_facts_cover_compiles() {
 
     compile(facts, &body).expect("the facts settled over this body cover its release");
 }
+
+/// A type argument spelled as a name, not a resolved type: what lowering
+/// hands the backend only when it failed to substitute one.
+fn unresolved_argument() -> miri::ast::expression::Expression {
+    miri::ast::expression::Expression::new(
+        0,
+        miri::ast::expression::ExpressionKind::Identifier("T".to_string(), None),
+        Span::default(),
+    )
+}
+
+/// A body releasing one local held at `kind`.
+fn body_releasing(kind: TypeKind) -> Body {
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::default()));
+    body.new_local(LocalDecl::new(ty(kind), Span::default()));
+    let mut block = BasicBlockData::new(None);
+    block.statements.push(Statement {
+        kind: StatementKind::DecRef(Place::new(Local(1))),
+        span: Span::default(),
+    });
+    block.terminator = Some(Terminator::new(TerminatorKind::Return, Span::default()));
+    body.basic_blocks.push(block);
+    body
+}
+
+/// Releasing a collection or tuple whose element type the backend cannot
+/// read is refused: skipping the elements would leak every counted one.
+#[test]
+fn a_release_whose_element_type_is_unresolved_is_refused() {
+    let string = || miri::ast::factory::type_expr_non_null(ty(TypeKind::String));
+    for kind in [
+        TypeKind::List(Box::new(unresolved_argument())),
+        TypeKind::Array(
+            Box::new(unresolved_argument()),
+            Box::new(miri::ast::factory::type_expr_non_null(ty(TypeKind::Int))),
+        ),
+        TypeKind::Map(Box::new(string()), Box::new(unresolved_argument())),
+        TypeKind::Tuple(vec![string(), unresolved_argument()]),
+    ] {
+        let body = body_releasing(kind.clone());
+        let facts =
+            TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
+
+        let error = compile(facts, &body).expect_err("the element type is unresolved");
+
+        assert!(
+            error.contains("unresolved type argument"),
+            "{kind:?}: unexpected error: {error}"
+        );
+    }
+}
