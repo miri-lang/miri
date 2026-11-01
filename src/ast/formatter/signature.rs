@@ -61,7 +61,7 @@ pub fn signature(node: &Statement) -> Option<Signature> {
             Some(built("trait", rendered_name(name), sink))
         }
         // These declare no body, so the whole statement already is the header.
-        StatementKind::RuntimeFunctionDeclaration(_, name, _, _) => {
+        StatementKind::RuntimeFunctionDeclaration(_, name, _, _, _) => {
             Some(whole("function", name.clone(), node))
         }
         StatementKind::IntrinsicFunctionDeclaration(name, _, _, _, _) => {

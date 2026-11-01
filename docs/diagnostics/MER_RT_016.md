@@ -12,6 +12,8 @@ A list was changed by the closure it was being sorted with. The runtime sorts by
 ```miri
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 class Log

@@ -8,6 +8,7 @@ fn test_runtime_io_smoke() {
     assert_runs_with_output(
         r#"
 
+@reads("s")
 runtime fn miri_rt_println(s String)
 fn main()
     miri_rt_println("IO Smoke Test")

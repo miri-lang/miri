@@ -361,6 +361,7 @@ pub enum StatementKind {
         String,                  // Function name (e.g., "miri_rt_string_new")
         Vec<Parameter>,          // Parameters
         Option<Box<Expression>>, // Return type
+        Vec<Attribute>,          // What the runtime does with each argument
     ),
 
     /// An intrinsic function declaration (compiler-implemented function).

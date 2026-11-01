@@ -103,6 +103,7 @@ use system.collections.list
 class Box
     var n int
 
+@writes("b")
 runtime "core" fn miri_rt_test_simulate_inline_over_release(b Box)
 
 fn main()

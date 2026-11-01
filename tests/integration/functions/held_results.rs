@@ -772,6 +772,8 @@ fn a_runtime_called_closure_answering_a_held_value_is_refused() {
 use system.io
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l List<int>, f fn(int, int) int?)
 
 fn main()

@@ -101,15 +101,21 @@ public class Regex
     fn init(handle int)
         self.handle = handle
 
+    @reads("pattern")
     runtime "core" fn miri_rt_regex_compile(pattern String) int
     runtime "core" fn miri_rt_regex_compile_status() int
     runtime "core" fn miri_rt_regex_compile_message() String
+    @reads("pattern")
     runtime "core" fn miri_rt_regex_from_validated_pattern(pattern String) int
+    @reads("text")
     runtime "core" fn miri_rt_regex_matches(handle int, text String) bool
+    @reads("text")
     runtime "core" fn miri_rt_regex_find(handle int, text String) bool
+    @reads("text")
     runtime "core" fn miri_rt_regex_find_from(handle int, text String, start_pos int) bool
     runtime "core" fn miri_rt_regex_match_start() int
     runtime "core" fn miri_rt_regex_match_end() int
+    @reads("text, replacement")
     runtime "core" fn miri_rt_regex_replace(handle int, text String, replacement String) String
 
     /// Compiles a regex pattern into a reusable Regex object.

@@ -228,6 +228,7 @@ fn test_a_runtime_writer_handed_a_local_copies_it_on_write_first() {
 use system.io
 use system.collections.list
 
+@writes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 fn main()

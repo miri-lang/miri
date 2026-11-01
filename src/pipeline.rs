@@ -307,7 +307,7 @@ fn runtime_declarations<'s>(
     stmts
         .flat_map(|stmt| std::iter::once(stmt).chain(class_body(stmt)))
         .filter_map(|stmt| {
-            let StatementKind::RuntimeFunctionDeclaration(kind, name, params, return_type) =
+            let StatementKind::RuntimeFunctionDeclaration(kind, name, params, return_type, _) =
                 &stmt.node
             else {
                 return None;

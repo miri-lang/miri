@@ -52,7 +52,7 @@ fn runtime_function_explicit_core() {
     type_checker_test(
         r#"
 fn main()
-    runtime "core" fn miri_rt_string_len(ptr i64) int
+    runtime "core" fn miri_rt_text_len(ptr i64) int
 "#,
     );
 }
@@ -89,9 +89,9 @@ fn runtime_function_callable_with_args() {
     type_checker_test(
         "
 fn main()
-    runtime fn miri_rt_string_len(ptr i64) int
+    runtime fn miri_rt_text_len(ptr i64) int
     let ptr i64 = 0
-    let len = miri_rt_string_len(ptr)
+    let len = miri_rt_text_len(ptr)
 ",
     );
 }

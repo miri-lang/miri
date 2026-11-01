@@ -8,9 +8,12 @@
 //! hard error rather than a silently ignored annotation.
 
 use crate::ast::{
-    Attribute, AttributeTarget, DEPRECATED_ATTRIBUTE, IGNORE_ATTRIBUTE,
-    INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, MUST_USE_ATTRIBUTE,
-    NON_EXHAUSTIVE_ATTRIBUTE, TEST_ATTRIBUTE, XFAIL_ATTRIBUTE,
+    Attribute, AttributeTarget, ALLOCATES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE,
+    DEPRECATED_ATTRIBUTE, DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE, IGNORE_ATTRIBUTE,
+    INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, KEY_ATTRIBUTE, MATCHES_ATTRIBUTE,
+    MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, ORDERS_ATTRIBUTE, READS_ATTRIBUTE,
+    RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, TEST_ATTRIBUTE, VALUE_ATTRIBUTE, WRITES_ATTRIBUTE,
+    XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -60,6 +63,17 @@ pub(crate) struct AttributeSpec {
     /// If non-empty, this attribute requires all of these companion attributes
     /// to be present on the same declaration.
     pub requires: &'static [&'static str],
+}
+
+/// An attribute stating what a runtime entry point does, valid on a `runtime`
+/// declaration only; `takes_argument` when it names parameters.
+const fn runtime_effect(name: &'static str, takes_argument: bool) -> AttributeSpec {
+    AttributeSpec {
+        name,
+        valid_on: &[AttributeTarget::RuntimeFunction],
+        takes_argument,
+        requires: &[],
+    }
 }
 
 /// Every attribute the compiler knows. Adding one is a single entry here plus
@@ -117,6 +131,19 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
         takes_argument: true,
         requires: &[],
     },
+    runtime_effect(READS_ATTRIBUTE, true),
+    runtime_effect(WRITES_ATTRIBUTE, true),
+    runtime_effect(STORES_ATTRIBUTE, true),
+    runtime_effect(ELEMENT_ATTRIBUTE, true),
+    runtime_effect(KEY_ATTRIBUTE, true),
+    runtime_effect(VALUE_ATTRIBUTE, true),
+    runtime_effect(CLOSURE_ATTRIBUTE, true),
+    runtime_effect(ORDERS_ATTRIBUTE, true),
+    runtime_effect(MATCHES_ATTRIBUTE, true),
+    runtime_effect(COPIES_ATTRIBUTE, true),
+    runtime_effect(RETURNS_ELEMENT_ATTRIBUTE, false),
+    runtime_effect(ALLOCATES_ATTRIBUTE, false),
+    runtime_effect(DIVERGES_ATTRIBUTE, false),
 ];
 
 /// Returns every attribute a declaration of this kind accepts, for diagnostics.

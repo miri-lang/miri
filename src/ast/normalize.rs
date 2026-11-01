@@ -53,7 +53,7 @@ fn normalize_stmt(stmt: &mut Statement) {
         } => normalize_for_stmt(vars, iterable, body),
         StatementKind::GpuFrameBlock(block) => normalize_stmt(block),
         StatementKind::FunctionDeclaration(decl) => normalize_function_decl(decl),
-        StatementKind::RuntimeFunctionDeclaration(_, _, params, ret) => {
+        StatementKind::RuntimeFunctionDeclaration(_, _, params, ret, _) => {
             normalize_params(params);
             normalize_optional_expr(ret.as_deref_mut());
         }

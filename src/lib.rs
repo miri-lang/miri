@@ -21,6 +21,8 @@ pub mod mir;
 pub mod parser;
 /// Compilation pipeline orchestrating all phases.
 pub mod pipeline;
+/// What each runtime entry point does to its arguments and its result.
+pub mod runtime_effects;
 /// Runtime function name constants (`miri_rt_*` symbols).
 pub mod runtime_fns;
 /// Test discovery and execution for `@test` functions.

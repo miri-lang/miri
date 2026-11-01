@@ -145,6 +145,9 @@ pub struct TypeChecker {
     /// The methods that write their receiver, so a call of one on a value
     /// another binding shares copies it first; see [`receiver_writes`].
     pub receiver_writes: receiver_writes::ReceiverWrites,
+    /// What each declared runtime entry point does to its arguments and its
+    /// result, as its `runtime` declaration states.
+    pub runtime_effects: HashMap<String, std::rc::Rc<crate::runtime_effects::RuntimeEffect>>,
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
@@ -312,6 +315,7 @@ impl TypeChecker {
             fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
             receiver_writes: receiver_writes::ReceiverWrites::default(),
+            runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
             instantiation_requirements: HashMap::new(),

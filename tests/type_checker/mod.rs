@@ -38,6 +38,7 @@ pub mod mutability;
 pub mod option;
 pub mod rawptr;
 pub mod result;
+pub mod runtime_effects;
 pub mod runtime_function;
 pub mod runtime_settled_methods;
 pub mod selective_import;

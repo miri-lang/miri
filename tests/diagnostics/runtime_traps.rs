@@ -53,7 +53,7 @@ const TRAPS: &[Trap] = &[
     },
     Trap {
         code: "MER_RT_016",
-        source: "use system.collections.list\n\nruntime \"core\" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)\n\nclass Log\n    var l List<int>\n\nfn noted(log Log, a int, b int) int\n    log.l.push(a)\n    return a - b\n\nfn main()\n    let log = Log(l: List([3, 1, 2]))\n    miri_rt_list_sort_by(log.l, fn(a int, b int) int: noted(log, a, b))\n",
+        source: "use system.collections.list\n\n@writes(\"l\")\n@closure(\"f, 2, l\")\nruntime \"core\" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)\n\nclass Log\n    var l List<int>\n\nfn noted(log Log, a int, b int) int\n    log.l.push(a)\n    return a - b\n\nfn main()\n    let log = Log(l: List([3, 1, 2]))\n    miri_rt_list_sort_by(log.l, fn(a int, b int) int: noted(log, a, b))\n",
     },    Trap {
         code: "MER_RT_017",
         source: SHARED_RECEIVER,

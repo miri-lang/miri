@@ -108,16 +108,20 @@ fn statement_code(sink: &mut Sink, node: &Statement, indent: usize) {
         StatementKind::Trait(name, generics, parents, members, level) => {
             trait_declaration(sink, name, generics, parents, members, level, indent)
         }
-        StatementKind::RuntimeFunctionDeclaration(runtime, name, parameters, return_type) => {
-            runtime_function(
-                sink,
-                runtime,
-                name,
-                parameters,
-                return_type.as_deref(),
-                indent,
-            )
-        }
+        StatementKind::RuntimeFunctionDeclaration(
+            runtime,
+            name,
+            parameters,
+            return_type,
+            entries,
+        ) => runtime_function(
+            sink,
+            (runtime, entries),
+            name,
+            parameters,
+            return_type.as_deref(),
+            indent,
+        ),
         StatementKind::IntrinsicFunctionDeclaration(
             name,
             generics,
@@ -534,13 +538,14 @@ pub(super) fn function_header(
 /// `runtime "core" fn name(params) Return`
 fn runtime_function(
     sink: &mut Sink,
-    runtime: &RuntimeKind,
+    (runtime, entries): (&RuntimeKind, &[Attribute]),
     name: &str,
     parameters: &[Parameter],
     return_type: Option<&Expression>,
     indent: usize,
 ) {
     let mark = sink.mark();
+    attributes(sink, entries, indent);
     sink.emit("runtime \"");
     sink.emit(runtime.name());
     sink.emit("\" fn ");

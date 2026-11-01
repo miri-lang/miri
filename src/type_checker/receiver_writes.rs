@@ -331,7 +331,7 @@ fn runtime_function_names<'s>(statements: impl Iterator<Item = &'s Statement>) -
     let mut pending: Vec<&Statement> = statements.collect();
     while let Some(statement) = pending.pop() {
         match &statement.node {
-            StatementKind::RuntimeFunctionDeclaration(_, name, _, _) => {
+            StatementKind::RuntimeFunctionDeclaration(_, name, _, _, _) => {
                 names.insert(name.as_str());
             }
             StatementKind::Block(body) | StatementKind::Trait(_, _, _, body, _) => {

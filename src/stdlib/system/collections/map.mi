@@ -21,18 +21,48 @@ use system.memory
 ///     println(f"{m.length()}")            // 2
 public class Map<K, V> implements Iterable<K>, Cloneable
 
+    @allocates
     runtime "core" fn miri_rt_map_new(key_size int, value_size int, key_kind int) Self
+    @writes("m")
     runtime "core" fn miri_rt_map_free(m Self)
+    @reads("m")
     runtime "core" fn miri_rt_map_len(m Self) int
+    @writes("m")
+    @key("key")
+    @value("value")
+    @stores("key, value")
+    @matches("m")
     runtime "core" fn miri_rt_map_set(m Self, key K, value V)
+    @reads("m")
+    @key("key")
+    @returns_element
+    @matches("m")
     runtime "core" fn miri_rt_map_get(m Self, key K) V
+    @reads("m")
+    @key("key")
+    @matches("m")
     runtime "core" fn miri_rt_map_contains_key(m Self, key K) bool
+    @reads("m")
+    @key("key")
+    @matches("m")
     runtime "core" fn miri_rt_map_slot_of(m Self, key K) int
+    @reads("m")
+    @returns_element
     runtime "core" fn miri_rt_map_value_in_slot(m Self, slot int) V
+    @writes("m")
+    @key("key")
+    @matches("m")
     runtime "core" fn miri_rt_map_remove(m Self, key K) bool
+    @writes("m")
     runtime "core" fn miri_rt_map_clear(m Self)
+    @reads("m")
+    @returns_element
     runtime "core" fn miri_rt_map_key_at(m Self, index int) K
+    @reads("m")
+    @returns_element
     runtime "core" fn miri_rt_map_value_at(m Self, index int) V
+    @reads("m")
+    @copies("m")
     runtime "core" fn miri_rt_map_clone(m Self) Map<K, V>
 
     /// Returns the number of key-value pairs in the map.

@@ -85,7 +85,6 @@ ALLOWED = [
     # facts are attributes on the runtime declarations.
     ("src/type_checker/receiver_writes.rs", "the type checker learns nothing from a runtime symbol name", "asks which argument positions an intrinsic only reads"),
     ("src/type_checker/instantiation_requirements.rs", "the type checker learns nothing from a runtime symbol name", "asks which intrinsics order or match elements"),
-    ("src/type_checker/statements/runtime_closures.rs", "the type checker learns nothing from a runtime symbol name", "asks the closure contract of an intrinsic"),
     ("src/type_checker/reference_cycles.rs", "the type checker learns nothing from a runtime symbol name", "asks which collections copy on write"),
 ]
 

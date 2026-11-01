@@ -31,12 +31,19 @@ public class Fs
 
     runtime "core" fn miri_rt_fs_status() int
     runtime "core" fn miri_rt_fs_error_message() String
+    @reads("path")
     runtime "core" fn miri_rt_fs_exists(path String) int
+    @reads("path")
     runtime "core" fn miri_rt_fs_read_file(path String) String
+    @reads("path, contents")
     runtime "core" fn miri_rt_fs_write_file(path String, contents String) int
+    @reads("path, contents")
     runtime "core" fn miri_rt_fs_append_file(path String, contents String) int
+    @reads("path")
     runtime "core" fn miri_rt_fs_list_dir(path String) [String]
+    @reads("path")
     runtime "core" fn miri_rt_fs_create_dir(path String) int
+    @reads("path")
     runtime "core" fn miri_rt_fs_delete(path String) int
     runtime "core" fn miri_rt_fs_cwd() String
 

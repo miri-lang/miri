@@ -401,6 +401,7 @@ pub fn runtime_function_declaration(
         name.into(),
         parameters,
         return_type,
+        Vec::new(),
     ))
 }
 

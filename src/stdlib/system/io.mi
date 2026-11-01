@@ -13,11 +13,17 @@ use system.string
 // Intrinsic function declarations
 // These map to miri_rt_* functions in the Rust runtime.
 
+@reads("message")
 runtime "core" fn miri_rt_print(message String)
+@reads("message")
 runtime "core" fn miri_rt_println(message String)
+@reads("message")
 runtime "core" fn miri_rt_eprint(message String)
+@reads("message")
 runtime "core" fn miri_rt_eprintln(message String)
 runtime "core" fn miri_rt_get_line_end() String
+@reads("message")
+@diverges
 runtime "core" fn miri_rt_panic(message String)
 
 // Public API

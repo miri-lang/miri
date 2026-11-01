@@ -70,6 +70,7 @@ runtime "core" fn miri_rt_test_simulate_shared_receiver()
 public fn simulate_shared_receiver()
     miri_rt_test_simulate_shared_receiver()
 
+@closure("f, 0, none")
 runtime "core" fn miri_rt_test_simulate_closure_over_release(f fn() int)
 
 /// Frees the closure `f` outright, as a spurious extra release would.

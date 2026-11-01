@@ -21,14 +21,32 @@ use system.memory
 ///     println(f"{s.contains(10)}")   // true
 public class Set<T> implements Iterable<T>, Cloneable
 
+    @allocates
     runtime "core" fn miri_rt_set_new(elem_size int) Self
+    @writes("s")
     runtime "core" fn miri_rt_set_free(s Self)
+    @reads("s")
     runtime "core" fn miri_rt_set_len(s Self) int
+    @writes("s")
+    @element("element")
+    @stores("element")
+    @matches("s")
     runtime "core" fn miri_rt_set_add(s Self, element T) bool
+    @reads("s")
+    @element("element")
+    @matches("s")
     runtime "core" fn miri_rt_set_contains(s Self, element T) bool
+    @writes("s")
+    @element("element")
+    @matches("s")
     runtime "core" fn miri_rt_set_remove(s Self, element T) bool
+    @writes("s")
     runtime "core" fn miri_rt_set_clear(s Self)
+    @reads("s")
+    @returns_element
     runtime "core" fn miri_rt_set_element_at(s Self, index int) T
+    @reads("s")
+    @copies("s")
     runtime "core" fn miri_rt_set_clone(s Self) Set<T>
 
     /// Returns the number of unique elements in the set.

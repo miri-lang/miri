@@ -18,7 +18,7 @@ fn main()
 fn runtime_function_with_params_compiles() {
     assert_runs(
         "
-runtime fn miri_rt_string_len(ptr i64) int
+runtime fn miri_rt_text_len(ptr i64) int
 fn main()
     let x = 42
 ",

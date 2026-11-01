@@ -104,7 +104,7 @@ pub fn declared_function_name(node: &Statement) -> Option<&str> {
     if let StatementKind::FunctionDeclaration(declaration) = &node.node {
         return Some(&declaration.name);
     }
-    if let StatementKind::RuntimeFunctionDeclaration(_, name, _, _) = &node.node {
+    if let StatementKind::RuntimeFunctionDeclaration(_, name, _, _, _) = &node.node {
         return Some(name);
     }
     if let StatementKind::IntrinsicFunctionDeclaration(name, _, _, _, _) = &node.node {

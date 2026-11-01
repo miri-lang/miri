@@ -14,6 +14,8 @@ fn a_runtime_function_calls_a_closure_it_is_handed() {
         r#"
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 fn main()
@@ -36,6 +38,8 @@ struct Pair
     a int
     b int
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by({declaration})
 
 fn main()
@@ -112,6 +116,8 @@ fn a_closure_that_grows_the_list_being_sorted_stops_the_program() {
         r#"
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 class H
@@ -140,6 +146,8 @@ fn a_closure_that_replaces_the_list_being_sorted_stops_the_program() {
         r#"
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 class H

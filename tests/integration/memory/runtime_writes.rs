@@ -16,6 +16,8 @@ fn test_a_runtime_writer_on_a_shared_list_leaves_the_other_binding_alone() {
 use system.io
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 fn main()
@@ -35,6 +37,8 @@ fn test_a_runtime_writer_on_a_parameter_leaves_the_callers_list_alone() {
 use system.io
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 fn sort_desc(l [int]) int
@@ -57,6 +61,7 @@ fn test_a_runtime_writer_on_an_unshared_list_writes_it_in_place() {
 use system.io
 use system.collections.list
 
+@writes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 fn main()
@@ -78,6 +83,7 @@ use system.io
 use system.collections.list
 use system.collections.map
 
+@writes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 struct S
@@ -164,7 +170,7 @@ fn test_a_runtime_writer_cannot_be_called_through_a_module_alias() {
             ),
             (
                 "lists.mi",
-                "runtime \"core\" fn miri_rt_list_clear(l [int])\n",
+                "@writes(\"l\")\nruntime \"core\" fn miri_rt_list_clear(l [int])\n",
             ),
         ],
         "'miri_rt_list_clear' is not visible",
@@ -182,6 +188,8 @@ fn test_a_closure_argument_capturing_the_written_list_reads_it_as_it_was() {
 use system.io
 use system.collections.list
 
+@writes("l")
+@closure("f, 2, l")
 runtime "core" fn miri_rt_list_sort_by(l [int], f fn(int, int) int)
 
 fn main()

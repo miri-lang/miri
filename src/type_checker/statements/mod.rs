@@ -62,7 +62,7 @@ pub mod gpu_for_captures;
 pub mod helpers;
 pub mod imports;
 pub mod returns;
-pub mod runtime_closures;
+pub mod runtime_effects;
 pub mod type_definitions;
 pub mod variables;
 
@@ -89,6 +89,9 @@ impl TypeChecker {
             }
             StatementKind::Class(class_data) => {
                 Some((&class_data.attributes, AttributeTarget::Class))
+            }
+            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, attributes) => {
+                Some((attributes, AttributeTarget::RuntimeFunction))
             }
             _ => None,
         }
@@ -383,9 +386,22 @@ impl TypeChecker {
             StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
             }
-            StatementKind::RuntimeFunctionDeclaration(_runtime, name, params, return_type_expr) => {
-                self.check_runtime_fn_decl(name, params, return_type_expr, context)
-            }
+            StatementKind::RuntimeFunctionDeclaration(
+                _runtime,
+                name,
+                params,
+                return_type_expr,
+                attributes,
+            ) => self.check_runtime_fn_decl(
+                &runtime_effects::RuntimeDeclaration {
+                    name,
+                    params,
+                    return_type: return_type_expr.as_deref(),
+                    attributes,
+                    span: statement.span,
+                },
+                context,
+            ),
             StatementKind::IntrinsicFunctionDeclaration(
                 name,
                 generics,
@@ -494,15 +510,14 @@ impl TypeChecker {
 
     fn check_runtime_fn_decl(
         &mut self,
-        name: &str,
-        params: &[Parameter],
-        return_type_expr: &Option<Box<Expression>>,
+        declaration: &runtime_effects::RuntimeDeclaration,
         context: &mut Context,
     ) {
+        let (name, params) = (declaration.name, declaration.params);
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
             params: params.to_vec(),
-            return_type: return_type_expr.clone(),
+            return_type: declaration.return_type.cloned().map(Box::new),
         })));
         let info = SymbolInfo::new_runtime(func_type, self.modules.current_module.clone());
 
@@ -518,10 +533,10 @@ impl TypeChecker {
             self.resolve_type_expression(&param.typ, context);
         }
 
-        if let Some(rt_expr) = return_type_expr {
+        if let Some(rt_expr) = declaration.return_type {
             self.resolve_type_expression(rt_expr, context);
         }
-        self.check_runtime_closure_params(name, params);
+        self.check_runtime_effects(declaration);
     }
 
     fn check_intrinsic_fn_decl(

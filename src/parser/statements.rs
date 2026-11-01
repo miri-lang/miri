@@ -85,6 +85,9 @@ impl<'source> Parser<'source> {
                 declaration.attributes.extend(attributes)
             }
             StatementKind::Class(class_data) => class_data.attributes.extend(attributes),
+            StatementKind::RuntimeFunctionDeclaration(_, _, _, _, existing) => {
+                existing.extend(attributes)
+            }
             _ => {
                 return Err(SyntaxError::new(
                     SyntaxErrorKind::UnsupportedAttributeTarget,

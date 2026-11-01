@@ -442,6 +442,7 @@ fn a_runtime_writer_called_as_a_value_leaves_a_shared_list_alone() {
 use system.io
 use system.collections.list
 
+@writes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 fn main()
@@ -464,6 +465,7 @@ fn a_runtime_writer_passed_as_a_function_argument_leaves_a_shared_list_alone() {
 use system.io
 use system.collections.list
 
+@writes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 fn apply(f fn([int]), xs [int])

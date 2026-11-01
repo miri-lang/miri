@@ -25,11 +25,21 @@ use system.accelerator
 ///         println(f"{x}")
 public class Array<T, Size> implements Equatable, Hashable, Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
+    @allocates
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
+    @writes("a")
     runtime "core" fn miri_rt_array_free(a Self)
+    @writes("a")
+    @orders("a")
     runtime "core" fn miri_rt_array_sort(a Self)
+    @reads("a")
     runtime "core" fn miri_rt_array_len(a Self) int
+    @writes("a")
+    @element("value")
+    @stores("value")
     runtime "core" fn miri_rt_array_set_val(a Self, index int, value T) bool
+    @reads("a")
+    @copies("a")
     runtime "core" fn miri_rt_array_clone(a Self) Array<T, Size>
 
     /// Returns the number of elements in the array (always equals Size).

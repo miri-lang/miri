@@ -146,7 +146,7 @@ fn collect_identifiers_in_stmt(
         | StatementKind::Struct(_, _, _, _, _, _)
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
         | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
     }
 }

@@ -34,8 +34,11 @@ public enum EnvError
 /// Environment variable capability class. Acquire a handle with `let env = Env()`.
 public class Env
 
+    @reads("name")
     runtime "core" fn miri_rt_env_has(name String) int
+    @reads("name")
     runtime "core" fn miri_rt_env_get(name String) String
+    @reads("name, value")
     runtime "core" fn miri_rt_env_set(name String, value String) int
     runtime "core" fn miri_rt_env_status() int
     runtime "core" fn miri_rt_env_error_message() String

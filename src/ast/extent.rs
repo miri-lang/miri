@@ -119,7 +119,7 @@ fn visit_statement(statement: &Statement, furthest: &mut Reach) {
         StatementKind::Trait(name, generics, parents, body, _) => {
             visit_container(name, generics.as_deref(), parents, body, furthest)
         }
-        StatementKind::RuntimeFunctionDeclaration(_, _, params, return_type) => {
+        StatementKind::RuntimeFunctionDeclaration(_, _, params, return_type, _) => {
             visit_signature(None, params, return_type.as_deref(), furthest)
         }
         StatementKind::IntrinsicFunctionDeclaration(_, generics, params, return_type, _) => {

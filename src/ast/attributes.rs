@@ -31,12 +31,63 @@ pub const INDEX_BOUNDS_CHECK_ATTRIBUTE: &str = "index_bounds_check";
 /// argument names both parameters (e.g., `@index_range_check("start, end")`).
 pub const INDEX_RANGE_CHECK_ATTRIBUTE: &str = "index_range_check";
 
+/// Names the parameters of a `runtime` declaration the entry point only reads:
+/// it keeps no reference to them and writes nothing reached through them.
+pub const READS_ATTRIBUTE: &str = "reads";
+
+/// Names the parameters of a `runtime` declaration the entry point writes in
+/// place, keeping no reference to them past the call.
+pub const WRITES_ATTRIBUTE: &str = "writes";
+
+/// Names the element parameters of a `runtime` declaration the collection
+/// keeps: the entry point takes the caller's reference over.
+pub const STORES_ATTRIBUTE: &str = "stores";
+
+/// Names the parameters of a `runtime` declaration that carry an element of a
+/// list, an array or a set. Such an argument travels by address.
+pub const ELEMENT_ATTRIBUTE: &str = "element";
+
+/// Names the parameters of a `runtime` declaration that carry a key of a map.
+pub const KEY_ATTRIBUTE: &str = "key";
+
+/// Names the parameters of a `runtime` declaration that carry a value of a map.
+pub const VALUE_ATTRIBUTE: &str = "value";
+
+/// States the closure a `runtime` declaration's entry point calls: the closure
+/// parameter, how many arguments the runtime passes it, and the collection
+/// parameter whose elements those are, or `none`
+/// (e.g. `@closure("f, 2, l")`).
+pub const CLOSURE_ATTRIBUTE: &str = "closure";
+
+/// Names the container parameter whose elements a `runtime` declaration's
+/// entry point orders.
+pub const ORDERS_ATTRIBUTE: &str = "orders";
+
+/// Names the container parameter whose elements, or keys, a `runtime`
+/// declaration's entry point matches values against.
+pub const MATCHES_ATTRIBUTE: &str = "matches";
+
+/// Marks a `runtime` declaration whose entry point hands back an element,
+/// written into storage the caller names.
+pub const RETURNS_ELEMENT_ATTRIBUTE: &str = "returns_element";
+
+/// Names the collection parameter a `runtime` declaration's entry point hands
+/// back a fresh copy of.
+pub const COPIES_ATTRIBUTE: &str = "copies";
+
+/// Marks a `runtime` declaration whose entry point builds an empty collection.
+pub const ALLOCATES_ATTRIBUTE: &str = "allocates";
+
+/// Marks a `runtime` declaration whose entry point never returns.
+pub const DIVERGES_ATTRIBUTE: &str = "diverges";
+
 /// Represents a declaration that can carry attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeTarget {
     Enum,
     Function,
     Class,
+    RuntimeFunction,
 }
 
 impl std::fmt::Display for AttributeTarget {
@@ -45,6 +96,7 @@ impl std::fmt::Display for AttributeTarget {
             AttributeTarget::Enum => "an enum declaration",
             AttributeTarget::Function => "a function declaration",
             AttributeTarget::Class => "a class declaration",
+            AttributeTarget::RuntimeFunction => "a runtime function declaration",
         };
         write!(f, "{}", name)
     }

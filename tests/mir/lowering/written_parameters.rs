@@ -144,6 +144,7 @@ fn test_a_parameter_handed_to_a_runtime_writer_is_copied_on_entry() {
 use system.io
 use system.collections.list
 
+@writes("l")
 runtime "core" fn miri_rt_list_clear(l [int])
 
 fn empty(xs [int]) int
@@ -169,6 +170,7 @@ fn test_a_parameter_handed_only_to_a_runtime_reader_is_not_copied() {
 use system.io
 use system.collections.list
 
+@reads("l")
 runtime "core" fn miri_rt_list_len(l [int]) int
 
 fn count(xs [int]) int

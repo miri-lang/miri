@@ -25,23 +25,45 @@ use system.accelerator
 ///     println(f"{l.get(0)}")    // 10
 public class List<T> implements Equatable, Hashable, Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
+    @allocates
     runtime "core" fn miri_rt_list_new(elem_size int) Self
+    @writes("l")
     runtime "core" fn miri_rt_list_free(l Self)
+    @reads("l")
     runtime "core" fn miri_rt_list_len(l Self) int
+    @writes("l")
+    @element("item")
+    @stores("item")
     runtime "core" fn miri_rt_list_push(l Self, item T)
+    @writes("l")
+    @element("item")
+    @stores("item")
     runtime "core" fn miri_rt_list_set(l Self, index int, item T) bool
+    @writes("l")
+    @element("item")
+    @stores("item")
     runtime "core" fn miri_rt_list_insert(l Self, index int, item T) bool
+    @writes("l")
     runtime "core" fn miri_rt_list_remove(l Self, index int) bool
+    @writes("l")
     runtime "core" fn miri_rt_list_clear(l Self)
+    @writes("l")
     runtime "core" fn miri_rt_list_reserve(l Self, capacity int)
+    @writes("l")
     runtime "core" fn miri_rt_list_reverse(l Self)
+    @writes("l")
+    @orders("l")
     runtime "core" fn miri_rt_list_sort(l Self)
     // TODO: spell this parameter `Self` like its siblings once a `Self`
     // argument stops leaking. Handed a `List<T>` local other than `self`, the
     // shared generic body lowers the argument as `IncRef(_4); _16 = move _4 as
     // List`, and nothing releases the reference that cast takes, so every
     // sort leaks its list.
+    @writes("l")
+    @closure("f, 2, l")
     runtime "core" fn miri_rt_list_sort_by(l List<T>, f fn(T, T) int)
+    @reads("l")
+    @copies("l")
     runtime "core" fn miri_rt_list_clone(l Self) List<T>
 
     /// Returns the number of elements in the list.

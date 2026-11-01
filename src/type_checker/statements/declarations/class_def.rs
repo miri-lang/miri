@@ -49,6 +49,7 @@ use crate::type_checker::context::{
     FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
+use crate::type_checker::statements::runtime_effects::RuntimeDeclaration;
 use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -758,8 +759,18 @@ impl TypeChecker {
                     rt_name,
                     params,
                     return_type_expr,
+                    attributes,
                 ) => {
-                    self.collect_runtime_function(rt_name, params, return_type_expr, context);
+                    self.collect_runtime_function(
+                        &RuntimeDeclaration {
+                            name: rt_name,
+                            params,
+                            return_type: return_type_expr.as_deref(),
+                            attributes,
+                            span: stmt.span,
+                        },
+                        context,
+                    );
                 }
                 StatementKind::IntrinsicFunctionDeclaration(
                     name,
@@ -988,15 +999,14 @@ impl TypeChecker {
     /// Register a runtime function declaration in class scope
     fn collect_runtime_function(
         &mut self,
-        rt_name: &str,
-        params: &[Parameter],
-        return_type_expr: &Option<Box<Expression>>,
+        declaration: &RuntimeDeclaration,
         context: &mut Context,
     ) {
+        let rt_name = declaration.name;
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
-            params: params.to_vec(),
-            return_type: return_type_expr.clone(),
+            params: declaration.params.to_vec(),
+            return_type: declaration.return_type.cloned().map(Box::new),
         })));
         let info = SymbolInfo::new_runtime(func_type, self.modules.current_module.clone());
 
@@ -1004,7 +1014,7 @@ impl TypeChecker {
             .global_scope
             .insert(rt_name.to_string(), info.clone());
         context.define(rt_name.to_string(), info);
-        self.check_runtime_closure_params(rt_name, params);
+        self.check_runtime_effects(declaration);
     }
 
     /// Register an intrinsic function declaration in class scope

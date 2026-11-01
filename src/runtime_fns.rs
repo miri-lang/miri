@@ -665,6 +665,7 @@ pub mod rt {
 }
 
 use crate::ast::types::BuiltinCollectionKind;
+pub use crate::runtime_effects::{ClosureContract, ElementRole};
 
 /// Argument positions whose reference `name` takes ownership of, in call order.
 ///
@@ -969,18 +970,6 @@ pub fn element_positions(name: &str) -> &'static [usize] {
     }
 }
 
-/// What an element argument of a collection entry point is to the
-/// collection it is handed to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ElementRole {
-    /// An element of a list, an array or a set.
-    Element,
-    /// A key of a map.
-    Key,
-    /// A value of a map.
-    Value,
-}
-
 /// Each argument position of `name` that carries an element (see
 /// [`element_positions`]), with what it is to the collection the call's first
 /// argument names. Exactly the positions [`element_positions`] lists.
@@ -998,26 +987,6 @@ pub fn element_roles(name: &str) -> &'static [(usize, ElementRole)] {
         rt::MAP_SET => &[(1, ElementRole::Key), (2, ElementRole::Value)],
         _ => &[],
     }
-}
-
-/// What a runtime entry point that calls a Miri closure promises about the
-/// call: how many arguments it passes, and where they come from. The closure
-/// always answers in a pointer-sized `int`, which the runtime reads the sign
-/// of.
-///
-/// The runtime calls a closure through a trampoline the compiler generates
-/// for the closure's parameter types (see `mir::closure_abi`), handing it the
-/// address of each argument's bytes. Those addresses are element slots of a
-/// collection argument, so a closure's parameters must be read exactly as
-/// that collection holds its elements; a declaration that promises any other
-/// shape is refused where it is written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ClosureContract {
-    /// How many arguments the runtime calls the closure with.
-    pub arity: usize,
-    /// The parameter position of the collection whose elements each argument
-    /// is; `None` for a closure the runtime calls with none.
-    pub elements_of: Option<usize>,
 }
 
 /// The contract of the closure parameter `position` of the runtime entry
