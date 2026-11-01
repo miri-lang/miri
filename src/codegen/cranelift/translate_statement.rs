@@ -658,7 +658,7 @@ impl<'a> FunctionTranslator<'a> {
         let ExpressionKind::Type(value_ty, _) = &value_expr.node else {
             return Ok(());
         };
-        if FunctionTranslator::is_unresolved_generic_elem(
+        if crate::mir::type_facts::is_unresolved_element(
             &value_ty.kind,
             type_ctx.facts.definitions(),
         ) {

@@ -10,7 +10,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
-use crate::mir::option_layout::{LayoutScope, OptionalLayers};
+use crate::mir::option_layout::OptionalLayers;
 use crate::mir::type_facts::TypeDefinition;
 
 use std::collections::HashMap;
@@ -692,39 +692,6 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Void
             | TypeKind::Error
             | TypeKind::Linear(_) => None,
-        }
-    }
-
-    /// Whether releasing an instance of `name` has a reference to give up.
-    ///
-    /// A class is asked about every field it stores, the ones it inherits
-    /// included: those belong to the instance just as much as its own, and a
-    /// class that declares none of its own still has to release what its parent
-    /// declared. An inherited field is read at the type the `extends` chain
-    /// pins it to, so `class Child extends Base<String>` sees a string where
-    /// the parent wrote a parameter.
-    pub(crate) fn has_managed_fields(
-        name: &str,
-        type_defs: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        match type_defs.get(name) {
-            Some(TypeDefinition::Struct(_) | TypeDefinition::Class(_)) => {
-                crate::mir::instantiation::field_types(type_defs, name, Some(&[]))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|ty| {
-                        crate::mir::rc::is_slot_counted(&ty.kind, LayoutScope::program(type_defs))
-                    })
-            }
-            Some(TypeDefinition::Enum(def)) => def.variants.values().any(|fields| {
-                fields.iter().any(|ty| {
-                    crate::mir::rc::is_slot_counted(&ty.kind, LayoutScope::program(type_defs))
-                })
-            }),
-            None
-            | Some(TypeDefinition::Generic(_))
-            | Some(TypeDefinition::Alias(_))
-            | Some(TypeDefinition::Trait(_)) => false,
         }
     }
 }

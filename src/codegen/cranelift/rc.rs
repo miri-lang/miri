@@ -21,7 +21,7 @@ use crate::mir::option_layout::{resolve_alias, OptionalLayers};
 use crate::mir::rc::is_slot_counted;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::TypeFacts;
-use crate::mir::type_facts::{EnumDefinition, TypeDefinition, ValueLayout};
+use crate::mir::type_facts::{TypeDefinition, ValueLayout};
 use crate::runtime_fns::rt;
 
 use cranelift_codegen::ir::types as cl_types;
@@ -33,32 +33,8 @@ use cranelift_object::ObjectModule;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-/// How a `$decref` wrapper releases the value whose last reference it drops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Release {
-    /// Through the type's own drop thunk: the value is of exactly that type.
-    Exact,
-    /// Through the drop slot of the vtable the value points at, or the type's
-    /// own drop thunk when it points at none: a class another class extends.
-    ByRuntimeClass,
-    /// Through the drop slot of the vtable the value points at: a trait, which
-    /// has no drop thunk of its own.
-    Trait,
-}
-
-impl Release {
-    /// How a value whose static type is `type_name` is released.
-    pub(crate) fn of(type_name: &str, facts: &TypeFacts) -> Self {
-        let definitions = facts.definitions();
-        match definitions.get(type_name) {
-            Some(TypeDefinition::Trait(_)) => Release::Trait,
-            _ if crate::mir::dispatch::released_by_runtime_class(type_name, definitions) => {
-                Release::ByRuntimeClass
-            }
-            _ => Release::Exact,
-        }
-    }
-}
+pub(crate) use crate::mir::type_facts::Release;
+use crate::mir::type_facts::{CountedSlot, DropPlan, DroppedMembers};
 
 /// A runtime call recording one pointer-sized setting on a container.
 pub(crate) type ContainerSetter =
@@ -206,7 +182,10 @@ impl<'a> FunctionTranslator<'a> {
             // parameter that has no concrete type yet: that symbol is defined
             // nowhere, so emitting it turns a compile into a link failure
             // reporting a mangled name instead of the program.
-            if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
+            if crate::mir::type_facts::is_unresolved_element(
+                elem_kind,
+                type_ctx.facts.definitions(),
+            ) {
                 return Err(CodegenError::Internal(format!(
                     "refusing to register a release helper named for the unresolved generic \
                      parameter '{class_name}': the registration site must skip an element whose \
@@ -241,7 +220,7 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
-        if Self::is_unresolved_generic_elem(key_kind, type_ctx.facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(key_kind, type_ctx.facts.definitions()) {
             return Ok(None);
         }
         Self::elem_decref_addr_for_kind(builder, ctx, key_kind, ptr_type, type_ctx)
@@ -314,7 +293,7 @@ impl<'a> FunctionTranslator<'a> {
         list_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -323,70 +302,6 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
         }
         Ok(())
-    }
-
-    /// True when `elem_kind` is a generic placeholder that has no concrete
-    /// `miri.TypeName.$decref` symbol — either `TypeKind::Generic`, or a
-    /// `TypeKind::Custom(name, _)` whose `name` is unknown to the type-definition
-    /// table or known only as `TypeDefinition::Generic`. This guards the
-    /// elem-drop-fn override sites where emitting a reference to an undefined
-    /// symbol would later fail at link time.
-    ///
-    /// An optional of such a placeholder is unresolved too: whether it is a box
-    /// or the payload's own pointer depends on the argument the placeholder
-    /// stands for, so releasing it without that argument would free a box that
-    /// may be the payload itself.
-    pub fn is_unresolved_generic_elem(
-        elem_kind: &TypeKind,
-        type_definitions: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        match elem_kind {
-            TypeKind::Generic(_, _, _) => true,
-            TypeKind::Option(payload) => {
-                Self::is_unresolved_generic_elem(&payload.kind, type_definitions)
-            }
-            TypeKind::Custom(name, _) => {
-                if BuiltinCollectionKind::from_name(name).is_some() {
-                    return false;
-                }
-                match type_definitions.get(name) {
-                    None | Some(TypeDefinition::Generic(_)) => true,
-                    Some(_) => false,
-                }
-            }
-            TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I64
-            | TypeKind::I128
-            | TypeKind::U8
-            | TypeKind::U16
-            | TypeKind::U32
-            | TypeKind::U64
-            | TypeKind::U128
-            | TypeKind::Float
-            | TypeKind::F16
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::String
-            | TypeKind::Boolean
-            | TypeKind::Identifier
-            | TypeKind::RawPtr
-            | TypeKind::List(_)
-            | TypeKind::Array(_, _)
-            | TypeKind::Map(_, _)
-            | TypeKind::Tuple(_)
-            | TypeKind::OneOf(_)
-            | TypeKind::Set(_)
-            | TypeKind::Result(_, _)
-            | TypeKind::Future(_)
-            | TypeKind::Function(_)
-            | TypeKind::Meta(_)
-            | TypeKind::Void
-            | TypeKind::Error
-            | TypeKind::Linear(_) => false,
-        }
     }
 
     /// Address of the comparator to register as a container's `elem_compare_fn`
@@ -503,7 +418,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         setters: ElementIdentitySetters,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         let layers = OptionalLayers::of(elem_kind, type_ctx.layout_scope());
@@ -648,7 +563,7 @@ impl<'a> FunctionTranslator<'a> {
         set_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -671,7 +586,7 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cranelift_codegen::ir::Type,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -694,7 +609,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         setters: ElementOrderSetters,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(kind) = Self::element_order_kind(elem_kind) {
@@ -730,7 +645,7 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cranelift_codegen::ir::Type,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if Self::is_unresolved_generic_elem(elem_kind, facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =
@@ -1104,20 +1019,18 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let definitions = type_ctx.facts.definitions();
-        if !crate::mir::dispatch::released_by_runtime_class(name, definitions) {
+        let release = type_ctx.facts.release(name);
+        if release == Release::Exact {
             return Self::emit_drop_custom_static(
                 builder, ctx, name, type_args, ptr, header_ptr, type_ctx,
             );
         }
-        let is_trait = matches!(definitions.get(name), Some(TypeDefinition::Trait(_)));
         Self::emit_release_by_runtime_class(builder, ctx, ptr, type_ctx.ptr_type, |builder, ctx| {
-            if is_trait {
-                Self::call_rt_block_free(builder, ctx, header_ptr)
-            } else {
-                Self::emit_drop_custom_static(
+            match release {
+                Release::Trait => Self::call_rt_block_free(builder, ctx, header_ptr),
+                Release::Exact | Release::ByRuntimeClass => Self::emit_drop_custom_static(
                     builder, ctx, name, type_args, ptr, header_ptr, type_ctx,
-                )
+                ),
             }
         })
     }
@@ -1161,11 +1074,14 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Drop a custom struct/class/enum known to be of exactly `name`: dispatch
-    /// through the type-specific `miri.TypeName.$drop` thunk when it carries
-    /// managed fields or a user-defined drop hook; otherwise, for enums, emit
-    /// field drops inline and free the RC block, or just free the block for
-    /// non-enums.
+    /// Drop a custom struct/class/enum known to be of exactly `name`.
+    ///
+    /// A concrete instantiation is released through its own drop thunk
+    /// (`miri.Box$String.$drop`), and any other value through its type's
+    /// shared thunk when that thunk's plan does anything beyond freeing the
+    /// block. Otherwise the block is freed in place, after releasing what the
+    /// plan for this value's own arguments names — the counted payloads of a
+    /// generic enum held in a shared generic body.
     fn emit_drop_custom_static(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1175,43 +1091,30 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        // Extract Type arguments from Expression arguments for generic enums.
-        // This enables resolution of generic variant fields to their concrete
-        // kinds so managed fields are correctly identified.
-        let concrete_args = type_args.and_then(crate::mir::instantiation::type_arguments);
-
-        // A generic instantiation dispatches to its per-instantiation drop
-        // thunk (`miri.Box$String.$drop`) so a managed field is DecRef'd and a
-        // scalar field skipped, each per instantiation. It always routes
-        // through that thunk: the declared field kinds see only the bare
-        // generic `T` (never managed), so `has_managed_fields` cannot detect a
-        // managed field that exists only after substitution (`Box<String>`).
+        let facts = type_ctx.facts;
         let per_instantiation = Self::drop_thunk(name, type_args, type_ctx)?.per_instantiation();
         let needs_thunk = per_instantiation.is_some()
-            || Self::has_managed_fields(name, type_ctx.facts.definitions())
-            || type_ctx.facts.has_drop_hook(name);
+            || facts
+                .drop_plan(name, None)
+                .is_some_and(DropPlan::releases_anything);
         if needs_thunk {
             let thunk =
                 Symbol::type_thunk(ThunkKind::Drop, name, per_instantiation.iter().flatten());
-            Self::call_drop_thunk(builder, ctx, &thunk, ptr, type_ctx.ptr_type)
-        } else if concrete_args.is_some() {
-            // For generic enums (concrete_args available) without a thunk, emit field
-            // drops inline using resolved type arguments so that generic variant
-            // fields become their concrete kinds and are correctly identified as managed.
-            if let Some(TypeDefinition::Enum(_)) = type_ctx.facts.definitions().get(name) {
-                Self::emit_struct_drop(
-                    builder,
-                    ctx,
-                    name,
-                    concrete_args.as_deref(),
-                    ptr,
-                    type_ctx,
-                )?;
-            }
-            Self::call_rt_block_free(builder, ctx, header_ptr)
-        } else {
-            Self::call_rt_block_free(builder, ctx, header_ptr)
+            return Self::call_drop_thunk(builder, ctx, &thunk, ptr, type_ctx.ptr_type);
         }
+        if let Some(args) = type_args.and_then(crate::mir::instantiation::type_arguments) {
+            let plan = facts.drop_plan_in(name, Some(&args), type_ctx.open_params);
+            Self::emit_planned_members(
+                builder,
+                ctx,
+                name,
+                Some(&args),
+                &plan.members,
+                ptr,
+                type_ctx,
+            )?;
+        }
+        Self::call_rt_block_free(builder, ctx, header_ptr)
     }
 
     /// The instantiation of `class_name` whose element-method thunk to
@@ -1464,37 +1367,6 @@ impl<'a> FunctionTranslator<'a> {
         Ok((args, open))
     }
 
-    /// Every type parameter `type_name` and the classes it extends declare —
-    /// the parameters its shared drop thunk reads its fields at.
-    fn declared_parameters(type_name: &str, facts: &TypeFacts) -> HashSet<String> {
-        let definitions = facts.definitions();
-        let mut names = HashSet::new();
-        let mut current = Some(type_name);
-        // Bounded by the table's size: a circular `extends` is reported where
-        // the class is declared, and must not hang the walk before that.
-        for _ in 0..=definitions.len() {
-            let Some(definition) = current.and_then(|name| definitions.get(name)) else {
-                break;
-            };
-            names.extend(
-                definition
-                    .generics()
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|generic| generic.name.clone()),
-            );
-            current = match definition {
-                TypeDefinition::Class(class) => class.base_class.as_deref(),
-                TypeDefinition::Struct(_)
-                | TypeDefinition::Enum(_)
-                | TypeDefinition::Generic(_)
-                | TypeDefinition::Alias(_)
-                | TypeDefinition::Trait(_) => None,
-            };
-        }
-        names
-    }
-
     /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
     /// then decrement the closure-balance counter and free the closure struct.
     /// Layout: `payload[0]=fn_ptr, payload[1]=dtor_ptr`, then the captures
@@ -1537,240 +1409,76 @@ impl<'a> FunctionTranslator<'a> {
         Self::call_rt_block_free(builder, ctx, header_ptr)
     }
 
-    /// Emits DecRef calls for all managed fields of a struct, class, or enum.
+    /// Release the counted members a drop plan names, out of the `name`
+    /// value at `payload_ptr` carrying `inst_args`.
     ///
-    /// For structs and classes, iterates all fields and emits a DecRef sequence
-    /// for each managed (heap-allocated) field. For enums, reads the discriminant
-    /// and conditionally DecRefs the active variant's managed fields.
-    ///
-    /// This is the body of the generated `miri.TypeName.$drop` function and is also
-    /// called directly from `generate_drop_function`.
-    pub(crate) fn emit_struct_drop(
+    /// Offsets come from the layout of the instance at its own arguments, so
+    /// an inherited field lands at its slot and a field after one a wide
+    /// argument binds is found where construction wrote it.
+    pub(crate) fn emit_planned_members(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        type_name: &str,
+        name: &str,
         inst_args: Option<&[Type]>,
+        members: &DroppedMembers,
         payload_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let Some(def) = type_ctx.facts.definitions().get(type_name) else {
-            return Ok(());
-        };
-        match def {
-            TypeDefinition::Struct(_) => {
-                let managed_fields = Self::managed_instance_fields(type_name, inst_args, type_ctx);
-                Self::emit_struct_like_field_decrefs(
-                    builder,
-                    ctx,
-                    type_name,
-                    inst_args,
-                    &managed_fields,
-                    payload_ptr,
-                    type_ctx,
-                )
+        let ptr_type = type_ctx.ptr_type;
+        let arg_exprs: Option<Vec<Expression>> =
+            inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
+        match members {
+            DroppedMembers::Fields(fields) => {
+                let custom_kind = TypeKind::Custom(name.to_string(), arg_exprs);
+                for slot in fields {
+                    let (offset, _) = layout::field_layout(
+                        &custom_kind,
+                        slot.index,
+                        type_ctx.layout_scope(),
+                        ptr_type,
+                    )?;
+                    let field_ptr =
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlagsData::new(), payload_ptr, offset);
+                    Self::emit_decref_value(builder, ctx, &slot.ty.kind, field_ptr, type_ctx)?;
+                }
+                Ok(())
             }
-            TypeDefinition::Enum(enum_def) => {
-                Self::emit_enum_drop(builder, ctx, enum_def, inst_args, payload_ptr, type_ctx)
-            }
-            TypeDefinition::Class(_) => {
-                let managed_fields = Self::managed_instance_fields(type_name, inst_args, type_ctx);
-                Self::emit_struct_like_field_decrefs(
-                    builder,
-                    ctx,
-                    type_name,
-                    inst_args,
-                    &managed_fields,
-                    payload_ptr,
-                    type_ctx,
-                )
-            }
-            // TODO: releasing a class instance through a trait-typed binding
-            // (`let held Get<String> = Cell<String>(..)`) lands here and frees
-            // the object without releasing any of its managed fields, for a
-            // generic and a plain class alike. The concrete class is known only
-            // at run time, so the release needs a drop entry in the instance's
-            // vtable to dispatch to.
-            TypeDefinition::Trait(_) | TypeDefinition::Alias(_) | TypeDefinition::Generic(_) => {
+            DroppedMembers::Variants(variants) => {
+                let Some(TypeDefinition::Enum(enum_def)) = type_ctx.facts.definitions().get(name)
+                else {
+                    return Err(CodegenError::Internal(format!(
+                        "the drop plan of `{name}` releases enum payloads, but `{name}` is no enum"
+                    )));
+                };
+                let disc = builder
+                    .ins()
+                    .load(ptr_type, MemFlagsData::new(), payload_ptr, 0);
+                let enum_layout = layout::enum_payload_layout(
+                    enum_def,
+                    arg_exprs.as_deref(),
+                    type_ctx.layout_scope(),
+                    ptr_type,
+                );
+                for (variant_idx, slots) in variants {
+                    let site = EnumDropSite {
+                        disc,
+                        layout: &enum_layout,
+                        payload_ptr,
+                    };
+                    Self::emit_enum_variant_drop_guard(
+                        builder,
+                        ctx,
+                        site,
+                        *variant_idx,
+                        slots,
+                        type_ctx,
+                    )?;
+                }
                 Ok(())
             }
         }
-    }
-
-    /// The index and resolved kind of every field of the struct or class
-    /// `type_name` the drop path must DecRef.
-    ///
-    /// A field is written in the parameters of the type that declares it
-    /// (`value T`, `items List<T>`), which name nothing concrete on their own.
-    /// The per-instantiation thunk supplies `inst_args`, and
-    /// [`TypeFacts::field_types`] resolves each field — an inherited one through
-    /// the `extends` chain — to the kind this instance actually stores: a
-    /// managed one joins the DecRef set at that kind, a scalar one is a genuine
-    /// no-op and is skipped. Substituting the whole field type rather than only
-    /// a bare parameter is what reaches an element type nested inside a
-    /// collection field. The shared bare-name thunk passes no arguments and is
-    /// only reached as a collection element's decref helper, where the direct
-    /// drop already routed through the mangled thunk — so a field of a generic
-    /// type still written at a parameter is skipped rather than released at a
-    /// type it may not have.
-    ///
-    /// [`TypeFacts::field_types`]: crate::mir::type_facts::TypeFacts::field_types
-    fn managed_instance_fields(
-        type_name: &str,
-        inst_args: Option<&[Type]>,
-        type_ctx: &TypeCtx,
-    ) -> Vec<(usize, TypeKind)> {
-        let definitions = type_ctx.facts.definitions();
-        let is_generic = definitions
-            .get(type_name)
-            .and_then(TypeDefinition::generics)
-            .is_some();
-        let arg_exprs: Vec<Expression> = inst_args
-            .unwrap_or_default()
-            .iter()
-            .cloned()
-            .map(type_expr_non_null)
-            .collect();
-        type_ctx
-            .facts
-            .field_types(type_name, Some(&arg_exprs))
-            .unwrap_or_default()
-            .into_iter()
-            .enumerate()
-            .filter(|(_, field)| {
-                !(is_generic && Self::is_unresolved_generic_elem(&field.kind, definitions))
-            })
-            .filter(|(_, field)| is_slot_counted(&field.kind, type_ctx.layout_scope()))
-            .map(|(idx, field)| (idx, field.kind))
-            .collect()
-    }
-
-    /// Emit `DecRef` for every managed field of a struct- or class-shaped
-    /// type. `managed_fields` carries the (full-field-list) index and field
-    /// type kind; offsets are resolved through `layout::field_layout` at the
-    /// instance's own arguments, so inherited fields land at the right slot
-    /// and a field after one a wide argument binds is found where construction
-    /// wrote it.
-    fn emit_struct_like_field_decrefs(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        type_name: &str,
-        inst_args: Option<&[Type]>,
-        managed_fields: &[(usize, TypeKind)],
-        payload_ptr: Value,
-        type_ctx: &TypeCtx,
-    ) -> Result<(), CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let arg_exprs =
-            inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
-        let custom_kind = TypeKind::Custom(type_name.to_string(), arg_exprs);
-        for (field_idx, field_kind) in managed_fields {
-            let (offset, _cl_ty) =
-                layout::field_layout(&custom_kind, *field_idx, type_ctx.layout_scope(), ptr_type)?;
-            let field_ptr = builder
-                .ins()
-                .load(ptr_type, MemFlagsData::new(), payload_ptr, offset);
-            Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
-        }
-        Ok(())
-    }
-
-    /// Drop an enum payload. Reads the discriminant at offset 0 and, for each
-    /// variant that carries managed fields, emits a guarded block that
-    /// DecRefs the variant's fields when the discriminant matches.
-    ///
-    /// For generic enums, `inst_args` provides the concrete type arguments so
-    /// that generic variant fields can be resolved to their concrete kinds. A
-    /// bare-generic field (`value T`) in a generic-enum variant is resolved to
-    /// the argument at the parameter's declared position: a managed one (like
-    /// `String`) joins the DecRef set at that kind, a scalar one (like `float`)
-    /// is skipped. The shared bare-name thunk (inst_args = None) is only reached
-    /// as a collection element's decref helper; there the direct drop already
-    /// routed through the mangled thunk, so an unresolvable generic field is
-    /// skipped here.
-    fn emit_enum_drop(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        enum_def: &EnumDefinition,
-        inst_args: Option<&[Type]>,
-        payload_ptr: Value,
-        type_ctx: &TypeCtx,
-    ) -> Result<(), CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let disc = builder
-            .ins()
-            .load(ptr_type, MemFlagsData::new(), payload_ptr, 0);
-        // The drop thunk carries the instantiation as types; the layout
-        // authority reads it as the type-argument expressions a construction
-        // site carries, so both sides resolve payloads by the same rule.
-        let type_args: Option<Vec<Expression>> =
-            inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
-        let enum_layout = layout::enum_payload_layout(
-            enum_def,
-            type_args.as_deref(),
-            type_ctx.layout_scope(),
-            ptr_type,
-        );
-
-        for (variant_idx, managed_fields) in
-            Self::enum_variants_with_managed_fields(enum_def, type_args.as_deref(), type_ctx)
-        {
-            Self::emit_enum_variant_drop_guard(
-                builder,
-                ctx,
-                EnumDropSite {
-                    disc,
-                    layout: &enum_layout,
-                    payload_ptr,
-                },
-                variant_idx,
-                &managed_fields,
-                type_ctx,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Collect `(variant_idx, [(field_idx, field_kind), ...])` for every
-    /// enum variant carrying at least one managed field. Variants without
-    /// managed fields are filtered out so the caller only emits guarded
-    /// blocks when there is decref work to do.
-    ///
-    /// For generic enums, resolves generic-parameter fields to their concrete
-    /// kinds through [`layout::enum_payload_field_kind`] using `type_args`, so
-    /// that a managed type argument (like `String`) is correctly identified as
-    /// managed. A parameter left unresolved — the shared bare-name thunk has no
-    /// arguments — is skipped.
-    pub fn enum_variants_with_managed_fields(
-        enum_def: &EnumDefinition,
-        type_args: Option<&[Expression]>,
-        type_ctx: &TypeCtx,
-    ) -> Vec<(usize, Vec<(usize, TypeKind)>)> {
-        enum_def
-            .variants
-            .iter()
-            .enumerate()
-            .filter_map(|(vi, (_name, fields))| {
-                let managed: Vec<(usize, TypeKind)> = fields
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(fi, ty)| {
-                        let kind = layout::enum_payload_field_kind(enum_def, &ty.kind, type_args);
-                        let unresolved = enum_def.generics.is_some()
-                            && Self::is_unresolved_generic_elem(
-                                &kind,
-                                type_ctx.facts.definitions(),
-                            );
-                        (!unresolved && is_slot_counted(&kind, type_ctx.layout_scope()))
-                            .then_some((fi, kind))
-                    })
-                    .collect();
-                if managed.is_empty() {
-                    None
-                } else {
-                    Some((vi, managed))
-                }
-            })
-            .collect()
     }
 
     /// Emit `if disc == variant_idx { decref each managed field }`. Caller
@@ -1780,7 +1488,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         site: EnumDropSite<'_>,
         variant_idx: usize,
-        managed_fields: &[(usize, TypeKind)],
+        slots: &[CountedSlot],
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let EnumDropSite {
@@ -1803,12 +1511,13 @@ impl<'a> FunctionTranslator<'a> {
             .brif(is_this_variant, drop_block, &[], merge_block, &[]);
 
         builder.switch_to_block(drop_block);
-        for (field_idx, field_kind) in managed_fields {
+        for slot in slots {
+            let field_idx = slot.index;
             // Payload field `k` is enum field `k + 1`: the discriminant
             // occupies the first column.
             let field_offset = enum_layout
                 .columns
-                .get(*field_idx + 1)
+                .get(field_idx + 1)
                 .ok_or_else(|| {
                     CodegenError::Internal(format!(
                         "variant {variant_idx} releases payload field {field_idx}, past the \
@@ -1820,7 +1529,7 @@ impl<'a> FunctionTranslator<'a> {
                 builder
                     .ins()
                     .load(ptr_type, MemFlagsData::new(), payload_ptr, field_offset);
-            Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
+            Self::emit_decref_value(builder, ctx, &slot.ty.kind, field_ptr, type_ctx)?;
         }
         builder.ins().jump(merge_block, &[]);
         builder.seal_block(drop_block);
@@ -2104,20 +1813,13 @@ impl<'a> FunctionTranslator<'a> {
         }
         // Generate miri.TypeName.$decref: the RC-decrement wrapper used as
         // elem_drop_fn for collections holding custom-type elements.
-        Self::generate_decref_function(
-            module,
-            ctx,
-            isa,
-            type_name,
-            &[],
-            Release::of(type_name, facts),
-        )
+        Self::generate_decref_function(module, ctx, isa, type_name, &[], facts.release(type_name))
     }
 
-    /// Emit the body of `miri.TypeName.$drop(ptr)`:
-    ///   1. invoke user-defined `fn drop(self)` when the type defines one,
-    ///   2. DecRef every managed field via `emit_struct_drop`,
-    ///   3. free the RC allocation via libc `free`.
+    /// Emit the body of `miri.TypeName.$drop(ptr)` from its plan:
+    ///   1. run the `fn drop(self)` hook the plan names,
+    ///   2. release every counted member the plan names,
+    ///   3. free the RC allocation.
     #[allow(clippy::too_many_arguments)]
     fn emit_drop_body(
         module: &mut ObjectModule,
@@ -2142,17 +1844,14 @@ impl<'a> FunctionTranslator<'a> {
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
-        // The shared thunk of a generic type reads its fields at the parameters
-        // they are declared in — the type's own and every ancestor's; a
-        // per-instantiation thunk reads them at its arguments, which leave open
-        // only a parameter inference never bound.
-        let open_params = match type_args {
-            None => Self::declared_parameters(type_name, facts),
-            Some(args) => args
-                .iter()
-                .flat_map(|arg| facts.open_parameter_names(arg))
-                .collect(),
-        };
+        let plan = facts.drop_plan(type_name, type_args).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "a drop thunk is emitted for {}, which has no drop plan",
+                Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default())
+                    .written()
+            ))
+        })?;
+        let open_params = facts.thunk_open_parameters(type_name, type_args);
         let no_bound_params = HashSet::new();
         let type_ctx = TypeCtx {
             local_types: &[],
@@ -2166,7 +1865,7 @@ impl<'a> FunctionTranslator<'a> {
             stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
 
-        if let Some(hook_name) = Self::resolve_drop_hook_name(type_name, facts) {
+        if let Some(hook) = &plan.hook {
             // The instance's count is already zero. The hook borrows `self`,
             // but a body that reads it as a whole value (`match self`) retains
             // and releases it, and that release would drop it again from
@@ -2179,18 +1878,19 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_user_drop_hook(
                 &mut builder,
                 &mut module_ctx,
-                &hook_name,
+                &hook.link_name(),
                 ptr,
                 ptr_type,
                 call_conv,
             )?;
         }
 
-        Self::emit_struct_drop(
+        Self::emit_planned_members(
             &mut builder,
             &mut module_ctx,
             type_name,
             type_args,
+            &plan.members,
             ptr,
             &type_ctx,
         )?;
@@ -2624,21 +2324,6 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_all_blocks();
         builder.finalize(module.isa().frontend_config());
         Ok(())
-    }
-
-    /// Resolves the symbol of the drop hook that releasing a `type_name` value
-    /// runs, or `None` when the type has none.
-    ///
-    /// The owner is found by the same resolution an inherited method call uses,
-    /// so a subclass reaches its base's hook (or its own copy, when the base is
-    /// abstract) and the hook this thunk declares is the method body lowered for
-    /// it. An enum names its own hook. The pipeline reads the same answer to compile the body this names. A value released
-    /// through a trait-typed or base-class reference reaches its own class's
-    /// hook through the vtable's drop slot instead.
-    pub fn resolve_drop_hook_name(type_name: &str, facts: &TypeFacts) -> Option<String> {
-        facts
-            .drop_hook_symbol(type_name)
-            .map(|symbol| symbol.link_name())
     }
 
     /// Resolves the mangled name of the shared `clone()` body for `type_name`.

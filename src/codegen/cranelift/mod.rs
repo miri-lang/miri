@@ -1401,7 +1401,7 @@ impl CraneliftBackend {
                 isa,
                 type_name,
                 args,
-                rc::Release::of(type_name, &self.facts),
+                self.facts.release(type_name),
             )?;
         }
         Ok(())

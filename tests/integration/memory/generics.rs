@@ -273,10 +273,9 @@ fn main()
 #[test]
 fn test_generic_class_managed_field_direct_drop_no_leak() {
     // A directly-dropped monomorphized `Box<String>` whose only managed field is
-    // the generic `value T` (resolved to `String`). The `has_managed_fields`
-    // gate that decides whether to call the drop thunk sees only the bare `T`
-    // field and must still route through the per-instantiation `__drop_Box__String`
-    // thunk, or the heap String leaks. Uses `f"..{..}"` so the String is a real
+    // the generic `value T` (resolved to `String`). The shared thunk's plan
+    // skips the bare `T` field, so the release must still route through the
+    // per-instantiation `Box$String` thunk, or the heap String leaks. Uses `f"..{..}"` so the String is a real
     // heap allocation (a string literal would be immortal and hide the leak).
     assert_runs_with_output(
         r#"

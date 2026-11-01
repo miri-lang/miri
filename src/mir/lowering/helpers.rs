@@ -377,7 +377,7 @@ fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<Expression>> {
 /// concretely as a reference-counted type makes the bound local managed, so
 /// Perceus retains it at the bind. That retain is what balances the release the
 /// enum's drop path emits for the same field once it resolves the instantiation
-/// (`codegen::cranelift::rc::enum_variants_with_managed_fields`). Both sides
+/// (the enum's [`crate::mir::type_facts::DropPlan`]). Both sides
 /// read the same instantiation arguments through the one rule,
 /// [`crate::mir::instantiation::member_type_at`], so a payload is managed at the
 /// bind exactly when it is released at the drop; substituting differently on

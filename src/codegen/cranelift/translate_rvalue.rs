@@ -796,7 +796,7 @@ impl<'a> FunctionTranslator<'a> {
         // helper to name: registering one would emit a symbol nothing defines
         // and fail the link. The instantiation registers the real one. Every
         // sibling registration site screens the element the same way.
-        if FunctionTranslator::is_unresolved_generic_elem(elem_kind, type_ctx.facts.definitions()) {
+        if crate::mir::type_facts::is_unresolved_element(elem_kind, type_ctx.facts.definitions()) {
             return Ok(());
         }
         if let Some(addr) =

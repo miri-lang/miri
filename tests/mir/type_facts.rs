@@ -224,6 +224,8 @@ fn an_unbound_argument_spelled_as_a_bare_name_names_the_same_drop_function() {
     assert!(facts.is_drop_instantiation("Duo", &[string(), parameter("B")]));
 }
 
+mod drop_plan;
+
 mod drop_hook_reach {
     //! Whether releasing a value may run a drop hook anywhere inside it.
 

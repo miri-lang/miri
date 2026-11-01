@@ -15,6 +15,7 @@
 //! so each rule those layers own is answered by its one implementation.
 
 mod drop_instantiations;
+mod drop_plan;
 mod drop_reach;
 pub mod unsharing;
 
@@ -33,6 +34,7 @@ pub use crate::type_checker::value_class::{
     held_value_layout, value_class, FieldRepr, LayoutShape, ScalarKind, ValueClass, ValueField,
     ValueLayout,
 };
+pub use drop_plan::{is_unresolved_element, CountedSlot, DropPlan, DroppedMembers, Release};
 pub use drop_reach::DropHookReach;
 
 /// Why the instantiations a drop thunk is emitted for could not be closed.
@@ -57,6 +59,7 @@ pub struct TypeFacts {
     definitions: HashMap<String, TypeDefinition>,
     generic_class_instantiations: HashMap<String, Vec<Vec<Type>>>,
     drop_instantiations: HashMap<String, Vec<Vec<Type>>>,
+    drop_plans: HashMap<Symbol, DropPlan>,
     vtable_fills: VtableFills,
     withheld_methods: HashSet<Symbol>,
 }
@@ -82,10 +85,12 @@ impl TypeFacts {
             &generic_class_instantiations,
             bodies,
         )?;
+        let drop_plans = drop_plans(&definitions, &drop_instantiations);
         Ok(Self {
             definitions,
             generic_class_instantiations,
             drop_instantiations,
+            drop_plans,
             vtable_fills,
             withheld_methods: HashSet::new(),
         })
@@ -126,6 +131,36 @@ impl TypeFacts {
         self.drop_instantiations_of(name)
             .iter()
             .any(|tuple| Symbol::type_thunk(ThunkKind::Drop, name, tuple) == wanted)
+    }
+
+    /// The plan of the drop thunk of `name` at `args`, or of its shared thunk
+    /// for `None`; `None` when the program emits no such thunk.
+    pub fn drop_plan(&self, name: &str, args: Option<&[Type]>) -> Option<&DropPlan> {
+        let symbol = Symbol::type_thunk(ThunkKind::Drop, name, args.unwrap_or_default());
+        self.drop_plans.get(&symbol)
+    }
+
+    /// The plan for releasing a `name` value at `args` in place, in code
+    /// leaving the parameters `open` unbound — a value no thunk is emitted
+    /// for at these arguments.
+    pub fn drop_plan_in(
+        &self,
+        name: &str,
+        args: Option<&[Type]>,
+        open: &HashSet<String>,
+    ) -> DropPlan {
+        drop_plan::drop_plan_in(&self.definitions, name, args, open)
+    }
+
+    /// The type parameters the drop thunk of `name` at `args` reads its
+    /// fields at; see [`DropPlan`].
+    pub fn thunk_open_parameters(&self, name: &str, args: Option<&[Type]>) -> HashSet<String> {
+        drop_plan::thunk_open_parameters(&self.definitions, name, args)
+    }
+
+    /// How a value whose static type is `name` is released.
+    pub fn release(&self, name: &str) -> Release {
+        Release::of(name, &self.definitions)
     }
 
     /// The name of every type parameter `ty` leaves open, anywhere inside it.
@@ -230,4 +265,31 @@ impl TypeFacts {
             )
         })
     }
+}
+
+/// The plan of every drop thunk the program emits: the shared thunk of every
+/// struct, class and enum, and the thunk of every instantiation in the drop
+/// set.
+fn drop_plans(
+    definitions: &HashMap<String, TypeDefinition>,
+    drop_instantiations: &HashMap<String, Vec<Vec<Type>>>,
+) -> HashMap<Symbol, DropPlan> {
+    let shared = (definitions.iter())
+        .filter(|(_, definition)| {
+            matches!(
+                definition,
+                TypeDefinition::Struct(_) | TypeDefinition::Class(_) | TypeDefinition::Enum(_)
+            )
+        })
+        .map(|(name, _)| (name.as_str(), None));
+    let instantiated = (drop_instantiations.iter())
+        .flat_map(|(name, tuples)| tuples.iter().map(move |args| (name.as_str(), Some(args))));
+    shared
+        .chain(instantiated)
+        .map(|(name, args)| {
+            let args = args.map(Vec::as_slice);
+            let symbol = Symbol::type_thunk(ThunkKind::Drop, name, args.unwrap_or_default());
+            (symbol, drop_plan::drop_plan(definitions, name, args))
+        })
+        .collect()
 }
