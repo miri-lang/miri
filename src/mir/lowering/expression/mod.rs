@@ -10,7 +10,6 @@ use crate::mir::symbol::Symbol;
 use crate::mir::{
     Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::statement::lower_statement;
@@ -165,18 +164,33 @@ pub(super) fn emit_to_string(
                 span: *span,
             });
             let call_args = vec![Operand::Copy(Place::new(int_temp))];
-            emit_runtime_to_string(ctx, rt::BOOL_TO_STRING, call_args, span)
+            emit_runtime_to_string(
+                ctx,
+                &crate::mir::compiler_intrinsics::BOOL_TO_STRING,
+                call_args,
+                span,
+            )
         }
         TypeKind::F32 => {
             // Format the f32 directly. Promoting to f64 first would surface the
             // f32→f64 representation error (`0.1f32` → `0.10000000149011612`),
             // so the f32 keeps its own shortest round-trip rendering.
             let call_args = vec![operand];
-            emit_runtime_to_string(ctx, rt::F32_TO_STRING, call_args, span)
+            emit_runtime_to_string(
+                ctx,
+                &crate::mir::compiler_intrinsics::F32_TO_STRING,
+                call_args,
+                span,
+            )
         }
         TypeKind::Float | TypeKind::F64 => {
             let call_args = vec![operand];
-            emit_runtime_to_string(ctx, rt::FLOAT_TO_STRING, call_args, span)
+            emit_runtime_to_string(
+                ctx,
+                &crate::mir::compiler_intrinsics::FLOAT_TO_STRING,
+                call_args,
+                span,
+            )
         }
         TypeKind::I128 | TypeKind::U128 => {
             // 128 bits do not fit the value word the narrower formatters are
@@ -201,9 +215,9 @@ pub(super) fn emit_to_string(
                 *span,
             );
             let runtime_fn = if matches!(type_kind, TypeKind::U128) {
-                rt::U128_TO_STRING
+                &crate::mir::compiler_intrinsics::U128_TO_STRING
             } else {
-                rt::I128_TO_STRING
+                &crate::mir::compiler_intrinsics::I128_TO_STRING
             };
             emit_runtime_to_string(ctx, runtime_fn, vec![addr], span)
         }
@@ -237,9 +251,9 @@ pub(super) fn emit_to_string(
             });
             let call_args = vec![Operand::Copy(Place::new(int_temp))];
             let runtime_fn = if is_unsigned {
-                rt::UINT_TO_STRING
+                &crate::mir::compiler_intrinsics::UINT_TO_STRING
             } else {
-                rt::INT_TO_STRING
+                &crate::mir::compiler_intrinsics::INT_TO_STRING
             };
             emit_runtime_to_string(ctx, runtime_fn, call_args, span)
         }
@@ -295,12 +309,12 @@ pub(super) fn emit_to_string(
 /// `Local` holding the resulting `String`.
 fn emit_runtime_to_string(
     ctx: &mut LoweringContext,
-    runtime_fn: &str,
+    runtime_fn: &crate::mir::compiler_intrinsics::Intrinsic,
     args: Vec<Operand>,
     span: &crate::error::syntax::Span,
 ) -> Result<crate::mir::place::Local, LoweringError> {
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
-    let func_op = Operand::runtime(runtime_fn, *span);
+    let func_op = Operand::runtime(runtime_fn.callee(), *span);
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -332,7 +346,10 @@ pub(super) fn emit_string_append(
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(crate::runtime_fns::rt::STRING_APPEND, *span),
+            func: Operand::runtime(
+                crate::mir::compiler_intrinsics::STRING_APPEND.callee(),
+                *span,
+            ),
             args: vec![
                 Operand::Move(Place::new(left)),
                 Operand::Copy(Place::new(right)),

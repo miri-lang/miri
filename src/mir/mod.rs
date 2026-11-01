@@ -18,6 +18,7 @@ pub mod backend;
 pub mod block;
 pub mod body;
 pub mod closure_abi;
+pub mod compiler_intrinsics;
 pub mod declaration;
 pub mod dispatch;
 pub mod element_abi;

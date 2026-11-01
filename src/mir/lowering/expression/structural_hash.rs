@@ -25,7 +25,9 @@ use super::structural_equality::{
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics as intrinsics;
 use crate::mir::lowering::context::LoweringContext;
+use crate::mir::symbol::RuntimeCallee;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
     BinOp, Constant, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
@@ -46,7 +48,10 @@ pub fn emit_structural_hash(
     value: Operand,
 ) -> Result<Local, LoweringError> {
     match kind {
-        TypeKind::String => Ok(call_runtime_hash(ctx, span, rt::STRING_HASH, vec![value])),
+        TypeKind::String => {
+            let callee = ctx.declared_runtime(rt::STRING_HASH, span)?;
+            Ok(call_runtime_hash(ctx, span, callee, vec![value]))
+        }
         TypeKind::Option(inner) => emit_option_hash(ctx, span, inner, value),
         // An atomic is held as the number it wraps, which `==` compares.
         TypeKind::Custom(_, _) if super::binary_expr::is_device_marker(kind) => {
@@ -55,9 +60,12 @@ pub fn emit_structural_hash(
         TypeKind::Custom(name, args) => {
             emit_named_type_hash(ctx, span, name, args.as_deref(), value)
         }
-        TypeKind::Float | TypeKind::F64 => {
-            Ok(call_runtime_hash(ctx, span, rt::FLOAT_HASH, vec![value]))
-        }
+        TypeKind::Float | TypeKind::F64 => Ok(call_runtime_hash(
+            ctx,
+            span,
+            intrinsics::FLOAT_HASH.callee(),
+            vec![value],
+        )),
         // A narrower float is widened first, which keeps its number, so it
         // hashes as the number `==` compares.
         TypeKind::F16 | TypeKind::F32 => {
@@ -65,7 +73,7 @@ pub fn emit_structural_hash(
             Ok(call_runtime_hash(
                 ctx,
                 span,
-                rt::FLOAT_HASH,
+                intrinsics::FLOAT_HASH.callee(),
                 vec![Operand::Copy(Place::new(wide))],
             ))
         }
@@ -83,11 +91,11 @@ pub fn emit_structural_hash(
         | TypeKind::U32
         | TypeKind::U64
         | TypeKind::U128 => Ok(cast(ctx, value, TypeKind::Int, span)),
-        TypeKind::RawPtr | TypeKind::Identifier => Ok(address_hash(ctx, span, value)),
+        TypeKind::RawPtr | TypeKind::Identifier => address_hash(ctx, span, value),
         // A type parameter is left open only in a generic body's shared copy,
         // which reads it as one machine word, as `==` there compares it; each
         // instantiation's own copy hashes the type it is bound to.
-        TypeKind::Generic(_, _, _) => Ok(address_hash(ctx, span, value)),
+        TypeKind::Generic(_, _, _) => address_hash(ctx, span, value),
         TypeKind::Void => Ok(int_constant(ctx, 0, span)),
         TypeKind::Result(_, _) => Err(LoweringError::unsupported_expression(
             "cannot hash a result type that was not resolved to its declaration".to_string(),
@@ -117,7 +125,7 @@ pub fn emit_structural_hash(
         | TypeKind::Set(_)
         | TypeKind::OneOf(_)
         | TypeKind::Function(_)
-        | TypeKind::Future(_) => Ok(address_hash(ctx, span, value)),
+        | TypeKind::Future(_) => address_hash(ctx, span, value),
         TypeKind::Meta(_) | TypeKind::Linear(_) | TypeKind::Error => {
             Err(LoweringError::unsupported_expression(
                 format!("a derived hash is not supported for type {}", kind),
@@ -221,9 +229,7 @@ fn emit_named_type_hash(
         Some(TypeDefinition::Struct(_)) => emit_struct_hash(ctx, span, name, args, value),
         // A class without `equals`, or a trait-typed value whose trait
         // declares no `hash`, is compared by `==` as the instance it is.
-        Some(TypeDefinition::Class(_) | TypeDefinition::Trait(_)) => {
-            Ok(address_hash(ctx, span, value))
-        }
+        Some(TypeDefinition::Class(_) | TypeDefinition::Trait(_)) => address_hash(ctx, span, value),
         Some(TypeDefinition::Generic(_) | TypeDefinition::Alias(_)) | None => {
             Err(LoweringError::unsupported_expression(
                 format!("a derived hash is not supported for type {}", name),
@@ -284,14 +290,14 @@ fn emit_enum_hash(
             if ctx.is_counted(&payload_ty.kind) {
                 ctx.emit_temp_drop(payload, watermark, span);
             }
-            hash = combine(ctx, hash, part, span);
+            hash = combine(ctx, hash, part, span)?;
         }
         assign_local(ctx, result, hash, span);
         goto(ctx, final_bb, span);
     }
 
     ctx.set_current_block(corrupt_bb);
-    emit_corrupt_discriminant_panic(ctx, enum_name, final_bb, span);
+    emit_corrupt_discriminant_panic(ctx, enum_name, final_bb, span)?;
 
     ctx.set_current_block(final_bb);
     Ok(result)
@@ -329,7 +335,7 @@ fn emit_struct_hash(
         }
         let part =
             emit_structural_hash(ctx, span, &field_ty.kind, Operand::Copy(Place::new(field)))?;
-        hash = combine(ctx, hash, part, span);
+        hash = combine(ctx, hash, part, span)?;
     }
     Ok(hash)
 }
@@ -345,7 +351,7 @@ fn emit_tuple_hash(
     value: Operand,
 ) -> Result<Local, LoweringError> {
     if ctx.body.value_layout(kind).is_none() {
-        return Ok(address_hash(ctx, span, value));
+        return address_hash(ctx, span, value);
     }
     let element_types: Vec<Type> = elements
         .iter()
@@ -366,7 +372,7 @@ fn emit_tuple_hash(
             &element_ty.kind,
             Operand::Copy(Place::new(element)),
         )?;
-        hash = combine(ctx, hash, part, span);
+        hash = combine(ctx, hash, part, span)?;
     }
     Ok(hash)
 }
@@ -386,32 +392,43 @@ fn call_hash_method(
 }
 
 /// The hash of a value `==` compares by identity: its address, mixed.
-fn address_hash(ctx: &mut LoweringContext, span: Span, value: Operand) -> Local {
+fn address_hash(
+    ctx: &mut LoweringContext,
+    span: Span,
+    value: Operand,
+) -> Result<Local, LoweringError> {
+    let combine = ctx.declared_runtime(rt::HASH_COMBINE, span)?;
     let seed = Operand::Copy(Place::new(int_constant(ctx, 0, span)));
-    call_runtime_hash(ctx, span, rt::HASH_COMBINE, vec![seed, value])
+    Ok(call_runtime_hash(ctx, span, combine, vec![seed, value]))
 }
 
 /// `seed` with `part` mixed into it.
-fn combine(ctx: &mut LoweringContext, seed: Local, part: Local, span: Span) -> Local {
-    call_runtime_hash(
+fn combine(
+    ctx: &mut LoweringContext,
+    seed: Local,
+    part: Local,
+    span: Span,
+) -> Result<Local, LoweringError> {
+    let combine = ctx.declared_runtime(rt::HASH_COMBINE, span)?;
+    Ok(call_runtime_hash(
         ctx,
         span,
-        rt::HASH_COMBINE,
+        combine,
         vec![
             Operand::Copy(Place::new(seed)),
             Operand::Copy(Place::new(part)),
         ],
-    )
+    ))
 }
 
-/// Call the runtime hashing helper `name` with `args`, into an `int` local.
+/// Call the runtime hashing helper `callee` with `args`, into an `int` local.
 fn call_runtime_hash(
     ctx: &mut LoweringContext,
     span: Span,
-    name: &str,
+    callee: RuntimeCallee,
     args: Vec<Operand>,
 ) -> Local {
-    call_into_int(ctx, span, Operand::runtime(name, span), args)
+    call_into_int(ctx, span, Operand::runtime(callee, span), args)
 }
 
 fn call_into_int(

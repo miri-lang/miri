@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use crate::type_checker::utils::{type_checker_error_test, type_checker_result};
+use miri::mir::compiler_intrinsics::{compiler_intrinsic, compiler_intrinsic_names};
 use miri::runtime_effects::{ParamUse, RuntimeEffect};
 use miri::runtime_fns as table;
 
@@ -238,6 +239,39 @@ fn the_declarations_state_what_the_name_tables_say() {
     .map(String::from)
     .collect();
     assert_eq!(found, expected);
+}
+
+/// The compiler's own records state what the name tables said, except that a
+/// map or a set copy-on-write hands back a collection as long as the one it
+/// is handed, as a list or an array copy-on-write does.
+#[test]
+fn the_compiler_owned_records_state_what_the_name_tables_say() {
+    let found: BTreeSet<String> = compiler_intrinsic_names()
+        .filter_map(|name| Some((name, compiler_intrinsic(name)?.effect())))
+        .flat_map(|(name, effect)| disagreements(name, &effect))
+        .collect();
+    let expected: BTreeSet<String> = [
+        "miri_rt_map_cow preserves_length: stated true, table false",
+        "miri_rt_map_cow copies_collection: stated true, table false",
+        "miri_rt_set_cow preserves_length: stated true, table false",
+        "miri_rt_set_cow copies_collection: stated true, table false",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert_eq!(found, expected);
+}
+
+/// An entry point is described in one place: no entry point the compiler
+/// describes is also declared by the stdlib.
+#[test]
+fn no_entry_point_is_both_declared_and_compiler_owned() {
+    let both: Vec<String> = declared()
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| compiler_intrinsic(name).is_some())
+        .collect();
+    assert!(both.is_empty(), "described twice: {both:?}");
 }
 
 /// Every entry point the stdlib declares has a record.

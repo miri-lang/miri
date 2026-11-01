@@ -8,6 +8,7 @@
 //! once, however many calls name it, and only after checking that the
 //! signature it calls the closure under is the one the closure's type gives.
 
+use crate::mir::utils::runtime_callee;
 use cranelift_codegen::ir::types;
 use cranelift_object::object::{File, Object, ObjectSymbol};
 use miri::ast::common::Parameter;
@@ -55,7 +56,7 @@ fn sorting_by(element: TypeKind) -> Body {
     let list = body.new_local(LocalDecl::new(ty(list), Span::default()));
     let closure = body.new_local(LocalDecl::new(ty(comparator_of(element)), Span::default()));
     let call = TerminatorKind::Call {
-        func: Operand::runtime(SORT_BY, Span::default()),
+        func: Operand::runtime(runtime_callee(SORT_BY), Span::default()),
         args: vec![
             Operand::Copy(Place::new(list)),
             Operand::Copy(Place::new(closure)),

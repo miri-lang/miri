@@ -137,7 +137,7 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             write_arguments(f, context_args)
         }
         SymbolKind::GpuKernel { kind, index } => write_gpu_kernel(f, *kind, *index),
-        SymbolKind::Runtime(c_name) => f.write_str(c_name),
+        SymbolKind::Runtime(callee) => f.write_str(callee.name()),
         SymbolKind::Entry => f.write_str(ENTRY_NAME),
         SymbolKind::TypeThunk { kind, subject } => {
             f.write_str(thunk_prefix(*kind))?;

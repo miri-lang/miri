@@ -11,7 +11,7 @@ use crate::error::syntax::Span;
 use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
-use crate::runtime_fns::{cow_fn, rt};
+use crate::runtime_fns::cow_fn;
 use crate::type_checker::context::{
     class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
     TypeDefinition,
@@ -1316,8 +1316,16 @@ pub(super) fn emit_cow_check(
         emit_receiver_unique_check(ctx, self_local, span);
         return Ok(obj_op);
     }
+    let Some(cow_intrinsic) = crate::mir::compiler_intrinsics::compiler_intrinsic(cow_fn_name)
+    else {
+        return Err(LoweringError::internal(
+            crate::diagnostics::DiagnosticCode::MirValidationFailed,
+            format!("`{cow_fn_name}` is no copy-on-write entry point the compiler describes"),
+            span,
+        ));
+    };
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
-    let cow_fn = Operand::runtime(cow_fn_name, span);
+    let cow_fn = Operand::runtime(cow_intrinsic.callee(), span);
     let cow_target = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -1358,7 +1366,10 @@ fn emit_receiver_unique_check(ctx: &mut LoweringContext, receiver: Local, span: 
     let target = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(rt::RECEIVER_UNIQUE, span),
+            func: Operand::runtime(
+                crate::mir::compiler_intrinsics::RECEIVER_UNIQUE.callee(),
+                span,
+            ),
             args: vec![Operand::Copy(Place::new(receiver))],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),

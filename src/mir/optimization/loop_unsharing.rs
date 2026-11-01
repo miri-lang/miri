@@ -414,7 +414,10 @@ fn make_own_before(body: &mut Body, loops: &[NaturalLoop], header: usize, local:
     let Some(decl) = body.local_decls.get(local.0) else {
         return false;
     };
-    let Some(cow) = decl.ty.kind.as_builtin_collection().and_then(cow_fn) else {
+    let Some(cow) = (decl.ty.kind.as_builtin_collection())
+        .and_then(cow_fn)
+        .and_then(crate::mir::compiler_intrinsics::compiler_intrinsic)
+    else {
         return false;
     };
     let ty = decl.ty.clone();
@@ -429,7 +432,7 @@ fn make_own_before(body: &mut Body, loops: &[NaturalLoop], header: usize, local:
     body.basic_blocks
         .push(BasicBlockData::new(Some(Terminator::new(
             TerminatorKind::Call {
-                func: Operand::runtime(cow, span),
+                func: Operand::runtime(cow.callee(), span),
                 args: vec![Operand::Move(Place::new(local))],
                 arg_modes: Vec::new(),
                 arg_handles: Vec::new(),

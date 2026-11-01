@@ -9,6 +9,7 @@
 //! removed or undone, with one finding naming the written place and the entry
 //! point.
 
+use crate::mir::utils::{runtime_callee, runtime_callee_stating};
 use miri::ast::common::MemberVisibility;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
@@ -23,6 +24,7 @@ use miri::mir::{
     AggregateKind, BinOp, Body, Constant, Discriminant, ExecutionModel, Local, LocalDecl, Operand,
     Place, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
+use miri::runtime_effects::ParamUse;
 use miri::runtime_fns::rt;
 use miri::type_checker::context::{ClassDefinition, FieldInfo, StructDefinition, TypeDefinition};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -216,7 +218,12 @@ fn call(func: Operand, args: Vec<Operand>, dest: Place, target: usize) -> Termin
 }
 
 fn runtime(name: &str, args: Vec<Operand>, dest: usize, target: usize) -> TerminatorKind {
-    call(Operand::runtime(name, span()), args, local(dest), target)
+    let callee = if name == UNKNOWN {
+        runtime_callee_stating(name, vec![ParamUse::Writes])
+    } else {
+        runtime_callee(name)
+    };
+    call(Operand::runtime(callee, span()), args, local(dest), target)
 }
 
 /// A call to a function of the program, handed `args`.
@@ -779,7 +786,8 @@ fn the_same_write_once_reachable_is_reported() {
 
 const UNKNOWN: &str = "miri_rt_user_fill";
 
-/// An entry point no table classifies, handed `_1` after `made` defined it.
+/// An entry point a program declares as writing what it is handed, handed
+/// `_1` after `made` defined it.
 fn unknown_writer(made: Vec<BasicBlockData>) -> Body {
     let count = made.len();
     let mut blocks = made;

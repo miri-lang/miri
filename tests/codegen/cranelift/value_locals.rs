@@ -9,6 +9,7 @@
 //! uses is compiled — with the Cranelift verifier on — and run before any
 //! program depends on it.
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
@@ -382,7 +383,10 @@ fn a_value_passed_to_a_runtime_function_is_refused() {
             block(
                 Vec::new(),
                 TerminatorKind::Call {
-                    func: Operand::runtime("miri_rt_example", span()),
+                    func: Operand::runtime(
+                        runtime_callee_stating("miri_rt_example", Vec::new()),
+                        span(),
+                    ),
                     args: vec![copy(place(1))],
                     arg_modes: Vec::new(),
                     arg_handles: Vec::new(),

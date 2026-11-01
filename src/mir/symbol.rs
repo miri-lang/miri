@@ -122,10 +122,12 @@ pub use trampoline::{TrampolineArgument, TrampolineShape, TrampolineWord};
 
 use std::borrow::Cow;
 use std::fmt::{self, Write};
+use std::rc::Rc;
 
 use crate::ast::type_identity;
 use crate::ast::types::Type;
 use crate::mir::body::DeviceHandleId;
+use crate::runtime_effects::RuntimeEffect;
 use crate::type_checker::ModuleId;
 use token::type_kind_to_mangle_str;
 
@@ -226,6 +228,40 @@ pub enum StringLiteralPart {
     Object,
 }
 
+/// A runtime entry point a call names, with the record of what it does to
+/// its arguments and its result.
+///
+/// Every stage that reasons about a runtime call reads the record from here,
+/// so no stage recognises an entry point by its name. Two callees with one
+/// name carry one record: the name selects the record when the callee is
+/// built.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RuntimeCallee {
+    name: String,
+    effect: Rc<RuntimeEffect>,
+}
+
+impl RuntimeCallee {
+    /// The entry point the runtime library exports under the C name `name`,
+    /// doing what `effect` records.
+    pub fn new(name: &str, effect: Rc<RuntimeEffect>) -> Self {
+        RuntimeCallee {
+            name: name.to_string(),
+            effect,
+        }
+    }
+
+    /// The C name the entry point is exported under.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// What the entry point does to its arguments and its result.
+    pub fn effect(&self) -> &RuntimeEffect {
+        &self.effect
+    }
+}
+
 /// A compiled body or datum, identified by what it stands for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Symbol {
@@ -259,7 +295,7 @@ enum SymbolKind {
         kind: GpuKernelKind,
         index: usize,
     },
-    Runtime(String),
+    Runtime(RuntimeCallee),
     Entry,
     TypeThunk {
         kind: ThunkKind,
@@ -376,9 +412,10 @@ impl Symbol {
         Self::of(SymbolKind::GpuKernel { kind, index })
     }
 
-    /// A function the runtime library exports under the C name `c_name`.
-    pub fn runtime(c_name: &str) -> Self {
-        Self::of(SymbolKind::Runtime(c_name.to_string()))
+    /// A function the runtime library exports, with what it does to its
+    /// arguments.
+    pub fn runtime(callee: RuntimeCallee) -> Self {
+        Self::of(SymbolKind::Runtime(callee))
     }
 
     /// The program's entry point.
@@ -561,7 +598,7 @@ impl Symbol {
     /// other symbol.
     pub fn runtime_name(&self) -> Option<&str> {
         match &self.kind {
-            SymbolKind::Runtime(c_name) => Some(c_name),
+            SymbolKind::Runtime(callee) => Some(&callee.name),
             SymbolKind::Function { .. }
             | SymbolKind::Method { .. }
             | SymbolKind::Vtable { .. }
@@ -574,6 +611,15 @@ impl Symbol {
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => None,
         }
+    }
+
+    /// What the runtime function this symbol names does; `None` for any
+    /// other symbol.
+    pub fn runtime_effect(&self) -> Option<&RuntimeEffect> {
+        let SymbolKind::Runtime(callee) = &self.kind else {
+            return None;
+        };
+        Some(callee.effect())
     }
 
     /// The name the linker knows this symbol by.
@@ -634,7 +680,7 @@ impl Symbol {
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            SymbolKind::Runtime(c_name) => f.write_str(c_name),
+            SymbolKind::Runtime(callee) => f.write_str(&callee.name),
             SymbolKind::Entry => f.write_str(ENTRY_NAME),
             SymbolKind::GpuKernel { .. }
             | SymbolKind::KernelDatum { .. }

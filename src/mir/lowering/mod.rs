@@ -1532,7 +1532,10 @@ fn emit_guard_fail_branch(
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(crate::runtime_fns::rt::GUARD_FAILED_PANIC, span),
+            func: Operand::runtime(
+                crate::mir::compiler_intrinsics::GUARD_FAILED_PANIC.callee(),
+                span,
+            ),
             args: vec![Operand::Copy(Place::new(message))],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),

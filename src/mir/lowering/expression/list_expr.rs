@@ -22,7 +22,7 @@ pub(crate) fn lower_list_expr(
         unreachable!()
     };
     let target = literal_target(ctx, expr, dest.as_ref());
-    emit_empty_list(ctx, &expr.span, &target.ty, target.place.clone());
+    emit_empty_list(ctx, &expr.span, &target.ty, target.place.clone())?;
     for element in elements {
         let list = Operand::Copy(target.place.clone());
         emit_list_push(

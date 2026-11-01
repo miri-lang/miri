@@ -64,7 +64,7 @@ fn write_written_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Res
         }
         SymbolKind::Closure { kind, .. } => write_written_closure(f, kind),
         SymbolKind::GpuKernel { kind, .. } => write_written_kernel(f, *kind),
-        SymbolKind::Runtime(c_name) => write!(f, "the runtime function `{c_name}`"),
+        SymbolKind::Runtime(callee) => write!(f, "the runtime function `{}`", callee.name()),
         SymbolKind::Entry => f.write_str("the entry point `main`"),
         SymbolKind::TypeThunk { kind, subject } => {
             write!(f, "the {} function of ", thunk_role(*kind))?;

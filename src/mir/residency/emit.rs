@@ -7,17 +7,16 @@
 //! the block the readback is appended to and returns the block that continues
 //! after it.
 
-use super::READBACK_FN;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::DeviceHandleId;
+use crate::mir::compiler_intrinsics::{self as intrinsics, Intrinsic};
 use crate::mir::{
     AggregateKind, BasicBlock, BasicBlockData, Body, Constant, Local, LocalDecl, Operand, Place,
     PlaceElem, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::rt;
 
 /// Append to block `from` the readback of `local`'s device buffer into its host
 /// value, returning the block that continues after it. A local with no device
@@ -55,7 +54,7 @@ pub(crate) fn append_readback(
         handle_operand(handle, span),
         Operand::Copy(Place::new(local)),
     ];
-    append_void_call(body, from, READBACK_FN, args, span)
+    append_void_call(body, from, &intrinsics::READBACK, args, span)
 }
 
 fn is_array(ty: &Type) -> bool {
@@ -75,7 +74,14 @@ fn detach_host_array(body: &mut Body, from: BasicBlock, local: Local, span: Span
     let ty = body.local_decls[local.0].ty.clone();
     let unshared = body.new_local(LocalDecl::new(ty, span));
     let args = vec![Operand::Move(Place::new(local))];
-    let next = append_call(body, from, rt::ARRAY_COW, args, Place::new(unshared), span);
+    let next = append_call(
+        body,
+        from,
+        &intrinsics::ARRAY_COW,
+        args,
+        Place::new(unshared),
+        span,
+    );
     body.basic_blocks[next.0].statements.push(Statement {
         kind: StatementKind::Assign(
             Place::new(local),
@@ -113,7 +119,7 @@ fn append_scalar_readback(
         handle_operand(handle, span),
         Operand::Copy(Place::new(wrapper)),
     ];
-    let next = append_void_call(body, from, READBACK_FN, args, span);
+    let next = append_void_call(body, from, &intrinsics::READBACK, args, span);
 
     let index = body.new_local(LocalDecl::new(Type::new(TypeKind::Int, span), span));
     let mut element = Place::new(wrapper);
@@ -152,7 +158,7 @@ fn one_element_array(element: Type, span: Span) -> Type {
     )
 }
 
-/// End block `from` with a call to runtime entry `name` whose result is
+/// End block `from` with a call to runtime entry `intrinsic` whose result is
 /// discarded, returning the block that continues after it.
 ///
 /// Terminator operands are not retained by Perceus, so a managed argument is
@@ -160,25 +166,25 @@ fn one_element_array(element: Type, span: Span) -> Type {
 fn append_void_call(
     body: &mut Body,
     from: BasicBlock,
-    name: &str,
+    intrinsic: &Intrinsic,
     args: Vec<Operand>,
     span: Span,
 ) -> BasicBlock {
     let discarded = body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span), span));
-    append_call(body, from, name, args, Place::new(discarded), span)
+    append_call(body, from, intrinsic, args, Place::new(discarded), span)
 }
 
-/// End block `from` with a call to runtime entry `name` storing into
+/// End block `from` with a call to runtime entry `intrinsic` storing into
 /// `destination`, returning the block that continues after it.
 fn append_call(
     body: &mut Body,
     from: BasicBlock,
-    name: &str,
+    intrinsic: &Intrinsic,
     args: Vec<Operand>,
     destination: Place,
     span: Span,
 ) -> BasicBlock {
-    let func = Operand::runtime(name, span);
+    let func = Operand::runtime(intrinsic.callee(), span);
     let next = new_block(body);
     body.basic_blocks[from.0].terminator = Some(Terminator::new(
         TerminatorKind::Call {

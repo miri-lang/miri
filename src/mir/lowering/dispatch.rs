@@ -763,7 +763,7 @@ pub(crate) fn emit_list_push(
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
     let obj_op = receiver.make_own(ctx)?;
-    let func_op = Operand::runtime(rt::LIST_PUSH, *span);
+    let func_op = ctx.declared_runtime_operand(rt::LIST_PUSH, *span)?;
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -1027,7 +1027,7 @@ pub(crate) fn emit_map_set(
         donate_operand_to_container(ctx, value_op, value_ty, value_arg.span);
     let obj_op = receiver.make_own(ctx)?;
 
-    let func_op = Operand::runtime(rt::MAP_SET, *span);
+    let func_op = ctx.declared_runtime_operand(rt::MAP_SET, *span)?;
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -1093,7 +1093,7 @@ pub(crate) fn emit_set_add(
     // result has to land in the caller's destination when it asked for one.
     let destination = dest
         .unwrap_or_else(|| Place::new(ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span)));
-    let func_op = Operand::runtime(rt::SET_ADD, *span);
+    let func_op = ctx.declared_runtime_operand(rt::SET_ADD, *span)?;
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -1152,7 +1152,7 @@ fn emit_list_insert(
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
     let obj_op = receiver.make_own(ctx)?;
-    let func_op = Operand::runtime(rt::LIST_INSERT, *span);
+    let func_op = ctx.declared_runtime_operand(rt::LIST_INSERT, *span)?;
     let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -1399,7 +1399,7 @@ fn lower_gpu_slice(
         .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
     let (destination, op) = call_destination(ctx, result_ty, dest, *span);
 
-    let func_op = Operand::runtime(rt::ARRAY_SLICE, *span);
+    let func_op = Operand::runtime(crate::mir::compiler_intrinsics::ARRAY_SLICE.callee(), *span);
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {

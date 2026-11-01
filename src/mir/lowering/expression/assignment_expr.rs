@@ -389,7 +389,7 @@ fn assign_to_member(
             dest,
         )?;
         if let Some(written) = written {
-            written.finish(ctx, obj);
+            written.finish(ctx, obj)?;
         }
         Ok(stored)
     } else {
@@ -683,8 +683,8 @@ pub(crate) fn emit_map_set_call(
     key_op: Operand,
     val_op: Operand,
     expr: &Expression,
-) -> crate::mir::Local {
-    let func_op = Operand::runtime(rt::MAP_SET, expr.span);
+) -> Result<crate::mir::Local, LoweringError> {
+    let func_op = ctx.declared_runtime_operand(rt::MAP_SET, expr.span)?;
 
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, expr.span), expr.span);
@@ -702,7 +702,7 @@ pub(crate) fn emit_map_set_call(
         expr.span,
     ));
     ctx.set_current_block(target_bb);
-    dummy_dest
+    Ok(dummy_dest)
 }
 
 /// Lower the receiver of an indexed assignment, taking an exclusive copy first
@@ -754,7 +754,7 @@ fn assign_to_index_map(
 
     inc_ref_if_managed(ctx, &val, &val_ty, expr);
 
-    let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr);
+    let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr)?;
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
     }
@@ -841,7 +841,7 @@ fn compound_assign_to_index_map(
     // its scope.
     inc_ref_if_managed(ctx, &combined, &value_ty, expr);
     let donated_val = combined;
-    emit_map_set_call(ctx, obj_op, donated_key, donated_val.clone(), expr);
+    emit_map_set_call(ctx, obj_op, donated_key, donated_val.clone(), expr)?;
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, key_watermark, idx.span);
     }
@@ -939,7 +939,10 @@ pub(crate) fn emit_map_get_checked_call(
     value_ty: &Type,
     expr: &Expression,
 ) -> Operand {
-    let func_op = Operand::runtime(rt::MAP_GET_CHECKED, expr.span);
+    let func_op = Operand::runtime(
+        crate::mir::compiler_intrinsics::MAP_GET_CHECKED.callee(),
+        expr.span,
+    );
 
     // The lookup hands back what the map still owns without raising its count,
     // so the temp holding it is a borrow: releasing it would take a reference
@@ -1107,7 +1110,7 @@ fn emit_gpu_upload(
 
     let array_operand = Operand::Copy(host_place.clone());
 
-    let func_op = Operand::runtime(crate::mir::residency::UPLOAD_FN, expr.span);
+    let func_op = Operand::runtime(crate::mir::compiler_intrinsics::UPLOAD.callee(), expr.span);
 
     let target_bb = ctx.new_basic_block();
     let _result_temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::error::syntax::Span;
 use miri::mir::{
     ArgMode, BasicBlock, BasicBlockData, Body, ExecutionModel, Local, Operand, Place, Rvalue,
@@ -39,7 +40,10 @@ fn test_written_locals_counts_statement_and_terminator_writes() {
     let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
     let mut block = BasicBlockData::new(Some(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime("callee", Span::default()),
+            func: Operand::runtime(
+                runtime_callee_stating("callee", Vec::new()),
+                Span::default(),
+            ),
             args: vec![
                 Operand::Copy(Place::new(Local(3))),
                 Operand::Copy(Place::new(Local(4))),

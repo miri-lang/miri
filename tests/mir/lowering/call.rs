@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::utils::runtime_callee;
 use crate::mir::utils::{mir_lower_code, mir_snapshot_test};
 use miri::mir::symbol::Symbol;
 use miri::mir::{Body, Operand, TerminatorKind};
@@ -147,7 +148,7 @@ fn main()
 #[test]
 fn test_runtime_call_names_its_runtime_symbol() {
     let body = mir_lower_code("fn main(): let s = {1, 2, 3}");
-    let expected = Symbol::runtime("miri_rt_set_add");
+    let expected = Symbol::runtime(runtime_callee("miri_rt_set_add"));
     let targets = call_targets(&body);
     assert!(
         targets
@@ -195,4 +196,21 @@ fn test_a_string_receiver_reaches_a_runtime_string_parameter_as_it_is() {
         !body.contains("IncRef(_1)") && !body.contains(" as String"),
         "code_at retains or re-spells its receiver:\n{body}"
     );
+}
+
+/// A runtime call carries the record of what its entry point does: the one
+/// the stdlib's declaration states, or the compiler's own.
+#[test]
+fn every_runtime_call_carries_its_entry_points_record() {
+    let body = mir_lower_code("fn main(): let s = f\"{1} {[1, 2].length()}\"");
+    let calls: Vec<&Operand> = call_targets(&body)
+        .into_iter()
+        .filter(|func| func.called_runtime_name().is_some())
+        .collect();
+    assert!(calls.len() >= 2, "expected runtime calls, got {calls:?}");
+    for func in calls {
+        let name = func.called_runtime_name().unwrap_or_default();
+        let carried = func.called_runtime_effect();
+        assert_eq!(carried, Some(runtime_callee(name).effect()), "{name}");
+    }
 }

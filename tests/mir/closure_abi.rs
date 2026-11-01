@@ -6,6 +6,7 @@
 //! position the runtime parameter table gives it once every earlier element
 //! and closure has gained its second word.
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::ast::common::Parameter;
 use miri::ast::factory::type_expr_non_null;
 use miri::ast::types::{FunctionTypeData, Type, TypeKind};
@@ -101,7 +102,7 @@ fn calling_sort_with(args: &[TypeKind]) -> Body {
         .collect::<Vec<_>>();
     let terminator = Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime("sort", Span::default()),
+            func: Operand::runtime(runtime_callee_stating("sort", Vec::new()), Span::default()),
             arg_modes: vec![ArgMode::Borrowed; operands.len()],
             args: operands,
             arg_handles: Vec::new(),
@@ -240,7 +241,10 @@ fn a_call_to_an_entry_point_with_no_closure_parameter_is_left_alone() {
     else {
         panic!("the body ends without its call");
     };
-    *func = Operand::runtime("reverse", Span::default());
+    *func = Operand::runtime(
+        runtime_callee_stating("reverse", Vec::new()),
+        Span::default(),
+    );
     pass_closures_through(&mut body, &table).expect("nothing to check");
     assert_eq!(trampolines(&body), vec![None, None]);
 }

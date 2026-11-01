@@ -37,9 +37,11 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics as intrinsics;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::place::PlaceElem;
+use crate::mir::symbol::RuntimeCallee;
 use crate::mir::terminator::Discriminant;
 use crate::mir::type_facts::unsharing::{is_copied_on_write, unsharing, Unsharing};
 use crate::mir::{
@@ -134,17 +136,26 @@ pub(crate) struct WrittenPlace {
 impl WrittenPlace {
     /// Completes the write into `obj` once it is done: stores a copied-out map
     /// value back under its key, then releases the temp the path starts at.
-    pub(crate) fn finish(self, ctx: &mut LoweringContext, obj: &Expression) {
+    pub(crate) fn finish(
+        self,
+        ctx: &mut LoweringContext,
+        obj: &Expression,
+    ) -> Result<(), LoweringError> {
         if let Some(write_back) = self.write_back {
-            store_entry_back(ctx, write_back, obj);
+            store_entry_back(ctx, write_back, obj)?;
         }
         TemporaryRoot::release(self.temporary, ctx, obj.span);
+        Ok(())
     }
 }
 
 /// Stores a copied-out map value back under its key once the write into it is
 /// done, the map taking the key, then releases the copy.
-fn store_entry_back(ctx: &mut LoweringContext, write_back: EntryWriteBack, obj: &Expression) {
+fn store_entry_back(
+    ctx: &mut LoweringContext,
+    write_back: EntryWriteBack,
+    obj: &Expression,
+) -> Result<(), LoweringError> {
     let (donated_key, _) = crate::mir::lowering::dispatch::donate_operand_to_container(
         ctx,
         Operand::Copy(write_back.key.clone()),
@@ -157,10 +168,11 @@ fn store_entry_back(ctx: &mut LoweringContext, write_back: EntryWriteBack, obj: 
         donated_key,
         Operand::Copy(write_back.value.clone()),
         obj,
-    );
+    )?;
     ctx.emit_temp_drop(write_back.key.local, write_back.key_watermark, obj.span);
     let copy = write_back.value.local;
     ctx.emit_temp_drop(copy, copy.0, obj.span);
+    Ok(())
 }
 
 /// Lowers `obj`, the value a write goes into, as a place every value on whose
@@ -632,7 +644,7 @@ fn own_entry_place(
         donated_key,
         copy_op,
         obj,
-    );
+    )?;
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: join_bb },
         obj.span,
@@ -706,7 +718,8 @@ fn branch_when_shared(ctx: &mut LoweringContext, place: &Place, span: Span) -> B
     let join_bb = ctx.new_basic_block();
     let is_shared = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     let check_bb = ctx.new_basic_block();
-    emit_runtime_call(ctx, rt::RC_IS_SHARED, place, is_shared, check_bb, span);
+    let is_shared_fn = intrinsics::RC_IS_SHARED.callee();
+    emit_runtime_call(ctx, is_shared_fn, place, is_shared, check_bb, span);
     ctx.set_current_block(check_bb);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
@@ -740,15 +753,9 @@ fn emit_copy(
             emit_aggregate_copy(ctx, place, kind, element_count, copy, span);
         }
         Unsharing::Collection(kind) => {
+            let clone_fn = ctx.declared_runtime(collection_clone_fn(kind), span)?;
             let written_bb = ctx.new_basic_block();
-            emit_runtime_call(
-                ctx,
-                collection_clone_fn(kind),
-                place,
-                copy,
-                written_bb,
-                span,
-            );
+            emit_runtime_call(ctx, clone_fn, place, copy, written_bb, span);
             ctx.set_current_block(written_bb);
         }
     }
@@ -764,7 +771,7 @@ fn emit_copy_count(ctx: &mut LoweringContext, span: Span) {
     let unit = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(rt::RC_STATS_COW_COPY, span),
+            func: Operand::runtime(intrinsics::RC_STATS_COW_COPY.callee(), span),
             args: Vec::new(),
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
@@ -818,17 +825,17 @@ fn collection_clone_fn(kind: BuiltinCollectionKind) -> &'static str {
     }
 }
 
-/// Calls runtime function `name` on the value at `place`, which it borrows,
+/// Calls runtime function `callee` on the value at `place`, which it borrows,
 /// writing the result into `destination` and continuing at `target`.
 fn emit_runtime_call(
     ctx: &mut LoweringContext,
-    name: &str,
+    callee: RuntimeCallee,
     place: &Place,
     destination: Local,
     target: BasicBlock,
     span: Span,
 ) {
-    let func = Operand::runtime(name, span);
+    let func = Operand::runtime(callee, span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func,

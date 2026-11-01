@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::utils::{runtime_callee, runtime_callee_stating};
 use miri::ast::types::{Type, TypeKind};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::syntax::Span;
@@ -355,7 +356,7 @@ fn functions_of_one_name_in_different_modules_are_distinct() {
 
 #[test]
 fn runtime_symbols_and_the_entry_point_are_verbatim() {
-    let runtime = Symbol::runtime("miri_rt_list_new");
+    let runtime = Symbol::runtime(runtime_callee("miri_rt_list_new"));
     assert_eq!(runtime.link_name(), "miri_rt_list_new");
     assert!(runtime.is_runtime());
     assert_eq!(Symbol::entry().link_name(), "main");
@@ -771,7 +772,7 @@ fn module_functions_named_from(
 fn symbols_named_from(names: &[String], argument_lists: &[Vec<Type>]) -> Vec<Symbol> {
     let mut symbols = vec![Symbol::entry()];
     for name in names {
-        symbols.push(Symbol::runtime(name));
+        symbols.push(Symbol::runtime(runtime_callee_stating(name, Vec::new())));
         for args in argument_lists {
             symbols.push(Symbol::function(&ModuleId::Program, name, args));
             symbols.push(Symbol::vtable(name, args));
@@ -984,7 +985,7 @@ fn the_link_and_wgsl_names_of_each_callee_kind_are_pinned() {
             "m__6system4math_lattice_unit",
         ),
         (
-            Symbol::runtime("miri_rt_list_new"),
+            Symbol::runtime(runtime_callee("miri_rt_list_new")),
             "miri_rt_list_new",
             "miri_rt_list_new",
         ),
@@ -1009,7 +1010,7 @@ fn the_link_and_wgsl_names_of_each_callee_kind_are_pinned() {
 #[test]
 fn only_a_runtime_function_has_a_runtime_name() {
     assert_eq!(
-        Symbol::runtime("miri_rt_list_new").runtime_name(),
+        Symbol::runtime(runtime_callee("miri_rt_list_new")).runtime_name(),
         Some("miri_rt_list_new")
     );
     assert_eq!(
@@ -1086,7 +1087,7 @@ fn a_trampoline_symbol_gives_back_its_shape_and_no_other_symbol_has_one() {
     assert!(!symbol.is_runtime());
     assert_eq!(symbol.runtime_name(), None);
     assert_eq!(
-        Symbol::runtime("miri_rt_list_sort_by").trampoline_shape(),
+        Symbol::runtime(runtime_callee("miri_rt_list_sort_by")).trampoline_shape(),
         None
     );
     assert_eq!(

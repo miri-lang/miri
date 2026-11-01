@@ -13,6 +13,7 @@ use crate::mir::analysis::heap_effects::{
     field_writing_method, function, holder, int_list, keyed, local, node, read_only_function,
     registry, returning, runtime_call, set_of, shelf, span, statement, store, tally,
 };
+use crate::mir::utils::runtime_callee;
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::TypeKind;
 use miri::mir::symbol::Symbol;
@@ -173,7 +174,7 @@ fn a_map_entry_of_a_field_lent_unretained_to_a_loud_callee_is_reported() {
         literal: Literal::Integer(IntegerLiteral::I64(1)),
     }));
     let get = call_into(
-        Operand::function(Symbol::runtime(rt::MAP_GET_CHECKED), span()),
+        Operand::function(Symbol::runtime(runtime_callee(rt::MAP_GET_CHECKED)), span()),
         vec![copy(field(1, 0)), key],
         local(2),
         1,

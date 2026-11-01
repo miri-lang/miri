@@ -8,6 +8,7 @@
 //! Each fixture is a hand-built body over a tuple of scalars, which every
 //! program holds as its bytes, and pins one violation.
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{FunctionTypeData, Type, TypeDeclarationKind, TypeKind};
 use miri::error::syntax::Span;
@@ -287,7 +288,10 @@ fn value_used_by_value_and_by_address_in_a_call_is_clean() {
     let mut locals = kinds();
     locals.push(pair());
     let call = TerminatorKind::Call {
-        func: Operand::runtime("consume_pointer", span()),
+        func: Operand::runtime(
+            runtime_callee_stating("consume_pointer", Vec::new()),
+            span(),
+        ),
         args: vec![copy(2)],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),

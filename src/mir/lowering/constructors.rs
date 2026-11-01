@@ -8,6 +8,8 @@ use crate::ast::types;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics as intrinsics;
+use crate::mir::symbol::RuntimeCallee;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
     AggregateKind, Constant, Local, Operand, Place, Rvalue, StatementKind, Terminator,
@@ -713,7 +715,7 @@ pub(crate) fn lower_list_constructor(
             let elems_are_managed = elem_kind.is_some_and(|kind| ctx.is_counted(&kind));
             lower_list_from_array(ctx, span, array, elem_size, elems_are_managed, destination)?;
         }
-        _ => emit_empty_list(ctx, span, &list_ty, destination),
+        _ => emit_empty_list(ctx, span, &list_ty, destination)?,
     }
     Ok(result_op)
 }
@@ -728,12 +730,14 @@ pub(crate) fn emit_empty_list(
     span: &Span,
     list_ty: &Type,
     destination: Place,
-) {
+) -> Result<(), LoweringError> {
     let elem_size = sequence_elem_kind(ctx, list_ty).as_ref().map_or(8, |kind| {
         compute_elem_size_from_type(kind, ctx.body.layout_scope())
     });
     let size_op = int_constant(elem_size, span);
-    emit_runtime_call(ctx, span, rt::LIST_NEW, vec![size_op], destination);
+    let list_new = ctx.declared_runtime(rt::LIST_NEW, *span)?;
+    emit_runtime_call(ctx, span, list_new, vec![size_op], destination);
+    Ok(())
 }
 
 /// Lowers `List(array)`: the runtime copies the array's element words into a
@@ -759,16 +763,23 @@ fn lower_list_from_array(
     } else {
         0
     };
-    let rt_fn_name = if elems_are_managed {
-        rt::LIST_NEW_FROM_MANAGED_ARRAY
+    let copy_fn = if elems_are_managed {
+        &intrinsics::LIST_NEW_FROM_MANAGED_ARRAY
     } else {
-        rt::LIST_NEW_FROM_RAW
+        &intrinsics::LIST_NEW_FROM_RAW
     };
     let trailing_args = vec![
         int_constant(literal_len, span),
         int_constant(elem_size, span),
     ];
-    lower_copy_from_source(ctx, span, array, rt_fn_name, trailing_args, destination)
+    lower_copy_from_source(
+        ctx,
+        span,
+        array,
+        copy_fn.callee(),
+        trailing_args,
+        destination,
+    )
 }
 
 /// Whether the one argument of `List(...)` is itself a list rather than an
@@ -789,10 +800,11 @@ fn lower_list_from_list(
     list: &Expression,
     destination: Place,
 ) -> Result<(), LoweringError> {
-    lower_copy_from_source(ctx, span, list, rt::LIST_CLONE, Vec::new(), destination)
+    let clone_fn = ctx.declared_runtime(rt::LIST_CLONE, *span)?;
+    lower_copy_from_source(ctx, span, list, clone_fn, Vec::new(), destination)
 }
 
-/// Lowers `source`, then calls the runtime routine `rt_fn_name` with the
+/// Lowers `source`, then calls the runtime routine `copy_fn` with the
 /// source followed by `trailing_args`, storing the new collection into
 /// `destination`.
 ///
@@ -803,7 +815,7 @@ fn lower_copy_from_source(
     ctx: &mut LoweringContext,
     span: &Span,
     source: &Expression,
-    rt_fn_name: &str,
+    copy_fn: RuntimeCallee,
     trailing_args: Vec<Operand>,
     destination: Place,
 ) -> Result<(), LoweringError> {
@@ -816,7 +828,7 @@ fn lower_copy_from_source(
 
     let mut args = vec![source_op];
     args.extend(trailing_args);
-    emit_runtime_call(ctx, span, rt_fn_name, args, destination);
+    emit_runtime_call(ctx, span, copy_fn, args, destination);
 
     if let Some(local) = source_local {
         ctx.emit_temp_drop(local, arg_watermark, *span);
@@ -824,17 +836,17 @@ fn lower_copy_from_source(
     Ok(())
 }
 
-/// Emits a call to the runtime function `name` storing into `destination`,
+/// Emits a call to the runtime function `callee` storing into `destination`,
 /// and continues lowering in the call's successor block.
 fn emit_runtime_call(
     ctx: &mut LoweringContext,
     span: &Span,
-    name: &str,
+    callee: RuntimeCallee,
     args: Vec<Operand>,
     destination: Place,
 ) {
     let target_bb = ctx.new_basic_block();
-    let func_op = Operand::runtime(name, *span);
+    let func_op = Operand::runtime(callee, *span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
@@ -1105,7 +1117,7 @@ pub(crate) fn lower_array_constructor(
         )),
     }));
 
-    let func_op = Operand::runtime(rt::ARRAY_NEW, *span);
+    let func_op = ctx.declared_runtime_operand(rt::ARRAY_NEW, *span)?;
 
     let target_bb = ctx.new_basic_block();
 

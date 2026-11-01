@@ -18,12 +18,6 @@ use super::helpers::{coerce_rvalue_in, read_older_local_by_copy, release_coerced
 use super::{lower_expression, resolve_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
-/// Runtime entry that frees the device buffer of a handle's innermost
-/// activation and closes that activation. Synthesized by the compiler like the
-/// other entries in [`crate::mir::residency`]; codegen declares the import on
-/// demand.
-const RELEASE_FN: &str = "miri_gpu_release";
-
 /// Fence outstanding device writes and copy the gpu binding `initializer` names
 /// back to its host value, for a read the readback pass cannot see: one that
 /// hands the binding to a runtime call as an argument, as `g.slice(range)` does.
@@ -54,7 +48,7 @@ pub(crate) fn emit_cross_residency_readback(
 pub(crate) fn emit_gpu_activation(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
     emit_void_runtime_call(
         ctx,
-        crate::mir::residency::ACQUIRE_FN,
+        &crate::mir::compiler_intrinsics::ACQUIRE,
         vec![handle_operand(handle, span)],
         span,
     );
@@ -71,7 +65,7 @@ fn emit_gpu_transfer(
 ) {
     emit_void_runtime_call(
         ctx,
-        crate::mir::residency::TRANSFER_FN,
+        &crate::mir::compiler_intrinsics::TRANSFER,
         vec![handle_operand(from, span), handle_operand(to, span)],
         span,
     );
@@ -80,7 +74,12 @@ fn emit_gpu_transfer(
 /// Frees the device buffer of `handle`'s innermost activation and closes it,
 /// for a binding that stops referring to that handle before its scope ends.
 pub(crate) fn emit_gpu_release(ctx: &mut LoweringContext, handle: DeviceHandleId, span: Span) {
-    emit_void_runtime_call(ctx, RELEASE_FN, vec![handle_operand(handle, span)], span);
+    emit_void_runtime_call(
+        ctx,
+        &crate::mir::compiler_intrinsics::RELEASE,
+        vec![handle_operand(handle, span)],
+        span,
+    );
 }
 
 fn handle_operand(handle: DeviceHandleId, span: Span) -> Operand {
@@ -98,11 +97,11 @@ fn handle_operand(handle: DeviceHandleId, span: Span) -> Operand {
 /// failures surface through the runtime's own log, not the program.
 fn emit_void_runtime_call(
     ctx: &mut LoweringContext,
-    fn_name: &str,
+    intrinsic: &crate::mir::compiler_intrinsics::Intrinsic,
     args: Vec<Operand>,
     span: Span,
 ) {
-    let func = Operand::runtime(fn_name, span);
+    let func = Operand::runtime(intrinsic.callee(), span);
     let dest_local = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     let after_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(

@@ -16,7 +16,6 @@ use crate::mir::lowering::expression::{
     emit_runtime_to_string, emit_string_append, emit_string_concat, emit_to_string,
     lower_expression,
 };
-use crate::runtime_fns::rt;
 
 pub(crate) fn lower_formattedstring_expr(
     ctx: &mut LoweringContext,
@@ -160,7 +159,12 @@ fn emit_fixed(
         Operand::Copy(Place::new(float)),
         int_constant(i64::from(precision), span),
     ];
-    emit_runtime_to_string(ctx, rt::FORMAT_FIXED, args, span)
+    emit_runtime_to_string(
+        ctx,
+        &crate::mir::compiler_intrinsics::FORMAT_FIXED,
+        args,
+        span,
+    )
 }
 
 /// The integer written in the radix `presentation` names.
@@ -182,7 +186,12 @@ fn emit_radix(
         int_constant(i64::from(presentation == Presentation::UpperHex), span),
         int_constant(i64::from(unsigned), span),
     ];
-    emit_runtime_to_string(ctx, rt::FORMAT_RADIX, args, span)
+    emit_runtime_to_string(
+        ctx,
+        &crate::mir::compiler_intrinsics::FORMAT_RADIX,
+        args,
+        span,
+    )
 }
 
 /// `text` padded to the spec's width. A number aligns right unless told
@@ -216,7 +225,12 @@ fn emit_pad(
         int_constant(i64::from(u32::from(fill)), span),
         int_constant(i64::from(zero), span),
     ];
-    emit_runtime_to_string(ctx, rt::FORMAT_PAD, args, span)
+    emit_runtime_to_string(
+        ctx,
+        &crate::mir::compiler_intrinsics::FORMAT_PAD,
+        args,
+        span,
+    )
 }
 
 /// A temp holding `operand` converted to `kind`.
@@ -304,9 +318,9 @@ fn integer_text(
     span: &Span,
 ) -> Result<crate::mir::place::Local, LoweringError> {
     let runtime_fn = if unsigned {
-        rt::UINT_TO_STRING
+        &crate::mir::compiler_intrinsics::UINT_TO_STRING
     } else {
-        rt::INT_TO_STRING
+        &crate::mir::compiler_intrinsics::INT_TO_STRING
     };
     emit_runtime_to_string(
         ctx,
@@ -367,15 +381,15 @@ fn emit_integer_append(
     span: &Span,
 ) -> crate::mir::place::Local {
     let runtime_fn = if unsigned {
-        rt::STRING_APPEND_UINT
+        &crate::mir::compiler_intrinsics::STRING_APPEND_UINT
     } else {
-        rt::STRING_APPEND_INT
+        &crate::mir::compiler_intrinsics::STRING_APPEND_INT
     };
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(crate::mir::Terminator::new(
         crate::mir::TerminatorKind::Call {
-            func: Operand::runtime(runtime_fn, *span),
+            func: Operand::runtime(runtime_fn.callee(), *span),
             args: vec![
                 Operand::Move(Place::new(left)),
                 Operand::Copy(Place::new(value)),

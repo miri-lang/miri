@@ -22,6 +22,7 @@ mod unshared_writes;
 mod value_arguments;
 mod value_representation;
 
+use crate::mir::utils::runtime_callee;
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
@@ -161,7 +162,7 @@ fn call_returning_string(destination: usize, target: usize) -> Terminator {
 /// A call to a named runtime intrinsic, spelling the callee the way lowering does.
 fn runtime_call(name: &str, args: Vec<Operand>, destination: usize, target: usize) -> Terminator {
     terminator(TerminatorKind::Call {
-        func: Operand::runtime(name, span()),
+        func: Operand::runtime(runtime_callee(name), span()),
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),

@@ -8,6 +8,7 @@
 //! lower to: the parameter handed to the list's copy-on-write entry point and
 //! the result stored back into it.
 
+use crate::mir::utils::runtime_callee;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
@@ -51,7 +52,7 @@ fn handing_to_runtime(name: &str, args: Vec<Operand>) -> Body {
     body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span()), span()));
     body.out_params = vec![false];
     let call = TerminatorKind::Call {
-        func: Operand::runtime(name, span()),
+        func: Operand::runtime(runtime_callee(name), span()),
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
@@ -82,7 +83,7 @@ fn copied_in_place() -> Body {
     body.new_local(LocalDecl::new(list_ty(), span()));
     body.out_params = vec![false];
     let cow = TerminatorKind::Call {
-        func: Operand::runtime("miri_rt_list_cow", span()),
+        func: Operand::runtime(runtime_callee("miri_rt_list_cow"), span()),
         args: vec![Operand::Move(Place::new(Local(1)))],
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),

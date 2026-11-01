@@ -32,12 +32,17 @@ use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
+use miri::mir::compiler_intrinsics::compiler_intrinsic;
 use miri::mir::lowering::lower_function;
+use miri::mir::symbol::RuntimeCallee;
 use miri::mir::{
     Body, Constant, GpuIntrinsic, LocalDecl, Operand, Rvalue, StatementKind, Terminator,
     TerminatorKind,
 };
 use miri::pipeline::Pipeline;
+use miri::runtime_effects::{ParamUse, RuntimeEffect};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 pub fn mir_lower_code(source: &str) -> Body {
     let pipeline = Pipeline::new();
@@ -257,4 +262,58 @@ pub fn make_string_const(val: &str) -> Operand {
         ty: Type::new(TypeKind::String, Span::default()),
         literal: Literal::String(val.to_string()),
     }))
+}
+
+/// The callee for the runtime entry point `name` as a compiled program names
+/// it: carrying the compiler's own record of it, or the record the stdlib's
+/// `runtime` declaration states.
+///
+/// Panics when neither describes `name`; a test calling an entry point no
+/// program could call states its record with [`runtime_callee_stating`].
+pub fn runtime_callee(name: &str) -> RuntimeCallee {
+    if let Some(intrinsic) = compiler_intrinsic(name) {
+        return intrinsic.callee();
+    }
+    let effect = STDLIB_RUNTIME_EFFECTS.with(|declared| declared.get(name).cloned());
+    match effect {
+        Some(effect) => RuntimeCallee::new(name, effect),
+        None => panic!("neither the compiler nor the stdlib describes `{name}`"),
+    }
+}
+
+/// A callee for the runtime entry point `name`, doing what `params` say to
+/// its arguments and handing back a value its caller owns.
+pub fn runtime_callee_stating(name: &str, params: Vec<ParamUse>) -> RuntimeCallee {
+    RuntimeCallee::new(name, Rc::new(RuntimeEffect::new(params)))
+}
+
+thread_local! {
+    /// What every stdlib `runtime` declaration states, keyed by entry point.
+    static STDLIB_RUNTIME_EFFECTS: HashMap<String, Rc<RuntimeEffect>> = stdlib_runtime_effects();
+}
+
+fn stdlib_runtime_effects() -> HashMap<String, Rc<RuntimeEffect>> {
+    let source = "
+use system.io
+use system.time
+use system.os
+use system.process
+use system.gpu
+use system.text
+use system.fs
+use system.testing
+use system.ops
+use system.string
+use system.collections.list
+use system.collections.set
+use system.collections.map
+use system.collections.array
+
+fn main()
+    return
+";
+    match Pipeline::new().frontend(source) {
+        Ok(result) => result.type_checker.runtime_effects,
+        Err(error) => panic!("the stdlib does not type-check: {error:?}"),
+    }
 }

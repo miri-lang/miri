@@ -255,7 +255,7 @@ pub(super) fn lower_field_append(
     }
     let result = copy_into_temp(ctx, &field, span);
     if let Some(written) = written {
-        written.finish(ctx, target.obj);
+        written.finish(ctx, target.obj)?;
     }
     let value = Operand::Copy(Place::new(result));
     finalize_assign_result(ctx, value, dest, expr, watermark)

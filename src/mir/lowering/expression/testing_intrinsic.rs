@@ -20,6 +20,7 @@ use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics::{self as intrinsics, Intrinsic};
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::{emit_string_concat, emit_to_string, lower_expression};
 use crate::mir::place::Local;
@@ -134,7 +135,7 @@ fn lower_assert(
     emit_call_no_return(
         ctx,
         span,
-        rt::ASSERT_FAIL,
+        &intrinsics::ASSERT_FAIL,
         vec![
             expr_text_op.clone(),
             msg_op.clone(),
@@ -283,7 +284,7 @@ fn emit_assert_eq_fail_block(
 
     let (fail_fn, fail_args) = match cmp {
         AssertCmp::Eq => (
-            rt::ASSERT_EQ_FAIL,
+            &intrinsics::ASSERT_EQ_FAIL,
             vec![
                 expected_op_s,
                 actual_op_s,
@@ -294,7 +295,7 @@ fn emit_assert_eq_fail_block(
             ],
         ),
         AssertCmp::Ne => (
-            rt::ASSERT_NE_FAIL,
+            &intrinsics::ASSERT_NE_FAIL,
             vec![actual_op_s, user_msg, path_op, line_op, column_op],
         ),
     };
@@ -392,7 +393,7 @@ fn lower_assert_panics(
 
     let next_bb = ctx.new_basic_block();
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
-    let func_op = Operand::runtime(rt::ASSERT_PANICS, span);
+    let func_op = Operand::runtime(intrinsics::ASSERT_PANICS.callee(), span);
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -513,12 +514,12 @@ fn lower_optional_string_arg(
 fn emit_call_no_return(
     ctx: &mut LoweringContext,
     span: Span,
-    runtime_fn: &str,
+    runtime_fn: &Intrinsic,
     args: Vec<Operand>,
     after_bb: crate::mir::BasicBlock,
 ) {
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
-    let func_op = Operand::runtime(runtime_fn, span);
+    let func_op = Operand::runtime(runtime_fn.callee(), span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
@@ -675,7 +676,7 @@ fn emit_equality(
     b: Operand,
 ) -> Result<Local, LoweringError> {
     match kind {
-        TypeKind::String => Ok(emit_string_equality(ctx, span, a, b)),
+        TypeKind::String => emit_string_equality(ctx, span, a, b),
         TypeKind::Boolean
         | TypeKind::Int
         | TypeKind::I8
@@ -733,12 +734,18 @@ fn reject_class_without_equality(
 }
 
 /// Emit `miri_rt_string_equals(a, b)` and return the boolean result local.
-fn emit_string_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b: Operand) -> Local {
+fn emit_string_equality(
+    ctx: &mut LoweringContext,
+    span: Span,
+    a: Operand,
+    b: Operand,
+) -> Result<Local, LoweringError> {
+    let func = ctx.declared_runtime_operand(rt::STRING_EQUALS, span)?;
     let result = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     let next = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(rt::STRING_EQUALS, span),
+            func,
             args: vec![a, b],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
@@ -749,7 +756,7 @@ fn emit_string_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b: Op
         span,
     ));
     ctx.set_current_block(next);
-    result
+    Ok(result)
 }
 
 /// Emit `a == b` as a `BinaryOp::Eq` and return the boolean result local.

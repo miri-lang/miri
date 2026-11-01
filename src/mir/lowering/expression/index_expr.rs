@@ -162,7 +162,7 @@ fn lower_string_range_slice(
     } else {
         let watermark = ctx.body.local_decls.len();
         let temp = ctx.push_temp(Type::new(TypeKind::Int, index_expr.span), index_expr.span);
-        let func = Operand::runtime(rt::STRING_CHAR_COUNT, index_expr.span);
+        let func = ctx.declared_runtime_operand(rt::STRING_CHAR_COUNT, index_expr.span)?;
         let bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
@@ -180,7 +180,7 @@ fn lower_string_range_slice(
         (Operand::Copy(Place::new(temp)), watermark, None)
     };
 
-    let func_op = Operand::runtime(rt::STRING_SUBSTRING, expr.span);
+    let func_op = ctx.declared_runtime_operand(rt::STRING_SUBSTRING, expr.span)?;
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -222,7 +222,7 @@ fn lower_string_char_at(
         _ => None,
     };
 
-    let func_op = Operand::runtime(rt::STRING_CHAR_AT, expr.span);
+    let func_op = ctx.declared_runtime_operand(rt::STRING_CHAR_AT, expr.span)?;
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -349,7 +349,10 @@ fn lower_map_index_read(
         Operand::Constant(_) | Operand::Function(_) => None,
     };
 
-    let func_op = Operand::runtime(rt::MAP_GET_CHECKED, expr.span);
+    let func_op = Operand::runtime(
+        crate::mir::compiler_intrinsics::MAP_GET_CHECKED.callee(),
+        expr.span,
+    );
 
     // Read through the active instantiation substitution, for the reason the
     // list read gives: a value type recorded against a generic parameter says

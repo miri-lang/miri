@@ -5,6 +5,7 @@
 //! parameters a body writes and so copies on entry.
 
 use super::value_bodies::*;
+use crate::mir::utils::runtime_callee;
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::TypeKind;
 use miri::mir::place::PlaceElem;
@@ -254,7 +255,7 @@ fn an_out_parameter_and_a_word_parameter_are_never_counted() {
 /// block 1.
 fn runtime_call(name: &str, args: Vec<Operand>, arg_modes: Vec<ArgMode>) -> TerminatorKind {
     TerminatorKind::Call {
-        func: Operand::function(Symbol::runtime(name), span()),
+        func: Operand::function(Symbol::runtime(runtime_callee(name)), span()),
         args,
         arg_modes,
         arg_handles: Vec::new(),

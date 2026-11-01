@@ -16,6 +16,7 @@ use crate::mir::optimization::stable_collections::{
     assign, call, indexed, int, loop_over_a_list, terminator, ty, BELOW, ELEMENT, INDEX, LIST,
     LOOP_BODY, LOOP_HEADER, SPARE, SPARE_LIST,
 };
+use crate::mir::utils::runtime_callee;
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
@@ -178,7 +179,10 @@ fn test_a_loop_rebinding_its_list_is_left_alone() {
 fn test_a_loop_pushing_onto_its_list_is_left_alone() {
     let mut body = loop_bounded_by(BinOp::Lt);
     let push = call(
-        Operand::runtime(miri::runtime_fns::rt::LIST_PUSH, Span::default()),
+        Operand::runtime(
+            runtime_callee(miri::runtime_fns::rt::LIST_PUSH),
+            Span::default(),
+        ),
         vec![Operand::Copy(Place::new(LIST)), int(1)],
         SPARE,
         LOOP_HEADER,
@@ -525,7 +529,10 @@ fn test_a_reversal_copying_its_high_pointer_from_a_step_made_after_the_copy_is_l
 fn test_a_stamped_call_in_a_versioned_loop_keeps_its_stamp_in_both_copies() {
     let mut body = loop_bounded_by(BinOp::Lt);
     body.basic_blocks[LOOP_BODY].terminator = Some(call(
-        Operand::runtime(miri::runtime_fns::rt::RC_STATS_DUP, Span::default()),
+        Operand::runtime(
+            runtime_callee(miri::runtime_fns::rt::RC_STATS_DUP),
+            Span::default(),
+        ),
         Vec::new(),
         SPARE,
         LOOP_HEADER,

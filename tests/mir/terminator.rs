@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::error::syntax::Span;
 use miri::mir::body::DeviceHandleId;
 use miri::mir::operand::Operand;
@@ -125,7 +126,10 @@ fn call_arg_handles_rejects_long() {
 
 fn call(args: Vec<Operand>, arg_modes: Vec<ArgMode>) -> TerminatorKind {
     TerminatorKind::Call {
-        func: Operand::runtime("callee", Span::default()),
+        func: Operand::runtime(
+            runtime_callee_stating("callee", Vec::new()),
+            Span::default(),
+        ),
         args,
         arg_modes,
         arg_handles: Vec::new(),

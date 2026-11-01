@@ -46,7 +46,7 @@ pub fn emit_structural_equality(
     is_eq: bool,
 ) -> Result<crate::mir::Local, LoweringError> {
     match kind {
-        TypeKind::String => Ok(emit_string_equality(ctx, span, lhs_op, rhs_op, is_eq)),
+        TypeKind::String => emit_string_equality(ctx, span, lhs_op, rhs_op, is_eq),
         TypeKind::Option(inner_ty) => {
             emit_option_structural_equality(ctx, span, inner_ty, lhs_op, rhs_op, is_eq)
         }
@@ -111,13 +111,14 @@ fn emit_string_equality(
     lhs: Operand,
     rhs: Operand,
     is_eq: bool,
-) -> crate::mir::Local {
+) -> Result<crate::mir::Local, LoweringError> {
+    let func = ctx.declared_runtime_operand(rt::STRING_EQUALS, span)?;
     let result = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     let next_bb = ctx.new_basic_block();
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(rt::STRING_EQUALS, span),
+            func,
             args: vec![lhs, rhs],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
@@ -141,9 +142,9 @@ fn emit_string_equality(
             ),
             span,
         });
-        negated
+        Ok(negated)
     } else {
-        result
+        Ok(result)
     }
 }
 
@@ -636,7 +637,7 @@ fn emit_tagged_union_equality(
     // A discriminant outside the declared variant set means the value is
     // corrupt; the rendering path reports the same condition the same way.
     ctx.set_current_block(corrupt_bb);
-    emit_corrupt_discriminant_panic(ctx, type_label, final_bb, span);
+    emit_corrupt_discriminant_panic(ctx, type_label, final_bb, span)?;
 
     ctx.set_current_block(final_bb);
     Ok(result_local)
@@ -893,7 +894,7 @@ pub(super) fn emit_corrupt_discriminant_panic(
     enum_name: &str,
     final_bb: crate::mir::BasicBlock,
     span: Span,
-) {
+) -> Result<(), LoweringError> {
     let message = format!(
         "Enum '{}' has an invalid discriminant (corrupt value)",
         enum_name
@@ -913,7 +914,7 @@ pub(super) fn emit_corrupt_discriminant_panic(
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(rt::PANIC, span),
+            func: ctx.declared_runtime_operand(rt::PANIC, span)?,
             args: vec![Operand::Copy(Place::new(message_temp))],
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
@@ -923,6 +924,7 @@ pub(super) fn emit_corrupt_discriminant_panic(
         },
         span,
     ));
+    Ok(())
 }
 
 /// Emit equality for struct fields - field-wise recursive comparison.

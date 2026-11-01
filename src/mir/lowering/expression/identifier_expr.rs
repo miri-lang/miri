@@ -260,7 +260,7 @@ pub(crate) fn global_function_symbol(
     declared: &str,
 ) -> Result<Symbol, LoweringError> {
     if ctx.callee_kind(expr) == CalleeKind::Runtime {
-        return Ok(Symbol::runtime(declared));
+        return Ok(Symbol::runtime(ctx.declared_runtime(declared, expr.span)?));
     }
     let callee = ctx.declared_callee(expr, declared)?;
     Ok(Symbol::declared_function(&callee.module, &callee.name))

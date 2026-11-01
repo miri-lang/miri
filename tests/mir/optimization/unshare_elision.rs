@@ -9,6 +9,7 @@
 //! pipeline lowered, counted references and elided what it could, so each test
 //! pins how many times the compiled body asks whether a value is shared.
 
+use crate::mir::utils::{runtime_callee, runtime_callee_stating};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
@@ -1034,7 +1035,7 @@ fn runtime_call(
     target: BasicBlock,
 ) -> TerminatorKind {
     TerminatorKind::Call {
-        func: Operand::runtime(name, span()),
+        func: Operand::runtime(runtime_callee(name), span()),
         args,
         arg_modes: Vec::new(),
         arg_handles: Vec::new(),
@@ -1400,7 +1401,7 @@ fn element_checks_around_a_call(mode: ArgMode) -> Body {
     builder.fresh(local(2));
     builder.check(element(2, 6));
     builder.call(|next| TerminatorKind::Call {
-        func: Operand::runtime("callee", span()),
+        func: Operand::runtime(runtime_callee_stating("callee", Vec::new()), span()),
         args: vec![Operand::Copy(local(6))],
         arg_modes: vec![mode],
         arg_handles: Vec::new(),
@@ -1521,7 +1522,7 @@ fn nest_writing_a_list(outer_step: Vec<StatementKind>) -> Body {
         block(
             Vec::new(),
             call(
-                Operand::runtime(rt::LIST_COW, span()),
+                Operand::runtime(runtime_callee(rt::LIST_COW), span()),
                 vec![Operand::Move(Place::new(NEST_LIST))],
                 HANDED_BACK,
                 7,

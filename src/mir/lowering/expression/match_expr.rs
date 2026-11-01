@@ -183,7 +183,7 @@ pub(super) fn emit_regex_predicate_test(
         span: *pattern_span,
     });
 
-    let func_op = Operand::runtime(rt::REGEX_MATCHES, *pattern_span);
+    let func_op = ctx.declared_runtime_operand(rt::REGEX_MATCHES, *pattern_span)?;
 
     let bool_ty = Type::new(TypeKind::Boolean, *pattern_span);
     let result_temp = ctx.push_temp(bool_ty, *pattern_span);

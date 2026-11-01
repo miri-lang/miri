@@ -61,6 +61,10 @@ pub(crate) const ACQUIRE_FN: &str = "miri_gpu_acquire";
 /// what a gpu-to-gpu move (`gpu var b = a`) does to the two bindings.
 pub(crate) const TRANSFER_FN: &str = "miri_gpu_transfer";
 
+/// Runtime entry that frees the device buffer of a `gpu`-resident binding's
+/// innermost activation and closes it.
+pub(crate) const RELEASE_FN: &str = "miri_gpu_release";
+
 /// What a terminator does to the agreement between device buffers and the host
 /// arrays they mirror.
 pub(crate) enum DeviceEffect<'a> {

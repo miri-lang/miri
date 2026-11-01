@@ -8,6 +8,7 @@
 //! Each fixture is a hand-built MIR body pinning one place such optionals meet,
 //! once with layouts that disagree and once with layouts that agree.
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
@@ -260,7 +261,7 @@ fn dealloc_of_the_payload_of_a_pointer_optional_is_flagged() {
 fn call_writing_the_payload_of_a_pointer_optional_is_flagged() {
     let call = Terminator {
         kind: TerminatorKind::Call {
-            func: Operand::runtime("make_node", span()),
+            func: Operand::runtime(runtime_callee_stating("make_node", Vec::new()), span()),
             args: Vec::new(),
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),

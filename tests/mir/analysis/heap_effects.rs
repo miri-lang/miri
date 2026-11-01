@@ -8,6 +8,7 @@
 //! holding an int and `Holder` holding a `Node`, so each test pins the one
 //! operation that makes a body loud or leaves it quiet.
 
+use crate::mir::utils::runtime_callee;
 use miri::ast::common::MemberVisibility;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
@@ -235,7 +236,10 @@ pub fn call_returning_to(name: &str, args: Vec<Operand>, target: usize) -> Termi
 
 /// A call of the runtime entry point `name`, returning to block 1.
 pub fn runtime_call(name: &str, args: Vec<Operand>) -> TerminatorKind {
-    call_of(Operand::function(Symbol::runtime(name), span()), args)
+    call_of(
+        Operand::function(Symbol::runtime(runtime_callee(name)), span()),
+        args,
+    )
 }
 
 /// A body that makes `terminator` its one call, then returns.

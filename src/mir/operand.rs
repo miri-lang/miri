@@ -6,8 +6,9 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::Body;
 use crate::mir::place::{Local, Place, PlaceElem};
-use crate::mir::symbol::Symbol;
+use crate::mir::symbol::{RuntimeCallee, Symbol};
 use crate::mir::types::MirType;
+use crate::runtime_effects::RuntimeEffect;
 use std::fmt;
 
 /// An operand for an Rvalue.
@@ -43,8 +44,14 @@ impl Operand {
 
     /// The operand naming the function the runtime library exports as
     /// `c_name`.
-    pub fn runtime(c_name: &str, span: Span) -> Self {
-        Self::function(Symbol::runtime(c_name), span)
+    pub fn runtime(callee: RuntimeCallee, span: Span) -> Self {
+        Self::function(Symbol::runtime(callee), span)
+    }
+
+    /// What the runtime function this operand names does; `None` for any
+    /// other operand.
+    pub fn called_runtime_effect(&self) -> Option<&RuntimeEffect> {
+        self.called_symbol()?.runtime_effect()
     }
 
     /// The C name of the runtime function this operand names; `None` for any

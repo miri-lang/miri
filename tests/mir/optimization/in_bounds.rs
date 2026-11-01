@@ -9,6 +9,7 @@ use crate::mir::optimization::stable_collections::{
     assign, call, int, list_of, loop_over_a_list, statement, terminator, ty, BELOW, ELEMENT, INDEX,
     LENGTH, LIST, LOOP_BODY, LOOP_HEADER, SPARE, SPARE_LIST,
 };
+use crate::mir::utils::runtime_callee;
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::optimization::in_bounds::{record_in_bounds, INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW};
@@ -160,7 +161,10 @@ fn test_a_push_between_the_length_and_the_access_proves_nothing() {
     let mut body = loop_over_a_list();
     let header = body.basic_blocks[LOOP_HEADER].terminator.take();
     let push = call(
-        Operand::runtime(miri::runtime_fns::rt::LIST_PUSH, Span::default()),
+        Operand::runtime(
+            runtime_callee(miri::runtime_fns::rt::LIST_PUSH),
+            Span::default(),
+        ),
         vec![Operand::Copy(Place::new(LIST)), int(1)],
         SPARE,
         body.basic_blocks.len(),
@@ -182,7 +186,10 @@ fn proofs_after_copying_a_list_of(element: TypeKind) -> Vec<InBounds> {
     record_stable_collections(&mut body);
     let read = body.basic_blocks.len();
     let copy = call(
-        Operand::runtime(miri::runtime_fns::rt::LIST_COW, Span::default()),
+        Operand::runtime(
+            runtime_callee(miri::runtime_fns::rt::LIST_COW),
+            Span::default(),
+        ),
         vec![Operand::Move(Place::new(SPARE_LIST))],
         SPARE_LIST,
         read,

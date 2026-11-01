@@ -17,6 +17,7 @@ use crate::integration::memory::loop_headers_across_calls::{
     THROUGH_ANOTHER_BINDING, THROUGH_AN_ELEMENT_POINTING_BACK, THROUGH_A_CLASS_FIELD,
     THROUGH_A_PASSED_CLOSURE, VIRTUAL_CALL, WRITER_THROUGH_A_COUNTED_FIELD,
 };
+use crate::mir::utils::runtime_callee;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
@@ -234,7 +235,7 @@ fn test_a_list_a_loop_only_reads_is_recorded_with_a_preheader_of_its_own() {
 #[test]
 fn test_a_push_in_the_loop_leaves_the_list_unrecorded() {
     let push = call(
-        Operand::runtime(rt::LIST_PUSH, Span::default()),
+        Operand::runtime(runtime_callee(rt::LIST_PUSH), Span::default()),
         vec![Operand::Copy(Place::new(LIST)), int(1)],
         SPARE,
         LOOP_HEADER,
@@ -256,7 +257,7 @@ fn test_a_call_to_a_function_of_the_program_leaves_the_list_unrecorded() {
 #[test]
 fn test_asking_whether_the_list_is_shared_keeps_it_recorded() {
     let ask = call(
-        Operand::runtime(rt::RC_IS_SHARED, Span::default()),
+        Operand::runtime(runtime_callee(rt::RC_IS_SHARED), Span::default()),
         vec![Operand::Copy(Place::new(LIST))],
         BELOW,
         LOOP_HEADER,
@@ -1010,7 +1011,7 @@ fn test_an_index_a_call_writes_through_out_is_not_proven_in_bounds() {
 /// its result into `destination`, ending the loop's step.
 fn copy_of_spare_list(name: &str, destination: Local) -> Terminator {
     call(
-        Operand::runtime(name, Span::default()),
+        Operand::runtime(runtime_callee(name), Span::default()),
         vec![Operand::Move(Place::new(SPARE_LIST))],
         destination,
         LOOP_HEADER,
@@ -1060,7 +1061,7 @@ fn test_a_copy_of_a_list_whose_elements_may_run_a_clone_method_leaves_the_list_u
 #[test]
 fn test_a_copy_on_write_of_the_list_itself_leaves_it_unrecorded() {
     let cow = call(
-        Operand::runtime(rt::LIST_COW, Span::default()),
+        Operand::runtime(runtime_callee(rt::LIST_COW), Span::default()),
         vec![Operand::Move(Place::new(LIST))],
         LIST,
         LOOP_HEADER,
@@ -1072,7 +1073,7 @@ fn test_a_copy_on_write_of_the_list_itself_leaves_it_unrecorded() {
 fn test_a_copy_on_write_whose_result_the_list_takes_leaves_it_unrecorded() {
     let mut body = loop_over_a_list();
     body.basic_blocks[LOOP_BODY].terminator = Some(call(
-        Operand::runtime(rt::LIST_COW, Span::default()),
+        Operand::runtime(runtime_callee(rt::LIST_COW), Span::default()),
         vec![Operand::Move(Place::new(LIST))],
         SPARE_LIST,
         4,

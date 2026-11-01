@@ -29,7 +29,6 @@ use crate::mir::{
 use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::forall_gpu::{compute_thread_index, int_constant, needs_wire_conversion, push_assign};
-use crate::mir::residency::READBACK_FN;
 
 /// Block size for GPU reduction kernels (1D workgroups, 256 threads).
 /// This value is coordinated with `GPU_REDUCE_BLOCK_SIZE`
@@ -331,11 +330,11 @@ fn push_assign_place(ctx: &mut LoweringContext, place: Place, rvalue: Rvalue, sp
 /// Used for GPU readback to fence device work and copy results back to host.
 fn emit_void_runtime_call(
     ctx: &mut LoweringContext,
-    fn_name: &str,
+    intrinsic: &crate::mir::compiler_intrinsics::Intrinsic,
     args: Vec<Operand>,
     span: Span,
 ) {
-    let func = Operand::runtime(fn_name, span);
+    let func = Operand::runtime(intrinsic.callee(), span);
     let dest_local = ctx.push_temp(Type::new(TypeKind::Void, span), span);
     let after_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -1155,7 +1154,7 @@ fn emit_reduce_gpu_launch(
     if !dest_is_gpu_resident {
         emit_void_runtime_call(
             ctx,
-            READBACK_FN,
+            &crate::mir::compiler_intrinsics::READBACK,
             vec![
                 handle_operand(handle_id, span),
                 Operand::Copy(Place::new(output_local)),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::utils::runtime_callee_stating;
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
@@ -113,7 +114,14 @@ fn test_place_names_what_a_copy_or_a_move_reads_and_nothing_else() {
     };
     assert_eq!(Operand::Copy(element.clone()).place(), Some(&element));
     assert_eq!(Operand::Move(element.clone()).place(), Some(&element));
-    assert_eq!(Operand::runtime("callee", Span::default()).place(), None);
+    assert_eq!(
+        Operand::runtime(
+            runtime_callee_stating("callee", Vec::new()),
+            Span::default()
+        )
+        .place(),
+        None
+    );
     assert_eq!(Operand::Copy(element).bare_local(), None);
     assert_eq!(
         Operand::Move(Place::new(Local(3))).bare_local(),

@@ -458,7 +458,7 @@ fn lower_in_operator(
         (Place::new(temp), Operand::Copy(Place::new(temp)))
     };
 
-    let contains_fn = Operand::runtime(fn_name, expr.span);
+    let contains_fn = ctx.declared_runtime_operand(fn_name, expr.span)?;
 
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -759,7 +759,10 @@ fn emit_unchecked_operator_trap(
     let after = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(crate::runtime_fns::rt::METHOD_NOT_CHECKED_PANIC, span),
+            func: Operand::runtime(
+                crate::mir::compiler_intrinsics::METHOD_NOT_CHECKED_PANIC.callee(),
+                span,
+            ),
             args: Vec::new(),
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),

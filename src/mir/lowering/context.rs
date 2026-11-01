@@ -4,14 +4,16 @@
 use super::compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 use crate::ast::expression::Expression;
 use crate::ast::types::Type;
+use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::compiler_intrinsics::compiler_intrinsic;
 use crate::mir::declaration::Declaration;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::module::Import;
 use crate::mir::place::{Local, Place};
-use crate::mir::symbol::{ClosureKind, InstantiationKey, Symbol};
-use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, StatementKind, Terminator};
+use crate::mir::symbol::{ClosureKind, InstantiationKey, RuntimeCallee, Symbol};
+use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, Operand, StatementKind, Terminator};
 use crate::type_checker::{CalleeKind, DeclaredFunction};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -149,6 +151,42 @@ impl<'a> SourceFile<'a> {
 }
 
 impl<'a> LoweringContext<'a> {
+    /// The runtime entry point a loaded `runtime` declaration exports as
+    /// `name`, carrying what that declaration states it does.
+    ///
+    /// # Errors
+    ///
+    /// An internal compiler error when no loaded declaration exports `name`,
+    /// or when the compiler's own table also lists it: lowering calls a
+    /// declared entry point only from a module the program reaches, and an
+    /// entry point is described in exactly one place.
+    pub fn declared_runtime(&self, name: &str, span: Span) -> Result<RuntimeCallee, LoweringError> {
+        let declared = self.type_checker.runtime_effects.get(name);
+        match (declared, compiler_intrinsic(name)) {
+            (Some(effect), None) => Ok(RuntimeCallee::new(name, Rc::clone(effect))),
+            (Some(_), Some(_)) => Err(LoweringError::internal(
+                DiagnosticCode::MirValidationFailed,
+                format!("the runtime entry point `{name}` is both declared and called only by the compiler"),
+                span,
+            )),
+            (None, Some(_)) | (None, None) => Err(LoweringError::internal(
+                DiagnosticCode::MirValidationFailed,
+                format!("no loaded `runtime` declaration states what `{name}` does"),
+                span,
+            )),
+        }
+    }
+
+    /// The operand naming the declared runtime entry point `name`; see
+    /// [`LoweringContext::declared_runtime`].
+    pub fn declared_runtime_operand(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<Operand, LoweringError> {
+        Ok(Operand::runtime(self.declared_runtime(name, span)?, span))
+    }
+
     /// Allocates the next device handle of this compilation.
     ///
     /// Drawn from the shared per-compilation allocator so that repeated
