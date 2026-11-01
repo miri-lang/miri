@@ -49,15 +49,11 @@ pub struct Body {
     /// Decides which of this body's values are reference counted, read
     /// against the program's type table at [`Body::type_params`].
     pub rc_classifier: RcClassifier,
-    /// Maps struct/class type names to their ordered field types (in layout order).
-    /// Used by Perceus to resolve `Field(i)` place projections and determine
-    /// whether the projected field is a managed type.
-    pub field_types: HashMap<String, Vec<Type>>,
-    /// Maps each generic class or struct to the names of its type parameters,
-    /// in declaration order.
-    /// Used by Perceus to read a `field_types` entry declared at a parameter
-    /// (`value T`) at the type arguments of the instance it is projected from.
-    pub class_type_params: HashMap<String, Vec<String>>,
+    /// The instance a method body was lowered for, `Custom(class, args)`,
+    /// when it was lowered for one instantiation of a generic class or
+    /// struct; `None` for any other body. A bare spelling of that class in
+    /// the body names this instance.
+    pub instance: Option<Type>,
     /// For closure/lambda bodies: the list of locals that hold captured values.
     /// Entry `i` is loaded at function entry from where codegen's capture
     /// layout places it, after the function and destructor pointers.
@@ -221,8 +217,7 @@ impl Body {
             execution_model,
             backend_metadata: None,
             rc_classifier: RcClassifier::default(),
-            field_types: HashMap::new(),
-            class_type_params: HashMap::new(),
+            instance: None,
             env_capture_locals: Vec::new(),
             type_params: HashSet::new(),
             open_params: HashSet::new(),

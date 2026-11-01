@@ -4,12 +4,17 @@
 use crate::mir::utils::runtime_callee_stating;
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
+use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::body::Body;
 use miri::mir::operand::{Constant, Operand};
 use miri::mir::place::{Place, PlaceElem};
+use miri::mir::rc::RcClassifier;
 use miri::mir::types::MirType;
 use miri::mir::{ExecutionModel, Local, LocalDecl};
+use miri::type_checker::context::{StructDefinition, TypeDefinition};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 fn new_local_with_mir_ty(body: &mut Body, mir_ty: MirType) -> Local {
     let span = Span::default();
@@ -94,8 +99,16 @@ fn test_ty_projected_custom_struct_field() {
     let span = Span::default();
     let mut body = Body::new(0, span, ExecutionModel::Cpu);
     let i32_type = Type::new(TypeKind::I32, span);
-    body.field_types
-        .insert("Point".to_string(), vec![i32_type.clone(), i32_type]);
+    let point = TypeDefinition::Struct(StructDefinition {
+        fields: vec![
+            ("x".to_string(), i32_type.clone(), MemberVisibility::Public),
+            ("y".to_string(), i32_type, MemberVisibility::Public),
+        ],
+        generics: None,
+        module: String::new(),
+    });
+    let definitions = HashMap::from([("Point".to_string(), point)]);
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions));
     let local = new_local_with_mir_ty(&mut body, MirType::Custom("Point".to_string()));
 
     let place = Place {

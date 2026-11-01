@@ -29,8 +29,7 @@ pub struct Perceus;
 pub(super) struct PerceusContext<'a> {
     pub(super) local_decls: &'a [crate::mir::LocalDecl],
     pub(super) rc_classifier: &'a RcClassifier,
-    field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
-    class_type_params: &'a std::collections::HashMap<String, Vec<String>>,
+    instance: Option<&'a crate::ast::types::Type>,
     type_params: &'a std::collections::HashSet<String>,
     /// The parameters the body leaves open; see [`Body::open_params`].
     open_params: &'a std::collections::HashSet<String>,
@@ -48,8 +47,7 @@ impl<'a> PerceusContext<'a> {
         PerceusContext {
             local_decls: &body.local_decls,
             rc_classifier: &body.rc_classifier,
-            field_types: &body.field_types,
-            class_type_params: &body.class_type_params,
+            instance: body.instance.as_ref(),
             type_params: &body.type_params,
             open_params: &body.open_params,
             closure_capture_types: &body.closure_capture_types,
@@ -198,8 +196,7 @@ impl OptimizationPass for Perceus {
             ref mut basic_blocks,
             ref local_decls,
             ref rc_classifier,
-            ref field_types,
-            ref class_type_params,
+            ref instance,
             ref type_params,
             ref open_params,
             ref closure_capture_types,
@@ -209,8 +206,7 @@ impl OptimizationPass for Perceus {
         let ctx = PerceusContext {
             local_decls,
             rc_classifier,
-            field_types,
-            class_type_params,
+            instance: instance.as_ref(),
             type_params,
             open_params,
             closure_capture_types,
@@ -618,9 +614,9 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// Handles `Index` projections for collection types and `Field` projections for:
 /// - `Option<T>` — `Field(0)` yields the inner `T`
 /// - `Tuple(T0, T1, ...)` — `Field(i)` yields `Ti`
-/// - Custom struct/class types — `Field(i)` is resolved via `field_types`, at the
-///   type arguments of the instance it is projected from (see
-///   [`field_type_in_instance`])
+/// - Custom struct/class types — `Field(i)` is the field's type at the type
+///   arguments of the instance it is projected from (see
+///   [`crate::mir::instantiation::field_type`])
 /// - Closure locals — `Field(i)` yields the type of captured variable `i`,
 ///   looked up from `closure_capture_types` using the root local index
 ///
@@ -641,8 +637,7 @@ fn place_is_counted(place: &Place, ctx: &PerceusContext) -> bool {
 pub(super) fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option<Type> {
     PlaceTypes {
         local_decls: ctx.local_decls,
-        field_types: ctx.field_types,
-        class_type_params: ctx.class_type_params,
+        instance: ctx.instance,
         closure_capture_types: ctx.closure_capture_types,
         definitions: ctx.rc_classifier.definitions(),
         type_params: ctx.type_params,

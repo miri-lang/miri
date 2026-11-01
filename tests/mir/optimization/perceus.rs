@@ -30,7 +30,7 @@ use miri::mir::{
     Statement, StatementKind, Terminator, TerminatorKind,
 };
 use miri::pipeline::Pipeline;
-use miri::type_checker::context::{AliasDefinition, FieldInfo, TypeDefinition};
+use miri::type_checker::context::{AliasDefinition, FieldInfo, StructDefinition, TypeDefinition};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
@@ -399,7 +399,7 @@ fn test_copy_of_managed_struct_field_increfs_the_projected_place() {
         0,
         vec![assign(place(2), use_copy(field(1, 0)))],
     );
-    body.field_types = HashMap::from([("Holder".to_string(), vec![ty(TypeKind::String)])]);
+    define_holder(&mut body, TypeKind::String);
 
     assert_eq!(
         rc_statements(&mut body),
@@ -422,18 +422,24 @@ fn return_of_generic_class_field(arg: TypeKind) -> Body {
         1,
         vec![assign(place(0), use_copy(field(1, 0)))],
     );
-    body.field_types = HashMap::from([(
-        "Tagged".to_string(),
-        vec![ty(TypeKind::Generic(
-            "T".to_string(),
-            None,
-            miri::ast::types::TypeDeclarationKind::None,
-        ))],
-    )]);
-    body.class_type_params = HashMap::from([("Tagged".to_string(), vec!["T".to_string()])]);
     let definitions = HashMap::from([("Tagged".to_string(), tagged_definition())]);
     body.rc_classifier = RcClassifier::new(Rc::new(definitions));
     body
+}
+
+/// Defines `struct Holder` with the one field `value`, of type `field`.
+fn define_holder(body: &mut Body, field: TypeKind) {
+    let holder = TypeDefinition::Struct(StructDefinition {
+        fields: vec![(
+            "value".to_string(),
+            ty(field),
+            miri::ast::MemberVisibility::Public,
+        )],
+        generics: None,
+        module: String::new(),
+    });
+    let definitions = HashMap::from([("Holder".to_string(), holder)]);
+    body.rc_classifier = RcClassifier::new(Rc::new(definitions));
 }
 
 /// `class Tagged<T>` with the one field `value T`, as the program defines it.
@@ -502,7 +508,7 @@ fn test_copy_of_scalar_struct_field_gets_no_incref() {
         0,
         vec![assign(place(2), use_copy(field(1, 0)))],
     );
-    body.field_types = HashMap::from([("Holder".to_string(), vec![ty(TypeKind::Int)])]);
+    define_holder(&mut body, TypeKind::Int);
 
     assert_eq!(
         rc_statements(&mut body),
@@ -537,7 +543,7 @@ fn test_cast_of_managed_field_increfs_the_projected_place() {
         0,
         vec![assign(place(2), cast.clone())],
     );
-    body.field_types = HashMap::from([("Holder".to_string(), vec![ty(TypeKind::String)])]);
+    define_holder(&mut body, TypeKind::String);
 
     assert_eq!(
         rc_statements(&mut body),

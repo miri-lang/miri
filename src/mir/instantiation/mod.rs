@@ -175,6 +175,23 @@ pub(crate) fn field_types(
     }
 }
 
+/// The type field `index` of the struct or class `name` is stored at, in an
+/// instance carrying `args`, read in a body lowered for `instance`: a bare
+/// spelling of the class that body was lowered for names that instance.
+pub(crate) fn field_type(
+    definitions: &HashMap<String, TypeDefinition>,
+    instance: Option<&Type>,
+    name: &str,
+    args: Option<&[Expression]>,
+    index: usize,
+) -> Option<Type> {
+    let args = args.or_else(|| match instance.map(|ty| &ty.kind) {
+        Some(TypeKind::Custom(owner, Some(own_args))) if owner == name => Some(own_args.as_slice()),
+        _ => None,
+    });
+    field_types(definitions, name, args)?.get(index).cloned()
+}
+
 /// [`field_types`] for the class `name`.
 fn class_field_types(
     definitions: &HashMap<String, TypeDefinition>,

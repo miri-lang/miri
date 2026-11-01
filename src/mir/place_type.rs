@@ -18,7 +18,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::type_identity;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, TUPLE_TYPE_NAME};
-use crate::mir::lowering::{field_type_in_instance, type_argument};
+use crate::mir::lowering::type_argument;
 use crate::mir::rvalue::AggregateKind;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::TerminatorKind;
@@ -32,8 +32,8 @@ use std::collections::HashMap;
 /// The declarations a body keeps that say what type a place reaches.
 pub struct PlaceTypes<'a> {
     pub local_decls: &'a [LocalDecl],
-    pub field_types: &'a HashMap<String, Vec<Type>>,
-    pub class_type_params: &'a HashMap<String, Vec<String>>,
+    /// The instance the body was lowered for; see [`Body::instance`].
+    pub instance: Option<&'a Type>,
     pub closure_capture_types: &'a HashMap<Local, Vec<Type>>,
     /// The program's type table, which says what an enum's variants and a
     /// struct's or class's fields hold where the body records no entry.
@@ -52,8 +52,7 @@ impl<'a> PlaceTypes<'a> {
     pub fn of(body: &'a Body) -> Self {
         Self {
             local_decls: &body.local_decls,
-            field_types: &body.field_types,
-            class_type_params: &body.class_type_params,
+            instance: body.instance.as_ref(),
             closure_capture_types: &body.closure_capture_types,
             definitions: body.rc_classifier.definitions(),
             type_params: &body.type_params,
@@ -149,12 +148,13 @@ impl<'a> PlaceTypes<'a> {
                     .get(index)?
                     .clone()
             }
-            None => match self.field_types.get(name.as_str()) {
-                Some(fields) => fields.get(index)?.clone(),
-                None => crate::mir::instantiation::field_types(self.definitions, name, None)?
-                    .get(index)?
-                    .clone(),
-            },
+            None => crate::mir::instantiation::field_type(
+                self.definitions,
+                self.instance,
+                name,
+                None,
+                index,
+            )?,
         };
         self.binds_every_name(&field).then_some(field)
     }
@@ -320,13 +320,11 @@ impl<'a> PlaceTypes<'a> {
         if self.strict {
             return None;
         }
-        let declared_field = self.field_types.get(name)?.get(index)?;
-        Some(field_type_in_instance(
-            self.class_type_params,
-            name,
-            Some(declared),
-            declared_field,
-        ))
+        let args = match &declared.kind {
+            TypeKind::Custom(_, Some(args)) => Some(args.as_slice()),
+            _ => None,
+        };
+        crate::mir::instantiation::field_type(self.definitions, self.instance, name, args, index)
     }
 
     /// The type a `Field(index)` projection yields from a value of type `current`,

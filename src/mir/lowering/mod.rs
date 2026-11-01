@@ -360,32 +360,6 @@ pub(crate) fn substitute_call_mapping(
         .collect()
 }
 
-/// The type a field of `class_name` has inside `instance`, given each class's
-/// type parameters in declaration order.
-///
-/// One rule with two readers, which must agree: MIR lowering decides from it
-/// whether a store into the field releases what it replaces, and Perceus decides
-/// from it whether the field it projects is reference counted. Disagreeing, a
-/// store claims a value nothing releases, or releases one nothing claimed.
-///
-/// A non-generic class, an instance whose arguments are not known, or a field
-/// that is not declared at any of the class's parameters leaves the declared
-/// spelling in place.
-pub(crate) fn field_type_in_instance(
-    class_type_params: &HashMap<String, Vec<String>>,
-    class_name: &str,
-    instance: Option<&Type>,
-    field_ty: &Type,
-) -> Type {
-    let (Some(params), Some(TypeKind::Custom(_, Some(args)))) = (
-        class_type_params.get(class_name),
-        instance.map(|ty| &ty.kind),
-    ) else {
-        return field_ty.clone();
-    };
-    instantiated_member_type(params.iter().map(String::as_str), args, field_ty)
-}
-
 // The three helpers below are the shared substitution machinery for generic
 // class monomorphization. `build_class_generic_substitution` drives constructor
 // field-type substitution; the single-type and `type_params`-rebuild
@@ -940,17 +914,13 @@ fn lower_class_method_body(
     // instantiation type instead of the pointer-width fallback.
     ctx.generic_subs = subs.clone();
 
-    // The field-type table is built once from the class declaration, so a field
-    // declared `value T` still reads as its type parameter. Perceus decides by
-    // that type whether assigning into the field claims the value, so an
-    // instantiation at a managed type would store what it never retained and the
-    // caller would release it out from under the field.
-    if let TypeKind::Custom(owner, _) = &self_type.kind {
-        if let Some(field_types) = ctx.body.field_types.get_mut(owner) {
-            for field_ty in field_types.iter_mut() {
-                *field_ty = apply_generic_sub(field_ty, subs);
-            }
-        }
+    // A field declared `value T` is stored at the instance's argument. Perceus
+    // decides by that type whether assigning into the field claims the value,
+    // so a bare spelling of the class in this body must read at the instance
+    // being lowered, or an instantiation at a managed type would store what it
+    // never retained and the caller would release it out from under the field.
+    if !subs.is_empty() {
+        ctx.body.instance = Some(self_type.clone());
     }
 
     // Method-own generics plus class-level generics that appear in param/return

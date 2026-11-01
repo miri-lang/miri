@@ -203,10 +203,6 @@ impl<'a> LoweringContext<'a> {
         // Reference counting reads the program's type table, shared by every body.
         body.rc_classifier =
             crate::mir::rc::RcClassifier::new(type_checker.shared_type_definitions());
-        // Pre-compute field type map for struct/class types (used by Perceus to resolve
-        // Field(i) projections without access to the type checker at optimization time).
-        body.field_types = Self::compute_field_types(type_checker);
-        body.class_type_params = Self::compute_class_type_params(type_checker);
         // Pre-compute set of types that define a user `fn drop(self)` destructor.
         // Used by RC elision to avoid removing the DecRef that triggers the destructor.
         body.has_drop_types = Self::compute_has_drop_types(type_checker);
@@ -961,81 +957,6 @@ impl<'a> LoweringContext<'a> {
             .keys()
             .filter(|name| crate::type_checker::utils::has_drop_hook(name, type_definitions))
             .cloned()
-            .collect()
-    }
-
-    /// Builds a map from struct/class type names to their ordered field types.
-    ///
-    /// This is used by the Perceus RC pass to resolve `Field(i)` place projections
-    /// and determine whether the projected field type is managed (needs RC).
-    ///
-    /// For structs, fields are in declaration order.
-    /// For classes, fields are in inheritance order (ancestor fields first), matching
-    /// the layout produced by `collect_class_fields_all`.
-    /// Enum types are excluded: their field layout depends on which variant is active,
-    /// so Perceus falls back to checking the LHS local's type for enum field projections.
-    fn compute_field_types(
-        type_checker: &crate::type_checker::TypeChecker,
-    ) -> HashMap<String, Vec<crate::ast::types::Type>> {
-        let mut field_types = HashMap::new();
-
-        for (name, def) in type_checker.type_definitions() {
-            match def {
-                crate::type_checker::context::TypeDefinition::Struct(struct_def) => {
-                    let types: Vec<_> = struct_def
-                        .fields
-                        .iter()
-                        .map(|(_, ty, _)| ty.clone())
-                        .collect();
-                    field_types.insert(name.clone(), types);
-                }
-                crate::type_checker::context::TypeDefinition::Class(_) => {
-                    // Each inherited field is written in the parameters of the
-                    // ancestor that declares it, which the `extends` clause
-                    // binds to this class's own. Reading them unbound names a
-                    // parameter this class does not have, so a swapped clause
-                    // decides a managed field is a scalar and releases it by
-                    // the wrong rule, or not at all.
-                    let types = crate::mir::lowering::inherited_instantiation::declared_field_types(
-                        type_checker.type_definitions(),
-                        name,
-                    );
-                    field_types.insert(name.clone(), types);
-                }
-                // Enums, aliases, generics, traits: excluded (see doc comment above).
-                _ => {}
-            }
-        }
-
-        field_types
-    }
-
-    /// Builds a map from each generic class or struct name to its type
-    /// parameter names, in declaration order — the order a
-    /// `Custom(name, Some(args))` spells its arguments in.
-    ///
-    /// A struct belongs here as much as a class: its fields are stored at the
-    /// instance's type arguments, so reading one declared at a parameter
-    /// without them would see an `Option<int>` field as an unmanaged word.
-    fn compute_class_type_params(
-        type_checker: &crate::type_checker::TypeChecker,
-    ) -> HashMap<String, Vec<String>> {
-        use crate::type_checker::context::TypeDefinition;
-        type_checker
-            .type_definitions()
-            .iter()
-            .filter_map(|(name, def)| {
-                let generics = match def {
-                    TypeDefinition::Class(class_def) => class_def.generics.as_ref()?,
-                    TypeDefinition::Struct(struct_def) => struct_def.generics.as_ref()?,
-                    TypeDefinition::Enum(_)
-                    | TypeDefinition::Alias(_)
-                    | TypeDefinition::Generic(_)
-                    | TypeDefinition::Trait(_) => return None,
-                };
-                let params = generics.iter().map(|g| g.name.clone()).collect();
-                Some((name.clone(), params))
-            })
             .collect()
     }
 }

@@ -565,26 +565,28 @@ fn wrap_value_for_field_slot(
 /// The type of the field an assignment writes, as the instance being written
 /// through holds it.
 ///
-/// `Body::field_types` records a field as its class declares it, so a field
-/// declared `value T` reads as the bare parameter — neither managed nor an
-/// optional slot — everywhere but the class's own method bodies, where the
-/// table is substituted in place for the instantiation being lowered. The
-/// instance's own type arguments are what give the field the type its value
-/// actually has, and that type is what decides whether the store releases what
-/// it replaces and whether a bare value is wrapped for an optional slot.
+/// The instance's own type arguments give the field the type its value
+/// actually has — a bare spelling of the class a method body was lowered for
+/// naming that body's instance — and that type is what decides whether the
+/// store releases what it replaces and whether a bare value is wrapped for an
+/// optional slot.
 pub(super) fn field_slot_type(
     ctx: &LoweringContext,
     instance: &Type,
     type_name: &str,
     idx: usize,
 ) -> Option<Type> {
-    let declared = ctx.body.field_types.get(type_name)?.get(idx)?;
-    Some(crate::mir::lowering::field_type_in_instance(
-        &ctx.body.class_type_params,
+    let args = match &instance.kind {
+        TypeKind::Custom(_, Some(args)) => Some(args.as_slice()),
+        _ => None,
+    };
+    crate::mir::instantiation::field_type(
+        ctx.body.rc_classifier.definitions(),
+        ctx.body.instance.as_ref(),
         type_name,
-        Some(instance),
-        declared,
-    ))
+        args,
+        idx,
+    )
 }
 
 fn assign_to_member_simple(
