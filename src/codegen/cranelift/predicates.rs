@@ -6,6 +6,7 @@
 //! Pure functions only: no IR emission. Each predicate exhaustively matches
 //! its target enum so adding a new variant forces this module to be revisited.
 
+use crate::abi::layout as abi;
 use crate::ast::type_arguments::argument_type;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator, TypeCtx};
@@ -119,46 +120,6 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// The element kind that makes a set match its elements, or a map its keys,
-    /// by their raw bytes. Mirrors the runtime's `element_identity::BY_BYTES`,
-    /// and is what every container starts at.
-    pub(crate) const BYTES_ELEMENT_KIND: i64 = 0;
-
-    /// The element kind that makes a set match its string elements, or a map
-    /// its string keys, by content. Mirrors the runtime's
-    /// `element_identity::BY_STRING_CONTENT`.
-    pub(crate) const STRING_CONTENT_ELEMENT_KIND: i64 = 1;
-
-    /// The element kinds that make a set match its float elements, or a map
-    /// its float keys, by the number they hold, so `-0.0` and `0.0` are one
-    /// key and every NaN is one key: one per float width. Mirror the runtime's
-    /// `element_identity::BY_F16_VALUE`, `BY_F32_VALUE` and `BY_F64_VALUE`.
-    pub(crate) const F16_VALUE_ELEMENT_KIND: i64 = 2;
-    pub(crate) const F32_VALUE_ELEMENT_KIND: i64 = 3;
-    pub(crate) const F64_VALUE_ELEMENT_KIND: i64 = 4;
-
-    /// Bits the element kind reserves for the rule that settles a value.
-    /// Mirrors the runtime's `element_identity`, which reads the word back.
-    const ELEMENT_RULE_BITS: u32 = 8;
-
-    /// Bits the element kind reserves for the number of optionals wrapping the
-    /// element, immediately above the rule.
-    const OPTIONAL_DEPTH_BITS: u32 = 8;
-
-    /// The bit, just above the depth, that says the innermost optional is a
-    /// nullable pointer rather than a box. Mirrors the runtime's
-    /// `element_identity`.
-    const INNERMOST_NULLABLE_BITS: u32 = 1;
-
-    /// The bit, just above the nullable bit, that says the element's
-    /// callbacks are handed the address its value resolves to: a value held
-    /// inline as its bytes. Mirrors the runtime's `element_identity`.
-    const SLOT_ADDRESS_BITS: u32 = 1;
-
-    /// How many optionals the element kind can say an element is wrapped in.
-    /// Mirrors the runtime's `element_identity::MAX_OPTIONAL_DEPTH`.
-    const MAX_OPTIONAL_DEPTH: usize = (1 << Self::OPTIONAL_DEPTH_BITS) - 1;
-
     /// The widest boxed value the element kind can state, which is the widest
     /// value held as its bytes: the field holding it is the rest of the word,
     /// but a size beyond this means the caller measured something other than a
@@ -168,9 +129,7 @@ impl<'a> FunctionTranslator<'a> {
     /// `kind`, with the element's callbacks handed the address its value
     /// resolves to, as an element held inline as its bytes needs.
     pub(crate) fn by_slot_address(kind: i64) -> i64 {
-        let shift =
-            Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS + Self::INNERMOST_NULLABLE_BITS;
-        kind | (1 << shift)
+        abi::by_slot_address(kind as usize) as i64
     }
 
     /// The element kind registering `rule` for the value reached by opening
@@ -190,17 +149,19 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Option<i64> {
         // An inline layer has no box to open: an optional held as its bytes
         // is matched through its own callbacks, not described here.
-        if !layers.is_optional() || layers.inline > 0 || layers.boxed > Self::MAX_OPTIONAL_DEPTH {
+        if !layers.is_optional() || layers.inline > 0 || layers.boxed > abi::MAX_OPTIONAL_DEPTH {
             return None;
         }
         if value_size == 0 || value_size > Self::MAX_OPTIONAL_VALUE_SIZE {
             return None;
         }
-        let nullable_shift = Self::ELEMENT_RULE_BITS + Self::OPTIONAL_DEPTH_BITS;
-        let size_shift = nullable_shift + Self::INNERMOST_NULLABLE_BITS + Self::SLOT_ADDRESS_BITS;
-        let nullable = i64::from(layers.innermost_nullable_pointer) << nullable_shift;
-        let size = i64::from(value_size) << size_shift;
-        Some(rule | (layers.boxed as i64) << Self::ELEMENT_RULE_BITS | nullable | size)
+        let kind = abi::through_optionals(
+            rule as usize,
+            layers.boxed,
+            value_size as usize,
+            layers.innermost_nullable_pointer,
+        );
+        Some(kind as i64)
     }
 
     /// Whether a value of `kind` is an optional held as its payload's own
@@ -259,25 +220,16 @@ impl<'a> FunctionTranslator<'a> {
         matches!(definitions.get(name), Some(TypeDefinition::Generic(_))).then_some(name)
     }
 
-    /// The order kind that makes a list or array sort its elements as unsigned
-    /// integers. Mirrors the runtime's `element_order::BY_UNSIGNED_VALUE`; the
-    /// default `0` reads an element's bytes as a signed value.
-    pub(crate) const UNSIGNED_VALUE_ORDER_KIND: i64 = 1;
-
-    /// The order kind that makes a list or array sort its elements as floats.
-    /// Mirrors the runtime's `element_order::BY_FLOAT_VALUE`.
-    pub(crate) const FLOAT_VALUE_ORDER_KIND: i64 = 2;
-
     /// The order kind a list or array of `elem_kind` must register so its bytes
     /// sort by value, or `None` when the runtime's signed default already does
     /// (signed integers, booleans) or the element carries no value in its bytes.
     pub(crate) fn element_order_kind(elem_kind: &TypeKind) -> Option<i64> {
         match elem_kind {
             TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128 => {
-                Some(Self::UNSIGNED_VALUE_ORDER_KIND)
+                Some(abi::BY_UNSIGNED_VALUE as i64)
             }
             TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64 => {
-                Some(Self::FLOAT_VALUE_ORDER_KIND)
+                Some(abi::BY_FLOAT_VALUE as i64)
             }
             TypeKind::Int
             | TypeKind::I8

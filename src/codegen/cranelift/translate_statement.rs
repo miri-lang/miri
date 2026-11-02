@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::abi::layout as abi;
 use crate::ast::literal::Literal;
 use crate::ast::type_arguments::{argument_type, TypeArguments};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::collection_header::{
-    HEADER_DATA, HEADER_LEN, LIST_CAPACITY, LIST_SLOT_SIZE,
+    count_offset, emit_count_is_immortal, header_offset, load_trusted_header_word,
 };
-use crate::codegen::cranelift::inline_strings::{
-    Append, STRING_ASCII_WORD, STRING_DATA_WORD, STRING_LEN_WORD,
-};
+use crate::codegen::cranelift::inline_strings::Append;
 use crate::codegen::cranelift::rc::ElementIdentitySetters;
 use crate::codegen::cranelift::translator::{
     CallSite, ElementShape, FunctionTranslator, ModuleCtx, RuntimeChecks, TypeCtx,
@@ -246,7 +245,6 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
         let null = builder.ins().iconst(ptr_type, 0);
@@ -256,12 +254,12 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
 
         builder.switch_to_block(rc_block);
-        let header_ptr = builder.ins().iadd_imm_s(ptr, -(ptr_size as i64));
+        let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
         let rc = builder
             .ins()
             .load(ptr_type, MemFlagsData::new(), header_ptr, 0);
 
-        let is_immortal = builder.ins().icmp_imm_s(IntCC::SignedLessThan, rc, 0);
+        let is_immortal = emit_count_is_immortal(builder, rc);
         let then_block = builder.create_block();
         builder
             .ins()
@@ -313,7 +311,6 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i64;
         let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx)?;
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx, None)?;
 
@@ -325,7 +322,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(rc_block);
         Self::emit_release_check(builder, ctx, ptr)?;
-        let header_ptr = builder.ins().iadd_imm_s(ptr, -(ptr_size));
+        let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
         let rc = builder.ins().load(
             ptr_type,
             cranelift_codegen::ir::MemFlagsData::new(),
@@ -333,11 +330,7 @@ impl<'a> FunctionTranslator<'a> {
             0,
         );
 
-        let is_immortal = builder.ins().icmp_imm_s(
-            cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
-            rc,
-            0,
-        );
+        let is_immortal = emit_count_is_immortal(builder, rc);
         let dealloc_block = builder.create_block();
         builder
             .ins()
@@ -1276,7 +1269,20 @@ impl<'a> FunctionTranslator<'a> {
         let call = builder.ins().call(local_func, &arg_values);
         let maybe_result =
             Self::land_call_result(builder, call, &prepared.result, destination, locals)?;
+        Self::init_constructed_list(builder, ctx, callee, maybe_result, dest_ty, args, type_ctx)
+    }
 
+    /// Registers a new list's element callbacks when `callee` is a list
+    /// constructor that handed back `maybe_result`.
+    fn init_constructed_list(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        callee: &Symbol,
+        maybe_result: Option<cranelift_codegen::ir::Value>,
+        dest_ty: &crate::ast::types::Type,
+        args: &[Operand],
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
         let runtime_name = callee.runtime_name();
         if runtime_name == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY) {
             let elem_ty = Self::list_literal_element_type(dest_ty, args, type_ctx);
@@ -1286,6 +1292,7 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         if runtime_name == Some(rt::LIST_NEW) {
+            let ptr_type = type_ctx.ptr_type;
             Self::apply_list_new_init(builder, ctx, maybe_result, dest_ty, type_ctx, ptr_type)?;
         }
         Ok(())
@@ -1298,6 +1305,11 @@ impl<'a> FunctionTranslator<'a> {
     /// negative. Emitted only in a build with the runtime's checks compiled
     /// out, so a build that keeps them still has the heap guard see every
     /// string the runtime is handed.
+    ///
+    /// Placement exception: the runtime owns `miri_rt_string_code_at`; this copies its ASCII
+    /// case because a call into the runtime library cannot be inlined. A `code_at` loop over
+    /// 5.5 million characters went from 41 ms to 26 ms on x86-64; nothing is allocated on the
+    /// path, so peak memory is unchanged. Guarded by the test `inline_fast_paths`.
     fn emit_inline_code_at(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1336,11 +1348,14 @@ impl<'a> FunctionTranslator<'a> {
             cranelift_codegen::ir::types::I32,
             flags,
             *string,
-            word * STRING_ASCII_WORD,
+            header_offset(abi::STRING_ASCII, word),
         );
-        let len = builder
-            .ins()
-            .load(code_type, flags, *string, word * STRING_LEN_WORD);
+        let len = builder.ins().load(
+            code_type,
+            flags,
+            *string,
+            header_offset(abi::STRING_LEN, word),
+        );
         let inside = builder.ins().icmp(IntCC::UnsignedLessThan, *index, len);
         let is_ascii = builder.ins().icmp_imm_u(IntCC::NotEqual, ascii, 0);
         let fast = builder.ins().band(inside, is_ascii);
@@ -1348,9 +1363,12 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(byte_read);
         builder.seal_block(byte_read);
-        let data = builder
-            .ins()
-            .load(code_type, flags, *string, word * STRING_DATA_WORD);
+        let data = builder.ins().load(
+            code_type,
+            flags,
+            *string,
+            header_offset(abi::STRING_DATA, word),
+        );
         let at = builder.ins().iadd(data, *index);
         let byte = builder.ins().uload8(code_type, flags, at, 0);
         builder.ins().jump(join, &[byte.into()]);
@@ -1379,6 +1397,11 @@ impl<'a> FunctionTranslator<'a> {
     /// that keeps the runtime's checks, the runtime answers while the heap
     /// guard or another tracking mode is on, so the guard still checks that
     /// the block is live.
+    ///
+    /// Placement exception: the runtime owns `miri_rt_rc_is_shared`; this copies it because a
+    /// call into the runtime library cannot be inlined. nbody at size S went from 0.87 s to
+    /// 0.77 s; nothing is allocated on the path, so peak memory is unchanged. Guarded by the
+    /// test `inline_fast_paths`.
     fn emit_inline_is_shared(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1469,6 +1492,11 @@ impl<'a> FunctionTranslator<'a> {
     /// runtime's checks, the call is also taken whenever the runtime's tracking
     /// state does not read off, so the heap guard still validates the block
     /// before the write, and the call settles a state not yet read.
+    ///
+    /// Placement exception: the runtime owns each collection's copy-on-write; this copies the
+    /// case where it hands the value back, because a call into the runtime library cannot be
+    /// inlined. Hot time at size S fell 26% on sieve and 30% on fannkuch-redux, with peak
+    /// memory unchanged. Guarded by the test `inline_fast_paths`.
     fn emit_inline_copy_on_write(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1518,6 +1546,10 @@ impl<'a> FunctionTranslator<'a> {
     /// runtime's checks, the call is also taken whenever the runtime's
     /// tracking state does not read off, so the heap guard still validates
     /// the receiver before the write.
+    ///
+    /// Placement exception: the runtime owns the receiver check; this copies its passing case
+    /// because a call into the runtime library cannot be inlined. Runs got about 7% faster,
+    /// with peak memory unchanged. Guarded by the test `inline_fast_paths`.
     fn emit_inline_receiver_unique(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1585,6 +1617,11 @@ impl<'a> FunctionTranslator<'a> {
     /// element, and — in a build that keeps the runtime's checks — any push
     /// while the runtime is tracking take the call, which grows the buffer,
     /// zeroes a slot's spare bytes and lets the heap guard see the list.
+    ///
+    /// Placement exception: the runtime owns `miri_rt_list_push`; this copies the push into a
+    /// list with room because a call into the runtime library cannot be inlined. Hot time at
+    /// size S fell 2.07x on closures and 1.86x on sieve, with peak memory unchanged or lower.
+    /// Guarded by the test `inline_fast_paths`.
     fn emit_inline_list_push(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1606,15 +1643,9 @@ impl<'a> FunctionTranslator<'a> {
         builder.seal_block(header_block);
         Self::branch_to_runtime_while_observed(builder, ctx, runtime_block)?;
         let header = MemFlagsData::trusted();
-        let len = builder
-            .ins()
-            .load(ptr_type, header, push.list, HEADER_LEN * word);
-        let capacity = builder
-            .ins()
-            .load(ptr_type, header, push.list, LIST_CAPACITY * word);
-        let slot = builder
-            .ins()
-            .load(ptr_type, header, push.list, LIST_SLOT_SIZE * word);
+        let len = load_trusted_header_word(builder, ptr_type, push.list, abi::LIST_LEN);
+        let capacity = load_trusted_header_word(builder, ptr_type, push.list, abi::LIST_CAPACITY);
+        let slot = load_trusted_header_word(builder, ptr_type, push.list, abi::LIST_SLOT_SIZE);
         let has_room = builder.ins().icmp(IntCC::UnsignedLessThan, len, capacity);
         let fills_slot = builder
             .ins()
@@ -1626,9 +1657,7 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(store_block);
         builder.seal_block(store_block);
-        let data = builder
-            .ins()
-            .load(ptr_type, header, push.list, HEADER_DATA * word);
+        let data = load_trusted_header_word(builder, ptr_type, push.list, abi::LIST_DATA);
         let offset = builder.ins().imul_imm_s(len, push.width.bytes() as i64);
         let dest = builder.ins().iadd(data, offset);
         let element = builder
@@ -1640,7 +1669,7 @@ impl<'a> FunctionTranslator<'a> {
         let grown = builder.ins().iadd_imm_s(len, 1);
         builder
             .ins()
-            .store(header, grown, push.list, HEADER_LEN * word);
+            .store(header, grown, push.list, header_offset(abi::LIST_LEN, word));
         builder.ins().jump(join_block, &[]);
 
         builder.switch_to_block(runtime_block);
@@ -1663,16 +1692,22 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Whether the count in the word before the payload at `ptr` is other than
     /// 1, as a value of `answer_type`.
+    ///
+    /// Placement exception: the runtime owns the shared-count rule; this copies it for the
+    /// inline paths above, whose measurements it carries. Guarded by the test
+    /// `inline_fast_paths`.
     fn emit_count_is_shared(
         builder: &mut FunctionBuilder,
         ptr: cranelift_codegen::ir::Value,
         answer_type: cranelift_codegen::ir::Type,
     ) -> cranelift_codegen::ir::Value {
         let ptr_type = builder.func.dfg.value_type(ptr);
-        let header = ptr_type.bytes() as i32;
-        let count = builder
-            .ins()
-            .load(ptr_type, MemFlagsData::trusted(), ptr, -header);
+        let count = builder.ins().load(
+            ptr_type,
+            MemFlagsData::trusted(),
+            ptr,
+            count_offset(ptr_type) as i32,
+        );
         let shared = builder.ins().icmp_imm_s(IntCC::NotEqual, count, 1);
         if answer_type == cranelift_codegen::ir::types::I8 {
             shared

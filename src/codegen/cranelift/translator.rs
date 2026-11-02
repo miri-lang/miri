@@ -2402,7 +2402,7 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.ins().icmp_imm_s(
             cranelift_codegen::ir::condcodes::IntCC::Equal,
             state,
-            rt::TRACKING_STATE_OFF,
+            i64::from(crate::abi::layout::TRACKING_OFF),
         ))
     }
 

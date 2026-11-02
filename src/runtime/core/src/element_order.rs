@@ -31,14 +31,7 @@ use std::cmp::Ordering;
 /// second, zero when neither does, and a positive number otherwise.
 pub type ElementCompareFn = unsafe extern "C" fn(*const u8, *const u8) -> isize;
 
-/// The element's bytes are a signed integer or a boolean.
-pub const BY_SIGNED_VALUE: usize = 0;
-
-/// The element's bytes are an unsigned integer.
-pub const BY_UNSIGNED_VALUE: usize = 1;
-
-/// The element's bytes are an IEEE-754 float.
-pub const BY_FLOAT_VALUE: usize = 2;
+pub use crate::abi_layout::{BY_FLOAT_VALUE, BY_SIGNED_VALUE, BY_UNSIGNED_VALUE};
 
 /// How a container decides which of two of its elements sorts first.
 ///

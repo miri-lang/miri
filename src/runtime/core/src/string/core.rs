@@ -66,6 +66,25 @@ pub struct MiriString {
     pub block_room: u8,
 }
 
+// Compiled code reads and writes a string's header at the words and bytes
+// `abi_layout` names, and spells its storage kinds as `abi_layout` does.
+const _: () = {
+    use crate::abi_layout::{
+        STORAGE_HEAP, STORAGE_INLINE, STORAGE_UNOWNED, STRING_ASCII, STRING_CAPACITY, STRING_DATA,
+        STRING_LEN, STRING_STORAGE_BYTE,
+    };
+    use std::mem::offset_of;
+    const WORD: usize = std::mem::size_of::<usize>();
+    assert!(offset_of!(MiriString, data) == STRING_DATA * WORD);
+    assert!(offset_of!(MiriString, len) == STRING_LEN * WORD);
+    assert!(offset_of!(MiriString, capacity) == STRING_CAPACITY * WORD);
+    assert!(offset_of!(MiriString, ascii) == STRING_ASCII * WORD);
+    assert!(offset_of!(MiriString, storage) == STRING_ASCII * WORD + STRING_STORAGE_BYTE);
+    assert!(StringStorage::Unowned as u8 == STORAGE_UNOWNED);
+    assert!(StringStorage::Heap as u8 == STORAGE_HEAP);
+    assert!(StringStorage::Inline as u8 == STORAGE_INLINE);
+};
+
 impl MiriString {
     /// Creates an empty `MiriString` with no heap allocation.
     #[must_use]

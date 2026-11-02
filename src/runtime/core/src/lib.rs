@@ -21,6 +21,9 @@
 //! All public FFI functions use `#[no_mangle] extern "C"` for C-compatible FFI,
 //! allowing compiled Miri code to call them via the linker.
 
+/// The layout facts compiled code relies on, compiled into the compiler too.
+#[path = "../../../abi/layout.rs"]
+pub mod abi_layout;
 pub mod alloc;
 pub mod alloc_count;
 pub mod array;

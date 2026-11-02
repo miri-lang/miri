@@ -9,7 +9,9 @@ that makes the import today is listed with the reason it is still allowed,
 so the rule catches every new file while the listed ones are repaired; an
 entry is removed when its file no longer needs it, never added without a
 reason. Only code is read: a comment or a doc line naming the import is not
-an import.
+an import. One rule refuses code rather than an import: a header word, count
+rule or tracking state spelled out in code generation instead of read from
+`abi::layout`, the one layout the compiled code and the runtime share.
 
 The script also lists every `Placement exception:` comment in the compiler,
 which is how a duplicate kept for performance is recorded (PRINCIPLES.md,
@@ -25,6 +27,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# A header word, a count rule or a tracking state the compiled code and the
+# runtime must agree on, spelled out by hand instead of read from
+# `abi::layout`: a header constant, a word index multiplied out, a count
+# loaded at a hand-written offset, or an immortal count tested or written
+# outside the helpers that read the rule.
+HAND_WRITTEN_LAYOUT = re.compile(
+    r"const (HEADER_|LIST_(DATA|LEN|CAPACITY|SLOT)|ARRAY_(DATA|LEN|SLOT)|STRING_\w*WORD"
+    r"|\w*ELEMENT_KIND|\w*ORDER_KIND|TRACKING_)\w*: (?!&str)"
+    r"|ptr_size \* [2-7]\b|ELEM_COUNT_OFFSET"
+    r"|load\([^;]*, -(word|ptr_size)\)"
+    r"|iconst\(ptr_type, -1\)"
+    r"|SignedLessThan, (rc|count|refcount)\w*, 0\b"
+)
+HAND_WRITTEN_LAYOUT_WHY = (
+    "compiled code and the runtime read one layout; a word index, count rule "
+    "or tracking state written here drifts from the runtime's struct"
+)
 
 # (rule name, directory prefix, forbidden import pattern, why it is forbidden).
 RULES = [
@@ -56,12 +76,26 @@ RULES = [
         "whether a value, slot or element is counted is asked of mir::rc; a "
         "second predicate falls back its own way and drifts from the first",
     ),
+    (
+        "code generation reads the runtime's layout from abi::layout",
+        "src/codegen/",
+        HAND_WRITTEN_LAYOUT,
+        HAND_WRITTEN_LAYOUT_WHY,
+    ),
+    (
+        "runtime symbols read the runtime's layout from abi::layout",
+        "src/runtime_fns",
+        HAND_WRITTEN_LAYOUT,
+        HAND_WRITTEN_LAYOUT_WHY,
+    ),
 ]
 
 # The file a rule's question belongs to: it may define what the rule refuses
 # everywhere else.
 OWNERS = {
     "one classifier decides what is reference counted": "src/mir/rc.rs",
+    "code generation reads the runtime's layout from abi::layout":
+        "src/codegen/cranelift/collection_header.rs",
 }
 
 # (path, rule name, why the import is still there). Known debt: each entry is

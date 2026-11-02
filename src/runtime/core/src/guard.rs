@@ -478,19 +478,7 @@ pub(crate) fn is_guard_enabled() -> bool {
     GUARD_ENABLED.load(Ordering::Relaxed)
 }
 
-/// Compiled code has not yet learned whether the runtime wants to observe its
-/// allocations. Deliberately distinct from [`TRACKING_OFF`], so the first
-/// allocation still calls the hook and that call is what settles the question —
-/// no allocation is missed before the environment has been read, and the
-/// runtime needs no startup entry point it does not have.
-pub const TRACKING_UNSET: u8 = 0;
-
-/// The runtime does not want to observe allocations. Compiled code skips the
-/// hook call entirely.
-pub const TRACKING_OFF: u8 = 1;
-
-/// The runtime wants every allocation and release reported.
-pub const TRACKING_ON: u8 = 2;
+pub use crate::abi_layout::{TRACKING_OFF, TRACKING_ON, TRACKING_UNSET};
 
 /// Whether compiled code should report the allocations it makes inline.
 ///
@@ -615,9 +603,9 @@ pub fn collect_leak_groups(state: &GuardState) -> String {
                 None
             } else {
                 let rc = unsafe { *((ptr - RC_HEADER_SIZE) as *const usize) };
-                // An immortal object stores a negative `isize` RC and is never
-                // freed by design (see `incref`), so it is not a leak.
-                if (rc as isize) < 0 {
+                // An immortal object is never freed by design (see `incref`),
+                // so it is not a leak.
+                if crate::abi_layout::is_immortal(rc) {
                     continue;
                 }
                 Some(rc)

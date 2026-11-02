@@ -3,8 +3,12 @@
 
 //! String operations compiled inline for their common case, with the runtime
 //! call kept for every other case. They read and write the runtime's
-//! `MiriString` header at the offsets below.
+//! `MiriString` header at the words and bytes `crate::abi::layout` names.
 
+use crate::abi::layout as abi;
+use crate::codegen::cranelift::collection_header::{
+    count_offset, header_offset, load_trusted_header_word,
+};
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, RuntimeChecks};
 use crate::error::CodegenError;
 use crate::mir::symbol::Symbol;
@@ -14,19 +18,6 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{Linkage, Module};
-
-/// Where a `MiriString` header keeps its bytes, its byte length and its
-/// capacity, in pointer-sized words from its start, and the bytes past the
-/// third word that hold its ASCII flag and its storage kind. The runtime's
-/// `test_string_header_sits_where_compiled_code_reads_and_writes_it` holds the
-/// header to these.
-pub(super) const STRING_DATA_WORD: i32 = 0;
-pub(super) const STRING_LEN_WORD: i32 = 1;
-const STRING_CAPACITY_WORD: i32 = 2;
-pub(super) const STRING_ASCII_WORD: i32 = 3;
-const STRING_STORAGE_BYTE: i32 = 1;
-/// The storage kind of bytes a string does not own, such as a literal's.
-const STORAGE_UNOWNED: i64 = 0;
 
 /// The two strings of an append, `left += right`.
 #[derive(Clone, Copy)]
@@ -45,6 +36,11 @@ impl<'a> FunctionTranslator<'a> {
     /// runtime also forgets what it remembered about that string's characters.
     /// Emitted only in a build with the runtime's checks compiled out, so a
     /// build that keeps them still has the heap guard see both strings.
+    ///
+    /// Placement exception: the runtime owns `miri_rt_string_append`; this copies its in-place
+    /// case because a call into the runtime library cannot be inlined. json-roundtrip went from
+    /// 142 ms to 124 ms on arm64; the path allocates nothing, so peak memory is unchanged.
+    /// Guarded by the test `inline_fast_paths`.
     pub(super) fn emit_inline_string_append(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -102,12 +98,15 @@ impl<'a> FunctionTranslator<'a> {
     ) -> AppendRoom {
         let word = ptr_type.bytes() as i32;
         let header = MemFlagsData::trusted();
-        let count = builder.ins().load(ptr_type, header, append.left, -word);
+        let count =
+            builder
+                .ins()
+                .load(ptr_type, header, append.left, count_offset(ptr_type) as i32);
         let unique = builder.ins().icmp_imm_s(IntCC::Equal, count, 1);
         let distinct = builder
             .ins()
             .icmp(IntCC::NotEqual, append.left, append.right);
-        let flags_at = word * STRING_ASCII_WORD;
+        let flags_at = header_offset(abi::STRING_ASCII, word);
         let ascii = builder
             .ins()
             .uload8(types::I32, header, append.left, flags_at);
@@ -116,21 +115,16 @@ impl<'a> FunctionTranslator<'a> {
             types::I32,
             header,
             append.left,
-            flags_at + STRING_STORAGE_BYTE,
+            flags_at + abi::STRING_STORAGE_BYTE as i32,
         );
-        let owned = builder
-            .ins()
-            .icmp_imm_u(IntCC::NotEqual, storage, STORAGE_UNOWNED);
-        let len = builder
-            .ins()
-            .load(ptr_type, header, append.left, word * STRING_LEN_WORD);
-        let piece_len = builder
-            .ins()
-            .load(ptr_type, header, append.right, word * STRING_LEN_WORD);
-        let capacity =
+        let owned =
             builder
                 .ins()
-                .load(ptr_type, header, append.left, word * STRING_CAPACITY_WORD);
+                .icmp_imm_u(IntCC::NotEqual, storage, i64::from(abi::STORAGE_UNOWNED));
+        let len = load_trusted_header_word(builder, ptr_type, append.left, abi::STRING_LEN);
+        let piece_len = load_trusted_header_word(builder, ptr_type, append.right, abi::STRING_LEN);
+        let capacity =
+            load_trusted_header_word(builder, ptr_type, append.left, abi::STRING_CAPACITY);
         // Both lengths are below isize::MAX, so their sum cannot wrap.
         let total = builder.ins().iadd(len, piece_len);
         let has_room = builder
@@ -159,19 +153,18 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let word = ptr_type.bytes() as i32;
         let header = MemFlagsData::trusted();
-        let data = builder
-            .ins()
-            .load(ptr_type, header, append.left, word * STRING_DATA_WORD);
+        let data = load_trusted_header_word(builder, ptr_type, append.left, abi::STRING_DATA);
         let dest = builder.ins().iadd(data, room.len);
-        let source = builder
-            .ins()
-            .load(ptr_type, header, append.right, word * STRING_DATA_WORD);
+        let source = load_trusted_header_word(builder, ptr_type, append.right, abi::STRING_DATA);
         let copy = Self::import_copy_bytes(builder, ctx, ptr_type)?;
         builder.ins().call(copy, &[dest, source, room.piece_len]);
-        builder
-            .ins()
-            .store(header, room.total, append.left, word * STRING_LEN_WORD);
-        let flags_at = word * STRING_ASCII_WORD;
+        builder.ins().store(
+            header,
+            room.total,
+            append.left,
+            header_offset(abi::STRING_LEN, word),
+        );
+        let flags_at = header_offset(abi::STRING_ASCII, word);
         let piece_ascii = builder
             .ins()
             .load(types::I8, header, append.right, flags_at);

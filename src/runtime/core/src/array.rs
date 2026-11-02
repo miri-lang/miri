@@ -45,6 +45,16 @@ pub struct MiriArray {
     elem_order: ElementOrder,
 }
 
+// Compiled code reads an array's header at the words `abi_layout` names.
+const _: () = {
+    use crate::abi_layout::{ARRAY_DATA, ARRAY_LEN, ARRAY_SLOT_SIZE};
+    use std::mem::offset_of;
+    const WORD: usize = std::mem::size_of::<usize>();
+    assert!(offset_of!(MiriArray, data) == ARRAY_DATA * WORD);
+    assert!(offset_of!(MiriArray, elem_count) == ARRAY_LEN * WORD);
+    assert!(offset_of!(MiriArray, elem_size) == ARRAY_SLOT_SIZE * WORD);
+};
+
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
 
 impl MiriArray {
@@ -207,7 +217,7 @@ pub mod ffi {
         }
         let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
         let rc = *rc_ptr;
-        if (rc as isize) < 0 {
+        if crate::abi_layout::is_immortal(rc) {
             return;
         }
         *rc_ptr -= 1;

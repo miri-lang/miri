@@ -19,7 +19,7 @@ use crate::guard::{guard_alloc, guard_free, report_and_abort, AllocKind, FreeVer
 
 /// Size of the reference count header, in bytes.
 /// Matches `ptr_type.bytes()` in the Cranelift codegen.
-pub const RC_HEADER_SIZE: usize = std::mem::size_of::<usize>();
+pub const RC_HEADER_SIZE: usize = crate::abi_layout::COUNT_WORDS * std::mem::size_of::<usize>();
 
 /// Global counter for RC-tracked heap objects (strings, lists, arrays, classes, …).
 /// Incremented on alloc, decremented on free. Non-zero at exit → leak or double-free.
@@ -163,7 +163,7 @@ pub unsafe fn incref(ptr: *mut u8) {
     }
     let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
     let rc = *rc_ptr;
-    if (rc as isize) >= 0 {
+    if !crate::abi_layout::is_immortal(rc) {
         *rc_ptr = rc.saturating_add(1);
     }
 }

@@ -69,22 +69,11 @@ pub type ElementEqualsFn = unsafe extern "C" fn(*const u8, *const u8) -> u8;
 /// holds, as the equality is handed it.
 pub type ElementHashFn = unsafe extern "C" fn(*const u8) -> i64;
 
-/// The element's bytes are its value.
-pub const BY_BYTES: usize = 0;
-
-/// The element's bytes point at a `MiriString`, matched by its content.
-pub const BY_STRING_CONTENT: usize = 1;
-
-/// The element is an IEEE half-precision float, matched by the number it
-/// holds. A float is read at its own width from the start of its slot, which
-/// may be wider.
-pub const BY_F16_VALUE: usize = 2;
-
-/// The element is an IEEE single-precision float, matched by its number.
-pub const BY_F32_VALUE: usize = 3;
-
-/// The element is an IEEE double-precision float, matched by its number.
-pub const BY_F64_VALUE: usize = 4;
+pub use crate::abi_layout::{
+    by_slot_address, through_optionals, BY_BYTES, BY_F16_VALUE, BY_F32_VALUE, BY_F64_VALUE,
+    BY_STRING_CONTENT, MAX_OPTIONAL_DEPTH,
+};
+use crate::abi_layout::{NULLABLE_BIT, RULE_BITS, SIZE_SHIFT, SLOT_ADDRESS_BIT};
 
 /// The width in bytes of the float `rule` matches by number, or `None` when
 /// `rule` matches something else.
@@ -95,54 +84,6 @@ fn float_width(rule: usize) -> Option<usize> {
         BY_F64_VALUE => Some(8),
         _ => None,
     }
-}
-
-/// Width of the field holding the rule that settles a resolved value.
-const RULE_BITS: u32 = 8;
-
-/// Width of the field holding how many boxed optionals wrap the element.
-const DEPTH_BITS: u32 = 8;
-
-/// The bit, just above the depth, saying the innermost optional is a nullable
-/// pointer rather than a box.
-const NULLABLE_BIT: u32 = RULE_BITS + DEPTH_BITS;
-
-/// The bit, just above the nullable bit, saying a callback is handed the
-/// address the element resolves to rather than the word stored there.
-const SLOT_ADDRESS_BIT: u32 = NULLABLE_BIT + 1;
-
-/// Where the boxed value's size starts, above the slot-address bit.
-const SIZE_SHIFT: u32 = SLOT_ADDRESS_BIT + 1;
-
-/// How many optionals one element may be wrapped in and still be matched by
-/// content. Nesting deeper than this keeps the byte rule: the compiler declines
-/// to encode a depth that does not fit, rather than truncating one into a rule
-/// that would open the wrong number of boxes.
-pub const MAX_OPTIONAL_DEPTH: usize = (1 << DEPTH_BITS) - 1;
-
-/// The kind word registering `rule` for a value reached by opening
-/// `boxed_depth` boxed optionals, each box holding `value_size` bytes, and then,
-/// when `innermost_nullable` is set, one optional more whose `None` is a null
-/// pointer and whose `Some` is the pointer itself.
-///
-/// With no optional at all — `boxed_depth` zero and no nullable layer — the word
-/// is `rule` exactly as the bare constants spell it, so a container whose
-/// elements are not optional encodes as it always did.
-pub const fn through_optionals(
-    rule: usize,
-    boxed_depth: usize,
-    value_size: usize,
-    innermost_nullable: bool,
-) -> usize {
-    rule | (boxed_depth << RULE_BITS)
-        | ((innermost_nullable as usize) << NULLABLE_BIT)
-        | (value_size << SIZE_SHIFT)
-}
-
-/// `kind`, with callbacks handed the address the element resolves to: the
-/// kind word of an element held inline as its bytes.
-pub const fn by_slot_address(kind: usize) -> usize {
-    kind | (1 << SLOT_ADDRESS_BIT)
 }
 
 /// What an element slot holds once every optional wrapping it is opened.

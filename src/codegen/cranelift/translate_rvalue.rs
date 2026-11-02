@@ -5,6 +5,7 @@ use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::type_arguments::TypeArguments;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
+use crate::codegen::cranelift::collection_header::header_offset;
 use crate::codegen::cranelift::layout::{
     aggregate_layout, class_payload_layout, enum_payload_layout, field_layout, EnumLayout, Member,
     PayloadLayout,
@@ -1507,15 +1508,16 @@ impl<'a> FunctionTranslator<'a> {
         let is_tuple_type = ty.kind.is_tuple();
 
         let len_offset = if Self::is_collection_type(&ty.kind) {
-            // MiriArray.elem_count, MiriList.len, MiriSet.len at offset ptr_size.
-            // MiriMap.len at offset 3*ptr_size (after states, keys, values).
-            Some(if Self::is_map_type(&ty.kind) {
-                ptr_size * 3
+            let word = if Self::is_map_type(&ty.kind) {
+                crate::abi::layout::MAP_LEN
+            } else if Self::is_set_type(&ty.kind) {
+                crate::abi::layout::SET_LEN
             } else {
-                ptr_size
-            })
+                crate::abi::layout::ELEMENTS_LEN
+            };
+            Some(header_offset(word, ptr_size))
         } else if matches!(&ty.kind, TypeKind::String) {
-            Some(ptr_size)
+            Some(header_offset(crate::abi::layout::STRING_LEN, ptr_size))
         } else if is_tuple_type {
             Some(0)
         } else {

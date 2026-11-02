@@ -65,6 +65,17 @@ pub struct MiriList {
     elem_order: ElementOrder,
 }
 
+// Compiled code reads a list's header at the words `abi_layout` names.
+const _: () = {
+    use crate::abi_layout::{LIST_CAPACITY, LIST_DATA, LIST_LEN, LIST_SLOT_SIZE};
+    use std::mem::offset_of;
+    const WORD: usize = std::mem::size_of::<usize>();
+    assert!(offset_of!(MiriList, data) == LIST_DATA * WORD);
+    assert!(offset_of!(MiriList, len) == LIST_LEN * WORD);
+    assert!(offset_of!(MiriList, capacity) == LIST_CAPACITY * WORD);
+    assert!(offset_of!(MiriList, elem_size) == LIST_SLOT_SIZE * WORD);
+};
+
 impl MiriList {
     /// Creates a new empty list with the given element size.
     pub fn new(elem_size: usize) -> Self {
@@ -527,7 +538,7 @@ pub mod ffi {
                 let rc_ptr = (ptr_val as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
                 let rc = *rc_ptr;
                 // Skip immortal objects (RC high bit set — e.g. string literals)
-                if (rc as isize) >= 0 {
+                if !crate::abi_layout::is_immortal(rc) {
                     *rc_ptr = rc + 1;
                 }
             }
@@ -889,8 +900,7 @@ pub mod ffi {
         }
         let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
         let rc = *rc_ptr;
-        // Skip immortal objects (RC stored as negative isize)
-        if (rc as isize) < 0 {
+        if crate::abi_layout::is_immortal(rc) {
             return;
         }
         *rc_ptr -= 1;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+/// The memory layout compiled code and the runtime agree on.
+pub mod abi;
 /// Abstract Syntax Tree types and construction utilities.
 pub mod ast;
 /// Command-line interface (argument parsing, REPL, version info).

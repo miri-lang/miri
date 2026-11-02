@@ -5,8 +5,12 @@
 //! per-type field-walking drop logic. Runtime FFI call wrappers live in
 //! `translator.rs`; this module dispatches into them.
 
+use crate::abi::layout as abi;
 use crate::ast::type_arguments::{type_arguments, TypeArguments};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::codegen::cranelift::collection_header::{
+    count_offset, emit_count_is_immortal, immortal_count,
+};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::structural_elements::StructuralElement;
 use crate::codegen::cranelift::translator::{
@@ -350,9 +354,9 @@ impl<'a> FunctionTranslator<'a> {
             ElementIdentity::Bytes => ElementRule::Bytes,
             ElementIdentity::StringContent => ElementRule::StringContent,
             ElementIdentity::Float(width) => ElementRule::FloatValue(match width {
-                FloatWidth::F16 => Self::F16_VALUE_ELEMENT_KIND,
-                FloatWidth::F32 => Self::F32_VALUE_ELEMENT_KIND,
-                FloatWidth::F64 => Self::F64_VALUE_ELEMENT_KIND,
+                FloatWidth::F16 => abi::BY_F16_VALUE as i64,
+                FloatWidth::F32 => abi::BY_F32_VALUE as i64,
+                FloatWidth::F64 => abi::BY_F64_VALUE as i64,
             }),
             ElementIdentity::FieldWise => {
                 let thunk = |kind| {
@@ -444,16 +448,16 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Option<i64> {
         let base = match rule {
-            ElementRule::StringContent => Self::STRING_CONTENT_ELEMENT_KIND,
+            ElementRule::StringContent => abi::BY_STRING_CONTENT as i64,
             ElementRule::FloatValue(kind) => kind,
-            ElementRule::Bytes | ElementRule::OwnEquals => Self::BYTES_ELEMENT_KIND,
+            ElementRule::Bytes | ElementRule::OwnEquals => abi::BY_BYTES as i64,
         };
         let base = match held {
             Some(_) => Self::by_slot_address(base),
             None => base,
         };
         let Some(layers) = wrapping.filter(|layers| layers.is_optional()) else {
-            return (base != Self::BYTES_ELEMENT_KIND).then_some(base);
+            return (base != abi::BY_BYTES as i64).then_some(base);
         };
         let value_size = match held {
             Some(layout) => layout.size,
@@ -1367,7 +1371,6 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i64;
 
         // Guard: skip if pointer is null
         let null = builder.ins().iconst(ptr_type, 0);
@@ -1381,7 +1384,7 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(rc_block);
         Self::emit_release_check(builder, ctx, ptr)?;
 
-        let header_ptr = builder.ins().iadd_imm_s(ptr, -ptr_size);
+        let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
         let rc = builder.ins().load(
             ptr_type,
             cranelift_codegen::ir::MemFlagsData::new(),
@@ -1389,12 +1392,7 @@ impl<'a> FunctionTranslator<'a> {
             0,
         );
 
-        // Skip immortal objects (RC < 0)
-        let is_immortal = builder.ins().icmp_imm_s(
-            cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
-            rc,
-            0,
-        );
+        let is_immortal = emit_count_is_immortal(builder, rc);
         let dec_block = builder.create_block();
         builder
             .ins()
@@ -1516,7 +1514,6 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
-        let ptr_size = ptr_type.bytes() as i64;
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
@@ -1555,8 +1552,10 @@ impl<'a> FunctionTranslator<'a> {
             // but a body that reads it as a whole value (`match self`) retains
             // and releases it, and that release would drop it again from
             // inside its own hook. Marked immortal, both leave it alone.
-            let header_ptr = builder.ins().iadd_imm_s(ptr, -i64::from(ptr_type.bytes()));
-            let immortal = builder.ins().iconst(ptr_type, -1);
+            let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
+            let immortal = builder
+                .ins()
+                .iconst(ptr_type, immortal_count(ptr_type.bits()) as i64);
             builder
                 .ins()
                 .store(MemFlagsData::new(), immortal, header_ptr, 0);
@@ -1580,7 +1579,7 @@ impl<'a> FunctionTranslator<'a> {
             &type_ctx,
         )?;
 
-        let header_ptr = builder.ins().iadd_imm_s(ptr, -ptr_size);
+        let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
         Self::call_rt_block_free(&mut builder, &mut module_ctx, header_ptr)?;
 
         builder.ins().return_(&[]);
@@ -1770,7 +1769,6 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
         sig: &Signature,
     ) -> Result<(), CodegenError> {
-        let ptr_size = ptr_type.bytes() as i64;
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
 
         let entry_block = builder.create_block();
@@ -1797,15 +1795,11 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(rc_block);
         builder.seal_block(rc_block);
         Self::emit_release_check(&mut builder, &mut module_ctx, ptr)?;
-        let header_ptr = builder.ins().iadd_imm_s(ptr, -ptr_size);
+        let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
         let rc = builder
             .ins()
             .load(ptr_type, MemFlagsData::new(), header_ptr, 0);
-        let is_immortal = builder.ins().icmp_imm_s(
-            cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
-            rc,
-            0,
-        );
+        let is_immortal = emit_count_is_immortal(&mut builder, rc);
         let dec_block = builder.create_block();
         builder
             .ins()

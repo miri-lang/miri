@@ -21,6 +21,17 @@ Currently, this module sets up the scaffolding for interacting with standard ope
 3.  **Safety**: The runtime provides safe wrappers around low-level operations (like bounding list accesses).
 4.  **One exit for a fault**: A program that dies of a runtime fault leaves through `core/src/trap.rs`, which takes the diagnostic code as an argument. Reporting the code is therefore part of dying, and a trap cannot reach a reader as a sentence on stderr beside an envelope that says the run succeeded.
 
+## The layout compiled code shares
+
+Compiled code reads a collection's or a string's header words, a value's
+count, the immortal count and the tracking state itself, without calling the
+runtime. All of these are defined once, in `src/abi/layout.rs`, a file with no
+dependencies that the compiler compiles as `crate::abi::layout` and the runtime
+includes as `abi_layout`. Each runtime struct asserts at compile time that it
+puts every word where that file says, so moving a field fails the runtime's
+build instead of a program. `make audit` refuses a header word or count rule
+written by hand in code generation.
+
 ## Counters for diagnosing memory
 
 Two environment variables make a compiled program report what its memory did,

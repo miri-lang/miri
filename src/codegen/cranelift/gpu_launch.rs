@@ -11,11 +11,13 @@
 //! invokes the single runtime entry that handles init / compile / cache /
 //! dispatch / sync / readback.
 
+use crate::abi::layout as abi;
 use crate::ast::gpu_wire::{
     buffer_conversion, collection_element_kind, scalar_capture_wire, WireConversion,
 };
 use crate::ast::literal::Literal;
 use crate::ast::types::{Type, TypeKind, DIM3_TYPE_NAME};
+use crate::codegen::cranelift::collection_header::header_offset;
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{ModuleCtx, TypeCtx};
 use crate::codegen::wgsl::types::buffer_array_stride;
@@ -156,16 +158,6 @@ mod desc_layout {
     pub(super) const UNIFORM_START_Y_VALUE: i32 = 160;
     pub(super) const UNIFORM_START_Z_VALUE: i32 = 168;
     pub(super) const DESC_SIZE: u32 = 176;
-}
-
-/// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
-/// `{ data: *mut u8, elem_count: usize, elem_size: usize, … }`.
-/// Centralized here so the GPU dispatcher cannot drift out of sync if
-/// the runtime struct gains or reorders a leading field.
-mod miri_array_layout {
-    pub(super) const DATA_OFFSET: i32 = 0;
-    pub(super) const ELEM_COUNT_OFFSET: i32 = 8;
-    pub(super) const ELEM_SIZE_OFFSET: i32 = 16;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -529,19 +521,19 @@ fn populate_capture_arrays(
             ptr_ty,
             MemFlagsData::new(),
             arr_ptr,
-            miri_array_layout::DATA_OFFSET,
+            header_offset(abi::ARRAY_DATA, ptr_size),
         );
         let elem_count = builder.ins().load(
             cl_types::I64,
             MemFlagsData::new(),
             arr_ptr,
-            miri_array_layout::ELEM_COUNT_OFFSET,
+            header_offset(abi::ARRAY_LEN, ptr_size),
         );
         let elem_size = builder.ins().load(
             cl_types::I64,
             MemFlagsData::new(),
             arr_ptr,
-            miri_array_layout::ELEM_SIZE_OFFSET,
+            header_offset(abi::ARRAY_SLOT_SIZE, ptr_size),
         );
         let byte_len = builder.ins().imul(elem_count, elem_size);
         builder.ins().store(

@@ -663,13 +663,6 @@ pub mod rt {
         REGEX_MATCH_END,
         REGEX_REPLACE,
     ];
-
-    /// Value of [`TRACKING_STATE`] meaning the runtime wants no report, so
-    /// compiled code may skip the hook. Any other value — including the initial
-    /// unset one, which is why the first allocation always calls in — means
-    /// report it. A value rather than a symbol name, so it belongs below the
-    /// table above rather than in it.
-    pub const TRACKING_STATE_OFF: i64 = 1;
 }
 
 use crate::runtime_effects::{ClosureContract, RuntimeEffect};

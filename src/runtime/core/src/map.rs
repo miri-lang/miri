@@ -53,7 +53,7 @@ const LOAD_FACTOR_DEN: usize = 4;
 
 /// A type-erased hash map using open addressing with linear probing.
 ///
-/// Memory layout matches what Miri codegen expects:
+/// Compiled code reads only `len`, where the assertion below puts it:
 /// - `states`: pointer to slot state array (EMPTY/OCCUPIED/TOMBSTONE)
 /// - `keys`: pointer to key storage (contiguous, key_size per slot)
 /// - `values`: pointer to value storage (contiguous, value_size per slot)
@@ -100,6 +100,10 @@ pub struct MiriMap {
     /// comparison instead of hashing and probing again.
     last_found: Cell<Option<Probe>>,
 }
+
+const _: () = assert!(
+    std::mem::offset_of!(MiriMap, len) == crate::abi_layout::MAP_LEN * std::mem::size_of::<usize>()
+);
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
 

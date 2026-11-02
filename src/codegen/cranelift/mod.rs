@@ -772,9 +772,10 @@ impl CraneliftBackend {
             .into_boxed_slice(),
         );
 
-        // Relocation for the data pointer at offset ptr_size
+        // The relocation for the data pointer word of the header.
         let bytes_ref = module.declare_data_in_data(bytes_id, &mut struct_ctx);
-        struct_ctx.write_data_addr(ptr_size, bytes_ref, 0);
+        let data_word = crate::abi::layout::COUNT_WORDS + crate::abi::layout::STRING_DATA;
+        struct_ctx.write_data_addr(data_word as u32 * ptr_size, bytes_ref, 0);
 
         module
             .define_data(struct_id, &struct_ctx)
@@ -800,23 +801,33 @@ impl CraneliftBackend {
         Ok(bytes_id)
     }
 
-    /// Build the `MiriString` struct payload: `[RC | DataPtr | Len | Cap |
-    /// Ascii]` with the high RC bit set so the runtime treats the literal as
-    /// immortal, and the ASCII flag the runtime reads a character index by.
-    /// The DataPtr slot (offset `ptr_size`) is left zero — the caller writes
-    /// the relocation via `write_data_addr`.
+    /// Build the `MiriString` struct payload: the count word, then the string
+    /// header at the words `crate::abi::layout` names, with the count marking
+    /// the literal immortal and the ASCII flag the runtime reads a character
+    /// index by. The storage byte stays zero, `STORAGE_UNOWNED`. The data
+    /// pointer word is left zero — the caller writes the relocation via
+    /// `write_data_addr`.
     fn build_miri_string_struct_bytes(len: u64, ascii: bool, ptr_size: u32) -> Vec<u8> {
-        let mut data = vec![0u8; 5 * ptr_size as usize];
-        data[4 * ptr_size as usize] = u8::from(ascii);
-        if ptr_size == 4 {
-            data[0..4].copy_from_slice(&(1u32 << 31).to_ne_bytes());
-            data[8..12].copy_from_slice(&(len as u32).to_ne_bytes());
-            data[12..16].copy_from_slice(&(len as u32).to_ne_bytes());
-        } else {
-            data[0..8].copy_from_slice(&(1u64 << 63).to_ne_bytes());
-            data[16..24].copy_from_slice(&len.to_ne_bytes());
-            data[24..32].copy_from_slice(&len.to_ne_bytes());
-        }
+        use crate::abi::layout as abi;
+        let word = ptr_size as usize;
+        let at = |index: usize| (abi::COUNT_WORDS + index) * word;
+        let mut data = vec![0u8; at(abi::STRING_ASCII + 1)];
+        let mut put = |offset: usize, value: u64| {
+            let bytes = value.to_ne_bytes();
+            let bytes = if word == 4 {
+                &(value as u32).to_ne_bytes()[..]
+            } else {
+                &bytes[..]
+            };
+            data[offset..offset + word].copy_from_slice(bytes);
+        };
+        put(
+            0,
+            crate::codegen::cranelift::collection_header::immortal_count(ptr_size * 8),
+        );
+        put(at(abi::STRING_LEN), len);
+        put(at(abi::STRING_CAPACITY), len);
+        data[at(abi::STRING_ASCII)] = u8::from(ascii);
         data
     }
 

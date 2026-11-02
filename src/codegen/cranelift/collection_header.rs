@@ -13,6 +13,7 @@
 //! length through the same pointer, and a load allowed to move could be
 //! hoisted above the null check that guards it.
 
+use crate::abi::layout as abi;
 use crate::ast::types::{BuiltinCollectionKind, Type};
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::error::CodegenError;
@@ -30,14 +31,45 @@ use cranelift_frontend::FunctionBuilder;
 /// compile rather than panic at run time.
 const INLINE_STRIDE_TRAP_CODE: TrapCode = TrapCode::unwrap_user(3);
 
-/// Word offsets of the fields of an array's or a list's header, laid out in C
-/// order: the data pointer and the element count are shared, the rest is
-/// each kind's own.
-pub(crate) const HEADER_DATA: i32 = 0;
-pub(crate) const HEADER_LEN: i32 = 1;
-pub(crate) const ARRAY_SLOT_SIZE: i32 = 2;
-pub(crate) const LIST_CAPACITY: i32 = 2;
-pub(crate) const LIST_SLOT_SIZE: i32 = 3;
+/// The byte offset, at a pointer size of `word` bytes, of the header word
+/// `index` names in [`crate::abi::layout`]. Every header word code generation
+/// reads or writes is reached through here.
+pub(crate) fn header_offset(index: usize, word: i32) -> i32 {
+    index as i32 * word
+}
+
+/// Loads the header word `index` names of the value at `base`, which the
+/// caller has checked is not null: the inline copies of runtime functions read
+/// their headers through here.
+pub(crate) fn load_trusted_header_word(
+    builder: &mut FunctionBuilder,
+    ptr_type: cl_types::Type,
+    base: Value,
+    index: usize,
+) -> Value {
+    let offset = header_offset(index, ptr_type.bytes() as i32);
+    builder
+        .ins()
+        .load(ptr_type, MemFlagsData::trusted(), base, offset)
+}
+
+/// The byte offset from a counted value's payload back to its count word, at
+/// a pointer size of `ptr_type`.
+pub(crate) fn count_offset(ptr_type: cl_types::Type) -> i64 {
+    -(abi::COUNT_WORDS as i64) * i64::from(ptr_type.bytes())
+}
+
+/// The count that marks a value immortal in a word of `bits` bits: only the
+/// high bit set, which [`abi::is_immortal`] reads as immortal.
+pub(crate) fn immortal_count(bits: u32) -> u64 {
+    1u64 << (bits - 1)
+}
+
+/// Whether the count word `count` marks its value immortal, as
+/// [`abi::is_immortal`] states it: no retain or release changes such a value.
+pub(crate) fn emit_count_is_immortal(builder: &mut FunctionBuilder, count: Value) -> Value {
+    builder.ins().icmp_imm_s(IntCC::SignedLessThan, count, 0)
+}
 
 /// The words of an array's or a list's header an element access reads.
 #[derive(Debug, Clone, Copy)]
@@ -76,8 +108,18 @@ impl FunctionTranslator<'_> {
         }
         let word = ptr_type.bytes() as i32;
         ElementHeader {
-            data: Self::load_header_word(builder, base, HEADER_DATA * word, ptr_type),
-            len: Self::load_header_word(builder, base, HEADER_LEN * word, ptr_type),
+            data: Self::load_header_word(
+                builder,
+                base,
+                header_offset(abi::ELEMENTS_DATA, word),
+                ptr_type,
+            ),
+            len: Self::load_header_word(
+                builder,
+                base,
+                header_offset(abi::ELEMENTS_LEN, word),
+                ptr_type,
+            ),
         }
     }
 
@@ -139,8 +181,8 @@ impl FunctionTranslator<'_> {
     /// is addressed by index, so neither has a slot size to check.
     fn slot_size_offset(base_type: &Type, ptr_size: i32) -> Option<i32> {
         match base_type.kind.as_builtin_collection()? {
-            BuiltinCollectionKind::Array => Some(ARRAY_SLOT_SIZE * ptr_size),
-            BuiltinCollectionKind::List => Some(LIST_SLOT_SIZE * ptr_size),
+            BuiltinCollectionKind::Array => Some(header_offset(abi::ARRAY_SLOT_SIZE, ptr_size)),
+            BuiltinCollectionKind::List => Some(header_offset(abi::LIST_SLOT_SIZE, ptr_size)),
             BuiltinCollectionKind::Map | BuiltinCollectionKind::Set => None,
         }
     }

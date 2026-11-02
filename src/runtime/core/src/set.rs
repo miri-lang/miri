@@ -58,6 +58,11 @@ pub struct MiriSet {
     cursor: SlotCursor,
 }
 
+// Compiled code reads a set's length at the word `abi_layout` names.
+const _: () = assert!(
+    std::mem::offset_of!(MiriSet, len) == crate::abi_layout::SET_LEN * std::mem::size_of::<usize>()
+);
+
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
 
 impl MiriSet {
@@ -682,7 +687,7 @@ pub mod ffi {
         }
         let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
         let rc = *rc_ptr;
-        if (rc as isize) < 0 {
+        if crate::abi_layout::is_immortal(rc) {
             return;
         }
         *rc_ptr -= 1;
