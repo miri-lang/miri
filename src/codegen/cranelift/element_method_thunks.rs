@@ -12,13 +12,12 @@
 //! it. A List or Array sorts through `miri.T.$compare`, and a Set or Map matches
 //! elements and keys through `miri.T.$equals`.
 
-use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME};
+use crate::ast::types::Type;
 use crate::codegen::cranelift::translator::FunctionTranslator;
 use crate::codegen::cranelift::value_abi::{miri_signature, Passing, Returning};
 use crate::error::CodegenError;
-use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
-use crate::mir::symbol::{Symbol, ThunkKind};
-use crate::mir::type_facts::{MethodInfo, TypeDefinition, TypeFacts};
+use crate::mir::symbol::Symbol;
+use crate::mir::type_facts::{ElementQuestion, TypeFacts};
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types as cl_types;
@@ -29,113 +28,13 @@ use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
 use std::sync::Arc;
 
-/// A question a container asks two of its elements, answered by a method the
-/// element type declares.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ElementMethod {
-    /// Which of the two sorts first: the type's `compare`, a negative, zero or
-    /// positive pointer-sized integer.
-    Compare,
-    /// Whether the two are the same element: the type's own `equals`, a boolean.
-    Equals,
-}
-
-impl ElementMethod {
-    /// Every question, in the order their thunks are emitted — the order of
-    /// [`ELEMENT_METHOD_NAMES`], whose names [`Self::method_name`] reads.
-    pub(crate) const ALL: [ElementMethod; 2] = [ElementMethod::Compare, ElementMethod::Equals];
-
-    /// The kind of thunk a container calls to ask this question.
-    pub(crate) fn thunk_kind(self) -> ThunkKind {
-        match self {
-            ElementMethod::Compare => ThunkKind::Compare,
-            ElementMethod::Equals => ThunkKind::Equals,
-        }
+/// The Cranelift type of the answer to `question`, which is the method's
+/// return type.
+fn answer_type(question: ElementQuestion, ptr_type: cl_types::Type) -> cl_types::Type {
+    match question {
+        ElementQuestion::Compare => ptr_type,
+        ElementQuestion::Equals => cl_types::I8,
     }
-
-    /// The method this question calls, as [`ELEMENT_METHOD_NAMES`] spells it.
-    pub(crate) fn method_name(self) -> &'static str {
-        let [ordering, equals] = ELEMENT_METHOD_NAMES;
-        match self {
-            ElementMethod::Compare => ordering,
-            ElementMethod::Equals => equals,
-        }
-    }
-
-    /// The Cranelift type of the answer, which is the method's return type.
-    fn answer_type(self, ptr_type: cl_types::Type) -> cl_types::Type {
-        match self {
-            ElementMethod::Compare => ptr_type,
-            ElementMethod::Equals => cl_types::I8,
-        }
-    }
-
-    /// Whether elements of `type_name` answer this question themselves.
-    ///
-    /// Only a class does: a value type's bytes already answer it, and an enum
-    /// may be stored as a bare discriminant the thunk's null guard would misread.
-    /// A set or map of enums or structs is matched through the equality the
-    /// pipeline synthesizes from their `==` instead, which calls an enum's own
-    /// `equals` where it declares one.
-    pub(crate) fn is_answered_by(self, type_name: &str, facts: &TypeFacts) -> bool {
-        let Some(TypeDefinition::Class(_)) = facts.definitions().get(type_name) else {
-            return false;
-        };
-        match self {
-            ElementMethod::Compare => {
-                facts.implements(type_name, ORDERING_TRAIT_NAME)
-                    && facts
-                        .inherited_method(type_name, self.method_name())
-                        .is_some_and(|method| !method.is_abstract)
-            }
-            ElementMethod::Equals => facts
-                .method_body(type_name, self.method_name())
-                .is_some_and(|(declaring, method)| is_element_equality(declaring, method)),
-        }
-    }
-
-    /// The symbol of the method body this question calls for `type_name` at
-    /// `inst_args`.
-    ///
-    /// Both are resolved as a written call resolves them — the class chain
-    /// first, then a default a trait it implements supplies — the same rule the
-    /// clone thunk applies and the one `==` and the ordering operators dispatch
-    /// by. An inherited method's body belongs to the class that declares it and
-    /// is compiled at *that* class's type arguments, which the `extends` chain
-    /// maps from the element's — so a `Child<U> extends Base<List<U>>` element asks
-    /// `Base_equals__List_String`, the body the pipeline lowered for it.
-    fn method_symbol(
-        self,
-        type_name: &str,
-        inst_args: Option<&[Type]>,
-        facts: &TypeFacts,
-    ) -> Symbol {
-        // The per-instantiation body is the one a static call names, from the
-        // one answer static dispatch reads. Where none applies — a non-generic
-        // ancestor declares the method, or the element is not a generic
-        // instantiation at all — the shared symbol is what the call sites name.
-        facts.element_method_symbol(type_name, self.method_name(), inst_args)
-    }
-}
-
-/// True when `method` is an `equals` a container can call on two elements of
-/// `type_name`: it has a body, takes one value of the class itself and answers
-/// with a boolean.
-///
-/// The thunk hands the method two element pointers, so a method declared over
-/// some other parameter type would read an element as a value it is not.
-fn is_element_equality(type_name: &str, method: &MethodInfo) -> bool {
-    let [(_, param_ty)] = method.params.as_slice() else {
-        return false;
-    };
-    let takes_own_type = matches!(
-        &param_ty.kind,
-        TypeKind::Custom(name, _) if name == type_name || name == SELF_TYPE_NAME
-    );
-    !method.is_abstract
-        && !method.is_static
-        && takes_own_type
-        && matches!(method.return_type.kind, TypeKind::Boolean)
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -148,7 +47,7 @@ impl<'a> FunctionTranslator<'a> {
     /// reaches the body compiled for the element's concrete type rather than the
     /// shared one written against the parameter.
     pub(crate) fn generate_element_method_thunk(
-        method: ElementMethod,
+        method: ElementQuestion,
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         isa: &Arc<dyn TargetIsa>,
@@ -156,7 +55,7 @@ impl<'a> FunctionTranslator<'a> {
         inst_args: Option<&[Type]>,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        if !method.is_answered_by(type_name, facts) {
+        if !facts.answers(type_name, method) {
             return Ok(());
         }
         let ptr_type = isa.pointer_type();
@@ -172,7 +71,7 @@ impl<'a> FunctionTranslator<'a> {
         sig.params.push(AbiParam::new(ptr_type));
         sig.params.push(AbiParam::new(ptr_type));
         sig.returns
-            .push(AbiParam::new(method.answer_type(ptr_type)));
+            .push(AbiParam::new(answer_type(method, ptr_type)));
 
         let func_id = module
             .declare_function(&thunk_name, Linkage::Export, &sig)
@@ -182,7 +81,9 @@ impl<'a> FunctionTranslator<'a> {
             sig,
         );
 
-        let symbol = method.method_symbol(type_name, inst_args, facts);
+        // The per-instantiation body is the one a static call names; where none
+        // applies the shared symbol is what the call sites name.
+        let symbol = facts.element_method_symbol(type_name, method.method_name(), inst_args);
         let callee = MethodCallee {
             method,
             withheld: facts.is_withheld(&symbol),
@@ -202,7 +103,7 @@ impl<'a> FunctionTranslator<'a> {
 
 /// The user method a thunk calls, and the ABI it calls it with.
 struct MethodCallee {
-    method: ElementMethod,
+    method: ElementQuestion,
     /// Lowering withheld the method at this instance, so no body answers it:
     /// the thunk reports that at run time instead of calling it.
     withheld: bool,
@@ -267,12 +168,12 @@ fn null_element_answer(
     [left_is_null, right_is_null]: [Value; 2],
 ) -> Value {
     match callee.method {
-        ElementMethod::Compare => {
+        ElementQuestion::Compare => {
             let left_rank = builder.ins().uextend(callee.ptr_type, left_is_null);
             let right_rank = builder.ins().uextend(callee.ptr_type, right_is_null);
             builder.ins().isub(right_rank, left_rank)
         }
-        ElementMethod::Equals => builder
+        ElementQuestion::Equals => builder
             .ins()
             .icmp(IntCC::Equal, left_is_null, right_is_null),
     }
@@ -294,14 +195,16 @@ fn emit_user_method_call(
         let trap = FunctionTranslator::method_not_checked_trap(module)?;
         let local_trap = module.declare_func_in_func(trap, builder.func);
         builder.ins().call(local_trap, &[]);
-        return Ok(builder.ins().iconst(callee.method.answer_type(ptr_type), 0));
+        return Ok(builder
+            .ins()
+            .iconst(answer_type(callee.method, ptr_type), 0));
     }
     let receiver_other_and_allocator = [Passing::Word(ptr_type); 3];
     let sig = miri_signature(
         callee.call_conv,
         ptr_type,
         &receiver_other_and_allocator,
-        Returning::Word(callee.method.answer_type(ptr_type)),
+        Returning::Word(answer_type(callee.method, ptr_type)),
     );
 
     let callee_name = callee.symbol.link_name();

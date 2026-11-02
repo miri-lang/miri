@@ -8,7 +8,6 @@
 use crate::ast::expression::Expression;
 use crate::ast::factory::type_expr_non_null;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
-use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::structural_elements::StructuralElement;
 use crate::codegen::cranelift::translator::{
@@ -35,7 +34,7 @@ use std::sync::Arc;
 pub(crate) use crate::mir::type_facts::Release;
 use crate::mir::type_facts::{
     release_plan, releases_slot, CountedSlot, DropPlan, DropThunk, DropThunkRefusal,
-    DroppedMembers, ReleasePlan, UnresolvedArgument,
+    DroppedMembers, ElementIdentity, ElementQuestion, FloatWidth, ReleasePlan, UnresolvedArgument,
 };
 
 /// A runtime call recording one pointer-sized setting on a container.
@@ -64,9 +63,8 @@ pub(crate) enum ElementRule {
     StringContent,
     /// The value is a float of this kind, matched by the number it holds.
     FloatValue(i64),
-    /// The value's type answers `equals`, reached through the thunk at this
-    /// address.
-    OwnEquals(Value),
+    /// The value is matched through a registered `equals` thunk.
+    OwnEquals,
 }
 
 /// The runtime setters through which a list's or array's elements learn how
@@ -230,11 +228,10 @@ impl<'a> FunctionTranslator<'a> {
         let ElementShape::UserClass(name) = Self::classify_element_shape(elem_kind) else {
             return Ok(None);
         };
-        if !Self::class_implements_cloneable(name, facts) {
+        if !facts.is_cloneable(name) {
             return Ok(None);
         }
-        let recorded =
-            Self::element_method_instantiation(name, Self::custom_type_args(elem_kind), facts);
+        let recorded = facts.element_method_instantiation(name, Self::custom_type_args(elem_kind));
         if facts.is_withheld(&Self::clone_method_symbol(name, recorded.as_deref(), facts)) {
             return Ok(None);
         }
@@ -295,75 +292,13 @@ impl<'a> FunctionTranslator<'a> {
         elem_kind: &TypeKind,
         type_ctx: &TypeCtx,
     ) -> Result<Option<Value>, CodegenError> {
-        let name = match Self::classify_element_shape(elem_kind) {
-            ElementShape::String => crate::ast::types::STRING_TYPE_NAME,
-            ElementShape::UserClass(name) => name,
-            ElementShape::Builtin(_) | ElementShape::Other => return Ok(None),
-        };
-        let recorded = Self::element_method_instantiation(
-            name,
-            Self::custom_type_args(elem_kind),
-            type_ctx.facts,
-        );
-        if !ElementMethod::Compare.is_answered_by(name, type_ctx.facts) {
+        let Some(thunk) = type_ctx
+            .facts
+            .element_method_thunk(ElementQuestion::Compare, elem_kind)
+        else {
             return Ok(None);
-        }
-        let thunk = Symbol::type_thunk(ThunkKind::Compare, name, recorded.iter().flatten());
+        };
         Ok(Some(Self::get_custom_compare_thunk_addr(
-            builder,
-            ctx,
-            &thunk,
-            type_ctx.ptr_type,
-        )?))
-    }
-
-    /// Address of the equality to register on a set or map for elements of
-    /// `elem_kind`, or `None` when the element type defines no `equals` of its
-    /// own and elements are matched by the rule their bytes imply.
-    ///
-    /// The element type is named the way the comparator path names it, so a
-    /// recorded instantiation of a generic class reaches the `equals` compiled
-    /// for its concrete type.
-    fn elem_equals_addr_for_kind(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        elem_kind: &TypeKind,
-        type_ctx: &TypeCtx,
-    ) -> Result<Option<Value>, CodegenError> {
-        // A struct or enum is matched through the equality the pipeline
-        // synthesized from its `==`, lowered for every one a set or map holds.
-        if let Some(thunk) = crate::mir::dispatch::synthesized_equality_symbol(
-            elem_kind,
-            type_ctx.facts.definitions(),
-        ) {
-            return Ok(Some(Self::get_custom_equals_thunk_addr(
-                builder,
-                ctx,
-                &thunk,
-                type_ctx.ptr_type,
-            )?));
-        }
-        let name = match Self::classify_element_shape(elem_kind) {
-            ElementShape::UserClass(name) => name,
-            // An array or list is matched element by element, through the
-            // `equals` its class declares, the comparison `==` makes.
-            ElementShape::Builtin(
-                kind @ (BuiltinCollectionKind::Array | BuiltinCollectionKind::List),
-            ) => kind.name(),
-            ElementShape::Builtin(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
-            | ElementShape::String
-            | ElementShape::Other => return Ok(None),
-        };
-        let recorded = Self::element_method_instantiation(
-            name,
-            Self::custom_type_args(elem_kind),
-            type_ctx.facts,
-        );
-        if !ElementMethod::Equals.is_answered_by(name, type_ctx.facts) {
-            return Ok(None);
-        }
-        let thunk = Symbol::type_thunk(ThunkKind::Equals, name, recorded.iter().flatten());
-        Ok(Some(Self::get_custom_equals_thunk_addr(
             builder,
             ctx,
             &thunk,
@@ -408,24 +343,48 @@ impl<'a> FunctionTranslator<'a> {
         // An element held as its bytes whole is matched through its own
         // callbacks; no optional layer is left for the runtime to open.
         let wrapping = (layers.inline == 0).then_some(&layers);
-        let Some(rule) = Self::value_identity_rule(builder, ctx, value_kind, type_ctx)? else {
-            return Ok(());
-        };
-        if let ElementRule::OwnEquals(addr) = rule {
-            (setters.set_equals_fn)(builder, ctx, container_ptr, addr)?;
-            let hash_thunk = Self::fieldwise_identity_thunk(ThunkKind::Hash, value_kind, type_ctx)
-                .or_else(|| {
-                    crate::mir::dispatch::element_hash_symbol(
-                        value_kind,
-                        type_ctx.facts.definitions(),
-                    )
-                });
-            if let Some(thunk) = hash_thunk {
-                let hash =
-                    Self::get_element_hash_thunk_addr(builder, ctx, &thunk, type_ctx.ptr_type)?;
-                (setters.set_hash_fn)(builder, ctx, container_ptr, hash)?;
+        let identity = type_ctx
+            .facts
+            .element_identity(value_kind, type_ctx.open_params);
+        let rule = match identity {
+            ElementIdentity::Unregistered => return Ok(()),
+            ElementIdentity::Bytes => ElementRule::Bytes,
+            ElementIdentity::StringContent => ElementRule::StringContent,
+            ElementIdentity::Float(width) => ElementRule::FloatValue(match width {
+                FloatWidth::F16 => Self::F16_VALUE_ELEMENT_KIND,
+                FloatWidth::F32 => Self::F32_VALUE_ELEMENT_KIND,
+                FloatWidth::F64 => Self::F64_VALUE_ELEMENT_KIND,
+            }),
+            ElementIdentity::FieldWise => {
+                let thunk = |kind| {
+                    Self::fieldwise_identity_thunk(kind, value_kind, type_ctx).ok_or_else(|| {
+                        CodegenError::Internal(format!(
+                            "a set or map element of `{value_kind}` is matched field by field, \
+                             but its layout names no structural thunk"
+                        ))
+                    })
+                };
+                let (equals, hash) = (thunk(ThunkKind::Equals)?, thunk(ThunkKind::Hash)?);
+                Self::register_equality(
+                    builder,
+                    ctx,
+                    container_ptr,
+                    &equals,
+                    Some(&hash),
+                    type_ctx,
+                    setters,
+                )?
             }
-        }
+            ElementIdentity::Equals(thunks) => Self::register_equality(
+                builder,
+                ctx,
+                container_ptr,
+                &thunks.equals,
+                thunks.hash.as_ref(),
+                type_ctx,
+                setters,
+            )?,
+        };
         let held = type_ctx.value_layout(value_kind);
         let Some(word) = Self::element_identity_kind(rule, wrapping, held.as_ref(), type_ctx)
         else {
@@ -433,6 +392,27 @@ impl<'a> FunctionTranslator<'a> {
         };
         let kind = builder.ins().iconst(type_ctx.ptr_type, word);
         (setters.set_kind)(builder, ctx, container_ptr, kind)
+    }
+
+    /// Register the `equals` thunk, and the `hash` thunk consistent with it,
+    /// through which a container matches its elements.
+    #[allow(clippy::too_many_arguments)]
+    fn register_equality(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        container_ptr: Value,
+        equals: &Symbol,
+        hash: Option<&Symbol>,
+        type_ctx: &TypeCtx,
+        setters: ElementIdentitySetters,
+    ) -> Result<ElementRule, CodegenError> {
+        let addr = Self::get_custom_equals_thunk_addr(builder, ctx, equals, type_ctx.ptr_type)?;
+        (setters.set_equals_fn)(builder, ctx, container_ptr, addr)?;
+        if let Some(hash) = hash {
+            let hash = Self::get_element_hash_thunk_addr(builder, ctx, hash, type_ctx.ptr_type)?;
+            (setters.set_hash_fn)(builder, ctx, container_ptr, hash)?;
+        }
+        Ok(ElementRule::OwnEquals)
     }
 
     /// The field-wise `equals` or `hash` thunk a set or map matches a tuple of
@@ -448,47 +428,6 @@ impl<'a> FunctionTranslator<'a> {
             type_ctx.layout_scope(),
         )?;
         Some(Symbol::structural_thunk(kind, encoding))
-    }
-
-    /// The rule matching two values of `value_kind` the way `==` compares them,
-    /// or `None` when no rule the runtime can apply does.
-    ///
-    /// A struct or an enum is matched through the equality the pipeline
-    /// synthesized from its `==`.
-    ///
-    /// TODO: a collection element (`Set<Array<String, 2>>`) is still matched
-    /// by its bytes, which are an address, so a set keeps two arrays `==` calls
-    /// one; it needs the same synthesized equality, lowered for collections.
-    fn value_identity_rule(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        value_kind: &TypeKind,
-        type_ctx: &TypeCtx,
-    ) -> Result<Option<ElementRule>, CodegenError> {
-        if let Some(thunk) = Self::fieldwise_identity_thunk(ThunkKind::Equals, value_kind, type_ctx)
-        {
-            let addr = Self::get_custom_equals_thunk_addr(builder, ctx, &thunk, type_ctx.ptr_type)?;
-            return Ok(Some(ElementRule::OwnEquals(addr)));
-        }
-        if let Some(addr) = Self::elem_equals_addr_for_kind(builder, ctx, value_kind, type_ctx)? {
-            return Ok(Some(ElementRule::OwnEquals(addr)));
-        }
-        if matches!(
-            Self::classify_element_shape(value_kind),
-            ElementShape::String
-        ) {
-            return Ok(Some(ElementRule::StringContent));
-        }
-        let float_kind = match value_kind {
-            TypeKind::F16 => Some(Self::F16_VALUE_ELEMENT_KIND),
-            TypeKind::F32 => Some(Self::F32_VALUE_ELEMENT_KIND),
-            TypeKind::Float | TypeKind::F64 => Some(Self::F64_VALUE_ELEMENT_KIND),
-            _ => None,
-        };
-        if let Some(kind) = float_kind {
-            return Ok(Some(ElementRule::FloatValue(kind)));
-        }
-        Ok(Self::is_matched_by_bytes(value_kind).then_some(ElementRule::Bytes))
     }
 
     /// The element kind word registering `rule` for a value wrapped in the
@@ -508,7 +447,7 @@ impl<'a> FunctionTranslator<'a> {
         let base = match rule {
             ElementRule::StringContent => Self::STRING_CONTENT_ELEMENT_KIND,
             ElementRule::FloatValue(kind) => kind,
-            ElementRule::Bytes | ElementRule::OwnEquals(_) => Self::BYTES_ELEMENT_KIND,
+            ElementRule::Bytes | ElementRule::OwnEquals => Self::BYTES_ELEMENT_KIND,
         };
         let base = match held {
             Some(_) => Self::by_slot_address(base),
@@ -1101,81 +1040,6 @@ impl<'a> FunctionTranslator<'a> {
             )?;
         }
         Self::call_rt_block_free(builder, ctx, header_ptr)
-    }
-
-    /// The instantiation of `class_name` whose element-method thunk to
-    /// register for its elements: the recorded one, as the drop path names it,
-    /// when codegen emitted a thunk for that instantiation, else `None` for the
-    /// shared one.
-    ///
-    /// Thunks exist only for instantiations the pipeline monomorphizes, since
-    /// each calls a method body lowered for its arguments. A body still written
-    /// against a parameter — the shared copy of a generic function holding a
-    /// `Set<Box<T>>` — records `Box<T>` as well, and naming its instantiation
-    /// here would reference a symbol nothing defines.
-    ///
-    /// For the same reason this is only ever asked about a class: a
-    /// per-instantiation method thunk is emitted for no other kind. Every
-    /// caller establishes that first, by asking whether the type answers the
-    /// method at all, so nothing re-checks it here. A kind that starts
-    /// answering one must gain its per-instantiation thunks in the same pass,
-    /// or the name built from this will reference a symbol nothing defines.
-    fn element_method_instantiation(
-        class_name: &str,
-        type_args: Option<&[Expression]>,
-        facts: &TypeFacts,
-    ) -> Option<Vec<Type>> {
-        // A value argument — the size of a value generic — is read the way
-        // the instantiation registry records it, wrapped in a marker type, so
-        // an `Array<String, 2>` reaches the body lowered at `String` and `2`.
-        let written = match type_args {
-            None => Vec::new(),
-            Some(args) => args
-                .iter()
-                .map(crate::mir::instantiation::instantiation_argument)
-                .collect::<Option<Vec<Type>>>()?,
-        };
-        let monomorphized = written.iter().all(|arg| {
-            crate::mir::instantiation::is_monomorphizable_type_argument(
-                &arg.kind,
-                facts.definitions(),
-            )
-        });
-        if !monomorphized {
-            return None;
-        }
-        Self::lowered_instantiation(class_name, type_args, facts)
-    }
-
-    /// The type arguments of `class_name`'s per-instantiation method bodies
-    /// matching `type_args`, or `None` when no body was lowered at them and
-    /// the shared one applies.
-    ///
-    /// Asked of the method-body registry, not of the drop instantiations: an
-    /// element-method thunk calls a lowered body, and one named for an
-    /// instantiation no body was lowered at references a symbol nothing
-    /// defines. A value-generic class is recorded at arguments that include
-    /// the size, wrapped in a marker type, and is matched at them.
-    fn lowered_instantiation(
-        class_name: &str,
-        type_args: Option<&[Expression]>,
-        facts: &TypeFacts,
-    ) -> Option<Vec<Type>> {
-        facts.definitions().get(class_name)?.generics()?;
-        let concrete = type_args?
-            .iter()
-            .map(crate::mir::instantiation::instantiation_argument)
-            .collect::<Option<Vec<Type>>>()?;
-        if concrete.is_empty() {
-            return None;
-        }
-        let want = Symbol::type_thunk(ThunkKind::Drop, class_name, &concrete);
-        let recorded = facts
-            .generic_class_instantiations()
-            .get(class_name)?
-            .iter()
-            .any(|tuple| Symbol::type_thunk(ThunkKind::Drop, class_name, tuple) == want);
-        recorded.then_some(concrete)
     }
 
     /// Which drop thunk releases a `name` value carrying `type_args` in the
@@ -2030,20 +1894,9 @@ impl<'a> FunctionTranslator<'a> {
         inst_args: Option<&[Type]>,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        // Only generate for concrete classes that implement Cloneable somewhere in their
-        // hierarchy. Abstract classes may have an abstract clone() with no compiled body;
-        // generating a thunk for them would reference an undefined symbol at link time.
-        match facts.definitions().get(type_name) {
-            Some(TypeDefinition::Class(cd)) if cd.is_abstract => return Ok(()),
-            None
-            | Some(TypeDefinition::Class(_))
-            | Some(TypeDefinition::Struct(_))
-            | Some(TypeDefinition::Enum(_))
-            | Some(TypeDefinition::Generic(_))
-            | Some(TypeDefinition::Alias(_))
-            | Some(TypeDefinition::Trait(_)) => {}
-        }
-        if !Self::class_implements_cloneable(type_name, facts) {
+        // Abstract classes may have an abstract clone() with no compiled body;
+        // a thunk for them would reference an undefined symbol at link time.
+        if !facts.has_clone_thunk(type_name) {
             return Ok(());
         }
         let clone_method = Self::clone_method_symbol(type_name, inst_args, facts);
@@ -2151,17 +2004,9 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Resolves the mangled name of the shared `clone()` body for `type_name`.
     ///
-    /// Walks the inheritance chain to find where `clone()` is defined.  The
-    /// concrete-caller / abstract-definer rule is applied: if the defining class
-    /// is abstract, the caller's name is used instead (matching how
-    /// `resolve_inherited_method` in `mir::lowering::dispatch` mangles the call).
+    /// The symbol is the one a static call to `clone` on a `type_name`
+    /// receiver names, as [`TypeFacts::element_method_symbol`] answers it.
     pub fn resolve_clone_method_name(type_name: &str, facts: &TypeFacts) -> String {
         Self::clone_method_symbol(type_name, None, facts).link_name()
-    }
-
-    /// Returns true if `type_name` (or any ancestor class) implements `Cloneable`,
-    /// directly or through a trait that extends it.
-    pub fn class_implements_cloneable(type_name: &str, facts: &TypeFacts) -> bool {
-        facts.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
     }
 }

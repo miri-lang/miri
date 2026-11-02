@@ -18,6 +18,7 @@ mod drop_instantiations;
 mod drop_plan;
 mod drop_reach;
 mod drop_thunk;
+mod element_identity;
 mod release_plan;
 pub mod unsharing;
 
@@ -39,6 +40,7 @@ pub use crate::type_checker::value_class::{
 pub use drop_plan::{is_unresolved_element, CountedSlot, DropPlan, DroppedMembers, Release};
 pub use drop_reach::DropHookReach;
 pub use drop_thunk::{DropThunk, DropThunkRefusal};
+pub use element_identity::{ElementIdentity, ElementQuestion, EqualityThunks, FloatWidth};
 pub use release_plan::{
     release_plan, released_captures, releases_slot, ReleasePlan, UnresolvedArgument,
 };

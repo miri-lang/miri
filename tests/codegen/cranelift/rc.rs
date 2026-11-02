@@ -11,15 +11,13 @@
 //! a skipped managed field leaks, a mangled name that disagrees with the
 //! thunk-generation site drops through to the wrong layout.
 
-use miri::ast::types::{Type, TypeKind, CLONEABLE_TRAIT_NAME, STRING_TYPE_NAME};
+use miri::ast::types::{Type, TypeKind, STRING_TYPE_NAME};
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::FunctionTranslator;
 use miri::error::syntax::Span;
 use miri::mir::symbol::Symbol;
 use miri::mir::type_facts::TypeFacts;
-use miri::type_checker::context::{
-    ClassDefinition, EnumDefinition, MethodInfo, StructDefinition, TypeDefinition,
-};
+use miri::type_checker::context::{ClassDefinition, MethodInfo, TypeDefinition};
 use miri::type_checker::ModuleId;
 use std::collections::{BTreeMap, HashMap};
 
@@ -74,20 +72,6 @@ fn defs<const N: usize>(entries: [(&str, TypeDefinition); N]) -> HashMap<String,
 /// The settled facts over `table`, with no instantiations and no bodies.
 fn facts_of(table: HashMap<String, TypeDefinition>) -> TypeFacts {
     TypeFacts::new(table, HashMap::new(), Default::default(), []).unwrap()
-}
-
-fn enum_def<const N: usize>(variants: [(&str, Vec<TypeKind>); N]) -> EnumDefinition {
-    EnumDefinition {
-        variants: variants
-            .into_iter()
-            .map(|(name, kinds)| (name.to_string(), kinds.into_iter().map(ty).collect()))
-            .collect(),
-        generics: None,
-        methods: BTreeMap::new(),
-        module: String::new(),
-        must_use: false,
-        non_exhaustive: false,
-    }
 }
 
 #[test]
@@ -221,95 +205,4 @@ fn test_clone_falls_back_to_the_requested_type_name() {
         FunctionTranslator::resolve_clone_method_name("Widget", &facts_of(table)),
         Symbol::method("Widget", &[], "clone", &[]).link_name()
     );
-}
-
-#[test]
-fn test_class_listing_the_cloneable_trait_implements_it() {
-    let mut widget = class("Widget");
-    widget.traits = vec![CLONEABLE_TRAIT_NAME.to_string()];
-    let table = defs([("Widget", TypeDefinition::Class(widget))]);
-    let facts = facts_of(table);
-
-    assert!(FunctionTranslator::class_implements_cloneable(
-        "Widget", &facts
-    ));
-}
-
-#[test]
-fn test_class_with_multiple_traits_implements_cloneable() {
-    let mut widget = class("Widget");
-    widget.traits = vec![
-        "Printable".to_string(),
-        CLONEABLE_TRAIT_NAME.to_string(),
-        "Equatable".to_string(),
-    ];
-    let table = defs([("Widget", TypeDefinition::Class(widget))]);
-    let facts = facts_of(table);
-
-    assert!(FunctionTranslator::class_implements_cloneable(
-        "Widget", &facts
-    ));
-}
-
-#[test]
-fn test_cloneable_is_inherited_through_the_base_chain() {
-    let mut root = class("Root");
-    root.traits = vec![CLONEABLE_TRAIT_NAME.to_string()];
-    let mut middle = class("Middle");
-    middle.base_class = Some("Root".to_string());
-    let mut leaf = class("Leaf");
-    leaf.base_class = Some("Middle".to_string());
-    let table = defs([
-        ("Root", TypeDefinition::Class(root)),
-        ("Middle", TypeDefinition::Class(middle)),
-        ("Leaf", TypeDefinition::Class(leaf)),
-    ]);
-    let facts = facts_of(table);
-
-    assert!(FunctionTranslator::class_implements_cloneable(
-        "Leaf", &facts
-    ));
-}
-
-#[test]
-fn test_class_without_the_cloneable_trait_does_not_implement_it() {
-    let mut base = class("Base");
-    base.traits = vec!["Printable".to_string()];
-    let mut derived = class("Derived");
-    derived.base_class = Some("Base".to_string());
-    let table = defs([
-        ("Base", TypeDefinition::Class(base)),
-        ("Derived", TypeDefinition::Class(derived)),
-    ]);
-    let facts = facts_of(table);
-
-    assert!(!FunctionTranslator::class_implements_cloneable(
-        "Derived", &facts
-    ));
-}
-
-#[test]
-fn test_non_class_definitions_do_not_implement_cloneable() {
-    let table = defs([
-        (
-            "Point",
-            TypeDefinition::Struct(StructDefinition {
-                generics: None,
-                fields: vec![("x".to_string(), ty(TypeKind::Int), MemberVisibility::Public)],
-                module: String::new(),
-            }),
-        ),
-        ("Shape", TypeDefinition::Enum(enum_def([("A", vec![])]))),
-    ]);
-    let facts = facts_of(table);
-
-    assert!(!FunctionTranslator::class_implements_cloneable(
-        "Point", &facts
-    ));
-    assert!(!FunctionTranslator::class_implements_cloneable(
-        "Shape", &facts
-    ));
-    assert!(!FunctionTranslator::class_implements_cloneable(
-        "Missing", &facts
-    ));
 }

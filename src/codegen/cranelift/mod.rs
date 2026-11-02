@@ -38,7 +38,6 @@ use crate::ast::types::{BuiltinCollectionKind, TypeKind, STRING_TYPE_NAME, TUPLE
 use crate::codegen::backend::{
     ArtifactFormat, Backend, CodeRange, CompiledArtifact, FunctionCodeMap, SourcePosition,
 };
-use crate::codegen::cranelift::element_method_thunks::ElementMethod;
 use crate::error::CodegenError;
 use crate::mir::option_layout::{LayoutScope, OptionalLayers};
 use crate::mir::symbol::{StringLiteralPart, Symbol};
@@ -1236,7 +1235,7 @@ impl CraneliftBackend {
             })
             .collect();
         names.sort_unstable();
-        for method in ElementMethod::ALL {
+        for method in crate::mir::type_facts::ElementQuestion::ALL {
             for type_name in &names {
                 FunctionTranslator::generate_element_method_thunk(
                     method,
@@ -1263,7 +1262,7 @@ impl CraneliftBackend {
     /// name a symbol nothing defines.
     fn generate_instantiation_method_thunks(
         &self,
-        method: ElementMethod,
+        method: crate::mir::type_facts::ElementQuestion,
         module: &mut ObjectModule,
         ctx: &mut Context,
         isa: &Arc<dyn TargetIsa>,

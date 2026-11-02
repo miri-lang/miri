@@ -258,51 +258,6 @@ impl<'a> FunctionTranslator<'a> {
         matches!(definitions.get(name), Some(TypeDefinition::Generic(_))).then_some(name)
     }
 
-    /// True when an element of `kind` is a scalar, whose bytes are its value.
-    ///
-    /// A float is one, but a set or map takes the float-value rule for it
-    /// before this one is asked (`value_identity_rule`), so `-0.0` and `0.0`
-    /// are one element and every NaN is one element.
-    pub(crate) fn is_matched_by_bytes(kind: &TypeKind) -> bool {
-        match kind {
-            TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I64
-            | TypeKind::I128
-            | TypeKind::U8
-            | TypeKind::U16
-            | TypeKind::U32
-            | TypeKind::U64
-            | TypeKind::U128
-            | TypeKind::Float
-            | TypeKind::F16
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::Boolean
-            | TypeKind::Identifier
-            | TypeKind::RawPtr => true,
-            TypeKind::String
-            | TypeKind::List(_)
-            | TypeKind::Array(_, _)
-            | TypeKind::Set(_)
-            | TypeKind::Map(_, _)
-            | TypeKind::Tuple(_)
-            | TypeKind::Custom(_, _)
-            | TypeKind::Result(_, _)
-            | TypeKind::Future(_)
-            | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
-            | TypeKind::OneOf(_)
-            | TypeKind::Meta(_)
-            | TypeKind::Option(_)
-            | TypeKind::Void
-            | TypeKind::Error
-            | TypeKind::Linear(_) => false,
-        }
-    }
-
     /// The order kind that makes a list or array sort its elements as unsigned
     /// integers. Mirrors the runtime's `element_order::BY_UNSIGNED_VALUE`; the
     /// default `0` reads an element's bytes as a signed value.
