@@ -454,20 +454,14 @@ pub fn function_type_signature(
     let declared = function
         .params
         .iter()
-        .filter_map(|param| written_type(&param.typ))
+        .filter_map(|param| type_argument(&param.typ))
         .map(|param_type| passing_of(&param_type, values, ptr_type));
     let params: Vec<Passing> = leading.iter().copied().chain(declared).collect();
-    let result = match function.return_type.as_deref().and_then(written_type) {
+    let result = match function.return_type.as_deref().and_then(type_argument) {
         Some(ret_type) => returning_of(&ret_type, values, ptr_type),
         None => Returning::Nothing,
     };
     miri_signature(call_conv, ptr_type, &params, result)
-}
-
-/// The type a function type's parameter or result is written as: `T?` is
-/// the type with its nullable flag set, read as the optional it spells.
-fn written_type(expr: &crate::ast::expression::Expression) -> Option<Type> {
-    type_argument(expr)
 }
 
 /// How a parameter of type `ty` is passed.

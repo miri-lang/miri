@@ -5,8 +5,7 @@
 //! per-type field-walking drop logic. Runtime FFI call wrappers live in
 //! `translator.rs`; this module dispatches into them.
 
-use crate::ast::expression::Expression;
-use crate::ast::factory::type_expr_non_null;
+use crate::ast::type_arguments::{type_arguments, TypeArguments};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::structural_elements::StructuralElement;
@@ -203,7 +202,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The type-argument expressions of a `TypeKind::Custom`, or `None` for any
     /// other kind. Used to resolve a collection element's generic instantiation.
-    fn custom_type_args(kind: &TypeKind) -> Option<&[Expression]> {
+    fn custom_type_args(kind: &TypeKind) -> Option<&TypeArguments> {
         if let TypeKind::Custom(_, args) = kind {
             args.as_deref()
         } else {
@@ -939,7 +938,7 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&TypeArguments>,
         ptr: Value,
         header_ptr: Value,
         type_ctx: &TypeCtx,
@@ -1011,7 +1010,7 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&TypeArguments>,
         ptr: Value,
         header_ptr: Value,
         type_ctx: &TypeCtx,
@@ -1046,7 +1045,7 @@ impl<'a> FunctionTranslator<'a> {
     /// code being translated, as [`TypeFacts::drop_thunk`] decides it.
     fn drop_thunk(
         name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&TypeArguments>,
         type_ctx: &TypeCtx,
     ) -> Result<DropThunk, CodegenError> {
         (type_ctx.facts)
@@ -1112,8 +1111,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let arg_exprs: Option<Vec<Expression>> =
-            inst_args.map(|args| args.iter().cloned().map(type_expr_non_null).collect());
+        let arg_exprs = inst_args.map(|args| type_arguments(args.iter().cloned()));
         match members {
             DroppedMembers::Fields(fields) => {
                 let custom_kind = TypeKind::Custom(name.to_string(), arg_exprs);

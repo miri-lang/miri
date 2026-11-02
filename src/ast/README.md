@@ -21,6 +21,18 @@ lowering ask, and live here so neither stage imports the other:
 (the names a parallel-loop body writes) and `gpu_frame_passes.rs` (the ordered
 passes a `gpu frame` block runs, with literal-count repeats expanded).
 
+## Type arguments
+
+A type's arguments are stored as the expressions they were written as, so a
+value generic's argument (the `4` of `Array<int, 4>`) fits the slot a type
+argument does. `type_arguments.rs` is how every stage past the type checker
+reads them: `argument_type` gives the type an argument names, or nothing when
+it names a value, and `unresolved_type_argument` finds an argument written
+where a type is required that names none, which `Body::validate` refuses. The
+backends read type arguments only through it and never match on an expression
+kind; `make audit` refuses an AST expression or factory import under
+`src/codegen`.
+
 ## Rendering back to source
 
 `formatter/` renders an AST back to canonical Miri source, and `doc_comments.rs`

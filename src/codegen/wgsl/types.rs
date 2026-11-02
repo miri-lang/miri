@@ -3,8 +3,8 @@
 
 //! WGSL type-name resolution from MIR/AST type kinds.
 
-use crate::ast::expression::ExpressionKind;
 use crate::ast::gpu_wire::{device_scalar, DeviceScalar};
+use crate::ast::type_arguments::{argument_type, argument_type_at, TypeArguments};
 use crate::ast::types::{vec_dim, TypeKind};
 use crate::error::CodegenError;
 
@@ -117,12 +117,9 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
 }
 
 /// The inner scalar of an `Atomic<T>` with exactly one resolved type argument.
-fn atomic_scalar(
-    kind: &TypeKind,
-    args: &[crate::ast::expression::Expression],
-) -> Result<WgslScalar, CodegenError> {
+fn atomic_scalar(kind: &TypeKind, args: &TypeArguments) -> Result<WgslScalar, CodegenError> {
     if let [only] = args {
-        if let ExpressionKind::Type(inner_ty, _) = &only.node {
+        if let Some(inner_ty) = argument_type(only) {
             return scalar(&inner_ty.kind);
         }
     }
@@ -144,11 +141,7 @@ pub fn vector_type(kind: &TypeKind) -> Option<String> {
     match kind {
         TypeKind::Custom(name, Some(args)) => {
             let dim = vec_dim(name)?;
-            let first_arg = args.first()?;
-            let elem_ty = match &first_arg.node {
-                ExpressionKind::Type(ty, _) => ty,
-                _ => return None,
-            };
+            let elem_ty = argument_type_at(args, 0)?;
 
             let elem_scalar = scalar(&elem_ty.kind).ok()?;
             Some(format!("vec{}<{}>", dim, elem_scalar.name()))
@@ -247,7 +240,7 @@ pub fn is_atomic_element_buffer(kind: &TypeKind) -> bool {
 fn component_scalar(inner: &TypeKind) -> Result<WgslScalar, CodegenError> {
     if let TypeKind::Custom(name, Some(args)) = inner {
         if vec_dim(name).is_some() {
-            if let Some(ExpressionKind::Type(elem, _)) = args.first().map(|a| &a.node) {
+            if let Some(elem) = argument_type_at(args, 0) {
                 return scalar(&elem.kind);
             }
         }
@@ -258,7 +251,6 @@ fn component_scalar(inner: &TypeKind) -> Result<WgslScalar, CodegenError> {
 /// Extract the element type-kind from a buffer-like collection type (the inner
 /// `T` of `Array<T, N>` / `List<T>` and their post-resolution `Custom` forms).
 fn buffer_element_inner_kind(kind: &TypeKind) -> Result<&TypeKind, CodegenError> {
-    use crate::ast::expression::ExpressionKind;
     use crate::ast::types::BuiltinCollectionKind;
     let elem_expr = match kind {
         TypeKind::List(elem) => elem,
@@ -315,47 +307,17 @@ fn buffer_element_inner_kind(kind: &TypeKind) -> Result<&TypeKind, CodegenError>
             )));
         }
     };
-    match &elem_expr.node {
-        ExpressionKind::Type(inner, _) => Ok(&inner.kind),
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Identifier(..)
-        | ExpressionKind::Binary(..)
-        | ExpressionKind::Logical(..)
-        | ExpressionKind::Unary(..)
-        | ExpressionKind::Assignment(..)
-        | ExpressionKind::Conditional(..)
-        | ExpressionKind::Range(..)
-        | ExpressionKind::Guard(..)
-        | ExpressionKind::Member(..)
-        | ExpressionKind::Index(..)
-        | ExpressionKind::Call(..)
-        | ExpressionKind::ImportPath(..)
-        | ExpressionKind::GenericType(..)
-        | ExpressionKind::TypeDeclaration(..)
-        | ExpressionKind::EnumValue(..)
-        | ExpressionKind::StructMember(..)
-        | ExpressionKind::Lambda(..)
-        | ExpressionKind::List(..)
-        | ExpressionKind::Array(..)
-        | ExpressionKind::Map(..)
-        | ExpressionKind::Tuple(..)
-        | ExpressionKind::Set(..)
-        | ExpressionKind::Match(..)
-        | ExpressionKind::FormattedString(..)
-        | ExpressionKind::NamedArgument(..)
-        | ExpressionKind::Super
-        | ExpressionKind::Cast(..)
-        | ExpressionKind::Block(..) => Err(CodegenError::Internal(
-            "WGSL backend: unresolved buffer element type expression".into(),
-        )),
-    }
+    argument_type(elem_expr)
+        .map(|inner| &inner.kind)
+        .ok_or_else(|| {
+            CodegenError::Internal("WGSL backend: unresolved buffer element type expression".into())
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::expression::Expression;
-    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::type_arguments::{type_argument, value_argument, TypeArgument};
     use crate::ast::types::{
         BuiltinCollectionKind, Type, ATOMIC_TYPE_NAME, STRING_TYPE_NAME, VEC2_TYPE_NAME,
         VEC3_TYPE_NAME, VEC4_TYPE_NAME,
@@ -366,17 +328,12 @@ mod tests {
         Span::new(0, 0)
     }
 
-    fn type_arg(kind: TypeKind) -> Expression {
-        let ty = Type::new(kind, span());
-        Expression::new(0, ExpressionKind::Type(Box::new(ty), false), span())
+    fn type_arg(kind: TypeKind) -> TypeArgument {
+        type_argument(Type::new(kind, span()))
     }
 
-    fn literal_arg() -> Expression {
-        Expression::new(
-            0,
-            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I32(4))),
-            span(),
-        )
+    fn literal_arg() -> TypeArgument {
+        value_argument(4)
     }
 
     fn generic(name: &str, args: Vec<TypeKind>) -> TypeKind {

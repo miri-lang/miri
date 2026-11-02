@@ -6,7 +6,7 @@
 //! Pure functions only: no IR emission. Each predicate exhaustively matches
 //! its target enum so adding a new variant forces this module to be revisited.
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::argument_type;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::translator::{ElementShape, FunctionTranslator, TypeCtx};
 use crate::error::CodegenError;
@@ -72,14 +72,15 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Extracts the element expression from a Set TypeKind.
-    pub(crate) fn set_elem_expr(kind: &TypeKind) -> Option<&Expression> {
+    /// The element type of a set, or `None` when `kind` is no set or its
+    /// element names no type.
+    pub(crate) fn set_element_type(kind: &TypeKind) -> Option<&Type> {
         match kind {
-            TypeKind::Set(e) => Some(e),
+            TypeKind::Set(e) => argument_type(e),
             TypeKind::Custom(name, Some(args))
                 if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
             {
-                args.first()
+                args.first().and_then(argument_type)
             }
             TypeKind::Custom(_, _)
             | TypeKind::Int
@@ -307,18 +308,19 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Extracts the key and value expressions from a Map TypeKind.
+    /// The key and value types of a map, each `None` when it names no type;
+    /// `None` when `kind` is no map spelled with both arguments.
     ///
-    /// Mirrors [`Self::set_elem_expr`]: a map written as a type literal carries
-    /// its arguments in `TypeKind::Map`, while one that reached codegen through
-    /// a generic instantiation carries them as `Custom` type arguments.
-    pub(crate) fn map_key_value_exprs(kind: &TypeKind) -> Option<(&Expression, &Expression)> {
+    /// Mirrors [`Self::set_element_type`]: a map written as a type literal
+    /// carries its arguments in `TypeKind::Map`, while one that reached codegen
+    /// through a generic instantiation carries them as `Custom` type arguments.
+    pub(crate) fn map_key_value_types(kind: &TypeKind) -> Option<(Option<&Type>, Option<&Type>)> {
         match kind {
-            TypeKind::Map(k, v) => Some((k, v)),
+            TypeKind::Map(k, v) => Some((argument_type(k), argument_type(v))),
             TypeKind::Custom(name, Some(args))
                 if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
             {
-                Some((args.first()?, args.get(1)?))
+                Some((argument_type(args.first()?), argument_type(args.get(1)?)))
             }
             TypeKind::Custom(_, _)
             | TypeKind::Int
@@ -367,13 +369,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Call this when you need just the TypeKind; wrap it as needed for
     /// &TypeKind or &Type returns.
     pub(crate) fn resolve_collection_elem_type_kind_impl(kind: &TypeKind) -> Option<&TypeKind> {
-        fn elem_kind_from_expr(expr: &Expression) -> Option<&TypeKind> {
-            if let ExpressionKind::Type(ty, _) = &expr.node {
-                Some(&ty.kind)
-            } else {
-                None
-            }
-        }
+        let elem_kind_from_expr = |expr| argument_type(expr).map(|ty| &ty.kind);
         match kind {
             TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
                 elem_kind_from_expr(elem_ty_expr)
@@ -447,13 +443,7 @@ impl<'a> FunctionTranslator<'a> {
     /// homogeneous tuples via the `Iterable` trait, and `Field` projections
     /// use `field_layout` rather than this resolver.
     pub(crate) fn resolve_collection_elem_type_as_type(base_type: &Type) -> Option<&Type> {
-        fn elem_type_from_expr(expr: &Expression) -> Option<&Type> {
-            if let ExpressionKind::Type(ty, _) = &expr.node {
-                Some(ty.as_ref())
-            } else {
-                None
-            }
-        }
+        let elem_type_from_expr = argument_type;
         // Use the core impl to resolve the TypeKind first, then extract the full Type
         // from the matching expression to preserve the full Type context.
         match &base_type.kind {
@@ -550,20 +540,21 @@ impl<'a> FunctionTranslator<'a> {
         kind.as_builtin_collection() == Some(BuiltinCollectionKind::Set)
     }
 
-    /// Extracts the element expression from a List or Array TypeKind.
-    /// Handles both canonical variants (`TypeKind::List(e)`, `TypeKind::Array(e, _)`)
-    /// and the normalised `TypeKind::Custom` form where
-    /// `BuiltinCollectionKind::from_name` returns `List` or `Array`.
-    pub(crate) fn collection_elem_expr(kind: &TypeKind) -> Option<&Expression> {
+    /// The element type of a list or array, or `None` when `kind` is neither
+    /// or its element names no type. Handles both canonical variants
+    /// (`TypeKind::List(e)`, `TypeKind::Array(e, _)`) and the normalised
+    /// `TypeKind::Custom` form where `BuiltinCollectionKind::from_name` returns
+    /// `List` or `Array`.
+    pub(crate) fn collection_element_type(kind: &TypeKind) -> Option<&Type> {
         match kind {
-            TypeKind::List(e) | TypeKind::Array(e, _) => Some(e),
+            TypeKind::List(e) | TypeKind::Array(e, _) => argument_type(e),
             TypeKind::Custom(name, Some(args))
                 if matches!(
                     BuiltinCollectionKind::from_name(name),
                     Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
                 ) =>
             {
-                args.first()
+                args.first().and_then(argument_type)
             }
             TypeKind::Custom(_, _)
             | TypeKind::Int

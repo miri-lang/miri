@@ -2605,15 +2605,6 @@ pub(crate) fn declared_element_bytes(kind: &TypeKind, type_ctx: &TypeCtx) -> u32
         .max(type_ctx.ptr_type.bytes())
 }
 
-/// The type a collection's type argument names, or `None` when the argument is
-/// not a type expression.
-pub(crate) fn type_argument(argument: &crate::ast::expression::Expression) -> Option<&Type> {
-    match &argument.node {
-        crate::ast::expression::ExpressionKind::Type(ty, _) => Some(ty),
-        _ => None,
-    }
-}
-
 /// The stride of an element of `kind` a collection lays out inline — a value
 /// held as its bytes — or `None` for an element held in one word, which a
 /// read loads.

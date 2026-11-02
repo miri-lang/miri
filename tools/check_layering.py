@@ -68,19 +68,6 @@ OWNERS = {
 # removed by the change that repairs the file, and no entry is added without
 # the reason the repair cannot land first.
 ALLOWED = [
-    # Codegen unwraps type arguments stored as AST expressions; gone once MIR
-    # carries resolved type arguments.
-    ("src/codegen/cranelift/layout.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/predicates.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/rc.rs", "codegen reads MIR, not AST expressions", "unwraps and rebuilds AST type arguments"),
-    ("src/codegen/cranelift/structural_elements.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/translate_rvalue.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/translate_statement.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/translator.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/types.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/cranelift/value_abi.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/wgsl/emitter.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
-    ("src/codegen/wgsl/types.rs", "codegen reads MIR, not AST expressions", "unwraps AST type arguments"),
 ]
 
 PLACEMENT_EXCEPTION = "Placement exception:"

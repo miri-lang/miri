@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::expression::Expression;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
+use crate::ast::type_arguments::TypeArguments;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::layout::{
@@ -725,11 +725,11 @@ impl<'a> FunctionTranslator<'a> {
         expected_ty: Option<&crate::ast::types::Type>,
         type_ctx: &TypeCtx,
     ) -> Option<(u32, u32)> {
-        use crate::codegen::cranelift::translator::{declared_element_bytes, type_argument};
-        let (key, value) = FunctionTranslator::map_key_value_exprs(&expected_ty?.kind)?;
+        use crate::codegen::cranelift::translator::declared_element_bytes;
+        let (key, value) = FunctionTranslator::map_key_value_types(&expected_ty?.kind)?;
         Some((
-            declared_element_bytes(&type_argument(key)?.kind, type_ctx),
-            declared_element_bytes(&type_argument(value)?.kind, type_ctx),
+            declared_element_bytes(&key?.kind, type_ctx),
+            declared_element_bytes(&value?.kind, type_ctx),
         ))
     }
 
@@ -745,11 +745,10 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         expected_ty: Option<&crate::ast::types::Type>,
     ) -> Result<Value, CodegenError> {
-        use crate::codegen::cranelift::translator::{declared_element_bytes, type_argument};
+        use crate::codegen::cranelift::translator::declared_element_bytes;
         let ptr_type = type_ctx.ptr_type;
         let elem_size = expected_ty
-            .and_then(|ty| FunctionTranslator::set_elem_expr(&ty.kind))
-            .and_then(type_argument)
+            .and_then(|ty| FunctionTranslator::set_element_type(&ty.kind))
             .map_or(ptr_type.bytes(), |elem| {
                 declared_element_bytes(&elem.kind, type_ctx)
             });
@@ -1359,11 +1358,14 @@ impl<'a> FunctionTranslator<'a> {
     /// declares its parameters. The type checker normalizes `Result<T, E>` to
     /// `TypeKind::Custom`, but the dedicated `TypeKind::Result` spelling also
     /// reaches codegen, so both forms are recognized.
-    fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<crate::ast::Expression>> {
+    fn enum_instantiation_args(kind: &TypeKind) -> Option<std::borrow::Cow<'_, TypeArguments>> {
         if let TypeKind::Custom(_, Some(args)) = kind {
-            Some(args.clone())
+            Some(std::borrow::Cow::Borrowed(args.as_slice()))
         } else if let TypeKind::Result(ok_ty, err_ty) = kind {
-            Some(vec![(**ok_ty).clone(), (**err_ty).clone()])
+            Some(std::borrow::Cow::Owned(vec![
+                (**ok_ty).clone(),
+                (**err_ty).clone(),
+            ]))
         } else {
             None
         }
@@ -3166,7 +3168,7 @@ impl<'a> FunctionTranslator<'a> {
         _ctx: &mut ModuleCtx,
         lhs_ptr: Value,
         rhs_ptr: Value,
-        element_exprs: &[Expression],
+        element_exprs: &TypeArguments,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;

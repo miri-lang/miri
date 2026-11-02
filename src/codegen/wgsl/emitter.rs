@@ -3,7 +3,6 @@
 
 //! MIR → WGSL text emitter.
 
-use crate::ast::expression::ExpressionKind;
 use crate::ast::gpu_wire::{
     collection_element_kind, device_scalar, scalar_capture_wire, sub_lane_bits, DeviceScalar,
 };
@@ -2146,13 +2145,12 @@ impl<'a> BodyEmitter<'a> {
                 CodegenError::Internal("vector type has empty type arguments".to_string())
             })?;
 
-            let elem_ty = if let ExpressionKind::Type(ty, _) = &first_arg.node {
-                ty
-            } else {
-                return Err(CodegenError::Internal(
-                    "vector type argument is not a type expression".to_string(),
-                ));
-            };
+            let elem_ty =
+                crate::ast::type_arguments::argument_type(first_arg).ok_or_else(|| {
+                    CodegenError::Internal(
+                        "vector type argument is not a type expression".to_string(),
+                    )
+                })?;
 
             let elem_scalar = scalar(&elem_ty.kind)?;
             let zero_literal = match elem_scalar {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
+use crate::ast::type_arguments::{argument_type, TypeArguments};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::collection_header::{
     HEADER_DATA, HEADER_LEN, LIST_CAPACITY, LIST_SLOT_SIZE,
@@ -594,12 +594,16 @@ impl<'a> FunctionTranslator<'a> {
         map_ptr: cranelift_codegen::ir::Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let Some((key_expr, value_expr)) = FunctionTranslator::map_key_value_exprs(&dest_ty.kind)
+        let Some((key_ty, value_ty)) = FunctionTranslator::map_key_value_types(&dest_ty.kind)
         else {
             return Ok(());
         };
-        Self::register_map_key_callbacks(builder, ctx, key_expr, map_ptr, type_ctx)?;
-        Self::register_map_value_callbacks_for_type(builder, ctx, value_expr, map_ptr, type_ctx)?;
+        if let Some(key_ty) = key_ty {
+            Self::register_map_key_callbacks(builder, ctx, key_ty, map_ptr, type_ctx)?;
+        }
+        if let Some(value_ty) = value_ty {
+            Self::register_map_value_callbacks_for_type(builder, ctx, value_ty, map_ptr, type_ctx)?;
+        }
         Ok(())
     }
 
@@ -611,14 +615,11 @@ impl<'a> FunctionTranslator<'a> {
     fn register_map_key_callbacks(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        key_expr: &Expression,
+        key_ty: &crate::ast::types::Type,
         map_ptr: cranelift_codegen::ir::Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ExpressionKind::Type(key_ty, _) = &key_expr.node else {
-            return Ok(());
-        };
         FunctionTranslator::emit_element_identity(
             builder,
             ctx,
@@ -650,14 +651,11 @@ impl<'a> FunctionTranslator<'a> {
     fn register_map_value_callbacks_for_type(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        value_expr: &Expression,
+        value_ty: &crate::ast::types::Type,
         map_ptr: cranelift_codegen::ir::Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ExpressionKind::Type(value_ty, _) = &value_expr.node else {
-            return Ok(());
-        };
         if crate::mir::type_facts::is_unresolved_element(
             &value_ty.kind,
             type_ctx.facts.definitions(),
@@ -698,10 +696,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let Some(elem_expr) = FunctionTranslator::set_elem_expr(&dest_ty.kind) else {
-            return Ok(());
-        };
-        let ExpressionKind::Type(elem_ty, _) = &elem_expr.node else {
+        let Some(elem_ty) = FunctionTranslator::set_element_type(&dest_ty.kind) else {
             return Ok(());
         };
         FunctionTranslator::emit_element_identity(
@@ -1800,13 +1795,7 @@ impl<'a> FunctionTranslator<'a> {
         args: &[Operand],
         type_ctx: &'t TypeCtx,
     ) -> Option<&'t crate::ast::types::Type> {
-        let element_of = |kind: &'t TypeKind| match FunctionTranslator::collection_elem_expr(kind) {
-            Some(Expression {
-                node: ExpressionKind::Type(inner, _),
-                ..
-            }) => Some(&**inner),
-            Some(_) | None => None,
-        };
+        let element_of = FunctionTranslator::collection_element_type;
         element_of(&dest_ty.kind).or_else(|| match args.first()? {
             Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
                 element_of(&type_ctx.local_types[p.local.0].kind)
@@ -1884,10 +1873,7 @@ impl<'a> FunctionTranslator<'a> {
         let Some(list_ptr) = maybe_result else {
             return Ok(());
         };
-        let Some(elem_expr) = FunctionTranslator::collection_elem_expr(&dest_ty.kind) else {
-            return Ok(());
-        };
-        let ExpressionKind::Type(elem_ty, _) = &elem_expr.node else {
+        let Some(elem_ty) = FunctionTranslator::collection_element_type(&dest_ty.kind) else {
             return Ok(());
         };
         FunctionTranslator::emit_list_drop_fn_for_elem_kind(
@@ -2074,12 +2060,8 @@ impl<'a> FunctionTranslator<'a> {
                 }),
             TypeKind::Tuple(elements) => Ok(elements
                 .get(idx)
-                .and_then(|element| {
-                    let ExpressionKind::Type(ty, _) = &element.node else {
-                        return None;
-                    };
-                    Some(ty.kind.clone())
-                })
+                .and_then(argument_type)
+                .map(|ty| ty.kind.clone())
                 .unwrap_or(TypeKind::Error)),
             TypeKind::Option(payload) => Ok(payload.kind.clone()),
             TypeKind::Int
@@ -2132,7 +2114,7 @@ impl<'a> FunctionTranslator<'a> {
     /// about the type, and is reported rather than read at a guessed width.
     fn declared_field_kind(
         name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&TypeArguments>,
         idx: usize,
         type_ctx: &TypeCtx,
     ) -> Result<TypeKind, CodegenError> {

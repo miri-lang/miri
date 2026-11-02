@@ -13,8 +13,8 @@
 //! symbol suffix, and finds every structural entry type a program uses so the
 //! matching thunk can be emitted before any body that references it is compiled.
 
-use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::ast::type_arguments::{argument_type, argument_type_at, TypeArguments};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::Body;
 use std::collections::{BTreeMap, HashSet};
 
@@ -86,13 +86,13 @@ fn encode(kind: &TypeKind, out: &mut String) {
         TypeKind::Tuple(elements) => {
             encode_arity('t', elements.len(), out);
             for element in elements {
-                encode_expr(element, out);
+                encode_argument(argument_type(element), out);
             }
         }
         TypeKind::OneOf(members) => {
             encode_arity('o', members.len(), out);
             for member in members {
-                encode_expr(member, out);
+                encode_argument(argument_type(member), out);
             }
         }
         TypeKind::Option(inner) => {
@@ -101,29 +101,29 @@ fn encode(kind: &TypeKind, out: &mut String) {
         }
         TypeKind::List(elem) | TypeKind::Array(elem, _) | TypeKind::Set(elem) => {
             out.push('l');
-            encode_expr(elem, out);
+            encode_argument(argument_type(elem), out);
         }
         TypeKind::Map(key, value) => {
             out.push('m');
-            encode_expr(key, out);
-            encode_expr(value, out);
+            encode_argument(argument_type(key), out);
+            encode_argument(argument_type(value), out);
         }
         TypeKind::Result(ok, err) => {
             out.push('r');
-            encode_expr(ok, out);
-            encode_expr(err, out);
+            encode_argument(argument_type(ok), out);
+            encode_argument(argument_type(err), out);
         }
         TypeKind::Custom(name, None) => encode_name(name, out),
         TypeKind::Custom(name, Some(args)) => {
             encode_arity('c', args.len(), out);
             encode_name(name, out);
             for arg in args {
-                encode_expr(arg, out);
+                encode_argument(argument_type(arg), out);
             }
         }
         TypeKind::Future(inner) => {
             out.push('u');
-            encode_expr(inner, out);
+            encode_argument(argument_type(inner), out);
         }
         TypeKind::Meta(inner) => {
             out.push('k');
@@ -166,13 +166,12 @@ fn encode_arity(tag: char, count: usize, out: &mut String) {
     out.push('.');
 }
 
-/// Encode the type carried by a type-argument expression. A value-generic
-/// argument carries a literal rather than a type and contributes no drop
-/// behavior, so it encodes as an empty name and keeps the surrounding form
-/// self-delimiting.
-fn encode_expr(expr: &Expression, out: &mut String) {
-    match expr_kind(expr) {
-        Some(kind) => encode(kind, out),
+/// Encode the type a type argument names. A value-generic argument names a
+/// value rather than a type and contributes no drop behavior, so it encodes
+/// as an empty name and keeps the surrounding form self-delimiting.
+fn encode_argument(argument: Option<&Type>, out: &mut String) {
+    match argument {
+        Some(ty) => encode(&ty.kind, out),
         None => encode_name("", out),
     }
 }
@@ -248,31 +247,31 @@ pub fn structural_element_types(bodies: &[(&str, &Body)]) -> Vec<StructuralEleme
 fn collect(kind: &TypeKind, found: &mut Vec<(String, TypeKind)>) {
     match kind {
         TypeKind::Map(key, value) => {
-            record(expr_kind(key), found);
-            record(expr_kind(value), found);
-            descend(key, found);
-            descend(value, found);
+            record(argument_type(key), found);
+            record(argument_type(value), found);
+            descend(argument_type(key), found);
+            descend(argument_type(value), found);
         }
         TypeKind::Custom(name, Some(args)) => {
             record_builtin_entries(BuiltinCollectionKind::from_name(name), args, found);
             for arg in args {
-                descend(arg, found);
+                descend(argument_type(arg), found);
             }
         }
         TypeKind::Tuple(elements) => {
             for element in elements {
-                descend(element, found);
+                descend(argument_type(element), found);
             }
         }
         TypeKind::List(elem) | TypeKind::Array(elem, _) | TypeKind::Set(elem) => {
-            record(expr_kind(elem), found);
-            descend(elem, found);
+            record(argument_type(elem), found);
+            descend(argument_type(elem), found);
         }
         TypeKind::Result(ok, err) => {
-            descend(ok, found);
-            descend(err, found);
+            descend(argument_type(ok), found);
+            descend(argument_type(err), found);
         }
-        TypeKind::Future(inner) => descend(inner, found),
+        TypeKind::Future(inner) => descend(argument_type(inner), found),
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             collect(&inner.kind, found)
         }
@@ -309,17 +308,17 @@ fn collect(kind: &TypeKind, found: &mut Vec<(String, TypeKind)>) {
 /// list, array, or set. A non-collection name contributes nothing.
 fn record_builtin_entries(
     collection: Option<BuiltinCollectionKind>,
-    args: &[Expression],
+    args: &TypeArguments,
     found: &mut Vec<(String, TypeKind)>,
 ) {
     match collection {
         Some(BuiltinCollectionKind::Map) => {
-            record(args.first().and_then(expr_kind), found);
-            record(args.get(1).and_then(expr_kind), found);
+            record(argument_type_at(args, 0), found);
+            record(argument_type_at(args, 1), found);
         }
         Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
         | Some(BuiltinCollectionKind::Set) => {
-            record(args.first().and_then(expr_kind), found);
+            record(argument_type_at(args, 0), found);
         }
         None => {}
     }
@@ -327,8 +326,8 @@ fn record_builtin_entries(
 
 /// Record an entry type when it is structural, ignoring one that already has a
 /// named thunk or no managed payload at all.
-fn record(entry: Option<&TypeKind>, found: &mut Vec<(String, TypeKind)>) {
-    let Some(kind) = entry else {
+fn record(entry: Option<&Type>, found: &mut Vec<(String, TypeKind)>) {
+    let Some(kind) = entry.map(|ty| &ty.kind) else {
         return;
     };
     if let Some(symbol) = structural_thunk_symbol(kind) {
@@ -336,17 +335,9 @@ fn record(entry: Option<&TypeKind>, found: &mut Vec<(String, TypeKind)>) {
     }
 }
 
-/// Continue the walk through a type-argument expression.
-fn descend(expr: &Expression, found: &mut Vec<(String, TypeKind)>) {
-    if let Some(kind) = expr_kind(expr) {
-        collect(kind, found);
+/// Continue the walk through the type a type argument names.
+fn descend(argument: Option<&Type>, found: &mut Vec<(String, TypeKind)>) {
+    if let Some(ty) = argument {
+        collect(&ty.kind, found);
     }
-}
-
-/// The type an expression carries when it is a type argument, else `None`.
-fn expr_kind(expr: &Expression) -> Option<&TypeKind> {
-    let ExpressionKind::Type(ty, _) = &expr.node else {
-        return None;
-    };
-    Some(&ty.kind)
 }

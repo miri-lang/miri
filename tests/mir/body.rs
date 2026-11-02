@@ -96,3 +96,70 @@ fn test_a_kernel_lowered_in_a_module_records_the_module_file() {
     assert!(fill.is_some() && fill != main, "fill records {fill:?}");
     assert_eq!(kernel, fill);
 }
+
+mod type_arguments {
+    //! A body's locals name every type argument a backend reads as a type:
+    //! one that does not is refused where the body is lowered, so no backend
+    //! ever guesses what the argument holds.
+
+    use miri::ast::factory::{identifier, type_expr_non_null};
+    use miri::ast::types::{Type, TypeKind};
+    use miri::error::syntax::Span;
+    use miri::mir::{Body, ExecutionModel, LocalDecl};
+
+    fn ty(kind: TypeKind) -> Type {
+        Type::new(kind, Span::default())
+    }
+
+    fn body_holding(held: Type) -> Body {
+        let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+        body.new_local(LocalDecl::new(held, Span::default()));
+        body.basic_blocks.push(miri::mir::BasicBlockData::new(Some(
+            miri::mir::Terminator::new(miri::mir::TerminatorKind::Return, Span::default()),
+        )));
+        body
+    }
+
+    #[test]
+    fn a_list_of_a_type_is_valid() {
+        let list = ty(TypeKind::List(Box::new(type_expr_non_null(ty(
+            TypeKind::String,
+        )))));
+        assert_eq!(body_holding(list).validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_list_whose_element_names_no_type_is_refused() {
+        let list = ty(TypeKind::List(Box::new(identifier("T"))));
+        let refusal = body_holding(list).validate().unwrap_err();
+        assert!(refusal.contains("type argument"), "{refusal}");
+    }
+
+    #[test]
+    fn a_map_value_that_names_no_type_is_refused() {
+        let map = ty(TypeKind::Map(
+            Box::new(type_expr_non_null(ty(TypeKind::String))),
+            Box::new(identifier("V")),
+        ));
+        assert!(body_holding(map).validate().is_err());
+    }
+
+    #[test]
+    fn a_tuple_slot_inside_an_option_that_names_no_type_is_refused() {
+        let tuple = ty(TypeKind::Tuple(vec![
+            type_expr_non_null(ty(TypeKind::Int)),
+            identifier("U"),
+        ]));
+        let optional = ty(TypeKind::Option(Box::new(tuple)));
+        assert!(body_holding(optional).validate().is_err());
+    }
+
+    #[test]
+    fn an_array_size_is_a_value_not_a_type() {
+        let array = ty(TypeKind::Array(
+            Box::new(type_expr_non_null(ty(TypeKind::Int))),
+            Box::new(identifier("N")),
+        ));
+        assert_eq!(body_holding(array).validate(), Ok(()));
+    }
+}

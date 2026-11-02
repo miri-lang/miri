@@ -336,6 +336,8 @@ impl Body {
     /// Checks:
     /// 1. All blocks have a terminator.
     /// 2. All jump targets are valid block indices.
+    /// 3. No local is typed at the native `Result` kind.
+    /// 4. Every type argument a backend reads as a type names one.
     pub fn validate(&self) -> Result<(), String> {
         for (i, block) in self.basic_blocks.iter().enumerate() {
             // 1. Check terminator
@@ -369,7 +371,22 @@ impl Body {
             ));
         }
 
-        // 4. Check reachability (optional check, for now just ensure internal consistency)
+        // 4. Every argument a backend reads as a type names one. An argument
+        //    that does not leaves a collection's elements, or a tuple's slots,
+        //    with no type to release or lay out at.
+        for (index, decl) in self.local_decls.iter().enumerate() {
+            if let Some(argument) =
+                crate::ast::type_arguments::unresolved_type_argument(&decl.ty.kind)
+            {
+                return Err(format!(
+                    "local _{index} of type `{}` holds a type argument that names no \
+                     type: {:?}",
+                    decl.ty, argument.node
+                ));
+            }
+        }
+
+        // 5. Check reachability (optional check, for now just ensure internal consistency)
         // We do not fail validation if blocks are unreachable, as that is valid MIR (dead code).
         // Use find_unreachable_blocks() if you need to detect them.
         Ok(())

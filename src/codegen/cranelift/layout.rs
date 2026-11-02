@@ -6,8 +6,8 @@
 //! Provides helpers to compute byte offsets and sizes for fields within
 //! structs, tuples, and enums during Cranelift code generation.
 
-use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::TypeKind;
+use crate::ast::type_arguments::{argument_type, TypeArguments};
+use crate::ast::types::{Type, TypeKind};
 use crate::codegen::cranelift::types::translate_type_kind;
 use crate::error::CodegenError;
 use crate::mir::instantiation::{field_types, member_type_at};
@@ -81,40 +81,13 @@ impl Slot {
         }
     }
 
-    /// The slot of a tuple element written as `expr`. Only a type expression
-    /// names one; anything else is pointer-sized.
-    fn element(expr: &Expression, scope: LayoutScope<'_>, ptr_ty: CraneliftType) -> Self {
-        match &expr.node {
-            ExpressionKind::Type(ty, _) => Self::member(&ty.kind, scope, ptr_ty),
-            ExpressionKind::Literal(_)
-            | ExpressionKind::Identifier(..)
-            | ExpressionKind::Binary(..)
-            | ExpressionKind::Logical(..)
-            | ExpressionKind::Unary(..)
-            | ExpressionKind::Assignment(..)
-            | ExpressionKind::Conditional(..)
-            | ExpressionKind::Range(..)
-            | ExpressionKind::Guard(..)
-            | ExpressionKind::Member(..)
-            | ExpressionKind::Index(..)
-            | ExpressionKind::Call(..)
-            | ExpressionKind::ImportPath(..)
-            | ExpressionKind::GenericType(..)
-            | ExpressionKind::TypeDeclaration(..)
-            | ExpressionKind::EnumValue(..)
-            | ExpressionKind::StructMember(..)
-            | ExpressionKind::Lambda(..)
-            | ExpressionKind::List(..)
-            | ExpressionKind::Array(..)
-            | ExpressionKind::Map(..)
-            | ExpressionKind::Tuple(..)
-            | ExpressionKind::Set(..)
-            | ExpressionKind::Match(..)
-            | ExpressionKind::FormattedString(..)
-            | ExpressionKind::NamedArgument(..)
-            | ExpressionKind::Super
-            | ExpressionKind::Block(..)
-            | ExpressionKind::Cast(..) => Self::of(ptr_ty),
+    /// The slot of a tuple element whose type argument names `element`. Only
+    /// an argument naming a type has a slot of its own; anything else is
+    /// pointer-sized.
+    fn element(element: Option<&Type>, scope: LayoutScope<'_>, ptr_ty: CraneliftType) -> Self {
+        match element {
+            Some(ty) => Self::member(&ty.kind, scope, ptr_ty),
+            None => Self::of(ptr_ty),
         }
     }
 }
@@ -322,7 +295,7 @@ pub fn aggregate_layout(
 /// of one.
 fn custom_aggregate_layout(
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> Option<PayloadLayout> {
@@ -346,20 +319,20 @@ fn custom_aggregate_layout(
 /// element count in the first word, then each element at the type its type
 /// argument names.
 fn tuple_payload_layout(
-    element_exprs: &[Expression],
+    element_exprs: &TypeArguments,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> PayloadLayout {
     let elements = element_exprs
         .iter()
-        .map(|element| Slot::element(element, scope, ptr_ty));
+        .map(|element| Slot::element(argument_type(element), scope, ptr_ty));
     place_fields(ptr_ty.bytes() as i32, elements)
 }
 
 /// The payload of a struct at the instantiation `type_args` names.
 fn struct_payload_layout(
     struct_def: &StructDefinition,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> PayloadLayout {
@@ -405,7 +378,7 @@ fn place_fields(header: i32, slots: impl IntoIterator<Item = Slot>) -> PayloadLa
 
 fn custom_field_layout(
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     field_idx: usize,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
@@ -447,7 +420,7 @@ fn custom_field_layout(
 fn struct_field_slot(
     struct_def: &StructDefinition,
     field_ty: &crate::ast::types::Type,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> Slot {
@@ -464,7 +437,7 @@ fn struct_field_slot(
 /// column names no field any variant carries.
 fn enum_field_layout(
     enum_def: &EnumDefinition,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     field_idx: usize,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
@@ -553,7 +526,7 @@ impl EnumLayout {
 /// by it, so none of them can disagree about where a field lives.
 pub fn enum_payload_layout(
     enum_def: &EnumDefinition,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> EnumLayout {
@@ -596,7 +569,7 @@ pub fn enum_payload_layout(
 pub fn enum_payload_field_kind(
     enum_def: &EnumDefinition,
     declared: &TypeKind,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
 ) -> TypeKind {
     let declared =
         crate::ast::types::Type::new(declared.clone(), crate::error::syntax::Span::default());
@@ -623,7 +596,7 @@ pub struct PayloadLayout {
 /// [`field_types`] lists them. See [`PayloadLayout`].
 pub fn class_payload_layout(
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
 ) -> PayloadLayout {
@@ -645,7 +618,7 @@ pub fn class_payload_layout(
 /// order the class lays them out, as [`field_types`] answers it.
 fn class_field_kinds(
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     type_definitions: &HashMap<String, TypeDefinition>,
 ) -> Vec<TypeKind> {
     field_types(type_definitions, name, type_args)
@@ -657,7 +630,7 @@ fn class_field_kinds(
 
 fn class_field_layout(
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     field_idx: usize,
     scope: LayoutScope<'_>,
     ptr_ty: CraneliftType,
@@ -736,7 +709,7 @@ pub fn aggregate_size(
 /// payload (classes, traits, generics) fall back to a pointer slot.
 fn custom_aggregate_size(
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
 ) -> u32 {
@@ -762,7 +735,7 @@ fn custom_aggregate_size(
 /// alignment.
 fn struct_aggregate_size(
     struct_def: &StructDefinition,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
 ) -> u32 {
@@ -774,7 +747,7 @@ fn struct_aggregate_size(
 /// Size of an enum aggregate: every column [`enum_payload_layout`] lays out.
 fn enum_aggregate_size(
     enum_def: &EnumDefinition,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&TypeArguments>,
     type_definitions: &HashMap<String, TypeDefinition>,
     ptr_ty: CraneliftType,
 ) -> u32 {
