@@ -1,0 +1,14 @@
+{
+ "run_id": "20261102T125938Z",
+ "suspect": [
+  {
+   "cell": "matmul/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.149219126232722,
+   "baseline": 2.1342925057672626,
+   "tonight": 2.4527697686029004
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
