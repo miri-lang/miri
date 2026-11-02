@@ -16,34 +16,25 @@
 //! The caller's value is left alone and the copy is released when the body
 //! ends, unless it is returned.
 //!
-//! Which parameters are written is read off the body before any of it is
-//! lowered, so a read lowered before the write — a loop header — reads the
-//! copy as well. A closure or nested function the body declares is a body of
-//! its own and is not read here. Over-approximating costs one copy; missing a
-//! write is caught where the write is lowered (`expression::unshare`).
+//! Which parameters a body writes is the type checker's verdict
+//! ([`ParameterWrites`]), made before any body is lowered, so a read lowered
+//! before the write — a loop header — reads the copy as well. This module
+//! only binds the copies, for the written parameters whose value a write
+//! copies.
 //!
 //! A method's receiver is never copied: a call to a method that writes it
 //! hands it a value only the caller holds, so the body writes it in place.
 //! Neither is an `out` parameter, which is the caller's binding itself.
-
-use std::collections::HashSet;
+//!
+//! [`ParameterWrites`]: crate::type_checker::body_writes::ParameterWrites
 
 use crate::ast::common::Parameter;
-use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::pattern::MatchBranch;
-use crate::ast::statement::{Statement, StatementKind};
-use crate::ast::types::TypeKind;
 use crate::error::syntax::Span;
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::dispatch::bind_arguments_to_parameters;
-use crate::mir::lowering::expression::identifier_expr::build_global_identifier_operand;
-use crate::mir::lowering::expression::unshare::path_root;
-use crate::mir::lowering::method_dispatch::is_receiver_written;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::{
     Local, Operand, Place, Rvalue, Statement as MirStatement, StatementKind as MirStatementKind,
 };
-use crate::type_checker::CalleeKind;
 
 /// The scope the entry copies of a body's written parameters are bound in.
 #[must_use]
@@ -61,14 +52,13 @@ impl WrittenParameterCopies {
     }
 }
 
-/// Binds, at the body's entry, a copy of each of `params` that `body` writes,
+/// Binds, at the body's entry, a copy of each of `params` its body writes,
 /// so every use of the parameter's name inside the body reads the copy.
 pub(crate) fn copy_written_parameters(
     ctx: &mut LoweringContext,
     params: &[Parameter],
-    body: Option<&Statement>,
 ) -> WrittenParameterCopies {
-    let written = written_parameters(ctx, params, body);
+    let written = written_parameters(ctx, params);
     if written.is_empty() {
         return WrittenParameterCopies { is_scoped: false };
     }
@@ -79,24 +69,18 @@ pub(crate) fn copy_written_parameters(
     WrittenParameterCopies { is_scoped: true }
 }
 
-/// Each of `params` that `body` writes and that holds a value its caller
-/// still holds, with its local.
+/// Each of `params` its body writes and that holds a value its caller still
+/// holds, with its local.
 fn written_parameters<'p>(
     ctx: &LoweringContext,
     params: &'p [Parameter],
-    body: Option<&Statement>,
 ) -> Vec<(&'p Parameter, Local)> {
-    let Some(body) = body.filter(|_| !ctx.body.is_gpu()) else {
+    if ctx.body.is_gpu() {
         return Vec::new();
-    };
-    let mut roots = WrittenRoots {
-        ctx,
-        names: HashSet::new(),
-    };
-    roots.statement(body);
+    }
     params
         .iter()
-        .filter(|param| roots.names.contains(param.name.as_str()))
+        .filter(|param| ctx.type_checker.parameter_writes.writes(param))
         .filter_map(|param| {
             let local = *ctx.variable_map.get(param.name.as_str())?;
             is_copied_parameter(ctx, local).then_some((param, local))
@@ -134,211 +118,4 @@ fn bind_parameter_copy(ctx: &mut LoweringContext, param: &Parameter, local: Loca
         span,
     });
     ctx.bind_local_name(param.name.clone(), copy);
-}
-
-/// The names of the bindings a body writes, or writes through a path
-/// starting at.
-struct WrittenRoots<'c, 'a, 'b> {
-    ctx: &'c LoweringContext<'a>,
-    names: HashSet<&'b str>,
-}
-
-impl<'b> WrittenRoots<'_, '_, 'b> {
-    fn statement(&mut self, statement: &'b Statement) {
-        match &statement.node {
-            StatementKind::Expression(expression) => self.expression(expression),
-            StatementKind::Block(statements) => self.statements(statements),
-            StatementKind::Variable(declarations, _) => {
-                for declaration in declarations {
-                    self.optional(declaration.initializer.as_deref());
-                }
-            }
-            StatementKind::If(condition, then_branch, else_branch, _) => {
-                self.expression(condition);
-                self.statement(then_branch);
-                if let Some(else_branch) = else_branch {
-                    self.statement(else_branch);
-                }
-            }
-            StatementKind::While(condition, body, _) => {
-                self.expression(condition);
-                self.statement(body);
-            }
-            StatementKind::For(_, iterable, body)
-            | StatementKind::GpuFrame(_, iterable, body)
-            | StatementKind::Forall { iterable, body, .. } => {
-                self.expression(iterable);
-                self.statement(body);
-            }
-            StatementKind::GpuFrameBlock(body) => self.statement(body),
-            StatementKind::Return(value) => self.optional(value.as_deref()),
-            StatementKind::FunctionDeclaration(_)
-            | StatementKind::Empty
-            | StatementKind::Break
-            | StatementKind::Continue
-            | StatementKind::Use(..)
-            | StatementKind::Type(..)
-            | StatementKind::Enum(..)
-            | StatementKind::Struct(..)
-            | StatementKind::Class(_)
-            | StatementKind::Trait(..)
-            | StatementKind::RuntimeFunctionDeclaration(..)
-            | StatementKind::IntrinsicFunctionDeclaration(..) => {}
-        }
-    }
-
-    fn statements(&mut self, statements: &'b [Statement]) {
-        for statement in statements {
-            self.statement(statement);
-        }
-    }
-
-    fn optional(&mut self, expression: Option<&'b Expression>) {
-        if let Some(expression) = expression {
-            self.expression(expression);
-        }
-    }
-
-    fn expressions(&mut self, expressions: &'b [Expression]) {
-        for expression in expressions {
-            self.expression(expression);
-        }
-    }
-
-    /// `expression`, recording the binding each write in it starts at. A
-    /// closure's body is lowered on its own and is not read.
-    fn expression(&mut self, expression: &'b Expression) {
-        match &expression.node {
-            ExpressionKind::Call(callee, arguments) => self.call(callee, arguments),
-            ExpressionKind::Assignment(target, _, value) => {
-                self.record(target.expression());
-                self.pair(target.expression(), value);
-            }
-            ExpressionKind::Index(left, right)
-            | ExpressionKind::Binary(left, _, right)
-            | ExpressionKind::Logical(left, _, right) => self.pair(left, right),
-            ExpressionKind::Member(operand, _)
-            | ExpressionKind::StructMember(operand, _)
-            | ExpressionKind::Unary(_, operand)
-            | ExpressionKind::Guard(_, operand)
-            | ExpressionKind::NamedArgument(_, operand)
-            | ExpressionKind::Cast(operand, _) => self.expression(operand),
-            ExpressionKind::Conditional(then_value, condition, else_value, _) => {
-                self.pair(condition, then_value);
-                self.optional(else_value.as_deref());
-            }
-            ExpressionKind::Range(start, end, _) => {
-                self.expression(start);
-                self.optional(end.as_deref());
-            }
-            ExpressionKind::Block(statements, value) => {
-                self.statements(statements);
-                self.expression(value);
-            }
-            ExpressionKind::Match(scrutinee, branches) => self.branches(scrutinee, branches),
-            ExpressionKind::List(elements)
-            | ExpressionKind::Set(elements)
-            | ExpressionKind::Tuple(elements)
-            | ExpressionKind::EnumValue(_, elements)
-            | ExpressionKind::FormattedString(elements, _) => self.expressions(elements),
-            ExpressionKind::Array(elements, size) => {
-                self.expressions(elements);
-                self.expression(size);
-            }
-            ExpressionKind::Map(entries) => self.entries(entries),
-            ExpressionKind::Lambda(_)
-            | ExpressionKind::Identifier(..)
-            | ExpressionKind::Super
-            | ExpressionKind::Literal(_)
-            | ExpressionKind::ImportPath(..)
-            | ExpressionKind::Type(..)
-            | ExpressionKind::GenericType(..)
-            | ExpressionKind::TypeDeclaration(..) => {}
-        }
-    }
-
-    fn pair(&mut self, first: &'b Expression, second: &'b Expression) {
-        self.expression(first);
-        self.expression(second);
-    }
-
-    fn branches(&mut self, scrutinee: &'b Expression, branches: &'b [MatchBranch]) {
-        self.expression(scrutinee);
-        for branch in branches {
-            self.optional(branch.guard.as_deref());
-            self.statement(&branch.body);
-        }
-    }
-
-    fn entries(&mut self, entries: &'b [(Expression, Expression)]) {
-        for (key, value) in entries {
-            self.pair(key, value);
-        }
-    }
-
-    /// A call of `callee` on `arguments`: a write into its receiver when it
-    /// calls a method that writes it, and into each argument a runtime entry
-    /// point writes in place.
-    fn call(&mut self, callee: &'b Expression, arguments: &'b [Expression]) {
-        if let ExpressionKind::Member(receiver, method) = &callee.node {
-            if is_receiver_written(self.ctx, receiver, method) {
-                self.record(receiver);
-            }
-        }
-        self.runtime_writes(callee, arguments);
-        self.expression(callee);
-        self.expressions(arguments);
-    }
-
-    /// Records each of `arguments` the runtime entry point `callee` names
-    /// its declaration states it writes in place, as lowering the call
-    /// makes it the call's own; nothing when `callee` names no runtime entry
-    /// point.
-    fn runtime_writes(&mut self, callee: &Expression, arguments: &'b [Expression]) {
-        let Some(name) = runtime_entry_point(self.ctx, callee) else {
-            return;
-        };
-        let Some(effect) = self.ctx.type_checker.runtime_effects.get(name.as_str()) else {
-            return;
-        };
-        let Some(TypeKind::Function(signature)) =
-            self.ctx.type_checker.get_type(callee.id).map(|ty| &ty.kind)
-        else {
-            return;
-        };
-        let parameters: Vec<&str> = signature.params.iter().map(|p| p.name.as_str()).collect();
-        for (position, argument) in bind_arguments_to_parameters(arguments, &parameters) {
-            if effect.writes_in_place(position) {
-                self.record(argument);
-            }
-        }
-    }
-
-    /// Records the binding the written place `place` starts at, if a binding
-    /// is where it starts.
-    fn record(&mut self, place: &'b Expression) {
-        if let ExpressionKind::Identifier(name, _) = &path_root(place).node {
-            self.names.insert(name.as_str());
-        }
-    }
-}
-
-/// The name of the runtime entry point `callee` calls, when it is a name a
-/// `runtime` declaration made.
-///
-/// Only a plain name is read. Lowering also routes a call through a module
-/// alias (`M.f(x)`) to the same argument seam, but a runtime declaration is
-/// never public and so never visible through an alias, which leaves the plain
-/// name the only way a body calls one.
-fn runtime_entry_point(ctx: &LoweringContext, callee: &Expression) -> Option<String> {
-    let ExpressionKind::Identifier(name, _) = &callee.node else {
-        return None;
-    };
-    if ctx.callee_kind(callee) != CalleeKind::Runtime {
-        return None;
-    }
-    build_global_identifier_operand(ctx, name, callee)
-        .ok()?
-        .called_runtime_name()
-        .map(str::to_owned)
 }

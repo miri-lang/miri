@@ -239,3 +239,28 @@ impl fmt::Display for ExpressionKind {
         }
     }
 }
+
+/// The parameter position each written argument binds, with the expression
+/// that supplies its value: a named argument binds the parameter it names,
+/// every other the position it is written in.
+///
+/// The type checker has refused a name no parameter carries, so a name that
+/// matches none here keeps its written position.
+pub fn bind_arguments_to_parameters<'a>(
+    args: &'a [Expression],
+    param_names: &[&str],
+) -> Vec<(usize, &'a Expression)> {
+    args.iter()
+        .enumerate()
+        .map(|(written, arg)| {
+            let ExpressionKind::NamedArgument(name, value) = &arg.node else {
+                return (written, arg);
+            };
+            let position = param_names
+                .iter()
+                .position(|param| *param == name.as_str())
+                .unwrap_or(written);
+            (position, value.as_ref())
+        })
+        .collect()
+}

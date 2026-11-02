@@ -1877,31 +1877,6 @@ fn callee_parameter_names(ctx: &LoweringContext, func_id: usize) -> Vec<String> 
         .collect()
 }
 
-/// The parameter position each written argument binds, with the expression
-/// that supplies its value: a named argument binds the parameter it names,
-/// every other the position it is written in.
-///
-/// The type checker has refused a name no parameter carries, so a name that
-/// matches none here keeps its written position.
-pub(super) fn bind_arguments_to_parameters<'a>(
-    args: &'a [Expression],
-    param_names: &[&str],
-) -> Vec<(usize, &'a Expression)> {
-    args.iter()
-        .enumerate()
-        .map(|(written, arg)| {
-            let ExpressionKind::NamedArgument(name, value) = &arg.node else {
-                return (written, arg);
-            };
-            let position = param_names
-                .iter()
-                .position(|param| *param == name.as_str())
-                .unwrap_or(written);
-            (position, value.as_ref())
-        })
-        .collect()
-}
-
 /// Put an operand lowered for the parameter at `position` into its slot,
 /// growing the slots to reach it.
 pub(super) fn place_at_parameter(slots: &mut Vec<Option<Operand>>, position: usize, op: Operand) {
@@ -1954,7 +1929,7 @@ fn lower_and_coerce_args<'e>(
     let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
     let mut slots = Vec::with_capacity(args.len());
     let mut written = Vec::new();
-    for (position, value) in bind_arguments_to_parameters(args, &names) {
+    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
         let op = match runtime_writes::lower_call_argument(ctx, callee, position, value)? {
             runtime_writes::CallArgument::Lowered(op) => op,

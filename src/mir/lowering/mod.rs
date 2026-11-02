@@ -219,7 +219,7 @@ fn lower_function_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
-    let copies = copy_written_parameters(&mut ctx, params, body_stmt.as_deref());
+    let copies = copy_written_parameters(&mut ctx, params);
 
     // Emit guard checks for parameters with guards
     emit_parameter_guards(&mut ctx, name, params)?;
@@ -635,7 +635,7 @@ fn lower_instantiation_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
-    let copies = copy_written_parameters(&mut ctx, params, body_stmt.as_deref());
+    let copies = copy_written_parameters(&mut ctx, params);
 
     emit_parameter_guards(&mut ctx, name, params)?;
 
@@ -974,7 +974,7 @@ fn lower_class_method_body(
     out_params.push(false);
     ctx.body.out_params = out_params;
 
-    let copies = copy_written_parameters(&mut ctx, params, body_stmt.as_deref());
+    let copies = copy_written_parameters(&mut ctx, params);
 
     // Lower body
     if let Some(body_box) = body_stmt {

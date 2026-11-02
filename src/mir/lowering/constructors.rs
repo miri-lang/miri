@@ -444,7 +444,7 @@ fn lower_class_with_init(
     let init_arg_watermark = ctx.body.local_decls.len();
     let names: Vec<&str> = init_params.iter().map(|(name, _)| name.as_str()).collect();
     let mut slots = Vec::with_capacity(args.len());
-    for (position, value) in super::dispatch::bind_arguments_to_parameters(args, &names) {
+    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
         let op = lower_expression(ctx, value, None)?;
         let op = match init_params.get(position) {

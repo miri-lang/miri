@@ -36,7 +36,8 @@
 
 use crate::runtime_effects::{RuntimeEffect, RuntimeEffects};
 
-use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
+use super::{BodyWrites, Mention, Place, Role, Scope};
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
 use std::collections::{HashMap, HashSet};
 
@@ -340,228 +341,56 @@ struct BodyFacts<'b> {
 }
 
 impl<'b> BodyFacts<'b> {
-    /// The facts of the function body `body`, whose last expression, when it
-    /// ends in one, is the value it returns.
+    /// The facts of the function body `body`, read off its mentions of the
+    /// receiver ([`BodyWrites`]).
     fn of(body: &'b Statement, runtime: &RuntimeEffects) -> Self {
         let mut facts = Self::default();
-        let statements = if let StatementKind::Block(statements) = &body.node {
-            statements.as_slice()
-        } else {
-            std::slice::from_ref(body)
-        };
-        if let Some((last, before)) = statements.split_last() {
-            facts.statements(before, runtime);
-            if let StatementKind::Expression(value) = &last.node {
-                facts.read(value, runtime);
-            } else {
-                facts.statement(last, runtime);
+        for mention in &BodyWrites::of(body).mentions {
+            if let Some(word) = receiver_word(mention.expression) {
+                facts.receiver_mention(mention, word, runtime);
             }
         }
         facts
     }
 
-    fn statement(&mut self, statement: &'b Statement, runtime: &RuntimeEffects) {
-        match &statement.node {
-            StatementKind::Expression(expression) => self.expression(expression, runtime),
-            StatementKind::Block(statements) => self.statements(statements, runtime),
-            StatementKind::Variable(declarations, _) => {
-                for declaration in declarations {
-                    self.optional(declaration.initializer.as_deref(), runtime);
-                }
-            }
-            StatementKind::If(condition, then_branch, else_branch, _) => {
-                self.expression(condition, runtime);
-                self.statement(then_branch, runtime);
-                if let Some(else_branch) = else_branch {
-                    self.statement(else_branch, runtime);
-                }
-            }
-            StatementKind::While(condition, body, _) => {
-                self.expression(condition, runtime);
-                self.statement(body, runtime);
-            }
-            StatementKind::For(_, iterable, body)
-            | StatementKind::GpuFrame(_, iterable, body)
-            | StatementKind::Forall { iterable, body, .. } => {
-                self.read(iterable, runtime);
-                self.statement(body, runtime);
-            }
-            StatementKind::GpuFrameBlock(body) => self.statement(body, runtime),
-            StatementKind::FunctionDeclaration(declaration) => {
-                if let Some(body) = declaration.body.as_deref() {
-                    self.statement(body, runtime);
-                }
-            }
-            StatementKind::Return(value) => {
-                if let Some(value) = value.as_deref() {
-                    self.read(value, runtime);
-                }
-            }
-            StatementKind::Empty
-            | StatementKind::Break
-            | StatementKind::Continue
-            | StatementKind::Use(..)
-            | StatementKind::Type(..)
-            | StatementKind::Enum(..)
-            | StatementKind::Struct(..)
-            | StatementKind::Class(_)
-            | StatementKind::Trait(..)
-            | StatementKind::RuntimeFunctionDeclaration(..)
-            | StatementKind::IntrinsicFunctionDeclaration(..) => {}
-        }
-    }
-
-    fn statements(&mut self, statements: &'b [Statement], runtime: &RuntimeEffects) {
-        for statement in statements {
-            self.statement(statement, runtime);
-        }
-    }
-
-    fn optional(&mut self, expression: Option<&'b Expression>, runtime: &RuntimeEffects) {
-        if let Some(expression) = expression {
-            self.expression(expression, runtime);
-        }
-    }
-
-    fn expressions(&mut self, expressions: &'b [Expression], runtime: &RuntimeEffects) {
-        for expression in expressions {
-            self.expression(expression, runtime);
-        }
-    }
-
-    /// `expression` where it is only read: the receiver itself reads nothing
-    /// into a write there.
-    fn read(&mut self, expression: &'b Expression, runtime: &RuntimeEffects) {
-        if is_receiver(expression) {
-            self.mentions_receiver = true;
-        } else {
-            self.expression(expression, runtime);
-        }
-    }
-
-    /// `expression` where the receiver, met anywhere the walk does not stop
-    /// at a read, a runtime argument or a method call first, is written.
-    fn expression(&mut self, expression: &'b Expression, runtime: &RuntimeEffects) {
-        match &expression.node {
-            ExpressionKind::Identifier(..) | ExpressionKind::Super => {
-                if is_receiver(expression) {
-                    self.mentions_receiver = true;
-                    self.writes = true;
-                }
-            }
-            ExpressionKind::Call(callee, arguments) => self.call(callee, arguments, runtime),
-            ExpressionKind::Assignment(target, _, value) => {
-                if writes_through_receiver(target) {
-                    self.writes = true;
-                }
-                self.expression(target.expression(), runtime);
-                self.expression(value, runtime);
-            }
-            ExpressionKind::Index(collection, index) => {
-                self.read(collection, runtime);
-                self.expression(index, runtime);
-            }
-            ExpressionKind::Member(object, _) | ExpressionKind::StructMember(object, _) => {
-                self.read(object, runtime);
-            }
-            ExpressionKind::Binary(left, _, right) | ExpressionKind::Logical(left, _, right) => {
-                self.read(left, runtime);
-                self.read(right, runtime);
-            }
-            ExpressionKind::FormattedString(parts, _) => {
-                for part in parts {
-                    self.read(part, runtime);
-                }
-            }
-            ExpressionKind::Unary(_, operand)
-            | ExpressionKind::Guard(_, operand)
-            | ExpressionKind::NamedArgument(_, operand)
-            | ExpressionKind::Cast(operand, _) => self.expression(operand, runtime),
-            ExpressionKind::Conditional(then_value, condition, else_value, _) => {
-                self.expression(condition, runtime);
-                self.expression(then_value, runtime);
-                self.optional(else_value.as_deref(), runtime);
-            }
-            ExpressionKind::Range(start, end, _) => {
-                self.expression(start, runtime);
-                self.optional(end.as_deref(), runtime);
-            }
-            ExpressionKind::Block(statements, value) => {
-                self.statements(statements, runtime);
-                self.expression(value, runtime);
-            }
-            ExpressionKind::Match(scrutinee, branches) => {
-                self.expression(scrutinee, runtime);
-                for branch in branches {
-                    self.optional(branch.guard.as_deref(), runtime);
-                    self.statement(&branch.body, runtime);
-                }
-            }
-            ExpressionKind::Lambda(lambda) => self.lambda(&lambda.body, runtime),
-            ExpressionKind::List(elements)
-            | ExpressionKind::Set(elements)
-            | ExpressionKind::Tuple(elements)
-            | ExpressionKind::EnumValue(_, elements) => self.expressions(elements, runtime),
-            ExpressionKind::Array(elements, size) => {
-                self.expressions(elements, runtime);
-                self.expression(size, runtime);
-            }
-            ExpressionKind::Map(entries) => self.entries(entries, runtime),
-            ExpressionKind::Literal(_)
-            | ExpressionKind::ImportPath(..)
-            | ExpressionKind::Type(..)
-            | ExpressionKind::GenericType(..)
-            | ExpressionKind::TypeDeclaration(..) => {}
-        }
-    }
-
-    fn entries(&mut self, entries: &'b [(Expression, Expression)], runtime: &RuntimeEffects) {
-        for (key, value) in entries {
-            self.expression(key, runtime);
-            self.expression(value, runtime);
-        }
-    }
-
-    /// A closure with `body`: one that captures the receiver holds it past
-    /// any one call and may write it whenever it runs, so it writes.
-    fn lambda(&mut self, body: &'b Statement, runtime: &RuntimeEffects) {
-        let inner = Self::of(body, runtime);
-        if inner.mentions_receiver {
-            self.mentions_receiver = true;
-            self.writes = true;
-        }
-    }
-
-    /// A call of `callee` on `arguments`: a write when it hands the receiver
-    /// to a runtime entry point that does not only read it, a call to follow
-    /// when it is a method called on the receiver, and otherwise a use of
-    /// whatever it is handed.
-    fn call(
+    /// A mention of the receiver: a write when a closure holds it, when it
+    /// starts an assignment's target, when it is handed to a runtime entry
+    /// point that does not only read it, or when it stands anywhere but a
+    /// read; a call to follow when a method is called on it.
+    fn receiver_mention(
         &mut self,
-        callee: &'b Expression,
-        arguments: &'b [Expression],
+        mention: &Mention<'b>,
+        word: ReceiverWord,
         runtime: &RuntimeEffects,
     ) {
-        if let Some(effect) = runtime_callee(callee, runtime) {
-            for (position, argument) in arguments.iter().enumerate() {
-                if is_receiver_argument(argument) {
-                    self.mentions_receiver = true;
-                    self.writes |= !effect.only_reads(position);
-                } else {
-                    self.expression(argument, runtime);
-                }
-            }
+        self.mentions_receiver = true;
+        if mention.scope == Scope::Closure {
+            self.writes = true;
             return;
         }
-        match method_called_on_receiver(callee) {
-            Some((method, ReceiverWord::Itself)) => self.calls_on_self.push(method),
-            Some((method, ReceiverWord::Super)) => self.calls_on_super.push(method),
-            None => self.expression(callee, runtime),
+        match mention.role {
+            Some(Role::Assigned) => self.writes = true,
+            Some(Role::Receiver { object, method }) if std::ptr::eq(object, mention.expression) => {
+                if let ExpressionKind::Identifier(method, _) = &method.node {
+                    match word {
+                        ReceiverWord::Itself => self.calls_on_self.push(method.as_str()),
+                        ReceiverWord::Super => self.calls_on_super.push(method.as_str()),
+                    }
+                }
+            }
+            Some(Role::Argument {
+                callee,
+                index,
+                is_bare,
+                ..
+            }) => match runtime_callee(callee, runtime).filter(|_| is_bare) {
+                Some(effect) => self.writes |= !effect.only_reads(index),
+                None => self.writes |= mention.place == Place::Value,
+            },
+            Some(Role::Receiver { .. }) | None => {
+                self.writes |= mention.place == Place::Value;
+            }
         }
-        if method_called_on_receiver(callee).is_some() {
-            self.mentions_receiver = true;
-        }
-        self.expressions(arguments, runtime);
     }
 }
 
@@ -588,23 +417,6 @@ fn receiver_word(expression: &Expression) -> Option<ReceiverWord> {
     (name == RECEIVER).then_some(ReceiverWord::Itself)
 }
 
-/// Whether `expression` is the receiver itself.
-fn is_receiver(expression: &Expression) -> bool {
-    receiver_word(expression).is_some()
-}
-
-/// Whether the runtime argument `expression` is the receiver, looked at
-/// through a cast, which hands a runtime entry point the same block.
-fn is_receiver_argument(expression: &Expression) -> bool {
-    if let ExpressionKind::Cast(value, _) = &expression.node {
-        return is_receiver_argument(value);
-    }
-    if let ExpressionKind::NamedArgument(_, value) = &expression.node {
-        return is_receiver_argument(value);
-    }
-    is_receiver(expression)
-}
-
 /// What the runtime entry point `callee` names does, when it names one.
 fn runtime_callee<'r>(
     callee: &Expression,
@@ -614,38 +426,6 @@ fn runtime_callee<'r>(
         return None;
     };
     runtime.get(name.as_str()).map(|effect| &**effect)
-}
-
-/// The method `callee` calls on the receiver, when it is one, with the
-/// word the receiver is named by.
-fn method_called_on_receiver(callee: &Expression) -> Option<(&str, ReceiverWord)> {
-    let ExpressionKind::Member(object, method) = &callee.node else {
-        return None;
-    };
-    let ExpressionKind::Identifier(method, _) = &method.node else {
-        return None;
-    };
-    receiver_word(object).map(|word| (method.as_str(), word))
-}
-
-/// Whether assigning to `target` writes through the receiver: to an element
-/// or a field of `self`, at any depth.
-fn writes_through_receiver(target: &LeftHandSideExpression) -> bool {
-    match target {
-        LeftHandSideExpression::Identifier(_) => false,
-        LeftHandSideExpression::Member(place) | LeftHandSideExpression::Index(place) => {
-            reaches_receiver(place)
-        }
-    }
-}
-
-/// Whether the place `expression` names lies inside the receiver.
-fn reaches_receiver(expression: &Expression) -> bool {
-    let (ExpressionKind::Member(base, _) | ExpressionKind::Index(base, _)) = &expression.node
-    else {
-        return false;
-    };
-    is_receiver(base) || reaches_receiver(base)
 }
 
 #[cfg(test)]

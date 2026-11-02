@@ -54,6 +54,7 @@ pub(crate) mod float_literals;
 mod format_specs;
 mod function_analysis;
 pub use function_analysis::{CalleeKind, DeclaredFunction, ModuleId};
+pub mod body_writes;
 pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
@@ -66,7 +67,6 @@ pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
 pub(crate) mod pattern_coverage;
-pub mod receiver_writes;
 mod reference_cycles;
 pub(crate) mod runtime_settled;
 mod source_arithmetic;
@@ -144,8 +144,11 @@ pub struct TypeChecker {
     /// These need to be included in MIR lowering and codegen.
     pub imported_statements: Vec<Statement>,
     /// The methods that write their receiver, so a call of one on a value
-    /// another binding shares copies it first; see [`receiver_writes`].
-    pub receiver_writes: receiver_writes::ReceiverWrites,
+    /// another binding shares copies it first; see [`body_writes`].
+    pub receiver_writes: body_writes::ReceiverWrites,
+    /// The parameters each body writes, so lowering binds a copy of each on
+    /// entry; see [`body_writes`].
+    pub parameter_writes: body_writes::ParameterWrites,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
     pub runtime_effects: crate::runtime_effects::RuntimeEffects,
@@ -315,7 +318,8 @@ impl TypeChecker {
             modules: ModuleLoader::new(),
             fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
-            receiver_writes: receiver_writes::ReceiverWrites::default(),
+            receiver_writes: body_writes::ReceiverWrites::default(),
+            parameter_writes: body_writes::ParameterWrites::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
@@ -650,10 +654,14 @@ impl TypeChecker {
         self.run_pass_escape_summaries(program, &mut context);
         self.run_pass_use_after_move(program, &context);
         self.check_hygiene(program);
-        self.receiver_writes = receiver_writes::ReceiverWrites::of(
+        self.receiver_writes = body_writes::ReceiverWrites::of(
             top_level_statements(program).chain(&self.imported_statements),
             |name| self.type_identity_named_by(name).map(str::to_string),
             &self.runtime_effects,
+        );
+        self.parameter_writes = body_writes::ParameterWrites::of(
+            top_level_statements(program).chain(&self.imported_statements),
+            self,
         );
         self.global_scope = Some(compiled_instances::GlobalScope(context));
 

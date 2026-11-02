@@ -189,7 +189,7 @@ fn lower_closure_body(
     let mut lambda_ctx = closure_context(ctx, closure, &ret_ty);
 
     let tentative_captures = declare_tentative_captures(ctx, &mut lambda_ctx, closure);
-    let copies = copy_written_parameters(&mut lambda_ctx, closure.params, Some(closure.body));
+    let copies = copy_written_parameters(&mut lambda_ctx, closure.params);
 
     lower_as_return(&mut lambda_ctx, closure.body, &ret_ty)?;
     copies.close(&mut lambda_ctx, span);

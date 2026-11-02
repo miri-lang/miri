@@ -659,7 +659,7 @@ fn lower_method_args(
         .map(|(name, _)| name.as_str())
         .collect();
     let mut slots = Vec::with_capacity(args.len());
-    for (position, value) in super::dispatch::bind_arguments_to_parameters(args, &names) {
+    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
         let op = lower_expression(ctx, value, None)?;
         let target = arg_types.get(position).filter(|target| {
@@ -1173,18 +1173,6 @@ fn call_writes_receiver(
         .map(copy_on_write_of)
 }
 
-/// Whether calling `method_expr` on `obj` writes the collection `obj` names,
-/// as [`prepare_method_self`] decides it for the call.
-pub(crate) fn is_receiver_written(
-    ctx: &LoweringContext,
-    obj: &Expression,
-    method_expr: &Expression,
-) -> bool {
-    resolve_method_receiver(ctx, obj, method_expr).is_some_and(|(obj_ty, class, method)| {
-        call_writes_receiver(ctx, &obj_ty, &class, &method).is_some()
-    })
-}
-
 /// Lower the receiver, apply a CoW check when the call writes a collection
 /// receiver, and return the self operand plus the receiver temp local (for
 /// Perceus drops).
@@ -1193,7 +1181,7 @@ pub(crate) fn is_receiver_written(
 /// method's body by the type checker ([`ReceiverWrites`]), so no method is
 /// named here.
 ///
-/// [`ReceiverWrites`]: crate::type_checker::receiver_writes::ReceiverWrites
+/// [`ReceiverWrites`]: crate::type_checker::body_writes::ReceiverWrites
 fn prepare_method_self<'e>(
     ctx: &mut LoweringContext,
     obj: &'e Expression,
