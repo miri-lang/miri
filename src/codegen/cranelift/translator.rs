@@ -2556,6 +2556,12 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = builder.func.dfg.value_type(header_ptr);
         let ptr_size = ptr_type.bytes() as i64;
+        // TODO: the one word before the count is the size `miri_rt_block_alloc`
+        // keeps there (`SIZE_WORD` in the runtime's block cache). It is spelled
+        // here and at the allocation sites rather than read from `abi::layout`,
+        // so a larger block prefix would free the wrong address without a
+        // compile error; naming it there and asserting it in the runtime
+        // closes that.
         let base = builder.ins().iadd_imm_s(header_ptr, -ptr_size);
 
         // Every inline release funnels through here, so the guard witnesses the
