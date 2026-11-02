@@ -2398,13 +2398,14 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cl_types::Type,
     ) -> Result<Value, CodegenError> {
         use cranelift_module::Module;
-        let has_managed = capture_ops.iter().any(|op| match op {
-            Operand::Copy(p) | Operand::Move(p) => {
-                let kind = &type_ctx.local_types[p.local.0].kind;
-                crate::mir::rc::is_slot_counted(kind, type_ctx.layout_scope())
-            }
-            Operand::Constant(_) | Operand::Function(_) => false,
+        // A constant or function capture holds no counted reference.
+        let captured_locals = capture_ops.iter().filter_map(|op| match op {
+            Operand::Copy(p) | Operand::Move(p) => Some(&type_ctx.local_types[p.local.0].kind),
+            Operand::Constant(_) | Operand::Function(_) => None,
         });
+        let has_managed =
+            !crate::mir::type_facts::released_captures(captured_locals, type_ctx.layout_scope())
+                .is_empty();
         if !has_managed {
             return Ok(builder.ins().iconst(ptr_type, 0));
         }

@@ -645,12 +645,11 @@ impl CraneliftBackend {
             if body.env_capture_locals.is_empty() {
                 continue;
             }
-            let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
-                crate::mir::rc::is_slot_counted(
-                    &body.local_decls[cap_local.0].ty.kind,
-                    body.layout_scope(),
-                )
-            });
+            let capture_kinds = (body.env_capture_locals.iter())
+                .map(|cap_local| &body.local_decls[cap_local.0].ty.kind);
+            let has_managed =
+                !crate::mir::type_facts::released_captures(capture_kinds, body.layout_scope())
+                    .is_empty();
             if has_managed {
                 FunctionTranslator::generate_closure_destructor(
                     module,

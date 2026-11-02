@@ -225,6 +225,7 @@ fn an_unbound_argument_spelled_as_a_bare_name_names_the_same_drop_function() {
 }
 
 mod drop_plan;
+mod release_plan;
 
 mod drop_hook_reach {
     //! Whether releasing a value may run a drop hook anywhere inside it.

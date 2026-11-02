@@ -11,10 +11,10 @@ use crate::codegen::cranelift::translate_type;
 use crate::codegen::cranelift::translator::{empty_module_ctx, FunctionTranslator, TypeCtx};
 use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
-use crate::mir::rc::is_slot_counted;
 use crate::mir::symbol::Symbol;
+use crate::mir::type_facts::released_captures;
 use crate::mir::type_facts::TypeFacts;
-use crate::mir::Body;
+use crate::mir::{Body, Local};
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature};
@@ -160,20 +160,31 @@ impl<'a> FunctionTranslator<'a> {
         };
 
         let layout = CaptureLayout::of_body(body, ptr_type);
-        for (&cap_local, &offset) in body.env_capture_locals.iter().zip(&layout.offsets) {
-            let cap_ty = &body.local_decls[cap_local.0].ty;
-            if is_slot_counted(&cap_ty.kind, body.layout_scope()) {
-                let cap_ptr = builder
-                    .ins()
-                    .load(ptr_type, MemFlagsData::new(), env_ptr, offset);
-                Self::emit_decref_value(
-                    &mut builder,
-                    &mut module_ctx,
-                    &cap_ty.kind,
-                    cap_ptr,
-                    &type_ctx,
-                )?;
-            }
+        let capture_kind = |cap_local: &Local| &body.local_decls[cap_local.0].ty.kind;
+        let released = released_captures(
+            body.env_capture_locals.iter().map(capture_kind),
+            body.layout_scope(),
+        );
+        for position in released {
+            let (Some(cap_local), Some(&offset)) = (
+                body.env_capture_locals.get(position),
+                layout.offsets.get(position),
+            ) else {
+                return Err(CodegenError::Internal(format!(
+                    "capture {position} of a closure is released, but its environment \
+                     holds no such capture"
+                )));
+            };
+            let cap_ptr = builder
+                .ins()
+                .load(ptr_type, MemFlagsData::new(), env_ptr, offset);
+            Self::emit_decref_value(
+                &mut builder,
+                &mut module_ctx,
+                capture_kind(cap_local),
+                cap_ptr,
+                &type_ctx,
+            )?;
         }
 
         builder.ins().return_(&[]);

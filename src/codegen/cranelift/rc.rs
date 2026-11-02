@@ -5,7 +5,7 @@
 //! per-type field-walking drop logic. Runtime FFI call wrappers live in
 //! `translator.rs`; this module dispatches into them.
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::Expression;
 use crate::ast::factory::type_expr_non_null;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::element_method_thunks::ElementMethod;
@@ -18,7 +18,6 @@ use crate::codegen::cranelift::value_abi::{miri_signature, Passing, Returning};
 use crate::codegen::cranelift::value_locals::ValueLocals;
 use crate::error::CodegenError;
 use crate::mir::option_layout::{resolve_alias, OptionalLayers};
-use crate::mir::rc::is_slot_counted;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::type_facts::TypeFacts;
 use crate::mir::type_facts::{TypeDefinition, ValueLayout};
@@ -34,7 +33,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub(crate) use crate::mir::type_facts::Release;
-use crate::mir::type_facts::{CountedSlot, DropPlan, DroppedMembers};
+use crate::mir::type_facts::{
+    release_plan, releases_slot, CountedSlot, DropPlan, DropThunk, DropThunkRefusal,
+    DroppedMembers, ReleasePlan, UnresolvedArgument,
+};
 
 /// A runtime call recording one pointer-sized setting on a container.
 pub(crate) type ContainerSetter =
@@ -86,31 +88,6 @@ struct EnumDropSite<'a> {
     layout: &'a layout::EnumLayout,
     /// Address of the discriminant slot.
     payload_ptr: Value,
-}
-
-/// The drop thunk a value of a named type is released through.
-#[derive(Debug, Clone, PartialEq)]
-enum DropThunk {
-    /// A type that declares no parameters: its one bare thunk.
-    Shared,
-    /// A generic type reached where its arguments are still open — no
-    /// arguments at all, or ones naming a parameter of the body it is held in
-    /// (`Box<T>` inside a shared generic body). The bare thunk skips every
-    /// field written at a parameter.
-    SharedBody,
-    /// A concrete instantiation, released by the thunk emitted for these
-    /// arguments.
-    PerInstantiation(Vec<Type>),
-}
-
-impl DropThunk {
-    /// The arguments of the per-instantiation thunk, or `None` for the bare one.
-    fn per_instantiation(self) -> Option<Vec<Type>> {
-        match self {
-            DropThunk::PerInstantiation(args) => Some(args),
-            DropThunk::Shared | DropThunk::SharedBody => None,
-        }
-    }
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -824,46 +801,71 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        // Resolve type aliases before dispatching so that e.g.
-        // `type IntArray is [int; 2]` correctly frees via rt_array_free.
+        let plan = release_plan(kind, type_ctx.layout_scope())
+            .map_err(|UnresolvedArgument(message)| CodegenError::Internal(message))?;
+        // The plan reads an alias as the type it stands for; a tuple's slots
+        // and an optional's layout are found the same way.
         let resolved = resolve_alias(kind, type_ctx.facts.definitions());
         let kind = resolved.as_ref().map_or(kind, |target| &target.kind);
-
-        if Self::is_map_type(kind) {
-            Self::emit_drop_map(builder, ctx, kind, ptr, type_ctx)
-        } else if Self::is_set_type(kind) {
-            Self::call_rt_set_free(builder, ctx, ptr)
-        } else if Self::is_list_type(kind) {
-            Self::emit_drop_list_or_array(builder, ctx, kind, ptr, type_ctx, true)
-        } else if Self::is_collection_type(kind) {
-            Self::emit_drop_list_or_array(builder, ctx, kind, ptr, type_ctx, false)
-        } else if let TypeKind::Tuple(element_exprs) = kind {
-            Self::emit_drop_tuple(builder, ctx, kind, element_exprs, ptr, header_ptr, type_ctx)
-        } else if let TypeKind::Option(inner) = kind {
-            // An optional held as its payload's own pointer has no box: the
-            // allocation reaching zero is the payload's, released as one.
-            if Self::nullable_pointer_layout(kind, type_ctx)? {
-                return Self::emit_type_drop(builder, ctx, &inner.kind, ptr, header_ptr, type_ctx);
+        match plan {
+            ReleasePlan::Map { counted_value } => {
+                Self::emit_drop_map(builder, ctx, counted_value.as_ref(), ptr, type_ctx)
             }
-            Self::emit_drop_option(builder, ctx, inner, ptr, header_ptr, type_ctx)
-        } else if kind == &TypeKind::String {
-            // miri_rt_string_free takes the payload pointer (not header) — it
-            // calls free_with_rc internally.
-            Self::call_rt_string_free(builder, ctx, ptr)
-        } else if let TypeKind::Custom(name, args) = kind {
-            Self::emit_drop_custom(
+            ReleasePlan::Set => Self::call_rt_set_free(builder, ctx, ptr),
+            ReleasePlan::List { counted_element } => Self::emit_drop_list_or_array(
                 builder,
                 ctx,
-                name,
+                counted_element.as_ref(),
+                ptr,
+                type_ctx,
+                true,
+            ),
+            ReleasePlan::Array { counted_element } => Self::emit_drop_list_or_array(
+                builder,
+                ctx,
+                counted_element.as_ref(),
+                ptr,
+                type_ctx,
+                false,
+            ),
+            ReleasePlan::Tuple { counted } => {
+                Self::emit_drop_tuple(builder, ctx, kind, &counted, ptr, header_ptr, type_ctx)
+            }
+            ReleasePlan::Optional {
+                payload,
+                payload_counted,
+            } => {
+                // An optional held as its payload's own pointer has no box: the
+                // allocation reaching zero is the payload's, released as one.
+                if Self::nullable_pointer_layout(kind, type_ctx)? {
+                    return Self::emit_type_drop(
+                        builder,
+                        ctx,
+                        &payload.kind,
+                        ptr,
+                        header_ptr,
+                        type_ctx,
+                    );
+                }
+                let counted_payload = payload_counted.then_some(&payload);
+                Self::emit_drop_option(builder, ctx, counted_payload, ptr, header_ptr, type_ctx)
+            }
+            // miri_rt_string_free takes the payload pointer (not header) — it
+            // calls free_with_rc internally.
+            ReleasePlan::String => Self::call_rt_string_free(builder, ctx, ptr),
+            ReleasePlan::Named { name, args } => Self::emit_drop_custom(
+                builder,
+                ctx,
+                &name,
                 args.as_deref(),
                 ptr,
                 header_ptr,
                 type_ctx,
-            )
-        } else if matches!(kind, TypeKind::Function(_)) {
-            Self::emit_drop_closure(builder, ctx, ptr, header_ptr, type_ctx)
-        } else {
-            Self::call_rt_block_free(builder, ctx, header_ptr)
+            ),
+            ReleasePlan::Closure => {
+                Self::emit_drop_closure(builder, ctx, ptr, header_ptr, type_ctx)
+            }
+            ReleasePlan::Block => Self::call_rt_block_free(builder, ctx, header_ptr),
         }
     }
 
@@ -872,12 +874,11 @@ impl<'a> FunctionTranslator<'a> {
     fn emit_drop_map(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        kind: &TypeKind,
+        counted_value: Option<&Type>,
         ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let val_ty = resolved_argument(Self::map_val_expr(kind), kind)?;
-        if is_slot_counted(&val_ty.kind, type_ctx.layout_scope()) {
+        if let Some(val_ty) = counted_value {
             let ptr_type = type_ctx.ptr_type;
             let ptr_size = ptr_type.bytes() as i32;
             let states = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
@@ -908,13 +909,12 @@ impl<'a> FunctionTranslator<'a> {
     fn emit_drop_list_or_array(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        kind: &TypeKind,
+        counted_element: Option<&Type>,
         ptr: Value,
         type_ctx: &TypeCtx,
         is_list: bool,
     ) -> Result<(), CodegenError> {
-        let inner_ty = resolved_argument(Self::collection_elem_expr(kind), kind)?;
-        if is_slot_counted(&inner_ty.kind, type_ctx.layout_scope()) {
+        if let Some(inner_ty) = counted_element {
             let ptr_type = type_ctx.ptr_type;
             let ptr_size = ptr_type.bytes() as i32;
             let data = builder.ins().load(ptr_type, MemFlagsData::new(), ptr, 0);
@@ -946,39 +946,25 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// DecRef each managed field of a tuple, then `free()` the RC block.
+    /// Release each counted slot of a tuple, then `free()` the RC block.
     /// Layout: `[elem_count: ptr][field0][field1]...` (payload_ptr = `ptr`).
-    #[allow(clippy::too_many_arguments)]
     fn emit_drop_tuple(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        kind: &TypeKind,
-        element_exprs: &[Expression],
+        tuple_kind: &TypeKind,
+        counted: &[CountedSlot],
         ptr: Value,
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let tuple_type = kind.clone();
-        let element_types = (element_exprs.iter())
-            .map(|expr| resolved_argument(Some(expr), kind))
-            .collect::<Result<Vec<&Type>, CodegenError>>()?;
-        let managed_fields = element_types
-            .iter()
-            .enumerate()
-            .filter(|(_, ty)| is_slot_counted(&ty.kind, type_ctx.layout_scope()))
-            .map(|(i, ty)| (i, &ty.kind))
-            .map(|(i, field_kind)| {
-                let (offset, _) =
-                    layout::field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
-                Ok((offset, field_kind.clone()))
-            })
-            .collect::<Result<Vec<(i32, TypeKind)>, CodegenError>>()?;
-        for (offset, field_kind) in managed_fields {
+        for slot in counted {
+            let (offset, _) =
+                layout::field_layout(tuple_kind, slot.index, type_ctx.layout_scope(), ptr_type)?;
             let field_ptr = builder
                 .ins()
                 .load(ptr_type, MemFlagsData::new(), ptr, offset);
-            Self::emit_decref_value(builder, ctx, &field_kind, field_ptr, type_ctx)?;
+            Self::emit_decref_value(builder, ctx, &slot.ty.kind, field_ptr, type_ctx)?;
         }
         Self::call_rt_block_free(builder, ctx, header_ptr)
     }
@@ -989,12 +975,12 @@ impl<'a> FunctionTranslator<'a> {
     fn emit_drop_option(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        inner: &Type,
+        counted_payload: Option<&Type>,
         ptr: Value,
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        if is_slot_counted(&inner.kind, type_ctx.layout_scope()) {
+        if let Some(inner) = counted_payload {
             let ptr_type = type_ctx.ptr_type;
             let cl_inner_ty =
                 crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
@@ -1192,179 +1178,16 @@ impl<'a> FunctionTranslator<'a> {
         recorded.then_some(concrete)
     }
 
-    /// Which drop thunk releases a value of `name` carrying `type_args`.
-    ///
-    /// A generic struct, class and enum declare fields written in their own
-    /// parameters, so the field an instantiation stores is known only once the
-    /// arguments are substituted, and each instantiation a value is held at
-    /// gets its own thunk ([`TypeFacts::drop_instantiations_of`]). That holds
-    /// too for an instantiation inference left partly unbound
-    /// (`Result<String, E>` from `let r = Result.Ok("s")`): its thunk releases
-    /// what the bound arguments hold and skips the unbound slot, which a value
-    /// built that way never fills.
-    ///
-    /// Only code that leaves parameters open — a shared generic body, a closure
-    /// inside one, or a generic type's own shared thunk — releases a value at
-    /// an instantiation naming one of those parameters, through the shared
-    /// thunk ([`TypeCtx::open_params`]). Anything else is reported rather than
-    /// released by a thunk that skips every field written at a parameter and
-    /// leaks what it holds: a parameter the body's substitution bound
-    /// ([`TypeCtx::bound_params`]), a parameter neither left open nor unbound,
-    /// an instantiation no thunk is emitted for, and an argument that is
-    /// neither a type nor a value.
-    ///
-    /// [`TypeFacts::drop_instantiations_of`]: crate::mir::type_facts::TypeFacts::drop_instantiations_of
+    /// Which drop thunk releases a `name` value carrying `type_args` in the
+    /// code being translated, as [`TypeFacts::drop_thunk`] decides it.
     fn drop_thunk(
         name: &str,
         type_args: Option<&[Expression]>,
         type_ctx: &TypeCtx,
     ) -> Result<DropThunk, CodegenError> {
-        let facts = type_ctx.facts;
-        let is_generic = facts
-            .definitions()
-            .get(name)
-            .and_then(TypeDefinition::generics)
-            .is_some();
-        if !is_generic {
-            return Ok(DropThunk::Shared);
-        }
-        // A generic value typed with no arguments at all is released through
-        // the shared body, which skips every field written at a parameter. In
-        // a body that leaves parameters open that is the body's own value. In
-        // a concrete body the only such value is a payload-less enum variant
-        // written where no location names an instantiation
-        // (`let n = Holder.Nothing`): the checker refuses to store a payload
-        // into a binding typed that way, so nothing is skipped. Anything else
-        // typed bare there was built at no instantiation, and releasing it
-        // would leak what its parameter-typed fields hold.
-        let Some(arg_exprs) = type_args.filter(|args| !args.is_empty()) else {
-            let is_enum = matches!(facts.definitions().get(name), Some(TypeDefinition::Enum(_)));
-            if type_ctx.open_params.is_empty() && !is_enum {
-                return Err(CodegenError::Internal(format!(
-                    "a `{name}` value is released in a concrete body with no type arguments, \
-                     so the fields written at its parameters would never be released"
-                )));
-            }
-            return Ok(DropThunk::SharedBody);
-        };
-        let (args, open) = Self::instantiation_arguments(name, arg_exprs, facts)?;
-        let args = crate::mir::instantiation::shape::with_unbound_arguments_normalized(
-            facts.definitions(),
-            name,
-            &args,
-        );
-        if let Some(missed) = open
-            .iter()
-            .find(|param| type_ctx.bound_params.contains(*param))
-        {
-            return Err(CodegenError::Internal(format!(
-                "a `{name}` value is released at an instantiation naming the parameter \
-                 `{missed}`, which the substitution of the body releasing it bound"
-            )));
-        }
-        let strays: Vec<&String> = open
-            .iter()
-            .filter(|param| !type_ctx.open_params.contains(*param))
-            .collect();
-        if strays.is_empty() && !open.is_empty() {
-            // TODO: the shared method body of a value-generic class
-            // (`Buf<T, Size>`) drops its own type here, through the bare thunk,
-            // which skips the fields written at `T`; that is the likely root of
-            // the leak a value-generic class holding `Array<T, Size>` beside a
-            // bare `T` shows at a managed instantiation.
-            return Ok(DropThunk::SharedBody);
-        }
-        let definitions = facts.definitions();
-        if let Some(stray) = strays
-            .iter()
-            .find(|param| !Self::is_unbound_parameter(name, &args, param, definitions))
-        {
-            return Err(CodegenError::Internal(format!(
-                "a `{name}` value is released at an instantiation naming the parameter \
-                 `{stray}`, which the code releasing it does not leave open"
-            )));
-        }
-        let is_named = args.len() == arg_exprs.len()
-            && crate::mir::instantiation::shape::is_partially_bound_instantiation(
-                definitions,
-                name,
-                &args,
-            );
-        if strays.len() < open.len() || !is_named {
-            // Every argument is open here or unbound: nothing is stored at a
-            // bound argument for a per-instantiation thunk to release.
-            return Ok(DropThunk::SharedBody);
-        }
-        if facts.is_drop_instantiation(name, &args) {
-            return Ok(DropThunk::PerInstantiation(args));
-        }
-        Err(CodegenError::Internal(format!(
-            "a `{name}` value is released at {}, an instantiation no drop thunk is emitted for",
-            Symbol::type_thunk(ThunkKind::Drop, name, &args).written()
-        )))
-    }
-
-    /// Whether `param` appears among `args` only as `name`'s own parameter at
-    /// its declared position — an argument inference left unbound.
-    fn is_unbound_parameter(
-        name: &str,
-        args: &[Type],
-        param: &str,
-        definitions: &HashMap<String, TypeDefinition>,
-    ) -> bool {
-        let mut is_unbound = false;
-        for (position, arg) in args.iter().enumerate() {
-            if crate::mir::instantiation::shape::is_own_parameter_at(
-                definitions,
-                name,
-                position,
-                arg,
-            ) {
-                is_unbound |=
-                    crate::mir::instantiation::shape::open_parameter_names(arg, definitions)
-                        .iter()
-                        .any(|spelled| spelled == param);
-            } else if crate::mir::instantiation::shape::open_parameter_names(arg, definitions)
-                .iter()
-                .any(|spelled| spelled == param)
-            {
-                return false;
-            }
-        }
-        is_unbound
-    }
-
-    /// `arg_exprs` as the instantiation arguments a drop thunk is named by,
-    /// with the name of every parameter they leave open — a type parameter
-    /// anywhere inside a type argument, or one an unfolded value argument
-    /// (`Size`, `Size + 1`) reads.
-    fn instantiation_arguments(
-        name: &str,
-        arg_exprs: &[Expression],
-        facts: &TypeFacts,
-    ) -> Result<(Vec<Type>, Vec<String>), CodegenError> {
-        let mut args = Vec::with_capacity(arg_exprs.len());
-        let mut open = Vec::new();
-        for arg in arg_exprs {
-            match crate::mir::instantiation::instantiation_argument(arg) {
-                Some(ty) => {
-                    open.extend(facts.open_parameter_names(&ty));
-                    args.push(ty);
-                }
-                None => {
-                    let names = crate::mir::instantiation::shape::value_parameter_names(arg)
-                        .ok_or_else(|| {
-                            CodegenError::Internal(format!(
-                                "a `{name}` value carries a type argument that is neither a type \
-                             nor a value: {:?}",
-                                arg.node
-                            ))
-                        })?;
-                    open.extend(names);
-                }
-            }
-        }
-        Ok((args, open))
+        (type_ctx.facts)
+            .drop_thunk(name, type_args, type_ctx.open_params, type_ctx.bound_params)
+            .map_err(|DropThunkRefusal(message)| CodegenError::Internal(message))
     }
 
     /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
@@ -1548,7 +1371,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Routing: built-in collections / String use their per-shape runtime decref
     /// helper (the fast path); user classes call `miri.TypeName.$decref`; Tuple,
     /// Option and function values (the only `ElementShape::Other` variants that
-    /// the classifier counts, `is_slot_counted`) inline through
+    /// MIR releases, [`releases_slot`]) inline through
     /// `emit_decref_value`, which dispatches to `emit_type_drop` and
     /// recursively releases nested managed fields. Primitive `Other` shapes are
     /// the explicit no-op branch.
@@ -1636,7 +1459,7 @@ impl<'a> FunctionTranslator<'a> {
         // `Other` shapes the classifier counts (a boxed tuple or optional, a
         // function value) are heap-allocated with an RC header. Route through the inline
         // decref-and-drop emitter so nested managed payloads are released.
-        if is_slot_counted(elem_type_kind, type_ctx.layout_scope()) {
+        if releases_slot(elem_type_kind, type_ctx.layout_scope()) {
             let old_val = builder
                 .ins()
                 .load(ptr_type, MemFlagsData::new(), elem_addr, 0);
@@ -2340,342 +2163,5 @@ impl<'a> FunctionTranslator<'a> {
     /// directly or through a trait that extends it.
     pub fn class_implements_cloneable(type_name: &str, facts: &TypeFacts) -> bool {
         facts.implements(type_name, crate::ast::types::CLONEABLE_TRAIT_NAME)
-    }
-}
-
-/// The type a drop reads off the type argument `argument` of `kind`.
-///
-/// Lowering hands the backend every type argument substituted. One that is
-/// missing or spelled as anything but a type means it did not, and a drop
-/// that skipped it would leak every counted element, so it is refused.
-fn resolved_argument<'k>(
-    argument: Option<&'k Expression>,
-    kind: &TypeKind,
-) -> Result<&'k Type, CodegenError> {
-    match argument.map(|argument| &argument.node) {
-        Some(ExpressionKind::Type(ty, _)) => Ok(ty),
-        Some(_) | None => Err(CodegenError::Internal(format!(
-            "a `{kind}` value is released with an unresolved type argument, so its \
-             counted elements cannot be found"
-        ))),
-    }
-}
-
-#[cfg(test)]
-mod drop_thunk_tests {
-    use super::*;
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::literal::Literal;
-    use crate::ast::types::TypeDeclarationKind;
-    use crate::ast::{IdNode, MemberVisibility};
-    use crate::error::syntax::Span;
-    use crate::mir::type_facts::{ClassDefinition, FieldInfo, GenericDefinition};
-    use std::collections::{BTreeMap, BTreeSet};
-
-    fn ty(kind: TypeKind) -> Type {
-        Type::new(kind, Span::default())
-    }
-
-    fn class(name: &str, generic: bool) -> TypeDefinition {
-        let parameter = ty(TypeKind::Generic(
-            "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
-        ));
-        TypeDefinition::Class(ClassDefinition {
-            name: name.to_string(),
-            generics: generic.then(|| {
-                vec![GenericDefinition {
-                    name: "T".to_string(),
-                    constraint: None,
-                    kind: TypeDeclarationKind::None,
-                }]
-            }),
-            base_class: None,
-            base_class_args: None,
-            traits: Vec::new(),
-            trait_args: HashMap::new(),
-            fields: vec![(
-                "value".to_string(),
-                FieldInfo {
-                    ty: if generic {
-                        parameter
-                    } else {
-                        ty(TypeKind::Int)
-                    },
-                    mutable: true,
-                    visibility: MemberVisibility::Public,
-                    initializer: None,
-                },
-            )],
-            methods: BTreeMap::new(),
-            module: String::new(),
-            is_abstract: false,
-            runtime_settled_methods: BTreeSet::new(),
-        })
-    }
-
-    /// `class Duo<A, B>`: two parameters, so one can be bound while inference
-    /// leaves the other unbound.
-    fn duo() -> TypeDefinition {
-        let TypeDefinition::Class(mut def) = class("Duo", true) else {
-            panic!("`class` builds a class");
-        };
-        def.generics = Some(
-            ["A", "B"]
-                .iter()
-                .map(|name| GenericDefinition {
-                    name: name.to_string(),
-                    constraint: None,
-                    kind: TypeDeclarationKind::None,
-                })
-                .collect(),
-        );
-        TypeDefinition::Class(def)
-    }
-
-    /// Facts over a generic `Box<T>`, a plain `Plain` and a two-parameter
-    /// `Duo<A, B>`, where `Box<String>` and `Duo<String, B>` are the
-    /// instantiations a value is released at.
-    fn facts() -> TypeFacts {
-        let definitions = HashMap::from([
-            ("Box".to_string(), class("Box", true)),
-            ("Plain".to_string(), class("Plain", false)),
-            ("Duo".to_string(), duo()),
-        ]);
-        let registry = HashMap::from([
-            ("Box".to_string(), vec![vec![ty(TypeKind::String)]]),
-            (
-                "Duo".to_string(),
-                vec![vec![ty(TypeKind::String), generic("B")]],
-            ),
-        ]);
-        let Ok(facts) = TypeFacts::new(definitions, registry, Default::default(), []) else {
-            panic!("a `Box<String>` registry settles");
-        };
-        facts
-    }
-
-    /// The thunk chosen for `name` at `args` in code leaving `open` open.
-    fn choose_in(
-        facts: &TypeFacts,
-        name: &str,
-        args: Option<&[Expression]>,
-        open: &[&str],
-    ) -> Result<DropThunk, CodegenError> {
-        let captures = HashMap::new();
-        let out_ptrs = HashMap::new();
-        let open_params: HashSet<String> = open.iter().map(|name| name.to_string()).collect();
-        let bound_params = HashSet::new();
-        let type_ctx = TypeCtx {
-            local_types: &[],
-            facts,
-            ptr_type: cl_types::I64,
-            closure_capture_ast_types: &captures,
-            out_param_ptr_vars: &out_ptrs,
-            open_params: &open_params,
-            bound_params: &bound_params,
-            values: &ValueLocals::none(),
-            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
-        };
-        FunctionTranslator::drop_thunk(name, args, &type_ctx)
-    }
-
-    /// The thunk chosen for `name` at `args` in code leaving nothing open.
-    fn choose(
-        facts: &TypeFacts,
-        name: &str,
-        args: Option<&[Expression]>,
-    ) -> Result<DropThunk, CodegenError> {
-        choose_in(facts, name, args, &[])
-    }
-
-    fn generic(name: &str) -> Type {
-        ty(TypeKind::Generic(
-            name.to_string(),
-            None,
-            TypeDeclarationKind::None,
-        ))
-    }
-
-    /// The thunk chosen for `name` at `args` in a body whose substitution
-    /// bound `bound`.
-    fn choose_bound(
-        facts: &TypeFacts,
-        name: &str,
-        args: Option<&[Expression]>,
-        bound: &[&str],
-    ) -> Result<DropThunk, CodegenError> {
-        let captures = HashMap::new();
-        let out_ptrs = HashMap::new();
-        let open_params = HashSet::new();
-        let bound_params: HashSet<String> = bound.iter().map(|name| name.to_string()).collect();
-        let type_ctx = TypeCtx {
-            local_types: &[],
-            facts,
-            ptr_type: cl_types::I64,
-            closure_capture_ast_types: &captures,
-            out_param_ptr_vars: &out_ptrs,
-            open_params: &open_params,
-            bound_params: &bound_params,
-            values: &ValueLocals::none(),
-            stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
-        };
-        FunctionTranslator::drop_thunk(name, args, &type_ctx)
-    }
-
-    #[test]
-    fn a_parameter_the_body_substitution_bound_is_refused_as_a_missed_substitution() {
-        let args = [open_parameter()];
-        let Err(CodegenError::Internal(message)) =
-            choose_bound(&facts(), "Box", Some(&args), &["T"])
-        else {
-            panic!("a leftover bound parameter must be reported");
-        };
-        assert!(message.contains("substitution of the body"), "{message}");
-    }
-
-    #[test]
-    fn a_partly_unbound_instantiation_is_released_by_its_own_thunk() {
-        let args = [type_arg(TypeKind::String), type_expr_non_null(generic("B"))];
-        assert_eq!(
-            choose(&facts(), "Duo", Some(&args)).ok(),
-            Some(DropThunk::PerInstantiation(vec![
-                ty(TypeKind::String),
-                generic("B")
-            ]))
-        );
-    }
-
-    #[test]
-    fn a_parameter_at_another_types_position_is_not_taken_for_unbound() {
-        // `B` is `Duo`'s second parameter, not its first: nothing but an open
-        // body could name it there.
-        let args = [type_expr_non_null(generic("B")), type_arg(TypeKind::String)];
-        assert!(choose(&facts(), "Duo", Some(&args)).is_err());
-    }
-
-    fn type_arg(kind: TypeKind) -> Expression {
-        type_expr_non_null(ty(kind))
-    }
-
-    fn expression(node: ExpressionKind) -> Expression {
-        IdNode::new(0, node, Span::default())
-    }
-
-    #[test]
-    fn a_type_without_parameters_is_released_by_its_one_thunk() {
-        assert_eq!(
-            choose(&facts(), "Plain", None).ok(),
-            Some(DropThunk::Shared)
-        );
-    }
-
-    #[test]
-    fn a_generic_type_without_arguments_is_released_by_the_shared_body_thunk_where_left_open() {
-        assert_eq!(
-            choose_in(&facts(), "Box", None, &["T"]).ok(),
-            Some(DropThunk::SharedBody)
-        );
-    }
-
-    #[test]
-    fn a_generic_class_without_arguments_in_a_concrete_body_is_refused() {
-        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", None) else {
-            panic!("a bare generic class in a concrete body must be reported");
-        };
-        assert!(message.contains("no type arguments"), "{message}");
-    }
-
-    #[test]
-    fn a_recorded_instantiation_is_released_by_its_own_thunk() {
-        let args = [type_arg(TypeKind::String)];
-        assert_eq!(
-            choose(&facts(), "Box", Some(&args)).ok(),
-            Some(DropThunk::PerInstantiation(vec![ty(TypeKind::String)]))
-        );
-    }
-
-    fn open_parameter() -> Expression {
-        type_arg(TypeKind::Generic(
-            "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
-        ))
-    }
-
-    #[test]
-    fn an_instantiation_at_a_parameter_the_body_leaves_open_is_released_by_the_shared_body_thunk() {
-        let args = [open_parameter()];
-        assert_eq!(
-            choose_in(&facts(), "Box", Some(&args), &["T"]).ok(),
-            Some(DropThunk::SharedBody)
-        );
-    }
-
-    #[test]
-    fn an_instantiation_left_at_the_types_own_parameter_is_released_by_the_shared_body_thunk() {
-        // Inference can leave a parameter of the released type unbound in a
-        // concrete body (`Result.Ok(0.5)` typed `Result<f32, E>`).
-        let args = [open_parameter()];
-        assert_eq!(
-            choose(&facts(), "Box", Some(&args)).ok(),
-            Some(DropThunk::SharedBody)
-        );
-    }
-
-    #[test]
-    fn an_instantiation_at_a_parameter_neither_the_body_nor_the_type_declares_is_refused() {
-        let args = [type_arg(TypeKind::Generic(
-            "U".to_string(),
-            None,
-            TypeDeclarationKind::None,
-        ))];
-        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", Some(&args)) else {
-            panic!("a parameter no enclosing code declares must be reported");
-        };
-        assert!(message.contains("does not leave open"), "{message}");
-    }
-
-    #[test]
-    fn an_unfolded_size_argument_the_body_leaves_open_is_released_by_the_shared_body_thunk() {
-        let args = [expression(ExpressionKind::Identifier(
-            "Size".to_string(),
-            None,
-        ))];
-        assert_eq!(
-            choose_in(&facts(), "Box", Some(&args), &["Size"]).ok(),
-            Some(DropThunk::SharedBody)
-        );
-    }
-
-    #[test]
-    fn an_unfolded_size_argument_the_body_does_not_leave_open_is_refused() {
-        let args = [expression(ExpressionKind::Identifier(
-            "Size".to_string(),
-            None,
-        ))];
-        assert!(choose(&facts(), "Box", Some(&args)).is_err());
-    }
-
-    #[test]
-    fn a_concrete_instantiation_no_thunk_is_emitted_for_is_refused() {
-        let args = [type_arg(TypeKind::Float)];
-        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", Some(&args)) else {
-            panic!("an unrecorded concrete instantiation must be reported");
-        };
-        assert!(
-            message.contains("no drop thunk is emitted for"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn an_argument_that_is_neither_a_type_nor_a_value_is_refused() {
-        let args = [expression(ExpressionKind::Literal(Literal::Boolean(true)))];
-        let Err(CodegenError::Internal(message)) = choose(&facts(), "Box", Some(&args)) else {
-            panic!("an argument naming no instantiation must be reported");
-        };
-        assert!(message.contains("neither a type nor a value"), "{message}");
     }
 }

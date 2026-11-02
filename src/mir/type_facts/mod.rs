@@ -17,6 +17,8 @@
 mod drop_instantiations;
 mod drop_plan;
 mod drop_reach;
+mod drop_thunk;
+mod release_plan;
 pub mod unsharing;
 
 use crate::ast::expression::Expression;
@@ -36,6 +38,10 @@ pub use crate::type_checker::value_class::{
 };
 pub use drop_plan::{is_unresolved_element, CountedSlot, DropPlan, DroppedMembers, Release};
 pub use drop_reach::DropHookReach;
+pub use drop_thunk::{DropThunk, DropThunkRefusal};
+pub use release_plan::{
+    release_plan, released_captures, releases_slot, ReleasePlan, UnresolvedArgument,
+};
 
 /// Why the instantiations a drop thunk is emitted for could not be closed.
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +162,19 @@ impl TypeFacts {
     /// fields at; see [`DropPlan`].
     pub fn thunk_open_parameters(&self, name: &str, args: Option<&[Type]>) -> HashSet<String> {
         drop_plan::thunk_open_parameters(&self.definitions, name, args)
+    }
+
+    /// Which drop thunk releases a `name` value carrying `type_args`, in code
+    /// leaving the parameters `open` unbound and whose substitution bound
+    /// `bound`; see [`DropThunk`].
+    pub fn drop_thunk(
+        &self,
+        name: &str,
+        type_args: Option<&[Expression]>,
+        open: &HashSet<String>,
+        bound: &HashSet<String>,
+    ) -> Result<DropThunk, DropThunkRefusal> {
+        drop_thunk::drop_thunk(self, name, type_args, open, bound)
     }
 
     /// How a value whose static type is `name` is released.
