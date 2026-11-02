@@ -16,11 +16,12 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::types::{
-    is_vector_component, scalar_width, vec_dim, vec_type_dim, BuiltinCollectionKind, Type,
-    TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME, DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME,
-    GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME, KERNEL_TYPE_NAME, LINEAR_TYPE_NAME,
-    LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME, RANGE_LOWERCASE_ALIAS, RANGE_TYPE_NAME,
-    SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
+    is_range_type_name, is_vector_component, range_type_kind, scalar_width, vec_dim, vec_type_dim,
+    BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME,
+    DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
+    KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
+    RANGE_LOWERCASE_ALIAS, SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES,
+    WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -1737,7 +1738,7 @@ impl TypeChecker {
                 }
                 Self::error_type()
             }
-            TypeKind::Custom(name, args) if name == RANGE_TYPE_NAME => {
+            TypeKind::Custom(name, args) if is_range_type_name(name) => {
                 if let Some(args) = args {
                     if let Some(arg) = args.first() {
                         return self
@@ -1931,7 +1932,7 @@ impl TypeChecker {
         }
 
         // Range is iterable
-        if type_name == RANGE_TYPE_NAME {
+        if is_range_type_name(type_name) {
             return true;
         }
 
@@ -2429,7 +2430,7 @@ impl TypeChecker {
         match name {
             n if n == OPTION_TYPE_NAME => self.resolve_alias_option(args, context),
             n if n == LINEAR_TYPE_NAME => self.resolve_alias_linear(args, context),
-            n if n == RANGE_TYPE_NAME || n == RANGE_LOWERCASE_ALIAS => {
+            n if is_range_type_name(n) || n == RANGE_LOWERCASE_ALIAS => {
                 self.resolve_alias_range(args, context)
             }
             _ => None,
@@ -2601,14 +2602,10 @@ impl TypeChecker {
         match args {
             Some(args) if args.len() == 1 => {
                 let t = self.resolve_type_expression(&args[0], context);
-                Some(make_type(TypeKind::Custom(
-                    RANGE_TYPE_NAME.to_string(),
-                    Some(vec![self.create_type_expression(t)]),
-                )))
+                Some(make_type(range_type_kind(self.create_type_expression(t))))
             }
-            None => Some(make_type(TypeKind::Custom(
-                RANGE_TYPE_NAME.to_string(),
-                Some(vec![self.create_type_expression(make_type(TypeKind::Int))]),
+            None => Some(make_type(range_type_kind(
+                self.create_type_expression(make_type(TypeKind::Int)),
             ))),
             _ => None,
         }

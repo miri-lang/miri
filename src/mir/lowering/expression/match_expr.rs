@@ -139,8 +139,9 @@ fn emit_string_equality_test(
     }
 }
 
-/// Test a regex predicate pattern and branch to appropriate targets.
-/// Uses method dispatch to call .matches(), avoiding hardcoded stdlib assumptions.
+/// Test a regex predicate pattern and branch to appropriate targets: the
+/// pattern is built as a regex literal is, and the subject tested by calling
+/// the method its class marks `@regex_match`, like any method call.
 pub(super) fn emit_regex_predicate_test(
     ctx: &mut LoweringContext,
     pattern: &Pattern,
@@ -153,37 +154,33 @@ pub(super) fn emit_regex_predicate_test(
         unreachable!()
     };
 
-    use crate::mir::lowering::expression::literal_expr::lower_regex_from_token;
-    use crate::runtime_fns::rt;
+    use crate::mir::lowering::dispatch_symbols::method_symbol;
+    use crate::mir::lowering::expression::literal_expr::{
+        lower_regex_from_token, regex_literal_hook,
+    };
 
-    // Materialize the Regex using the standard path.
-    // Allocate a temp destination so the call ABI is consistent regardless of type resolution.
-    let regex_ty = Type::new(
-        TypeKind::Custom(crate::ast::types::REGEX_TYPE_NAME.into(), None),
-        *pattern_span,
-    );
+    let hook = regex_literal_hook(ctx, *pattern_span)?;
+    let Some(matcher) = hook.matcher else {
+        return Err(LoweringError::unsupported_expression(
+            format!("`{}` declares no `@regex_match` method", hook.class),
+            *pattern_span,
+        ));
+    };
+    let regex_ty = Type::new(TypeKind::Custom(hook.class.clone(), None), *pattern_span);
     let regex_temp = ctx.push_temp(regex_ty, *pattern_span);
     let regex_dest = Place::new(regex_temp);
+    lower_regex_from_token(ctx, regex_token, *pattern_span, 0, Some(regex_dest.clone()))?;
 
-    let _regex_op =
-        lower_regex_from_token(ctx, regex_token, *pattern_span, 0, Some(regex_dest.clone()))?;
-
-    // Extract the handle from the Regex object (Field 0) and call the runtime function.
-    // This is the matches() method implementation from the Regex class.
-    // INVARIANT: Regex.handle must remain field 0; see src/stdlib/system/text.mi line 95.
-    let mut handle_place = regex_dest.clone();
-    handle_place.projection.push(PlaceElem::Field(0));
-
-    let handle_local = ctx.push_temp(Type::new(TypeKind::Int, *pattern_span), *pattern_span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(handle_local),
-            Rvalue::Use(Operand::Copy(handle_place)),
-        ),
-        span: *pattern_span,
-    });
-
-    let func_op = ctx.declared_runtime_operand(rt::REGEX_MATCHES, *pattern_span)?;
+    let symbol = method_symbol(ctx.type_checker.type_definitions(), &hook.class, &matcher);
+    let func_op = Operand::function(symbol, *pattern_span);
+    let mut args = vec![
+        Operand::Copy(regex_dest),
+        Operand::Copy(Place::new(subject_local)),
+    ];
+    // A class method body, which takes the implicit allocator.
+    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+        args.push(Operand::Copy(Place::new(allocator)));
+    }
 
     let bool_ty = Type::new(TypeKind::Boolean, *pattern_span);
     let result_temp = ctx.push_temp(bool_ty, *pattern_span);
@@ -192,10 +189,7 @@ pub(super) fn emit_regex_predicate_test(
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
-            args: vec![
-                Operand::Copy(Place::new(handle_local)),
-                Operand::Copy(Place::new(subject_local)),
-            ],
+            args,
             arg_modes: vec![],
             arg_handles: vec![],
             flags: crate::mir::CallFlags::default(),

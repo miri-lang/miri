@@ -1086,13 +1086,8 @@ pub fn lower_for(
 /// a name, passed in or returned, rather than written in the loop header.
 fn range_value_element(ctx: &LoweringContext, iterable: &Expression) -> Option<Type> {
     let ty = ctx.recorded_type(iterable.id)?;
-    let TypeKind::Custom(name, Some(args)) = &ty.kind else {
-        return None;
-    };
-    if name != crate::ast::types::RANGE_TYPE_NAME {
-        return None;
-    }
-    Some(ctx.resolved_type(args.first()?))
+    let element = crate::ast::types::range_element_expression(&ty.kind)?;
+    Some(ctx.resolved_type(element))
 }
 
 /// Lower `for x in r` over a range value `r`.

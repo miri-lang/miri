@@ -223,6 +223,10 @@ audit:
 	@echo "        debt. Also lists every 'Placement exception:' comment, for review:"
 	@python3 tools/check_layering.py
 	@echo
+	@echo "§5.3 — type-name constants compared in compiler code (fails the audit on a"
+	@echo "        constant with no stated reason; see tools/check_type_name_constants.py):"
+	@python3 tools/check_type_name_constants.py
+	@echo
 	@echo "§1.4 — ratchet (fails the audit): the advisory counts below may not grow past"
 	@echo "        tools/audit_baseline.json; lower the baseline with --update, never raise it:"
 	@python3 tools/check_audit_ratchet.py

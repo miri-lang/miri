@@ -62,6 +62,9 @@ pub struct ModuleLoader {
     /// Importing a module that needs one of these names is a conflict: it was
     /// written against the stdlib type, not the program's.
     pub user_shadowed_types: HashSet<String>,
+    /// Whether the regex prelude tier has been loaded, which happens at most
+    /// once, for the first file that writes regex syntax.
+    pub regex_prelude_loaded: bool,
     /// Stack of modules currently being loaded (used to detect circular imports).
     pub loading_stack: Vec<String>,
     /// Maps module alias names to their full module paths.
@@ -133,6 +136,7 @@ impl ModuleLoader {
             module_visibility: HashMap::new(),
             implicitly_preloaded_modules: HashSet::new(),
             user_shadowed_types: HashSet::new(),
+            regex_prelude_loaded: false,
             loading_stack: Vec::new(),
             module_aliases: HashMap::new(),
             source_dir: None,

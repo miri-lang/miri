@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind, REGEX_TYPE_NAME};
+use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
@@ -256,6 +256,20 @@ impl TypeChecker {
         }
     }
 
+    /// Reports a regex literal or pattern that no class in scope can build or
+    /// test: none declares a method marked `attribute`.
+    pub(crate) fn report_missing_regex_hook(&mut self, attribute: &str, span: Span) {
+        let error = TypeError::new(
+            TypeErrorKind::InvalidRegexLiteral {
+                reason: format!(
+                    "no class in scope declares a `@{attribute}` method; import the module that declares the regex type"
+                ),
+            },
+            span,
+        );
+        self.report_typed_error(error);
+    }
+
     /// Validates a regex literal by checking flags and compiling the pattern.
     pub(crate) fn check_regex_literal(&mut self, lit: &Literal, span: Span, context: &Context) {
         let Literal::Regex(token) = lit else {
@@ -268,6 +282,15 @@ impl TypeChecker {
                     .to_string(),
                 span,
             );
+            return;
+        }
+
+        if crate::type_checker::literal_hooks::regex_literal(
+            &self.type_table.global_type_definitions,
+        )
+        .is_none()
+        {
+            self.report_missing_regex_hook(crate::ast::PATTERN_LITERAL_ATTRIBUTE, span);
             return;
         }
 
@@ -321,7 +344,12 @@ impl TypeChecker {
             Literal::String(_) => ast_factory::make_type(TypeKind::String),
             Literal::Identifier(_) => ast_factory::make_type(TypeKind::Identifier),
             Literal::Regex(_) => {
-                ast_factory::make_type(TypeKind::Custom(REGEX_TYPE_NAME.into(), None))
+                match crate::type_checker::literal_hooks::regex_literal(
+                    &self.type_table.global_type_definitions,
+                ) {
+                    Some(hook) => ast_factory::make_type(TypeKind::Custom(hook.class, None)),
+                    None => Self::error_type(),
+                }
             }
             Literal::None => ast_factory::make_type(TypeKind::Option(Box::new(
                 ast_factory::make_type(TypeKind::Void),

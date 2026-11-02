@@ -61,6 +61,7 @@ pub(crate) mod hygiene;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
 pub(crate) mod launch_rules;
+pub mod literal_hooks;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
@@ -638,6 +639,7 @@ impl TypeChecker {
         self.record_program_declarations(program);
         self.run_pass_collect_type_shells(program);
         self.load_shadowable_prelude(&mut context);
+        self.load_regex_prelude_for(&program.body, &mut context);
         self.run_pass_collect_type_aliases(program, &mut context);
         self.run_pass_collect_declarations(program, &mut context);
         self.check_top_level_shape(program);

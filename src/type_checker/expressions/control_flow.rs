@@ -809,6 +809,12 @@ impl TypeChecker {
                 span,
             );
         }
+        let hook = crate::type_checker::literal_hooks::regex_literal(
+            &self.type_table.global_type_definitions,
+        );
+        if hook.and_then(|hook| hook.matcher).is_none() {
+            self.report_missing_regex_hook(crate::ast::PATTERN_MATCH_ATTRIBUTE, span);
+        }
     }
 
     /// Validates an enum variant pattern with bindings.

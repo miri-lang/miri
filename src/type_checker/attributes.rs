@@ -11,9 +11,9 @@ use crate::ast::{
     Attribute, AttributeTarget, ALLOCATES_ATTRIBUTE, CLOSURE_ATTRIBUTE, COPIES_ATTRIBUTE,
     DEPRECATED_ATTRIBUTE, DIVERGES_ATTRIBUTE, ELEMENT_ATTRIBUTE, IGNORE_ATTRIBUTE,
     INDEX_BOUNDS_CHECK_ATTRIBUTE, INDEX_RANGE_CHECK_ATTRIBUTE, KEY_ATTRIBUTE, MATCHES_ATTRIBUTE,
-    MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, ORDERS_ATTRIBUTE, READS_ATTRIBUTE,
-    RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE, TEST_ATTRIBUTE, VALUE_ATTRIBUTE, WRITES_ATTRIBUTE,
-    XFAIL_ATTRIBUTE,
+    MUST_USE_ATTRIBUTE, NON_EXHAUSTIVE_ATTRIBUTE, ORDERS_ATTRIBUTE, PATTERN_LITERAL_ATTRIBUTE,
+    PATTERN_MATCH_ATTRIBUTE, READS_ATTRIBUTE, RETURNS_ELEMENT_ATTRIBUTE, STORES_ATTRIBUTE,
+    TEST_ATTRIBUTE, VALUE_ATTRIBUTE, WRITES_ATTRIBUTE, XFAIL_ATTRIBUTE,
 };
 use crate::error::type_error::{TypeError, TypeErrorKind};
 
@@ -129,6 +129,18 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
         name: INDEX_RANGE_CHECK_ATTRIBUTE,
         valid_on: &[AttributeTarget::Function],
         takes_argument: true,
+        requires: &[],
+    },
+    AttributeSpec {
+        name: PATTERN_LITERAL_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: false,
+        requires: &[],
+    },
+    AttributeSpec {
+        name: PATTERN_MATCH_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function],
+        takes_argument: false,
         requires: &[],
     },
     runtime_effect(READS_ATTRIBUTE, true),

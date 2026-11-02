@@ -2078,7 +2078,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::translate_identifier_literal(builder, ctx, name, &constant.ty, type_ctx)
             }
             Literal::Regex(_) => Err(CodegenError::Internal(
-                "Regex literal reached codegen; MIR lowering must replace all regex literals with calls to Regex.from_validated_pattern()"
+                "Regex literal reached codegen; MIR lowering must replace every regex literal with a call of its `@regex_literal` method"
                     .to_string(),
             )),
         }

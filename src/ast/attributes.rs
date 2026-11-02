@@ -31,6 +31,14 @@ pub const INDEX_BOUNDS_CHECK_ATTRIBUTE: &str = "index_bounds_check";
 /// argument names both parameters (e.g., `@index_range_check("start, end")`).
 pub const INDEX_RANGE_CHECK_ATTRIBUTE: &str = "index_range_check";
 
+/// Marks the static method a regex literal (`re"pattern"`) is built by. It
+/// takes the pattern, already validated by the compiler, as its one `String`
+/// argument, and its class is the type of every regex literal.
+pub const PATTERN_LITERAL_ATTRIBUTE: &str = "regex_literal";
+
+/// Marks the method of the regex literal's class a regex match pattern tests
+/// its subject with: it takes the subject `String` and answers `bool`.
+pub const PATTERN_MATCH_ATTRIBUTE: &str = "regex_match";
 /// Names the parameters of a `runtime` declaration the entry point only reads:
 /// it keeps no reference to them and writes nothing reached through them.
 pub const READS_ATTRIBUTE: &str = "reads";

@@ -13,7 +13,9 @@ use system.accelerator
 /// T must be one of: u32, i32. No f32, f64, i64, or other types are supported.
 /// (WGSL atomics are integer-only; no hardware float atomics are portable.)
 ///
-/// This type is a compiler built-in; no methods are defined on it.
+/// This type is a compiler built-in; no methods are defined on it. It stays a
+/// language type, recognised by name, because the GPU backend lowers it to a
+/// native WGSL `atomic<T>`, a lowering no library declaration could state.
 /// The struct has no user-accessible fields (compiler-only marker).
 struct Atomic<T>
     _unused T

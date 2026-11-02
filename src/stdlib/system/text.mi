@@ -141,12 +141,14 @@ public class Regex
 
     /// Constructs a Regex from a pattern the compiler has already validated.
     ///
-    /// This method is called by the compiler when lowering regex literals (`re"pattern"`).
+    /// `@regex_literal` makes this the method every regex literal (`re"pattern"`)
+    /// is built through: the compiler finds it by that attribute, not by name.
     /// Because the compiler validated the pattern, a failure here indicates a
     /// version mismatch between the compiler's and runtime's regex crate versions.
     /// In that case, the runtime aborts with a diagnostic message.
     ///
     /// User code should call `compile()` instead, which returns a Result.
+    @regex_literal
     static fn from_validated_pattern(pattern String) Regex
         let handle = miri_rt_regex_from_validated_pattern(pattern)
         Regex(handle: handle)
@@ -165,6 +167,9 @@ public class Regex
     ///             else
     ///                 println("no digits")
     ///         Result.Err(e): println("error")
+    ///
+    /// `@regex_match` makes this the test a regex pattern in a `match` arm runs.
+    @regex_match
     public fn matches(text String) bool
         return miri_rt_regex_matches(self.handle, text)
 

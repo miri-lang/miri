@@ -28,8 +28,8 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{
-    vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, AUTO_COPY_MAX_SIZE,
-    EQUALS_METHOD_NAME, OPTION_TYPE_NAME, RANGE_TYPE_NAME,
+    is_range_type_name, vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME,
+    AUTO_COPY_MAX_SIZE, EQUALS_METHOD_NAME, OPTION_TYPE_NAME,
 };
 use crate::type_checker::context::{
     EnumDefinition, GenericDefinition, StructDefinition, TypeDefinition,
@@ -777,7 +777,7 @@ fn range_element<'n, 'a>(
     args: Option<&'a [Expression]>,
     names: Names<'n, 'a>,
 ) -> Option<Argument<'n, 'a>> {
-    if name != RANGE_TYPE_NAME {
+    if !is_range_type_name(name) {
         return None;
     }
     let [element] = args? else {

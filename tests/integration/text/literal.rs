@@ -192,3 +192,139 @@ match result
         "ok",
     );
 }
+
+/// A regex literal needs no `use`: the class it is built through is loaded
+/// with the prelude's definitions, as a collection literal's is.
+#[test]
+fn test_regex_literal_needs_no_import() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let r = re"[0-9]+"
+    if r.matches("a1"): println("yes")
+"#,
+        "yes",
+    );
+}
+
+/// A regex pattern in a `match` arm needs no `use` either.
+#[test]
+fn test_regex_pattern_needs_no_import() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    match "ab12"
+        re"[0-9]+": println("digits")
+        _: println("none")
+"#,
+        "digits",
+    );
+}
+
+/// The regex class stays private without a `use`: only the literal reaches it.
+#[test]
+fn test_regex_type_name_still_needs_an_import() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+fn main()
+    let r = Regex.compile("[0-9]+")
+"#,
+        "Regex",
+    );
+}
+
+/// With no class declaring a `@regex_literal` method (a standard library
+/// whose prelude loads nothing), a regex literal is refused by the type
+/// checker with that reason, never left for lowering to fail on.
+#[test]
+fn test_regex_literal_without_a_declaring_class_is_refused() {
+    let stdlib = tempfile::tempdir().expect("a temporary directory");
+    let system = stdlib.path().join("system");
+    std::fs::create_dir(&system).expect("the system directory");
+    for prelude in [
+        "prelude.mi",
+        "prelude_internal.mi",
+        "prelude_shadowable.mi",
+        "prelude_regex.mi",
+    ] {
+        std::fs::write(system.join(prelude), "").expect("an empty prelude file");
+    }
+    let result = crate::utils::miri_run_with_env(
+        "fn main()\n    let _r = re\"[0-9]+\"\n",
+        "MIRI_STDLIB_PATH",
+        stdlib.path().to_str().expect("a UTF-8 path"),
+    );
+    assert!(!result.success, "the program should not compile");
+    assert!(
+        result
+            .output()
+            .contains("no class in scope declares a `@regex_literal` method"),
+        "{}",
+        result.output()
+    );
+}
+
+/// The regex module is loaded only for a program that writes regex syntax, so
+/// a program declaring its own `Result` and no regex keeps its own.
+#[test]
+fn test_a_program_without_regex_keeps_its_own_result() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+enum Result
+    Yes
+    No
+
+fn main()
+    match Result.No
+        Result.Yes: println("yes")
+        Result.No: println("no")
+"#,
+        "no",
+    );
+}
+
+/// A regex literal written only in an imported module loads the regex module
+/// for that module too.
+#[test]
+fn test_a_regex_literal_in_an_imported_module_needs_no_import() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                "use system.io\nuse local.digits as digits\n\nfn main()\n    println(f\"{digits.has_digit('a1')}\")\n",
+            ),
+            (
+                "digits.mi",
+                "public fn has_digit(text String) bool\n    re\"[0-9]\".matches(text)\n",
+            ),
+        ],
+        "true",
+    );
+}
+
+/// The regex module is written against the standard `Result`, so a program
+/// that writes regex syntax and declares its own `Result` is told so at the
+/// declaration rather than failing inside library source.
+#[test]
+fn test_regex_syntax_beside_an_own_result_names_the_conflict() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+enum Result
+    Yes
+
+fn main()
+    if re"[0-9]+".matches("a1"): println("yes")
+"#,
+        "Type 'Result' is declared in this program and also provided by",
+    );
+}

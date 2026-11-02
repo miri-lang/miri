@@ -39,6 +39,7 @@
 //! - Implicit vs explicit returns
 //! - Return type compatibility
 
+use crate::ast::analysis::program_uses_regex;
 use crate::ast::*;
 use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::error::syntax::Span;
@@ -142,6 +143,7 @@ impl TypeChecker {
             self.modules.loading_stack.retain(|m| m != &abs_path_str);
             return;
         }
+        self.load_regex_prelude_for(&module_ast.body, context);
 
         let visible_before_load: HashSet<String> = self.type_table.visible_type_names.clone();
         self.process_loaded_module(
@@ -1145,6 +1147,11 @@ impl TypeChecker {
     ///   tier, but skipped for any module whose types the program declares
     ///   itself. Loaded separately by [`load_shadowable_prelude`] after the
     ///   program's own type names are known.
+    /// - `system/prelude_regex.mi` — loaded for definitions only, like the
+    ///   internal tier, but only for a file that writes regex syntax: the class
+    ///   a regex literal is built through and a regex pattern is tested with.
+    ///   Loaded by [`load_regex_prelude_for`], so a program without regex never
+    ///   loads that module or the `Result` it is written against.
     ///
     /// Loading happens at clean type-checker state (before any user expression),
     /// which is required: the collection modules pull a trait web whose default
@@ -1155,18 +1162,45 @@ impl TypeChecker {
     /// `use system.string` in user code a no-op.
     pub(crate) fn load_prelude(&mut self, context: &mut Context) {
         self.load_prelude_file("prelude.mi", context);
+        self.load_definitions_only("prelude_internal.mi", context);
+    }
 
+    /// Loads the regex prelude tier when `statements` write a regex literal or
+    /// a regex match pattern, once per program.
+    ///
+    /// Runs for the program after its own type names are known, and for each
+    /// imported file before it is checked, so a regex written only in an
+    /// imported file is served too. A program that declares its own `Result`
+    /// and writes regex syntax is told of the conflict at the regex module's
+    /// import of `system.result`, as any import of a module written against a
+    /// shadowed name is.
+    pub(crate) fn load_regex_prelude_for(
+        &mut self,
+        statements: &[Statement],
+        context: &mut Context,
+    ) {
+        if self.modules.regex_prelude_loaded || !program_uses_regex(statements) {
+            return;
+        }
+        self.modules.regex_prelude_loaded = true;
+        self.load_definitions_only("prelude_regex.mi", context);
+    }
+
+    /// Loads the modules the prelude file `file_name` lists for their
+    /// definitions alone: none of their type names becomes visible to the
+    /// program.
+    fn load_definitions_only(&mut self, file_name: &str, context: &mut Context) {
         let visible_before = self.type_table.visible_type_names.clone();
         let modules_before: HashSet<String> =
             self.modules.module_visibility.keys().cloned().collect();
-        self.load_prelude_file("prelude_internal.mi", context);
+        self.load_prelude_file(file_name, context);
         self.type_table.visible_type_names = visible_before;
 
-        // Every module loaded while processing the internal prelude — the listed
-        // collection modules AND their transitive deps (queryable, ops, …) — is
-        // marked preloaded, so a later explicit `use` of any of them replays its
-        // full visibility (an explicit `use system.collections.queryable` must
-        // still expose the transitive `Iterable` it would on a fresh load).
+        // Every module loaded while processing the file — the listed modules
+        // AND their transitive deps (queryable, ops, …) — is marked preloaded,
+        // so a later explicit `use` of any of them replays its full visibility
+        // (an explicit `use system.collections.queryable` must still expose the
+        // transitive `Iterable` it would on a fresh load).
         let newly_loaded: Vec<String> = self
             .modules
             .module_visibility

@@ -5,10 +5,11 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
-use crate::ast::types::{Type, TypeKind, REGEX_TYPE_NAME};
+use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind};
 use crate::type_checker::expressions::literals::build_regex_pattern;
+use crate::type_checker::literal_hooks::{regex_literal, RegexLiteral};
 
 use crate::mir::lowering::context::LoweringContext;
 
@@ -36,7 +37,9 @@ fn literal_type_kind(lit: &crate::ast::literal::Literal) -> TypeKind {
         Literal::Integer(int_lit) => integer_literal_type_kind(int_lit),
         Literal::Boolean(_) => TypeKind::Boolean,
         Literal::String(_) => TypeKind::String,
-        Literal::Regex(_) => TypeKind::Custom(REGEX_TYPE_NAME.into(), None),
+        // A regex literal is built by a call (`lower_regex_literal`) and is
+        // never typed from the literal alone.
+        Literal::Regex(_) => TypeKind::Void,
         Literal::Float(FloatLiteral::F32(_)) => TypeKind::F32,
         Literal::Float(FloatLiteral::F64(_)) => TypeKind::F64,
         Literal::Identifier(_) => TypeKind::Identifier,
@@ -62,7 +65,7 @@ pub(crate) fn lower_literal_expr(
         unreachable!()
     };
 
-    // Regex literals are lowered to calls to `Regex.from_validated_pattern()`.
+    // A regex literal is lowered to a call of the method marked `@regex_literal`.
     if let Literal::Regex(token) = lit {
         return lower_regex_literal(ctx, expr, token, dest);
     }
@@ -91,10 +94,11 @@ pub(crate) fn lower_literal_expr(
     }
 }
 
-/// Lower a regex literal by calling Regex.from_validated_pattern().
+/// Lower a regex literal by calling the static method its class marks
+/// `@regex_literal` ([`regex_literal`]) on the validated pattern, through the
+/// ordinary call path, into `dest` or a new temporary.
 ///
 /// Takes the expression id of the call site so that type resolution works correctly.
-/// Always materializes to a temp or provided destination to ensure consistent ABI.
 pub(crate) fn lower_regex_from_token(
     ctx: &mut LoweringContext,
     token: &crate::lexer::token::RegexToken,
@@ -105,7 +109,7 @@ pub(crate) fn lower_regex_from_token(
     use crate::ast::expression::{Expression as AstExpr, ExpressionKind as AstExprKind};
     use crate::mir::lowering::dispatch::lower_call;
 
-    // Build the pattern string with flags applied as a prefix.
+    let hook = regex_literal_hook(ctx, span)?;
     let pattern = build_regex_pattern(
         &token.body,
         token.ignore_case,
@@ -113,54 +117,42 @@ pub(crate) fn lower_regex_from_token(
         token.dot_all,
         token.unicode,
     );
+    let synthetic = |node| AstExpr { id: 0, node, span };
+    let member_expr = synthetic(AstExprKind::Member(
+        Box::new(synthetic(AstExprKind::Identifier(hook.class.clone(), None))),
+        Box::new(synthetic(AstExprKind::Identifier(hook.constructor, None))),
+    ));
+    let pattern_expr = synthetic(AstExprKind::Literal(Literal::String(pattern)));
 
-    // Construct synthetic AST expressions for Regex.from_validated_pattern(pattern)
-    let class_expr = AstExpr {
-        id: 0,
-        node: AstExprKind::Identifier(REGEX_TYPE_NAME.to_string(), None),
-        span,
-    };
-
-    let method_expr = AstExpr {
-        id: 0,
-        node: AstExprKind::Identifier("from_validated_pattern".to_string(), None),
-        span,
-    };
-
-    let member_expr = AstExpr {
-        id: 0,
-        node: AstExprKind::Member(Box::new(class_expr), Box::new(method_expr)),
-        span,
-    };
-
-    let pattern_expr = AstExpr {
-        id: 0,
-        node: AstExprKind::Literal(Literal::String(pattern)),
-        span,
-    };
-
-    // Allocate a temp if no destination provided, to ensure consistent ABI
-    let actual_dest = if let Some(d) = dest {
-        Some(d)
-    } else {
-        let regex_ty = Type::new(TypeKind::Custom(REGEX_TYPE_NAME.into(), None), span);
-        let temp = ctx.push_temp(regex_ty, span);
-        Some(Place::new(temp))
-    };
-
-    // Call the static method through the normal dispatch mechanism.
-    // Use the real call_expr_id so type resolution works correctly.
+    let dest = dest.unwrap_or_else(|| {
+        let regex_ty = Type::new(TypeKind::Custom(hook.class, None), span);
+        Place::new(ctx.push_temp(regex_ty, span))
+    });
     lower_call(
         ctx,
         &span,
         call_expr_id,
         &member_expr,
         &[pattern_expr],
-        actual_dest,
+        Some(dest),
     )
 }
 
-/// Lower a regex literal by calling Regex.from_validated_pattern().
+/// The class and methods regex literals go through; the type checker refused
+/// any regex literal in a program declaring none.
+pub(crate) fn regex_literal_hook(
+    ctx: &LoweringContext,
+    span: crate::error::syntax::Span,
+) -> Result<RegexLiteral, LoweringError> {
+    regex_literal(ctx.type_checker.type_definitions()).ok_or_else(|| {
+        LoweringError::unsupported_expression(
+            "a regex literal needs a class declaring a `@regex_literal` method".to_string(),
+            span,
+        )
+    })
+}
+
+/// Lower a regex literal by calling the method marked `@regex_literal`.
 fn lower_regex_literal(
     ctx: &mut LoweringContext,
     expr: &Expression,

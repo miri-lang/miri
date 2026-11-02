@@ -117,19 +117,6 @@ pub const VALUE_GENERIC_MARKER: &str = "__value_generic__";
 /// Types with all primitive/auto-copy fields and total size <= this are auto-copy.
 pub const AUTO_COPY_MAX_SIZE: usize = 128;
 
-/// Canonical class name for the built-in `Regex` compiled pattern type.
-///
-/// Regex literals (`re"pattern"`) are typed as `TypeKind::Custom(REGEX_TYPE_NAME, None)`.
-/// Centralized so the type checker, MIR lowering, and method dispatch share
-/// one spelling instead of scattering `"Regex"` string literals.
-pub const REGEX_TYPE_NAME: &str = "Regex";
-
-/// Canonical method name for constructing a Regex from a compile-time-validated pattern.
-///
-/// Called by MIR lowering when lowering regex literals to construct the Regex value.
-/// Not `public`; documented as the compiler's internal entry point for already-validated patterns.
-pub const REGEX_FROM_VALIDATED_PATTERN_METHOD: &str = "from_validated_pattern";
-
 /// Canonical method name a type defines to supply its own equality.
 ///
 /// `==` and `!=` dispatch to this method when the receiver's type declares it,
@@ -180,6 +167,28 @@ pub const LINEAR_TYPE_NAME: &str = "Linear";
 /// (lowercase alias) or "Range". Centralized so type dispatch shares one
 /// spelling instead of scattering `"Range"` string literals.
 pub const RANGE_TYPE_NAME: &str = "Range";
+
+/// Whether `name` is the canonical spelling of the range type.
+///
+/// `Range<T>` is a language type, not a library one: it is the type of the
+/// `start..end` syntax and has no `.mi` declaration. Every stage asks these
+/// helpers rather than comparing names, so the spelling lives here alone.
+pub fn is_range_type_name(name: &str) -> bool {
+    name == RANGE_TYPE_NAME
+}
+
+/// The element type expression of `kind` when it is `Range<T>`.
+pub fn range_element_expression(kind: &TypeKind) -> Option<&Expression> {
+    let TypeKind::Custom(name, Some(args)) = kind else {
+        return None;
+    };
+    (name == RANGE_TYPE_NAME).then(|| args.first())?
+}
+
+/// The range type `Range<T>` over the element type expression `element`.
+pub fn range_type_kind(element: Expression) -> TypeKind {
+    TypeKind::Custom(RANGE_TYPE_NAME.to_string(), Some(vec![element]))
+}
 
 /// Lowercase collection-type aliases accepted by `resolve_builtin_type_alias`
 /// alongside the capitalized canonical names. Centralized here so alias
