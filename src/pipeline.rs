@@ -21,16 +21,16 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
+use crate::mir::call_graph::direct_callees;
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
 #[cfg(feature = "cranelift")]
 use crate::runtime_effects::RuntimeEffects;
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::ast::BuiltinCollectionKind;
 use crate::mir::lowering::instance_demand::{
     instantiated_method_symbol, ImpliedMethodVerdicts, InstanceMethod, MethodDemand,
 };
@@ -846,59 +846,6 @@ fn called_functions(bodies: &[(Symbol, mir::Body)]) -> HashSet<Symbol> {
         .flat_map(|(_, body)| direct_callees(body))
         .cloned()
         .collect()
-}
-
-/// The functions reached from some starting bodies by following their direct
-/// calls, each yielded once, the starting ones included.
-struct CalleeWalk<'m, 'b> {
-    body_of: &'m HashMap<&'b Symbol, &'b mir::Body>,
-    visited: HashSet<&'b Symbol>,
-    queue: VecDeque<&'b Symbol>,
-}
-
-impl<'m, 'b> CalleeWalk<'m, 'b> {
-    fn from(
-        body_of: &'m HashMap<&'b Symbol, &'b mir::Body>,
-        starts: impl IntoIterator<Item = &'b Symbol>,
-    ) -> Self {
-        let mut walk = Self {
-            body_of,
-            visited: HashSet::new(),
-            queue: VecDeque::new(),
-        };
-        for start in starts {
-            if walk.visited.insert(start) {
-                walk.queue.push_back(start);
-            }
-        }
-        walk
-    }
-}
-
-impl<'b> Iterator for CalleeWalk<'_, 'b> {
-    type Item = &'b Symbol;
-
-    fn next(&mut self) -> Option<&'b Symbol> {
-        let current = self.queue.pop_front()?;
-        if let Some(body) = self.body_of.get(current) {
-            for callee in direct_callees(body) {
-                if self.visited.insert(callee) {
-                    self.queue.push_back(callee);
-                }
-            }
-        }
-        Some(current)
-    }
-}
-
-/// The functions a body calls directly.
-fn direct_callees(body: &mir::Body) -> impl Iterator<Item = &Symbol> {
-    body.basic_blocks.iter().filter_map(|block| {
-        let mir::TerminatorKind::Call { func, .. } = &block.terminator.as_ref()?.kind else {
-            return None;
-        };
-        func.called_symbol()
-    })
 }
 
 /// The functions the lowered bodies call, gathered as they grow: each refresh
@@ -2179,7 +2126,7 @@ impl Pipeline {
                         .map(move |v| (name.clone(), v))
                 })
                 .collect();
-            Self::report_violations(violations, &mode)?;
+            Self::fail_or_warn(&mir::verify::ProgramReport::of(violations), &mode)?;
         }
         match opts.cpu_backend {
             CpuBackend::Cranelift => {
@@ -2697,67 +2644,6 @@ impl Pipeline {
         (method_name == equals || method_name == hash) && declares(equals) && declares(method_name)
     }
 
-    /// The shared body of every method a built-in collection is compiled with:
-    /// the symbols [`mir::verify::verify_collection_element_ownership`] holds to its
-    /// rule, spelled from the declarations rather than recognised by reading a
-    /// call's name.
-    fn shared_collection_methods(result: &PipelineResult) -> HashSet<Symbol> {
-        let definitions = result.type_checker.type_definitions();
-        Self::builtin_collection_classes(result)
-            .flat_map(|(class_name, _)| {
-                mir::lowering::dispatch_symbols::methods_compiled_under(definitions, class_name)
-                    .map(move |method_name| Symbol::method(class_name, &[], method_name, &[]))
-            })
-            .collect()
-    }
-
-    /// The shared collection method symbols whose bodies settle element
-    /// ownership by calling the runtime.
-    ///
-    /// Those bodies do it through the runtime rather than by any RC operation MIR
-    /// can see, so the shared generic one is correct at every element type and
-    /// [`mir::verify::verify_collection_element_ownership`] exempts them. Every
-    /// other method needs the concrete element type instead —
-    /// [`mir::lowering::method_dispatch::is_settled_by_the_runtime`] is the one
-    /// definition dispatch and this exemption share, and
-    /// [`crate::type_checker::runtime_settled`] states the rule.
-    fn collection_methods_backed_by_intrinsics(result: &PipelineResult) -> HashSet<Symbol> {
-        Self::builtin_collection_classes(result)
-            .flat_map(|(class_name, class_def)| {
-                class_def
-                    .methods
-                    .keys()
-                    .filter(|method_name| {
-                        mir::lowering::method_dispatch::is_settled_by_the_runtime(
-                            class_def,
-                            method_name,
-                        )
-                    })
-                    .map(move |method_name| Symbol::method(class_name, &[], method_name, &[]))
-            })
-            .collect()
-    }
-
-    /// Every built-in collection the program's type table declares as a class.
-    fn builtin_collection_classes(
-        result: &PipelineResult,
-    ) -> impl Iterator<Item = (&str, &crate::type_checker::context::ClassDefinition)> {
-        use crate::type_checker::context::TypeDefinition;
-        result
-            .type_checker
-            .type_definitions()
-            .iter()
-            .filter(|(class_name, _)| BuiltinCollectionKind::from_name(class_name).is_some())
-            .filter_map(|(class_name, definition)| match definition {
-                TypeDefinition::Class(class_def) => Some((class_name.as_str(), class_def)),
-                TypeDefinition::Struct(_)
-                | TypeDefinition::Enum(_)
-                | TypeDefinition::Generic(_)
-                | TypeDefinition::Alias(_)
-                | TypeDefinition::Trait(_) => None,
-            })
-    }
-
     /// Lower every body the program reaches, each under the symbol it is
     /// linked as. A symbol whose link name another already holds refuses the
     /// program.
@@ -2903,13 +2789,15 @@ impl Pipeline {
 
         // Clone user functions that are transitively called from GPU kernels into
         // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
-        Self::clone_gpu_device_helpers(&mut lowered, &mut gpu_names)?;
+        mir::gpu::clone_gpu_device_helpers(&mut lowered, &mut gpu_names)
+            .map_err(CompilerError::Lowering)?;
 
         // Apply recorded workgroup sizes from kernel launches to GPU kernel bodies.
         // When kernel(args).launch(grid, block) is lowered, the block size is recorded
         // in the caller's body.kernel_workgroups. This pass collects them and applies
         // each to the corresponding GPU kernel body's backend metadata.
-        Self::stamp_kernel_workgroups(&mut lowered)?;
+        mir::gpu::stamp_kernel_workgroups(&mut lowered)
+            .map_err(|error| CompilerError::Codegen(error.to_string()))?;
 
         // Read back every gpu-resident binding a host read needs fresh, in every
         // build. Runs before RC insertion, which accounts for the host arrays the
@@ -2974,7 +2862,9 @@ impl Pipeline {
         // verifier must first learn the by-address element spelling and the
         // closure trampolines, or a post-ABI run reports false violations.
         if let Some(mode) = verify_mode {
-            Self::report_mir_violations(result, &bodies, program_violations, &mode)?;
+            let definitions = result.type_checker.type_definitions();
+            let report = mir::verify::verify_program(definitions, &bodies, program_violations);
+            Self::fail_or_warn(&report, &mode)?;
         }
 
         Ok(bodies)
@@ -3336,131 +3226,12 @@ impl Pipeline {
         Ok(())
     }
 
-    /// The violations found across the program with every retain and release
-    /// in place: optional slots checked again, and every argument lent through
-    /// a class field to a call that may release it.
-    fn verify_program_after_rc(
-        result: &PipelineResult,
-        bodies: &[(String, mir::Body)],
-    ) -> Vec<(String, mir::verify::VerificationViolation)> {
-        let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
-        let mut violations = mir::verify::verify_optional_slots(bodies, String::clone);
-        violations.extend(mir::verify::verify_lent_arguments(
-            bodies,
-            String::clone,
-            &hooks,
-        ));
-        violations
-    }
-
-    /// The calls of each of `bodies` to a function of the program the
-    /// verifiers' own rule finds harmless, over the program with every retain
-    /// and release in place.
-    fn harmless_calls_after_rc(
-        result: &PipelineResult,
-        bodies: &[(String, mir::Body)],
-    ) -> Vec<HashSet<mir::BasicBlock>> {
-        let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
-        let harmless = mir::verify::HarmlessCallees::of(bodies, String::clone, &hooks);
-        bodies
-            .iter()
-            .map(|(_, body)| harmless.calls_in(body))
-            .collect()
-    }
-
-    /// Run every verification pass over every body and turn what they find
-    /// into one report — printed under `warn`, fatal otherwise.
-    ///
-    /// `program_violations` are the findings of checks run across bodies, each
-    /// already naming the function it was found in.
-    fn report_mir_violations(
-        result: &PipelineResult,
-        bodies: &[(String, mir::Body)],
-        program_violations: Vec<(Symbol, mir::verify::VerificationViolation)>,
-        mode: &str,
-    ) -> Result<(), CompilerError> {
-        let shared_collection_methods = Self::shared_collection_methods(result);
-        let intrinsic_backed = Self::collection_methods_backed_by_intrinsics(result);
-        let mut functions_with_violations = program_violations
-            .iter()
-            .map(|(symbol, _)| symbol)
-            .collect::<HashSet<_>>()
-            .len();
-        let mut all_violations: Vec<String> = program_violations
-            .into_iter()
-            .map(|(symbol, v)| format!("  fn {}: {}", symbol, v))
-            .collect();
-        let after_rc = Self::verify_program_after_rc(result, bodies);
-        functions_with_violations += after_rc
-            .iter()
-            .map(|(name, _)| name)
-            .collect::<HashSet<_>>()
-            .len();
-        all_violations.extend(
-            after_rc
-                .into_iter()
-                .map(|(name, v)| format!("  fn {}: {}", name, v)),
-        );
-        let harmless_calls = Self::harmless_calls_after_rc(result, bodies);
-        for ((name, body), harmless) in bodies.iter().zip(&harmless_calls) {
-            let mut violations = mir::verify::verify_body_with_harmless_calls(body, Some(harmless));
-            violations.extend(mir::verify::verify_collection_element_ownership(
-                body,
-                &shared_collection_methods,
-                &intrinsic_backed,
-            ));
-            violations.extend(mir::verify::verify_cross_residency_readback(body));
-            violations.extend(mir::verify::verify_optional_representation(
-                body,
-                result.type_checker.type_definitions(),
-            ));
-            violations.extend(mir::verify::verify_value_representation(
-                body,
-                result.type_checker.type_definitions(),
-            ));
-            violations.extend(mir::verify::verify_value_arguments(body));
-            violations.extend(mir::verify::verify_bound_names(body));
-            violations.extend(mir::verify::verify_stable_collections(body, Some(harmless)));
-            // TODO: this check runs only under --verify-mir; a normal build does
-            // not check that in-place writes land on unshared collections.
-            violations.extend(mir::verify::verify_unshared_writes(body));
-            if !violations.is_empty() {
-                functions_with_violations += 1;
-            }
-            for v in violations {
-                all_violations.push(format!("  fn {}: {}", name, v));
-            }
-        }
-        Self::fail_or_warn(all_violations, functions_with_violations, mode)
-    }
-
-    /// Report `violations`, each naming the function it was found in, the
-    /// way [`Self::report_mir_violations`] reports its own.
-    fn report_violations(
-        violations: Vec<(String, mir::verify::VerificationViolation)>,
-        mode: &str,
-    ) -> Result<(), CompilerError> {
-        let functions = (violations.iter().map(|(name, _)| name))
-            .collect::<HashSet<_>>()
-            .len();
-        let lines = (violations.iter())
-            .map(|(name, v)| format!("  fn {}: {}", name, v))
-            .collect();
-        Self::fail_or_warn(lines, functions, mode)
-    }
-
-    /// Print `lines` under `warn` mode, fail with them otherwise; nothing
-    /// when there are none.
-    fn fail_or_warn(lines: Vec<String>, functions: usize, mode: &str) -> Result<(), CompilerError> {
-        if lines.is_empty() {
+    /// Print `report` under `warn` mode, fail with it otherwise; nothing
+    /// when it is empty.
+    fn fail_or_warn(report: &mir::verify::ProgramReport, mode: &str) -> Result<(), CompilerError> {
+        let Some(message) = report.message() else {
             return Ok(());
-        }
-        let message = format!(
-            "{} MIR invariant violation(s) in {} function(s):\n{}",
-            lines.len(),
-            functions,
-            lines.join("\n")
-        );
+        };
         if mode == "warn" {
             eprintln!("{}", message);
             return Ok(());
@@ -4429,233 +4200,6 @@ impl Pipeline {
         }
 
         Ok(())
-    }
-
-    /// Clone user functions that are transitively called from GPU kernels.
-    /// Each clone is marked as GpuDevice and has f32-narrowed types.
-    ///
-    /// A clone keeps the symbol of the body it was cloned from, so afterwards a
-    /// helper's symbol names two bodies: the CPU original and its GpuDevice
-    /// clone. They are told apart by execution model, which is what every later
-    /// lookup by symbol selects on.
-    fn clone_gpu_device_helpers(
-        bodies: &mut Vec<(Symbol, mir::Body)>,
-        gpu_names: &mut mir::gpu_names::GpuNames,
-    ) -> Result<(), CompilerError> {
-        let body_of: HashMap<&Symbol, &mir::Body> =
-            bodies.iter().map(|(symbol, body)| (symbol, body)).collect();
-        let kernels: HashSet<&Symbol> = bodies
-            .iter()
-            .filter(|(_, body)| body.execution_model == mir::ExecutionModel::GpuKernel)
-            .map(|(symbol, _)| symbol)
-            .collect();
-        if kernels.is_empty() {
-            return Ok(());
-        }
-
-        let reachable: HashSet<&Symbol> =
-            CalleeWalk::from(&body_of, kernels.iter().copied()).collect();
-        let mut helpers_to_add = Vec::new();
-        for (symbol, body) in bodies.iter() {
-            if reachable.contains(symbol)
-                && body.execution_model == mir::ExecutionModel::Cpu
-                && !kernels.contains(symbol)
-            {
-                let mut gpu_body = body.clone();
-                gpu_body.execution_model = mir::ExecutionModel::GpuDevice;
-                Self::narrow_float_types(&mut gpu_body);
-                gpu_names
-                    .claim_helper(symbol, body.span)
-                    .map_err(CompilerError::Lowering)?;
-                helpers_to_add.push((symbol.clone(), gpu_body));
-            }
-        }
-
-        // A kernel that calls a (now f32-narrowed) GpuDevice helper must not widen
-        // the f32 buffer values it passes to the helper's float params. Narrowing
-        // the calling kernel's scalar f64 temps to f32 removes that spurious widen.
-        // `narrow_type_kind` only touches scalar floats, so explicit `array<f64>`
-        // buffers are left intact; f64-buffer kernels that call no helper are
-        // unaffected because they never enter this set.
-        let helpers = gpu_names.helpers();
-        let kernels_calling_helpers: Vec<usize> = bodies
-            .iter()
-            .enumerate()
-            .filter(|(_, (symbol, body))| {
-                body.execution_model == mir::ExecutionModel::GpuKernel
-                    && CalleeWalk::from(&body_of, [symbol]).any(|callee| helpers.contains(callee))
-            })
-            .map(|(index, _)| index)
-            .collect();
-        for index in kernels_calling_helpers {
-            Self::narrow_float_types(&mut bodies[index].1);
-        }
-
-        bodies.extend(helpers_to_add);
-        Ok(())
-    }
-
-    /// Narrow all f64 (float) types in the body to f32 for GPU compatibility.
-    fn narrow_float_types(body: &mut mir::Body) {
-        for local_decl in &mut body.local_decls {
-            Self::narrow_type_kind(&mut local_decl.ty.kind);
-            local_decl.mir_ty = mir::types::MirType::from_type_kind(&local_decl.ty.kind);
-        }
-        // Constant operands carry their own type, which drives the WGSL literal
-        // width (`2.0lf` for f64). Narrow them too, or an f64 literal survives
-        // into an otherwise-f32 helper and trips the SHADER_F64 feature gate.
-        for block in &mut body.basic_blocks {
-            for stmt in &mut block.statements {
-                if let mir::StatementKind::Assign(_, rv) | mir::StatementKind::Reassign(_, rv) =
-                    &mut stmt.kind
-                {
-                    Self::narrow_rvalue_floats(rv);
-                }
-            }
-            if let Some(term) = &mut block.terminator {
-                Self::narrow_terminator_floats(&mut term.kind);
-            }
-        }
-    }
-
-    fn narrow_operand_floats(op: &mut mir::Operand) {
-        if let mir::Operand::Constant(c) = op {
-            Self::narrow_type_kind(&mut c.ty.kind);
-        }
-    }
-
-    fn narrow_rvalue_floats(rv: &mut mir::Rvalue) {
-        match rv {
-            mir::Rvalue::Use(o) => Self::narrow_operand_floats(o),
-            mir::Rvalue::UnaryOp(_, o) => Self::narrow_operand_floats(o),
-            mir::Rvalue::BinaryOp(_, a, b) => {
-                Self::narrow_operand_floats(a);
-                Self::narrow_operand_floats(b);
-            }
-            mir::Rvalue::Cast(o, ty) => {
-                Self::narrow_operand_floats(o);
-                Self::narrow_type_kind(&mut ty.kind);
-            }
-            mir::Rvalue::MathIntrinsic(_, args) | mir::Rvalue::Aggregate(_, args) => {
-                for a in args {
-                    Self::narrow_operand_floats(a);
-                }
-            }
-            mir::Rvalue::Ref(_) | mir::Rvalue::Len(_) | mir::Rvalue::GpuIntrinsic(_) => {}
-            mir::Rvalue::AtomicOp {
-                buffer,
-                index,
-                value,
-                compare_expected,
-                ..
-            } => {
-                Self::narrow_operand_floats(buffer);
-                Self::narrow_operand_floats(index);
-                Self::narrow_operand_floats(value);
-                if let Some(expected) = compare_expected {
-                    Self::narrow_operand_floats(expected);
-                }
-            }
-        }
-    }
-
-    fn narrow_terminator_floats(term: &mut mir::TerminatorKind) {
-        match term {
-            mir::TerminatorKind::SwitchInt { discr, .. } => Self::narrow_operand_floats(discr),
-            mir::TerminatorKind::Call { func, args, .. } => {
-                Self::narrow_operand_floats(func);
-                for a in args {
-                    Self::narrow_operand_floats(a);
-                }
-            }
-            mir::TerminatorKind::VirtualCall { args, .. } => {
-                for a in args {
-                    Self::narrow_operand_floats(a);
-                }
-            }
-            mir::TerminatorKind::Goto { .. }
-            | mir::TerminatorKind::Return
-            | mir::TerminatorKind::Unreachable
-            | mir::TerminatorKind::GpuLaunch { .. } => {}
-        }
-    }
-
-    /// Apply recorded GPU kernel workgroup sizes to the corresponding GPU kernel bodies.
-    ///
-    /// When a `kernel(args).launch(grid, block)` call is lowered in a caller's body,
-    /// the block size is recorded in that body's `kernel_workgroups` vec.
-    /// This pass collects all these recordings across all bodies and applies each
-    /// to the corresponding GPU kernel body by setting its `BackendMetadata::Gpu.workgroup_size`.
-    ///
-    /// If a kernel has multiple conflicting block sizes recorded (different launches
-    /// with different blocks), returns an error — per-shape monomorphization is deferred.
-    fn stamp_kernel_workgroups(bodies: &mut [(Symbol, mir::Body)]) -> Result<(), CompilerError> {
-        use crate::mir::backend::BackendMetadata;
-
-        // Collect all workgroup size recordings from all bodies.
-        let mut workgroup_map: HashMap<Symbol, [u32; 3]> = HashMap::new();
-
-        for (_name, body) in bodies.iter() {
-            for (kernel, block_size) in &body.kernel_workgroups {
-                if let Some(&existing) = workgroup_map.get(kernel) {
-                    if existing != *block_size {
-                        return Err(CompilerError::Codegen(format!(
-                            "conflicting launch workgroup shapes for kernel '{}': \
-                            {} {} {} vs {} {} {} (per-shape monomorphization is deferred)",
-                            kernel.wgsl_name(),
-                            existing[0],
-                            existing[1],
-                            existing[2],
-                            block_size[0],
-                            block_size[1],
-                            block_size[2]
-                        )));
-                    }
-                } else {
-                    workgroup_map.insert(kernel.clone(), *block_size);
-                }
-            }
-        }
-
-        // Apply each workgroup size to the corresponding kernel body. A helper's
-        // symbol also names its CPU original, so the kernel is selected by its
-        // execution model as well.
-        for (kernel, block_size) in workgroup_map {
-            let Some((_, body)) = bodies.iter_mut().find(|(symbol, body)| {
-                *symbol == kernel && body.execution_model == mir::ExecutionModel::GpuKernel
-            }) else {
-                return Err(CompilerError::Codegen(format!(
-                    "a launch records a workgroup size for the kernel '{}', which has no \
-                     compiled kernel body",
-                    kernel.wgsl_name()
-                )));
-            };
-            match &mut body.backend_metadata {
-                Some(BackendMetadata::Gpu(gpu_md)) => gpu_md.workgroup_size = Some(block_size),
-                None => {
-                    body.backend_metadata =
-                        Some(BackendMetadata::Gpu(crate::mir::backend::GpuBodyMetadata {
-                            workgroup_size: Some(block_size),
-                            ..Default::default()
-                        }));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Recursively narrow TypeKind, converting F64 to F32.
-    fn narrow_type_kind(kind: &mut TypeKind) {
-        match kind {
-            TypeKind::Float => {
-                *kind = TypeKind::F32;
-            }
-            TypeKind::F64 => {
-                *kind = TypeKind::F32;
-            }
-            _ => {}
-        }
     }
 }
 

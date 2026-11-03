@@ -122,7 +122,7 @@ pub struct Body {
     /// Maps each kernel to [block_x, block_y, block_z].
     /// Collected when a `kernel(args).launch(grid, block)` call is lowered in a caller.
     /// Applied as metadata to the GPU kernel body's `BackendMetadata::Gpu.workgroup_size`
-    /// during the post-lowering pipeline pass `stamp_kernel_workgroups`.
+    /// by `mir::gpu::stamp_kernel_workgroups` once every body is lowered.
     pub kernel_workgroups: Vec<(Symbol, [u32; 3])>,
     /// Launch grids written as a literal `Dim3` at a `kernel(args).launch(grid,
     /// block)` in this body, keyed by kernel, as [grid_x, grid_y, grid_z]
