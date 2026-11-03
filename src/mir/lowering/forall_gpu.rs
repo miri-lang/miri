@@ -1151,6 +1151,7 @@ fn assemble_gpu_launch_terminator(
             uniform_start_x: params.starts[0].clone(),
             uniform_start_y: params.starts[1].clone(),
             uniform_start_z: params.starts[2].clone(),
+            literal_grid: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },

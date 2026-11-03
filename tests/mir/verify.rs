@@ -1498,6 +1498,7 @@ fn launch_over_binding(handle: u64, target: usize) -> Terminator {
         uniform_start_x: None,
         uniform_start_y: None,
         uniform_start_z: None,
+        literal_grid: None,
         destination: place(3),
         target: Some(BasicBlock(target)),
     })

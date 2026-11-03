@@ -190,6 +190,7 @@ fn written_places_names_launch_destinations() {
         uniform_start_x: None,
         uniform_start_y: None,
         uniform_start_z: None,
+        literal_grid: None,
         destination: Place::new(Local(5)),
         target: None,
     };

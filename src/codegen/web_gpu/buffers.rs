@@ -54,13 +54,6 @@ impl<'a> HostProgram<'a> {
             if runs_on_host(body) {
                 program.record_owners(body);
                 program.record_launches(body)?;
-                for (kernel, grid) in &body.kernel_grids {
-                    program
-                        .grids
-                        .entry(kernel.wgsl_name())
-                        .or_default()
-                        .push(*grid);
-                }
             }
         }
         Ok(program)
@@ -88,6 +81,7 @@ impl<'a> HostProgram<'a> {
             let TerminatorKind::GpuLaunch {
                 kernel,
                 launch_args,
+                literal_grid,
                 ..
             } = &terminator.kind
             else {
@@ -98,6 +92,9 @@ impl<'a> HostProgram<'a> {
                     "a launch names its kernel by {kernel}, not by the kernel's symbol"
                 )));
             };
+            if let Some(grid) = literal_grid {
+                self.grids.entry(name.clone()).or_default().push(*grid);
+            }
             self.launches.entry(name).or_default().push(LaunchSite {
                 handles: launch_args.arg_handles(),
                 span: terminator.span,
@@ -477,6 +474,7 @@ mod tests {
                 uniform_start_x: None,
                 uniform_start_y: None,
                 uniform_start_z: None,
+                literal_grid: None,
                 destination: Place::new(crate::mir::Local(0)),
                 target: Some(BasicBlock(0)),
             },

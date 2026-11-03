@@ -110,6 +110,7 @@ impl Terminator {
                 uniform_start_x: _,
                 uniform_start_y: _,
                 uniform_start_z: _,
+                literal_grid: _,
                 target: _,
             } => (Some(destination), &[], &[]),
             TerminatorKind::Goto { target: _ }
@@ -232,6 +233,7 @@ impl fmt::Display for Terminator {
                 uniform_start_x: _,
                 uniform_start_y: _,
                 uniform_start_z: _,
+                literal_grid: _,
                 destination,
                 target,
             } => {
@@ -579,6 +581,10 @@ pub enum TerminatorKind {
         uniform_start_y: Option<Box<Operand>>,
         /// Runtime range start for the z axis (3D loops). `None` for a literal start.
         uniform_start_z: Option<Box<Operand>>,
+        /// The grid as [x, y, z] workgroup counts, when the launch spelled it
+        /// as a literal `Dim3`; `None` for a grid computed at run time. A web
+        /// bundle dispatches the grid it records, so it reads this.
+        literal_grid: Option<[u32; 3]>,
         destination: Place,
         target: Option<BasicBlock>,
     },

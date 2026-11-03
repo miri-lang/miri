@@ -1396,6 +1396,7 @@ fn test_a_kernel_launch_handed_the_place_forgets_it() {
             uniform_start_x: None,
             uniform_start_y: None,
             uniform_start_z: None,
+            literal_grid: None,
             destination: local(4),
             target: Some(next),
         });

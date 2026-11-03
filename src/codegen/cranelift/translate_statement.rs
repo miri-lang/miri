@@ -784,6 +784,7 @@ impl<'a> FunctionTranslator<'a> {
                 uniform_start_x,
                 uniform_start_y,
                 uniform_start_z,
+                literal_grid: _,
                 destination: _,
                 target,
             } => {

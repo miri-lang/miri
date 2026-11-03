@@ -1142,6 +1142,7 @@ fn emit_reduce_gpu_launch(
             uniform_start_x: None,
             uniform_start_y: None,
             uniform_start_z: None,
+            literal_grid: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },

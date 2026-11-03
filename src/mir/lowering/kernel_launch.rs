@@ -279,9 +279,6 @@ pub(crate) fn try_lower_kernel_launch(
         ctx.requests
             .kernel_workgroups
             .push((kernel_name.clone(), workgroup_size));
-        if let Some(grid) = try_extract_dim3_literal(&args[0]) {
-            ctx.body.kernel_grids.push((kernel_name.clone(), grid));
-        }
     }
 
     let GpuFnArgs {
@@ -309,6 +306,7 @@ pub(crate) fn try_lower_kernel_launch(
             uniform_start_x: None,
             uniform_start_y: None,
             uniform_start_z: None,
+            literal_grid: try_extract_dim3_literal(&args[0]),
             destination,
             target: Some(target_bb),
         },

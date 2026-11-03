@@ -136,6 +136,7 @@ pub trait Visitor {
                 uniform_start_x,
                 uniform_start_y,
                 uniform_start_z,
+                literal_grid: _,
                 destination,
                 target: _,
             } => {
@@ -353,6 +354,7 @@ pub trait MutVisitor {
                 uniform_start_x,
                 uniform_start_y,
                 uniform_start_z,
+                literal_grid: _,
                 destination,
                 target: _,
             } => {

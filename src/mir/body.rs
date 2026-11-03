@@ -9,7 +9,6 @@ use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::Statement;
-use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
 use crate::type_checker::value_class::{LayoutScope, ValueLayout};
@@ -102,11 +101,6 @@ pub struct Body {
     /// Populated by MIR lowering from the type checker's struct/class definitions.
     /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
     pub has_drop_types: HashSet<String>,
-    /// Launch grids written as a literal `Dim3` at a `kernel(args).launch(grid,
-    /// block)` in this body, keyed by kernel, as [grid_x, grid_y, grid_z]
-    /// workgroup counts. A web bundle dispatches the grid it records, so it
-    /// reads this; a grid computed at run time has no entry.
-    pub kernel_grids: Vec<(Symbol, [u32; 3])>,
     /// Boolean locals the readback pass keeps, each paired with the device
     /// handle it watches. A flag is set while its handle's device buffer may
     /// hold results the host array lacks, and cleared when a readback, an
@@ -153,7 +147,6 @@ impl Body {
             receiver: None,
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
-            kernel_grids: Vec::new(),
             device_stale_flags: HashMap::new(),
             allocator: None,
             generation: 0,
