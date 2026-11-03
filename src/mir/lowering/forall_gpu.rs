@@ -760,10 +760,10 @@ fn mark_written_params(
 ) {
     let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
     out_params.extend(std::iter::repeat_n(false, read_only_count));
-    kernel.out_params = out_params;
+    kernel.signature.out_params = out_params;
     let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.out_params.len(), false);
-    kernel.param_written = param_written;
+    param_written.resize(kernel.signature.out_params.len(), false);
+    kernel.signature.param_written = param_written;
 }
 
 /// Builds a per-axis bounds check condition: `loop_var_i < limit_i`, and

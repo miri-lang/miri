@@ -130,7 +130,7 @@ pub fn body_over(kinds: &[TypeKind], arg_count: usize, entry: BasicBlockData) ->
     for kind in kinds {
         body.new_local(LocalDecl::new(ty(kind.clone()), span()));
     }
-    body.out_params = vec![false; arg_count];
+    body.signature.out_params = vec![false; arg_count];
     body.basic_blocks.push(entry);
     body.basic_blocks
         .push(block(Vec::new(), TerminatorKind::Return));

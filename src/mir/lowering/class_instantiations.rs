@@ -515,7 +515,7 @@ impl LoweringContext<'_> {
         span: Span,
     ) -> Result<(), LoweringError> {
         let Some(cause) =
-            unfoldable_value_argument(arg, &self.generic_subs, &self.body.type_params)
+            unfoldable_value_argument(arg, &self.generic_subs, &self.body.generics.type_params)
         else {
             return Ok(());
         };

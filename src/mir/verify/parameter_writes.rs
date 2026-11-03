@@ -60,7 +60,7 @@ pub fn verify_parameter_writes(
 /// The finding for a body that copies its own receiver on write, asks
 /// whether it is shared, or stores a whole value into it.
 fn replaced_receiver(body: &Body) -> Option<VerificationViolation> {
-    let receiver = body.receiver?;
+    let receiver = body.signature.receiver?;
     let decl = body.local_decls.get(receiver.0)?;
     if decl.device_handle.is_some() || !is_copied_on_write(body, &decl.ty) {
         return None;

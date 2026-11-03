@@ -738,10 +738,10 @@ fn build_frame_kernel_literal(
     let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
     out_params.extend(std::iter::repeat_n(false, frame_param_count));
     out_params.extend(scalar_captures.iter().map(|_| false));
-    kernel.out_params = out_params;
+    kernel.signature.out_params = out_params;
     let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.out_params.len(), false);
-    kernel.param_written = param_written;
+    param_written.resize(kernel.signature.out_params.len(), false);
+    kernel.signature.param_written = param_written;
 
     let mut ctx = LoweringContext::for_kernel(kernel, parent);
 
@@ -850,10 +850,10 @@ fn build_frame_kernel_runtime(
     out_params.extend(std::iter::repeat_n(false, frame_param_count));
     out_params.push(false);
     out_params.extend(scalar_captures.iter().map(|_| false));
-    kernel.out_params = out_params;
+    kernel.signature.out_params = out_params;
     let mut param_written: Vec<bool> = buffer_captures.iter().map(|c| c.writes_buffer).collect();
-    param_written.resize(kernel.out_params.len(), false);
-    kernel.param_written = param_written;
+    param_written.resize(kernel.signature.out_params.len(), false);
+    kernel.signature.param_written = param_written;
 
     let mut ctx = LoweringContext::for_kernel(kernel, parent);
 

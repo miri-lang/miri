@@ -110,7 +110,7 @@ impl<'a> Layouts<'a> {
     /// What this body's optionals are laid out against: the type table and the
     /// parameters the body leaves open.
     fn scope(&self) -> LayoutScope<'a> {
-        LayoutScope::new(self.definitions, &self.body.type_params)
+        LayoutScope::new(self.definitions, &self.body.generics.type_params)
     }
 
     /// The violations one statement raises.
@@ -292,7 +292,7 @@ impl<'a> Layouts<'a> {
         (parameter, callee_scope): (&Type, LayoutScope<'_>),
     ) -> Option<VerificationViolation> {
         let source = self.operand_type(arg)?;
-        if names_open_parameter(&source.kind, &self.body.type_params)
+        if names_open_parameter(&source.kind, &self.body.generics.type_params)
             || names_open_parameter(&parameter.kind, callee_scope.type_params)
         {
             return None;
@@ -321,8 +321,8 @@ impl<'a> Layouts<'a> {
     ) -> Option<VerificationViolation> {
         let returned = &callee_body.local_decls.first()?.ty;
         let target = self.place_type(destination)?;
-        if names_open_parameter(&returned.kind, &callee_body.type_params)
-            || names_open_parameter(&target.kind, &self.body.type_params)
+        if names_open_parameter(&returned.kind, &callee_body.generics.type_params)
+            || names_open_parameter(&target.kind, &self.body.generics.type_params)
         {
             return None;
         }
@@ -358,7 +358,7 @@ impl<'a> Layouts<'a> {
     where
         'a: 'b,
     {
-        LayoutScope::new(self.definitions, &callee.type_params)
+        LayoutScope::new(self.definitions, &callee.generics.type_params)
     }
 
     /// The type `operand` reads, unless it is the absent value, whose type

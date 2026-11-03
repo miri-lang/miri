@@ -430,7 +430,7 @@ fn propagate_to_callers(initial: Vec<bool>, edges: &[Vec<usize>]) -> Vec<bool> {
 /// callers copy on write.
 fn writes_unique_receiver(body: &Body) -> bool {
     let receiver = Local(1);
-    body.receiver == Some(receiver)
+    body.signature.receiver == Some(receiver)
         && body
             .local_decls
             .get(receiver.0)
@@ -654,7 +654,7 @@ impl<'b> Classifier<'b> {
         let local = place.local;
         place.projection.is_empty()
             && self.may_release(local)
-            && !self.body.env_capture_locals.contains(&local)
+            && !self.body.captures.env_capture_locals.contains(&local)
             && !self.ownership.is_borrowed(local)
             && self.body.local_decls.get(local.0).is_some()
             && self.body.is_counted_local(local)
@@ -740,13 +740,13 @@ fn is_shared_holder(ty: Option<&Type>, definitions: &HashMap<String, TypeDefinit
 /// a closure's environment still reads after the body writes it.
 fn is_shared_root(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let is_out = (local.0.checked_sub(1))
-        .and_then(|index| body.out_params.get(index))
+        .and_then(|index| body.signature.out_params.get(index))
         .copied()
         .unwrap_or(false);
-    body.receiver == Some(local)
+    body.signature.receiver == Some(local)
         || ownership.is_owned_param(local)
         || is_out
-        || body.env_capture_locals.contains(&local)
+        || body.captures.env_capture_locals.contains(&local)
 }
 
 /// Which arguments one body lends that a call able to release them must not

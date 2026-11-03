@@ -508,7 +508,7 @@ fn a_local_naming_an_unbound_parameter_is_flagged() {
         0,
         vec![ret_block(Vec::new())],
     );
-    open.open_params.insert("U".to_string());
+    open.generics.open_params.insert("U".to_string());
     assert!(
         verify_bound_names(&open).is_empty(),
         "an open parameter is bound"

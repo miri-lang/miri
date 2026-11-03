@@ -130,7 +130,7 @@ fn closure_calling_list_method(clears: bool) -> Body {
         vec![block(Vec::new(), call_closure(1)), returning(Vec::new())]
     };
     let mut body = body_of(&kinds, 2, blocks);
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body
 }
 
@@ -220,8 +220,8 @@ fn shared_set_contains() -> Body {
             returning(Vec::new()),
         ],
     );
-    body.receiver = Some(Local(1));
-    body.type_params.insert("T".to_string());
+    body.signature.receiver = Some(Local(1));
+    body.generics.type_params.insert("T".to_string());
     body
 }
 
@@ -290,7 +290,7 @@ fn map_slot_of_spelled_as_its_class() -> Body {
             returning(Vec::new()),
         ],
     );
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body
 }
 

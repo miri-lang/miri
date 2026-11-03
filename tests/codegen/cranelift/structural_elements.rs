@@ -79,8 +79,8 @@ fn body_holding_pairs_of_u(open: &[&str], bound: &[&str]) -> miri::mir::Body {
     );
     let mut body = miri::mir::Body::new(0, Span::default(), miri::mir::ExecutionModel::Cpu);
     body.new_local(miri::mir::LocalDecl::new(ty(list), Span::default()));
-    body.open_params = open.iter().map(|name| name.to_string()).collect();
-    body.bound_params = bound.iter().map(|name| name.to_string()).collect();
+    body.generics.open_params = open.iter().map(|name| name.to_string()).collect();
+    body.generics.bound_params = bound.iter().map(|name| name.to_string()).collect();
     body
 }
 

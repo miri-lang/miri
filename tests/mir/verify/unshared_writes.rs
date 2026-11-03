@@ -402,7 +402,7 @@ fn checked_field_then_pushed(no: usize, yes: usize, before_write: Vec<Statement>
         returning(Vec::new()),
     ];
     let mut body = body_of(&bag_locals(), 1, blocks);
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body
 }
 
@@ -579,7 +579,7 @@ fn receiver_cleared(before: Vec<TerminatorKind>) -> Body {
     ));
     blocks.push(returning(Vec::new()));
     let mut body = body_of(&list_locals(), 1, blocks);
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body
 }
 

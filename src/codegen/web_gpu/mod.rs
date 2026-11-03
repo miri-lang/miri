@@ -351,8 +351,14 @@ fn extract_buffer_bindings(
             })?;
             // Atomic buffers need read-write access; check the element type
             let is_atomic_buffer = is_atomic_element_buffer(&decl.ty.kind);
-            let is_out = body.out_params.get(local_idx - 1).copied().unwrap_or(false);
+            let is_out = body
+                .signature
+                .out_params
+                .get(local_idx - 1)
+                .copied()
+                .unwrap_or(false);
             let writes = body
+                .signature
                 .param_written
                 .get(local_idx - 1)
                 .copied()

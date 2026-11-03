@@ -91,7 +91,7 @@ impl<'a> StableHeaders<'a> {
 /// The array and list locals `body` may cache the header of: neither a
 /// capture, a gpu-resident binding nor a local whose address is taken.
 fn indexed_collections(body: &Body) -> HashSet<Local> {
-    let mut foreign: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
+    let mut foreign: HashSet<Local> = body.captures.env_capture_locals.iter().copied().collect();
     for statement in body.basic_blocks.iter().flat_map(|block| &block.statements) {
         if let StatementKind::Assign(_, Rvalue::Ref(place))
         | StatementKind::Reassign(_, Rvalue::Ref(place)) = &statement.kind

@@ -206,7 +206,7 @@ impl Checker<'_> {
     fn local_refusal(&self, local: Local) -> Option<String> {
         let body = self.body;
         let decl = &body.local_decls[local.0];
-        if local.0 <= body.arg_count || body.env_capture_locals.contains(&local) {
+        if local.0 <= body.arg_count || body.captures.env_capture_locals.contains(&local) {
             return Some("it is a parameter, a capture or the return slot".to_string());
         }
         if !body.is_counted_local(local) || decl.device_handle.is_some() {
@@ -407,7 +407,7 @@ fn definitions_of(body: &Body, local: Local) -> Option<Vec<((usize, usize), Plac
 /// a local holding a device buffer, or one whose address the body takes.
 fn is_root(body: &Body, root: Local) -> bool {
     (root.0 > body.arg_count || is_parameter(body, root))
-        && !body.env_capture_locals.contains(&root)
+        && !body.captures.env_capture_locals.contains(&root)
         && body.is_counted_local(root)
         && body.local_decls[root.0].device_handle.is_none()
         && !accesses_in(body)
@@ -417,7 +417,7 @@ fn is_root(body: &Body, root: Local) -> bool {
 /// Whether `local` is a parameter of `body` other than an `out` one.
 fn is_parameter(body: &Body, local: Local) -> bool {
     let is_out = (local.0.checked_sub(1))
-        .and_then(|index| body.out_params.get(index))
+        .and_then(|index| body.signature.out_params.get(index))
         .copied()
         .unwrap_or(false);
     (1..=body.arg_count).contains(&local.0) && !is_out

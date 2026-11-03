@@ -299,7 +299,7 @@ fn calls_only_questions(
 /// parameters, captures, gpu-resident bindings and address-taken locals.
 fn foreign_locals(body: &Body) -> HashSet<Local> {
     let mut foreign: HashSet<Local> = (1..=body.arg_count).map(Local).collect();
-    foreign.extend(body.env_capture_locals.iter().copied());
+    foreign.extend(body.captures.env_capture_locals.iter().copied());
     for (index, decl) in body.local_decls.iter().enumerate() {
         if decl.device_handle.is_some() {
             foreign.insert(Local(index));

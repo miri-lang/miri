@@ -51,7 +51,7 @@ fn handing_to_runtime(name: &str, args: Vec<Operand>) -> Body {
     body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span()), span()));
     body.new_local(LocalDecl::new(list_ty(), span()));
     body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span()), span()));
-    body.out_params = vec![false];
+    body.signature.out_params = vec![false];
     let call = TerminatorKind::Call {
         func: Operand::runtime(runtime_callee(name), span()),
         args,
@@ -82,7 +82,7 @@ fn copied_in_place() -> Body {
     body.new_local(LocalDecl::new(Type::new(TypeKind::Void, span()), span()));
     body.new_local(LocalDecl::new(list_ty(), span()));
     body.new_local(LocalDecl::new(list_ty(), span()));
-    body.out_params = vec![false];
+    body.signature.out_params = vec![false];
     let cow = TerminatorKind::Call {
         func: Operand::runtime(runtime_callee("miri_rt_list_cow"), span()),
         args: vec![Operand::Move(Place::new(Local(1)))],
@@ -117,7 +117,7 @@ fn a_parameter_copied_on_write_in_place_is_flagged_once() {
 #[test]
 fn a_receiver_copied_on_write_in_place_is_flagged_once() {
     let mut body = copied_in_place();
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     let violations = verify_parameter_writes(&body, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert_eq!(violations[0].local, Local(1));
@@ -130,7 +130,7 @@ fn a_receiver_asked_whether_it_is_shared_is_flagged() {
         "miri_rt_rc_is_shared",
         vec![Operand::Copy(Place::new(Local(1)))],
     );
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     assert_eq!(
         verify_parameter_writes(&body, &OwnershipFacts::default()).len(),
         1
@@ -143,7 +143,7 @@ fn a_receiver_assigned_whole_is_flagged() {
         "miri_rt_list_len",
         vec![Operand::Copy(Place::new(Local(1)))],
     );
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body.basic_blocks[1].statements.push(Statement {
         kind: StatementKind::Assign(
             Place::new(Local(1)),
@@ -170,7 +170,7 @@ fn a_receiver_checked_unique_and_written_in_place_raises_nothing() {
         ),
     ] {
         let mut body = handing_to_runtime(name, args);
-        body.receiver = Some(Local(1));
+        body.signature.receiver = Some(Local(1));
         assert!(
             verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty(),
             "{name}"
@@ -183,14 +183,14 @@ fn a_field_of_a_receiver_copied_on_write_raises_nothing() {
     let mut field = Place::new(Local(1));
     field.projection.push(miri::mir::PlaceElem::Field(0));
     let mut body = handing_to_runtime("miri_rt_rc_is_shared", vec![Operand::Copy(field)]);
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     assert!(verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty());
 }
 
 #[test]
 fn an_out_parameter_copied_on_write_in_place_raises_nothing() {
     let mut body = copied_in_place();
-    body.out_params = vec![true];
+    body.signature.out_params = vec![true];
     assert!(verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty());
 }
 

@@ -208,7 +208,7 @@ impl Closure<'_> {
 /// carries no type arguments of its own; the local it is assigned to does.
 fn held_types(body: &Body) -> impl Iterator<Item = &Type> {
     let locals = body.local_decls.iter().map(|decl| &decl.ty);
-    let captures = body.closure_capture_types.values().flatten();
+    let captures = body.captures.closure_capture_types.values().flatten();
     let constructed = body
         .basic_blocks
         .iter()

@@ -85,7 +85,7 @@ fn appended_strings<'e>(
 ) -> Option<Vec<&'e Expression>> {
     let decl = ctx.body.local_decls.get(local.0)?;
     let is_host = decl.device_handle.is_none()
-        && !ctx.body.env_capture_locals.contains(&local)
+        && !ctx.body.captures.env_capture_locals.contains(&local)
         && !ctx.body.is_gpu();
     if decl.ty.kind != TypeKind::String || !is_host {
         return None;
@@ -236,12 +236,20 @@ fn handle_managed_place_assign(
 /// The closure `local` held before is released by the reassignment itself, and
 /// its destructor releases that closure's captures, so none are released here.
 fn sync_closure_captures(ctx: &mut LoweringContext, local: crate::mir::Local, rhs_place: &Place) {
-    match ctx.body.closure_capture_types.remove(&rhs_place.local) {
+    match ctx
+        .body
+        .captures
+        .closure_capture_types
+        .remove(&rhs_place.local)
+    {
         Some(new_caps) => {
-            ctx.body.closure_capture_types.insert(local, new_caps);
+            ctx.body
+                .captures
+                .closure_capture_types
+                .insert(local, new_caps);
         }
         None => {
-            ctx.body.closure_capture_types.remove(&local);
+            ctx.body.captures.closure_capture_types.remove(&local);
         }
     }
 }
@@ -582,7 +590,7 @@ pub(super) fn field_slot_type(
     };
     crate::mir::instantiation::field_type(
         ctx.body.rc_classifier.definitions(),
-        ctx.body.instance.as_ref(),
+        ctx.body.generics.instance.as_ref(),
         type_name,
         args,
         idx,

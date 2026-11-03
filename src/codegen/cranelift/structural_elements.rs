@@ -233,10 +233,12 @@ pub fn structural_element_types(bodies: &[(&str, &Body)]) -> Vec<StructuralEleme
                     open_params: HashSet::new(),
                     bound_params: HashSet::new(),
                 });
-            element.open_params.extend(body.open_params.iter().cloned());
+            element
+                .open_params
+                .extend(body.generics.open_params.iter().cloned());
             element
                 .bound_params
-                .extend(body.bound_params.iter().cloned());
+                .extend(body.generics.bound_params.iter().cloned());
         }
     }
     by_symbol.into_values().collect()

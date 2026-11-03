@@ -300,7 +300,7 @@ impl<'o> Emitter<'o> {
                     i
                 ))
             })?;
-            if body.allocator == Some(Local(i)) {
+            if body.signature.allocator == Some(Local(i)) {
                 continue;
             }
             if emitted > 0 {
@@ -453,13 +453,18 @@ fn collect_storage_bindings(
         )
     });
     for &(param_idx, decl) in storage {
-        let read_write = body.out_params.get(param_idx - 1).copied().ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "WGSL backend: out_params length {} < arg_count {}",
-                body.out_params.len(),
-                body.arg_count
-            ))
-        })?;
+        let read_write = body
+            .signature
+            .out_params
+            .get(param_idx - 1)
+            .copied()
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: out_params length {} < arg_count {}",
+                    body.signature.out_params.len(),
+                    body.arg_count
+                ))
+            })?;
         let var_name = decl
             .name
             .as_deref()
@@ -1670,7 +1675,7 @@ impl<'a> BodyEmitter<'a> {
     fn is_allocator_operand(&self, op: &Operand) -> bool {
         match op {
             Operand::Copy(place) | Operand::Move(place) => {
-                place.projection.is_empty() && self.body.allocator == Some(place.local)
+                place.projection.is_empty() && self.body.signature.allocator == Some(place.local)
             }
             Operand::Constant(_) | Operand::Function(_) => false,
         }

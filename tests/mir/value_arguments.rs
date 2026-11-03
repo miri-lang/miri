@@ -247,7 +247,7 @@ fn an_out_parameter_and_a_word_parameter_are_never_counted() {
         goto_exit(),
     );
     let mut body = body_over(&kinds, 3, entry);
-    body.out_params = vec![true, false, false];
+    body.signature.out_params = vec![true, false, false];
     assert!(written_value_params(&body).is_empty());
 }
 

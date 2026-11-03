@@ -45,43 +45,25 @@ pub struct Body {
     /// Backend-specific metadata. None for CPU functions.
     pub backend_metadata: Option<BackendMetadata>,
     /// Decides which of this body's values are reference counted, read
-    /// against the program's type table at [`Body::type_params`].
+    /// against the program's type table at [`Generics::type_params`].
     pub rc_classifier: RcClassifier,
-    /// The instance a method body was lowered for, `Custom(class, args)`,
-    /// when it was lowered for one instantiation of a generic class or
-    /// struct; `None` for any other body. A bare spelling of that class in
-    /// the body names this instance.
-    pub instance: Option<Type>,
-    /// For closure/lambda bodies: the list of locals that hold captured values.
-    /// Entry `i` is loaded at function entry from where codegen's capture
-    /// layout places it, after the function and destructor pointers.
-    /// Empty for non-closure functions.
-    pub env_capture_locals: Vec<Local>,
-    /// Names of generic type parameters in scope for this function body.
-    /// Used by [`Body::is_counted`] to distinguish unresolved generic placeholders
-    /// (which are never counted) from concrete user-defined types.
-    /// Populated from the function's explicit generics and from `TypeKind::Generic`
-    /// names found in parameter/return types (captures class-level generics too).
-    pub type_params: HashSet<String>,
-    /// The type and value parameters this body leaves open: those of a shared
-    /// generic body, compiled once for every instantiation of its declaration,
-    /// and inherited by the closures written inside it. A value held at an
-    /// instantiation still naming one of them is released through its type's
-    /// shared drop function. Empty for a body compiled for one instantiation.
-    ///
-    /// Unlike [`Body::type_params`], which reference counting reads, this never
-    /// lists a parameter the body's substitution bound.
-    pub open_params: HashSet<String>,
-    /// The parameters this body's substitution bound, when it was lowered for
-    /// one instantiation. A type still naming one of them missed that
-    /// substitution.
-    pub bound_params: HashSet<String>,
-    /// Maps each closure local to the ordered AST types of its captured variables.
-    /// Populated by `lower_lambda_expr` after capture pruning.
-    /// Used by Perceus to emit per-capture DecRef at StorageDead, and by codegen
-    /// to resolve `Field(i)` projections on closure locals.
-    /// Only present when the closure has at least one capture.
-    pub closure_capture_types: HashMap<Local, Vec<Type>>,
+    /// How the body is called beyond its parameter count.
+    pub signature: Signature,
+    /// Which instantiation of a generic declaration the body was lowered for,
+    /// and the parameters it leaves open or bound.
+    pub generics: Generics,
+    /// What a closure body captures; empty for any other body.
+    pub captures: Captures,
+    /// How many times a pass has rewritten the control-flow graph since the
+    /// body was lowered. A fact computed off the body records the generation
+    /// it was computed at and holds only while the body is still at it.
+    generation: u64,
+}
+
+/// How a body is called, beyond its parameter count: which parameters it
+/// writes, the one it is called on, and where its allocator lives.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Signature {
     /// Which parameters (indexed 1..=arg_count) are `out` parameters.
     /// `out_params[i-1] == true` means parameter `_i` was declared `out`.
     /// Populated by MIR lowering from `Parameter::is_out`.
@@ -105,10 +87,54 @@ pub struct Body {
     /// allocator, so the WGSL backend drops this parameter and every argument
     /// read from it.
     pub allocator: Option<Local>,
-    /// How many times a pass has rewritten the control-flow graph since the
-    /// body was lowered. A fact computed off the body records the generation
-    /// it was computed at and holds only while the body is still at it.
-    generation: u64,
+}
+
+/// Which instantiation of a generic declaration a body was lowered for, and
+/// the type and value parameters it leaves open or had bound.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Generics {
+    /// The instance a method body was lowered for, `Custom(class, args)`,
+    /// when it was lowered for one instantiation of a generic class or
+    /// struct; `None` for any other body. A bare spelling of that class in
+    /// the body names this instance.
+    pub instance: Option<Type>,
+    /// Names of generic type parameters in scope for this function body.
+    /// Used by [`Body::is_counted`] to distinguish unresolved generic placeholders
+    /// (which are never counted) from concrete user-defined types.
+    /// Populated from the function's explicit generics and from `TypeKind::Generic`
+    /// names found in parameter/return types (captures class-level generics too).
+    pub type_params: HashSet<String>,
+    /// The type and value parameters this body leaves open: those of a shared
+    /// generic body, compiled once for every instantiation of its declaration,
+    /// and inherited by the closures written inside it. A value held at an
+    /// instantiation still naming one of them is released through its type's
+    /// shared drop function. Empty for a body compiled for one instantiation.
+    ///
+    /// Unlike [`Generics::type_params`], which reference counting reads, this never
+    /// lists a parameter the body's substitution bound.
+    pub open_params: HashSet<String>,
+    /// The parameters this body's substitution bound, when it was lowered for
+    /// one instantiation. A type still naming one of them missed that
+    /// substitution.
+    pub bound_params: HashSet<String>,
+}
+
+/// What a closure body captures: the locals its captured values load into
+/// and, for each closure local it creates, the types of that closure's
+/// captures. Empty for a body that is no closure and creates none.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Captures {
+    /// For closure/lambda bodies: the list of locals that hold captured values.
+    /// Entry `i` is loaded at function entry from where codegen's capture
+    /// layout places it, after the function and destructor pointers.
+    /// Empty for non-closure functions.
+    pub env_capture_locals: Vec<Local>,
+    /// Maps each closure local to the ordered AST types of its captured variables.
+    /// Populated by `lower_lambda_expr` after capture pruning.
+    /// Used by Perceus to emit per-capture DecRef at StorageDead, and by codegen
+    /// to resolve `Field(i)` projections on closure locals.
+    /// Only present when the closure has at least one capture.
+    pub closure_capture_types: HashMap<Local, Vec<Type>>,
 }
 
 impl Body {
@@ -125,16 +151,9 @@ impl Body {
             execution_model,
             backend_metadata: None,
             rc_classifier: RcClassifier::default(),
-            instance: None,
-            env_capture_locals: Vec::new(),
-            type_params: HashSet::new(),
-            open_params: HashSet::new(),
-            bound_params: HashSet::new(),
-            closure_capture_types: HashMap::new(),
-            out_params: Vec::new(),
-            receiver: None,
-            param_written: Vec::new(),
-            allocator: None,
+            signature: Signature::default(),
+            generics: Generics::default(),
+            captures: Captures::default(),
             generation: 0,
         }
     }
@@ -196,12 +215,13 @@ impl Body {
     /// What a type written in this body is laid out against: the program's
     /// type table and the type parameters this body leaves open.
     pub fn layout_scope(&self) -> LayoutScope<'_> {
-        LayoutScope::new(self.rc_classifier.definitions(), &self.type_params)
+        LayoutScope::new(self.rc_classifier.definitions(), &self.generics.type_params)
     }
 
     /// Whether a value of `kind`, written in this body, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind) -> bool {
-        self.rc_classifier.is_counted(kind, &self.type_params)
+        self.rc_classifier
+            .is_counted(kind, &self.generics.type_params)
     }
 
     /// The layout a value of `kind`, written in this body, is held in as its
@@ -213,7 +233,8 @@ impl Body {
         if self.is_gpu() {
             return None;
         }
-        self.rc_classifier.value_layout(kind, &self.type_params)
+        self.rc_classifier
+            .value_layout(kind, &self.generics.type_params)
     }
 
     /// Whether the value `local` holds is reference counted.
@@ -232,10 +253,10 @@ impl Body {
         let is_out = local
             .0
             .checked_sub(1)
-            .and_then(|index| self.out_params.get(index))
+            .and_then(|index| self.signature.out_params.get(index))
             .copied()
             .unwrap_or(false);
-        (1..=self.arg_count).contains(&local.0) && !is_out && self.receiver != Some(local)
+        (1..=self.arg_count).contains(&local.0) && !is_out && self.signature.receiver != Some(local)
     }
 
     /// Returns true if this function runs on a GPU.
@@ -597,7 +618,8 @@ pub fn written_back_out_params(body: &Body) -> HashSet<Local> {
     if matches!(body.backend_metadata, Some(BackendMetadata::Gpu(_))) {
         return HashSet::new();
     }
-    body.out_params
+    body.signature
+        .out_params
         .iter()
         .enumerate()
         .filter(|(_, is_out)| **is_out)

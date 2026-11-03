@@ -652,7 +652,7 @@ fn never_negative(body: &Body) -> HashSet<usize> {
 fn own_definitions(body: &Body) -> (HashMap<usize, Vec<&Rvalue>>, HashSet<usize>) {
     let mut definitions: HashMap<usize, Vec<&Rvalue>> = HashMap::new();
     let mut foreign: HashSet<usize> = (1..=body.arg_count).collect();
-    foreign.extend(body.env_capture_locals.iter().map(|l| l.0));
+    foreign.extend(body.captures.env_capture_locals.iter().map(|l| l.0));
     for data in &body.basic_blocks {
         for statement in &data.statements {
             if let StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) =

@@ -345,7 +345,7 @@ impl<'a> FunctionTranslator<'a> {
         let builds_in_place = slots
             .declared(place)
             .is_some_and(|ty| type_ctx.value_layout(&ty.kind).is_some());
-        let is_monomorphized = body.open_params.is_empty();
+        let is_monomorphized = body.generics.open_params.is_empty();
         for (index, operand) in operands.iter().enumerate() {
             let Some(slot) = slots.aggregate_slot(kind, place, index) else {
                 if is_monomorphized || (is_absent(operand) && !builds_in_place) {

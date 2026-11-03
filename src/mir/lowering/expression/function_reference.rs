@@ -160,7 +160,10 @@ fn lower_function_reference(
     // The allocator is an unmanaged scalar, so this closure owns no captured
     // values. A stale capture-type entry left by an earlier assignment to the
     // same local would make Perceus drop fields the new payload does not have.
-    ctx.body.closure_capture_types.remove(&target.local);
+    ctx.body
+        .captures
+        .closure_capture_types
+        .remove(&target.local);
 
     Ok(Operand::Copy(target))
 }
@@ -220,9 +223,9 @@ fn build_forwarding_thunk(
     thunk_ctx.read_source_like(ctx);
     thunk_ctx.use_compilation_ids(ctx.compilation_ids.clone());
     // Read against the enclosing body's parameters, as a lambda's body is.
-    thunk_ctx.body.type_params = ctx.body.type_params.clone();
-    thunk_ctx.body.open_params = ctx.body.open_params.clone();
-    thunk_ctx.body.bound_params = ctx.body.bound_params.clone();
+    thunk_ctx.body.generics.type_params = ctx.body.generics.type_params.clone();
+    thunk_ctx.body.generics.open_params = ctx.body.generics.open_params.clone();
+    thunk_ctx.body.generics.bound_params = ctx.body.generics.bound_params.clone();
     thunk_ctx.push_param(
         "__env_ptr".to_string(),
         Type::new(TypeKind::RawPtr, span),
@@ -281,7 +284,7 @@ fn capture_allocator(
         return Vec::new();
     };
     let local = thunk_ctx.push_param("allocator".to_string(), allocator.ty.clone(), span);
-    thunk_ctx.body.env_capture_locals.push(local);
+    thunk_ctx.body.captures.env_capture_locals.push(local);
     args.push(Operand::Copy(Place::new(local)));
     vec![CapturedVar {
         name: "allocator".into(),

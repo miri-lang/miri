@@ -219,7 +219,7 @@ impl Eligibility {
             }
         }
         let mut foreign_root = unstable_index.clone();
-        let captured = body.env_capture_locals.iter().copied();
+        let captured = body.captures.env_capture_locals.iter().copied();
         let resident = (body.local_decls.iter().enumerate())
             .filter(|(_, decl)| decl.device_handle.is_some())
             .map(|(index, _)| Local(index));

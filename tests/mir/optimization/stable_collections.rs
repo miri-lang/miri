@@ -396,7 +396,7 @@ fn test_a_list_whose_address_is_taken_is_not_recorded() {
 #[test]
 fn test_a_captured_list_is_not_recorded() {
     let mut body = loop_over_a_list();
-    body.env_capture_locals.push(LIST);
+    body.captures.env_capture_locals.push(LIST);
     assert!(records_of(body).is_empty());
 }
 
@@ -924,7 +924,7 @@ fn test_an_owned_list_moved_out_of_a_local_holding_its_own_reference_stays_recor
 #[test]
 fn test_an_owned_list_moved_out_of_a_captured_binding_is_unrecorded_across_a_call() {
     let mut body = loop_over_a_list_moved_out_of_a_spare();
-    body.env_capture_locals.push(SPARE_LIST);
+    body.captures.env_capture_locals.push(SPARE_LIST);
     assert!(records_of(body).is_empty());
 }
 

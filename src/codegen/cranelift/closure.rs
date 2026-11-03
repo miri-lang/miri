@@ -68,7 +68,7 @@ impl CaptureLayout {
     /// local types.
     pub(crate) fn of_body(body: &Body, ptr_type: cl_types::Type) -> Self {
         Self::new(
-            body.env_capture_locals.iter().map(|local| {
+            body.captures.env_capture_locals.iter().map(|local| {
                 let ty = &body.local_decls[local.0].ty;
                 match body.value_layout(&ty.kind) {
                     Some(layout) => layout.size,
@@ -153,8 +153,8 @@ impl<'a> FunctionTranslator<'a> {
             ptr_type,
             closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
-            open_params: &body.open_params,
-            bound_params: &body.bound_params,
+            open_params: &body.generics.open_params,
+            bound_params: &body.generics.bound_params,
             values: &ValueLocals::none(),
             stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
@@ -162,12 +162,12 @@ impl<'a> FunctionTranslator<'a> {
         let layout = CaptureLayout::of_body(body, ptr_type);
         let capture_kind = |cap_local: &Local| &body.local_decls[cap_local.0].ty.kind;
         let released = released_captures(
-            body.env_capture_locals.iter().map(capture_kind),
+            body.captures.env_capture_locals.iter().map(capture_kind),
             body.layout_scope(),
         );
         for position in released {
             let (Some(cap_local), Some(&offset)) = (
-                body.env_capture_locals.get(position),
+                body.captures.env_capture_locals.get(position),
                 layout.offsets.get(position),
             ) else {
                 return Err(CodegenError::Internal(format!(

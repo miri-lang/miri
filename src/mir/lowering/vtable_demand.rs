@@ -652,7 +652,7 @@ fn leaves_a_parameter_open(body: &Body, type_defs: &HashMap<String, TypeDefiniti
 /// says nothing about the body itself.
 fn names_a_parameter(ty: &Type, body: &Body, type_defs: &HashMap<String, TypeDefinition>) -> bool {
     if let TypeKind::Generic(name, _, _) = &ty.kind {
-        return body.type_params.contains(name.as_str());
+        return body.generics.type_params.contains(name.as_str());
     }
     if let TypeKind::Custom(name, None) = &ty.kind {
         return name != SELF_TYPE_NAME && !type_defs.contains_key(name.as_str());

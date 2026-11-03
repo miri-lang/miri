@@ -26,7 +26,7 @@ fn expr_ty(kind: TypeKind) -> Expression {
 #[test]
 fn every_out_param_of_a_host_body_is_written_back() {
     let mut body = miri::mir::Body::new(2, Span::default(), miri::mir::ExecutionModel::Cpu);
-    body.out_params = vec![true, false];
+    body.signature.out_params = vec![true, false];
     let written_back = miri::mir::body::written_back_out_params(&body);
     assert!(written_back.contains(&miri::mir::Local(1)));
     assert!(!written_back.contains(&miri::mir::Local(2)));

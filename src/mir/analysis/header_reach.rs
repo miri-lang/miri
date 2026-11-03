@@ -459,7 +459,7 @@ fn holder_failure(
     if ownership.is_borrowed(local) {
         return Some(UncountedRoot::Borrowed(local));
     }
-    if body.env_capture_locals.contains(&local) {
+    if body.captures.env_capture_locals.contains(&local) {
         return Some(UncountedRoot::Captured(local));
     }
     let is_resident = (body.local_decls.get(local.0)).is_some_and(|d| d.device_handle.is_some());

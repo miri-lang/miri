@@ -2068,7 +2068,7 @@ fn an_element_typed_by_an_unpinned_type_parameter_verifies_clean() {
         Type::new(TypeKind::Custom("T".to_string(), None), span()),
         "miri_rt_set_add",
     );
-    body.type_params.insert("T".to_string());
+    body.generics.type_params.insert("T".to_string());
     assert_clean(&body, "an element typed by an unpinned type parameter");
 }
 

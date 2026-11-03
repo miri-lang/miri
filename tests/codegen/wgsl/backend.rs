@@ -53,7 +53,7 @@ fn build_copy_kernel() -> Body {
     output.is_user_variable = true;
     body.local_decls.push(output);
 
-    body.out_params = vec![false, true];
+    body.signature.out_params = vec![false, true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([64, 1, 1]),
         grid_size: None,
@@ -244,7 +244,7 @@ fn math_intrinsic_maps_to_wgsl_sqrt() {
     buf.is_user_variable = true;
     body.local_decls.push(buf);
 
-    body.out_params = vec![true];
+    body.signature.out_params = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -328,7 +328,7 @@ fn block_dim_intrinsic_substitutes_workgroup_size_literal() {
     buf.is_user_variable = true;
     body.local_decls.push(buf);
 
-    body.out_params = vec![true];
+    body.signature.out_params = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([128, 1, 1]),
         grid_size: None,
@@ -417,7 +417,7 @@ fn single_buffer_kernel() -> Body {
     buf.name = Some("buf".into());
     buf.is_user_variable = true;
     body.local_decls.push(buf);
-    body.out_params = vec![true];
+    body.signature.out_params = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -511,7 +511,7 @@ fn back_edge_loop_is_rejected() {
 #[test]
 fn out_params_length_mismatch_is_rejected() {
     let mut body = single_buffer_kernel();
-    body.out_params.clear();
+    body.signature.out_params.clear();
     finish_body(&mut body, vec![]);
 
     let msg = compile_err(&body);
@@ -797,7 +797,7 @@ fn non_buffer_kernel_param_is_rejected() {
     scalar_param.is_user_variable = true;
     body.local_decls.push(scalar_param);
 
-    body.out_params = vec![false];
+    body.signature.out_params = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,
@@ -864,7 +864,7 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
     uniform_param.is_user_variable = true;
     body.local_decls.push(uniform_param);
 
-    body.out_params = vec![false];
+    body.signature.out_params = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
         grid_size: None,

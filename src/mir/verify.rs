@@ -292,7 +292,7 @@ pub fn verify_body_with_harmless_calls(
         return violations;
     }
 
-    let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
+    let env_captures: HashSet<Local> = body.captures.env_capture_locals.iter().copied().collect();
     let (borrows, borrow_violations) = local_borrows::held_borrows(body, ownership, harmless_calls);
     violations.extend(borrow_violations);
     let tracked = collect_tracked_locals(body, ownership, &env_captures, &borrows);
@@ -1615,7 +1615,7 @@ fn concrete_operand_type(operand: &Operand, body: &Body) -> Option<crate::ast::t
 fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::types::Type> {
     use crate::ast::types::TypeKind;
     match &ty.kind {
-        TypeKind::Custom(name, None) if body.type_params.contains(name.as_str()) => None,
+        TypeKind::Custom(name, None) if body.generics.type_params.contains(name.as_str()) => None,
         TypeKind::Generic(_, _, _) => None,
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => None,
         _ => Some(ty.clone()),

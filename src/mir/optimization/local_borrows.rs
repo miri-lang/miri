@@ -324,14 +324,19 @@ fn is_root(body: &Body, root: Local, managed_locals: &HashSet<Local>) -> bool {
         root.0 > body.arg_count && managed_locals.contains(&root)
     };
     is_counted
-        && !body.env_capture_locals.contains(&root)
+        && !body.captures.env_capture_locals.contains(&root)
         && body.local_decls[root.0].device_handle.is_none()
 }
 
 /// Whether `local` is a parameter of `body` other than an `out` one.
 fn is_parameter(body: &Body, local: Local) -> bool {
     (1..=body.arg_count).contains(&local.0)
-        && !body.out_params.get(local.0 - 1).copied().unwrap_or(false)
+        && !body
+            .signature
+            .out_params
+            .get(local.0 - 1)
+            .copied()
+            .unwrap_or(false)
 }
 
 /// Whether `statement` ends the binding of a parameter `body` is lent, whose

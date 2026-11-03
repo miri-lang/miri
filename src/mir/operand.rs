@@ -113,7 +113,7 @@ impl Operand {
     /// - `Field(i)` on `Tuple(T0, T1, ...)` → yields `Ti`
     /// - `Field(i)` on custom `Struct`/`Class` types → the field's type, as
     ///   [`crate::mir::instantiation::field_type`] reads it
-    /// - `Field(i)` on `Function` (closure) → looks up in `body.closure_capture_types`
+    /// - `Field(i)` on `Function` (closure) → looks up in `body.captures.closure_capture_types`
     /// - `Deref` → unresolvable (returns `None`)
     /// - Enum `Field(i)` → unresolvable (variant not known at compile time)
     ///
@@ -170,7 +170,7 @@ fn resolve_place_mir_type(place: &Place, body: &Body) -> Option<MirType> {
                     MirType::Custom(name) => {
                         let field_ty = crate::mir::instantiation::field_type(
                             body.rc_classifier.definitions(),
-                            body.instance.as_ref(),
+                            body.generics.instance.as_ref(),
                             name,
                             None,
                             *i,
@@ -179,7 +179,7 @@ fn resolve_place_mir_type(place: &Place, body: &Body) -> Option<MirType> {
                     }
                     // Closure local → look up in closure_capture_types and convert to MirType
                     MirType::Function => {
-                        let captures = body.closure_capture_types.get(&place.local)?;
+                        let captures = body.captures.closure_capture_types.get(&place.local)?;
                         let capture_ty = captures.get(*i)?;
                         MirType::from_type_kind(&capture_ty.kind)
                     }

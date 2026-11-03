@@ -198,15 +198,15 @@ fn lower_function_body(
 
     // Populate generic type parameter names so that `Body::is_counted` can
     // distinguish unresolved generic placeholders from concrete user types.
-    ctx.body.type_params = collect_type_params(decl, tc);
-    ctx.body.open_params = ctx.body.type_params.clone();
+    ctx.body.generics.type_params = collect_type_params(decl, tc);
+    ctx.body.generics.open_params = ctx.body.generics.type_params.clone();
 
     // _0: Return value
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
 
     // Lower parameters and record out-param flags.
-    ctx.body.out_params = params.iter().map(|p| p.is_out).collect();
+    ctx.body.signature.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
         let param_ty = resolve_declared_annotation(tc, &param.typ);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
@@ -601,8 +601,11 @@ fn lower_instantiation_body(
     // type — those names no longer remain as unresolved placeholders after
     // substitution. Populate type_params with the original names anyway so that
     // any types not yet substituted (e.g. nested generics) are handled correctly.
-    ctx.body.type_params = subs.keys().cloned().collect();
-    (ctx.body.open_params, ctx.body.bound_params) = substitution_parameters(subs, tc);
+    ctx.body.generics.type_params = subs.keys().cloned().collect();
+    (
+        ctx.body.generics.open_params,
+        ctx.body.generics.bound_params,
+    ) = substitution_parameters(subs, tc);
     // Carry the substitution so that a type the type checker recorded against
     // the generic parameter — an operand of an operator, an intrinsic element
     // read — resolves to the instantiation's concrete type. Without it the
@@ -616,7 +619,7 @@ fn lower_instantiation_body(
 
     // Lower parameters and record out-param flags. `push_param` reads each
     // declared type at the instantiation.
-    ctx.body.out_params = params.iter().map(|p| p.is_out).collect();
+    ctx.body.signature.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
         ctx.push_param(
             param.name.clone(),
@@ -921,7 +924,7 @@ fn lower_class_method_body(
     // being lowered, or an instantiation at a managed type would store what it
     // never retained and the caller would release it out from under the field.
     if !subs.is_empty() {
-        ctx.body.instance = Some(self_type.clone());
+        ctx.body.generics.instance = Some(self_type.clone());
     }
 
     // Method-own generics plus class-level generics that appear in param/return
@@ -935,9 +938,9 @@ fn lower_class_method_body(
     }
     type_params.retain(|name| !subs.contains_key(name));
     let (open_through_subs, bound_params) = substitution_parameters(subs, tc);
-    ctx.body.open_params = type_params.union(&open_through_subs).cloned().collect();
-    ctx.body.bound_params = bound_params;
-    ctx.body.type_params = type_params;
+    ctx.body.generics.open_params = type_params.union(&open_through_subs).cloned().collect();
+    ctx.body.generics.bound_params = bound_params;
+    ctx.body.generics.type_params = type_params;
 
     // _0: Return value
     ctx.body
@@ -947,7 +950,7 @@ fn lower_class_method_body(
     // Static methods skip this slot entirely.
     if has_self {
         let receiver = ctx.push_param("self".to_string(), self_type.clone(), ast_method.span);
-        ctx.body.receiver = Some(receiver);
+        ctx.body.signature.receiver = Some(receiver);
     }
 
     // Remaining explicit parameters (registered in variable_map).
@@ -970,10 +973,10 @@ fn lower_class_method_body(
     let allocator_decl = LocalDecl::new(Type::new(TypeKind::Int, ast_method.span), ast_method.span);
     let alloc_local = ctx.body.new_local(allocator_decl);
     ctx.variable_map.insert("allocator".into(), alloc_local);
-    ctx.body.allocator = Some(alloc_local);
+    ctx.body.signature.allocator = Some(alloc_local);
     ctx.body.arg_count += 1;
     out_params.push(false);
-    ctx.body.out_params = out_params;
+    ctx.body.signature.out_params = out_params;
 
     let copies = copy_written_parameters(&mut ctx, params);
 
@@ -1043,7 +1046,7 @@ fn is_gpu_storage_param(kind: &TypeKind) -> bool {
 ///   generics that appear in method signatures, e.g. `T` in `List<T>::push(item: T)`)
 /// - `TypeKind::Generic` names found in the return type
 ///
-/// The resulting set is stored in `Body::type_params` and used by `Body::is_counted`
+/// The resulting set is stored in `Generics::type_params` and used by `Body::is_counted`
 /// to distinguish unresolved generic placeholders from concrete user-defined types.
 fn collect_type_params(
     decl: &crate::ast::statement::FunctionDeclarationData,
@@ -1197,7 +1200,7 @@ fn collect_generic_names_from_type(
 pub(crate) fn bind_null_allocator(ctx: &mut LoweringContext, span: crate::error::syntax::Span) {
     let allocator_type = Type::new(TypeKind::Int, span);
     let alloc_local = ctx.push_local("allocator".to_string(), allocator_type.clone(), span);
-    ctx.body.allocator = Some(alloc_local);
+    ctx.body.signature.allocator = Some(alloc_local);
     let null_allocator = Operand::Constant(Box::new(Constant {
         span,
         ty: allocator_type,
@@ -1227,7 +1230,7 @@ fn inject_allocator_param(
         bind_null_allocator(ctx, span);
     } else {
         let alloc_local = ctx.push_param("allocator".to_string(), allocator_type, span);
-        ctx.body.allocator = Some(alloc_local);
+        ctx.body.signature.allocator = Some(alloc_local);
         ctx.body.arg_count += 1;
     }
 }

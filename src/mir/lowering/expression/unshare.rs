@@ -542,7 +542,7 @@ fn root_step<'e>(
     }
     let is_parameter = (1..=ctx.body.arg_count).contains(&local.0);
     if is_parameter && is_copied_on_write(&ctx.body, &decl.ty) {
-        if ctx.body.receiver == Some(local) {
+        if ctx.body.signature.receiver == Some(local) {
             return Ok(None);
         }
         if ctx.body.is_lent_param(local) {

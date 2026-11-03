@@ -686,7 +686,7 @@ fn test_generic_type_parameter_place_gets_no_incref() {
         0,
         vec![assign(place(2), use_copy(place(1)))],
     );
-    body.type_params.insert("T".to_string());
+    body.generics.type_params.insert("T".to_string());
 
     assert_eq!(
         rc_statements(&mut body),

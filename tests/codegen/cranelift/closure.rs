@@ -52,7 +52,7 @@ fn lambda_capturing(captures: &[TypeKind]) -> Body {
 
     for capture in captures {
         let local = body.new_local(LocalDecl::new(ty(capture.clone()), span()));
-        body.env_capture_locals.push(local);
+        body.captures.env_capture_locals.push(local);
     }
 
     let mut block = BasicBlockData::new(None);

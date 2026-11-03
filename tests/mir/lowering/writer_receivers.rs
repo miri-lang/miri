@@ -76,7 +76,11 @@ fn hands(body: &Body, is_named: impl Fn(&str) -> bool, place: &Place) -> bool {
 }
 
 fn receiver(body: &Body) -> Place {
-    Place::new(body.receiver.expect("a method body names its receiver"))
+    Place::new(
+        body.signature
+            .receiver
+            .expect("a method body names its receiver"),
+    )
 }
 
 fn is_copy_on_write(name: &str) -> bool {
@@ -177,7 +181,7 @@ fn main()
 "#;
     let bodies = lowered(source);
     let body = body_where(&bodies, |symbol| symbol.contains("$lambda"));
-    assert!(body.receiver.is_none());
+    assert!(body.signature.receiver.is_none());
     assert!(!runtime_calls(body, is_copy_on_write).is_empty());
     assert!(runtime_calls(body, is_receiver_check).is_empty());
 }

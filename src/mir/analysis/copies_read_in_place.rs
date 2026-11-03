@@ -68,7 +68,7 @@ pub fn copies_read_in_place(body: &Body) -> HashSet<Local> {
 fn candidate_sources(body: &Body) -> HashMap<Local, Place> {
     let mut writes: HashMap<Local, Vec<&Statement>> = HashMap::new();
     let mut excluded: HashSet<Local> = (0..=body.arg_count).map(Local).collect();
-    excluded.extend(body.env_capture_locals.iter().copied());
+    excluded.extend(body.captures.env_capture_locals.iter().copied());
     for data in &body.basic_blocks {
         for statement in &data.statements {
             if let StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) =

@@ -641,10 +641,10 @@ impl CraneliftBackend {
         bodies: &[(&str, &Body)],
     ) -> Result<(), CodegenError> {
         for (name, body) in bodies.iter() {
-            if body.env_capture_locals.is_empty() {
+            if body.captures.env_capture_locals.is_empty() {
                 continue;
             }
-            let capture_kinds = (body.env_capture_locals.iter())
+            let capture_kinds = (body.captures.env_capture_locals.iter())
                 .map(|cap_local| &body.local_decls[cap_local.0].ty.kind);
             let has_managed =
                 !crate::mir::type_facts::released_captures(capture_kinds, body.layout_scope())

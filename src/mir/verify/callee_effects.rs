@@ -181,7 +181,7 @@ fn calls_to(body: &Body, callees: &HashSet<String>) -> HashSet<BasicBlock> {
 /// Whether `body` is a method that stores through its receiver or hands it
 /// to a runtime entry point writing that argument in place.
 fn writes_receiver_in_place(body: &Body) -> bool {
-    let Some(receiver) = body.receiver else {
+    let Some(receiver) = body.signature.receiver else {
         return false;
     };
     let stores_through =
@@ -369,7 +369,7 @@ fn stores_into_own_value(body: &Body, dest: &Place) -> bool {
 /// Whether `local` is the return slot or a local of `body` other than a
 /// parameter or a capture.
 fn is_own_local(body: &Body, local: Local) -> bool {
-    (local.0 == 0 || local.0 > body.arg_count) && !body.env_capture_locals.contains(&local)
+    (local.0 == 0 || local.0 > body.arg_count) && !body.captures.env_capture_locals.contains(&local)
 }
 
 /// The harm of a call in `body` to a runtime entry point doing `effect`, handed
@@ -406,9 +406,9 @@ fn handed(body: &Body, places: &PlaceTypes, args: &[Operand]) -> Handed {
     args.iter()
         .map(|arg| match arg.place() {
             None => Handed::ByValue,
-            Some(place) => places
-                .declared(place)
-                .map_or(Handed::Other, |ty| built_of(&ty.kind, &body.type_params)),
+            Some(place) => places.declared(place).map_or(Handed::Other, |ty| {
+                built_of(&ty.kind, &body.generics.type_params)
+            }),
         })
         .max()
         .unwrap_or(Handed::ByValue)

@@ -103,7 +103,10 @@ fn describe(
     if matches!(kind, TypeKind::Void) {
         return "no value";
     }
-    match value_class(kind, LayoutScope::new(definitions, &body.type_params)) {
+    match value_class(
+        kind,
+        LayoutScope::new(definitions, &body.generics.type_params),
+    ) {
         ValueClass::Scalar(_) => "a scalar",
         ValueClass::Bitwise(_) if body.is_counted(kind) => "a counted bitwise value",
         ValueClass::Bitwise(_) => "a bitwise value held as its bytes",

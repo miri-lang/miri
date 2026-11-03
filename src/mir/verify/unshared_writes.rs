@@ -846,7 +846,7 @@ fn read_places(rvalue: &Rvalue) -> Vec<&Place> {
 /// address is taken.
 fn shared_roots(body: &Body, ownership: &OwnershipFacts) -> HashSet<Local> {
     let mut roots: HashSet<Local> = (1..=body.arg_count).map(Local).collect();
-    roots.extend(body.env_capture_locals.iter().copied());
+    roots.extend(body.captures.env_capture_locals.iter().copied());
     roots.extend(ownership.borrowed_locals.keys().copied());
     roots.extend(
         (body.local_decls.iter().enumerate())

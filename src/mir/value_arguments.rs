@@ -301,7 +301,12 @@ pub fn written_value_params(body: &Body) -> HashSet<Local> {
     }
     let is_value_param = |local: &Local| {
         (1..=body.arg_count).contains(&local.0)
-            && !body.out_params.get(local.0 - 1).copied().unwrap_or(false)
+            && !body
+                .signature
+                .out_params
+                .get(local.0 - 1)
+                .copied()
+                .unwrap_or(false)
             && body
                 .local_decls
                 .get(local.0)

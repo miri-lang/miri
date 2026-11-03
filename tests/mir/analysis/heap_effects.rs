@@ -263,7 +263,7 @@ pub fn field_writing_method() -> Body {
         1,
         vec![returning(vec![store(field(1, 0), local(2))])],
     );
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body
 }
 

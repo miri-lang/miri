@@ -336,7 +336,7 @@ fn a_binding_released_in_the_entry_block_stays_borrowed() {
 #[test]
 fn an_out_parameter_stays_borrowed() {
     let mut callee = binding_callee();
-    callee.out_params = vec![true];
+    callee.signature.out_params = vec![true];
     let mut program = program(callee);
     let facts = decide(&mut program);
     assert_borrowed(&program, &facts);
@@ -347,7 +347,7 @@ fn a_parameter_typed_by_a_type_parameter_stays_borrowed() {
     let element = Type::new(TypeKind::Custom("T".to_string(), None), span());
     let optional = Type::new(TypeKind::Option(Box::new(element)), span());
     let mut callee = binding_callee_of(optional);
-    callee.type_params.insert("T".to_string());
+    callee.generics.type_params.insert("T".to_string());
     let mut program = program(callee);
     let facts = decide(&mut program);
     assert_borrowed(&program, &facts);
@@ -405,7 +405,7 @@ fn a_statically_called_method_binding_its_parameter_owns_it() {
 #[test]
 fn a_receiver_bound_to_a_local_stays_borrowed() {
     let mut callee = binding_callee();
-    callee.receiver = Some(Local(1));
+    callee.signature.receiver = Some(Local(1));
     let symbol = Symbol::method("Owner", &[], "callee", &[]);
     let mut program = vec![
         (symbol.clone(), callee),
@@ -474,7 +474,7 @@ fn storing_method(statements: Vec<Statement>) -> Body {
         2,
         vec![block(statements, TerminatorKind::Return)],
     );
-    body.receiver = Some(Local(1));
+    body.signature.receiver = Some(Local(1));
     body.rc_classifier = RcClassifier::new(Rc::new(holder_definitions()));
     body
 }
@@ -654,7 +654,7 @@ fn a_vector_parameter_stays_borrowed() {
 #[test]
 fn a_closure_body_with_captures_stays_borrowed() {
     let mut callee = binding_callee();
-    callee.env_capture_locals = vec![Local(2)];
+    callee.captures.env_capture_locals = vec![Local(2)];
     let mut program = program(callee);
     let facts = decide(&mut program);
     assert_borrowed(&program, &facts);

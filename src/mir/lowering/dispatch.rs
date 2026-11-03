@@ -708,7 +708,8 @@ fn host_binding(
     };
     let local = *ctx.variable_map.get(name.as_str())?;
     let decl = ctx.body.local_decls.get(local.0)?;
-    let is_host = decl.device_handle.is_none() && !ctx.body.env_capture_locals.contains(&local);
+    let is_host =
+        decl.device_handle.is_none() && !ctx.body.captures.env_capture_locals.contains(&local);
     let is_declared_kind = decl.ty.kind.as_builtin_collection() == Some(kind);
     (is_host && is_declared_kind && !ctx.body.is_gpu()).then_some(local)
 }

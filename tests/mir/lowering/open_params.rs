@@ -61,11 +61,19 @@ fn a_body_lowered_for_one_instantiation_leaves_no_parameter_open() {
     let string = Type::new(TypeKind::String, Span::default());
     let (body, lambdas) = lower_pick(Some(HashMap::from([("T".to_string(), string)])));
 
-    assert!(body.open_params.is_empty(), "{:?}", body.open_params);
-    assert_eq!(body.bound_params, names(&["T"]));
+    assert!(
+        body.generics.open_params.is_empty(),
+        "{:?}",
+        body.generics.open_params
+    );
+    assert_eq!(body.generics.bound_params, names(&["T"]));
     for lambda in &lambdas {
-        assert!(lambda.open_params.is_empty(), "{:?}", lambda.open_params);
-        assert_eq!(lambda.bound_params, names(&["T"]));
+        assert!(
+            lambda.generics.open_params.is_empty(),
+            "{:?}",
+            lambda.generics.open_params
+        );
+        assert_eq!(lambda.generics.bound_params, names(&["T"]));
     }
 }
 
@@ -73,11 +81,11 @@ fn a_body_lowered_for_one_instantiation_leaves_no_parameter_open() {
 fn a_shared_generic_body_and_its_closures_leave_its_parameters_open() {
     let (body, lambdas) = lower_pick(None);
 
-    assert_eq!(body.open_params, names(&["T"]));
-    assert!(body.bound_params.is_empty());
+    assert_eq!(body.generics.open_params, names(&["T"]));
+    assert!(body.generics.bound_params.is_empty());
     assert!(!lambdas.is_empty(), "the closure inside `pick` is lowered");
     for lambda in &lambdas {
-        assert_eq!(lambda.open_params, names(&["T"]));
+        assert_eq!(lambda.generics.open_params, names(&["T"]));
     }
 }
 
@@ -95,6 +103,10 @@ fn a_body_substituted_at_an_open_parameter_leaves_that_parameter_open() {
     );
     let (body, _) = lower_pick(Some(HashMap::from([("T".to_string(), open)])));
 
-    assert_eq!(body.open_params, names(&["U"]));
-    assert!(body.bound_params.is_empty(), "{:?}", body.bound_params);
+    assert_eq!(body.generics.open_params, names(&["U"]));
+    assert!(
+        body.generics.bound_params.is_empty(),
+        "{:?}",
+        body.generics.bound_params
+    );
 }

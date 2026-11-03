@@ -233,7 +233,7 @@ impl<'a> BodyFacts<'a> {
             .is_some_and(|decl| decl.ty.kind == TypeKind::Int && decl.device_handle.is_none());
         is_int
             && !self.address_taken.contains(&bound)
-            && !self.body.env_capture_locals.contains(&bound)
+            && !self.body.captures.env_capture_locals.contains(&bound)
     }
 }
 

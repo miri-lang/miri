@@ -303,10 +303,10 @@ impl<'a> FunctionTranslator<'a> {
             local_types: &self.local_types,
             facts: self.facts,
             ptr_type: self.ptr_type,
-            closure_capture_ast_types: &body.closure_capture_types,
+            closure_capture_ast_types: &body.captures.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
-            open_params: &body.open_params,
-            bound_params: &body.bound_params,
+            open_params: &body.generics.open_params,
+            bound_params: &body.generics.bound_params,
             values: &values,
             stable_headers: &stable_headers,
         };
@@ -473,7 +473,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::define_value_slots(builder, body, locals, type_ctx.values, ptr_type);
                 Self::copy_written_value_params(builder, body, locals, type_ctx.values, ptr_type)?;
                 Self::load_scalar_out_params(builder, body, locals, out_param_ptr_vars, ptr_type);
-                if !body.env_capture_locals.is_empty() {
+                if !body.captures.env_capture_locals.is_empty() {
                     Self::load_closure_captures(builder, body, locals, ptr_type);
                 }
             }
@@ -587,7 +587,7 @@ impl<'a> FunctionTranslator<'a> {
         let env_ptr_var = locals[&Local(1)];
         let env_ptr_val = builder.use_var(env_ptr_var);
         let layout = CaptureLayout::of_body(body, ptr_type);
-        for (&cap_local, &offset) in body.env_capture_locals.iter().zip(&layout.offsets) {
+        for (&cap_local, &offset) in body.captures.env_capture_locals.iter().zip(&layout.offsets) {
             let Some(&cap_var) = locals.get(&cap_local) else {
                 continue;
             };

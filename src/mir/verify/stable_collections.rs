@@ -168,7 +168,7 @@ impl<'a> RecordCheck<'a> {
         if decl.device_handle.is_some() {
             return Some("it is a gpu-resident binding".to_string());
         }
-        if body.env_capture_locals.contains(&local) {
+        if body.captures.env_capture_locals.contains(&local) {
             return Some("it is a captured binding".to_string());
         }
         let is_address_taken = body
@@ -447,7 +447,7 @@ impl<'a> RecordCheck<'a> {
         let is_owned = if (1..=body.arg_count).contains(&root.0) {
             self.ownership.is_owned_param(root)
         } else {
-            !body.env_capture_locals.contains(&root) && !self.ownership.is_borrowed(root)
+            !body.captures.env_capture_locals.contains(&root) && !self.ownership.is_borrowed(root)
         };
         matches!(operand, Operand::Move(_)) && source.projection.is_empty() && is_owned
     }

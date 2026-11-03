@@ -32,7 +32,7 @@ use std::collections::HashMap;
 /// The declarations a body keeps that say what type a place reaches.
 pub struct PlaceTypes<'a> {
     pub local_decls: &'a [LocalDecl],
-    /// The instance the body was lowered for; see [`Body::instance`].
+    /// The instance the body was lowered for; see [`crate::mir::Generics::instance`].
     pub instance: Option<&'a Type>,
     pub closure_capture_types: &'a HashMap<Local, Vec<Type>>,
     /// The program's type table, which says what an enum's variants and a
@@ -52,11 +52,11 @@ impl<'a> PlaceTypes<'a> {
     pub fn of(body: &'a Body) -> Self {
         Self {
             local_decls: &body.local_decls,
-            instance: body.instance.as_ref(),
-            closure_capture_types: &body.closure_capture_types,
+            instance: body.generics.instance.as_ref(),
+            closure_capture_types: &body.captures.closure_capture_types,
             definitions: body.rc_classifier.definitions(),
-            type_params: &body.type_params,
-            open_params: &body.open_params,
+            type_params: &body.generics.type_params,
+            open_params: &body.generics.open_params,
             strict: true,
         }
     }

@@ -1331,7 +1331,7 @@ fn test_a_gpu_resident_binding_keeps_its_check() {
 #[test]
 fn test_a_captured_binding_keeps_its_check() {
     let mut body = fresh_then_check(Vec::new()).finish();
-    body.env_capture_locals.push(Local(2));
+    body.captures.env_capture_locals.push(Local(2));
     assert_eq!(checks_left(body), 1);
 }
 

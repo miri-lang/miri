@@ -301,7 +301,7 @@ fn dying_source_transfer(body: &Body, block: usize, kept: KeptPairs) -> Option<D
 /// Whether `local` is one the body owns and releases, and no borrow involves.
 fn is_transferable_source(body: &Body, local: Local, kept: KeptPairs) -> bool {
     local.0 > body.arg_count
-        && !body.env_capture_locals.contains(&local)
+        && !body.captures.env_capture_locals.contains(&local)
         && !kept.borrows.contains(&local)
         && !kept.lenders.contains(&local)
         && body.local_decls[local.0].device_handle.is_none()
@@ -499,7 +499,7 @@ fn passes_an_owned_argument(body: &Body) -> bool {
 fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let decl = &body.local_decls[local.0];
     local.0 > body.arg_count
-        && !body.env_capture_locals.contains(&local)
+        && !body.captures.env_capture_locals.contains(&local)
         && !ownership.is_borrowed(local)
         && decl.device_handle.is_none()
         && body.is_counted_local(local)

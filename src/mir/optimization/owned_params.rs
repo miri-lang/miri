@@ -149,8 +149,8 @@ fn can_own_parameters(symbol: &Symbol, body: &Body, synthesized: &HashSet<Symbol
     is_static_callee
         && !synthesized.contains(symbol)
         && matches!(body.execution_model, ExecutionModel::Cpu)
-        && body.open_params.is_empty()
-        && body.env_capture_locals.is_empty()
+        && body.generics.open_params.is_empty()
+        && body.captures.env_capture_locals.is_empty()
         && body.predecessor_counts().first() == Some(&1)
 }
 
@@ -237,11 +237,17 @@ impl Visitor for ParameterUses {
 /// buffer, and typed without any type parameter.
 fn is_ownable_param(body: &Body, param: Local, drop_hooks: &DropHookReach) -> bool {
     let decl = &body.local_decls[param.0];
-    let is_out = body.out_params.get(param.0 - 1).copied().unwrap_or(false);
-    let is_type_parameter =
-        |name: &str| body.type_params.contains(name) || body.open_params.contains(name);
+    let is_out = body
+        .signature
+        .out_params
+        .get(param.0 - 1)
+        .copied()
+        .unwrap_or(false);
+    let is_type_parameter = |name: &str| {
+        body.generics.type_params.contains(name) || body.generics.open_params.contains(name)
+    };
     body.is_counted_local(param)
-        && body.receiver != Some(param)
+        && body.signature.receiver != Some(param)
         && !is_out
         && decl.device_handle.is_none()
         && !mentions_type_parameter(&decl.ty, &is_type_parameter, true)

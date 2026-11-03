@@ -137,7 +137,7 @@ impl BodySketch {
 
     fn body(self) -> Body {
         let mut body = Body::new(0, span(), ExecutionModel::Cpu);
-        body.type_params = self.type_params.iter().map(|p| p.to_string()).collect();
+        body.generics.type_params = self.type_params.iter().map(|p| p.to_string()).collect();
         if self.has_self {
             let self_ty = TypeKind::Custom(SELF_TYPE_NAME.to_string(), None);
             body.new_local(LocalDecl::new(ty(self_ty), span()));

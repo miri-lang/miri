@@ -145,7 +145,7 @@ fn reachable_entries(body: &Body) -> HashSet<Local> {
             collection.is_none_or(|place| {
                 is_held_by_field(body, place)
                     || (1..=body.arg_count).contains(&place.local.0)
-                    || body.env_capture_locals.contains(&place.local)
+                    || body.captures.env_capture_locals.contains(&place.local)
             })
         })
         .map(|(entry, _)| entry)

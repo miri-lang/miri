@@ -79,7 +79,7 @@ fn whole_definitions(body: &Body) -> HashMap<usize, Vec<&Rvalue>> {
 /// whose address is taken.
 fn excluded_locals(body: &Body) -> HashSet<usize> {
     let mut excluded: HashSet<usize> = (1..=body.arg_count).collect();
-    excluded.extend(body.env_capture_locals.iter().map(|local| local.0));
+    excluded.extend(body.captures.env_capture_locals.iter().map(|local| local.0));
     for data in &body.basic_blocks {
         for statement in &data.statements {
             match &statement.kind {

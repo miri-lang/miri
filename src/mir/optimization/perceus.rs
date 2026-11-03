@@ -31,7 +31,7 @@ pub(super) struct PerceusContext<'a> {
     pub(super) rc_classifier: &'a RcClassifier,
     instance: Option<&'a crate::ast::types::Type>,
     type_params: &'a std::collections::HashSet<String>,
-    /// The parameters the body leaves open; see [`Body::open_params`].
+    /// The parameters the body leaves open; see [`crate::mir::Generics::open_params`].
     open_params: &'a std::collections::HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Used by `place_is_counted` to resolve `closure.Field(i)` projections so that
@@ -47,10 +47,10 @@ impl<'a> PerceusContext<'a> {
         PerceusContext {
             local_decls: &body.local_decls,
             rc_classifier: &body.rc_classifier,
-            instance: body.instance.as_ref(),
-            type_params: &body.type_params,
-            open_params: &body.open_params,
-            closure_capture_types: &body.closure_capture_types,
+            instance: body.generics.instance.as_ref(),
+            type_params: &body.generics.type_params,
+            open_params: &body.generics.open_params,
+            closure_capture_types: &body.captures.closure_capture_types,
             borrowed,
         }
     }
@@ -135,6 +135,7 @@ impl BorrowedLocals {
             arg_count: body.arg_count,
             owned_params: ownership.owned_params.clone(),
             read_only_captures: body
+                .captures
                 .env_capture_locals
                 .iter()
                 .copied()
@@ -200,20 +201,18 @@ impl Perceus {
             ref mut basic_blocks,
             ref local_decls,
             ref rc_classifier,
-            ref instance,
-            ref type_params,
-            ref open_params,
-            ref closure_capture_types,
+            ref generics,
+            ref captures,
             ..
         } = *body;
 
         let ctx = PerceusContext {
             local_decls,
             rc_classifier,
-            instance: instance.as_ref(),
-            type_params,
-            open_params,
-            closure_capture_types,
+            instance: generics.instance.as_ref(),
+            type_params: &generics.type_params,
+            open_params: &generics.open_params,
+            closure_capture_types: &captures.closure_capture_types,
             borrowed: &borrowed,
         };
 
@@ -261,6 +260,7 @@ impl Perceus {
             return false;
         };
         let retains: Vec<Statement> = body
+            .captures
             .env_capture_locals
             .iter()
             .filter(|local| managed_locals.contains(local))

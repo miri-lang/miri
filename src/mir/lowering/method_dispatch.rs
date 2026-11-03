@@ -1300,7 +1300,7 @@ pub(super) fn emit_cow_check(
     let Some(self_local) = cow_checked_local(ctx, &obj_op, span)? else {
         return Ok(obj_op);
     };
-    if ctx.body.receiver == Some(self_local) {
+    if ctx.body.signature.receiver == Some(self_local) {
         emit_receiver_unique_check(ctx, self_local, span);
         return Ok(obj_op);
     }

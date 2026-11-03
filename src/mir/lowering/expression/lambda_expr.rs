@@ -251,9 +251,9 @@ fn closure_context<'a>(
     // out a value of an open parameter as that body does: the signature the
     // enclosing body declares the closure at, `fn() U?`, is read against the
     // same parameters the lambda's own body is.
-    lambda_ctx.body.type_params = ctx.body.type_params.clone();
-    lambda_ctx.body.open_params = ctx.body.open_params.clone();
-    lambda_ctx.body.bound_params = ctx.body.bound_params.clone();
+    lambda_ctx.body.generics.type_params = ctx.body.generics.type_params.clone();
+    lambda_ctx.body.generics.open_params = ctx.body.generics.open_params.clone();
+    lambda_ctx.body.generics.bound_params = ctx.body.generics.bound_params.clone();
 
     // Local 1: env_ptr (implicit first parameter — pointer to the closure struct payload).
     // We use push_param so it does NOT emit StorageLive.
@@ -324,7 +324,7 @@ fn capture_type(ctx: &LoweringContext, outer_local: Local) -> Type {
 }
 
 /// Keep only the tentative captures whose closure-body local the body
-/// references, recording each kept one in `body.env_capture_locals`.
+/// references, recording each kept one in `body.captures.env_capture_locals`.
 ///
 /// An unreferenced capture's local stays allocated but is left out of
 /// `env_capture_locals` and of the closure aggregate's operands. When the body
@@ -341,7 +341,7 @@ fn keep_referenced_captures(
     let mut untouched = HashSet::new();
     for (name, outer_local, lambda_local) in tentative {
         if referenced_locals.contains(lambda_local) {
-            body.env_capture_locals.push(*lambda_local);
+            body.captures.env_capture_locals.push(*lambda_local);
             captures.push(CapturedVar {
                 name: name.clone(),
                 lambda_local: *lambda_local,
@@ -430,9 +430,13 @@ fn emit_closure_aggregate(
     // assignment — a stale entry would cause a spurious DecRef of the new
     // closure's payload at StorageDead.
     if capture_ast_types.is_empty() {
-        ctx.body.closure_capture_types.remove(&target.local);
+        ctx.body
+            .captures
+            .closure_capture_types
+            .remove(&target.local);
     } else {
         ctx.body
+            .captures
             .closure_capture_types
             .insert(target.local, capture_ast_types);
     }

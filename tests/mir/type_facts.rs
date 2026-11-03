@@ -140,7 +140,8 @@ fn a_registered_instantiation_keeps_its_thunk() {
 #[test]
 fn an_instantiation_only_a_closure_captures_gets_a_drop_thunk() {
     let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
-    body.closure_capture_types
+    body.captures
+        .closure_capture_types
         .insert(Local(0), vec![instance("Box", vec![string()])]);
     let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
 
