@@ -47,6 +47,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::mir::analysis::element_matching::{
     element_matching, matched_element, Matching, Question,
 };
+use crate::mir::facts::{OwnershipFacts, ProgramFacts};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::Symbol;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
@@ -108,6 +109,7 @@ impl HeapEffects {
     /// names a body the way a call to it names its callee.
     pub fn of<N>(
         program: &[(N, Body)],
+        facts: &ProgramFacts,
         link_name: impl Fn(&N) -> String,
         phase: Phase,
         hooks: &DropHookReach,
@@ -116,9 +118,10 @@ impl HeapEffects {
         for (index, (name, _)) in program.iter().enumerate() {
             by_link_name.entry(link_name(name)).or_default().push(index);
         }
-        let summaries: Vec<BodySummary> = program
-            .iter()
-            .map(|(_, body)| summarize(body, phase, hooks, &by_link_name))
+        let summaries: Vec<BodySummary> = (program.iter().zip(facts.iter()))
+            .map(|((_, body), facts)| {
+                summarize(body, facts.ownership(), phase, hooks, &by_link_name)
+            })
             .collect();
         let matches_open = open_matchers(&summaries);
         let loud = loud_bodies(&summaries, &matches_open, &by_link_name);
@@ -143,8 +146,14 @@ impl HeapEffects {
 
     /// The quiet calls of `body` and its calls handing a receiver over
     /// unique, read in `phase`.
-    pub fn call_facts(&self, body: &Body, phase: Phase, hooks: &DropHookReach) -> CallFacts {
-        let classifier = Classifier::of(body, phase, hooks);
+    pub fn call_facts(
+        &self,
+        body: &Body,
+        ownership: &OwnershipFacts,
+        phase: Phase,
+        hooks: &DropHookReach,
+    ) -> CallFacts {
+        let classifier = Classifier::of(body, ownership, phase, hooks);
         let mut facts = CallFacts::default();
         for (index, block) in body.basic_blocks.iter().enumerate() {
             let Some(terminator) = &block.terminator else {
@@ -211,9 +220,14 @@ pub struct BodyNoise<'b> {
 }
 
 impl<'b> BodyNoise<'b> {
-    pub fn of(body: &'b Body, phase: Phase, hooks: &'b DropHookReach<'b>) -> Self {
+    pub fn of(
+        body: &'b Body,
+        ownership: &'b OwnershipFacts,
+        phase: Phase,
+        hooks: &'b DropHookReach<'b>,
+    ) -> Self {
         BodyNoise {
-            classifier: Classifier::of(body, phase, hooks),
+            classifier: Classifier::of(body, ownership, phase, hooks),
         }
     }
 
@@ -235,11 +249,16 @@ impl<'b> BodyNoise<'b> {
 /// Stamp, on every call of every body of `program`, whether its callee is
 /// quiet and whether it is handed a receiver it writes in place
 /// ([`CallFlags`]). Read before reference counting, which funds every lent
-/// argument read through a class field that a loud call is handed.
-pub fn stamp_quiet_calls(program: &mut [(Symbol, Body)], hooks: &DropHookReach) {
-    let effects = HeapEffects::of(program, Symbol::link_name, Phase::Lowered, hooks);
-    for (_, body) in program.iter_mut() {
-        let facts = effects.call_facts(body, Phase::Lowered, hooks);
+/// argument read through a class field that a loud call is handed; `facts`
+/// are those of `program`'s bodies, in order.
+pub fn stamp_quiet_calls(
+    program: &mut [(Symbol, Body)],
+    facts: &ProgramFacts,
+    hooks: &DropHookReach,
+) {
+    let effects = HeapEffects::of(program, facts, Symbol::link_name, Phase::Lowered, hooks);
+    for ((_, body), body_facts) in program.iter_mut().zip(facts.iter()) {
+        let facts = effects.call_facts(body, body_facts.ownership(), Phase::Lowered, hooks);
         for (index, data) in body.basic_blocks.iter_mut().enumerate() {
             let at = BasicBlock(index);
             if let Some(Terminator {
@@ -300,6 +319,7 @@ struct BodySummary {
 /// calls a symbol no body of the program is lowered under.
 fn summarize(
     body: &Body,
+    ownership: &OwnershipFacts,
     phase: Phase,
     hooks: &DropHookReach,
     by_link_name: &HashMap<String, Vec<usize>>,
@@ -313,7 +333,7 @@ fn summarize(
     if body.is_gpu() {
         return summary;
     }
-    let classifier = Classifier::of(body, phase, hooks);
+    let classifier = Classifier::of(body, ownership, phase, hooks);
     for block in &body.basic_blocks {
         summary.is_loud |= (block.statements.iter()).any(|s| classifier.is_loud_statement(&s.kind));
         let noise = (block.terminator.as_ref()).map_or(Noise::Quiet, |t| classifier.noise(t));
@@ -464,15 +484,22 @@ fn hands_to_runtime_writer(terminator: &Terminator, local: Local) -> bool {
 /// The per-operation rule, for one body.
 struct Classifier<'b> {
     body: &'b Body,
+    ownership: &'b OwnershipFacts,
     types: PlaceTypes<'b>,
     hooks: &'b DropHookReach<'b>,
     phase: Phase,
 }
 
 impl<'b> Classifier<'b> {
-    fn of(body: &'b Body, phase: Phase, hooks: &'b DropHookReach<'b>) -> Self {
+    fn of(
+        body: &'b Body,
+        ownership: &'b OwnershipFacts,
+        phase: Phase,
+        hooks: &'b DropHookReach<'b>,
+    ) -> Self {
         Classifier {
             body,
+            ownership,
             types: PlaceTypes::of(body),
             hooks,
             phase,
@@ -628,7 +655,7 @@ impl<'b> Classifier<'b> {
         place.projection.is_empty()
             && self.may_release(local)
             && !self.body.env_capture_locals.contains(&local)
-            && !self.body.borrowed_locals.contains_key(&local)
+            && !self.ownership.is_borrowed(local)
             && self.body.local_decls.get(local.0).is_some()
             && self.body.is_counted_local(local)
     }
@@ -636,7 +663,7 @@ impl<'b> Classifier<'b> {
     /// Whether the body may release what `local` holds: it is no parameter,
     /// or one the body takes over.
     fn may_release(&self, local: Local) -> bool {
-        !(1..=self.body.arg_count).contains(&local.0) || self.body.is_owned_param(local)
+        !(1..=self.body.arg_count).contains(&local.0) || self.ownership.is_owned_param(local)
     }
 
     /// Whether a store into `dest` may replace a value another name holds.
@@ -645,7 +672,7 @@ impl<'b> Classifier<'b> {
     }
 
     fn is_shared_root(&self, local: Local) -> bool {
-        is_shared_root(self.body, local)
+        is_shared_root(self.body, self.ownership, local)
     }
 
     /// Whether releasing what `place` holds may run a drop hook; a place
@@ -711,13 +738,13 @@ fn is_shared_holder(ty: Option<&Type>, definitions: &HashMap<String, TypeDefinit
 /// Whether `local` is the receiver, a parameter the body takes over, an
 /// `out` parameter or a capture of `body`: a binding whose value a caller or
 /// a closure's environment still reads after the body writes it.
-fn is_shared_root(body: &Body, local: Local) -> bool {
+fn is_shared_root(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let is_out = (local.0.checked_sub(1))
         .and_then(|index| body.out_params.get(index))
         .copied()
         .unwrap_or(false);
     body.receiver == Some(local)
-        || body.is_owned_param(local)
+        || ownership.is_owned_param(local)
         || is_out
         || body.env_capture_locals.contains(&local)
 }
@@ -733,9 +760,9 @@ pub struct HeapLends<'b> {
 }
 
 impl<'b> HeapLends<'b> {
-    pub fn of(body: &'b Body) -> Self {
+    pub fn of(body: &'b Body, ownership: &OwnershipFacts) -> Self {
         let types = PlaceTypes::of(body);
-        let entry_borrows = entry_borrows(body, &types);
+        let entry_borrows = entry_borrows(body, ownership, &types);
         HeapLends {
             body,
             types,
@@ -770,11 +797,11 @@ impl<'b> HeapLends<'b> {
 /// the collection it reads ([`RuntimeEffect::hands_back_a_borrow`]), when that
 /// collection is reached through a class field or a dereference, or is the
 /// receiver, an owned or `out` parameter or a capture.
-fn entry_borrows(body: &Body, types: &PlaceTypes) -> HashSet<Local> {
+fn entry_borrows(body: &Body, ownership: &OwnershipFacts, types: &PlaceTypes) -> HashSet<Local> {
     borrowed_entries(body)
         .filter(|(_, collection)| {
             collection.is_some_and(|place| {
-                crosses_heap_field(types, place) || is_shared_root(body, place.local)
+                crosses_heap_field(types, place) || is_shared_root(body, ownership, place.local)
             })
         })
         .map(|(entry, _)| entry)

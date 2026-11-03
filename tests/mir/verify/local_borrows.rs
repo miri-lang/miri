@@ -17,6 +17,7 @@ use super::{
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::mir::block::{BasicBlock, BasicBlockData};
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::place::PlaceElem;
 use miri::mir::symbol::Symbol;
 use miri::mir::verify::{verify_body, verify_local_borrows};
@@ -27,6 +28,27 @@ use miri::mir::{
 use miri::runtime_fns::rt;
 use miri::type_checker::ModuleId;
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
+
+/// A body with the locals it records as borrowing.
+struct Recorded {
+    body: Body,
+    ownership: OwnershipFacts,
+}
+
+impl Deref for Recorded {
+    type Target = Body;
+
+    fn deref(&self) -> &Body {
+        &self.body
+    }
+}
+
+impl DerefMut for Recorded {
+    fn deref_mut(&mut self) -> &mut Body {
+        &mut self.body
+    }
+}
 
 fn int_ty() -> Type {
     Type::new(TypeKind::Int, miri::error::syntax::Span::new(0, 0))
@@ -66,8 +88,8 @@ fn end_of_borrow_and_list() -> Vec<Statement> {
 /// Locals: 0 the return slot, 1 a list of strings the body owns, 2 the index,
 /// 3 the string read out of the list, 4 a call's result. `_3` is recorded as
 /// borrowing `_1[_2]`.
-fn borrowing_body(blocks: Vec<BasicBlockData>) -> Body {
-    let mut body = body_of(
+fn borrowing_body(blocks: Vec<BasicBlockData>) -> Recorded {
+    let body = body_of(
         &[
             void_ty(),
             collection_ty("List", &[TypeKind::String]),
@@ -78,19 +100,24 @@ fn borrowing_body(blocks: Vec<BasicBlockData>) -> Body {
         0,
         blocks,
     );
-    body.borrowed_locals = HashMap::from([(Local(3), vec![Local(1)])]);
-    body
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals: HashMap::from([(Local(3), vec![Local(1)])]),
+            ..OwnershipFacts::default()
+        },
+    }
 }
 
-fn single_block(middle: Vec<Statement>) -> Body {
+fn single_block(middle: Vec<Statement>) -> Recorded {
     let mut statements = list_and_index();
     statements.extend(middle);
     statements.extend(end_of_borrow_and_list());
     borrowing_body(vec![block(statements, ret())])
 }
 
-fn assert_refused(body: &Body, what: &str) {
-    let violations = verify_local_borrows(body, None);
+fn assert_refused(body: &Recorded, what: &str) {
+    let violations = verify_local_borrows(body, &body.ownership, None);
     assert!(
         violations
             .iter()
@@ -103,7 +130,7 @@ fn assert_refused(body: &Body, what: &str) {
 #[test]
 fn a_borrow_whose_list_stays_holds_no_reference_and_is_no_leak() {
     let body = single_block(Vec::new());
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &body.ownership);
     assert!(violations.is_empty(), "got: {}", messages(&violations));
 }
 
@@ -112,8 +139,8 @@ fn a_borrow_whose_list_stays_holds_no_reference_and_is_no_leak() {
 #[test]
 fn the_same_read_unrecorded_is_a_leak() {
     let mut body = single_block(Vec::new());
-    body.borrowed_locals.clear();
-    let violations = verify_body(&body);
+    body.ownership.borrowed_locals.clear();
+    let violations = verify_body(&body, &body.ownership);
     assert!(
         violations
             .iter()
@@ -128,7 +155,7 @@ fn a_borrow_whose_list_is_released_while_it_holds_is_refused() {
     let body = single_block(vec![super::decref(1)]);
     assert_refused(&body, "releasing the list inside the range");
     assert!(
-        !verify_body(&body).is_empty(),
+        !verify_body(&body, &body.ownership).is_empty(),
         "verify_body reports the refused borrow"
     );
 }
@@ -210,7 +237,7 @@ fn parameter_element() -> Vec<Statement> {
 /// A body whose list `_1` is a parameter it borrows, with `_3` recorded as
 /// borrowing `_1[_2]`: block 0 reads the element and ends in `terminator`,
 /// block 1 runs `middle` and ends the borrow.
-fn parameter_borrowing_body(terminator: Terminator, middle: Vec<Statement>) -> Body {
+fn parameter_borrowing_body(terminator: Terminator, middle: Vec<Statement>) -> Recorded {
     let mut end = middle;
     end.push(super::storage_dead(3));
     let mut body = borrowing_body(vec![
@@ -270,10 +297,10 @@ fn a_borrow_across_a_call_the_pass_falsely_stamped_quiet_is_refused() {
 fn a_borrow_of_a_parameter_element_holds_only_across_a_call_found_harmless() {
     let body = parameter_borrowing_body(unrelated_call(), Vec::new());
     let quiet = HashSet::from([BasicBlock(0)]);
-    let violations = verify_local_borrows(&body, Some(&quiet));
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&quiet));
     assert!(violations.is_empty(), "got: {}", messages(&violations));
     let elsewhere = HashSet::from([BasicBlock(1)]);
-    let violations = verify_local_borrows(&body, Some(&elsewhere));
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&elsewhere));
     assert!(
         violations
             .iter()
@@ -310,7 +337,7 @@ fn the_storage_end_of_a_parameter_owner_keeps_the_borrow_and_of_a_local_owner_re
 #[test]
 fn a_borrow_whose_owner_is_not_recorded_is_refused() {
     let mut body = single_block(Vec::new());
-    body.borrowed_locals = HashMap::from([(Local(3), vec![Local(4)])]);
+    body.ownership.borrowed_locals = HashMap::from([(Local(3), vec![Local(4)])]);
     assert_refused(&body, "a record missing the owner");
 }
 
@@ -336,16 +363,16 @@ fn a_borrow_whose_list_is_lent_to_a_reader_holds() {
         ),
         block(end_of_borrow_and_list(), ret()),
     ]);
-    let violations = verify_local_borrows(&body, None);
+    let violations = verify_local_borrows(&body, &body.ownership, None);
     assert!(violations.is_empty(), "got: {}", messages(&violations));
 }
 
 /// Locals as in [`borrowing_body`], but `_1` is a list of lists of integers
 /// and `_3` the row read out of it — a value a callee writing its parameter
 /// copies on entry. `_4` is a second list of integers.
-fn row_borrowing_body(call: Terminator) -> Body {
+fn row_borrowing_body(call: Terminator) -> Recorded {
     let row = collection_ty("List", &[TypeKind::Int]);
-    let mut body = body_of(
+    let body = body_of(
         &[
             void_ty(),
             collection_ty("List", std::slice::from_ref(&row.kind)),
@@ -359,8 +386,13 @@ fn row_borrowing_body(call: Terminator) -> Body {
             block(end_of_borrow_and_list(), ret()),
         ],
     );
-    body.borrowed_locals = HashMap::from([(Local(3), vec![Local(1)])]);
-    body
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals: HashMap::from([(Local(3), vec![Local(1)])]),
+            ..OwnershipFacts::default()
+        },
+    }
 }
 
 /// A call to `callee` handing it `args`, each with its mode, returning to
@@ -400,8 +432,8 @@ fn lent(local: usize) -> (Operand, ArgMode) {
     (Operand::Copy(place(local)), ArgMode::Borrowed)
 }
 
-fn assert_held(body: &Body, what: &str) {
-    let violations = verify_local_borrows(body, None);
+fn assert_held(body: &Recorded, what: &str) {
+    let violations = verify_local_borrows(body, &body.ownership, None);
     assert!(violations.is_empty(), "{what}: {}", messages(&violations));
 }
 
@@ -466,7 +498,7 @@ fn entry_borrowing_body(
     middle: Vec<Statement>,
     terminator: Terminator,
     recorded: Vec<Local>,
-) -> Body {
+) -> Recorded {
     let list = collection_ty("List", &[TypeKind::String]);
     let zero = super::constant(int_ty(), Literal::Integer(IntegerLiteral::I64(0)));
     let lookup = vec![
@@ -485,7 +517,7 @@ fn entry_borrowing_body(
         )),
     ];
     read.extend(middle);
-    let mut body = body_of(
+    let body = body_of(
         &[
             void_ty(),
             collection_ty("Map", &[TypeKind::Int, list.kind.clone()]),
@@ -508,8 +540,13 @@ fn entry_borrowing_body(
             block(end_of_borrow_and_list(), ret()),
         ],
     );
-    body.borrowed_locals = HashMap::from([(Local(3), recorded)]);
-    body
+    Recorded {
+        body,
+        ownership: OwnershipFacts {
+            borrowed_locals: HashMap::from([(Local(3), recorded)]),
+            ..OwnershipFacts::default()
+        },
+    }
 }
 
 /// An entry a map hands back holds no reference of its own: the map does.
@@ -533,7 +570,7 @@ fn a_borrow_out_of_a_map_entry_across_a_call_not_found_quiet_is_refused() {
     );
     assert_refused(&body, "a call with no heap facts");
     let quiet = HashSet::from([BasicBlock(1)]);
-    let violations = verify_local_borrows(&body, Some(&quiet));
+    let violations = verify_local_borrows(&body, &body.ownership, Some(&quiet));
     assert!(violations.is_empty(), "got: {}", messages(&violations));
 }
 

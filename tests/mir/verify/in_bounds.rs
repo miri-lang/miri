@@ -14,6 +14,7 @@ use crate::mir::optimization::stable_collections::{
 };
 use miri::error::syntax::Span;
 use miri::mir::element_abi::pass_elements_by_address;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::optimization::in_bounds::record_in_bounds;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::proven_indexes::{mark_in_bounds, proven_indexes};
@@ -26,7 +27,7 @@ use miri::mir::{
 
 /// `body` with its stable collections recorded and `proof` forged on.
 fn forged(mut body: Body, proof: InBounds) -> Body {
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     assert!(
         mark_in_bounds(&mut body, proof),
         "nothing indexes the list there"
@@ -53,7 +54,7 @@ fn messages(body: &Body) -> Vec<String> {
 #[test]
 fn test_an_entry_the_pass_made_has_no_violation() {
     let mut body = loop_over_a_list();
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     assert_eq!(proven_indexes(&body).len(), 1);
     assert_eq!(messages(&body), Vec::<String>::new());
@@ -124,7 +125,7 @@ fn test_an_entry_no_stable_record_covers_is_flagged() {
 #[test]
 fn test_a_proven_index_below_another_projection_is_flagged() {
     let mut body = loop_over_a_list();
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     let StatementKind::Assign(_, Rvalue::Use(Operand::Copy(read))) =
         &mut body.basic_blocks[LOOP_BODY].statements[0].kind
@@ -145,7 +146,7 @@ fn test_a_proven_index_below_another_projection_is_flagged() {
 fn test_an_unproven_index_marked_after_the_element_abi_is_flagged() {
     let mut body = loop_over_a_list();
     body.basic_blocks[LOOP_HEADER].statements[0] = assign(Place::new(LENGTH), Rvalue::Use(int(3)));
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     pass_elements_by_address(&mut body).expect("the element ABI applies");
     assert!(mark_in_bounds(&mut body, read_at(0)), "{body}");
     let found = messages(&body);
@@ -159,7 +160,7 @@ fn test_an_unproven_index_marked_after_the_element_abi_is_flagged() {
 #[test]
 fn test_a_proof_carried_through_the_element_abi_has_no_violation() {
     let mut body = loop_over_a_list();
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     pass_elements_by_address(&mut body).expect("the element ABI applies");
     assert_eq!(proven_indexes(&body).len(), 1, "{body}");
@@ -177,7 +178,7 @@ fn flags_the_unproven_read(body: Body) -> bool {
 #[test]
 fn test_an_entry_proven_by_a_bound_no_greater_than_the_length_has_no_violation() {
     let mut body = loop_under_a_guard(compare(BinOp::Le, BOUND, LENGTH), BinOp::Lt);
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     assert_eq!(proven_indexes(&body).len(), 1);
     assert_eq!(messages(&body), Vec::<String>::new());
@@ -186,7 +187,7 @@ fn test_an_entry_proven_by_a_bound_no_greater_than_the_length_has_no_violation()
 #[test]
 fn test_an_entry_proven_by_a_bound_below_the_length_has_no_violation() {
     let mut body = loop_under_a_guard(compare(BinOp::Lt, BOUND, LENGTH), BinOp::Le);
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     assert_eq!(proven_indexes(&body).len(), 1);
     assert_eq!(messages(&body), Vec::<String>::new());
@@ -259,7 +260,7 @@ fn test_an_entry_after_a_call_between_the_guard_and_the_loop_is_flagged() {
 /// `body` with its records made by the passes, after checking they recorded
 /// `expected` entries and the verifier finds each proven.
 fn checks_clean(mut body: Body, expected: usize) {
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     assert_eq!(proven_indexes(&body).len(), expected, "{body}");
     assert_eq!(messages(&body), Vec::<String>::new());

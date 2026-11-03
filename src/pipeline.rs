@@ -22,8 +22,12 @@ use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
 use crate::mir::call_graph::direct_callees;
+use crate::mir::facts::{ProgramFacts, StaleFact};
 use crate::mir::lowering::requests::LoweredBody;
-use crate::mir::passes::{self, run_body_pass, run_program_pass, PassContract};
+use crate::mir::passes::{
+    self, run_body_pass, run_body_pass_with_facts, run_program_pass, run_program_pass_with_facts,
+    PassContract,
+};
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
 #[cfg(feature = "cranelift")]
@@ -847,6 +851,13 @@ fn refuses_the_program(code: DiagnosticCode) -> bool {
 impl From<PassContract> for CompilerError {
     fn from(broken: PassContract) -> Self {
         CompilerError::Internal(broken.to_string())
+    }
+}
+
+/// A fact read after a rewrite left it stale is a fault of the compiler.
+impl From<StaleFact> for CompilerError {
+    fn from(stale: StaleFact) -> Self {
+        CompilerError::Internal(stale.to_string())
     }
 }
 
@@ -1974,7 +1985,7 @@ impl Pipeline {
     ) -> Result<PathBuf, CompilerError> {
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
-        let mir_bodies = self.lower_to_mir(&mut pipeline_result, opts.release)?;
+        let (mir_bodies, _) = self.lower_to_mir(&mut pipeline_result, opts.release)?;
 
         match opts.target {
             BuildTarget::Native => {
@@ -2796,7 +2807,7 @@ impl Pipeline {
         &self,
         result: &mut PipelineResult,
         is_release: bool,
-    ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
+    ) -> Result<(Vec<(String, mir::Body)>, ProgramFacts), CompilerError> {
         let lowered = self.lower_program(result, is_release)?;
         let launches: Vec<_> = (lowered.iter())
             .flat_map(|lowered| lowered.requests.kernel_workgroups.iter().cloned())
@@ -2822,12 +2833,11 @@ impl Pipeline {
         // Read back every gpu-resident binding a host read needs fresh, in every
         // build. Runs before RC insertion, which accounts for the host arrays the
         // readbacks detach.
-        for (_symbol, body) in &mut lowered {
-            run_body_pass(
-                &passes::INSERT_READBACKS,
-                body,
-                mir::residency::insert_readbacks,
-            )?;
+        let mut facts = ProgramFacts::of(&lowered);
+        for ((_symbol, body), facts) in lowered.iter_mut().zip(facts.iter_mut()) {
+            let readbacks =
+                |body: &mut mir::Body, _: &mut _| mir::residency::insert_readbacks(body);
+            run_body_pass_with_facts(&passes::INSERT_READBACKS, body, facts, readbacks)?;
         }
 
         // Hand every call a value held as its bytes from a value local the
@@ -2841,14 +2851,19 @@ impl Pipeline {
         run_program_pass(&passes::CONFORM_OPTIONAL_OPERANDS, &mut lowered, conform)?;
 
         let verify_mode = self.verify_mode();
-        let program_violations =
-            run_program_pass(&passes::DECIDE_OWNED_PARAMETERS, &mut lowered, |lowered| {
-                Self::decide_owned_parameters(result, lowered, verify_mode.is_some())
-            })?;
+        let program_violations = run_program_pass_with_facts(
+            &passes::DECIDE_OWNED_PARAMETERS,
+            &mut lowered,
+            &mut facts,
+            |lowered, facts| {
+                Self::decide_owned_parameters(result, lowered, facts, verify_mode.is_some())
+            },
+        )?;
         let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
-        run_program_pass(&passes::STAMP_QUIET_CALLS, &mut lowered, |lowered| {
-            mir::analysis::heap_effects::stamp_quiet_calls(lowered, &hooks)
-        })?;
+        let stamp = |lowered: &mut [(Symbol, mir::Body)], facts: &mut ProgramFacts| {
+            mir::analysis::heap_effects::stamp_quiet_calls(lowered, facts, &hooks)
+        };
+        run_program_pass_with_facts(&passes::STAMP_QUIET_CALLS, &mut lowered, &mut facts, stamp)?;
 
         let mut bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
@@ -2857,39 +2872,39 @@ impl Pipeline {
         result.device_helpers = gpu_names.into_helpers();
 
         // Insert Perceus RC operations on all function bodies, exactly once,
-        // on the bodies as lowering and the GPU passes above left them. No MIR
-        // optimization pass runs before this: `mir::optimization::optimize` is
-        // not called anywhere in the pipeline.
-        for (_name, body) in &mut bodies {
-            run_body_pass(&passes::INSERT_RC, body, mir::optimization::insert_rc)?;
-        }
-
-        // Elide redundant IncRef/DecRef pairs identified by the RC elision pass.
-        // This runs after Perceus to remove pairs that are provably net-zero.
-        for (_name, body) in &mut bodies {
-            run_body_pass(&passes::ELIDE_RC, body, mir::optimization::elide_rc)?;
+        // on the bodies as lowering and the GPU passes above left them, then
+        // elide redundant IncRef/DecRef pairs that are provably net-zero.
+        for ((_name, body), facts) in bodies.iter_mut().zip(facts.iter_mut()) {
+            run_body_pass_with_facts(&passes::INSERT_RC, body, facts, |body, facts| {
+                mir::optimization::insert_rc(body, facts.ownership_mut())
+            })?;
+            run_body_pass_with_facts(&passes::ELIDE_RC, body, facts, |body, facts| {
+                mir::optimization::elide_rc(body, facts.ownership())
+            })?;
         }
 
         // Drop the uniqueness checks an earlier write through the same path
         // already answered, on the bodies with every retain explicit; thread
         // branch conditions; copy each loop a guard on its bound proves in
         // bounds; then record each collection a loop leaves unchanged.
-        for (_name, body) in &mut bodies {
+        for ((_name, body), facts) in bodies.iter_mut().zip(facts.iter_mut()) {
             use mir::optimization as opt;
-            run_body_pass(
-                &passes::ELIDE_UNSHARE_CHECKS,
+            run_body_pass_with_facts(&passes::ELIDE_UNSHARE_CHECKS, body, facts, |body, _| {
+                opt::elide_unshare_checks(body)
+            })?;
+            run_body_pass_with_facts(&passes::THREAD_BRANCH_CONDITIONS, body, facts, |body, _| {
+                opt::thread_branch_conditions(body)
+            })?;
+            run_body_pass_with_facts(
+                &passes::VERSION_BOUNDED_LOOPS,
                 body,
-                opt::elide_unshare_checks,
+                facts,
+                |body, facts| opt::loop_versioning::version_bounded_loops(body, facts.ownership()),
             )?;
-            run_body_pass(
-                &passes::THREAD_BRANCH_CONDITIONS,
-                body,
-                opt::thread_branch_conditions,
-            )?;
-            let version = opt::loop_versioning::version_bounded_loops;
-            run_body_pass(&passes::VERSION_BOUNDED_LOOPS, body, version)?;
-            let stable = opt::stable_collections::record_stable_collections;
-            run_body_pass(&passes::RECORD_STABLE_COLLECTIONS, body, stable)?;
+            let stable = &passes::RECORD_STABLE_COLLECTIONS;
+            run_body_pass_with_facts(stable, body, facts, |body, facts| {
+                opt::stable_collections::record_stable_collections(body, facts.ownership())
+            })?;
             run_body_pass(
                 &passes::RECORD_IN_BOUNDS,
                 body,
@@ -2908,11 +2923,12 @@ impl Pipeline {
         // closure trampolines, or a post-ABI run reports false violations.
         if let Some(mode) = verify_mode {
             let definitions = result.type_checker.type_definitions();
-            let report = mir::verify::verify_program(definitions, &bodies, program_violations);
+            let report =
+                mir::verify::verify_program(definitions, &bodies, &facts, program_violations)?;
             Self::fail_or_warn(&report, &mode)?;
         }
 
-        Ok(bodies)
+        Ok((bodies, facts))
     }
 
     /// How optional MIR verification runs: enabled by `--verify-mir` or by
@@ -2937,6 +2953,7 @@ impl Pipeline {
     fn decide_owned_parameters(
         result: &PipelineResult,
         lowered: &mut [(Symbol, mir::Body)],
+        facts: &mut ProgramFacts,
         is_verifying: bool,
     ) -> Vec<(Symbol, mir::verify::VerificationViolation)> {
         let type_definitions = result.type_checker.type_definitions();
@@ -2947,13 +2964,14 @@ impl Pipeline {
         synthesized.extend(result.vtable_fills.slot_symbols().cloned());
         mir::optimization::owned_params::decide_owned_parameters(
             lowered,
+            facts,
             &synthesized,
             &mir::type_facts::DropHookReach::new(type_definitions),
         );
         if !is_verifying {
             return Vec::new();
         }
-        let mut violations = mir::verify::verify_owned_argument_modes(lowered);
+        let mut violations = mir::verify::verify_owned_argument_modes(lowered, facts);
         violations.extend(mir::verify::verify_optional_call_layouts(
             lowered,
             type_definitions,
@@ -4124,7 +4142,7 @@ impl Pipeline {
         let mut pipeline_result = self.frontend_script(source)?;
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
-        let mir_bodies = self.lower_to_mir(&mut pipeline_result, false)?;
+        let (mir_bodies, _) = self.lower_to_mir(&mut pipeline_result, false)?;
 
         let mut output = String::new();
         for (name, body) in &mir_bodies {
@@ -4167,7 +4185,7 @@ impl Pipeline {
         release: bool,
     ) -> Result<GpuProgram, CompilerError> {
         let mut result = self.frontend(source)?;
-        let bodies = self.lower_to_mir(&mut result, release)?;
+        let (bodies, _) = self.lower_to_mir(&mut result, release)?;
         Ok(GpuProgram {
             bodies,
             device_helpers: result.device_helpers,
@@ -4187,6 +4205,18 @@ impl Pipeline {
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         // `lower_to_mir` already inserts and elides RC. Running either pass again
         // here would hand tests bodies carrying two of every operation.
+        Ok(self.lower_to_mir(&mut pipeline_result, false)?.0)
+    }
+
+    /// [`Self::get_mir_bodies_with_rc`], with what the passes recorded about
+    /// each body beside it, in the same order.
+    pub fn get_mir_program_with_rc(
+        &self,
+        source: &str,
+    ) -> Result<(Vec<(String, crate::mir::Body)>, ProgramFacts), CompilerError> {
+        let mut pipeline_result = self.frontend_script(source)?;
+        pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
+        pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         self.lower_to_mir(&mut pipeline_result, false)
     }
 

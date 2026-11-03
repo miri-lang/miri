@@ -34,7 +34,7 @@
 //! | a bare-local `Move(p)` operand of an aggregate holding references | `d(p) -= 1`; a retain before it pays for `p` itself |
 //! | call destination | `d(dest) += 1`, unless the callee hands back a borrow |
 //! | an argument the callee takes ownership of — a runtime intrinsic's taken position, or one passed `ArgMode::Owned` | `d(p) -= 1` |
-//! | entry to a body | each parameter it takes over (`Body::owned_params`) owns 1; every other parameter is the caller's and untracked |
+//! | entry to a body | each parameter it takes over (`OwnershipFacts::owned_params`) owns 1; every other parameter is the caller's and untracked |
 //! | a call that never returns | the path stops; nothing is carried into its successor |
 //! | `Return` | every tracked local must own nothing |
 //!
@@ -91,6 +91,7 @@
 
 use crate::ast::literal::Literal;
 use crate::ast::types::BuiltinCollectionKind;
+use crate::mir::facts::{OwnershipFacts, ProgramFacts};
 use crate::mir::lowering::constructors::compute_elem_size_from_type;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
@@ -269,8 +270,8 @@ fn join_states(into: &mut PathState, from: &PathState) {
 ///
 /// With no facts on which calls are harmless, every call to a function of the
 /// program is taken as harmful; see [`verify_body_with_harmless_calls`].
-pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
-    verify_body_with_harmless_calls(body, None)
+pub fn verify_body(body: &Body, ownership: &OwnershipFacts) -> Vec<VerificationViolation> {
+    verify_body_with_harmless_calls(body, ownership, None)
 }
 
 /// [`verify_body`], judging the borrowed locals the body records against
@@ -279,6 +280,7 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
 /// `None` takes every such call as harmful.
 pub fn verify_body_with_harmless_calls(
     body: &Body,
+    ownership: &OwnershipFacts,
     harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> Vec<VerificationViolation> {
     let mut violations = verify_callees(body);
@@ -290,17 +292,17 @@ pub fn verify_body_with_harmless_calls(
     }
 
     let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
-    let (borrows, borrow_violations) = local_borrows::held_borrows(body, harmless_calls);
+    let (borrows, borrow_violations) = local_borrows::held_borrows(body, ownership, harmless_calls);
     violations.extend(borrow_violations);
-    let tracked = collect_tracked_locals(body, &env_captures, &borrows);
+    let tracked = collect_tracked_locals(body, ownership, &env_captures, &borrows);
     let managed_params = collect_managed_param_locals(body);
     let reachable = reachable_block_indices(body);
 
     violations.extend(verify_collection_element_width(body));
-    violations.extend(parameter_writes::verify_parameter_writes(body));
-    flag_decref_on_params(body, &managed_params, &mut violations);
+    violations.extend(parameter_writes::verify_parameter_writes(body, ownership));
+    flag_decref_on_params(body, ownership, &managed_params, &mut violations);
 
-    let fixpoint = run_to_fixpoint(body, &tracked, &reachable);
+    let fixpoint = run_to_fixpoint(body, ownership, &tracked, &reachable);
     report_path_findings(
         body,
         &tracked,
@@ -326,10 +328,10 @@ pub fn verify_body_with_harmless_calls(
 /// [`owner_violations`]).
 pub fn verify_owned_argument_modes(
     program: &[(Symbol, Body)],
+    facts: &ProgramFacts,
 ) -> Vec<(Symbol, VerificationViolation)> {
-    let owned: HashMap<&Symbol, &[bool]> = program
-        .iter()
-        .map(|(symbol, body)| (symbol, body.owned_params.as_slice()))
+    let owned: HashMap<&Symbol, &[bool]> = (program.iter().zip(facts.iter()))
+        .map(|((symbol, _), facts)| (symbol, facts.ownership().owned_params.as_slice()))
         .collect();
     let mut violations: Vec<(Symbol, VerificationViolation)> = program
         .iter()
@@ -341,7 +343,7 @@ pub fn verify_owned_argument_modes(
                 .map(move |violation| (symbol.clone(), violation))
         })
         .collect();
-    violations.extend(owner_violations(program));
+    violations.extend(owner_violations(program, facts));
     violations
 }
 
@@ -349,11 +351,13 @@ pub fn verify_owned_argument_modes(
 /// through a host call whose modes [`argument_mode_violation`] checks: a second
 /// body lowered under its symbol, a mention that is not a call's callee, and a
 /// call from a GPU body, which funds no reference.
-fn owner_violations(program: &[(Symbol, Body)]) -> Vec<(Symbol, VerificationViolation)> {
-    let owners: HashSet<&Symbol> = program
-        .iter()
-        .filter(|(_, body)| body.owned_params.contains(&true))
-        .map(|(symbol, _)| symbol)
+fn owner_violations(
+    program: &[(Symbol, Body)],
+    facts: &ProgramFacts,
+) -> Vec<(Symbol, VerificationViolation)> {
+    let owners: HashSet<&Symbol> = (program.iter().zip(facts.iter()))
+        .filter(|(_, facts)| facts.ownership().owned_params.contains(&true))
+        .map(|((symbol, _), _)| symbol)
         .collect();
     if owners.is_empty() {
         return Vec::new();
@@ -549,13 +553,14 @@ fn callee_violation(body: &Body, kind: &TerminatorKind) -> Option<VerificationVi
 /// like a local of its own, holding the one reference its caller funded.
 fn collect_tracked_locals(
     body: &Body,
+    ownership: &OwnershipFacts,
     env_captures: &HashSet<Local>,
     borrows: &HashSet<Local>,
 ) -> Vec<Local> {
     (0..body.local_decls.len())
         .map(Local)
         .filter(|&local| {
-            (local.0 > body.arg_count || body.is_owned_param(local))
+            (local.0 > body.arg_count || ownership.is_owned_param(local))
                 && !env_captures.contains(&local)
                 && !borrows.contains(&local)
                 && body.is_counted_local(local)
@@ -588,6 +593,7 @@ fn reachable_block_indices(body: &Body) -> Vec<usize> {
 /// over, and takes the new value back through its slot.
 fn flag_decref_on_params(
     body: &Body,
+    ownership: &OwnershipFacts,
     managed_params: &HashSet<Local>,
     violations: &mut Vec<VerificationViolation>,
 ) {
@@ -595,7 +601,7 @@ fn flag_decref_on_params(
     let managed_params: HashSet<Local> = managed_params
         .difference(&written_back)
         .copied()
-        .filter(|local| !body.is_owned_param(*local))
+        .filter(|local| !ownership.is_owned_param(*local))
         .collect();
     let mut seen: Vec<Local> = Vec::new();
     for block in &body.basic_blocks {
@@ -639,7 +645,12 @@ struct Fixpoint {
 /// converged entry: a change to an entry always queues its block again, and a
 /// queued block reads its entry only when it is dequeued. A reachable block the
 /// walk never enters still gets an exit, computed from the empty state.
-fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpoint {
+fn run_to_fixpoint(
+    body: &Body,
+    ownership: &OwnershipFacts,
+    tracked: &[Local],
+    reachable: &[usize],
+) -> Fixpoint {
     let is_reachable = block_mask(body, reachable);
     let mut entries: HashMap<usize, PathState> = HashMap::new();
     let mut exits: HashMap<usize, PathState> = HashMap::new();
@@ -648,7 +659,7 @@ fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpo
     let mut worklist: VecDeque<usize> = VecDeque::new();
 
     if is_reachable.first().copied().unwrap_or(false) {
-        entries.insert(0, entry_state(body, tracked));
+        entries.insert(0, entry_state(ownership, tracked));
         worklist.push_back(0);
         queued[0] = true;
     }
@@ -685,10 +696,10 @@ fn run_to_fixpoint(body: &Body, tracked: &[Local], reachable: &[usize]) -> Fixpo
 
 /// What the body owns on entry: the one reference each parameter it takes over
 /// was handed.
-fn entry_state(body: &Body, tracked: &[Local]) -> PathState {
+fn entry_state(ownership: &OwnershipFacts, tracked: &[Local]) -> PathState {
     tracked
         .iter()
-        .filter(|local| body.is_owned_param(**local))
+        .filter(|local| ownership.is_owned_param(**local))
         .map(|local| (*local, Delta::Owned(1)))
         .collect()
 }

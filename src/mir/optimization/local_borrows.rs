@@ -71,6 +71,7 @@
 
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME};
 use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::optimization::perceus::{place_declared_type, Perceus, PerceusContext};
 use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
@@ -94,6 +95,7 @@ type Reads = HashMap<Local, Vec<(Site, Place)>>;
 /// what it holds alive; see the module documentation.
 pub(super) fn infer_local_borrows(
     body: &Body,
+    ownership: &OwnershipFacts,
     ctx: &PerceusContext,
     managed_locals: &HashSet<Local>,
 ) -> HashMap<Local, Vec<Local>> {
@@ -105,9 +107,10 @@ pub(super) fn infer_local_borrows(
     let entries = entry_collections(body);
     let hooks = DropHookReach::new(definitions(ctx));
     let noise = (!exposed_sites.is_empty() || !entries.is_empty())
-        .then(|| BodyNoise::of(body, Phase::Lowered, &hooks));
+        .then(|| BodyNoise::of(body, ownership, Phase::Lowered, &hooks));
     let mut settled = Settled {
         body,
+        ownership,
         reads: &reads,
         exposed_sites: &exposed_sites,
         entries: &entries,
@@ -180,6 +183,7 @@ fn entry_collections(body: &Body) -> HashMap<Local, Vec<Local>> {
 /// parent's own root must then stay as well.
 struct Settled<'b> {
     body: &'b Body,
+    ownership: &'b OwnershipFacts,
     reads: &'b Reads,
     /// The reads other code may reach what they read through.
     exposed_sites: &'b HashSet<Site>,
@@ -220,6 +224,7 @@ impl Settled<'_> {
             let read_exposed = parent_exposed || self.exposed_sites.contains(site);
             let watch = Watch {
                 body: self.body,
+                ownership: self.ownership,
                 owners: &owners,
                 noise: self.noise.filter(|_| read_exposed),
             };
@@ -331,11 +336,11 @@ fn is_parameter(body: &Body, local: Local) -> bool {
 
 /// Whether `statement` ends the binding of a parameter `body` is lent, whose
 /// value its caller's reference keeps.
-fn ends_lent_parameter(body: &Body, statement: &Statement) -> bool {
+fn ends_lent_parameter(body: &Body, ownership: &OwnershipFacts, statement: &Statement) -> bool {
     matches!(&statement.kind, StatementKind::StorageDead(place)
         if place.projection.is_empty()
             && is_parameter(body, place.local)
-            && !body.is_owned_param(place.local))
+            && !ownership.is_owned_param(place.local))
 }
 
 /// The candidates something in `body` uses in a way a borrow cannot carry:
@@ -541,6 +546,7 @@ enum Segment {
 /// What a borrow's range must leave as it was.
 struct Watch<'w> {
     body: &'w Body,
+    ownership: &'w OwnershipFacts,
     owners: &'w [Local],
     /// For a borrow other code may reach what it holds through: the rule
     /// finding each operation that may release a value another name holds,
@@ -600,7 +606,7 @@ impl Watch<'_> {
     }
 
     fn is_changed_by(&self, statement: &Statement) -> bool {
-        if ends_lent_parameter(self.body, statement) {
+        if ends_lent_parameter(self.body, self.ownership, statement) {
             return false;
         }
         statement_changes(statement, self.owners)

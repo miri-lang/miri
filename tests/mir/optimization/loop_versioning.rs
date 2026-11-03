@@ -21,6 +21,7 @@ use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
 use miri::mir::analysis::loops::{natural_loops, NaturalLoop};
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::header_reads::stable_collections;
 use miri::mir::optimization::in_bounds::record_in_bounds;
 use miri::mir::optimization::loop_versioning::version_bounded_loops;
@@ -53,7 +54,10 @@ fn loop_bounded_by(op: BinOp) -> Body {
 
 /// `body` versioned, or a failure naming what the pass did not do.
 fn versioned(mut body: Body) -> Body {
-    assert!(version_bounded_loops(&mut body), "not versioned:\n{body}");
+    assert!(
+        version_bounded_loops(&mut body, &OwnershipFacts::default()),
+        "not versioned:\n{body}"
+    );
     body
 }
 
@@ -61,7 +65,7 @@ fn versioned(mut body: Body) -> Body {
 fn is_left_alone(body: Body) -> bool {
     let before = body.to_string();
     let mut after = body;
-    !version_bounded_loops(&mut after) && after.to_string() == before
+    !version_bounded_loops(&mut after, &OwnershipFacts::default()) && after.to_string() == before
 }
 
 /// The switch ending `block` of `body`: `(condition, true target, otherwise)`.
@@ -103,7 +107,7 @@ fn guard_comparison(body: &Body, block: usize) -> (BinOp, String, String) {
 }
 
 fn proofs_of(mut body: Body) -> Vec<InBounds> {
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     proven_indexes(&body)
 }
@@ -382,7 +386,7 @@ fn test_fannkuch_copies_its_permutation_without_a_bounds_check() {
 /// each proven.
 fn checked_proofs_of(body: Body) -> Vec<InBounds> {
     let mut body = versioned(body);
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     let violations: Vec<String> = miri::mir::verify::verify_in_bounds(&body)
         .iter()

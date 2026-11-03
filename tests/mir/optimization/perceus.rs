@@ -20,6 +20,7 @@ use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::lowering::lower_function;
 use miri::mir::lowering::Lowered;
 use miri::mir::optimization::{count_rc_ops, insert_rc};
@@ -127,7 +128,7 @@ fn body_with(local_tys: &[Type], arg_count: usize, statements: Vec<Statement>) -
 
 /// Run Perceus and return the entry block's statement kinds in order.
 fn rc_statements(body: &mut Body) -> Vec<StatementKind> {
-    insert_rc(body);
+    insert_rc(body, &mut OwnershipFacts::default());
     body.basic_blocks[0]
         .statements
         .iter()
@@ -782,6 +783,11 @@ fn test_body_without_managed_locals_is_left_unchanged() {
 
 /// Lower `source` and run Perceus on the function named `name`.
 fn lowered_with_rc(source: &str, name: &str) -> Body {
+    lowered_with_rc_and_ownership(source, name).0
+}
+
+/// [`lowered_with_rc`], with the ownership Perceus recorded about the body.
+fn lowered_with_rc_and_ownership(source: &str, name: &str) -> (Body, OwnershipFacts) {
     let pipeline = Pipeline::new();
     let result = pipeline.frontend(source).expect("Frontend should succeed");
 
@@ -797,8 +803,9 @@ fn lowered_with_rc(source: &str, name: &str) -> Body {
 
     let Lowered { mut body, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
-    insert_rc(&mut body);
-    body
+    let mut ownership = OwnershipFacts::default();
+    insert_rc(&mut body, &mut ownership);
+    (body, ownership)
 }
 
 fn all_statements(body: &Body) -> Vec<StatementKind> {
@@ -1060,8 +1067,8 @@ fn use_conn(conn Conn) int:
     ];
 
     for (name, source) in sources {
-        let body = lowered_with_rc(source, name);
-        let violations = verify_body(&body);
+        let (body, ownership) = lowered_with_rc_and_ownership(source, name);
+        let violations = verify_body(&body, &ownership);
         assert!(
             violations.is_empty(),
             "RC violations in '{}' after Perceus: {:?}",
@@ -1268,11 +1275,11 @@ fn total() int
     t
 "
     );
-    let body = lowered_with_rc(&source, "total");
+    let (body, ownership) = lowered_with_rc_and_ownership(&source, "total");
     let s = local_named(&body, "s");
     assert_eq!(count_rc_ops(&body, s), (0, 0));
     assert_eq!(retain_and_releases(&body, s), (false, 0));
-    assert!(body.borrowed_locals.contains_key(&s));
+    assert!(ownership.borrowed_locals.contains_key(&s));
 }
 
 /// A match subject read out of a list the body owns borrows the element.
@@ -1323,12 +1330,12 @@ fn probe(h Holder, xs [Box]) int
     x.v
 "
     );
-    let body = lowered_with_rc(&source, "probe");
+    let (body, ownership) = lowered_with_rc_and_ownership(&source, "probe");
     assert_eq!(
         retain_and_releases(&body, local_named(&body, "x")),
         (true, 1)
     );
-    assert!(body.borrowed_locals.is_empty());
+    assert!(ownership.borrowed_locals.is_empty());
 }
 
 /// A method can clear a class field it is never shown naming, so a value read
@@ -1399,10 +1406,10 @@ fn t() int
         n = n + grow(row)
     n
 "#;
-    let body = lowered_with_rc(source, "t");
+    let (body, ownership) = lowered_with_rc_and_ownership(source, "t");
     let row = local_named(&body, "row");
     assert_eq!(retain_and_releases(&body, row), (false, 0));
-    assert!(body.borrowed_locals.contains_key(&row));
+    assert!(ownership.borrowed_locals.contains_key(&row));
 }
 
 /// `for row in grid` lends each row to `sum`, a function that only reads it:
@@ -1425,11 +1432,11 @@ fn run() int
         total = total + sum(row)
     total
 "#;
-    let body = lowered_with_rc(source, "run");
+    let (body, ownership) = lowered_with_rc_and_ownership(source, "run");
     let row = local_named(&body, "row");
     assert_eq!(count_rc_ops(&body, row), (0, 0));
     assert_eq!(retain_and_releases(&body, row), (false, 0));
-    assert!(body.borrowed_locals.contains_key(&row));
+    assert!(ownership.borrowed_locals.contains_key(&row));
 }
 
 /// A method's receiver is not copied on entry: it relies on the caller's

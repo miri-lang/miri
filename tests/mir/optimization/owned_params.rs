@@ -14,6 +14,7 @@ use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::body::DeviceHandleId;
+use miri::mir::facts::ProgramFacts;
 use miri::mir::optimization::owned_params::decide_owned_parameters;
 use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::Symbol;
@@ -138,12 +139,25 @@ fn program(callee: Body) -> Vec<(Symbol, Body)> {
     ]
 }
 
-fn decide(program: &mut [(Symbol, Body)]) {
-    decide_with(program, &definitions());
+fn decide(program: &mut [(Symbol, Body)]) -> ProgramFacts {
+    decide_with(program, &definitions())
 }
 
-fn decide_with(program: &mut [(Symbol, Body)], definitions: &HashMap<String, TypeDefinition>) {
-    decide_owned_parameters(program, &HashSet::new(), &DropHookReach::new(definitions));
+fn decide_with(
+    program: &mut [(Symbol, Body)],
+    definitions: &HashMap<String, TypeDefinition>,
+) -> ProgramFacts {
+    let mut facts = ProgramFacts::of(program);
+    let hooks = DropHookReach::new(definitions);
+    decide_owned_parameters(program, &mut facts, &HashSet::new(), &hooks);
+    facts
+}
+
+/// Which parameters the `index`th body of the program takes over.
+fn owned(facts: &ProgramFacts, index: usize) -> Vec<bool> {
+    (facts.iter().nth(index))
+        .map(|facts| facts.ownership().owned_params.clone())
+        .unwrap_or_default()
 }
 
 fn named(name: &str, args: Vec<Type>) -> Type {
@@ -224,8 +238,8 @@ fn list_of(element: Type) -> Type {
     named("List", vec![element])
 }
 
-fn assert_owned(program: &[(Symbol, Body)]) {
-    assert_eq!(program[0].1.owned_params, vec![true]);
+fn assert_owned(program: &[(Symbol, Body)], facts: &ProgramFacts) {
+    assert_eq!(owned(facts, 0), vec![true]);
     assert_eq!(call_modes(&program[1].1), vec![ArgMode::Owned]);
 }
 
@@ -248,12 +262,11 @@ fn call_modes(body: &Body) -> Vec<ArgMode> {
 }
 
 /// Assert the callee kept its parameter borrowed and no call passes it owned.
-fn assert_borrowed(program: &[(Symbol, Body)]) {
-    let (_, callee) = &program[0];
+fn assert_borrowed(program: &[(Symbol, Body)], facts: &ProgramFacts) {
     assert!(
-        !callee.owned_params.contains(&true),
+        !owned(facts, 0).contains(&true),
         "the parameter was made owned: {:?}",
-        callee.owned_params
+        owned(facts, 0)
     );
     assert!(
         !call_modes(&program[1].1).contains(&ArgMode::Owned),
@@ -264,10 +277,10 @@ fn assert_borrowed(program: &[(Symbol, Body)]) {
 #[test]
 fn a_parameter_only_bound_to_a_local_is_owned_and_every_call_funds_it() {
     let mut program = program(binding_callee());
-    decide(&mut program);
+    let facts = decide(&mut program);
 
     let (_, callee) = &program[0];
-    assert_eq!(callee.owned_params, vec![true]);
+    assert_eq!(owned(&facts, 0), vec![true]);
     assert_eq!(
         callee.basic_blocks[0].statements[0].kind,
         StatementKind::Assign(place(2), Rvalue::Use(Operand::Move(place(1)))),
@@ -281,8 +294,8 @@ fn a_parameter_read_a_second_time_stays_borrowed() {
     let mut callee = binding_callee();
     callee.basic_blocks[0].statements.insert(1, bind(2, 1));
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -301,8 +314,8 @@ fn a_binding_outside_the_entry_block_stays_borrowed() {
         ],
     );
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -316,8 +329,8 @@ fn a_binding_released_in_the_entry_block_stays_borrowed() {
         )],
     );
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -325,8 +338,8 @@ fn an_out_parameter_stays_borrowed() {
     let mut callee = binding_callee();
     callee.out_params = vec![true];
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -336,8 +349,8 @@ fn a_parameter_typed_by_a_type_parameter_stays_borrowed() {
     let mut callee = binding_callee_of(optional);
     callee.type_params.insert("T".to_string());
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -345,8 +358,8 @@ fn a_callee_running_on_a_gpu_stays_borrowed() {
     let mut callee = binding_callee();
     callee.execution_model = ExecutionModel::GpuDevice;
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -358,8 +371,8 @@ fn a_callee_a_gpu_body_calls_stays_borrowed() {
         Symbol::declared_function(&ModuleId::Program, "gpu_caller"),
         gpu_caller,
     ));
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -371,8 +384,8 @@ fn the_entry_point_keeps_its_parameters_borrowed() {
             caller_of(Symbol::entry()),
         ),
     ];
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -385,8 +398,8 @@ fn a_statically_called_method_binding_its_parameter_owns_it() {
             caller_of(symbol),
         ),
     ];
-    decide(&mut program);
-    assert_owned(&program);
+    let facts = decide(&mut program);
+    assert_owned(&program, &facts);
 }
 
 #[test]
@@ -401,8 +414,8 @@ fn a_receiver_bound_to_a_local_stays_borrowed() {
             caller_of(symbol),
         ),
     ];
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 /// Codegen calls an element method through a runtime thunk at every
@@ -418,8 +431,8 @@ fn a_method_a_runtime_thunk_calls_stays_borrowed() {
             caller_of(symbol),
         ),
     ];
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 fn holder_symbol() -> Symbol {
@@ -508,10 +521,10 @@ fn holder_program(statements: Vec<Statement>) -> Vec<(Symbol, Body)> {
 #[test]
 fn a_parameter_only_stored_into_a_field_is_owned_and_moved_there() {
     let mut program = holder_program(storing_statements());
-    decide_with(&mut program, &holder_definitions());
+    let facts = decide_with(&mut program, &holder_definitions());
 
     let (_, init) = &program[0];
-    assert_eq!(init.owned_params, vec![false, true]);
+    assert_eq!(owned(&facts, 0), vec![false, true]);
     assert_eq!(
         init.basic_blocks[0].statements[0].kind,
         StatementKind::Reassign(receiver_field(), Rvalue::Use(Operand::Move(place(2)))),
@@ -538,8 +551,8 @@ fn a_parameter_stored_twice_stays_borrowed() {
     let mut statements = storing_statements();
     statements.insert(1, store_parameter());
     let mut program = holder_program(statements);
-    decide_with(&mut program, &holder_definitions());
-    assert!(!program[0].1.owned_params.contains(&true));
+    let facts = decide_with(&mut program, &holder_definitions());
+    assert!(!owned(&facts, 0).contains(&true));
     assert!(!call_modes(&program[1].1).contains(&ArgMode::Owned));
 }
 
@@ -548,8 +561,8 @@ fn a_stored_value_read_again_stays_borrowed() {
     let mut statements = storing_statements();
     statements.insert(2, bind(0, 3));
     let mut program = holder_program(statements);
-    decide_with(&mut program, &holder_definitions());
-    assert!(!program[0].1.owned_params.contains(&true));
+    let facts = decide_with(&mut program, &holder_definitions());
+    assert!(!owned(&facts, 0).contains(&true));
 }
 
 /// A store whose field type the body cannot read may hold the value as its
@@ -558,20 +571,22 @@ fn a_stored_value_read_again_stays_borrowed() {
 fn a_store_into_a_field_of_unknown_type_stays_borrowed() {
     let mut program = holder_program(storing_statements());
     program[0].1.rc_classifier = RcClassifier::default();
-    decide_with(&mut program, &holder_definitions());
-    assert!(!program[0].1.owned_params.contains(&true));
+    let facts = decide_with(&mut program, &holder_definitions());
+    assert!(!owned(&facts, 0).contains(&true));
 }
 
 #[test]
 fn a_method_codegen_reaches_through_a_vtable_stays_borrowed() {
     let mut program = holder_program(storing_statements());
     let reached: HashSet<Symbol> = [holder_symbol()].into_iter().collect();
+    let mut facts = ProgramFacts::of(&program);
     decide_owned_parameters(
         &mut program,
+        &mut facts,
         &reached,
         &DropHookReach::new(&holder_definitions()),
     );
-    assert!(!program[0].1.owned_params.contains(&true));
+    assert!(!owned(&facts, 0).contains(&true));
     assert!(!call_modes(&program[1].1).contains(&ArgMode::Owned));
 }
 
@@ -579,12 +594,14 @@ fn a_method_codegen_reaches_through_a_vtable_stays_borrowed() {
 fn a_callee_codegen_calls_outside_the_program_stays_borrowed() {
     let mut program = program(binding_callee());
     let synthesized: HashSet<Symbol> = [callee_symbol()].into_iter().collect();
+    let mut facts = ProgramFacts::of(&program);
     decide_owned_parameters(
         &mut program,
+        &mut facts,
         &synthesized,
         &DropHookReach::new(&definitions()),
     );
-    assert_borrowed(&program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -601,37 +618,37 @@ fn a_callee_named_as_a_value_stays_borrowed() {
             place(3),
             Rvalue::Use(Operand::function(callee_symbol(), span())),
         )));
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
 fn a_list_of_plain_values_is_owned() {
     let mut program = program_of(list_of(named("Plain", Vec::new())));
-    decide(&mut program);
-    assert_owned(&program);
+    let facts = decide(&mut program);
+    assert_owned(&program, &facts);
 }
 
 #[test]
 fn a_parameter_whose_release_runs_a_drop_hook_stays_borrowed() {
     let mut program = program_of(named("R", Vec::new()));
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
 fn a_list_whose_elements_run_a_drop_hook_stays_borrowed() {
     let mut program = program_of(list_of(named("R", Vec::new())));
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
 fn a_vector_parameter_stays_borrowed() {
     let float = Type::new(TypeKind::F32, span());
     let mut program = program_of(named(VEC3_TYPE_NAME, vec![float]));
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -639,19 +656,17 @@ fn a_closure_body_with_captures_stays_borrowed() {
     let mut callee = binding_callee();
     callee.env_capture_locals = vec![Local(2)];
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
 fn a_symbol_lowered_into_two_bodies_stays_borrowed() {
     let mut program = program(binding_callee());
     program.push((callee_symbol(), binding_callee()));
-    decide(&mut program);
+    let facts = decide(&mut program);
     assert!(
-        program
-            .iter()
-            .all(|(_, body)| !body.owned_params.contains(&true)),
+        (facts.iter()).all(|facts| !facts.ownership().owned_params.contains(&true)),
         "a body under a symbol lowered twice took its parameter over"
     );
     assert!(!call_modes(&program[1].1).contains(&ArgMode::Owned));
@@ -669,8 +684,8 @@ fn a_callee_called_at_another_arity_stays_borrowed() {
         panic!("the caller ends in a call");
     };
     args.push(Operand::Copy(place(1)));
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -678,8 +693,8 @@ fn a_parameter_holding_a_device_buffer_stays_borrowed() {
     let mut callee = binding_callee();
     callee.local_decls[1].device_handle = Some(DeviceHandleId(1));
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -687,8 +702,8 @@ fn a_binding_holding_a_device_buffer_stays_borrowed() {
     let mut callee = binding_callee();
     callee.local_decls[2].device_handle = Some(DeviceHandleId(1));
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
@@ -701,15 +716,15 @@ fn a_binding_in_an_entry_block_a_loop_returns_to_stays_borrowed() {
         span: span(),
     });
     let mut program = program(callee);
-    decide(&mut program);
-    assert_borrowed(&program);
+    let facts = decide(&mut program);
+    assert_borrowed(&program, &facts);
 }
 
 #[test]
 fn a_function_nothing_calls_keeps_its_parameters_borrowed() {
     let mut program = vec![(callee_symbol(), binding_callee())];
-    decide(&mut program);
-    assert!(!program[0].1.owned_params.contains(&true));
+    let facts = decide(&mut program);
+    assert!(!owned(&facts, 0).contains(&true));
     assert_eq!(
         program[0].1.basic_blocks[0].statements[0].kind,
         bind(2, 1).kind,
@@ -751,8 +766,8 @@ fn only_the_bound_parameter_of_two_is_owned() {
         (callee_symbol(), second_binding_callee()),
         (Symbol::entry(), caller),
     ];
-    decide(&mut program);
-    assert_eq!(program[0].1.owned_params, vec![false, true]);
+    let facts = decide(&mut program);
+    assert_eq!(owned(&facts, 0), vec![false, true]);
     assert_eq!(
         call_modes(&program[1].1),
         vec![ArgMode::Borrowed, ArgMode::Owned]

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::VerificationViolation;
 use crate::ast::BuiltinCollectionKind;
+use crate::mir::facts::{ProgramFacts, StaleFact};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{ClassDefinition, TypeDefinition};
 
@@ -79,12 +80,15 @@ fn harmless_calls_after_rc(
 /// into one report.
 ///
 /// `program_violations` are the findings of checks run across bodies, each
-/// already naming the function it was found in.
+/// already naming the function it was found in. `facts` are those of
+/// `bodies`, in order; a body whose ownership facts no longer hold at its
+/// generation is a fault of the compiler, reported as [`StaleFact`].
 pub fn verify_program(
     definitions: &TypeDefinitions,
     bodies: &[(String, crate::mir::Body)],
+    facts: &ProgramFacts,
     program_violations: Vec<(Symbol, super::VerificationViolation)>,
-) -> ProgramReport {
+) -> Result<ProgramReport, StaleFact> {
     let shared_collection_methods = shared_collection_methods(definitions);
     let intrinsic_backed = collection_methods_backed_by_intrinsics(definitions);
     let mut functions_with_violations = program_violations
@@ -108,8 +112,10 @@ pub fn verify_program(
             .map(|(name, v)| format!("  fn {}: {}", name, v)),
     );
     let harmless_calls = harmless_calls_after_rc(definitions, bodies);
-    for ((name, body), harmless) in bodies.iter().zip(&harmless_calls) {
-        let mut violations = super::verify_body_with_harmless_calls(body, Some(harmless));
+    for (((name, body), harmless), facts) in bodies.iter().zip(&harmless_calls).zip(facts.iter()) {
+        let ownership = facts.current_ownership(body)?;
+        let mut violations =
+            super::verify_body_with_harmless_calls(body, ownership, Some(harmless));
         violations.extend(super::verify_collection_element_ownership(
             body,
             &shared_collection_methods,
@@ -120,10 +126,14 @@ pub fn verify_program(
         violations.extend(super::verify_value_representation(body, definitions));
         violations.extend(super::verify_value_arguments(body));
         violations.extend(super::verify_bound_names(body));
-        violations.extend(super::verify_stable_collections(body, Some(harmless)));
+        violations.extend(super::verify_stable_collections(
+            body,
+            ownership,
+            Some(harmless),
+        ));
         // TODO: this check runs only under --verify-mir; a normal build does
         // not check that in-place writes land on unshared collections.
-        violations.extend(super::verify_unshared_writes(body));
+        violations.extend(super::verify_unshared_writes(body, ownership));
         if !violations.is_empty() {
             functions_with_violations += 1;
         }
@@ -131,10 +141,10 @@ pub fn verify_program(
             all_violations.push(format!("  fn {}: {}", name, v));
         }
     }
-    ProgramReport {
+    Ok(ProgramReport {
         lines: all_violations,
         functions: functions_with_violations,
-    }
+    })
 }
 
 /// The shared body of every method a built-in collection is compiled with:

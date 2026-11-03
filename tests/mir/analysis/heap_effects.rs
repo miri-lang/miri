@@ -15,6 +15,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::analysis::heap_effects::{call_flags, stamp_quiet_calls, HeapEffects, Phase};
 use miri::mir::block::{BasicBlock, BasicBlockData};
+use miri::mir::facts::ProgramFacts;
 use miri::mir::place::PlaceElem;
 use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::Symbol;
@@ -279,6 +280,7 @@ pub fn effects(program: &[(Symbol, Body)], phase: Phase) -> HeapEffects {
     let definitions = definitions();
     HeapEffects::of(
         program,
+        &ProgramFacts::of(program),
         Symbol::link_name,
         phase,
         &DropHookReach::new(&definitions),
@@ -471,7 +473,8 @@ fn stamping_marks_each_call_to_a_quiet_callee_by_its_block() {
         ),
     ];
     let definitions = definitions();
-    stamp_quiet_calls(&mut program, &DropHookReach::new(&definitions));
+    let facts = ProgramFacts::of(&program);
+    stamp_quiet_calls(&mut program, &facts, &DropHookReach::new(&definitions));
     let main = &program[2].1;
     let quiet = |block: usize| {
         (main.basic_blocks[block].terminator.as_ref()).is_some_and(|call| call_flags(call).quiet)

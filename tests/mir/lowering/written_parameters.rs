@@ -7,17 +7,23 @@
 //! the choice of which parameters a function takes over included, so the
 //! assertions read the MIR code generation is handed.
 
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::{Body, Local, Operand, Place, Rvalue, StatementKind};
 use miri::pipeline::Pipeline;
 
 /// The body `source` lowers the function `name` to.
 fn lowered(source: &str, name: &str) -> Body {
-    Pipeline::new()
-        .get_mir_bodies_with_rc(source)
-        .expect("pipeline should lower the program")
-        .into_iter()
-        .find(|(symbol, _)| symbol == &format!("miri.{name}"))
-        .map(|(_, body)| body)
+    lowered_with_ownership(source, name).0
+}
+
+/// [`lowered`], with the ownership the pipeline recorded about the body.
+fn lowered_with_ownership(source: &str, name: &str) -> (Body, OwnershipFacts) {
+    let (bodies, facts) = Pipeline::new()
+        .get_mir_program_with_rc(source)
+        .expect("pipeline should lower the program");
+    (bodies.into_iter().zip(facts.iter()))
+        .find(|((symbol, _), _)| symbol == &format!("miri.{name}"))
+        .map(|((_, body), facts)| (body, facts.ownership().clone()))
         .unwrap_or_else(|| panic!("no body for `{name}`"))
 }
 
@@ -56,7 +62,7 @@ fn main()
 
 #[test]
 fn test_a_written_parameter_is_moved_into_a_copy_on_entry() {
-    let body = lowered(WRITING, "f");
+    let (body, ownership) = lowered_with_ownership(WRITING, "f");
     let copy = locals_named(&body, "xs")
         .into_iter()
         .find(|local| local.0 > body.arg_count)
@@ -72,7 +78,7 @@ fn test_a_written_parameter_is_moved_into_a_copy_on_entry() {
                 if *dest == Place::new(copy) && *source == Place::new(Local(1))),
         "{entry:?}"
     );
-    assert_eq!(body.owned_params.first(), Some(&true));
+    assert_eq!(ownership.owned_params.first(), Some(&true));
 }
 
 #[test]

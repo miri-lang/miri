@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Checks every local a body records as borrowing ([`Body::borrowed_locals`])
+//! Checks every local a body records as borrowing ([`OwnershipFacts::borrowed_locals`])
 //! against the body itself, after every reference-counting pass has run.
 //!
 //! A borrowed local holds no reference of its own: it reads a value out of a
@@ -57,6 +57,7 @@ use super::borrow_reach::{is_reference_by_design, reach_of, Reach};
 use super::callee_effects::BodyHarm;
 use super::{local_display_name, VerificationViolation};
 use crate::ast::types::Type;
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
@@ -116,21 +117,23 @@ enum Access {
 /// every such call as harmful.
 pub(super) fn held_borrows(
     body: &Body,
+    ownership: &OwnershipFacts,
     harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> (HashSet<Local>, Vec<VerificationViolation>) {
     let mut held = HashSet::new();
     let mut violations = Vec::new();
-    if body.borrowed_locals.is_empty() {
+    if ownership.borrowed_locals.is_empty() {
         return (held, violations);
     }
     let hooks = DropHookReach::new(body.rc_classifier.definitions());
     let mut checker = Checker {
         body,
+        ownership,
         harm: BodyHarm::of(body, &hooks, harmless_calls),
         entries: entry_collections(body),
         decided: HashMap::new(),
     };
-    let mut records: Vec<(&Local, &Vec<Local>)> = body.borrowed_locals.iter().collect();
+    let mut records: Vec<(&Local, &Vec<Local>)> = ownership.borrowed_locals.iter().collect();
     records.sort_unstable_by_key(|(local, _)| local.0);
     for (&local, recorded) in records {
         match checker.refusal(local, recorded) {
@@ -154,9 +157,10 @@ pub(super) fn held_borrows(
 /// with `harmless_calls` as for [`held_borrows`].
 pub fn verify_local_borrows(
     body: &Body,
+    ownership: &OwnershipFacts,
     harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> Vec<VerificationViolation> {
-    held_borrows(body, harmless_calls).1
+    held_borrows(body, ownership, harmless_calls).1
 }
 
 /// The owners a borrow's value is held by, with whether other code may
@@ -167,6 +171,7 @@ type Owners = (Vec<Local>, bool);
 /// borrowed local reads that local's owners once.
 struct Checker<'b> {
     body: &'b Body,
+    ownership: &'b OwnershipFacts,
     /// Which operations are harmless.
     harm: BodyHarm<'b>,
     /// Each local holding an entry a collection lends, with the locals
@@ -247,13 +252,13 @@ impl Checker<'_> {
             if let Some(collections) = self.entries.get(&source.local) {
                 owners.extend(collections);
                 read_exposed = true;
-            } else if body.borrowed_locals.contains_key(&source.local) {
+            } else if self.ownership.is_borrowed(source.local) {
                 let (parents, parent_exposed) = self.owners(source.local)?;
                 owners.extend(parents);
                 read_exposed |= parent_exposed;
             }
             let harm = read_exposed.then_some(&self.harm);
-            if !stays_over_range(body, local, site, &owners, harm) {
+            if !stays_over_range(body, self.ownership, local, site, &owners, harm) {
                 return None;
             }
             all_owners.extend(owners);
@@ -420,11 +425,11 @@ fn is_parameter(body: &Body, local: Local) -> bool {
 
 /// Whether `statement` ends the binding of a parameter the body is lent:
 /// its caller's reference still holds the value.
-fn ends_lent_parameter(body: &Body, statement: &Statement) -> bool {
+fn ends_lent_parameter(body: &Body, ownership: &OwnershipFacts, statement: &Statement) -> bool {
     matches!(&statement.kind, StatementKind::StorageDead(place)
         if place.projection.is_empty()
             && is_parameter(body, place.local)
-            && !body.is_owned_param(place.local))
+            && !ownership.is_owned_param(place.local))
 }
 
 /// Whether, on every path from the definition of `local` at `site` to the end
@@ -434,6 +439,7 @@ fn ends_lent_parameter(body: &Body, statement: &Statement) -> bool {
 /// body's end first does not end the range.
 fn stays_over_range(
     body: &Body,
+    ownership: &OwnershipFacts,
     local: Local,
     site: (usize, usize),
     owners: &[Local],
@@ -455,8 +461,8 @@ fn stays_over_range(
                 continue 'blocks;
             }
             let is_loud = harm.is_some_and(|harm| !harm.is_harmless_statement(&statement.kind));
-            let changes_owner =
-                !ends_lent_parameter(body, statement) && changes(statement_accesses(statement));
+            let changes_owner = !ends_lent_parameter(body, ownership, statement)
+                && changes(statement_accesses(statement));
             if changes_owner || is_loud {
                 return false;
             }

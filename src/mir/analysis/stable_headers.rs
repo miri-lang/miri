@@ -27,6 +27,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::types::{BuiltinCollectionKind, Type};
 use crate::mir::analysis::header_reach::{may_hold_type, HeaderReach};
 use crate::mir::analysis::loops::{predecessors, NaturalLoop};
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::{
@@ -38,6 +39,7 @@ use crate::mir::{
 /// unchanged, with each collection's call reach computed once.
 pub struct StableHeaders<'a> {
     body: &'a Body,
+    ownership: &'a OwnershipFacts,
     candidates: HashSet<Local>,
     releases: ReleaseFacts<'a>,
     predecessors: Vec<Vec<usize>>,
@@ -45,12 +47,14 @@ pub struct StableHeaders<'a> {
 }
 
 impl<'a> StableHeaders<'a> {
-    /// The facts for `body`, or `None` when it holds no array or list whose
-    /// header could be read once.
-    pub fn of(body: &'a Body) -> Option<Self> {
+    /// The facts for `body`, whose parameters and locals `ownership` says
+    /// who holds, or `None` when it holds no array or list whose header could
+    /// be read once.
+    pub fn of(body: &'a Body, ownership: &'a OwnershipFacts) -> Option<Self> {
         let candidates = indexed_collections(body);
         (!candidates.is_empty()).then(|| Self {
             body,
+            ownership,
             candidates,
             releases: ReleaseFacts::of(body),
             predecessors: predecessors(body),
@@ -69,16 +73,16 @@ impl<'a> StableHeaders<'a> {
     /// the header of `local`: the local keeps its value, no release frees
     /// what a borrowed `local` points at, and no call reaches its header.
     pub fn keeps_header(&mut self, found: &NaturalLoop, local: Local) -> bool {
-        let body = self.body;
+        let (body, ownership) = (self.body, self.ownership);
         self.candidates.contains(&local)
             && keeps_its_value(body, found, local, &self.predecessors)
-            && (!is_borrowed_param(body, local)
+            && (!is_borrowed_param(body, ownership, local)
                 || releases_nothing_it_borrows(body, found, local, &self.releases))
             && {
                 let reach = self
                     .reaches
                     .entry(local)
-                    .or_insert_with(|| HeaderReach::of(body, local));
+                    .or_insert_with(|| HeaderReach::of(body, ownership, local));
                 calls_leave_header(body, found, reach)
             }
     }
@@ -194,8 +198,8 @@ fn statement_leaves_headers(statement: &Statement, facts: &ReleaseFacts) -> bool
 
 /// Whether `local` is a parameter the body borrows from its caller rather
 /// than takes over, so it holds no reference of its own.
-fn is_borrowed_param(body: &Body, local: Local) -> bool {
-    (1..=body.arg_count).contains(&local.0) && !body.is_owned_param(local)
+fn is_borrowed_param(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
+    (1..=body.arg_count).contains(&local.0) && !ownership.is_owned_param(local)
 }
 
 /// Whether nothing in `found` releases or overwrites, other than through

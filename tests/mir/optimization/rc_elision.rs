@@ -9,6 +9,7 @@
 
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::lowering::Lowered;
 use miri::mir::optimization::rc_elision::{decref_in_range, elide_block, find_decref};
 use miri::mir::optimization::{count_all_rc_ops, elide_rc, insert_rc};
@@ -43,7 +44,7 @@ fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
                 mut body, lambdas, ..
             } = lower_function(stmt, &result.type_checker, false, false)
                 .expect("Lowering should succeed");
-            insert_rc(&mut body);
+            insert_rc(&mut body, &mut OwnershipFacts::default());
             bodies.push((
                 Symbol::declared_function(&ModuleId::Program, &decl.name).link_name(),
                 body,
@@ -210,9 +211,11 @@ use system.collections.list
 fn benchmark(items [int]) int:
     return items.element_at(0)
 "#;
-    let bodies = get_elided_bodies(source);
-    for (name, body) in &bodies {
-        let violations = verify_body(body);
+    let (bodies, facts) = Pipeline::new()
+        .get_mir_program_with_rc(source)
+        .expect("Pipeline should succeed");
+    for ((name, body), facts) in bodies.iter().zip(facts.iter()) {
+        let violations = verify_body(body, facts.ownership());
         assert!(
             violations.is_empty(),
             "RC violations in '{}' after elision: {:?}",
@@ -296,12 +299,13 @@ fn benchmark(items [int]) int:
     let Lowered { mut body, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
 
-    insert_rc(&mut body);
-    elide_rc(&mut body);
+    let mut ownership = OwnershipFacts::default();
+    insert_rc(&mut body, &mut ownership);
+    elide_rc(&mut body, &ownership);
     let (inc1, dec1) = count_all_rc_ops(&body);
 
     // Run elision a second time — no change expected.
-    elide_rc(&mut body);
+    elide_rc(&mut body, &ownership);
     let (inc2, dec2) = count_all_rc_ops(&body);
 
     assert_eq!((inc1, dec1), (inc2, dec2), "RC elision is not idempotent");
@@ -526,9 +530,11 @@ fn test_elision_keeps_the_pair_funding_a_local_a_borrow_reads_from() {
         make_assign(dest, src),
         make_decref(dest),
     ]));
-    body.borrowed_locals = HashMap::from([(Local(3), vec![dest])]);
-
-    elide_rc(&mut body);
+    let ownership = OwnershipFacts {
+        borrowed_locals: HashMap::from([(Local(3), vec![dest])]),
+        ..OwnershipFacts::default()
+    };
+    elide_rc(&mut body, &ownership);
 
     assert_eq!(body.basic_blocks[0].statements.len(), 3, "the pair is kept");
 }
@@ -549,9 +555,11 @@ fn test_elision_keeps_the_pair_copying_a_borrowed_local() {
         make_assign(dest, src),
         make_decref(dest),
     ]));
-    body.borrowed_locals = HashMap::from([(src, vec![Local(3)])]);
-
-    elide_rc(&mut body);
+    let ownership = OwnershipFacts {
+        borrowed_locals: HashMap::from([(src, vec![Local(3)])]),
+        ..OwnershipFacts::default()
+    };
+    elide_rc(&mut body, &ownership);
 
     assert_eq!(body.basic_blocks[0].statements.len(), 3, "the pair is kept");
 }
@@ -564,6 +572,7 @@ mod owned_transfers {
     use miri::ast::types::{Type, TypeKind};
     use miri::error::syntax::Span;
     use miri::mir::block::{BasicBlock, BasicBlockData};
+    use miri::mir::facts::OwnershipFacts;
     use miri::mir::optimization::elide_rc;
     use miri::mir::symbol::Symbol;
     use miri::mir::{
@@ -673,7 +682,7 @@ mod owned_transfers {
     #[test]
     fn a_dying_owned_argument_hands_its_own_reference_over() {
         let mut dying = caller(string_ty(), handing_over(vec![decref(1), storage_dead(1)]));
-        elide_rc(&mut dying);
+        elide_rc(&mut dying, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&dying), 0, "{dying}");
 
         let mut rebound = caller(
@@ -683,7 +692,7 @@ mod owned_transfers {
                 stmt(StatementKind::Reassign(place(1), fresh_string())),
             ]),
         );
-        elide_rc(&mut rebound);
+        elide_rc(&mut rebound, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&rebound), 0, "{rebound}");
     }
 
@@ -698,7 +707,7 @@ mod owned_transfers {
             span: span(),
         });
         let mut body = caller(string_ty(), blocks);
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 
@@ -712,7 +721,7 @@ mod owned_transfers {
             },
         ));
         let mut body = caller(string_ty(), blocks);
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 
@@ -726,7 +735,7 @@ mod owned_transfers {
             string_ty(),
             handing_over(vec![read, decref(1), storage_dead(1)]),
         );
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 
@@ -754,7 +763,7 @@ mod owned_transfers {
             ),
         ];
         let mut body = caller(string_ty(), blocks);
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 
@@ -763,7 +772,7 @@ mod owned_transfers {
         let resource = Type::new(TypeKind::Custom("Res".to_string(), None), span());
         let mut body = caller(resource, handing_over(vec![decref(1), storage_dead(1)]));
         body.has_drop_types.insert("Res".to_string());
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
 }
@@ -776,6 +785,7 @@ mod dying_sources {
     use miri::ast::types::{Type, TypeKind};
     use miri::error::syntax::Span;
     use miri::mir::block::BasicBlockData;
+    use miri::mir::facts::OwnershipFacts;
     use miri::mir::optimization::elide_rc;
     use miri::mir::verify::verify_body;
     use miri::mir::{
@@ -890,16 +900,16 @@ mod dying_sources {
 
     fn elided(statements: Vec<Statement>) -> Body {
         let mut body = body_of(string_ty(), statements);
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         body
     }
 
     fn assert_moved(body: &Body) {
         assert_eq!(rc_ops_on_x(body), 0, "{body}");
         assert!(
-            verify_body(body).is_empty(),
+            verify_body(body, &OwnershipFacts::default()).is_empty(),
             "{:?}\n{body}",
-            verify_body(body)
+            verify_body(body, &OwnershipFacts::default())
         );
     }
 
@@ -941,7 +951,7 @@ mod dying_sources {
         ];
         let mut body = body_of(string_ty(), statements);
         body.local_decls[0] = LocalDecl::new(string_ty(), span());
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_x(&body), 0, "{body}");
     }
 
@@ -972,9 +982,9 @@ mod dying_sources {
         ]);
         assert!(rc_ops_on_x(&body) >= 1, "{body}");
         assert!(
-            verify_body(&body).is_empty(),
+            verify_body(&body, &OwnershipFacts::default()).is_empty(),
             "{:?}\n{body}",
-            verify_body(&body)
+            verify_body(&body, &OwnershipFacts::default())
         );
     }
 
@@ -1032,7 +1042,7 @@ mod dying_sources {
         let mut body = body_of(resource, dying(copy_source(false), Vec::new(), 3));
         body.local_decls[3] = body.local_decls[1].clone();
         body.has_drop_types.insert("Res".to_string());
-        elide_rc(&mut body);
+        elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_x(&body), 0, "{body}");
     }
 
@@ -1062,7 +1072,11 @@ mod dying_sources {
             storage_dead(2),
         ];
         let body = body_of(string_ty(), funded);
-        assert!(verify_body(&body).is_empty(), "{:?}", verify_body(&body));
+        assert!(
+            verify_body(&body, &OwnershipFacts::default()).is_empty(),
+            "{:?}",
+            verify_body(&body, &OwnershipFacts::default())
+        );
 
         let released_again = vec![
             fresh(1),
@@ -1073,7 +1087,10 @@ mod dying_sources {
             storage_dead(2),
         ];
         let body = body_of(string_ty(), released_again);
-        assert!(!verify_body(&body).is_empty(), "{body}");
+        assert!(
+            !verify_body(&body, &OwnershipFacts::default()).is_empty(),
+            "{body}"
+        );
     }
 
     #[test]
@@ -1083,8 +1100,11 @@ mod dying_sources {
             HashMap::from([(Local(3), vec![Local(1)])]),
         ] {
             let mut body = body_of(string_ty(), dying(wrap_source(), Vec::new(), 2));
-            body.borrowed_locals = borrowed;
-            elide_rc(&mut body);
+            let ownership = OwnershipFacts {
+                borrowed_locals: borrowed,
+                ..OwnershipFacts::default()
+            };
+            elide_rc(&mut body, &ownership);
             assert_eq!(rc_ops_on_x(&body), 2, "{body}");
         }
     }
@@ -1099,6 +1119,7 @@ mod constructed_trees {
     use miri::mir::optimization::count_all_rc_ops;
     use miri::mir::symbol::Symbol;
     use miri::mir::{ArgMode, Body, StatementKind, TerminatorKind};
+    use miri::pipeline::Pipeline;
     use miri::type_checker::ModuleId;
 
     const TREES: &str = r#"
@@ -1147,9 +1168,16 @@ fn kept_leaf(leaf Node) Node
 
     #[test]
     fn building_a_node_from_dying_subtrees_retains_and_releases_nothing() {
-        let bodies = get_elided_bodies(TREES);
-        let init = body(&bodies, &Symbol::method("Node", &[], "init", &[]));
-        assert_eq!(init.owned_params, vec![false, true, true, false], "{init}");
+        let (bodies, facts) = Pipeline::new()
+            .get_mir_program_with_rc(TREES)
+            .expect("Pipeline should succeed");
+        let init_symbol = Symbol::method("Node", &[], "init", &[]);
+        let init = body(&bodies, &init_symbol);
+        let (_, init_facts) = (bodies.iter().zip(facts.iter()))
+            .find(|((name, _), _)| *name == init_symbol.link_name())
+            .unwrap_or_else(|| panic!("{init_symbol} was not lowered"));
+        let owned = &init_facts.ownership().owned_params;
+        assert_eq!(*owned, vec![false, true, true, false], "{init}");
         assert_eq!(count_all_rc_ops(init).0, 0, "{init}");
 
         let bottom_up = body(

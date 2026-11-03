@@ -16,6 +16,7 @@ use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::place::PlaceElem;
 use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::Symbol;
@@ -250,7 +251,7 @@ fn push(place: Place, dest: usize, target: usize) -> TerminatorKind {
 }
 
 fn findings(body: &Body) -> Vec<VerificationViolation> {
-    verify_unshared_writes(body)
+    verify_unshared_writes(body, &OwnershipFacts::default())
 }
 
 /// Asserts `body` has exactly one finding, on `place`'s write through `name`.

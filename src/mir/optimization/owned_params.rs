@@ -36,6 +36,7 @@
 
 use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
 use crate::ast::statement::DROP_HOOK_NAME;
+use crate::mir::facts::ProgramFacts;
 use crate::mir::instantiation::shape::mentions_type_parameter;
 use crate::mir::place::PlaceContext;
 use crate::mir::place_type::PlaceTypes;
@@ -56,9 +57,11 @@ use std::collections::{HashMap, HashSet};
 /// stay borrowed, since no call site could be marked.
 /// `drop_hooks` answers which parameter types may run a drop hook when
 /// released. Bodies are visited in `program` order, so the result is
-/// deterministic.
+/// deterministic. Which parameters each body takes over is recorded in its
+/// entry of `facts`, the facts of `program`'s bodies in order.
 pub fn decide_owned_parameters(
     program: &mut [(Symbol, Body)],
+    facts: &mut ProgramFacts,
     synthesized: &HashSet<Symbol>,
     drop_hooks: &DropHookReach,
 ) {
@@ -69,10 +72,11 @@ pub fn decide_owned_parameters(
     count_references(program, &mut candidates);
     candidates.retain(|_, candidate| candidate.is_only_called_directly());
     let mut owners = HashMap::new();
-    for (symbol, body) in program.iter_mut() {
+    for ((symbol, body), facts) in program.iter_mut().zip(facts.iter_mut()) {
         if let Some(candidate) = candidates.get(symbol) {
-            take_over_parameters(body, &candidate.bindings);
-            owners.insert(symbol.clone(), body.owned_params.clone());
+            let owned = take_over_parameters(body, &candidate.bindings);
+            owners.insert(symbol.clone(), owned.clone());
+            facts.ownership_mut().owned_params = owned;
         }
     }
     for (_, body) in program.iter_mut() {
@@ -366,13 +370,13 @@ fn count_direct_calls(body: &Body, candidates: &mut HashMap<Symbol, Candidate>) 
 }
 
 /// Turn each owned parameter's binding into a move out of the parameter, and
-/// record which parameters `body` owns: exactly those whose binding was
+/// return which parameters `body` owns: exactly those whose binding was
 /// rewritten.
 ///
 /// The discarded copies of an owned parameter go, along with their
 /// temporaries' storage ends: nothing reads them, and past the move they would
 /// read a parameter whose reference has left.
-fn take_over_parameters(body: &mut Body, bindings: &[Option<Binding>]) {
+fn take_over_parameters(body: &mut Body, bindings: &[Option<Binding>]) -> Vec<bool> {
     let owned: Vec<bool> = bindings
         .iter()
         .map(|binding| {
@@ -392,7 +396,7 @@ fn take_over_parameters(body: &mut Body, bindings: &[Option<Binding>]) {
         .flat_map(|binding| binding.discarded.iter().copied())
         .collect();
     remove_discarded_copies(body, &discarded);
-    body.owned_params = owned;
+    owned
 }
 
 /// Turn every statement naming one of `discarded` into a no-op.

@@ -40,6 +40,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::gpu_wire::collection_element_kind;
 use crate::ast::types::{Type, TypeKind};
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::instantiation::shape::constructor_parts;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::TypeDefinition;
@@ -76,6 +77,7 @@ pub enum UncountedRoot {
 #[derive(Debug)]
 pub struct HeaderReach<'a> {
     body: &'a Body,
+    ownership: &'a OwnershipFacts,
     local: Local,
     facts: OnceCell<AliasFacts>,
 }
@@ -90,10 +92,12 @@ struct AliasFacts {
 }
 
 impl<'a> HeaderReach<'a> {
-    /// What can reach the header of the collection `local` holds in `body`.
-    pub fn of(body: &'a Body, local: Local) -> Self {
+    /// What can reach the header of the collection `local` holds in `body`,
+    /// whose parameters and locals `ownership` says who holds.
+    pub fn of(body: &'a Body, ownership: &'a OwnershipFacts, local: Local) -> Self {
         Self {
             body,
+            ownership,
             local,
             facts: OnceCell::new(),
         }
@@ -110,7 +114,7 @@ impl<'a> HeaderReach<'a> {
                 || HashSet::from([self.local]),
                 |target| aliases_of(body, &PlaceTypes::of(body), self.local, target),
             );
-            let root = uncounted_root(body, self.local, &aliases);
+            let root = uncounted_root(body, self.ownership, self.local, &aliases);
             AliasFacts {
                 target,
                 aliases,
@@ -144,8 +148,9 @@ impl<'a> HeaderReach<'a> {
                     let facts = self.facts();
                     facts.root.is_none()
                         && !facts.aliases.contains(&destination.local)
-                        && (std::iter::once(func).chain(args))
-                            .all(|operand| !facts.reaches_through(self.body, operand))
+                        && (std::iter::once(func).chain(args)).all(|operand| {
+                            !facts.reaches_through(self.body, self.ownership, operand)
+                        })
                 }
             },
             TerminatorKind::VirtualCall { .. } | TerminatorKind::GpuLaunch { .. } => false,
@@ -206,14 +211,14 @@ fn is_data_type(body: &Body, kind: &TypeKind) -> bool {
 impl AliasFacts {
     /// Whether a callee handed `operand` may reach the collection: it reads
     /// an alias, or a borrow of one whose type may hold the collection.
-    fn reaches_through(&self, body: &Body, operand: &Operand) -> bool {
+    fn reaches_through(&self, body: &Body, ownership: &OwnershipFacts, operand: &Operand) -> bool {
         let Some(root) = operand.place().map(|place| place.local) else {
             return false;
         };
         if self.aliases.contains(&root) {
             return true;
         }
-        let borrows_an_alias = (body.borrowed_locals.get(&root))
+        let borrows_an_alias = (ownership.borrowed_locals.get(&root))
             .is_some_and(|owners| owners.iter().any(|owner| self.aliases.contains(owner)));
         let declared = body.local_decls.get(root.0).map(|decl| &decl.ty);
         let may_hold = match (declared, &self.target) {
@@ -405,7 +410,12 @@ fn terminator_flows(terminator: &Terminator) -> Vec<(Local, Local)> {
 
 /// Why `local`, with `aliases`, holds no reference of its own that only its
 /// aliases reach, if it does not.
-fn uncounted_root(body: &Body, local: Local, aliases: &HashSet<Local>) -> Option<UncountedRoot> {
+fn uncounted_root(
+    body: &Body,
+    ownership: &OwnershipFacts,
+    local: Local,
+    aliases: &HashSet<Local>,
+) -> Option<UncountedRoot> {
     let is_counted = (body.local_decls.get(local.0)).is_some_and(|d| body.is_counted(&d.ty.kind));
     if !is_counted {
         return Some(UncountedRoot::NotCounted);
@@ -415,9 +425,9 @@ fn uncounted_root(body: &Body, local: Local, aliases: &HashSet<Local>) -> Option
     sorted.sort_by_key(|alias| alias.0);
     sorted
         .into_iter()
-        .find_map(|alias| alias_failure(body, alias, &address_taken))
+        .find_map(|alias| alias_failure(body, ownership, alias, &address_taken))
         .or_else(|| {
-            uncounted_definition(body, local, &address_taken)
+            uncounted_definition(body, ownership, local, &address_taken)
                 .map(UncountedRoot::UncountedDefinition)
         })
 }
@@ -426,14 +436,15 @@ fn uncounted_root(body: &Body, local: Local, aliases: &HashSet<Local>) -> Option
 /// collection, if it may.
 fn alias_failure(
     body: &Body,
+    ownership: &OwnershipFacts,
     alias: Local,
     address_taken: &HashSet<Local>,
 ) -> Option<UncountedRoot> {
     let is_param = (1..=body.arg_count).contains(&alias.0);
-    if is_param && !(body.is_owned_param(alias) && body.is_lent_param(alias)) {
+    if is_param && !(ownership.is_owned_param(alias) && body.is_lent_param(alias)) {
         return Some(UncountedRoot::Parameter(alias));
     }
-    holder_failure(body, alias, address_taken)
+    holder_failure(body, ownership, alias, address_taken)
 }
 
 /// Why code this body does not show may reach the value `local` holds
@@ -441,10 +452,11 @@ fn alias_failure(
 /// address-taken.
 fn holder_failure(
     body: &Body,
+    ownership: &OwnershipFacts,
     local: Local,
     address_taken: &HashSet<Local>,
 ) -> Option<UncountedRoot> {
-    if body.borrowed_locals.contains_key(&local) {
+    if ownership.is_borrowed(local) {
         return Some(UncountedRoot::Borrowed(local));
     }
     if body.env_capture_locals.contains(&local) {
@@ -467,6 +479,7 @@ fn holder_failure(
 /// address `body` takes.
 fn uncounted_definition(
     body: &Body,
+    ownership: &OwnershipFacts,
     local: Local,
     address_taken: &HashSet<Local>,
 ) -> Option<BasicBlock> {
@@ -476,7 +489,15 @@ fn uncounted_definition(
         .find(|(_, data)| {
             (data.statements.iter().enumerate()).any(|(position, statement)| {
                 let statements = &data.statements;
-                is_uncounted_definition(body, statements, position, statement, local, address_taken)
+                let definition = (statement, local);
+                is_uncounted_definition(
+                    body,
+                    ownership,
+                    statements,
+                    position,
+                    definition,
+                    address_taken,
+                )
             })
         })
         .map(|(index, _)| BasicBlock(index))
@@ -487,10 +508,10 @@ fn uncounted_definition(
 /// every place whose address `body` takes.
 fn is_uncounted_definition(
     body: &Body,
+    ownership: &OwnershipFacts,
     statements: &[Statement],
     position: usize,
-    statement: &Statement,
-    local: Local,
+    (statement, local): (&Statement, Local),
     address_taken: &HashSet<Local>,
 ) -> bool {
     let (StatementKind::Assign(written, rvalue) | StatementKind::Reassign(written, rvalue)) =
@@ -503,7 +524,11 @@ fn is_uncounted_definition(
     }
     match rvalue {
         Rvalue::Aggregate(..) => false,
-        Rvalue::Use(Operand::Move(source)) if is_owning_local(body, source, address_taken) => false,
+        Rvalue::Use(Operand::Move(source))
+            if is_owning_local(body, ownership, source, address_taken) =>
+        {
+            false
+        }
         Rvalue::Use(Operand::Copy(source) | Operand::Move(source)) => {
             !is_retained_before(statements, position, source)
         }
@@ -522,11 +547,16 @@ fn is_uncounted_definition(
 /// Whether `place` is a whole local holding a reference of its own that
 /// only this body reaches: not a parameter the body does not take over, and
 /// not borrowed, captured, gpu-resident or in `address_taken`.
-fn is_owning_local(body: &Body, place: &Place, address_taken: &HashSet<Local>) -> bool {
+fn is_owning_local(
+    body: &Body,
+    ownership: &OwnershipFacts,
+    place: &Place,
+    address_taken: &HashSet<Local>,
+) -> bool {
     let is_param = (1..=body.arg_count).contains(&place.local.0);
     place.projection.is_empty()
-        && (!is_param || body.is_owned_param(place.local))
-        && holder_failure(body, place.local, address_taken).is_none()
+        && (!is_param || ownership.is_owned_param(place.local))
+        && holder_failure(body, ownership, place.local, address_taken).is_none()
 }
 
 /// Whether a statement of `statements` before `position` retains `place`,

@@ -28,6 +28,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::body::{BindingResidency, DeviceHandleId};
+use miri::mir::facts::{OwnershipFacts, ProgramFacts};
 use miri::mir::symbol::{ClosureKind, GpuKernelKind, Symbol};
 use miri::mir::verify::{
     verify_body, verify_callees, verify_collection_element_ownership,
@@ -224,7 +225,11 @@ fn messages(violations: &[VerificationViolation]) -> String {
 }
 
 fn assert_clean(body: &Body, what: &str) {
-    let violations = verify_body(body);
+    assert_clean_with(body, &OwnershipFacts::default(), what);
+}
+
+fn assert_clean_with(body: &Body, ownership: &OwnershipFacts, what: &str) {
+    let violations = verify_body(body, ownership);
     assert!(
         violations.is_empty(),
         "expected no findings for {}, got: {}",
@@ -245,7 +250,7 @@ fn clean_body_reports_nothing_and_a_finding_names_its_local() {
         vec![storage_live(1), assign_fresh(1), storage_dead(1)],
         ret(),
     )]);
-    let violations = verify_body(&leaking);
+    let violations = verify_body(&leaking, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     let rendered = violations[0].to_string();
     assert!(
@@ -265,7 +270,7 @@ fn match_arm_returning_without_its_scope_pop_is_flagged() {
         block(vec![decref(1), storage_dead(1)], ret()),
     ]);
 
-    let violations = verify_body(&broken);
+    let violations = verify_body(&broken, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
     assert!(
@@ -296,7 +301,7 @@ fn method_call_argument_temp_left_unreleased_is_flagged() {
         block(Vec::new(), ret()),
     ]);
 
-    let violations = verify_body(&broken);
+    let violations = verify_body(&broken, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
 }
@@ -323,7 +328,7 @@ fn coalesce_result_stranded_on_one_branch_is_flagged() {
         block(Vec::new(), ret()),
     ]);
 
-    let violations = verify_body(&broken);
+    let violations = verify_body(&broken, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
     assert!(
@@ -357,7 +362,7 @@ fn join_divergence_names_both_incoming_blocks_and_their_counts() {
         block(vec![decref(1), storage_dead(1)], ret()),
     ]);
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     let divergence = violations
         .iter()
         .find(|violation| violation.message.contains("diverges"))
@@ -389,7 +394,7 @@ fn releasing_more_references_than_are_owned_is_flagged() {
         ret(),
     )]);
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert!(
         violations[0].message.contains("double-release"),
@@ -408,7 +413,7 @@ fn decref_on_a_parameter_is_flagged() {
         vec![block(vec![decref(1)], ret())],
     );
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
     assert!(
@@ -456,7 +461,7 @@ fn loop_acquiring_without_releasing_terminates_and_is_flagged() {
         block(vec![storage_dead(1)], ret()),
     ]);
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert!(
         violations
             .iter()
@@ -559,7 +564,7 @@ fn a_copy_with_no_funding_incref_is_a_borrow() {
             ret(),
         )],
     );
-    let violations = verify_body(&released);
+    let violations = verify_body(&released, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(2));
     assert!(
@@ -676,7 +681,7 @@ fn a_local_is_reported_once_and_does_not_cascade() {
         ret(),
     )]);
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert_eq!(
         violations.len(),
         1,
@@ -712,7 +717,7 @@ fn consuming_a_local_that_owns_nothing_is_flagged() {
         )],
     );
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert!(
         violations
             .iter()
@@ -768,7 +773,7 @@ fn only_the_donating_argument_position_transfers_ownership() {
         block(vec![storage_dead(1)], ret()),
     ]);
 
-    let violations = verify_body(&wrong_position);
+    let violations = verify_body(&wrong_position, &OwnershipFacts::default());
     assert!(
         violations
             .iter()
@@ -791,7 +796,7 @@ fn an_ordinary_call_does_not_donate_its_argument() {
         block(vec![storage_dead(1)], ret()),
     ]);
 
-    let violations = verify_body(&ordinary);
+    let violations = verify_body(&ordinary, &OwnershipFacts::default());
     assert!(
         violations
             .iter()
@@ -845,7 +850,7 @@ fn donating_a_reference_the_caller_does_not_own_is_flagged() {
         block(vec![storage_dead(1)], ret()),
     ]);
 
-    let violations = verify_body(&over_donated);
+    let violations = verify_body(&over_donated, &OwnershipFacts::default());
     assert!(
         violations
             .iter()
@@ -1006,7 +1011,7 @@ fn releasing_a_local_that_was_never_written_is_not_a_double_release() {
         ],
         ret(),
     )]);
-    let violations = verify_body(&released_twice);
+    let violations = verify_body(&released_twice, &OwnershipFacts::default());
     assert!(
         violations
             .iter()
@@ -1136,7 +1141,7 @@ fn dealloc_with_delta_two_is_flagged() {
         ],
         ret(),
     )]);
-    let violations = verify_body(&over_specialized);
+    let violations = verify_body(&over_specialized, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
     assert!(
@@ -1158,7 +1163,7 @@ fn dealloc_with_delta_zero_is_flagged() {
         ],
         ret(),
     )]);
-    let violations = verify_body(&double_free);
+    let violations = verify_body(&double_free, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
     // The message matters, not just the count: releasing an unowned place is a
@@ -1919,7 +1924,7 @@ fn an_element_narrower_than_the_slot_it_is_stored_in_is_reported() {
         "miri_rt_set_add",
     );
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert_eq!(
         violations.len(),
         1,
@@ -1976,7 +1981,7 @@ fn a_map_value_narrower_than_its_slot_is_reported() {
         ],
     );
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert_eq!(
         violations.len(),
         1,
@@ -2022,7 +2027,7 @@ fn a_map_key_narrower_than_its_slot_names_the_key_argument() {
         ],
     );
 
-    let violations = verify_body(&body);
+    let violations = verify_body(&body, &OwnershipFacts::default());
     assert_eq!(
         violations.len(),
         1,
@@ -2406,7 +2411,7 @@ fn a_call_through_a_constant_callee_is_refused() {
         messages(&violations)
     );
     assert_eq!(
-        verify_body(&body).len(),
+        verify_body(&body, &OwnershipFacts::default()).len(),
         1,
         "verify_body reports the refusal and nothing else"
     );
@@ -2461,15 +2466,34 @@ fn a_launch_naming_its_kernel_by_its_symbol_is_accepted() {
 }
 
 /// `fn callee(text String)` taking its parameter over: locals 0 the return slot,
-/// 1 the owned parameter, 2 the local it is moved into.
+/// 1 the owned parameter, 2 the local it is moved into. Its ownership is
+/// [`owned_param`].
 fn owned_param_body(statements: Vec<Statement>) -> Body {
-    let mut body = body_of(
+    body_of(
         &[void_ty(), string_ty(), string_ty()],
         1,
         vec![block(statements, ret())],
-    );
-    body.owned_params = vec![true];
-    body
+    )
+}
+
+/// The ownership of a body taking its one parameter over.
+fn owned_param() -> OwnershipFacts {
+    OwnershipFacts {
+        owned_params: vec![true],
+        ..OwnershipFacts::default()
+    }
+}
+
+/// The facts of `program`, with every body lowered under the callee's symbol
+/// taking its one parameter over.
+fn owned_callee_facts(program: &[(Symbol, Body)]) -> ProgramFacts {
+    let mut facts = ProgramFacts::of(program);
+    for ((symbol, _), facts) in program.iter().zip(facts.iter_mut()) {
+        if *symbol == callee_symbol() {
+            *facts.ownership_mut() = owned_param();
+        }
+    }
+    facts
 }
 
 fn move_into(dest: usize, source: usize) -> Statement {
@@ -2481,7 +2505,7 @@ fn move_into(dest: usize, source: usize) -> Statement {
 
 #[test]
 fn owned_param_never_released_leaks_at_the_return() {
-    let violations = verify_body(&owned_param_body(Vec::new()));
+    let violations = verify_body(&owned_param_body(Vec::new()), &owned_param());
     assert_eq!(violations.len(), 1, "got: {}", messages(&violations));
     assert_eq!(violations[0].local, Local(1));
     assert!(
@@ -2493,7 +2517,7 @@ fn owned_param_never_released_leaks_at_the_return() {
 
 #[test]
 fn owned_param_moved_into_a_released_local_is_clean() {
-    assert_clean(
+    assert_clean_with(
         &owned_param_body(vec![
             storage_live(2),
             move_into(2, 1),
@@ -2501,14 +2525,16 @@ fn owned_param_moved_into_a_released_local_is_clean() {
             storage_dead(2),
             storage_dead(1),
         ]),
+        &owned_param(),
         "an owned parameter released through the local it moved into",
     );
 }
 
 #[test]
 fn releasing_an_owned_param_directly_is_not_flagged_as_a_caller_release() {
-    assert_clean(
+    assert_clean_with(
         &owned_param_body(vec![decref(1), storage_dead(1)]),
+        &owned_param(),
         "an owned parameter released in place",
     );
 }
@@ -2539,7 +2565,10 @@ fn an_owned_argument_is_consumed_by_the_call() {
         &caller_passing_temp(ArgMode::Owned),
         "a temp handed over at a call",
     );
-    let lent = verify_body(&caller_passing_temp(ArgMode::Borrowed));
+    let lent = verify_body(
+        &caller_passing_temp(ArgMode::Borrowed),
+        &OwnershipFacts::default(),
+    );
     assert_eq!(
         lent.len(),
         1,
@@ -2560,18 +2589,20 @@ fn a_call_whose_mode_disagrees_with_its_callee_is_reported() {
             (Symbol::entry(), caller_passing_temp(mode)),
         ]
     };
+    let agreeing = program(ArgMode::Owned);
     assert!(
-        verify_owned_argument_modes(&program(ArgMode::Owned)).is_empty(),
+        verify_owned_argument_modes(&agreeing, &owned_callee_facts(&agreeing)).is_empty(),
         "a call passing owned what its callee takes over agrees with it"
     );
-    let missed = verify_owned_argument_modes(&program(ArgMode::Borrowed));
+    let lending = program(ArgMode::Borrowed);
+    let missed = verify_owned_argument_modes(&lending, &owned_callee_facts(&lending));
     assert_eq!(missed.len(), 1, "a call lending what its callee releases");
     assert_eq!(missed[0].0, Symbol::entry());
 
-    let mut borrowing_callee = program(ArgMode::Owned);
-    borrowing_callee[0].1.owned_params = Vec::new();
+    let borrowing_callee = program(ArgMode::Owned);
+    let borrowing_facts = ProgramFacts::of(&borrowing_callee);
     assert_eq!(
-        verify_owned_argument_modes(&borrowing_callee).len(),
+        verify_owned_argument_modes(&borrowing_callee, &borrowing_facts).len(),
         1,
         "a call handing over what its callee only borrows"
     );
@@ -2595,7 +2626,7 @@ fn a_function_taking_a_parameter_over_named_as_a_value_is_reported() {
             place(2),
             Rvalue::Use(Operand::function(callee_symbol(), span())),
         )));
-    let found = verify_owned_argument_modes(&program);
+    let found = verify_owned_argument_modes(&program, &owned_callee_facts(&program));
     assert_eq!(
         found.len(),
         1,
@@ -2608,7 +2639,7 @@ fn a_function_taking_a_parameter_over_named_as_a_value_is_reported() {
 fn a_function_taking_a_parameter_over_called_from_a_gpu_body_is_reported() {
     let mut program = owned_call_program();
     program[1].1.execution_model = ExecutionModel::GpuDevice;
-    let found = verify_owned_argument_modes(&program);
+    let found = verify_owned_argument_modes(&program, &owned_callee_facts(&program));
     assert_eq!(found.len(), 1, "a GPU body funds no reference");
     assert_eq!(found[0].0, Symbol::entry());
 }
@@ -2617,7 +2648,7 @@ fn a_function_taking_a_parameter_over_called_from_a_gpu_body_is_reported() {
 fn a_function_taking_a_parameter_over_lowered_twice_is_reported() {
     let mut program = owned_call_program();
     program.push((callee_symbol(), owned_param_body(Vec::new())));
-    let found = verify_owned_argument_modes(&program);
+    let found = verify_owned_argument_modes(&program, &owned_callee_facts(&program));
     assert_eq!(found.len(), 1, "two bodies under one symbol");
     assert_eq!(found[0].0, callee_symbol());
 }

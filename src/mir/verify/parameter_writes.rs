@@ -27,14 +27,19 @@
 
 use super::{local_display_name, VerificationViolation};
 use crate::mir::block::BasicBlockData;
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::type_facts::unsharing::is_copied_on_write;
 use crate::mir::{Body, Local, Operand, Place, StatementKind};
 use std::collections::BTreeSet;
 
 /// Every parameter of `body` whose value its caller still holds that the
-/// body writes, or hands a runtime entry point that may write it.
-pub fn verify_parameter_writes(body: &Body) -> Vec<VerificationViolation> {
+/// body writes, or hands a runtime entry point that may write it; `ownership`
+/// says which parameters the body takes over.
+pub fn verify_parameter_writes(
+    body: &Body,
+    ownership: &OwnershipFacts,
+) -> Vec<VerificationViolation> {
     if body.is_gpu() {
         return Vec::new();
     }
@@ -42,7 +47,7 @@ pub fn verify_parameter_writes(body: &Body) -> Vec<VerificationViolation> {
         .basic_blocks
         .iter()
         .flat_map(written_locals)
-        .filter(|&local| is_callers_value(body, local))
+        .filter(|&local| is_callers_value(body, ownership, local))
         .map(|local| local.0)
         .collect();
     written
@@ -183,10 +188,10 @@ fn written_arguments(kind: &TerminatorKind) -> Vec<Local> {
 
 /// Whether `local` is a parameter holding a value its caller still holds and
 /// a write would copy.
-fn is_callers_value(body: &Body, local: Local) -> bool {
+fn is_callers_value(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let decl = &body.local_decls[local.0];
     body.is_lent_param(local)
-        && !body.is_owned_param(local)
+        && !ownership.is_owned_param(local)
         && decl.device_handle.is_none()
         && is_copied_on_write(body, &decl.ty)
 }

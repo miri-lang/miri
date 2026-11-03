@@ -25,6 +25,7 @@
 use super::VerificationViolation;
 use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::analysis::header_reach::{may_hold_type, runtime_call_leaves_headers};
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::header_reads::stable_collections;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
@@ -40,13 +41,14 @@ use std::collections::{HashMap, HashSet};
 /// as one that may change a header.
 pub fn verify_stable_collections(
     body: &Body,
+    ownership: &OwnershipFacts,
     harmless_calls: Option<&HashSet<BasicBlock>>,
 ) -> Vec<VerificationViolation> {
     let records = stable_collections(body);
     if records.is_empty() {
         return Vec::new();
     }
-    let checker = RecordCheck::of(body, harmless_calls);
+    let checker = RecordCheck::of(body, ownership, harmless_calls);
     (records.iter())
         .flat_map(|record| checker.failures(record))
         .chain(overlaps(&records))
@@ -90,6 +92,7 @@ fn display_name(body: &Body, local: Local) -> String {
 /// releases are read by.
 struct RecordCheck<'a> {
     body: &'a Body,
+    ownership: &'a OwnershipFacts,
     places: PlaceTypes<'a>,
     hooks: DropHookReach<'a>,
     predecessors: Vec<Vec<usize>>,
@@ -97,7 +100,11 @@ struct RecordCheck<'a> {
 }
 
 impl<'a> RecordCheck<'a> {
-    fn of(body: &'a Body, harmless_calls: Option<&'a HashSet<BasicBlock>>) -> Self {
+    fn of(
+        body: &'a Body,
+        ownership: &'a OwnershipFacts,
+        harmless_calls: Option<&'a HashSet<BasicBlock>>,
+    ) -> Self {
         let mut predecessors = vec![Vec::new(); body.basic_blocks.len()];
         for (index, data) in body.basic_blocks.iter().enumerate() {
             for successor in data.terminator.iter().flat_map(Terminator::successors) {
@@ -108,6 +115,7 @@ impl<'a> RecordCheck<'a> {
         }
         Self {
             body,
+            ownership,
             places: PlaceTypes::of(body),
             hooks: DropHookReach::new(body.rc_classifier.definitions()),
             predecessors,
@@ -294,7 +302,7 @@ impl<'a> RecordCheck<'a> {
         statement: &Statement,
     ) -> Option<String> {
         let is_borrowed =
-            (1..=self.body.arg_count).contains(&local.0) && !self.body.is_owned_param(local);
+            (1..=self.body.arg_count).contains(&local.0) && !self.ownership.is_owned_param(local);
         let target = self.body.local_decls.get(local.0).map(|decl| &decl.ty)?;
         let released = match &statement.kind {
             StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => {
@@ -406,10 +414,10 @@ impl<'a> RecordCheck<'a> {
         if !body.is_counted_local(local) {
             return Some("it is not reference counted".to_string());
         }
-        if body.borrowed_locals.contains_key(&local) {
+        if self.ownership.is_borrowed(local) {
             return Some("it holds no reference of its own".to_string());
         }
-        if (1..=body.arg_count).contains(&local.0) && !body.is_owned_param(local) {
+        if (1..=body.arg_count).contains(&local.0) && !self.ownership.is_owned_param(local) {
             return Some("it is a parameter the body borrows".to_string());
         }
         (body.basic_blocks.iter().enumerate()).find_map(|(block, data)| {
@@ -437,9 +445,9 @@ impl<'a> RecordCheck<'a> {
         let body = self.body;
         let root = source.local;
         let is_owned = if (1..=body.arg_count).contains(&root.0) {
-            body.is_owned_param(root)
+            self.ownership.is_owned_param(root)
         } else {
-            !body.env_capture_locals.contains(&root) && !body.borrowed_locals.contains_key(&root)
+            !body.env_capture_locals.contains(&root) && !self.ownership.is_borrowed(root)
         };
         matches!(operand, Operand::Move(_)) && source.projection.is_empty() && is_owned
     }
@@ -473,7 +481,7 @@ impl<'a> RecordCheck<'a> {
                     holders.insert(dest.local);
                 }
             }
-            for (borrow, owners) in &body.borrowed_locals {
+            for (borrow, owners) in &self.ownership.borrowed_locals {
                 if owners.iter().any(|owner| holders.contains(owner)) {
                     holders.insert(*borrow);
                 }

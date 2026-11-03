@@ -10,7 +10,7 @@
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlockData;
-use crate::mir::optimization::OptimizationPass;
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
@@ -72,7 +72,7 @@ impl<'a> PerceusContext<'a> {
 /// parameters, which the caller owns, and the closure captures it only reads,
 /// which the closure's environment owns and its destructor releases.
 ///
-/// A parameter the body takes over (`Body::owned_params`) is not borrowed: its
+/// A parameter the body takes over (`OwnershipFacts::owned_params`) is not borrowed: its
 /// binding moves the caller's reference out into a local the body releases.
 ///
 /// A capture the body assigns is not borrowed. Its value is replaced by one the
@@ -129,11 +129,11 @@ fn assigned_or_call_written_locals(body: &Body) -> std::collections::HashSet<cra
 }
 
 impl BorrowedLocals {
-    fn of(body: &Body) -> Self {
+    fn of(body: &Body, ownership: &OwnershipFacts) -> Self {
         let written = assigned_or_call_written_locals(body);
         BorrowedLocals {
             arg_count: body.arg_count,
-            owned_params: body.owned_params.clone(),
+            owned_params: ownership.owned_params.clone(),
             read_only_captures: body
                 .env_capture_locals
                 .iter()
@@ -152,12 +152,15 @@ impl BorrowedLocals {
     }
 }
 
-impl OptimizationPass for Perceus {
-    fn run(&mut self, body: &mut Body) -> bool {
+impl Perceus {
+    /// Inserts every retain and release into `body`, reading which parameters
+    /// it takes over from `ownership` and recording there the locals it
+    /// borrows. Returns true if any operation was inserted.
+    pub(super) fn insert(&self, body: &mut Body, ownership: &mut OwnershipFacts) -> bool {
         // Step 0: a lent argument held only through a class field gets a local
         // of its own across a call that may release it, retained below like
         // any other copy of a counted field.
-        let held = super::lent_arguments::hold_lent_field_arguments(body);
+        let held = super::lent_arguments::hold_lent_field_arguments(body, ownership);
 
         // Step 1: Identify which variables actually need tracking (managed locals).
         //
@@ -174,10 +177,11 @@ impl OptimizationPass for Perceus {
         // stored in the closure struct.  This works for both local and cross-function
         // closures and eliminates the double-free that would occur if both the
         // destructor and Perceus decremented the same capture on drop.
-        let mut borrowed = BorrowedLocals::of(body);
-        let mut managed_locals = self.identify_managed_locals(body, &borrowed);
+        let mut borrowed = BorrowedLocals::of(body, ownership);
+        let mut managed_locals = self.identify_managed_locals(body, ownership, &borrowed);
         let borrows = super::local_borrows::infer_local_borrows(
             body,
+            ownership,
             &PerceusContext::of(body, &borrowed),
             &managed_locals,
         );
@@ -185,7 +189,7 @@ impl OptimizationPass for Perceus {
             managed_locals.remove(local);
             borrowed.reads.insert(*local);
         }
-        body.borrowed_locals = borrows;
+        ownership.borrowed_locals = borrows;
         let mut changed = self.retain_written_captures(body, &managed_locals) || held;
 
         // Step 2: Iterate through every block of code and inject RC instructions.
@@ -222,12 +226,6 @@ impl OptimizationPass for Perceus {
         changed
     }
 
-    fn name(&self) -> &'static str {
-        "Perceus"
-    }
-}
-
-impl Perceus {
     /// Identifies all locals that are managed (heap-allocated) and owned by this function.
     ///
     /// Excludes borrowed locals — parameters and closure captures — and
@@ -238,13 +236,14 @@ impl Perceus {
     fn identify_managed_locals(
         &self,
         body: &Body,
+        ownership: &OwnershipFacts,
         borrowed: &BorrowedLocals,
     ) -> std::collections::HashSet<crate::mir::Local> {
         (1..body.local_decls.len())
             .map(crate::mir::Local)
             .filter(|&local| {
                 !borrowed.contains(local)
-                    && !body.is_owned_param(local)
+                    && !ownership.is_owned_param(local)
                     && body.is_counted_local(local)
             })
             .collect()

@@ -92,21 +92,6 @@ pub struct Body {
     /// body. A call to a method that writes its receiver hands it one only the
     /// caller holds, so the body writes it in place.
     pub receiver: Option<Local>,
-    /// Which parameters (indexed 1..=arg_count) the body takes over from its
-    /// callers. `owned_params[i-1] == true` means parameter `_i` is passed
-    /// [`crate::mir::ArgMode::Owned`] by every call: the caller funds one
-    /// reference for it and this body releases it. Empty means every parameter
-    /// is borrowed. Decided by `crate::mir::optimization::owned_params`.
-    pub owned_params: Vec<bool>,
-    /// The locals that borrow a value from a place the body owns, each with
-    /// every local whose value keeps what it holds alive: the roots its
-    /// definitions read from and, for a borrow read out of another borrowed
-    /// local, that local's owners in turn. A borrowed local holds no reference
-    /// of its own, so it is neither retained when it reads nor released when
-    /// its storage ends. Decided by Perceus
-    /// (`crate::mir::optimization::local_borrows`); the verifier checks each
-    /// entry again against the body.
-    pub borrowed_locals: HashMap<Local, Vec<Local>>,
     /// Which parameters (indexed 1..=arg_count) the body actually writes.
     /// `param_written[i-1] == true` means parameter `_i` is written by this body.
     /// Distinct from `out_params`, which for a kernel also drives the WGSL storage
@@ -166,8 +151,6 @@ impl Body {
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
             receiver: None,
-            owned_params: Vec::new(),
-            borrowed_locals: HashMap::new(),
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
             kernel_grids: Vec::new(),
@@ -257,17 +240,6 @@ impl Body {
     /// Whether the value `local` holds is reference counted.
     pub fn is_counted_local(&self, local: Local) -> bool {
         self.is_counted(&self.local_decls[local.0].ty.kind)
-    }
-
-    /// Whether `local` is a parameter this body takes over from its callers
-    /// (see [`Body::owned_params`]).
-    pub fn is_owned_param(&self, local: Local) -> bool {
-        local
-            .0
-            .checked_sub(1)
-            .and_then(|index| self.owned_params.get(index))
-            .copied()
-            .unwrap_or(false)
     }
 
     /// Whether `local` is a parameter holding a value its caller still holds:

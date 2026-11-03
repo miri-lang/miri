@@ -10,7 +10,14 @@
 //! current; a pass that rewrites without declaring it would hide the rewrite
 //! from whoever orders the passes. Debug builds compare the body's shape
 //! before and after every pass and refuse either.
+//!
+//! A pass also declares which fact groups ([`crate::mir::facts`]) it reads,
+//! records and keeps true across its own rewrite. The runner refuses to
+//! start it on a stale group it reads, stamps the groups it records, carries
+//! the ones it preserves to the body's new generation, and leaves every other
+//! group stale once it rewrites the graph.
 
+use crate::mir::facts::{BodyFacts, Fact, ProgramFacts, StaleFact};
 use crate::mir::Body;
 
 /// A pass run over one body at a time.
@@ -19,77 +26,132 @@ pub struct BodyPass {
     pub name: &'static str,
     /// Whether the pass may add, remove or redirect a block.
     pub rewrites_cfg: bool,
+    /// The fact groups the pass reads; each must hold when it starts.
+    pub requires: &'static [Fact],
+    /// The fact groups the pass records; each holds once it ends.
+    pub records: &'static [Fact],
+    /// The fact groups a rewrite by the pass leaves true.
+    pub preserves: &'static [Fact],
+}
+
+impl BodyPass {
+    /// Whether the pass reads or writes any fact group.
+    pub fn uses_facts(&self) -> bool {
+        !(self.requires.is_empty() && self.records.is_empty() && self.preserves.is_empty())
+    }
 }
 
 /// Reads back gpu-resident bindings a host read needs fresh.
 pub const INSERT_READBACKS: BodyPass = BodyPass {
     name: "insert_readbacks",
     rewrites_cfg: true,
+    requires: &[],
+    records: &[],
+    preserves: &[Fact::Ownership],
 };
 /// Copies a value argument a call also writes.
 pub const COPY_VALUE_ARGUMENTS: BodyPass = BodyPass {
     name: "copy_value_arguments",
     rewrites_cfg: false,
+    requires: &[],
+    records: &[],
+    preserves: &[],
 };
 /// Converts optional operands to the layout their use expects.
 pub const CONFORM_OPTIONAL_OPERANDS: BodyPass = BodyPass {
     name: "conform_optional_operands",
     rewrites_cfg: false,
+    requires: &[],
+    records: &[],
+    preserves: &[],
 };
 /// Decides which parameters each function takes over from its callers.
 pub const DECIDE_OWNED_PARAMETERS: BodyPass = BodyPass {
     name: "decide_owned_parameters",
     rewrites_cfg: false,
+    requires: &[],
+    records: &[Fact::Ownership],
+    preserves: &[],
 };
 /// Marks the calls that release nothing their caller holds.
 pub const STAMP_QUIET_CALLS: BodyPass = BodyPass {
     name: "stamp_quiet_calls",
     rewrites_cfg: false,
+    requires: &[Fact::Ownership],
+    records: &[],
+    preserves: &[],
 };
 /// Inserts every retain and release.
 pub const INSERT_RC: BodyPass = BodyPass {
     name: "insert_rc",
     rewrites_cfg: false,
+    requires: &[Fact::Ownership],
+    records: &[Fact::Ownership],
+    preserves: &[],
 };
 /// Removes retain and release pairs that cancel.
 pub const ELIDE_RC: BodyPass = BodyPass {
     name: "elide_rc",
     rewrites_cfg: false,
+    requires: &[Fact::Ownership],
+    records: &[],
+    preserves: &[],
 };
 /// Drops uniqueness checks an earlier write already answered.
 pub const ELIDE_UNSHARE_CHECKS: BodyPass = BodyPass {
     name: "elide_unshare_checks",
     rewrites_cfg: true,
+    requires: &[],
+    records: &[],
+    preserves: &[Fact::Ownership],
 };
 /// Threads branch conditions known on an incoming edge.
 pub const THREAD_BRANCH_CONDITIONS: BodyPass = BodyPass {
     name: "thread_branch_conditions",
     rewrites_cfg: true,
+    requires: &[],
+    records: &[],
+    preserves: &[Fact::Ownership],
 };
 /// Copies each loop a guard on its bound proves in bounds.
 pub const VERSION_BOUNDED_LOOPS: BodyPass = BodyPass {
     name: "version_bounded_loops",
     rewrites_cfg: true,
+    requires: &[Fact::Ownership],
+    records: &[],
+    preserves: &[Fact::Ownership],
 };
 /// Records each collection a loop leaves unchanged.
 pub const RECORD_STABLE_COLLECTIONS: BodyPass = BodyPass {
     name: "record_stable_collections",
     rewrites_cfg: true,
+    requires: &[Fact::Ownership],
+    records: &[],
+    preserves: &[Fact::Ownership],
 };
 /// Records each access proven in bounds.
 pub const RECORD_IN_BOUNDS: BodyPass = BodyPass {
     name: "record_in_bounds",
     rewrites_cfg: false,
+    requires: &[],
+    records: &[],
+    preserves: &[],
 };
 /// Spells element arguments by address.
 pub const PASS_ELEMENTS_BY_ADDRESS: BodyPass = BodyPass {
     name: "pass_elements_by_address",
     rewrites_cfg: true,
+    requires: &[],
+    records: &[],
+    preserves: &[],
 };
 /// Spells closure arguments with their trampolines.
 pub const PASS_CLOSURES_WITH_TRAMPOLINES: BodyPass = BodyPass {
     name: "pass_closures_with_trampolines",
     rewrites_cfg: false,
+    requires: &[],
+    records: &[],
+    preserves: &[],
 };
 
 /// How a pass broke its declaration.
@@ -100,6 +162,12 @@ pub enum PassContract {
     RewroteWithoutBumping(&'static str),
     /// The pass rewrote the graph though it declares it never does.
     RewroteUndeclared(&'static str),
+    /// The pass declares fact groups but was run without the body's facts.
+    RunWithoutFacts(&'static str),
+    /// A fact group the pass reads did not hold when it started.
+    Stale(&'static str, StaleFact),
+    /// The program's facts do not describe its bodies one for one.
+    FactsMisaligned { facts: usize, bodies: usize },
 }
 
 impl std::fmt::Display for PassContract {
@@ -113,59 +181,152 @@ impl std::fmt::Display for PassContract {
                 f,
                 "the pass `{pass}` rewrote the control-flow graph, which it declares it never does"
             ),
+            Self::RunWithoutFacts(pass) => write!(
+                f,
+                "the pass `{pass}` reads or records facts but was run without them"
+            ),
+            Self::Stale(pass, stale) => {
+                write!(f, "the pass `{pass}` started on stale facts: {stale}")
+            }
+            Self::FactsMisaligned { facts, bodies } => write!(
+                f,
+                "the program holds facts for {facts} bodies but has {bodies}"
+            ),
         }
     }
 }
 
-/// Runs `pass` over `body` through `run`, handing back what `run` returned.
+/// Runs `pass`, which uses no facts, over `body` through `run`, handing back
+/// what `run` returned.
 ///
 /// In a debug build the body's shape and generation are compared before and
 /// after: a changed shape needs a new generation, and a new generation needs
-/// a pass that declares it rewrites the graph.
+/// a pass that declares it rewrites the graph. A fact recorded off the body
+/// before a rewrite run this way goes stale with the old generation.
 pub fn run_body_pass<R>(
     pass: &BodyPass,
     body: &mut Body,
     run: impl FnOnce(&mut Body) -> R,
 ) -> Result<R, PassContract> {
-    if !cfg!(debug_assertions) {
-        return Ok(run(body));
+    if pass.uses_facts() {
+        return Err(PassContract::RunWithoutFacts(pass.name));
     }
-    let shape = body.shape();
-    let generation = body.generation();
+    let watch = Watch::of(body);
     let result = run(body);
-    let bumped = body.generation() != generation;
-    if bumped && !pass.rewrites_cfg {
-        return Err(PassContract::RewroteUndeclared(pass.name));
-    }
-    if !bumped && body.shape() != shape {
-        return Err(PassContract::RewroteWithoutBumping(pass.name));
-    }
+    watch.check(pass, body)?;
     Ok(result)
 }
 
-/// Runs `pass` over every body of `bodies` at once, the way [`run_body_pass`]
-/// runs one over a single body: a pass that reads across bodies still
-/// rewrites each one on its own terms.
+/// Runs `pass` over `body` and its `facts` through `run`, the way
+/// [`run_body_pass`] runs a pass that uses none, and settles the facts after
+/// it: see [`settle`].
+pub fn run_body_pass_with_facts<R>(
+    pass: &BodyPass,
+    body: &mut Body,
+    facts: &mut BodyFacts,
+    run: impl FnOnce(&mut Body, &mut BodyFacts) -> R,
+) -> Result<R, PassContract> {
+    require(pass, body, facts)?;
+    let watch = Watch::of(body);
+    let result = run(body, facts);
+    watch.check(pass, body)?;
+    settle(pass, body, facts, watch.generation);
+    Ok(result)
+}
+
+/// Runs `pass`, which uses no facts, over every body of `bodies` at once, the
+/// way [`run_body_pass`] runs one over a single body: a pass that reads across
+/// bodies still rewrites each one on its own terms.
 pub fn run_program_pass<K, R>(
     pass: &BodyPass,
     bodies: &mut [(K, Body)],
     run: impl FnOnce(&mut [(K, Body)]) -> R,
 ) -> Result<R, PassContract> {
-    if !cfg!(debug_assertions) {
-        return Ok(run(bodies));
+    if pass.uses_facts() {
+        return Err(PassContract::RunWithoutFacts(pass.name));
     }
-    let before: Vec<_> = (bodies.iter())
-        .map(|(_, body)| (body.shape(), body.generation()))
-        .collect();
+    let watches: Vec<_> = bodies.iter().map(|(_, body)| Watch::of(body)).collect();
     let result = run(bodies);
-    for ((_, body), (shape, generation)) in bodies.iter().zip(&before) {
-        let bumped = body.generation() != *generation;
+    for ((_, body), watch) in bodies.iter().zip(&watches) {
+        watch.check(pass, body)?;
+    }
+    Ok(result)
+}
+
+/// Runs `pass` over every body of `bodies` and their `facts` at once, the way
+/// [`run_body_pass_with_facts`] runs one over a single body.
+pub fn run_program_pass_with_facts<K, R>(
+    pass: &BodyPass,
+    bodies: &mut [(K, Body)],
+    facts: &mut ProgramFacts,
+    run: impl FnOnce(&mut [(K, Body)], &mut ProgramFacts) -> R,
+) -> Result<R, PassContract> {
+    if facts.len() != bodies.len() {
+        let (facts, bodies) = (facts.len(), bodies.len());
+        return Err(PassContract::FactsMisaligned { facts, bodies });
+    }
+    for ((_, body), body_facts) in bodies.iter().zip(facts.iter()) {
+        require(pass, body, body_facts)?;
+    }
+    let watches: Vec<_> = bodies.iter().map(|(_, body)| Watch::of(body)).collect();
+    let result = run(bodies, facts);
+    for (((_, body), body_facts), watch) in bodies.iter().zip(facts.iter_mut()).zip(&watches) {
+        watch.check(pass, body)?;
+        settle(pass, body, body_facts, watch.generation);
+    }
+    Ok(result)
+}
+
+/// Fails unless every fact group `pass` reads holds at `body`'s generation.
+fn require(pass: &BodyPass, body: &Body, facts: &BodyFacts) -> Result<(), PassContract> {
+    for &fact in pass.requires {
+        (facts.check(fact, body)).map_err(|stale| PassContract::Stale(pass.name, stale))?;
+    }
+    Ok(())
+}
+
+/// Brings `facts` up to the generation `pass` left `body` at, from
+/// `generation`, the one it started at: a group the pass records holds now;
+/// after a rewrite, a group it preserves is carried to the new generation and
+/// every other group is stale.
+fn settle(pass: &BodyPass, body: &Body, facts: &mut BodyFacts, generation: u64) {
+    let rewrote = body.generation() != generation;
+    for fact in Fact::ALL {
+        if pass.records.contains(&fact) || (rewrote && pass.preserves.contains(&fact)) {
+            facts.stamp_current(fact, body);
+        } else if rewrote {
+            facts.invalidate(fact);
+        }
+    }
+}
+
+/// A body's generation, and in a debug build its shape, before a pass runs.
+struct Watch {
+    generation: u64,
+    shape: Option<Vec<Vec<crate::mir::BasicBlock>>>,
+}
+
+impl Watch {
+    fn of(body: &Body) -> Self {
+        Watch {
+            generation: body.generation(),
+            shape: cfg!(debug_assertions).then(|| body.shape()),
+        }
+    }
+
+    /// In a debug build, fails when `pass` rewrote `body` without saying so
+    /// either way.
+    fn check(&self, pass: &BodyPass, body: &Body) -> Result<(), PassContract> {
+        let Some(shape) = &self.shape else {
+            return Ok(());
+        };
+        let bumped = body.generation() != self.generation;
         if bumped && !pass.rewrites_cfg {
             return Err(PassContract::RewroteUndeclared(pass.name));
         }
         if !bumped && body.shape() != *shape {
             return Err(PassContract::RewroteWithoutBumping(pass.name));
         }
+        Ok(())
     }
-    Ok(result)
 }

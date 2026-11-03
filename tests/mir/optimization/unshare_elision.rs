@@ -15,6 +15,7 @@ use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
 use miri::mir::analysis::loops::natural_loops;
 use miri::mir::body::DeviceHandleId;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::optimization::elide_unshare_checks;
 use miri::mir::optimization::loop_unsharing::hoist_loop_unsharing;
 use miri::mir::{
@@ -45,10 +46,17 @@ fn bodies_of(source: &str) -> Vec<(String, Body)> {
 
 /// The body `source` compiles to whose link name ends in `suffix`.
 fn body_named(source: &str, suffix: &str) -> Body {
-    bodies_of(source)
-        .into_iter()
-        .find(|(name, _)| name.ends_with(suffix))
-        .map(|(_, body)| body)
+    body_and_ownership_named(source, suffix).0
+}
+
+/// [`body_named`], with the ownership the pipeline recorded about it.
+fn body_and_ownership_named(source: &str, suffix: &str) -> (Body, OwnershipFacts) {
+    let (bodies, facts) = Pipeline::new()
+        .get_mir_program_with_rc(source)
+        .expect("pipeline should lower the program");
+    (bodies.into_iter().zip(facts.iter()))
+        .find(|((name, _), _)| name.ends_with(suffix))
+        .map(|((_, body), facts)| (body, facts.ownership().clone()))
         .unwrap_or_else(|| panic!("no body named *{suffix}"))
 }
 
@@ -641,9 +649,9 @@ fn main()
     println(f"{c[0].x}")
 "#
     );
-    let body = body_named(&source, ".touch");
+    let (body, ownership) = body_and_ownership_named(&source, ".touch");
     assert!(
-        body.is_owned_param(Local(1)),
+        ownership.is_owned_param(Local(1)),
         "the list is handed over to touch"
     );
     assert_eq!(reachable_checks(&body), 2);
@@ -662,9 +670,9 @@ fn touch(start [Cell], i int) int
     start[i].x + l[i].x
 "#,
     );
-    let body = body_named(&source, ".touch");
+    let (body, ownership) = body_and_ownership_named(&source, ".touch");
     assert!(
-        !body.is_owned_param(Local(1)),
+        !ownership.is_owned_param(Local(1)),
         "touch reads the list after the writes"
     );
     assert_eq!(reachable_checks(&body), 2);

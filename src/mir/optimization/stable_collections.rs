@@ -63,6 +63,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::mir::analysis::dominators::DominatorTree;
 use crate::mir::analysis::loops::{natural_loops, predecessors, NaturalLoop};
 use crate::mir::analysis::stable_headers::StableHeaders;
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -71,13 +72,14 @@ use crate::mir::{
 };
 
 /// Records every collection a loop of `body` leaves the header of unchanged,
-/// inserting a preheader before each such loop. Returns true if any was
+/// inserting a preheader before each such loop; `ownership` says who holds
+/// what the body's parameters and locals hold. Returns true if any was
 /// recorded.
-pub fn record_stable_collections(body: &mut Body) -> bool {
+pub fn record_stable_collections(body: &mut Body, ownership: &OwnershipFacts) -> bool {
     if body.is_gpu() {
         return false;
     }
-    let found = stable_loops(body);
+    let found = stable_loops(body, ownership);
     if found.is_empty() {
         return false;
     }
@@ -104,8 +106,8 @@ pub fn record_stable_collections(body: &mut Body) -> bool {
 
 /// Every loop of `body` paired with a collection it leaves unchanged, the
 /// outermost loop first.
-fn stable_loops(body: &Body) -> Vec<(NaturalLoop, Local)> {
-    let Some(mut headers) = StableHeaders::of(body) else {
+fn stable_loops(body: &Body, ownership: &OwnershipFacts) -> Vec<(NaturalLoop, Local)> {
+    let Some(mut headers) = StableHeaders::of(body, ownership) else {
         return Vec::new();
     };
     let mut loops = natural_loops(body, &DominatorTree::compute(body));

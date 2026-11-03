@@ -12,6 +12,7 @@ use crate::mir::optimization::stable_collections::{
 use crate::mir::utils::runtime_callee;
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::optimization::in_bounds::{record_in_bounds, INTEGER_ARITHMETIC_TRAPS_ON_OVERFLOW};
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::proven_indexes::proven_indexes;
@@ -25,7 +26,7 @@ use miri::pipeline::Pipeline;
 /// The in-bounds entries `body` gets once its stable collections are
 /// recorded.
 pub(crate) fn proofs_of(mut body: Body) -> Vec<InBounds> {
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     record_in_bounds(&mut body);
     proven_indexes(&body)
 }
@@ -183,7 +184,7 @@ fn test_a_push_between_the_length_and_the_access_proves_nothing() {
 fn proofs_after_copying_a_list_of(element: TypeKind) -> Vec<InBounds> {
     let mut body = loop_over_a_list();
     body.local_decls[SPARE_LIST.0] = LocalDecl::new(list_of(element), Span::default());
-    record_stable_collections(&mut body);
+    record_stable_collections(&mut body, &OwnershipFacts::default());
     let read = body.basic_blocks.len();
     let copy = call(
         Operand::runtime(

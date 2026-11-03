@@ -6,10 +6,11 @@
 //! hold for, and the check has to say why.
 
 use crate::mir::optimization::stable_collections::{
-    list_of, loop_over_a_list, loop_over_an_owned_list, program_call,
+    borrowing, list_of, loop_over_a_list, loop_over_an_owned_list, program_call,
 };
 use miri::ast::types::TypeKind;
 use miri::error::syntax::Span;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::header_reads::stable_collections;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::symbol::Symbol;
@@ -62,7 +63,11 @@ fn forge_record(mut body: Body) -> Body {
 }
 
 fn messages(body: &Body) -> Vec<String> {
-    verify_stable_collections(body, None)
+    messages_with(body, &OwnershipFacts::default())
+}
+
+fn messages_with(body: &Body, ownership: &OwnershipFacts) -> Vec<String> {
+    verify_stable_collections(body, ownership, None)
         .into_iter()
         .map(|violation| violation.message)
         .collect()
@@ -71,7 +76,10 @@ fn messages(body: &Body) -> Vec<String> {
 #[test]
 fn test_a_record_the_pass_made_has_no_violation() {
     let mut body = loop_over_a_list();
-    assert!(record_stable_collections(&mut body));
+    assert!(record_stable_collections(
+        &mut body,
+        &OwnershipFacts::default()
+    ));
     assert_eq!(messages(&body), Vec::<String>::new());
 }
 
@@ -195,7 +203,11 @@ fn test_a_record_of_a_borrowed_list_over_a_loop_storing_a_list_elsewhere_is_flag
 
 /// `found`, which must hold a message containing `fragment`.
 fn assert_flagged(body: &Body, fragment: &str) {
-    let found = messages(body);
+    assert_flagged_with(body, &OwnershipFacts::default(), fragment);
+}
+
+fn assert_flagged_with(body: &Body, ownership: &OwnershipFacts, fragment: &str) {
+    let found = messages_with(body, ownership);
     assert!(
         found.iter().any(|message| message.contains(fragment)),
         "{found:?}"
@@ -206,7 +218,10 @@ fn assert_flagged(body: &Body, fragment: &str) {
 fn test_a_record_the_pass_made_over_a_loop_calling_a_function_of_the_program_has_no_violation() {
     let mut body = loop_over_an_owned_list();
     body.basic_blocks[2].terminator = Some(program_call(Vec::new()));
-    assert!(record_stable_collections(&mut body), "{body}");
+    assert!(
+        record_stable_collections(&mut body, &OwnershipFacts::default()),
+        "{body}"
+    );
     assert_eq!(messages(&body), Vec::<String>::new());
 }
 
@@ -228,18 +243,22 @@ fn test_a_record_over_a_loop_calling_a_function_handed_a_copy_of_the_list_is_fla
 #[test]
 fn test_a_record_over_a_loop_calling_a_function_handed_a_borrow_of_the_list_is_flagged() {
     let mut body = loop_over_an_owned_list();
-    body.borrowed_locals.insert(SPARE_LIST, vec![LIST]);
+    let ownership = borrowing(SPARE_LIST, vec![LIST]);
     body.basic_blocks[2].terminator =
         Some(program_call(vec![Operand::Copy(Place::new(SPARE_LIST))]));
-    assert_flagged(&forge_record(body), "bb2 calls");
+    assert_flagged_with(&forge_record(body), &ownership, "bb2 calls");
 }
 
 #[test]
 fn test_a_record_of_a_borrowed_list_over_a_loop_calling_a_function_is_flagged() {
     let mut body = loop_over_an_owned_list();
-    body.borrowed_locals.insert(LIST, vec![SPARE_LIST]);
+    let ownership = borrowing(LIST, vec![SPARE_LIST]);
     body.basic_blocks[2].terminator = Some(program_call(Vec::new()));
-    assert_flagged(&forge_record(body), "holds no reference of its own");
+    assert_flagged_with(
+        &forge_record(body),
+        &ownership,
+        "holds no reference of its own",
+    );
 }
 
 #[test]

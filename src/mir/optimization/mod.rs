@@ -34,6 +34,7 @@ pub mod rc_elision;
 pub mod stable_collections;
 pub mod unshare_elision;
 
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::{Body, ExecutionModel};
 use perceus::Perceus;
 use rc_elision::RcElision;
@@ -96,11 +97,13 @@ pub trait OptimizationPass {
 /// # Arguments
 ///
 /// * `body` - The MIR function body to annotate with RC operations (mutated in place)
-pub fn insert_rc(body: &mut Body) {
+/// * `ownership` - Which parameters the body takes over; the locals it
+///   borrows are recorded here
+pub fn insert_rc(body: &mut Body, ownership: &mut OwnershipFacts) {
     if runs_on_a_gpu(body) {
         return;
     }
-    Perceus.run(body);
+    Perceus.insert(body, ownership);
 }
 
 /// Whether `body` executes on a GPU rather than on the host.
@@ -124,11 +127,12 @@ fn runs_on_a_gpu(body: &Body) -> bool {
 /// # Arguments
 ///
 /// * `body` - The MIR function body already annotated with RC operations
-pub fn elide_rc(body: &mut Body) {
+/// * `ownership` - What [`insert_rc`] recorded about the body
+pub fn elide_rc(body: &mut Body, ownership: &OwnershipFacts) {
     if runs_on_a_gpu(body) {
         return;
     }
-    RcElision.run(body);
+    RcElision.elide(body, ownership);
 }
 
 /// Let each block branch on the condition it computed rather than jump to a

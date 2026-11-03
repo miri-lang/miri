@@ -23,6 +23,7 @@ pub mod compiler_intrinsics;
 pub mod declaration;
 pub mod dispatch;
 pub mod element_abi;
+pub mod facts;
 pub mod gpu;
 pub mod gpu_names;
 pub mod header_reads;

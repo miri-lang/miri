@@ -13,6 +13,7 @@ use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::verify::verify_parameter_writes;
 use miri::mir::{
     Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue, Statement, StatementKind,
@@ -107,7 +108,7 @@ fn copied_in_place() -> Body {
 
 #[test]
 fn a_parameter_copied_on_write_in_place_is_flagged_once() {
-    let violations = verify_parameter_writes(&copied_in_place());
+    let violations = verify_parameter_writes(&copied_in_place(), &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert_eq!(violations[0].local, Local(1));
     assert!(violations[0].message.contains("caller still holds"));
@@ -117,7 +118,7 @@ fn a_parameter_copied_on_write_in_place_is_flagged_once() {
 fn a_receiver_copied_on_write_in_place_is_flagged_once() {
     let mut body = copied_in_place();
     body.receiver = Some(Local(1));
-    let violations = verify_parameter_writes(&body);
+    let violations = verify_parameter_writes(&body, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert_eq!(violations[0].local, Local(1));
     assert!(violations[0].message.contains("receiver"));
@@ -130,7 +131,10 @@ fn a_receiver_asked_whether_it_is_shared_is_flagged() {
         vec![Operand::Copy(Place::new(Local(1)))],
     );
     body.receiver = Some(Local(1));
-    assert_eq!(verify_parameter_writes(&body).len(), 1);
+    assert_eq!(
+        verify_parameter_writes(&body, &OwnershipFacts::default()).len(),
+        1
+    );
 }
 
 #[test]
@@ -147,7 +151,10 @@ fn a_receiver_assigned_whole_is_flagged() {
         ),
         span: span(),
     });
-    assert_eq!(verify_parameter_writes(&body).len(), 1);
+    assert_eq!(
+        verify_parameter_writes(&body, &OwnershipFacts::default()).len(),
+        1
+    );
 }
 
 #[test]
@@ -164,7 +171,10 @@ fn a_receiver_checked_unique_and_written_in_place_raises_nothing() {
     ] {
         let mut body = handing_to_runtime(name, args);
         body.receiver = Some(Local(1));
-        assert!(verify_parameter_writes(&body).is_empty(), "{name}");
+        assert!(
+            verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty(),
+            "{name}"
+        );
     }
 }
 
@@ -174,28 +184,31 @@ fn a_field_of_a_receiver_copied_on_write_raises_nothing() {
     field.projection.push(miri::mir::PlaceElem::Field(0));
     let mut body = handing_to_runtime("miri_rt_rc_is_shared", vec![Operand::Copy(field)]);
     body.receiver = Some(Local(1));
-    assert!(verify_parameter_writes(&body).is_empty());
+    assert!(verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty());
 }
 
 #[test]
 fn an_out_parameter_copied_on_write_in_place_raises_nothing() {
     let mut body = copied_in_place();
     body.out_params = vec![true];
-    assert!(verify_parameter_writes(&body).is_empty());
+    assert!(verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty());
 }
 
 #[test]
 fn a_parameter_the_body_owns_copied_on_write_in_place_raises_nothing() {
-    let mut body = copied_in_place();
-    body.owned_params = vec![true];
-    assert!(verify_parameter_writes(&body).is_empty());
+    let body = copied_in_place();
+    let ownership = OwnershipFacts {
+        owned_params: vec![true],
+        ..OwnershipFacts::default()
+    };
+    assert!(verify_parameter_writes(&body, &ownership).is_empty());
 }
 
 #[test]
 fn a_parameter_a_runtime_writer_is_handed_is_flagged() {
     let receiver = Operand::Move(Place::new(Local(1)));
     let body = handing_to_runtime("miri_rt_list_push", vec![receiver, int_constant()]);
-    let violations = verify_parameter_writes(&body);
+    let violations = verify_parameter_writes(&body, &OwnershipFacts::default());
     assert_eq!(violations.len(), 1, "{violations:?}");
     assert_eq!(violations[0].local, Local(1));
 }
@@ -210,7 +223,10 @@ fn a_projection_of_a_parameter_a_runtime_writer_is_handed_is_flagged() {
         "miri_rt_list_push",
         vec![Operand::Copy(element), int_constant()],
     );
-    assert_eq!(verify_parameter_writes(&body).len(), 1);
+    assert_eq!(
+        verify_parameter_writes(&body, &OwnershipFacts::default()).len(),
+        1
+    );
 }
 
 #[test]
@@ -219,7 +235,7 @@ fn a_parameter_a_runtime_entry_only_reads_raises_nothing() {
         "miri_rt_list_len",
         vec![Operand::Copy(Place::new(Local(1)))],
     );
-    assert!(verify_parameter_writes(&body).is_empty());
+    assert!(verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty());
 }
 
 #[test]
@@ -228,7 +244,7 @@ fn a_parameter_stored_as_an_element_raises_nothing() {
         "miri_rt_list_push",
         vec![int_constant(), Operand::Copy(Place::new(Local(1)))],
     );
-    assert!(verify_parameter_writes(&body).is_empty());
+    assert!(verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty());
 }
 
 /// `String.join` and `List(array)` hand their collection parameter to an
@@ -250,6 +266,9 @@ fn a_parameter_joined_or_copied_into_a_list_raises_nothing() {
         ),
     ] {
         let body = handing_to_runtime(name, args);
-        assert!(verify_parameter_writes(&body).is_empty(), "{name}");
+        assert!(
+            verify_parameter_writes(&body, &OwnershipFacts::default()).is_empty(),
+            "{name}"
+        );
     }
 }

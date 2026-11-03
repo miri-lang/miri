@@ -24,6 +24,7 @@
 
 use crate::mir::analysis::heap_effects::{call_flags, HeapLends};
 use crate::mir::block::{BasicBlock, BasicBlockData};
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, Terminator, TerminatorKind};
 use crate::mir::{Body, LocalDecl, Operand, Place, Rvalue};
@@ -37,9 +38,10 @@ struct HeldArgument {
 }
 
 /// Read each lent argument a loud call is handed through a class field into
-/// a temporary that lives across the call. Reports whether any was.
-pub(super) fn hold_lent_field_arguments(body: &mut Body) -> bool {
-    let held = held_arguments(body);
+/// a temporary that lives across the call; `ownership` says which
+/// parameters the body takes over. Reports whether any was.
+pub(super) fn hold_lent_field_arguments(body: &mut Body, ownership: &OwnershipFacts) -> bool {
+    let held = held_arguments(body, ownership);
     if held.is_empty() {
         return false;
     }
@@ -77,8 +79,8 @@ pub(super) fn hold_lent_field_arguments(body: &mut Body) -> bool {
 
 /// Every argument of a call `body` makes that a loud callee may release
 /// while it reads it, in block order.
-fn held_arguments(body: &Body) -> Vec<HeldArgument> {
-    let lends = HeapLends::of(body);
+fn held_arguments(body: &Body, ownership: &OwnershipFacts) -> Vec<HeldArgument> {
+    let lends = HeapLends::of(body, ownership);
     let mut held = Vec::new();
     for (index, data) in body.basic_blocks.iter().enumerate() {
         let Some(terminator) = &data.terminator else {

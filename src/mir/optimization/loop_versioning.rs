@@ -70,6 +70,7 @@ use crate::mir::analysis::loops::{
 use crate::mir::analysis::non_negative::{constant_step, non_negative_locals, Step};
 use crate::mir::analysis::stable_headers::{is_single_entry, StableHeaders};
 use crate::mir::analysis::traversal::{address_taken, successors_of};
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::PlaceContext;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -99,16 +100,17 @@ struct Chosen {
 }
 
 /// Copies every loop of `body` a guard on its bound lets the in-bounds pass
-/// prove, entering the copy through that guard. Returns true if any loop
-/// was copied.
-pub fn version_bounded_loops(body: &mut Body) -> bool {
+/// prove, entering the copy through that guard; `ownership` says who holds
+/// what the body's parameters and locals hold. Returns true if any loop was
+/// copied.
+pub fn version_bounded_loops(body: &mut Body, ownership: &OwnershipFacts) -> bool {
     if body.is_gpu()
         || !stable_collections(body).is_empty()
         || !crate::mir::proven_indexes::proven_indexes(body).is_empty()
     {
         return false;
     }
-    let chosen = chosen_loops(body);
+    let chosen = chosen_loops(body, ownership);
     let mut predecessors = predecessors(body);
     for each in &chosen {
         version(body, each, &mut predecessors);
@@ -120,12 +122,12 @@ pub fn version_bounded_loops(body: &mut Body) -> bool {
 }
 
 /// Every loop of `body` worth a copy, in header order.
-fn chosen_loops(body: &Body) -> Vec<Chosen> {
+fn chosen_loops(body: &Body, ownership: &OwnershipFacts) -> Vec<Chosen> {
     let loops = natural_loops(body, &DominatorTree::compute(body));
     if loops.is_empty() {
         return Vec::new();
     }
-    let Some(mut headers) = StableHeaders::of(body) else {
+    let Some(mut headers) = StableHeaders::of(body, ownership) else {
         return Vec::new();
     };
     let facts = BodyFacts::of(body);

@@ -39,6 +39,7 @@
 
 use super::{local_display_name, VerificationViolation};
 use crate::mir::analysis::traversal::reverse_postorder;
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::PlaceContext;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::residency::{READBACK_FN, UPLOAD_FN};
@@ -52,12 +53,16 @@ use crate::mir::{
 use crate::runtime_effects::RuntimeEffect;
 use std::collections::{HashMap, HashSet};
 
-/// Every runtime write in `body` of a value another name may hold.
-pub fn verify_unshared_writes(body: &Body) -> Vec<VerificationViolation> {
+/// Every runtime write in `body` of a value another name may hold;
+/// `ownership` says which locals the body borrows.
+pub fn verify_unshared_writes(
+    body: &Body,
+    ownership: &OwnershipFacts,
+) -> Vec<VerificationViolation> {
     if body.is_gpu() || !body.basic_blocks.iter().any(ends_in_runtime_call) {
         return Vec::new();
     }
-    let model = Model::of(body);
+    let model = Model::of(body, ownership);
     let entries = model.entry_states();
     (body.basic_blocks.iter().enumerate())
         .filter_map(|(block, data)| Some((block, data, entries.get(block)?.as_ref()?)))
@@ -97,6 +102,7 @@ type Facts = HashSet<Fact>;
 /// The body and the facts about it the dataflow reads.
 struct Model<'a> {
     body: &'a Body,
+    ownership: &'a OwnershipFacts,
     places: PlaceTypes<'a>,
     hooks: DropHookReach<'a>,
     /// Locals whose value something outside the body may also reach.
@@ -114,7 +120,7 @@ struct Model<'a> {
 }
 
 impl<'a> Model<'a> {
-    fn of(body: &'a Body) -> Self {
+    fn of(body: &'a Body, ownership: &'a OwnershipFacts) -> Self {
         let mut predecessors = vec![Vec::new(); body.basic_blocks.len()];
         for (index, data) in body.basic_blocks.iter().enumerate() {
             for successor in data.terminator.iter().flat_map(Terminator::successors) {
@@ -126,9 +132,10 @@ impl<'a> Model<'a> {
         let (mentions, definitions) = count_uses(body);
         let mut model = Self {
             body,
+            ownership,
             places: PlaceTypes::of(body),
             hooks: DropHookReach::new(body.rc_classifier.definitions()),
-            shared_roots: shared_roots(body),
+            shared_roots: shared_roots(body, ownership),
             mentions,
             definitions,
             lookups: lookups(body),
@@ -491,10 +498,10 @@ impl<'a> Model<'a> {
     fn forget_handed<'o>(&self, operands: impl Iterator<Item = &'o Operand>, facts: &mut Facts) {
         for place in operands.filter_map(Operand::place) {
             self.forget(place, facts);
-            let lends_to = (self.body.borrowed_locals.iter())
+            let lends_to = (self.ownership.borrowed_locals.iter())
                 .filter(|(_, owners)| owners.contains(&place.local))
                 .map(|(borrow, _)| borrow);
-            let borrows_from = self.body.borrowed_locals.get(&place.local);
+            let borrows_from = self.ownership.borrowed_locals.get(&place.local);
             for local in lends_to.chain(borrows_from.into_iter().flatten()) {
                 self.forget(&Place::new(*local), facts);
             }
@@ -837,10 +844,10 @@ fn read_places(rvalue: &Rvalue) -> Vec<&Place> {
 /// The locals whose value something outside the body may also reach:
 /// parameters, captures, borrows, gpu-resident bindings and locals whose
 /// address is taken.
-fn shared_roots(body: &Body) -> HashSet<Local> {
+fn shared_roots(body: &Body, ownership: &OwnershipFacts) -> HashSet<Local> {
     let mut roots: HashSet<Local> = (1..=body.arg_count).map(Local).collect();
     roots.extend(body.env_capture_locals.iter().copied());
-    roots.extend(body.borrowed_locals.keys().copied());
+    roots.extend(ownership.borrowed_locals.keys().copied());
     roots.extend(
         (body.local_decls.iter().enumerate())
             .filter(|(_, decl)| decl.device_handle.is_some())

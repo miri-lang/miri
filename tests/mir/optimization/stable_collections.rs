@@ -25,6 +25,7 @@ use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
 use miri::mir::analysis::loops::natural_loops;
 use miri::mir::body::DeviceHandleId;
+use miri::mir::facts::OwnershipFacts;
 use miri::mir::header_reads::stable_collections;
 use miri::mir::optimization::stable_collections::record_stable_collections;
 use miri::mir::proven_indexes::proven_indexes;
@@ -36,6 +37,7 @@ use miri::mir::{
 };
 use miri::pipeline::Pipeline;
 use miri::runtime_fns::rt;
+use std::collections::HashMap;
 
 pub(crate) const LIST: Local = Local(1);
 pub(crate) const INDEX: Local = Local(2);
@@ -158,9 +160,23 @@ pub(crate) fn loop_over_a_list() -> Body {
 }
 
 /// The records `body` gets.
-fn records_of(mut body: Body) -> Vec<StableCollection> {
-    record_stable_collections(&mut body);
+fn records_of(body: Body) -> Vec<StableCollection> {
+    records_with(body, &OwnershipFacts::default())
+}
+
+/// The records `body`, whose parameters and locals `ownership` says who
+/// holds, gets.
+fn records_with(mut body: Body, ownership: &OwnershipFacts) -> Vec<StableCollection> {
+    record_stable_collections(&mut body, ownership);
     stable_collections(&body)
+}
+
+/// The ownership of a body whose `borrow` borrows from `owners`.
+pub(crate) fn borrowing(borrow: Local, owners: Vec<Local>) -> OwnershipFacts {
+    OwnershipFacts {
+        borrowed_locals: HashMap::from([(borrow, owners)]),
+        ..OwnershipFacts::default()
+    }
 }
 
 pub(crate) fn call(
@@ -195,7 +211,10 @@ fn with_step_statement(mut body: Body, extra: Statement) -> Body {
 #[test]
 fn test_a_list_a_loop_only_reads_is_recorded_with_a_preheader_of_its_own() {
     let mut body = loop_over_a_list();
-    assert!(record_stable_collections(&mut body));
+    assert!(record_stable_collections(
+        &mut body,
+        &OwnershipFacts::default()
+    ));
     let preheader = body.basic_blocks.len() - 1;
     assert_eq!(
         stable_collections(&body),
@@ -392,7 +411,10 @@ fn test_a_device_resident_list_is_not_recorded() {
 fn test_a_gpu_body_records_nothing() {
     let mut body = loop_over_a_list();
     body.execution_model = ExecutionModel::GpuKernel;
-    assert!(!record_stable_collections(&mut body));
+    assert!(!record_stable_collections(
+        &mut body,
+        &OwnershipFacts::default()
+    ));
     assert!(stable_collections(&body).is_empty());
     assert_eq!(body.basic_blocks.len(), 4, "a GPU body gains no block");
 }
@@ -769,27 +791,30 @@ fn test_a_call_writing_its_result_into_a_copy_of_an_owned_list_leaves_it_unrecor
 
 #[test]
 fn test_a_call_handed_a_list_borrowed_from_an_owned_list_leaves_it_unrecorded() {
-    let mut body = loop_over_an_owned_list();
-    body.borrowed_locals.insert(SPARE_LIST, vec![LIST]);
+    let body = loop_over_an_owned_list();
+    let ownership = borrowing(SPARE_LIST, vec![LIST]);
     let handed = program_call(vec![Operand::Copy(Place::new(SPARE_LIST))]);
-    assert!(records_of(with_step_ending(body, handed)).is_empty());
+    assert!(records_with(with_step_ending(body, handed), &ownership).is_empty());
 }
 
 #[test]
 fn test_a_call_handed_a_string_borrowed_from_an_owned_list_keeps_it_recorded() {
     let mut body = loop_over_an_owned_list();
     let text = body.new_local(LocalDecl::new(ty(TypeKind::String), Span::default()));
-    body.borrowed_locals.insert(text, vec![LIST]);
+    let ownership = borrowing(text, vec![LIST]);
     let handed = program_call(vec![Operand::Copy(Place::new(text))]);
-    assert_eq!(records_of(with_step_ending(body, handed)).len(), 1);
+    assert_eq!(
+        records_with(with_step_ending(body, handed), &ownership).len(),
+        1
+    );
 }
 
 #[test]
 fn test_an_owned_list_borrowed_from_another_is_unrecorded_across_a_call() {
-    let mut body = loop_over_an_owned_list();
-    body.borrowed_locals.insert(LIST, vec![SPARE_LIST]);
+    let body = loop_over_an_owned_list();
+    let ownership = borrowing(LIST, vec![SPARE_LIST]);
     let unrelated = program_call(vec![int(1)]);
-    assert!(records_of(with_step_ending(body, unrelated)).is_empty());
+    assert!(records_with(with_step_ending(body, unrelated), &ownership).is_empty());
 }
 
 #[test]
@@ -819,10 +844,16 @@ fn test_an_owned_list_copied_after_a_retain_stays_recorded_across_a_call() {
 
 #[test]
 fn test_a_parameter_the_body_takes_over_stays_recorded_across_a_call() {
-    let mut body = loop_over_a_list();
-    body.owned_params = vec![true];
+    let body = loop_over_a_list();
+    let ownership = OwnershipFacts {
+        owned_params: vec![true],
+        ..OwnershipFacts::default()
+    };
     let unrelated = program_call(vec![int(1)]);
-    assert_eq!(records_of(with_step_ending(body, unrelated)).len(), 1);
+    assert_eq!(
+        records_with(with_step_ending(body, unrelated), &ownership).len(),
+        1
+    );
 }
 
 #[test]
@@ -869,9 +900,9 @@ fn test_a_closure_built_around_an_owned_list_and_called_leaves_it_unrecorded() {
 fn test_a_call_handed_a_pointer_borrowed_from_an_owned_list_leaves_it_unrecorded() {
     let mut body = loop_over_an_owned_list();
     let pointer = body.new_local(LocalDecl::new(ty(TypeKind::RawPtr), Span::default()));
-    body.borrowed_locals.insert(pointer, vec![LIST]);
+    let ownership = borrowing(pointer, vec![LIST]);
     let handed = program_call(vec![Operand::Copy(Place::new(pointer))]);
-    assert!(records_of(with_step_ending(body, handed)).is_empty());
+    assert!(records_with(with_step_ending(body, handed), &ownership).is_empty());
 }
 
 /// `loop_over_an_owned_list` with the list moved out of `SPARE_LIST` rather

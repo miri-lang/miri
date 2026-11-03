@@ -62,7 +62,7 @@
 //! writes the value finds it unshared. See [`cancel_owned_transfers`].
 
 use crate::mir::block::BasicBlock;
-use crate::mir::optimization::OptimizationPass;
+use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::{Local, PlaceContext};
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
@@ -73,16 +73,19 @@ use std::collections::HashSet;
 
 pub struct RcElision;
 
-impl OptimizationPass for RcElision {
-    fn run(&mut self, body: &mut Body) -> bool {
+impl RcElision {
+    /// Removes the redundant retain and release pairs of `body`, keeping
+    /// every pair the borrows `ownership` records rely on. Returns true if
+    /// any statement was removed.
+    pub(super) fn elide(&self, body: &mut Body, ownership: &OwnershipFacts) -> bool {
         let Body {
             basic_blocks,
             has_drop_types,
             local_decls,
-            borrowed_locals,
             ..
         } = body;
 
+        let borrowed_locals = &ownership.borrowed_locals;
         let lenders: HashSet<Local> = borrowed_locals.values().flatten().copied().collect();
         let borrows: HashSet<Local> = borrowed_locals.keys().copied().collect();
         let kept = KeptPairs {
@@ -96,11 +99,7 @@ impl OptimizationPass for RcElision {
             }
         }
         let moved = move_dying_sources(body, kept);
-        cancel_owned_transfers(body) || moved || any_changed
-    }
-
-    fn name(&self) -> &'static str {
-        "RC Elision"
+        cancel_owned_transfers(body, ownership) || moved || any_changed
     }
 }
 
@@ -121,7 +120,7 @@ pub fn elide_block(
 }
 
 /// The pairs RC elision keeps for the borrowed locals of a body
-/// ([`Body::borrowed_locals`]).
+/// ([`OwnershipFacts::borrowed_locals`]).
 #[derive(Clone, Copy)]
 struct KeptPairs<'a> {
     /// The locals some borrow relies on to keep what it holds alive. Copied
@@ -408,13 +407,13 @@ fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
 /// released, and nothing reads it.
 ///
 /// Returns true if any pair was cancelled.
-pub fn cancel_owned_transfers(body: &mut Body) -> bool {
+pub fn cancel_owned_transfers(body: &mut Body, ownership: &OwnershipFacts) -> bool {
     if !passes_an_owned_argument(body) {
         return false;
     }
     let predecessors = body.predecessor_counts();
     let mut cancelled: Vec<(usize, usize)> = (0..body.basic_blocks.len())
-        .flat_map(|block| owned_transfers_from(body, block, &predecessors))
+        .flat_map(|block| owned_transfers_from(body, ownership, block, &predecessors))
         .collect();
     cancelled.sort_unstable();
     cancelled.dedup();
@@ -426,7 +425,12 @@ pub fn cancel_owned_transfers(body: &mut Body) -> bool {
 
 /// The (block, statement) positions of every retain and release the call
 /// ending `block` lets cancel.
-fn owned_transfers_from(body: &Body, block: usize, predecessors: &[usize]) -> Vec<(usize, usize)> {
+fn owned_transfers_from(
+    body: &Body,
+    ownership: &OwnershipFacts,
+    block: usize,
+    predecessors: &[usize],
+) -> Vec<(usize, usize)> {
     let data = &body.basic_blocks[block];
     let Some(TerminatorKind::Call {
         args,
@@ -458,7 +462,7 @@ fn owned_transfers_from(body: &Body, block: usize, predecessors: &[usize]) -> Ve
         let receives_the_result = mentions(local, |mention| {
             mention.visit_place(destination, PlaceContext::MutatingUse, BasicBlock(0))
         });
-        if !is_passed_once || receives_the_result || !is_released_by_body(body, local) {
+        if !is_passed_once || receives_the_result || !is_released_by_body(body, ownership, local) {
             continue;
         }
         let continuation = &body.basic_blocks[target.0].statements;
@@ -491,11 +495,11 @@ fn passes_an_owned_argument(body: &Body) -> bool {
 
 /// Whether `local` is one the body owns and Perceus releases, whose last
 /// release runs no drop hook. A borrowed local is never released.
-fn is_released_by_body(body: &Body, local: Local) -> bool {
+fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let decl = &body.local_decls[local.0];
     local.0 > body.arg_count
         && !body.env_capture_locals.contains(&local)
-        && !body.borrowed_locals.contains_key(&local)
+        && !ownership.is_borrowed(local)
         && decl.device_handle.is_none()
         && body.is_counted_local(local)
         && !type_has_destructor(local, &body.local_decls, &body.has_drop_types)
