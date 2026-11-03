@@ -1691,9 +1691,9 @@ fn generic_function_symbol(
         &function.name,
         type_args.iter().map(|(_, ty)| ty),
     );
-    ctx.body
+    ctx.requests
         .generic_function_calls
-        .push(crate::mir::body::GenericFunctionCall {
+        .push(crate::mir::lowering::requests::GenericFunctionCall {
             symbol: symbol.clone(),
             function,
             type_args,

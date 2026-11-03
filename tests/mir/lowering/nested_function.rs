@@ -21,7 +21,8 @@ fn lower_with_allocator(source: &str, name: &str) -> (Body, Vec<LambdaInfo>) {
             matches!(&stmt.node, AstStatementKind::FunctionDeclaration(decl) if decl.name == name)
         })
         .expect("function not found");
-    lower_function(stmt, &result.type_checker, false, true).expect("Lowering failed")
+    let lowered = lower_function(stmt, &result.type_checker, false, true).expect("Lowering failed");
+    (lowered.body, lowered.lambdas)
 }
 
 fn local_named(body: &Body, name: &str) -> Local {

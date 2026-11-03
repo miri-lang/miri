@@ -50,29 +50,30 @@ impl std::fmt::Display for WorkgroupError {
 /// Apply recorded GPU kernel workgroup sizes to the corresponding GPU kernel bodies.
 ///
 /// When a `kernel(args).launch(grid, block)` call is lowered in a caller's body,
-/// the block size is recorded in that body's `kernel_workgroups` vec.
-/// This pass collects all these recordings across all bodies and applies each
-/// to the corresponding GPU kernel body by setting its `BackendMetadata::Gpu.workgroup_size`.
+/// the block size is recorded among that body's lowering requests. `launches`
+/// holds every such recording across the program; each is applied to the
+/// kernel body it names by setting its `BackendMetadata::Gpu.workgroup_size`.
 ///
 /// If a kernel has multiple conflicting block sizes recorded (different launches
 /// with different blocks), returns an error — per-shape monomorphization is deferred.
-pub fn stamp_kernel_workgroups(bodies: &mut [(Symbol, Body)]) -> Result<(), WorkgroupError> {
-    // Collect all workgroup size recordings from all bodies.
+pub fn stamp_kernel_workgroups(
+    bodies: &mut [(Symbol, Body)],
+    launches: &[(Symbol, [u32; 3])],
+) -> Result<(), WorkgroupError> {
+    // Gather the recordings by kernel.
     let mut workgroup_map: HashMap<Symbol, [u32; 3]> = HashMap::new();
 
-    for (_name, body) in bodies.iter() {
-        for (kernel, block_size) in &body.kernel_workgroups {
-            if let Some(&existing) = workgroup_map.get(kernel) {
-                if existing != *block_size {
-                    return Err(WorkgroupError::Conflicting {
-                        kernel: kernel.wgsl_name(),
-                        first: existing,
-                        second: *block_size,
-                    });
-                }
-            } else {
-                workgroup_map.insert(kernel.clone(), *block_size);
+    for (kernel, block_size) in launches {
+        if let Some(&existing) = workgroup_map.get(kernel) {
+            if existing != *block_size {
+                return Err(WorkgroupError::Conflicting {
+                    kernel: kernel.wgsl_name(),
+                    first: existing,
+                    second: *block_size,
+                });
             }
+        } else {
+            workgroup_map.insert(kernel.clone(), *block_size);
         }
     }
 

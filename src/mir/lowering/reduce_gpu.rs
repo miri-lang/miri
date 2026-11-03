@@ -73,11 +73,13 @@ pub(crate) fn try_lower_gpu_reduce(
 
     // Build the reduction kernel.
     let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Reduce, ctx.kernel_index(call_expr_id));
-    let kernel_body = build_gpu_reduce_kernel(ctx, obj_ty, array_length, fold_op, *span)?;
+    let (kernel_body, requests) =
+        build_gpu_reduce_kernel(ctx, obj_ty, array_length, fold_op, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {
         symbol: kernel_symbol.clone(),
         body: kernel_body,
+        requests,
         captures: Vec::new(),
     });
 
@@ -910,7 +912,7 @@ fn build_gpu_reduce_kernel(
     array_length: i64,
     fold_op: BinOp,
     span: Span,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, crate::mir::lowering::requests::LoweringRequests), LoweringError> {
     let workgroup_size = GPU_REDUCE_BLOCK_SIZE;
     let arg_count = 3;
 
@@ -974,7 +976,7 @@ fn build_gpu_reduce_kernel(
 
     ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
 
-    Ok(ctx.body)
+    Ok((ctx.body, ctx.requests))
 }
 
 /// Emit a workgroup barrier.

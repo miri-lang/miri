@@ -4,6 +4,7 @@
 use crate::mir::utils::mir_lower_code;
 use miri::ast::statement::StatementKind;
 use miri::mir::lowering::forall_gpu::{literal_grid_dim, literal_grid_x};
+use miri::mir::lowering::Lowered;
 use miri::mir::lowering::{
     lower_function, lower_function_with_compilation_ids, new_shared_compilation_ids,
 };
@@ -45,7 +46,7 @@ fn synthesize_kernel_names(source: &str) -> Vec<String> {
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("a function declaration");
-    let (_body, lambdas) =
+    let Lowered { lambdas, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lowering");
     lambdas
         .into_iter()
@@ -106,7 +107,7 @@ fn main()
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .unwrap();
-    let (_body, lambdas) =
+    let Lowered { lambdas, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lowering");
     let kernel = lambdas
         .iter()
@@ -249,8 +250,9 @@ fn main()
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("a function declaration");
-    let (body, lambdas) = lower_function(func_stmt, &result.type_checker, false, false)
-        .expect("expected lowering to succeed for scalar capture");
+    let Lowered { body, lambdas, .. } =
+        lower_function(func_stmt, &result.type_checker, false, false)
+            .expect("expected lowering to succeed for scalar capture");
 
     // Verify the parent function has a GpuLaunch terminator with scalar_args.
     let gpu_launch = body
@@ -317,7 +319,7 @@ fn b()
         .iter()
         .filter(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
     {
-        let (_body, lambdas) = lower_function_with_compilation_ids(
+        let Lowered { lambdas, .. } = lower_function_with_compilation_ids(
             func_stmt,
             &result.type_checker,
             false,
@@ -435,7 +437,7 @@ fn main()
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("function");
-    let (_body, lambdas) =
+    let Lowered { lambdas, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lower 1D");
     let kernel_1d = lambdas
         .iter()
@@ -465,7 +467,7 @@ fn main()
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("function");
-    let (_body, lambdas) =
+    let Lowered { lambdas, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lower 2D");
     let kernel_2d = lambdas
         .iter()
@@ -495,7 +497,7 @@ fn main()
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("function");
-    let (_body, lambdas) =
+    let Lowered { lambdas, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lower 3D");
     let kernel_3d = lambdas
         .iter()

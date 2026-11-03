@@ -8,6 +8,7 @@ use miri::ast::statement::StatementKind;
 use miri::codegen::backend::Backend;
 use miri::codegen::wgsl::{WgslBackend, WgslOptions};
 use miri::mir::lowering::lower_function;
+use miri::mir::lowering::Lowered;
 use miri::mir::ExecutionModel;
 use miri::pipeline::Pipeline;
 
@@ -143,7 +144,7 @@ pub fn compile_to_manifest(source: &str) -> Result<serde_json::Value, String> {
             |stmt| matches!(&stmt.node, StatementKind::FunctionDeclaration(d) if d.name == "main"),
         )
         .ok_or("source must contain 'fn main'".to_string())?;
-    let (_body, lambdas) = lower_function(func_stmt, &result.type_checker, false, false)
+    let Lowered { lambdas, .. } = lower_function(func_stmt, &result.type_checker, false, false)
         .map_err(|e| format!("{:?}", e))?;
 
     // Count frame passes

@@ -201,17 +201,18 @@ fn emit_frame_pass(
 
     if is_literal_end {
         let range = literal_frame_range(loop_var_name, start_lit, end, range_type.clone(), *span)?;
-        let kernel_body =
+        let (kernel_body, requests) =
             build_frame_kernel_literal(ctx, captures, &range, body, *span, uses_frame)?;
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
             symbol: kernel_symbol.clone(),
             body: kernel_body,
+            requests,
             captures: Vec::new(),
         });
         emit_gpu_frame_launch_literal(ctx, kernel_symbol, range.grid, captures, *span, uses_frame)?;
     } else {
         let bound = forall_gpu::AxisBound::Runtime(end.clone(), range_type.clone());
-        let kernel_body = build_frame_kernel_runtime(
+        let (kernel_body, requests) = build_frame_kernel_runtime(
             ctx,
             captures,
             &frame_axis(loop_var_name, start_lit, bound),
@@ -222,6 +223,7 @@ fn emit_frame_pass(
         ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
             symbol: kernel_symbol.clone(),
             body: kernel_body,
+            requests,
             captures: Vec::new(),
         });
         emit_gpu_frame_launch_runtime(
@@ -711,7 +713,7 @@ fn build_frame_kernel_literal(
     body: &Statement,
     span: Span,
     uses_frame: bool,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, crate::mir::lowering::requests::LoweringRequests), LoweringError> {
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);
 
@@ -775,7 +777,7 @@ fn build_frame_kernel_literal(
         body,
         span,
     )?;
-    Ok(ctx.body)
+    Ok((ctx.body, ctx.requests))
 }
 
 /// Register frame and runtime parameters for the kernel.
@@ -823,7 +825,7 @@ fn build_frame_kernel_runtime(
     body: &Statement,
     span: Span,
     uses_frame: bool,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, crate::mir::lowering::requests::LoweringRequests), LoweringError> {
     let (buffer_captures, scalar_captures): (Vec<&_>, Vec<&_>) =
         captures.iter().partition(|c| !c.is_scalar);
 
@@ -871,7 +873,7 @@ fn build_frame_kernel_runtime(
         span,
     )?;
 
-    Ok(ctx.body)
+    Ok((ctx.body, ctx.requests))
 }
 
 #[cfg(test)]

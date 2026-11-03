@@ -109,14 +109,14 @@ pub(crate) fn residency_specialize_call(
     )
     .with_residency(&gpu_args);
     *func_op = Operand::function(symbol.clone(), func.span);
-    ctx.body
-        .residency_function_calls
-        .push(crate::mir::body::ResidencyFunctionCall {
+    ctx.requests.residency_function_calls.push(
+        crate::mir::lowering::requests::ResidencyFunctionCall {
             symbol,
             function,
             type_args,
             arg_handles: handles.clone(),
-        });
+        },
+    );
     Ok(handles)
 }
 

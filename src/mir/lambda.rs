@@ -18,6 +18,8 @@ pub struct LambdaInfo {
     pub symbol: Symbol,
     /// The MIR body for this lambda
     pub body: Body,
+    /// What lowering the body asks the pipeline to lower or settle next.
+    pub requests: crate::mir::lowering::requests::LoweringRequests,
     /// Variables captured from the enclosing scope.
     /// Maps the original variable name to its Local in the enclosing function.
     pub captures: Vec<CapturedVar>,

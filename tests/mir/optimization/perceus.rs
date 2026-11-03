@@ -21,6 +21,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
 use miri::mir::lowering::lower_function;
+use miri::mir::lowering::Lowered;
 use miri::mir::optimization::{count_rc_ops, insert_rc};
 use miri::mir::rc::RcClassifier;
 use miri::mir::type_facts::{ClassDefinition, GenericDefinition};
@@ -794,7 +795,7 @@ fn lowered_with_rc(source: &str, name: &str) -> Body {
         })
         .unwrap_or_else(|| panic!("function '{}' not found", name));
 
-    let (mut body, _) =
+    let Lowered { mut body, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
     insert_rc(&mut body);
     body

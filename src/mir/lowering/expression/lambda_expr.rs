@@ -38,6 +38,7 @@ use crate::mir::{
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::identifier_expr::lower_self_reference_value;
 use crate::mir::lowering::helpers::{lower_as_return, resolve_type};
+use crate::mir::lowering::requests::LoweringRequests;
 use crate::mir::lowering::written_parameters::copy_written_parameters;
 use crate::mir::lowering::{apply_generic_sub, resolve_execution_model};
 use std::collections::HashSet;
@@ -151,10 +152,11 @@ pub(crate) fn lower_closure(
     closure: &ClosureSource,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let (body, captures) = lower_closure_body(ctx, closure)?;
+    let (body, requests, captures) = lower_closure_body(ctx, closure)?;
     ctx.lambda_bodies.push(LambdaInfo {
         symbol: closure.symbol.clone(),
         body,
+        requests,
         captures: captures.clone(),
     });
     emit_closure_aggregate(ctx, closure, &captures, dest)
@@ -172,11 +174,12 @@ fn inferred_return_type(ty: &Type, ctx: &LoweringContext) -> Option<Type> {
         .map(|return_type| ctx.declared_type(return_type))
 }
 
-/// Lower the closure's body, returning it with the captures it keeps.
+/// Lower the closure's body, returning it with the requests it makes and the
+/// captures it keeps.
 fn lower_closure_body(
     ctx: &mut LoweringContext,
     closure: &ClosureSource,
-) -> Result<(Body, Vec<CapturedVar>), LoweringError> {
+) -> Result<(Body, LoweringRequests, Vec<CapturedVar>), LoweringError> {
     let span = closure.span;
     // An unannotated lambda returns what the checker inferred from its body,
     // which is the return type of the function type its value is recorded at:
@@ -213,7 +216,7 @@ fn lower_closure_body(
     // discarded with it, leaving codegen a call to a symbol nothing defines.
     ctx.lambda_bodies.append(&mut lambda_ctx.lambda_bodies);
 
-    Ok((lambda_ctx.body, captures))
+    Ok((lambda_ctx.body, lambda_ctx.requests, captures))
 }
 
 /// A fresh context for the closure's body, holding its return slot, its

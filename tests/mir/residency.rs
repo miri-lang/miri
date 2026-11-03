@@ -29,7 +29,7 @@ fn get_main_mir(source: &str) -> miri::mir::Body {
 
     lower_function(func_stmt, &result.type_checker, false, false)
         .expect("Lowering failed")
-        .0
+        .body
 }
 
 #[test]

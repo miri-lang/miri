@@ -11,6 +11,7 @@
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
+use miri::mir::lowering::Lowered;
 use miri::mir::lowering::{lower_function, lower_generic_instantiation};
 use miri::mir::Body;
 use miri::pipeline::Pipeline;
@@ -40,7 +41,7 @@ fn lower_pick(subs: Option<HashMap<String, Type>>) -> (Body, Vec<Body>) {
             matches!(&stmt.node, AstStatementKind::FunctionDeclaration(func) if func.name == "pick")
         })
         .expect("`pick` is declared");
-    let (body, lambdas) = match subs {
+    let Lowered { body, lambdas, .. } = match subs {
         None => lower_function(pick, &result.type_checker, false, false),
         Some(subs) => lower_generic_instantiation(pick, &result.type_checker, false, false, &subs),
     }

@@ -9,6 +9,7 @@
 
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
+use miri::mir::lowering::Lowered;
 use miri::mir::optimization::rc_elision::{decref_in_range, elide_block, find_decref};
 use miri::mir::optimization::{count_all_rc_ops, elide_rc, insert_rc};
 use miri::mir::statement::StatementKind;
@@ -38,7 +39,9 @@ fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
     let mut bodies = Vec::new();
     for stmt in &result.ast.body {
         if let AstStatementKind::FunctionDeclaration(decl) = &stmt.node {
-            let (mut body, lambdas) = lower_function(stmt, &result.type_checker, false, false)
+            let Lowered {
+                mut body, lambdas, ..
+            } = lower_function(stmt, &result.type_checker, false, false)
                 .expect("Lowering should succeed");
             insert_rc(&mut body);
             bodies.push((
@@ -290,7 +293,7 @@ fn benchmark(items [int]) int:
         })
         .expect("benchmark function not found");
 
-    let (mut body, _) =
+    let Lowered { mut body, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
 
     insert_rc(&mut body);

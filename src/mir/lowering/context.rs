@@ -79,6 +79,9 @@ pub struct LoweringContext<'a> {
     pub self_references: HashMap<Local, Type>,
     /// Lambda bodies collected during lowering
     pub lambda_bodies: Vec<LambdaInfo>,
+    /// What the body being lowered asks the pipeline to lower or settle next;
+    /// handed over beside the body once it is lowered.
+    pub requests: crate::mir::lowering::requests::LoweringRequests,
     /// Type declarations collected during lowering
     pub declarations: Vec<Declaration>,
     /// Imports collected during lowering
@@ -221,6 +224,7 @@ impl<'a> LoweringContext<'a> {
             borrowed_temps: std::collections::HashSet::new(),
             self_references: HashMap::new(),
             lambda_bodies: Vec::new(),
+            requests: Default::default(),
             declarations: Vec::new(),
             imports: Vec::new(),
             is_release,

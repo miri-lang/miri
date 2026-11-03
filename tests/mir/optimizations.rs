@@ -24,7 +24,7 @@ fn get_main_mir(source: &str, is_release: bool) -> miri::mir::Body {
 
     lower_function(func_stmt, &result.type_checker, is_release, false)
         .expect("Lowering failed")
-        .0
+        .body
 }
 
 #[test]

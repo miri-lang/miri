@@ -13,7 +13,6 @@ use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
 use crate::type_checker::value_class::{LayoutScope, ValueLayout};
-use crate::type_checker::DeclaredFunction;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
@@ -118,37 +117,11 @@ pub struct Body {
     /// Populated by MIR lowering from the type checker's struct/class definitions.
     /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
     pub has_drop_types: HashSet<String>,
-    /// GPU kernel workgroup sizes recorded during a launch in another function.
-    /// Maps each kernel to [block_x, block_y, block_z].
-    /// Collected when a `kernel(args).launch(grid, block)` call is lowered in a caller.
-    /// Applied as metadata to the GPU kernel body's `BackendMetadata::Gpu.workgroup_size`
-    /// by `mir::gpu::stamp_kernel_workgroups` once every body is lowered.
-    pub kernel_workgroups: Vec<(Symbol, [u32; 3])>,
     /// Launch grids written as a literal `Dim3` at a `kernel(args).launch(grid,
     /// block)` in this body, keyed by kernel, as [grid_x, grid_y, grid_z]
     /// workgroup counts. A web bundle dispatches the grid it records, so it
     /// reads this; a grid computed at run time has no entry.
     pub kernel_grids: Vec<(Symbol, [u32; 3])>,
-    /// Every generic function instantiation this body calls, in call order.
-    /// Recorded when the call is lowered, with the body's own instantiation
-    /// substitution already applied, so the pipeline can lower each callee
-    /// without recovering its type arguments from the mangled symbol.
-    pub generic_function_calls: Vec<GenericFunctionCall>,
-    /// Every call this body retargets to a residency-specialized body, in call
-    /// order. Recorded when the call is lowered, so the pipeline lowers each
-    /// specialization from the function it specializes without recovering that
-    /// function from the specialized symbol.
-    pub residency_function_calls: Vec<ResidencyFunctionCall>,
-    /// Every generic class instantiation this body names only through its own
-    /// instantiation substitution, in the order it was met.
-    ///
-    /// The type checker records the instantiations a program writes down, once,
-    /// against the parameters of the body they appear in: `Box<T>` inside
-    /// `via_box<T>` is `Box` at a placeholder. Which concrete `Box` that is exists
-    /// only once `via_box` is lowered for a type, so the lowering records it and
-    /// the pipeline adds it to the registry that decides which per-instantiation
-    /// method bodies and drop functions get emitted.
-    pub generic_class_instantiations: Vec<GenericClassInstantiation>,
     /// Boolean locals the readback pass keeps, each paired with the device
     /// handle it watches. A flag is set while its handle's device buffer may
     /// hold results the host array lacks, and cleared when a readback, an
@@ -169,42 +142,6 @@ pub struct Body {
     /// body was lowered. A fact computed off the body records the generation
     /// it was computed at and holds only while the body is still at it.
     generation: u64,
-}
-
-/// One generic class at concrete type arguments.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GenericClassInstantiation {
-    /// The generic class's declared name.
-    pub class: String,
-    /// The class's type arguments, in declaration order.
-    pub type_args: Vec<Type>,
-}
-
-/// One call to a generic function at concrete type arguments.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GenericFunctionCall {
-    /// The instantiation the call targets, e.g. `smaller` at `String`.
-    pub symbol: Symbol,
-    /// The generic function the instantiation is lowered from.
-    pub function: DeclaredFunction,
-    /// Each of the callee's generic parameters, paired with the type it is
-    /// instantiated at.
-    pub type_args: Vec<(String, Type)>,
-}
-
-/// One call to a function specialized for the gpu-resident buffers it passes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResidencyFunctionCall {
-    /// The residency-specialized symbol the call targets.
-    pub symbol: Symbol,
-    /// The function the specialization is lowered from.
-    pub function: DeclaredFunction,
-    /// Each generic parameter of the function paired with the type the call
-    /// instantiates it at; empty for a function that is not generic.
-    pub type_args: Vec<(String, Type)>,
-    /// The device handle each positional argument carries, `None` for an
-    /// argument that is not a gpu-resident buffer.
-    pub arg_handles: Vec<Option<DeviceHandleId>>,
 }
 
 impl Body {
@@ -233,11 +170,7 @@ impl Body {
             borrowed_locals: HashMap::new(),
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
-            kernel_workgroups: Vec::new(),
             kernel_grids: Vec::new(),
-            generic_function_calls: Vec::new(),
-            residency_function_calls: Vec::new(),
-            generic_class_instantiations: Vec::new(),
             device_stale_flags: HashMap::new(),
             allocator: None,
             generation: 0,

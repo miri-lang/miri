@@ -26,7 +26,7 @@ pub fn lower_element_equality(
     type_checker: &TypeChecker,
     element: &Type,
     span: Span,
-) -> Result<Body, LoweringError> {
+) -> Result<super::Lowered, LoweringError> {
     let body = Body::new(2, span, ExecutionModel::Cpu);
     let mut ctx = LoweringContext::new(body, type_checker, false);
     ctx.body
@@ -51,8 +51,7 @@ pub fn lower_element_equality(
         ),
         span,
     });
-    let (body, _lambdas) = super::finalize_body(&mut ctx, span)?;
-    Ok(body)
+    super::finalize_body(&mut ctx, span)
 }
 
 /// Lower the hash a container of `element` values places them by.
@@ -60,7 +59,7 @@ pub fn lower_element_hash(
     type_checker: &TypeChecker,
     element: &Type,
     span: Span,
-) -> Result<Body, LoweringError> {
+) -> Result<super::Lowered, LoweringError> {
     let body = Body::new(1, span, ExecutionModel::Cpu);
     let mut ctx = LoweringContext::new(body, type_checker, false);
     ctx.body
@@ -82,6 +81,5 @@ pub fn lower_element_hash(
         ),
         span,
     });
-    let (body, _lambdas) = super::finalize_body(&mut ctx, span)?;
-    Ok(body)
+    super::finalize_body(&mut ctx, span)
 }

@@ -34,6 +34,7 @@ pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;
 pub mod reduce_gpu;
+pub mod requests;
 mod runtime_writes;
 pub mod statement;
 pub mod variable;
@@ -46,13 +47,13 @@ use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
-use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     BinOp, Body, Constant, Discriminant, ExecutionModel, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
 };
 use crate::type_checker::context::GenericDefinition;
 use crate::type_checker::TypeChecker;
+pub use requests::{Lowered, LoweringRequests};
 use std::collections::HashMap;
 
 // Re-export commonly used items from submodules
@@ -122,7 +123,7 @@ pub fn lower_function(
     tc: &TypeChecker,
     is_release: bool,
     inject_allocator: bool,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_function_with_compilation_ids(
         ast_func,
         tc,
@@ -142,7 +143,7 @@ pub fn lower_function_with_compilation_ids(
     is_release: bool,
     inject_allocator: bool,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_function_body(ast_func, tc, is_release, inject_allocator, compilation_ids)
         .map_err(|error| in_declaring_file(error, ast_func, tc))
 }
@@ -164,7 +165,7 @@ fn lower_function_body(
     is_release: bool,
     inject_allocator: bool,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -477,7 +478,7 @@ pub fn lower_generic_instantiation(
     is_release: bool,
     inject_allocator: bool,
     subs: &HashMap<String, Type>,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_generic_instantiation_with_compilation_ids(
         ast_func,
         tc,
@@ -497,7 +498,7 @@ pub fn lower_generic_instantiation_with_compilation_ids(
     inject_allocator: bool,
     subs: &HashMap<String, Type>,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_instantiation_core(
         ast_func,
         tc,
@@ -529,7 +530,7 @@ pub fn lower_residency_instantiation_with_compilation_ids(
     subs: &HashMap<String, Type>,
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_instantiation_core(
         ast_func,
         tc,
@@ -552,7 +553,7 @@ fn lower_instantiation_core(
     subs: &HashMap<String, Type>,
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_instantiation_body(
         ast_func,
         tc,
@@ -573,7 +574,7 @@ fn lower_instantiation_body(
     subs: &HashMap<String, Type>,
     param_handles: &[Option<crate::mir::body::DeviceHandleId>],
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -716,7 +717,7 @@ pub fn lower_class_method(
     self_type: Type,
     tc: &TypeChecker,
     is_release: bool,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_class_method_impl(
         ast_method,
         self_type,
@@ -735,7 +736,7 @@ pub fn lower_class_method_with_compilation_ids(
     tc: &TypeChecker,
     is_release: bool,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_class_method_impl(
         ast_method,
         self_type,
@@ -766,7 +767,7 @@ pub fn lower_class_method_at_with_compilation_ids(
     is_release: bool,
     pinned: &HashMap<String, Type>,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_class_method_impl(
         ast_method,
         self_type,
@@ -859,7 +860,7 @@ fn lower_class_method_impl(
     is_release: bool,
     subs: &HashMap<String, Type>,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     lower_class_method_body(ast_method, self_type, tc, is_release, subs, compilation_ids)
         .map_err(|error| in_declaring_file(error, ast_method, tc))
 }
@@ -871,7 +872,7 @@ fn lower_class_method_body(
     is_release: bool,
     subs: &HashMap<String, Type>,
     compilation_ids: SharedCompilationIds,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_method.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration for class method".to_string(),
@@ -1531,7 +1532,7 @@ fn emit_guard_fail_branch(
 fn finalize_body(
     ctx: &mut LoweringContext,
     span: crate::error::syntax::Span,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
+) -> Result<Lowered, LoweringError> {
     // Pop root scope variables if falling through
     if ctx.body.basic_blocks[ctx.current_block.0]
         .terminator
@@ -1558,8 +1559,11 @@ fn finalize_body(
     ctx.record_local_class_instantiations();
 
     let body = std::mem::replace(&mut ctx.body, Body::new(0, span, ExecutionModel::Cpu));
-    let lambda_bodies = std::mem::take(&mut ctx.lambda_bodies);
-    Ok((body, lambda_bodies))
+    Ok(Lowered {
+        body,
+        requests: std::mem::take(&mut ctx.requests),
+        lambdas: std::mem::take(&mut ctx.lambda_bodies),
+    })
 }
 
 #[cfg(test)]

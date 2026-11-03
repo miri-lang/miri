@@ -194,11 +194,12 @@ pub fn lower_forall_gpu(
     // symbol table keeps the first and the rest share it. Each instantiation
     // of a generic body gets a kernel of its own, compiled at its types.
     let kernel_symbol = Symbol::gpu_kernel(GpuKernelKind::Forall, ctx.kernel_index(stmt_id));
-    let kernel_body = build_kernel_body_nd(ctx, config, &axes, &captures, body, *span)?;
+    let (kernel_body, requests) = build_kernel_body_nd(ctx, config, &axes, &captures, body, *span)?;
 
     ctx.lambda_bodies.push(LambdaInfo {
         symbol: kernel_symbol.clone(),
         body: kernel_body,
+        requests,
         captures: Vec::new(),
     });
 
@@ -671,7 +672,7 @@ fn build_kernel_body_nd(
     captures: &[CaptureInfo],
     body: &Statement,
     span: Span,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, crate::mir::lowering::requests::LoweringRequests), LoweringError> {
     let rank = axes.len();
     let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
         captures.iter().partition(|c| !c.is_scalar);
@@ -732,7 +733,7 @@ fn build_kernel_body_nd(
         span,
     )?;
 
-    Ok(ctx.body)
+    Ok((ctx.body, ctx.requests))
 }
 
 /// How many launch uniforms a kernel over `axes` takes: in runtime mode, one

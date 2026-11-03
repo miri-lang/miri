@@ -263,6 +263,7 @@ fn build_forwarding_thunk(
     Ok(LambdaInfo {
         symbol: thunk_symbol,
         body: thunk_ctx.body,
+        requests: thunk_ctx.requests,
         captures,
     })
 }

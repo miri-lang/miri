@@ -7,6 +7,7 @@ use miri::ast::statement::{Statement, StatementKind as AstStatementKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::lowering::lower_class_method;
+use miri::mir::lowering::Lowered;
 use miri::mir::{AggregateKind, Body, Rvalue, StatementKind};
 use miri::pipeline::Pipeline;
 
@@ -171,7 +172,7 @@ fn main()
     let result = Pipeline::new().frontend(source).expect("frontend failed");
     let method = class_method(&result.ast.body, "Tree", "attach").expect("Tree.attach not parsed");
     let tree = Type::new(TypeKind::Custom("Tree".to_string(), None), Span::default());
-    let (body, _) =
+    let Lowered { body, .. } =
         lower_class_method(method, tree, &result.type_checker, false).expect("lowering failed");
     let node = Type::new(TypeKind::Custom("Node".to_string(), None), Span::default());
     assert_eq!(

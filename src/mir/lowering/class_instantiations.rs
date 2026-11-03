@@ -28,7 +28,7 @@ use crate::ast::expression::Expression;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::body::GenericClassInstantiation;
+use crate::mir::lowering::requests::{GenericClassInstantiation, LoweredBody};
 use crate::mir::symbol::{Symbol, TypeInstance};
 use crate::mir::{Body, StatementKind};
 use crate::type_checker::context::TypeDefinition;
@@ -131,12 +131,12 @@ pub struct Unregistered {
 /// once, in the order the bodies first name them.
 pub fn unregistered_instantiations(
     type_checker: &TypeChecker,
-    bodies: &[(Symbol, Body)],
+    bodies: &[LoweredBody],
 ) -> Vec<Unregistered> {
     let mut seen = HashSet::new();
     let mut found = Vec::new();
-    for (index, (_, body)) in bodies.iter().enumerate() {
-        for named in &body.generic_class_instantiations {
+    for (index, lowered) in bodies.iter().enumerate() {
+        for named in &lowered.requests.generic_class_instantiations {
             if is_registered_instantiation(type_checker, &named.class, &named.type_args)
                 || !seen.insert(TypeInstance::new(&named.class, &named.type_args))
             {
@@ -158,7 +158,7 @@ pub fn unregistered_instantiations(
 pub fn refuse_past_limits(
     type_checker: &TypeChecker,
     found: &[Unregistered],
-    bodies: &[(Symbol, Body)],
+    bodies: &[LoweredBody],
 ) -> Result<(), LoweringError> {
     let type_defs = type_checker.type_definitions();
     let mut value_instances: HashMap<&str, usize> = HashMap::new();
@@ -184,7 +184,7 @@ pub fn refuse_past_limits(
 fn refusal_of(
     instance: &Unregistered,
     limit: &ExceededLimit,
-    bodies: &[(Symbol, Body)],
+    bodies: &[LoweredBody],
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> LoweringError {
     let (chain, method) = static_growth(instance, bodies, type_defs);
@@ -193,7 +193,7 @@ fn refusal_of(
         method: method.as_deref(),
         through_trait: false,
     };
-    let span = naming_span(&bodies[instance.body].1, &instance.class, &instance.args);
+    let span = naming_span(&bodies[instance.body].body, &instance.class, &instance.args);
     polymorphic_recursion(&instance.class, &instance.args, limit, &growth, span)
 }
 
@@ -328,14 +328,14 @@ fn spells_instance(ty: &Type, class: &str, args: &[Type]) -> bool {
 /// enough to reach back through every value instance a class may need.
 fn static_growth(
     instance: &Unregistered,
-    bodies: &[(Symbol, Body)],
+    bodies: &[LoweredBody],
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> (Vec<Vec<Type>>, Option<String>) {
     let class = instance.class.as_str();
     let builder_of = |args: &[Type], running: Option<&Symbol>| {
-        bodies.iter().position(|(symbol, body)| {
-            builds_instance(body, class, args)
-                || running.is_some_and(|callee| symbol != callee && calls(body, callee))
+        bodies.iter().position(|lowered| {
+            builds_instance(lowered, class, args)
+                || running.is_some_and(|callee| lowered.symbol != *callee && calls(lowered, callee))
         })
     };
     let mut chain: Vec<Vec<Type>> = Vec::new();
@@ -345,7 +345,7 @@ fn static_growth(
         let Some(index) = builder else {
             break;
         };
-        let (symbol, body) = &bodies[index];
+        let LoweredBody { symbol, body, .. } = &bodies[index];
         let Some(owner) = self_instance(body, class) else {
             break;
         };
@@ -361,23 +361,19 @@ fn static_growth(
     (chain, method)
 }
 
-/// Whether `body` calls the generic function instantiation `symbol`.
-fn calls(body: &Body, symbol: &Symbol) -> bool {
-    body.generic_function_calls
-        .iter()
-        .any(|call| call.symbol == *symbol)
+/// Whether `lowered` calls the generic function instantiation `symbol`.
+fn calls(lowered: &LoweredBody, symbol: &Symbol) -> bool {
+    (lowered.requests.generic_function_calls.iter()).any(|call| call.symbol == *symbol)
 }
 
-/// Whether `body` names `class` at `args` other than through the instance it
-/// runs at: a body names its own instance, and every instance nested inside
-/// it, without having built any of them.
-fn builds_instance(body: &Body, class: &str, args: &[Type]) -> bool {
-    let names = body
-        .generic_class_instantiations
-        .iter()
+/// Whether `lowered` names `class` at `args` other than through the instance
+/// it runs at: a body names its own instance, and every instance nested
+/// inside it, without having built any of them.
+fn builds_instance(lowered: &LoweredBody, class: &str, args: &[Type]) -> bool {
+    let names = (lowered.requests.generic_class_instantiations.iter())
         .any(|named| named.class == class && same_arguments(&named.type_args, args));
     names
-        && !self_instance(body, class).is_some_and(|own| {
+        && !self_instance(&lowered.body, class).is_some_and(|own| {
             same_arguments(&own, args) || own.iter().any(|arg| nests_instance(arg, class, args))
         })
 }
@@ -618,11 +614,13 @@ impl LoweringContext<'_> {
     fn push_class_instantiations(&mut self, found: Vec<GenericClassInstantiation>) {
         for instantiation in found {
             if !self
-                .body
+                .requests
                 .generic_class_instantiations
                 .contains(&instantiation)
             {
-                self.body.generic_class_instantiations.push(instantiation);
+                self.requests
+                    .generic_class_instantiations
+                    .push(instantiation);
             }
         }
     }

@@ -276,7 +276,7 @@ pub(crate) fn try_lower_kernel_launch(
     if let Some(ref kernel_name) = kernel_name {
         let workgroup_size = launch_block_size(ctx, &args[1])?;
 
-        ctx.body
+        ctx.requests
             .kernel_workgroups
             .push((kernel_name.clone(), workgroup_size));
         if let Some(grid) = try_extract_dim3_literal(&args[0]) {

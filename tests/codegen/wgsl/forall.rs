@@ -5,6 +5,7 @@ use miri::ast::statement::StatementKind;
 use miri::codegen::backend::Backend;
 use miri::codegen::wgsl::{WgslBackend, WgslOptions};
 use miri::mir::lowering::lower_function;
+use miri::mir::lowering::Lowered;
 use miri::pipeline::Pipeline;
 
 fn synthesize_gpu_for_kernel(source: &str) -> Vec<u8> {
@@ -21,7 +22,7 @@ fn synthesize_gpu_for_kernel(source: &str) -> Vec<u8> {
         })
         .expect("source must contain 'fn main'");
 
-    let (_body, lambdas) =
+    let Lowered { lambdas, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lowering failed");
 
     let kernel = lambdas

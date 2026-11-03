@@ -33,7 +33,7 @@ use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::compiler_intrinsics::{compiler_intrinsic, compiler_intrinsic_names};
-use miri::mir::lowering::lower_function;
+use miri::mir::lowering::{lower_function, Lowered};
 use miri::mir::symbol::RuntimeCallee;
 use miri::mir::{
     Body, Constant, GpuIntrinsic, LocalDecl, Operand, Rvalue, StatementKind, Terminator,
@@ -45,6 +45,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 pub fn mir_lower_code(source: &str) -> Body {
+    mir_lower_main(source).body
+}
+
+/// Lower `main`, or the first function when there is none, with what its
+/// lowering requests of the rest of the program.
+pub fn mir_lower_main(source: &str) -> Lowered {
     let pipeline = Pipeline::new();
     let result = pipeline.frontend(source).expect("Frontend failed");
 
@@ -68,9 +74,7 @@ pub fn mir_lower_code(source: &str) -> Body {
         })
         .expect("No function declaration found in source");
 
-    lower_function(func_stmt, &result.type_checker, false, false)
-        .expect("Lowering failed")
-        .0
+    lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed")
 }
 
 /// Normalize MIR output for comparison by trimming lines and removing empty lines.

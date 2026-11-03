@@ -50,11 +50,12 @@ While the Abstract Syntax Tree (AST) represents the syntactic structure of code,
 
 ## Monomorphization
 
-A generic function or generic-class method is lowered once per instantiation, with its substitution (`LoweringContext::generic_subs`) applied to every recorded type. What such a body reaches is recorded on the `Body` rather than recovered from mangled symbols:
+A generic function or generic-class method is lowered once per instantiation, with its substitution (`LoweringContext::generic_subs`) applied to every recorded type. What such a body reaches is recorded rather than recovered from mangled symbols, in the `LoweringRequests` lowering returns beside the body (`lowering/requests.rs`). They are read while the program is lowered and dropped once it is, so no later pass sees them:
 
 -   `generic_function_calls` — each generic function it calls, at the types the call pins. The pipeline lowers those in a worklist.
 -   `residency_function_calls` — each call it retargets to a body specialized for the gpu-resident buffers it passes, with the function that body is lowered from. The pipeline lowers those after the generic worklist.
 -   `generic_class_instantiations` — each generic class it names only through its substitution (`Box<T>` inside `via_box<T>` lowered at `String`). The pipeline adds these to the type checker's instantiation registry, then emits the methods they call, repeating until nothing new is reached. Codegen reads the same registry for per-instantiation drop functions and element-method thunks.
+-   `kernel_workgroups` — the workgroup size each kernel launch in the body chooses, stamped on the kernel's own body (`gpu::stamp_kernel_workgroups`).
 
 ## Design Principles
 
