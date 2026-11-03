@@ -121,16 +121,9 @@ pub fn verify_program(
             &shared_collection_methods,
             &intrinsic_backed,
         ));
-        violations.extend(super::verify_cross_residency_readback(body));
         violations.extend(super::verify_optional_representation(body, definitions));
         violations.extend(super::verify_value_representation(body, definitions));
         violations.extend(super::verify_value_arguments(body));
-        violations.extend(super::verify_bound_names(body));
-        violations.extend(super::verify_stable_collections(
-            body,
-            ownership,
-            Some(harmless),
-        ));
         // TODO: this check runs only under --verify-mir; a normal build does
         // not check that in-place writes land on unshared collections.
         violations.extend(super::verify_unshared_writes(body, ownership));
@@ -145,6 +138,47 @@ pub fn verify_program(
         lines: all_violations,
         functions: functions_with_violations,
     })
+}
+
+/// Run every verifier that reads the bodies a backend receives over
+/// `bodies`, and gather what they find into one report.
+///
+/// These checks hold of a body whatever spelling the element and closure ABI
+/// gave its runtime calls, so they run after it: the accesses emitted without
+/// a bounds check, the readback fences, the names a pattern binds and the
+/// collections a loop leaves unchanged. Every other verifier reads the body as
+/// lowered, in [`verify_program`]. `lowered` is each body before the ABI
+/// passes ran, in the same order, when they did: each body is then checked to
+/// differ from it only by the ABI's own expansions.
+pub fn verify_backend_bodies(
+    definitions: &TypeDefinitions,
+    bodies: &[(String, crate::mir::Body)],
+    facts: &ProgramFacts,
+    lowered: Option<&[(String, crate::mir::Body)]>,
+) -> Result<ProgramReport, StaleFact> {
+    let harmless_calls = harmless_calls_after_rc(definitions, bodies);
+    let mut found = Vec::new();
+    for (index, (((name, body), harmless), facts)) in bodies
+        .iter()
+        .zip(&harmless_calls)
+        .zip(facts.iter())
+        .enumerate()
+    {
+        let ownership = facts.current_ownership(body)?;
+        let mut violations = super::verify_in_bounds(body);
+        violations.extend(super::verify_cross_residency_readback(body));
+        violations.extend(super::verify_bound_names(body));
+        violations.extend(super::verify_stable_collections(
+            body,
+            ownership,
+            Some(harmless),
+        ));
+        if let Some((_, before)) = lowered.and_then(|lowered| lowered.get(index)) {
+            violations.extend(super::verify_abi_translation(before, body));
+        }
+        found.extend(violations.into_iter().map(|v| (name.clone(), v)));
+    }
+    Ok(ProgramReport::of(found))
 }
 
 /// The shared body of every method a built-in collection is compiled with:

@@ -28,7 +28,7 @@ use crate::mir;
 use crate::mir::call_graph::direct_callees;
 use crate::mir::facts::{ProgramFacts, StaleFact};
 use crate::mir::lowering::requests::LoweredBody;
-use crate::mir::passes::{self, run_body_pass, PassContext, PassContract, PassManager};
+use crate::mir::passes::{self, run_body_pass_with_facts, PassContext, PassContract, PassManager};
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
 #[cfg(feature = "cranelift")]
@@ -665,6 +665,13 @@ impl Listing {
     }
 }
 
+/// Every body a program lowers to, beside what the MIR passes recorded about
+/// each, in the same order.
+struct MirProgram {
+    bodies: Vec<(String, mir::Body)>,
+    facts: ProgramFacts,
+}
+
 /// The object code a CPU backend produced for a program.
 struct ObjectCode {
     bytes: Vec<u8>,
@@ -1179,17 +1186,27 @@ impl Pipeline {
     ) -> Result<PathBuf, CompilerError> {
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
-        let (mir_bodies, _) = self.lower_to_mir(&mut pipeline_result, opts.release)?;
+        let (mir_bodies, facts) = self.lower_to_mir(&mut pipeline_result, opts.release)?;
+        let lowered = MirProgram {
+            bodies: mir_bodies,
+            facts,
+        };
 
         match opts.target {
             BuildTarget::Native => {
-                self.build_native(&pipeline_result, mir_bodies, opts, opts.out_path.clone())
+                self.build_native(&pipeline_result, lowered, opts, opts.out_path.clone())
             }
             BuildTarget::WebGpu => {
+                // The bundle hands its bodies on as lowered, without the
+                // element and closure ABI a CPU backend takes.
+                if let Some(mode) = self.verify_mode() {
+                    Self::verify_backend_bodies(&pipeline_result, &lowered, None, &mode)?;
+                }
+                let mir_bodies = &lowered.bodies;
                 let gpu_buffer_inits = &pipeline_result.type_checker.gpu_buffer_inits;
                 let bundle_dir = crate::codegen::web_gpu::emit_bundle(
                     crate::codegen::web_gpu::LoweredProgram {
-                        bodies: &mir_bodies,
+                        bodies: mir_bodies,
                         device_helpers: &pipeline_result.device_helpers,
                     },
                     opts.out_path.as_ref(),
@@ -1206,7 +1223,7 @@ impl Pipeline {
                 // callers leave `emit_native_host` off and need no linker.
                 if opts.emit_native_host {
                     let native_out = native_binary_path(&bundle_dir);
-                    self.build_native(&pipeline_result, mir_bodies, opts, Some(native_out))?;
+                    self.build_native(&pipeline_result, lowered, opts, Some(native_out))?;
                 }
                 Ok(bundle_dir)
             }
@@ -1222,15 +1239,15 @@ impl Pipeline {
     fn build_native(
         &self,
         pipeline_result: &PipelineResult,
-        mir_bodies: Vec<(String, mir::Body)>,
+        lowered: MirProgram,
         opts: &BuildOptions,
         out_override: Option<PathBuf>,
     ) -> Result<PathBuf, CompilerError> {
         let mir_text = opts
             .emit
             .contains(&Listing::Mir)
-            .then(|| mir_listing(&mir_bodies));
-        let object = Self::compile_object(pipeline_result, mir_bodies, opts, self.verify_mode())?;
+            .then(|| mir_listing(&lowered.bodies));
+        let object = Self::compile_object(pipeline_result, lowered, opts, self.verify_mode())?;
         let (work_dir, out_path) = Self::output_paths(out_override)?;
         fs::create_dir_all(&work_dir)?;
 
@@ -1317,36 +1334,18 @@ impl Pipeline {
     /// must be linked against.
     fn compile_object(
         pipeline_result: &PipelineResult,
-        mut mir_bodies: Vec<(String, mir::Body)>,
+        mut lowered: MirProgram,
         opts: &BuildOptions,
         verify_mode: Option<String>,
     ) -> Result<ObjectCode, CompilerError> {
-        // Spell the element and closure ABIs at the hand-off: reference
-        // counting, verification and every MIR reader before this point see an
-        // element or a closure argument as the value it is, and every CPU
-        // backend takes an element as an address and a byte count, and a
-        // closure as itself and the trampoline the runtime calls it through.
-        for (name, body) in &mut mir_bodies {
-            let elements = mir::element_abi::pass_elements_by_address;
-            run_body_pass(&passes::PASS_ELEMENTS_BY_ADDRESS, body, elements)?
-                .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
-            let closures = mir::closure_abi::pass_closures_with_trampolines;
-            run_body_pass(&passes::PASS_CLOSURES_WITH_TRAMPOLINES, body, closures)?
-                .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
-        }
-        // An access emitted without its bounds check is re-proven on the very
-        // bodies the backend receives, after every rewrite of them.
+        let before_abi = verify_mode.as_ref().map(|_| lowered.bodies.clone());
+        Self::spell_runtime_abi(&mut lowered)?;
+        // The checks that hold whatever the ABI spelled run on the very bodies
+        // the backend receives, after every rewrite of them.
         if let Some(mode) = verify_mode {
-            let violations = mir_bodies
-                .iter()
-                .flat_map(|(name, body)| {
-                    mir::verify::verify_in_bounds(body)
-                        .into_iter()
-                        .map(move |v| (name.clone(), v))
-                })
-                .collect();
-            Self::fail_or_warn(&mir::verify::ProgramReport::of(violations), &mode)?;
+            Self::verify_backend_bodies(pipeline_result, &lowered, before_abi.as_deref(), &mode)?;
         }
+        let mir_bodies = lowered.bodies;
         match opts.cpu_backend {
             CpuBackend::Cranelift => {
                 Self::compile_with_cranelift(pipeline_result, &mir_bodies, opts)
@@ -1440,6 +1439,50 @@ impl Pipeline {
         }
     }
 
+    /// Spell the element and closure ABIs at the hand-off: reference
+    /// counting, verification and every MIR reader before this point see an
+    /// element or a closure argument as the value it is, and every CPU backend
+    /// takes an element as an address and a byte count, and a closure as
+    /// itself and the trampoline the runtime calls it through.
+    fn spell_runtime_abi(lowered: &mut MirProgram) -> Result<(), CompilerError> {
+        for ((name, body), facts) in lowered.bodies.iter_mut().zip(lowered.facts.iter_mut()) {
+            let elements =
+                |body: &mut mir::Body, _: &mut _| mir::element_abi::pass_elements_by_address(body);
+            run_body_pass_with_facts(&passes::PASS_ELEMENTS_BY_ADDRESS, body, facts, elements)?
+                .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
+            let closures = |body: &mut mir::Body, _: &mut _| {
+                mir::closure_abi::pass_closures_with_trampolines(body)
+            };
+            run_body_pass_with_facts(
+                &passes::PASS_CLOSURES_WITH_TRAMPOLINES,
+                body,
+                facts,
+                closures,
+            )?
+            .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Run the verifiers that read the bodies a backend receives over
+    /// `lowered`, each checked against its body in `before_abi` when the ABI
+    /// passes rewrote it.
+    fn verify_backend_bodies(
+        pipeline_result: &PipelineResult,
+        lowered: &MirProgram,
+        before_abi: Option<&[(String, mir::Body)]>,
+        mode: &str,
+    ) -> Result<(), CompilerError> {
+        let definitions = pipeline_result.type_checker.type_definitions();
+        let report = mir::verify::verify_backend_bodies(
+            definitions,
+            &lowered.bodies,
+            &lowered.facts,
+            before_abi,
+        )?;
+        Self::fail_or_warn(&report, mode)
+    }
+
     /// Lower every body the program needs.
     ///
     /// Takes the result mutably because lowering an instantiation can reach a
@@ -1491,15 +1534,11 @@ impl Pipeline {
             .collect();
         result.device_helpers = gpu_names.into_helpers();
 
-        // Check RC invariants, cross-residency readback fencing and optional
-        // layouts after Perceus, and that every call passes an owned argument
-        // exactly where its callee takes one over.
-        //
-        // TODO: these checks run before the element and closure ABI passes
-        // rewrite the bodies in `compile_object`, so they never see the MIR
-        // the backend consumes; only `verify_in_bounds` runs after them. Each
-        // verifier must first learn the by-address element spelling and the
-        // closure trampolines, or a post-ABI run reports false violations.
+        // Check RC invariants and optional and value layouts after Perceus,
+        // and that every call passes an owned argument exactly where its
+        // callee takes one over. These read an element or a closure argument
+        // as the value it is, so they run before the ABI spells it; the checks
+        // that hold whatever it spelled run on the backend's bodies instead.
         if let Some(mode) = verify_mode {
             let definitions = result.type_checker.type_definitions();
             let report =

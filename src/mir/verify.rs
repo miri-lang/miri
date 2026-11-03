@@ -108,6 +108,7 @@ use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Stat
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
+mod abi_translation;
 mod borrow_reach;
 mod bound_names;
 mod callee_effects;
@@ -123,6 +124,7 @@ mod unshared_writes;
 mod value_arguments;
 mod value_representation;
 
+pub use abi_translation::verify_abi_translation;
 pub use bound_names::verify_bound_names;
 pub use callee_effects::HarmlessCallees;
 pub use in_bounds::verify_in_bounds;
@@ -131,7 +133,7 @@ pub use local_borrows::verify_local_borrows;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
 pub use parameter_writes::verify_parameter_writes;
-pub use program::{verify_program, ProgramReport};
+pub use program::{verify_backend_bodies, verify_program, ProgramReport};
 pub use stable_collections::verify_stable_collections;
 pub use unshared_writes::verify_unshared_writes;
 pub use value_arguments::verify_value_arguments;

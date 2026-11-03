@@ -12,6 +12,7 @@
 //! because the verifier is right is distinguishable from one passing because the
 //! verifier reports nothing at all.
 
+mod abi_translation;
 mod in_bounds;
 mod lent_arguments;
 mod local_borrows;

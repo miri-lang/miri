@@ -149,12 +149,15 @@ pub const RECORD_IN_BOUNDS: BodyPass = BodyPass {
     preserves: &[],
 };
 /// Spells element arguments by address.
+///
+/// The locals it adds hold an address, a constant or a result slot: none
+/// is a parameter or a borrow, so who owns what stays as recorded.
 pub const PASS_ELEMENTS_BY_ADDRESS: BodyPass = BodyPass {
     name: "pass_elements_by_address",
     rewrites_cfg: true,
     requires: &[],
     records: &[],
-    preserves: &[],
+    preserves: &[Fact::Ownership],
 };
 /// Spells closure arguments with their trampolines.
 pub const PASS_CLOSURES_WITH_TRAMPOLINES: BodyPass = BodyPass {
