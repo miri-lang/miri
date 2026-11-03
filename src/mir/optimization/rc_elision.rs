@@ -64,6 +64,7 @@
 use crate::mir::block::BasicBlock;
 use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::{Local, PlaceContext};
+use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
 use crate::mir::types::MirType;
@@ -80,7 +81,7 @@ impl RcElision {
     pub(super) fn elide(&self, body: &mut Body, ownership: &OwnershipFacts) -> bool {
         let Body {
             basic_blocks,
-            has_drop_types,
+            rc_classifier,
             local_decls,
             ..
         } = body;
@@ -94,7 +95,7 @@ impl RcElision {
         };
         let mut any_changed = false;
         for block in basic_blocks.iter_mut() {
-            if elide_block_keeping(block, has_drop_types, local_decls, kept) {
+            if elide_block_keeping(block, rc_classifier, local_decls, kept) {
                 any_changed = true;
             }
         }
@@ -108,7 +109,7 @@ impl RcElision {
 /// Returns true if any statements were removed.
 pub fn elide_block(
     block: &mut crate::mir::block::BasicBlockData,
-    has_drop_types: &HashSet<String>,
+    classifier: &RcClassifier,
     local_decls: &[crate::mir::LocalDecl],
 ) -> bool {
     let none = HashSet::new();
@@ -116,7 +117,7 @@ pub fn elide_block(
         lenders: &none,
         borrows: &none,
     };
-    elide_block_keeping(block, has_drop_types, local_decls, kept)
+    elide_block_keeping(block, classifier, local_decls, kept)
 }
 
 /// The pairs RC elision keeps for the borrowed locals of a body
@@ -136,7 +137,7 @@ struct KeptPairs<'a> {
 /// [`elide_block`], keeping every pair `kept` names.
 fn elide_block_keeping(
     block: &mut crate::mir::block::BasicBlockData,
-    has_drop_types: &HashSet<String>,
+    classifier: &RcClassifier,
     local_decls: &[crate::mir::LocalDecl],
     kept: KeptPairs,
 ) -> bool {
@@ -165,7 +166,7 @@ fn elide_block_keeping(
 
         // src's type must not carry a user-defined destructor, a borrow must
         // not rely on dest's reference, and src must hold its own.
-        if type_has_destructor(src_local, local_decls, has_drop_types)
+        if type_has_destructor(src_local, local_decls, classifier)
             || kept.lenders.contains(&dest_local)
             || kept.borrows.contains(&src_local)
         {
@@ -502,7 +503,7 @@ fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) ->
         && !ownership.is_borrowed(local)
         && decl.device_handle.is_none()
         && body.is_counted_local(local)
-        && !type_has_destructor(local, &body.local_decls, &body.has_drop_types)
+        && !type_has_destructor(local, &body.local_decls, &body.rc_classifier)
 }
 
 /// The position of `IncRef(local)` when it is the block's last mention of
@@ -586,10 +587,10 @@ fn copy_source(rvalue: &crate::mir::Rvalue) -> Option<&Place> {
 fn type_has_destructor(
     local: Local,
     local_decls: &[crate::mir::LocalDecl],
-    has_drop_types: &HashSet<String>,
+    classifier: &RcClassifier,
 ) -> bool {
     match &local_decls[local.0].mir_ty {
-        MirType::Custom(name) => has_drop_types.contains(name.as_str()),
+        MirType::Custom(name) => classifier.runs_drop_hook(name),
         _ => false,
     }
 }

@@ -13,13 +13,14 @@ use miri::mir::facts::OwnershipFacts;
 use miri::mir::lowering::Lowered;
 use miri::mir::optimization::rc_elision::{decref_in_range, elide_block, find_decref};
 use miri::mir::optimization::{count_all_rc_ops, elide_rc, insert_rc};
+use miri::mir::rc::RcClassifier;
 use miri::mir::statement::StatementKind;
 use miri::mir::symbol::Symbol;
 use miri::mir::terminator::TerminatorKind;
 use miri::mir::{Local, LocalDecl, Operand, Place, Statement};
 use miri::pipeline::Pipeline;
 use miri::type_checker::ModuleId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Lower `source` to MIR, run Perceus, run RC elision, and return all bodies.
 fn get_elided_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
@@ -470,10 +471,10 @@ fn test_elision_blocked_by_decref_in_range() {
         make_decref(src),
         make_decref(dest),
     ]);
-    let has_drop: HashSet<String> = HashSet::new();
+    let classifier = RcClassifier::default();
     let local_decls = make_local_decls_string(3);
 
-    let changed = elide_block(&mut block, &has_drop, &local_decls);
+    let changed = elide_block(&mut block, &classifier, &local_decls);
 
     assert!(
         !changed,
@@ -501,10 +502,10 @@ fn test_elision_fires_without_decref_in_range() {
         make_assign(dest, src),
         make_decref(dest),
     ]);
-    let has_drop: HashSet<String> = HashSet::new();
+    let classifier = RcClassifier::default();
     let local_decls = make_local_decls_string(3);
 
-    let changed = elide_block(&mut block, &has_drop, &local_decls);
+    let changed = elide_block(&mut block, &classifier, &local_decls);
 
     assert!(changed, "elide_block must fire for a clean linear pair");
     assert_eq!(
@@ -568,6 +569,7 @@ mod owned_transfers {
     //! A retain funding an argument the callee takes over, cancelled against
     //! the caller's release of the same local right after the call.
 
+    use crate::mir::utils::classifier_with_drop_hook;
     use miri::ast::literal::Literal;
     use miri::ast::types::{Type, TypeKind};
     use miri::error::syntax::Span;
@@ -771,7 +773,7 @@ mod owned_transfers {
     fn an_argument_with_a_drop_hook_keeps_the_retain() {
         let resource = Type::new(TypeKind::Custom("Res".to_string(), None), span());
         let mut body = caller(resource, handing_over(vec![decref(1), storage_dead(1)]));
-        body.has_drop_types.insert("Res".to_string());
+        body.rc_classifier = classifier_with_drop_hook("Res");
         elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&body), 2, "{body}");
     }
@@ -781,6 +783,7 @@ mod dying_sources {
     //! A retain funding a copy of a local that dies right after it, cancelled
     //! against that local's release: the copy takes the local's own reference.
 
+    use crate::mir::utils::classifier_with_drop_hook;
     use miri::ast::literal::Literal;
     use miri::ast::types::{Type, TypeKind};
     use miri::error::syntax::Span;
@@ -1041,7 +1044,7 @@ mod dying_sources {
         let resource = Type::new(TypeKind::Custom("Res".to_string(), None), span());
         let mut body = body_of(resource, dying(copy_source(false), Vec::new(), 3));
         body.local_decls[3] = body.local_decls[1].clone();
-        body.has_drop_types.insert("Res".to_string());
+        body.rc_classifier = classifier_with_drop_hook("Res");
         elide_rc(&mut body, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_x(&body), 0, "{body}");
     }

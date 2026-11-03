@@ -97,10 +97,6 @@ pub struct Body {
     /// qualifier and stays true for atomic buffers regardless of data flow; this
     /// carries the truthful flow to backends that need it.
     pub param_written: Vec<bool>,
-    /// Names of custom types that define a `fn drop(self)` method (resource types).
-    /// Populated by MIR lowering from the type checker's struct/class definitions.
-    /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
-    pub has_drop_types: HashSet<String>,
     /// The local holding the allocator the CPU ABI threads through every call:
     /// the trailing parameter every Miri-defined function takes, or a local
     /// bound to zero in a body whose signature carries none. `None` for a body
@@ -138,7 +134,6 @@ impl Body {
             out_params: Vec::new(),
             receiver: None,
             param_written: Vec::new(),
-            has_drop_types: HashSet::new(),
             allocator: None,
             generation: 0,
         }

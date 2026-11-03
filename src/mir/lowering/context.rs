@@ -206,9 +206,6 @@ impl<'a> LoweringContext<'a> {
         // Reference counting reads the program's type table, shared by every body.
         body.rc_classifier =
             crate::mir::rc::RcClassifier::new(type_checker.shared_type_definitions());
-        // Pre-compute set of types that define a user `fn drop(self)` destructor.
-        // Used by RC elision to avoid removing the DecRef that triggers the destructor.
-        body.has_drop_types = Self::compute_has_drop_types(type_checker);
 
         let source = type_checker.entry_source.as_deref();
         let source_path = type_checker.entry_source_path.as_deref();
@@ -945,23 +942,6 @@ impl<'a> LoweringContext<'a> {
     /// Returns true if the given type has auto-copy semantics (no RC needed).
     pub fn is_type_auto_copy(&self, ty: &Type) -> bool {
         crate::type_checker::utils::is_auto_copy(&ty.kind, self.type_checker.type_definitions())
-    }
-
-    /// Builds the set of type names whose release runs a `fn drop(self)` hook,
-    /// declared on the type or inherited from a base class.
-    ///
-    /// Only struct and class types can carry a user-defined destructor.
-    /// This set is used by RC elision to skip optimization for destructor-carrying types,
-    /// ensuring DecRef operations that trigger destructors are never removed.
-    fn compute_has_drop_types(
-        type_checker: &crate::type_checker::TypeChecker,
-    ) -> std::collections::HashSet<String> {
-        let type_definitions = type_checker.type_definitions();
-        type_definitions
-            .keys()
-            .filter(|name| crate::type_checker::utils::has_drop_hook(name, type_definitions))
-            .cloned()
-            .collect()
     }
 }
 

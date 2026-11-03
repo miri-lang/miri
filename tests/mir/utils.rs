@@ -34,6 +34,7 @@ use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::compiler_intrinsics::{compiler_intrinsic, compiler_intrinsic_names};
 use miri::mir::lowering::{lower_function, Lowered};
+use miri::mir::rc::RcClassifier;
 use miri::mir::symbol::RuntimeCallee;
 use miri::mir::{
     Body, Constant, GpuIntrinsic, LocalDecl, Operand, Rvalue, StatementKind, Terminator,
@@ -43,6 +44,15 @@ use miri::pipeline::Pipeline;
 use miri::runtime_effects::{ParamUse, RuntimeEffect};
 use std::collections::HashMap;
 use std::rc::Rc;
+
+/// The reference-counting classifier of a program declaring class `name`
+/// with a drop hook, for a hand-built body that holds one.
+pub fn classifier_with_drop_hook(name: &str) -> RcClassifier {
+    let source = format!(
+        "class {name}\n    handle int\n    fn drop(self)\n        return\n\nfn main()\n    let x = 1\n"
+    );
+    mir_lower_code(&source).rc_classifier
+}
 
 pub fn mir_lower_code(source: &str) -> Body {
     mir_lower_main(source).body

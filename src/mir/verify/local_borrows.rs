@@ -213,7 +213,7 @@ impl Checker<'_> {
             return Some("it holds no counted host value".to_string());
         }
         let has_drop_hook = matches!(&decl.mir_ty,
-            MirType::Custom(name) if body.has_drop_types.contains(name.as_str()));
+            MirType::Custom(name) if body.rc_classifier.runs_drop_hook(name));
         if has_drop_hook {
             return Some("its type has a drop hook".to_string());
         }

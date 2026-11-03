@@ -979,7 +979,7 @@ fn use_conn(conn Conn) int:
     let (increfs, decrefs) = count_rc(&body);
 
     assert!(
-        body.has_drop_types.contains("Conn"),
+        body.rc_classifier.runs_drop_hook("Conn"),
         "a struct with `fn drop` must be recorded as a resource type"
     );
     assert!(

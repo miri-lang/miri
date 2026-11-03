@@ -42,6 +42,14 @@ impl RcClassifier {
         Self { definitions }
     }
 
+    /// Whether releasing the last reference to a `type_name` runs a
+    /// `fn drop(self)` hook, declared on the type or inherited from a base
+    /// class. A pass must keep every release of such a value, since removing
+    /// one skips the hook.
+    pub fn runs_drop_hook(&self, type_name: &str) -> bool {
+        crate::type_checker::utils::has_drop_hook(type_name, &self.definitions)
+    }
+
     /// Whether a value of `kind`, written in a body that leaves `type_params`
     /// open, is reference counted.
     pub fn is_counted(&self, kind: &TypeKind, type_params: &HashSet<String>) -> bool {

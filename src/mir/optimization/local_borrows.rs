@@ -309,7 +309,7 @@ fn borrowing_reads(body: &Body, ctx: &PerceusContext, managed_locals: &HashSet<L
 fn is_plain_value(body: &Body, local: Local) -> bool {
     let decl = &body.local_decls[local.0];
     let has_drop_hook = matches!(&decl.mir_ty,
-        MirType::Custom(name) if body.has_drop_types.contains(name.as_str()));
+        MirType::Custom(name) if body.rc_classifier.runs_drop_hook(name));
     !has_drop_hook && decl.device_handle.is_none()
 }
 
