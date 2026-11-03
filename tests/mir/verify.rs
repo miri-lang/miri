@@ -2115,7 +2115,7 @@ fn flag_guarded_copy(set_after_launch: bool, registered: bool) -> Body {
     );
     body.new_local(LocalDecl::new(bool_ty(), span()));
     if registered {
-        body.device_stale_flags.insert(Local(4), DeviceHandleId(7));
+        body.local_decls[4].stale_flag_of = Some(DeviceHandleId(7));
     }
     body
 }
@@ -2174,7 +2174,10 @@ fn the_readback_pass_keeps_a_flag_for_a_read_at_the_head_of_a_loop() {
 
     assert_fenced(&looping, "the pass's output");
     assert_eq!(readback_calls(&looping), 1, "one guarded readback");
-    assert_eq!(looping.device_stale_flags.len(), 1, "one flag for handle 7");
+    let flags: Vec<_> = (looping.local_decls.iter())
+        .filter_map(|decl| decl.stale_flag_of)
+        .collect();
+    assert_eq!(flags, vec![DeviceHandleId(7)], "one flag for handle 7");
     let enters_the_entry_block = looping
         .basic_blocks
         .iter()
@@ -2202,7 +2205,10 @@ fn the_readback_pass_reads_back_once_for_two_reads_after_a_launch() {
 
     assert_fenced(&twice, "the pass's output");
     assert_eq!(readback_calls(&twice), 1);
-    assert!(twice.device_stale_flags.is_empty(), "no read needs a flag");
+    assert!(
+        (twice.local_decls.iter()).all(|decl| decl.stale_flag_of.is_none()),
+        "no read needs a flag"
+    );
 }
 
 /// `dest = source`, replacing the value `dest` held.

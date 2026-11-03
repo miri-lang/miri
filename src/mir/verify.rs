@@ -91,6 +91,7 @@
 
 use crate::ast::literal::Literal;
 use crate::ast::types::BuiltinCollectionKind;
+use crate::mir::body::DeviceHandleId;
 use crate::mir::facts::{OwnershipFacts, ProgramFacts};
 use crate::mir::lowering::constructors::compute_elem_size_from_type;
 use crate::mir::operand::Operand;
@@ -1835,7 +1836,7 @@ impl Fences {
         else {
             return;
         };
-        let Some(handle) = body.device_stale_flags.get(&dest.local) else {
+        let Some(handle) = stale_flag_of(body, dest.local) else {
             return;
         };
         let sets_the_flag = matches!(rvalue, Rvalue::Use(Operand::Constant(c))
@@ -1914,9 +1915,7 @@ fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Op
     else {
         return None;
     };
-    let handle = body
-        .device_stale_flags
-        .get(&residency::whole_local(discr)?)?;
+    let handle = stale_flag_of(body, residency::whole_local(discr)?)?;
     let only_when_clear = otherwise.0 != target
         && targets
             .iter()
@@ -1925,6 +1924,12 @@ fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Op
         .iter()
         .any(|(value, block)| block.0 == target && *value == Discriminant::bool_false());
     (only_when_clear && reached_when_clear).then_some(handle.0)
+}
+
+/// The device handle `local` is the stale flag of, if the readback pass made
+/// it one.
+fn stale_flag_of(body: &Body, local: Local) -> Option<DeviceHandleId> {
+    body.local_decls.get(local.0)?.stale_flag_of
 }
 
 /// The fences on entry to every reachable block.

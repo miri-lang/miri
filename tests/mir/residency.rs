@@ -177,7 +177,16 @@ fn main()
     );
     assert_verifies_clean(&body);
     assert_eq!(readback_calls(&body), 1, "one readback site:\n{body}");
-    assert_eq!(body.device_stale_flags.len(), 1, "one flag:\n{body}");
+    let flags: Vec<_> = (body.local_decls.iter())
+        .filter_map(|decl| decl.stale_flag_of)
+        .collect();
+    assert_eq!(flags.len(), 1, "one flag:\n{body}");
+    let handle = (body.local_decls.iter()).find_map(|decl| decl.device_handle);
+    assert_eq!(
+        flags.first().copied(),
+        handle,
+        "the flag watches g:\n{body}"
+    );
 }
 
 /// Reads in different positions after one launch share the readback the first
@@ -201,7 +210,10 @@ fn main()
     );
     assert_verifies_clean(&body);
     assert_eq!(readback_calls(&body), 1, "one readback:\n{body}");
-    assert!(body.device_stale_flags.is_empty(), "no read needs a flag");
+    assert!(
+        (body.local_decls.iter()).all(|decl| decl.stale_flag_of.is_none()),
+        "no read needs a flag"
+    );
 }
 
 /// A binding no launch touched has no device buffer to read back.

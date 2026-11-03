@@ -101,14 +101,6 @@ pub struct Body {
     /// Populated by MIR lowering from the type checker's struct/class definitions.
     /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
     pub has_drop_types: HashSet<String>,
-    /// Boolean locals the readback pass keeps, each paired with the device
-    /// handle it watches. A flag is set while its handle's device buffer may
-    /// hold results the host array lacks, and cleared when a readback, an
-    /// upload or a fresh activation brings the two back into agreement. A host
-    /// read reached along paths that disagree about the buffer tests the flag
-    /// rather than reading back every time, and the verifier takes a flag found
-    /// clear as a fence.
-    pub device_stale_flags: HashMap<Local, DeviceHandleId>,
     /// The local holding the allocator the CPU ABI threads through every call:
     /// the trailing parameter every Miri-defined function takes, or a local
     /// bound to zero in a body whose signature carries none. `None` for a body
@@ -147,7 +139,6 @@ impl Body {
             receiver: None,
             param_written: Vec::new(),
             has_drop_types: HashSet::new(),
-            device_stale_flags: HashMap::new(),
             allocator: None,
             generation: 0,
         }
@@ -526,6 +517,14 @@ pub struct LocalDecl {
     /// Set on a GPU kernel parameter the launch fills in; `None` for every
     /// other local, including captured scalars. See [`LaunchUniform`].
     pub launch_uniform: Option<LaunchUniform>,
+    /// Set on a boolean local the readback pass keeps, naming the device
+    /// handle it watches. The flag is set while that handle's device buffer
+    /// may hold results the host array lacks, and cleared when a readback, an
+    /// upload or a fresh activation brings the two back into agreement. A host
+    /// read reached along paths that disagree about the buffer tests the flag
+    /// rather than reading back every time, and the verifier takes a flag found
+    /// clear as a fence. `None` for every other local.
+    pub stale_flag_of: Option<DeviceHandleId>,
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
@@ -550,6 +549,7 @@ impl LocalDecl {
             device_handle: None,
             device_handle_borrowed: false,
             launch_uniform: None,
+            stale_flag_of: None,
             mir_ty,
         }
     }

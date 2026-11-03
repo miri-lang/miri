@@ -57,11 +57,9 @@ pub fn insert_readbacks(body: &mut Body) {
     let block_ends = (0..original_blocks).map(|bb| tails.get(&bb).map_or(bb, |tail| tail.0));
     keep_flags_on_edges(body, block_ends.collect(), &flags, &carriers);
     initialize_flags(body, &flags, &carriers);
-    body.device_stale_flags.extend(
-        flags
-            .iter()
-            .map(|(&handle, &flag)| (flag, DeviceHandleId(handle))),
-    );
+    for (&handle, &flag) in &flags {
+        body.local_decls[flag.0].stale_flag_of = Some(DeviceHandleId(handle));
+    }
 }
 
 fn declares_gpu_bindings(body: &Body) -> bool {
