@@ -11,6 +11,7 @@ pub mod operand;
 pub mod optimization;
 pub mod optimizations;
 pub mod option_layout;
+pub mod passes;
 pub mod place;
 pub mod place_type;
 pub mod rc;

@@ -82,6 +82,7 @@ pub fn record_stable_collections(body: &mut Body) -> bool {
         return false;
     }
     let preheaders = insert_preheaders(body, &found);
+    body.cfg_changed();
     let records: Vec<StableCollection> = found
         .iter()
         .filter_map(|(found_loop, local)| record(found_loop, *local, &preheaders))

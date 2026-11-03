@@ -50,6 +50,7 @@ pub fn insert_readbacks(body: &mut Body) {
         .iter()
         .map(|(&bb, refreshes)| (bb, rewrite_block(body, bb, refreshes, &flags, &carriers)))
         .collect();
+    body.cfg_changed();
     if flags.is_empty() {
         return;
     }

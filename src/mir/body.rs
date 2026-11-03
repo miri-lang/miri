@@ -5,7 +5,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::error::SourceId;
 use crate::mir::backend::BackendMetadata;
-use crate::mir::block::BasicBlockData;
+use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::Statement;
@@ -165,6 +165,10 @@ pub struct Body {
     /// allocator, so the WGSL backend drops this parameter and every argument
     /// read from it.
     pub allocator: Option<Local>,
+    /// How many times a pass has rewritten the control-flow graph since the
+    /// body was lowered. A fact computed off the body records the generation
+    /// it was computed at and holds only while the body is still at it.
+    generation: u64,
 }
 
 /// One generic class at concrete type arguments.
@@ -236,7 +240,33 @@ impl Body {
             generic_class_instantiations: Vec::new(),
             device_stale_flags: HashMap::new(),
             allocator: None,
+            generation: 0,
         }
+    }
+
+    /// The number of control-flow rewrites the body has been through.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Records that a pass rewrote the control-flow graph: added, removed or
+    /// redirected a block. Every pass that does calls this once it is done,
+    /// so a fact recorded before the rewrite is known to be stale.
+    pub fn cfg_changed(&mut self) {
+        self.generation += 1;
+    }
+
+    /// The control-flow graph's shape: each block's successors, in block
+    /// order. Two bodies of one shape have the same blocks and edges.
+    pub fn shape(&self) -> Vec<Vec<BasicBlock>> {
+        (self.basic_blocks.iter())
+            .map(|block| {
+                block
+                    .terminator
+                    .as_ref()
+                    .map_or_else(Vec::new, |t| t.successors())
+            })
+            .collect()
     }
 
     pub fn new_local(&mut self, decl: LocalDecl) -> Local {

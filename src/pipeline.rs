@@ -22,6 +22,7 @@ use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
 use crate::mir::call_graph::direct_callees;
+use crate::mir::passes::{self, run_body_pass, run_program_pass, PassContract};
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
 #[cfg(feature = "cranelift")]
@@ -837,6 +838,14 @@ fn refuses_the_program(code: DiagnosticCode) -> bool {
                 | DiagnosticCode::MirInvalidInstantiationArgument
         ),
         _ => false,
+    }
+}
+
+/// A pass that broke what it declares about the control-flow graph is a
+/// fault of the compiler, not of the program.
+impl From<PassContract> for CompilerError {
+    fn from(broken: PassContract) -> Self {
+        CompilerError::Internal(broken.to_string())
     }
 }
 
@@ -2110,9 +2119,11 @@ impl Pipeline {
         // backend takes an element as an address and a byte count, and a
         // closure as itself and the trampoline the runtime calls it through.
         for (name, body) in &mut mir_bodies {
-            mir::element_abi::pass_elements_by_address(body)
+            let elements = mir::element_abi::pass_elements_by_address;
+            run_body_pass(&passes::PASS_ELEMENTS_BY_ADDRESS, body, elements)?
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
-            mir::closure_abi::pass_closures_with_trampolines(body)
+            let closures = mir::closure_abi::pass_closures_with_trampolines;
+            run_body_pass(&passes::PASS_CLOSURES_WITH_TRAMPOLINES, body, closures)?
                 .map_err(|e| CompilerError::Internal(format!("fn {name}: {e}")))?;
         }
         // An access emitted without its bounds check is re-proven on the very
@@ -2803,22 +2814,32 @@ impl Pipeline {
         // build. Runs before RC insertion, which accounts for the host arrays the
         // readbacks detach.
         for (_symbol, body) in &mut lowered {
-            mir::residency::insert_readbacks(body);
+            run_body_pass(
+                &passes::INSERT_READBACKS,
+                body,
+                mir::residency::insert_readbacks,
+            )?;
         }
 
         // Hand every call a value held as its bytes from a value local the
         // call does not also write, whole or at a fixed offset of it, so no
         // callee reads bytes that change under it.
         for (_symbol, body) in &mut lowered {
-            mir::value_arguments::copy_value_arguments(body);
+            let copy = mir::value_arguments::copy_value_arguments;
+            run_body_pass(&passes::COPY_VALUE_ARGUMENTS, body, copy)?;
         }
-        mir::optional_conformance::conform_optional_operands(&mut lowered);
+        let conform = mir::optional_conformance::conform_optional_operands;
+        run_program_pass(&passes::CONFORM_OPTIONAL_OPERANDS, &mut lowered, conform)?;
 
         let verify_mode = self.verify_mode();
         let program_violations =
-            Self::decide_owned_parameters(result, &mut lowered, verify_mode.is_some());
+            run_program_pass(&passes::DECIDE_OWNED_PARAMETERS, &mut lowered, |lowered| {
+                Self::decide_owned_parameters(result, lowered, verify_mode.is_some())
+            })?;
         let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
-        mir::analysis::heap_effects::stamp_quiet_calls(&mut lowered, &hooks);
+        run_program_pass(&passes::STAMP_QUIET_CALLS, &mut lowered, |lowered| {
+            mir::analysis::heap_effects::stamp_quiet_calls(lowered, &hooks)
+        })?;
 
         let mut bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
@@ -2831,13 +2852,13 @@ impl Pipeline {
         // optimization pass runs before this: `mir::optimization::optimize` is
         // not called anywhere in the pipeline.
         for (_name, body) in &mut bodies {
-            mir::optimization::insert_rc(body);
+            run_body_pass(&passes::INSERT_RC, body, mir::optimization::insert_rc)?;
         }
 
         // Elide redundant IncRef/DecRef pairs identified by the RC elision pass.
         // This runs after Perceus to remove pairs that are provably net-zero.
         for (_name, body) in &mut bodies {
-            mir::optimization::elide_rc(body);
+            run_body_pass(&passes::ELIDE_RC, body, mir::optimization::elide_rc)?;
         }
 
         // Drop the uniqueness checks an earlier write through the same path
@@ -2845,11 +2866,26 @@ impl Pipeline {
         // branch conditions; copy each loop a guard on its bound proves in
         // bounds; then record each collection a loop leaves unchanged.
         for (_name, body) in &mut bodies {
-            mir::optimization::elide_unshare_checks(body);
-            mir::optimization::thread_branch_conditions(body);
-            mir::optimization::loop_versioning::version_bounded_loops(body);
-            mir::optimization::stable_collections::record_stable_collections(body);
-            mir::optimization::in_bounds::record_in_bounds(body);
+            use mir::optimization as opt;
+            run_body_pass(
+                &passes::ELIDE_UNSHARE_CHECKS,
+                body,
+                opt::elide_unshare_checks,
+            )?;
+            run_body_pass(
+                &passes::THREAD_BRANCH_CONDITIONS,
+                body,
+                opt::thread_branch_conditions,
+            )?;
+            let version = opt::loop_versioning::version_bounded_loops;
+            run_body_pass(&passes::VERSION_BOUNDED_LOOPS, body, version)?;
+            let stable = opt::stable_collections::record_stable_collections;
+            run_body_pass(&passes::RECORD_STABLE_COLLECTIONS, body, stable)?;
+            run_body_pass(
+                &passes::RECORD_IN_BOUNDS,
+                body,
+                opt::in_bounds::record_in_bounds,
+            )?;
         }
 
         // Check RC invariants, cross-residency readback fencing and optional

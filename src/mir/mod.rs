@@ -34,6 +34,7 @@ pub mod operand;
 pub mod optimization;
 pub mod option_layout;
 pub mod optional_conformance;
+pub mod passes;
 pub mod place;
 pub mod place_type;
 pub mod proven_indexes;

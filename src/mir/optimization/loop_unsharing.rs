@@ -108,6 +108,9 @@ pub fn hoist_loop_unsharing(body: &mut Body) -> bool {
     for (header, local) in hoists {
         changed |= make_own_before(body, &loops, header, Local(local));
     }
+    if changed {
+        body.cfg_changed();
+    }
     changed
 }
 

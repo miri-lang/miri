@@ -42,6 +42,9 @@ pub fn thread_branch_conditions(body: &mut Body) -> bool {
             changed = true;
         }
     }
+    if changed {
+        body.cfg_changed();
+    }
     changed
 }
 

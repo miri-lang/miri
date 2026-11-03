@@ -113,6 +113,9 @@ pub fn version_bounded_loops(body: &mut Body) -> bool {
     for each in &chosen {
         version(body, each, &mut predecessors);
     }
+    if !chosen.is_empty() {
+        body.cfg_changed();
+    }
     !chosen.is_empty()
 }
 

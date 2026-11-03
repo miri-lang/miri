@@ -132,6 +132,7 @@ fn elide_answered_checks(body: &mut Body) -> bool {
         replace_with_move(body, copy);
     }
     clear_newly_unreachable(body, &unreachable_before);
+    body.cfg_changed();
     true
 }
 

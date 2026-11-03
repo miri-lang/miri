@@ -413,6 +413,7 @@ fn assign_after_call(
     });
     let copy_block = BasicBlock(body.basic_blocks.len());
     body.basic_blocks.push(copy);
+    body.cfg_changed();
     if let Some(Terminator {
         kind: TerminatorKind::Call { target, .. },
         ..
