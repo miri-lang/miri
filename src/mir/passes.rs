@@ -16,9 +16,20 @@
 //! start it on a stale group it reads, stamps the groups it records, carries
 //! the ones it preserves to the body's new generation, and leaves every other
 //! group stale once it rewrites the graph.
+//!
+//! The passes that run between lowering and code generation are a list,
+//! [`MIR_PASSES`], and [`PassManager`] runs it. The manager checks the list
+//! before running any of it: a pass that reads a fact group needs an earlier
+//! pass to record it, with no rewrite in between that leaves it stale.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::mir::facts::{BodyFacts, Fact, ProgramFacts, StaleFact};
+use crate::mir::symbol::Symbol;
+use crate::mir::type_facts::DropHookReach;
+use crate::mir::verify::VerificationViolation;
 use crate::mir::Body;
+use crate::type_checker::context::TypeDefinition;
 
 /// A pass run over one body at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,4 +340,253 @@ impl Watch {
         }
         Ok(())
     }
+}
+
+/// A body-at-a-time pass's work.
+pub type BodyRun = fn(&mut Body, &mut BodyFacts);
+
+/// A whole-program pass's work.
+pub type ProgramRun = fn(&mut [(Symbol, Body)], &mut ProgramFacts, &mut PassContext<'_>);
+
+/// What a program pass reads beyond the bodies, and what it reports.
+pub struct PassContext<'a> {
+    pub definitions: &'a HashMap<String, TypeDefinition>,
+    /// Which classes run a drop hook when a value of them is released.
+    pub hooks: DropHookReach<'a>,
+    /// The bodies called through without a MIR call naming them, such as a
+    /// vtable slot's.
+    pub synthesized: HashSet<Symbol>,
+    /// Whether the program's MIR is verified, so a pass reports what it
+    /// finds wrong across bodies.
+    pub verifying: bool,
+    /// What the passes found wrong across bodies, while verifying.
+    pub violations: Vec<(Symbol, VerificationViolation)>,
+}
+
+impl<'a> PassContext<'a> {
+    pub fn new(
+        definitions: &'a HashMap<String, TypeDefinition>,
+        synthesized: HashSet<Symbol>,
+        verifying: bool,
+    ) -> Self {
+        PassContext {
+            definitions,
+            hooks: DropHookReach::new(definitions),
+            synthesized,
+            verifying,
+            violations: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Run {
+    Body(BodyRun),
+    Program(ProgramRun),
+}
+
+/// One entry of a pass list: a pass's declaration and its work.
+#[derive(Clone, Copy)]
+pub struct Step {
+    pub pass: &'static BodyPass,
+    run: Run,
+}
+
+impl Step {
+    /// A pass run over each body on its own.
+    pub const fn body(pass: &'static BodyPass, run: BodyRun) -> Self {
+        Step {
+            pass,
+            run: Run::Body(run),
+        }
+    }
+
+    /// A pass run over every body at once.
+    pub const fn program(pass: &'static BodyPass, run: ProgramRun) -> Self {
+        Step {
+            pass,
+            run: Run::Program(run),
+        }
+    }
+}
+
+/// How a pass list is out of order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PassOrder {
+    /// `pass` reads `fact`, which no earlier pass records.
+    NeverRecorded { pass: &'static str, fact: Fact },
+    /// `pass` reads `fact`, which `rewrite` left stale after it was recorded.
+    StaleAfter {
+        pass: &'static str,
+        fact: Fact,
+        rewrite: &'static str,
+    },
+}
+
+impl std::fmt::Display for PassOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NeverRecorded { pass, fact } => write!(
+                f,
+                "the pass `{pass}` reads the {fact} facts, which no earlier pass records"
+            ),
+            Self::StaleAfter {
+                pass,
+                fact,
+                rewrite,
+            } => write!(
+                f,
+                "the pass `{pass}` reads the {fact} facts, which `{rewrite}` left stale"
+            ),
+        }
+    }
+}
+
+/// Runs a pass list checked to be in order.
+pub struct PassManager<'s> {
+    steps: &'s [Step],
+}
+
+impl<'s> PassManager<'s> {
+    /// A manager for `steps`, refused unless every fact group a pass reads
+    /// was recorded by an earlier pass and no rewrite since left it stale.
+    pub fn new(steps: &'s [Step]) -> Result<Self, PassOrder> {
+        // For each group: `None` before any pass records it, then the pass
+        // that last left it stale, if one did.
+        let mut held: HashMap<Fact, Option<&'static str>> = HashMap::new();
+        for step in steps {
+            let pass = step.pass;
+            for &fact in pass.requires {
+                match held.get(&fact) {
+                    None => {
+                        return Err(PassOrder::NeverRecorded {
+                            pass: pass.name,
+                            fact,
+                        })
+                    }
+                    Some(Some(rewrite)) => {
+                        let rewrite = *rewrite;
+                        return Err(PassOrder::StaleAfter {
+                            pass: pass.name,
+                            fact,
+                            rewrite,
+                        });
+                    }
+                    Some(None) => {}
+                }
+            }
+            for fact in Fact::ALL {
+                if pass.records.contains(&fact) {
+                    held.insert(fact, None);
+                } else if pass.rewrites_cfg && !pass.preserves.contains(&fact) {
+                    if let Some(state) = held.get_mut(&fact) {
+                        *state = Some(pass.name);
+                    }
+                }
+            }
+        }
+        Ok(PassManager { steps })
+    }
+
+    /// Runs every step in order, a body step over each body before the next
+    /// step starts.
+    pub fn run(
+        &self,
+        bodies: &mut [(Symbol, Body)],
+        facts: &mut ProgramFacts,
+        context: &mut PassContext<'_>,
+    ) -> Result<(), PassContract> {
+        if facts.len() != bodies.len() {
+            let (facts, bodies) = (facts.len(), bodies.len());
+            return Err(PassContract::FactsMisaligned { facts, bodies });
+        }
+        for step in self.steps {
+            match step.run {
+                Run::Body(run) => {
+                    for ((_, body), body_facts) in bodies.iter_mut().zip(facts.iter_mut()) {
+                        run_body_pass_with_facts(step.pass, body, body_facts, run)?;
+                    }
+                }
+                Run::Program(run) => {
+                    run_program_pass_with_facts(step.pass, bodies, facts, |bodies, facts| {
+                        run(bodies, facts, context)
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The passes run between lowering and the checks on the MIR the backends
+/// read, in order.
+///
+/// Readbacks come first, before reference counting accounts for the host
+/// arrays they detach. Ownership is decided across the program before any
+/// pass reads it; retains and releases are inserted once, on the bodies as
+/// lowering and the GPU passes left them, then the pairs that cancel are
+/// removed. The rewrites after that see every retain spelled out.
+pub const MIR_PASSES: &[Step] = &[
+    Step::body(&INSERT_READBACKS, |body, _| {
+        crate::mir::residency::insert_readbacks(body)
+    }),
+    Step::body(&COPY_VALUE_ARGUMENTS, |body, _| {
+        crate::mir::value_arguments::copy_value_arguments(body)
+    }),
+    Step::program(&CONFORM_OPTIONAL_OPERANDS, |bodies, _, _| {
+        crate::mir::optional_conformance::conform_optional_operands(bodies)
+    }),
+    Step::program(&DECIDE_OWNED_PARAMETERS, decide_owned_parameters),
+    Step::program(&STAMP_QUIET_CALLS, |bodies, facts, context| {
+        crate::mir::analysis::heap_effects::stamp_quiet_calls(bodies, facts, &context.hooks)
+    }),
+    Step::body(&INSERT_RC, |body, facts| {
+        crate::mir::optimization::insert_rc(body, facts.ownership_mut())
+    }),
+    Step::body(&ELIDE_RC, |body, facts| {
+        crate::mir::optimization::elide_rc(body, facts.ownership())
+    }),
+    Step::body(&ELIDE_UNSHARE_CHECKS, |body, _| {
+        crate::mir::optimization::elide_unshare_checks(body)
+    }),
+    Step::body(&THREAD_BRANCH_CONDITIONS, |body, _| {
+        crate::mir::optimization::thread_branch_conditions(body)
+    }),
+    Step::body(&VERSION_BOUNDED_LOOPS, |body, facts| {
+        crate::mir::optimization::loop_versioning::version_bounded_loops(body, facts.ownership());
+    }),
+    Step::body(&RECORD_STABLE_COLLECTIONS, |body, facts| {
+        let ownership = facts.ownership();
+        crate::mir::optimization::stable_collections::record_stable_collections(body, ownership);
+    }),
+    Step::body(&RECORD_IN_BOUNDS, |body, _| {
+        crate::mir::optimization::in_bounds::record_in_bounds(body);
+    }),
+];
+
+/// Decides which parameters each function takes over, then, while
+/// verifying, checks every call against the decision and the layouts its
+/// arguments cross bodies in.
+fn decide_owned_parameters(
+    bodies: &mut [(Symbol, Body)],
+    facts: &mut ProgramFacts,
+    context: &mut PassContext<'_>,
+) {
+    use crate::mir::verify;
+    let synthesized = &context.synthesized;
+    crate::mir::optimization::owned_params::decide_owned_parameters(
+        bodies,
+        facts,
+        synthesized,
+        &context.hooks,
+    );
+    if !context.verifying {
+        return;
+    }
+    let definitions = context.definitions;
+    let violations = &mut context.violations;
+    violations.extend(verify::verify_owned_argument_modes(bodies, facts));
+    violations.extend(verify::verify_optional_call_layouts(bodies, definitions));
+    violations.extend(verify::verify_value_call_classes(bodies, definitions));
+    violations.extend(verify::verify_optional_slots(bodies, Symbol::link_name));
 }

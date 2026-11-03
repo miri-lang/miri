@@ -24,10 +24,7 @@ use crate::mir;
 use crate::mir::call_graph::direct_callees;
 use crate::mir::facts::{ProgramFacts, StaleFact};
 use crate::mir::lowering::requests::LoweredBody;
-use crate::mir::passes::{
-    self, run_body_pass, run_body_pass_with_facts, run_program_pass, run_program_pass_with_facts,
-    PassContract,
-};
+use crate::mir::passes::{self, run_body_pass, PassContext, PassContract, PassManager};
 use crate::mir::symbol::{Symbol, SymbolTable, TypeInstance};
 use crate::parser::Parser;
 #[cfg(feature = "cranelift")]
@@ -2830,87 +2827,24 @@ impl Pipeline {
         mir::gpu::stamp_kernel_workgroups(&mut lowered, &launches)
             .map_err(|error| CompilerError::Codegen(error.to_string()))?;
 
-        // Read back every gpu-resident binding a host read needs fresh, in every
-        // build. Runs before RC insertion, which accounts for the host arrays the
-        // readbacks detach.
-        let mut facts = ProgramFacts::of(&lowered);
-        for ((_symbol, body), facts) in lowered.iter_mut().zip(facts.iter_mut()) {
-            let readbacks =
-                |body: &mut mir::Body, _: &mut _| mir::residency::insert_readbacks(body);
-            run_body_pass_with_facts(&passes::INSERT_READBACKS, body, facts, readbacks)?;
-        }
-
-        // Hand every call a value held as its bytes from a value local the
-        // call does not also write, whole or at a fixed offset of it, so no
-        // callee reads bytes that change under it.
-        for (_symbol, body) in &mut lowered {
-            let copy = mir::value_arguments::copy_value_arguments;
-            run_body_pass(&passes::COPY_VALUE_ARGUMENTS, body, copy)?;
-        }
-        let conform = mir::optional_conformance::conform_optional_operands;
-        run_program_pass(&passes::CONFORM_OPTIONAL_OPERANDS, &mut lowered, conform)?;
-
         let verify_mode = self.verify_mode();
-        let program_violations = run_program_pass_with_facts(
-            &passes::DECIDE_OWNED_PARAMETERS,
-            &mut lowered,
-            &mut facts,
-            |lowered, facts| {
-                Self::decide_owned_parameters(result, lowered, facts, verify_mode.is_some())
-            },
-        )?;
-        let hooks = mir::type_facts::DropHookReach::new(result.type_checker.type_definitions());
-        let stamp = |lowered: &mut [(Symbol, mir::Body)], facts: &mut ProgramFacts| {
-            mir::analysis::heap_effects::stamp_quiet_calls(lowered, facts, &hooks)
-        };
-        run_program_pass_with_facts(&passes::STAMP_QUIET_CALLS, &mut lowered, &mut facts, stamp)?;
+        let definitions = result.type_checker.type_definitions();
+        // A vtable slot is called through without a MIR call naming its body,
+        // so a body some slot points at lends every parameter too.
+        let mut synthesized = mir::lowering::dispatch_symbols::synthesized_references(definitions);
+        synthesized.extend(result.vtable_fills.slot_symbols().cloned());
+        let mut context = PassContext::new(definitions, synthesized, verify_mode.is_some());
+        let mut facts = ProgramFacts::of(&lowered);
+        let manager = PassManager::new(passes::MIR_PASSES)
+            .map_err(|order| CompilerError::Internal(order.to_string()))?;
+        manager.run(&mut lowered, &mut facts, &mut context)?;
+        let program_violations = context.violations;
 
-        let mut bodies: Vec<(String, mir::Body)> = lowered
+        let bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()
             .map(|(symbol, body)| (gpu_names.emitted_name(&symbol, &body), body))
             .collect();
         result.device_helpers = gpu_names.into_helpers();
-
-        // Insert Perceus RC operations on all function bodies, exactly once,
-        // on the bodies as lowering and the GPU passes above left them, then
-        // elide redundant IncRef/DecRef pairs that are provably net-zero.
-        for ((_name, body), facts) in bodies.iter_mut().zip(facts.iter_mut()) {
-            run_body_pass_with_facts(&passes::INSERT_RC, body, facts, |body, facts| {
-                mir::optimization::insert_rc(body, facts.ownership_mut())
-            })?;
-            run_body_pass_with_facts(&passes::ELIDE_RC, body, facts, |body, facts| {
-                mir::optimization::elide_rc(body, facts.ownership())
-            })?;
-        }
-
-        // Drop the uniqueness checks an earlier write through the same path
-        // already answered, on the bodies with every retain explicit; thread
-        // branch conditions; copy each loop a guard on its bound proves in
-        // bounds; then record each collection a loop leaves unchanged.
-        for ((_name, body), facts) in bodies.iter_mut().zip(facts.iter_mut()) {
-            use mir::optimization as opt;
-            run_body_pass_with_facts(&passes::ELIDE_UNSHARE_CHECKS, body, facts, |body, _| {
-                opt::elide_unshare_checks(body)
-            })?;
-            run_body_pass_with_facts(&passes::THREAD_BRANCH_CONDITIONS, body, facts, |body, _| {
-                opt::thread_branch_conditions(body)
-            })?;
-            run_body_pass_with_facts(
-                &passes::VERSION_BOUNDED_LOOPS,
-                body,
-                facts,
-                |body, facts| opt::loop_versioning::version_bounded_loops(body, facts.ownership()),
-            )?;
-            let stable = &passes::RECORD_STABLE_COLLECTIONS;
-            run_body_pass_with_facts(stable, body, facts, |body, facts| {
-                opt::stable_collections::record_stable_collections(body, facts.ownership())
-            })?;
-            run_body_pass(
-                &passes::RECORD_IN_BOUNDS,
-                body,
-                opt::in_bounds::record_in_bounds,
-            )?;
-        }
 
         // Check RC invariants, cross-residency readback fencing and optional
         // layouts after Perceus, and that every call passes an owned argument
@@ -2939,52 +2873,6 @@ impl Pipeline {
         self.verify_mir
             .then(|| "error".to_string())
             .or_else(|| std::env::var("MIRI_VERIFY_MIR").ok())
-    }
-
-    /// Decide which parameters each function takes over from its callers, and
-    /// mark the calls passing them, before Perceus funds those arguments.
-    ///
-    /// When `is_verifying`, also check across the program that every call
-    /// passes an owned argument exactly where its callee takes one over, and
-    /// hands each optional argument and receives each optional result at the
-    /// layout the callee declares, and holds each argument and result as
-    /// bytes exactly where the callee does; the findings are returned to join
-    /// the per-body checks run after Perceus.
-    fn decide_owned_parameters(
-        result: &PipelineResult,
-        lowered: &mut [(Symbol, mir::Body)],
-        facts: &mut ProgramFacts,
-        is_verifying: bool,
-    ) -> Vec<(Symbol, mir::verify::VerificationViolation)> {
-        let type_definitions = result.type_checker.type_definitions();
-        // A vtable slot is called through without a MIR call naming its body,
-        // so a body some slot points at lends every parameter too.
-        let mut synthesized =
-            mir::lowering::dispatch_symbols::synthesized_references(type_definitions);
-        synthesized.extend(result.vtable_fills.slot_symbols().cloned());
-        mir::optimization::owned_params::decide_owned_parameters(
-            lowered,
-            facts,
-            &synthesized,
-            &mir::type_facts::DropHookReach::new(type_definitions),
-        );
-        if !is_verifying {
-            return Vec::new();
-        }
-        let mut violations = mir::verify::verify_owned_argument_modes(lowered, facts);
-        violations.extend(mir::verify::verify_optional_call_layouts(
-            lowered,
-            type_definitions,
-        ));
-        violations.extend(mir::verify::verify_value_call_classes(
-            lowered,
-            type_definitions,
-        ));
-        violations.extend(mir::verify::verify_optional_slots(
-            lowered,
-            Symbol::link_name,
-        ));
-        violations
     }
 
     /// Emit the generic-class methods and trait defaults the lowered bodies

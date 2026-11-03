@@ -12,10 +12,14 @@ use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::facts::{BodyFacts, Fact, ProgramFacts, StaleFact};
 use miri::mir::passes::{
-    run_body_pass, run_body_pass_with_facts, run_program_pass_with_facts, BodyPass, PassContract,
+    run_body_pass, run_body_pass_with_facts, run_program_pass_with_facts, BodyPass, PassContext,
+    PassContract, PassManager, PassOrder, Step, MIR_PASSES,
 };
+use miri::mir::symbol::Symbol;
 use miri::mir::Local;
 use miri::mir::{Body, ExecutionModel, LocalDecl, Terminator, TerminatorKind};
+use miri::type_checker::ModuleId;
+use std::collections::{HashMap, HashSet};
 
 /// `fn f()`: one block that returns.
 fn returning_body() -> Body {
@@ -236,4 +240,115 @@ fn program_facts_that_do_not_describe_every_body_are_refused() {
             bodies: 2
         })
     );
+}
+
+const READS: BodyPass = BodyPass {
+    name: "reads",
+    rewrites_cfg: false,
+    requires: &[Fact::Ownership],
+    records: &[],
+    preserves: &[],
+};
+const RECORDS: BodyPass = BodyPass {
+    name: "records",
+    rewrites_cfg: false,
+    requires: &[],
+    records: &[Fact::Ownership],
+    preserves: &[],
+};
+const REWRITES: BodyPass = BodyPass {
+    name: "rewrites",
+    rewrites_cfg: true,
+    requires: &[],
+    records: &[],
+    preserves: &[],
+};
+const REWRITES_KEEPING: BodyPass = BodyPass {
+    name: "rewrites_keeping",
+    rewrites_cfg: true,
+    requires: &[],
+    records: &[],
+    preserves: &[Fact::Ownership],
+};
+
+fn nothing(_: &mut Body, _: &mut BodyFacts) {}
+
+fn order_of(steps: &[Step]) -> Result<(), PassOrder> {
+    PassManager::new(steps).map(|_| ())
+}
+
+#[test]
+fn the_compilers_pass_list_is_in_order() {
+    assert_eq!(order_of(MIR_PASSES), Ok(()));
+}
+
+#[test]
+fn a_list_reading_a_fact_no_earlier_pass_records_is_refused() {
+    let steps = [Step::body(&READS, nothing), Step::body(&RECORDS, nothing)];
+    assert_eq!(
+        order_of(&steps),
+        Err(PassOrder::NeverRecorded {
+            pass: "reads",
+            fact: Fact::Ownership
+        })
+    );
+}
+
+#[test]
+fn a_list_reading_a_fact_a_rewrite_left_stale_is_refused() {
+    let steps = [
+        Step::body(&RECORDS, nothing),
+        Step::body(&REWRITES, nothing),
+        Step::body(&READS, nothing),
+    ];
+    assert_eq!(
+        order_of(&steps),
+        Err(PassOrder::StaleAfter {
+            pass: "reads",
+            fact: Fact::Ownership,
+            rewrite: "rewrites"
+        })
+    );
+}
+
+#[test]
+fn a_rewrite_that_preserves_a_fact_keeps_the_list_in_order() {
+    let steps = [
+        Step::body(&RECORDS, nothing),
+        Step::body(&REWRITES_KEEPING, nothing),
+        Step::body(&READS, nothing),
+    ];
+    assert_eq!(order_of(&steps), Ok(()));
+}
+
+#[test]
+fn the_manager_runs_each_step_over_every_body_and_settles_its_facts() {
+    let steps = [
+        Step::body(&RECORDS, nothing),
+        Step::body(&REWRITES, rewrite),
+    ];
+    let Ok(manager) = PassManager::new(&steps) else {
+        panic!("the list is in order");
+    };
+    let mut bodies: Vec<(Symbol, Body)> = vec![
+        (
+            Symbol::declared_function(&ModuleId::Program, "f"),
+            returning_body(),
+        ),
+        (
+            Symbol::declared_function(&ModuleId::Program, "g"),
+            returning_body(),
+        ),
+    ];
+    let mut facts = ProgramFacts::of(&bodies);
+    let definitions = HashMap::new();
+    let mut context = PassContext::new(&definitions, HashSet::new(), false);
+    assert_eq!(manager.run(&mut bodies, &mut facts, &mut context), Ok(()));
+    for ((_, body), facts) in bodies.iter().zip(facts.iter()) {
+        assert_eq!(body.basic_blocks.len(), 2, "every body was rewritten");
+        assert!(
+            facts.check(Fact::Ownership, body).is_err(),
+            "and its facts went stale"
+        );
+    }
 }
