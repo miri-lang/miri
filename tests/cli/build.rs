@@ -1016,6 +1016,11 @@ fn test_a_profile_build_without_the_frame_pointer_runtime_is_refused() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let bin_dir = tempfile::tempdir().unwrap();
     let compiler = bin_dir.path().join("miri");
+    // TODO: on Linux, running the copy can fail with "Text file busy": a child
+    // another test thread forks while the copy is open for writing inherits
+    // that descriptor until it execs. Spawning the copy needs a bounded retry
+    // on `ExecutableFileBusy`, shared by every test that copies and runs a
+    // binary.
     std::fs::copy(assert_cmd::cargo_bin!("miri"), &compiler).unwrap();
     let source = create_test_file(HASH_COMBINE);
     let build = |flag: &str| {
