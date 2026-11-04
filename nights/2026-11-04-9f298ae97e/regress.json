@@ -1,0 +1,21 @@
+{
+ "run_id": "20261104T124314Z",
+ "suspect": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.105004310213877,
+   "baseline": 1.2029704949891262,
+   "tonight": 1.3292875820231054
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0928006092861373,
+   "baseline": 1.2026039638244819,
+   "tonight": 1.3142063443973175
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
