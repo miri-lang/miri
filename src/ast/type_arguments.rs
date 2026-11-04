@@ -263,15 +263,18 @@ pub fn value_argument(value: i128) -> TypeArgument {
     )
 }
 
-// TODO: the slots this searches only ever hold a type, yet are typed as a
-// `TypeArgument` that may hold a value, so the state it finds can be built and
-// `Body::validate` has to refuse it; typing those slots as types would make it
-// unrepresentable and this search unnecessary.
-/// The first argument within `kind` written where a type is required — a
-/// collection's element, a map's key or value, a tuple's slot, a result's or
-/// a future's payload — that names no type — a value where a type belongs — searched through every type
-/// argument `kind` holds. A value generic's own arguments may name values, so
-/// only the built-in collections' positions are required to be types.
+/// The first argument within `kind` that holds a value where a type is
+/// required: a collection's element, a map's key or value, a tuple's slot, or
+/// a result's or a future's payload. A value generic's own arguments may name
+/// values, so only the built-in collections' positions are required to be
+/// types.
+///
+/// This search is how the rule is enforced, not a stopgap. After parsing, a
+/// built-in collection is spelled as a class, `Custom("List", [T])`, and a
+/// class's argument list must hold types and values side by side
+/// (`Buf<T, Size>`), so the representation cannot make a value in a
+/// collection's element slot unbuildable. `Body::validate` refuses what this
+/// finds.
 pub fn unresolved_type_argument(kind: &TypeKind) -> Option<&TypeArgument> {
     let required: Vec<&TypeArgument> = match kind {
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Array(element, _) => {
