@@ -80,7 +80,7 @@ impl TypeChecker {
             self.modules
                 .qualified_type_names
                 .insert(expr_id, identity.to_string());
-            self.modules.qualified_name_recorded = true;
+            self.modules.spelling_recorded = true;
         }
     }
 
@@ -144,12 +144,32 @@ impl TypeChecker {
 
     /// The type the type expression `expr` writes, with each name in it that
     /// checking resolved to a type a module keeps private spelled as that
-    /// type's identity; `None` when it names no such type.
+    /// type's identity, and each value argument spelled as the value it
+    /// folded to; `None` when it needs neither.
     ///
     /// A written type is its module's own spelling, and the stages after
-    /// checking read it with no module to resolve its names in.
-    pub fn qualified_written_type(&self, expr: &Expression) -> Option<&Type> {
-        self.modules.qualified_written_types.get(&expr.id)
+    /// checking read it with no module to resolve its names in and no
+    /// constants to fold.
+    pub fn written_type_spelling(&self, expr: &Expression) -> Option<&Type> {
+        self.modules.written_type_spellings.get(&expr.id)
+    }
+
+    /// Records that the value argument `written` resolved to `resolved`, so
+    /// the written type enclosing it is spelled with `resolved` for the
+    /// stages after checking. Nothing is recorded when the two agree.
+    pub(crate) fn record_folded_value_argument(
+        &mut self,
+        written: &TypeArgument,
+        resolved: &TypeArgument,
+    ) {
+        if written.id == 0 || written == resolved {
+            return;
+        }
+        let spelled = crate::ast::type_arguments::rewritten(written, resolved.node.clone());
+        self.modules
+            .folded_value_arguments
+            .insert(written.id, spelled);
+        self.modules.spelling_recorded = true;
     }
 
     /// The identity a callee's declared signature resolved `expr` to in the
@@ -170,26 +190,25 @@ impl TypeChecker {
 
     /// Remembers, for the type expression `expr` whose resolution `resolve`
     /// performs, the type it writes with each name that resolved to a type a
-    /// module keeps private spelled as that type's identity. Only a type that
-    /// names one is remembered, so the stages after checking pay one lookup for
+    /// module keeps private spelled as that type's identity and each value
+    /// argument that folded spelled as its value. Only a type that needs one
+    /// of those is remembered, so the stages after checking pay one lookup for
     /// every other.
     pub(crate) fn resolving_written_type<T>(
         &mut self,
         expr: &Expression,
         resolve: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        let outer = std::mem::replace(&mut self.modules.qualified_name_recorded, false);
+        let outer = std::mem::replace(&mut self.modules.spelling_recorded, false);
         let resolved = resolve(self);
-        let recorded = self.modules.qualified_name_recorded;
+        let recorded = self.modules.spelling_recorded;
         if recorded && expr.id != 0 {
             if let ExpressionKind::Type(written, _) = &expr.node {
-                let qualified = self.qualified_type(written, expr.id);
-                self.modules
-                    .qualified_written_types
-                    .insert(expr.id, qualified);
+                let spelled = self.qualified_type(written, expr.id);
+                self.modules.written_type_spellings.insert(expr.id, spelled);
             }
         }
-        self.modules.qualified_name_recorded = outer || recorded;
+        self.modules.spelling_recorded = outer || recorded;
         resolved
     }
 
@@ -314,9 +333,12 @@ impl TypeChecker {
             .collect()
     }
 
-    /// `arg` with the names the type it names writes qualified; a value as it
-    /// is.
+    /// `arg` with the names the type it names writes qualified; a value as
+    /// the value it folded to, when it folded.
     fn qualified_argument(&self, arg: &TypeArgument) -> TypeArgument {
+        if let Some(folded) = self.modules.folded_value_arguments.get(&arg.id) {
+            return folded.clone();
+        }
         let mut qualified = arg.clone();
         if let TypeArgKind::Type(written, _) = &mut qualified.node {
             **written = self.qualified_type(written, arg.id);

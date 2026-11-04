@@ -2036,7 +2036,7 @@ impl TypeChecker {
     pub(crate) fn extract_type_from_expression(&self, expr: &Expression) -> Result<Type, String> {
         match &expr.node {
             ExpressionKind::Type(t, is_nullable) => {
-                let written = self.qualified_written_type(expr).unwrap_or(t);
+                let written = self.written_type_spelling(expr).unwrap_or(t);
                 if *is_nullable {
                     Ok(make_type(TypeKind::Option(Box::new(written.clone()))))
                 } else {
@@ -2320,17 +2320,17 @@ impl TypeChecker {
             args_vec
                 .iter()
                 .map(|arg| match &arg.node {
-                    // TODO: only an integer is accepted as a value argument
-                    // in a written type. A constant (`Buf<T, K>`, which parses
-                    // as a type) or arithmetic (`Buf<T, 1 + 1>`) folds here,
-                    // but MIR lowering reads the annotation as written, so the
-                    // local is declared at an instantiation nothing builds.
-                    // MIR needs to read the folded type this checker records.
-                    TypeArgKind::Value(ValueArg::Int(_) | ValueArg::OutOfRange { .. }) => {
-                        self.value_argument(name, arg, context)
+                    // A bare name parses as a type; one naming an integer
+                    // constant is the value it names. The value an argument
+                    // resolves to is recorded, so the stages after checking
+                    // read the written type at the instantiation it names.
+                    TypeArgKind::Value(_) => self.recorded_value_argument(name, arg, context),
+                    TypeArgKind::Type(..)
+                        if Self::try_eval_const_argument(arg, Some(context)).is_some() =>
+                    {
+                        self.recorded_value_argument(name, arg, context)
                     }
-                    TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..))
-                    | TypeArgKind::Type(..) => {
+                    TypeArgKind::Type(..) => {
                         let resolved_type = self.resolve_type_argument(arg, context);
                         self.create_type_argument(resolved_type)
                     }
@@ -2339,6 +2339,22 @@ impl TypeChecker {
         });
 
         self.resolve_written_type_name(name, resolved_args, expr, context)
+    }
+
+    /// The value argument `arg` of the written type `class`, resolved as
+    /// [`Self::value_argument`] resolves it and recorded for the written
+    /// type's spelling.
+    fn recorded_value_argument(
+        &mut self,
+        class: &str,
+        arg: &TypeArgument,
+        context: &Context,
+    ) -> TypeArgument {
+        let resolved = self.value_argument(class, arg, context);
+        if !matches!(&resolved.node, TypeArgKind::Type(..)) {
+            self.record_folded_value_argument(arg, &resolved);
+        }
+        resolved
     }
 
     /// Resolves the type written as `name`, at `resolved_args`, to its

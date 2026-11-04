@@ -296,6 +296,86 @@ fn main()
     );
 }
 
+/// A value argument in a type annotation written as a constant or as
+/// arithmetic names the instantiation it folds to, the one a constructor call
+/// of that value builds.
+#[test]
+fn test_a_constant_or_arithmetic_value_argument_in_a_type_annotation_names_its_folded_instantiation(
+) {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+const K = 2
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let a Buf<String, K> = Buf<String, 2>("a" + "b")
+    let b Buf<String, 1 + 1> = Buf<String, 2>("c" + "d")
+    let c Buf<String, K * 3 / 2> = Buf<String, 3>("e" + "f")
+    println(a.v + b.v + c.v)
+"#,
+        "abcdef",
+    );
+}
+
+/// In a generic body, an annotation's value argument written over the body's
+/// own value parameter names the instantiation that parameter is bound to.
+#[test]
+fn test_a_value_argument_in_a_generic_bodys_annotation_follows_its_parameter() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+const K = 1
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+class Pair<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+    fn grown() T
+        let b Buf<T, Size + K> = Buf<T, Size + 1>(self.v)
+        return b.v
+
+fn main()
+    let p = Pair<String, 2>("a" + "b")
+    println(p.grown())
+"#,
+        "ab",
+    );
+}
+
+/// A value argument in a type annotation that is not a compile-time constant
+/// is refused where it is written.
+#[test]
+fn test_a_non_constant_value_argument_in_a_type_annotation_is_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    var n = 1
+    let b Buf<String, n + 1> = Buf<String, 2>("a" + "b")
+    println(b.v)
+"#,
+        "MER_TYP_076",
+    );
+}
+
 /// An annotation naming a different value argument than the value it is
 /// given is a mismatch, not a coercion.
 #[test]

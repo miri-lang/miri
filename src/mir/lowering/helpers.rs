@@ -69,7 +69,7 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     // type-checker cache by id collides with any other id=0 expression that
     // happens to have been stored last, so we trust the inner type instead.
     if let ExpressionKind::Type(t, is_nullable) = &expr.node {
-        let written = tc.qualified_written_type(expr).unwrap_or(t).clone();
+        let written = tc.written_type_spelling(expr).unwrap_or(t).clone();
         if *is_nullable {
             return Type::new(TypeKind::Option(Box::new(written)), expr.span);
         }
