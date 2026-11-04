@@ -112,7 +112,20 @@ fn main()
     let t = (1, 2, 3)
     let x = t[0]
 "#,
-        &["// t", "// x", "_1[_3]"],
+        &["// t", "// x", "_1.0"],
+    );
+}
+
+#[test]
+fn test_tuple_index_by_a_value_reads_through_an_index_projection() {
+    mir_snapshot_contains_test(
+        r#"
+fn main()
+    let t = (1, 2, 3)
+    var i = 1
+    let x = t[i]
+"#,
+        &["// t", "// i", "// x", "_1[_2]"],
     );
 }
 

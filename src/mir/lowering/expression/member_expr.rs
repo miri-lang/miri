@@ -44,6 +44,30 @@ pub(super) fn extract_integer_index(val: &crate::ast::literal::IntegerLiteral) -
     }
 }
 
+/// Lower the read of element `idx` of the tuple `obj_operand` holds, a
+/// position fixed at compile time: `t.1` and `t[1]` alike.
+///
+/// The element is reached by a `Field` projection, which every later stage
+/// types by that position alone. An `Index` projection would claim the tuple
+/// is homogeneous and type the read by its first element, so a counted
+/// element behind a scalar one would go unretained, and an element of a tuple
+/// whose elements differ in width would be read at the wrong offset.
+pub(super) fn lower_tuple_element(
+    ctx: &mut LoweringContext,
+    obj_operand: Operand,
+    obj: &Expression,
+    obj_watermark: usize,
+    idx: usize,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let obj_place = ensure_place(ctx, obj_operand, obj.span);
+    let base = obj_place.local;
+    let result = lower_tuple_field_access(ctx, obj_place, idx, expr, dest)?;
+    release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
+    Ok(result)
+}
+
 /// Lower a field access on a tuple type.
 fn lower_tuple_field_access(
     ctx: &mut LoweringContext,
@@ -505,11 +529,7 @@ pub(crate) fn lower_member_expr(
     if let TypeKind::Tuple(_) = &obj_ty.kind {
         if let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(val)) = &prop.node {
             let idx = extract_integer_index(val);
-            let obj_place = ensure_place(ctx, obj_operand, obj.span);
-            let base = obj_place.local;
-            let result = lower_tuple_field_access(ctx, obj_place, idx, expr, dest)?;
-            release_field_access_base(ctx, base, obj_watermark, &result, expr.span);
-            return Ok(result);
+            return lower_tuple_element(ctx, obj_operand, obj, obj_watermark, idx, expr, dest);
         }
     }
 

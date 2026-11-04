@@ -12,6 +12,7 @@ pub mod errors;
 pub mod functions;
 pub mod indexed_elements;
 pub mod iteration;
+pub mod literal_index;
 pub mod methods;
 pub mod mixed_widths;
 pub mod optional_results;

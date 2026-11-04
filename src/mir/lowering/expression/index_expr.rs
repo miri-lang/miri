@@ -16,6 +16,7 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::conform_lookup_operand;
 use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::expression::member_expr::{extract_integer_index, lower_tuple_element};
 use crate::mir::lowering::helpers::ensure_place;
 
 pub(crate) fn lower_index_expr(
@@ -41,6 +42,13 @@ pub(crate) fn lower_index_expr(
     // array literal). Only drop on Copy — Perceus IncRef's the source temp.
     let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_expression(ctx, obj, None)?;
+
+    // A tuple indexed by an integer literal names one position, as `t.1` does;
+    // only a tuple picked by a value is read through an `Index` projection.
+    if let Some(position) = literal_tuple_position(ctx, obj, index_expr) {
+        return lower_tuple_element(ctx, obj_operand, obj, obj_watermark, position, expr, dest);
+    }
+
     let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
@@ -60,6 +68,26 @@ pub(crate) fn lower_index_expr(
         expr,
         dest,
     )
+}
+
+/// The position `obj[index_expr]` names when `obj` is a tuple and the index is
+/// an integer literal: the one form the type checker accepts for a tuple whose
+/// elements differ, and the one it types by that position's element.
+fn literal_tuple_position(
+    ctx: &LoweringContext,
+    obj: &Expression,
+    index_expr: &Expression,
+) -> Option<usize> {
+    let is_tuple = ctx
+        .type_checker
+        .get_type(obj.id)
+        .is_some_and(|t| matches!(t.kind, TypeKind::Tuple(_)));
+    match &index_expr.node {
+        ExpressionKind::Literal(Literal::Integer(value)) if is_tuple => {
+            Some(extract_integer_index(value))
+        }
+        _ => None,
+    }
 }
 
 /// True when `obj` is a `String` (indexing it lowers to a runtime call).
