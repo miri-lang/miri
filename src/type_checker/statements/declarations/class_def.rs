@@ -1639,30 +1639,29 @@ impl TypeChecker {
 
     /// Find the first generic parameter name referenced in a resolved type
     fn find_generic_in_resolved_type(&self, ty: &Type, generic_names: &[&str]) -> Option<String> {
-        match &ty.kind {
-            TypeKind::Generic(name, _, _) => {
-                if generic_names.contains(&name.as_str()) {
-                    Some(name.clone())
-                } else {
-                    None
-                }
+        if let TypeKind::Generic(name, _, _) = &ty.kind {
+            if generic_names.contains(&name.as_str()) {
+                return Some(name.clone());
             }
-            TypeKind::Custom(_, Some(args)) => {
-                for arg in args {
-                    if let Some(found) = self.find_generic_in_type_expression(arg, generic_names) {
-                        return Some(found);
-                    }
-                }
-                None
-            }
-            _ => None,
         }
+        if let TypeKind::Custom(_, Some(args)) = &ty.kind {
+            let named = args
+                .iter()
+                .find_map(|arg| self.find_generic_in_type_expression(arg, generic_names));
+            if named.is_some() {
+                return named;
+            }
+        }
+        // A parameter nested in a type argument (`List<T>`, `T?`) is as
+        // unbound in a static method as a bare one.
+        let (components, wrapped) = crate::type_checker::type_identities::type_components(&ty.kind);
+        components
+            .into_iter()
+            .chain(wrapped)
+            .find_map(|component| self.find_generic_in_resolved_type(component, generic_names))
     }
 
     /// Find the first generic parameter name a value argument names.
-    // TODO: a type argument naming a class parameter (the `T` of `List<T>` in
-    // a static method's signature) is not searched, so the static method is
-    // accepted; whether to refuse it there too is an open question.
     fn find_generic_in_type_expression(
         &self,
         expr: &TypeArgument,

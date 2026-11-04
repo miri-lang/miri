@@ -97,6 +97,10 @@ pub fn lower_expression(
             // These should be handled during type checking/resolution.
             // If they reach MIR lowering, they are being used as values incorrectly.
             // Note: A type declaration or generic type expression is not valid as a value expression.
+            // TODO: a static call through an instantiated class (`Box<int>.seven()`)
+            // passes the type checker and reaches here, giving an internal error
+            // instead of either running like `Box.seven()` or being refused where
+            // it is written.
             Err(LoweringError::unsupported_expression(
                 "Type declarations cannot be used as expressions".to_string(),
                 expr.span,

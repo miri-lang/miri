@@ -271,6 +271,66 @@ fn main()
     );
 }
 
+/// A class parameter written inside a type argument has no binding in a
+/// static method any more than a bare one does, wherever the signature
+/// writes it.
+#[test]
+fn test_static_method_naming_class_generic_inside_a_type_argument_is_error() {
+    for signature in [
+        "public static fn empty() List<T>",
+        "public static fn count(items Map<String, T>) int",
+        "public static fn maybe() T?",
+        "public static fn nested() List<List<T>>",
+    ] {
+        assert_compiler_error(
+            &format!(
+                r#"
+use system.collections.list
+use system.collections.map
+
+class Box<T>
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+    {signature}
+        return 0
+
+fn main()
+    println("compiled")
+    "#
+            ),
+            "Static method",
+        );
+    }
+}
+
+/// A static method of a generic class that names none of its parameters is
+/// still accepted, including one writing a type argument of its own.
+#[test]
+fn test_static_method_of_generic_class_naming_no_class_parameter_runs() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Box<T>
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+    public static fn sizes() List<int>
+        return List([1, 2, 3])
+
+fn main()
+    println(f"{Box.sizes().length()}")
+    "#,
+        "3",
+    );
+}
+
 #[test]
 fn test_duplicate_instance_and_static_method_names_is_error() {
     assert_compiler_error(

@@ -342,7 +342,7 @@ impl TypeChecker {
 /// The parts of a type that are types themselves: the types its arguments,
 /// elements and a closure's signature are written as, and the type an
 /// optional, a metatype or a linear type wraps.
-fn type_components(kind: &TypeKind) -> (Vec<&Type>, Option<&Type>) {
+pub(crate) fn type_components(kind: &TypeKind) -> (Vec<&Type>, Option<&Type>) {
     match kind {
         TypeKind::Custom(_, args) => (
             args.iter().flatten().filter_map(argument_type).collect(),
