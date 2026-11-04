@@ -9,6 +9,7 @@
 //! with its payload(s).
 
 use crate::ast::literal::Literal;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -255,7 +256,7 @@ fn emit_option_some_block(
 fn emit_enum_variant_blocks(
     ctx: &mut LoweringContext,
     enum_variants: &std::collections::BTreeMap<String, Vec<Type>>,
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
     generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
     variant_blocks: &[crate::mir::BasicBlock],
     enum_place: &Place,
@@ -323,7 +324,7 @@ pub(super) fn emit_enum_to_string(
     ctx: &mut LoweringContext,
     operand: Operand,
     enum_name: &str,
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
     span: &crate::error::syntax::Span,
 ) -> Result<crate::mir::place::Local, LoweringError> {
     // Watermark: track any temps created during this operation.

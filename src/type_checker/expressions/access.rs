@@ -44,6 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
+use crate::ast::type_arguments::{value_argument, TypeArgKind, TypeArgument};
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME, RESULT_TYPE_NAME, STRING_TYPE_NAME,
     TUPLE_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
@@ -109,7 +110,7 @@ impl TypeChecker {
                 // Ensure range is of integer type
                 if let Some(args) = args {
                     if args.len() == 1 {
-                        let range_inner = self.resolve_type_expression(&args[0], context);
+                        let range_inner = self.resolve_type_argument(&args[0], context);
                         if !matches!(range_inner.kind, TypeKind::Int) {
                             self.report_error(
                                 DiagnosticCode::TypSliceOperation,
@@ -171,7 +172,7 @@ impl TypeChecker {
     fn infer_index_with_range_array(
         &mut self,
         cname: &str,
-        cargs: &Option<Vec<Expression>>,
+        cargs: &Option<Vec<TypeArgument>>,
         index: &Expression,
         span: Span,
         context: &mut Context,
@@ -185,7 +186,7 @@ impl TypeChecker {
             _ => None,
         };
         if let Some(size_expr) = size_expr_opt {
-            let array_size = Self::try_eval_const_int(&size_expr);
+            let array_size = Self::try_eval_const_argument(&size_expr, None);
             self.check_slice_bounds_for_array(array_size, index, span, context);
             if let ExpressionKind::Range(start, end, range_type) = &index.node {
                 let start_val = Self::try_eval_const_int_with_context(start, context);
@@ -198,7 +199,7 @@ impl TypeChecker {
                         RangeExpressionType::Inclusive => e - s + 1,
                         _ => e - s,
                     };
-                    let new_size = crate::ast::factory::int_literal_expression(slice_size);
+                    let new_size = value_argument(slice_size);
                     return make_type(TypeKind::Custom(
                         BuiltinCollectionKind::Array.name().to_string(),
                         Some(vec![inner, new_size]),
@@ -215,24 +216,24 @@ impl TypeChecker {
 
     fn infer_index_with_range_tuple(
         &mut self,
-        elements: &[Expression],
+        elements: &[TypeArgument],
         span: Span,
         context: &mut Context,
     ) -> Type {
         if elements.is_empty() {
             return make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
-                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+                Some(vec![self.create_type_argument(make_type(TypeKind::Void))]),
             ));
         }
         let element_types: Vec<Type> = elements
             .iter()
-            .map(|element| self.resolve_type_expression(element, context))
+            .map(|element| self.resolve_type_argument(element, context))
             .collect();
         if let Some(first) = uniform_element_type(&element_types) {
             make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
-                Some(vec![self.create_type_expression(first.clone())]),
+                Some(vec![self.create_type_argument(first.clone())]),
             ))
         } else {
             self.report_error(
@@ -392,7 +393,7 @@ impl TypeChecker {
     fn infer_index_array_list_tuple(
         &mut self,
         name: &str,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         index: &Expression,
         index_type: &Type,
         span: Span,
@@ -466,11 +467,11 @@ impl TypeChecker {
     fn validate_array_bounds(
         &mut self,
         index: &Expression,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &mut Context,
     ) -> Result<(), Type> {
         let size_expr = args.as_deref().and_then(|a| a.get(1));
-        let size_val = size_expr.and_then(Self::try_eval_const_int);
+        let size_val = size_expr.and_then(|size| Self::try_eval_const_argument(size, None));
 
         if !self.validate_const_index_against_size(index, size_val, context) {
             return Err(make_type(TypeKind::Error));
@@ -487,13 +488,13 @@ impl TypeChecker {
     /// report about it has no source range of its own to render at.
     fn resolve_collection_element_type(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         use_site: Span,
         context: &mut Context,
     ) -> Type {
         let elem_type = if let Some(args) = args {
             if let Some(inner_type_expr) = args.first() {
-                self.resolve_type_expression_at(inner_type_expr, use_site, context)
+                self.resolve_type_argument_at(inner_type_expr, use_site, context)
             } else {
                 if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
                     make_type(TypeKind::Generic(
@@ -529,7 +530,7 @@ impl TypeChecker {
         if let TypeKind::Custom(name, Some(inner_args)) = &elem_type.kind {
             if name == crate::ast::types::ATOMIC_TYPE_NAME && !inner_args.is_empty() {
                 if let Some(inner_expr) = inner_args.first() {
-                    if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
+                    if let TypeArgKind::Type(inner_ty, _) = &inner_expr.node {
                         return Type::new(inner_ty.kind.clone(), elem_type.span);
                     }
                 }
@@ -541,14 +542,14 @@ impl TypeChecker {
 
     fn infer_index_map(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         index: &Expression,
         index_type: &Type,
         context: &mut Context,
     ) -> Type {
         if let Some(args) = args {
             if args.len() >= 2 {
-                let key_type = self.resolve_type_expression(&args[0], context);
+                let key_type = self.resolve_type_argument(&args[0], context);
                 // A number written as the key takes the key type, as it would
                 // stored anywhere else.
                 let index_type = &self
@@ -569,7 +570,7 @@ impl TypeChecker {
                     );
                     return make_type(TypeKind::Error);
                 }
-                return self.resolve_type_expression(&args[1], context);
+                return self.resolve_type_argument(&args[1], context);
             }
         }
         if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("V") {
@@ -589,7 +590,7 @@ impl TypeChecker {
 
     fn infer_index_tuple_hetero(
         &mut self,
-        element_type_exprs: &[Expression],
+        element_type_exprs: &[TypeArgument],
         index: &Expression,
         index_type: &Type,
         span: Span,
@@ -600,7 +601,7 @@ impl TypeChecker {
         } else {
             let resolved_types: Vec<Type> = element_type_exprs
                 .iter()
-                .map(|t| self.resolve_type_expression(t, context))
+                .map(|t| self.resolve_type_argument(t, context))
                 .collect();
             uniform_element_type(&resolved_types).is_some()
         };
@@ -635,12 +636,12 @@ impl TypeChecker {
                 }
             }
 
-            self.resolve_type_expression(&element_type_exprs[0], context)
+            self.resolve_type_argument(&element_type_exprs[0], context)
         } else if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
             let idx = val.to_usize();
 
             if idx < element_type_exprs.len() {
-                self.resolve_type_expression(&element_type_exprs[idx], context)
+                self.resolve_type_argument(&element_type_exprs[idx], context)
             } else {
                 self.report_error(
                     DiagnosticCode::TypIndexOperation,
@@ -741,7 +742,7 @@ impl TypeChecker {
             if let ExpressionKind::Literal(Literal::Integer(val)) = &prop.node {
                 let idx = val.to_usize();
                 if idx < element_types.len() {
-                    return self.resolve_type_expression(&element_types[idx], context);
+                    return self.resolve_type_argument(&element_types[idx], context);
                 } else {
                     self.report_error(
                         DiagnosticCode::TypIndexOperation,
@@ -1008,7 +1009,7 @@ impl TypeChecker {
         type_name: &str,
         prop_name: &str,
         obj_type: &Type,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
         call_arity: Option<usize>,
@@ -1161,7 +1162,7 @@ impl TypeChecker {
         obj_type: &Type,
         span: Span,
         context: &mut Context,
-    ) -> (Option<String>, Option<Vec<Expression>>) {
+    ) -> (Option<String>, Option<Vec<TypeArgument>>) {
         match &obj_type.kind {
             TypeKind::String => (Some(STRING_TYPE_NAME.to_string()), None),
             TypeKind::List(elem) => (
@@ -1210,22 +1211,22 @@ impl TypeChecker {
     /// Extracts member type info from a tuple type.
     fn extract_tuple_member_type(
         &mut self,
-        element_type_exprs: &[Expression],
+        element_type_exprs: &[TypeArgument],
         context: &mut Context,
-    ) -> (Option<String>, Option<Vec<Expression>>) {
+    ) -> (Option<String>, Option<Vec<TypeArgument>>) {
         if element_type_exprs.is_empty() {
             return (None, None);
         }
 
         let resolved_types: Vec<Type> = element_type_exprs
             .iter()
-            .map(|t| self.resolve_type_expression(t, context))
+            .map(|t| self.resolve_type_argument(t, context))
             .collect();
         let Some(first_type) = uniform_element_type(&resolved_types) else {
             return (None, None);
         };
         let [element, length] = tuple_class_arguments(
-            self.create_type_expression(first_type.clone()),
+            self.create_type_argument(first_type.clone()),
             resolved_types.len(),
         );
         // The tuple class's methods are compiled per element type and length
@@ -1248,7 +1249,7 @@ impl TypeChecker {
     fn extract_constrained_generic_member_type(
         &self,
         constraint: &Type,
-    ) -> (Option<String>, Option<Vec<Expression>>) {
+    ) -> (Option<String>, Option<Vec<TypeArgument>>) {
         match &constraint.kind {
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             _ => (None, None),
@@ -1307,7 +1308,7 @@ impl TypeChecker {
 
         let future_void_type = ast_factory::make_type(TypeKind::Custom(
             "Future".to_string(),
-            Some(vec![ast_factory::type_expr_non_null(
+            Some(vec![crate::ast::type_arguments::type_argument(
                 ast_factory::make_type(TypeKind::Void),
             )]),
         ));
@@ -1343,7 +1344,7 @@ impl TypeChecker {
         def: &crate::type_checker::context::StructDefinition,
         type_name: &str,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         _context: &mut Context,
     ) -> Type {
@@ -1365,7 +1366,7 @@ impl TypeChecker {
                         let mut mapping = HashMap::new();
                         for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
                             let arg_type = self
-                                .extract_type_from_expression(arg_expr)
+                                .extract_type_from_argument(arg_expr)
                                 .unwrap_or(make_type(TypeKind::Error));
                             mapping.insert(param.name.clone(), arg_type);
                         }
@@ -1410,7 +1411,7 @@ impl TypeChecker {
         def: &crate::type_checker::context::ClassDefinition,
         name: &str,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
         call_arity: Option<usize>,
@@ -1443,7 +1444,7 @@ impl TypeChecker {
         def: &crate::type_checker::context::ClassDefinition,
         name: &str,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
     ) -> Option<Type> {
@@ -1620,7 +1621,7 @@ impl TypeChecker {
         &mut self,
         search_class_def: &crate::type_checker::context::ClassDefinition,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
     ) -> std::collections::HashMap<String, Type> {
         let mut mapping = std::collections::HashMap::new();
         if let Some(generics) = &search_class_def.generics {
@@ -1666,10 +1667,10 @@ impl TypeChecker {
     /// `Type` that lives in the substitution map. Type arguments come back as
     /// their own `Type`; value arguments (e.g. an integer literal for a
     /// const-size slot) are wrapped in the value-generic marker so that
-    /// `substitute_value_generic_in_expr` can recover the original expression
-    /// later when it rewrites size-position identifiers.
-    fn generic_arg_to_mapping_type(&self, arg_expr: &Expression) -> Type {
-        if let Ok(arg_type) = self.extract_type_from_expression(arg_expr) {
+    /// `substitute_value_generic` can recover the original argument later
+    /// when it rewrites size-position names.
+    fn generic_arg_to_mapping_type(&self, arg_expr: &TypeArgument) -> Type {
+        if let Ok(arg_type) = self.extract_type_from_argument(arg_expr) {
             return arg_type;
         }
         crate::type_checker::generics::value_generic_marker_type(arg_expr.clone())
@@ -1680,7 +1681,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         context: &mut Context,
         span: Span,
         call_arity: Option<usize>,
@@ -1756,7 +1757,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
     ) -> Option<RepairRequest> {
         if prop_name != member_hints::KEY_ACCESSOR {
@@ -1766,7 +1767,7 @@ impl TypeChecker {
         let [key_argument, _] = args.as_slice() else {
             return None;
         };
-        let key_type = self.extract_type_from_expression(key_argument).ok()?;
+        let key_type = self.extract_type_from_argument(key_argument).ok()?;
         let receiver = make_type(TypeKind::Custom(name.to_string(), Some(args.clone())));
         if self.get_iterable_element_type(&receiver, span).kind != key_type.kind {
             return None;
@@ -1833,7 +1834,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
     ) -> Option<Type> {
         let default =
             inherited_trait_default(&self.type_table.global_type_definitions, name, prop_name)?;
@@ -1849,7 +1850,7 @@ impl TypeChecker {
     fn build_receiver_mapping(
         &mut self,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
     ) -> std::collections::HashMap<String, Type> {
         let mut m = std::collections::HashMap::new();
         if let Some(orig_generics) =
@@ -1867,7 +1868,7 @@ impl TypeChecker {
             if let Some(type_args) = type_args {
                 for (gen, arg_expr) in orig_generics.iter().zip(type_args.iter()) {
                     let arg_type = self
-                        .extract_type_from_expression(arg_expr)
+                        .extract_type_from_argument(arg_expr)
                         .unwrap_or(make_type(TypeKind::Error));
                     m.insert(gen.name.clone(), arg_type);
                 }
@@ -1940,7 +1941,7 @@ impl TypeChecker {
         name: &str,
         trait_def: &crate::type_checker::context::TraitDefinition,
         prop_name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
     ) -> Type {
@@ -2006,7 +2007,7 @@ impl TypeChecker {
     fn build_trait_method_mapping(
         &mut self,
         trait_def: &crate::type_checker::context::TraitDefinition,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
     ) -> HashMap<String, Type> {
         let (Some(generics), Some(args)) = (&trait_def.generics, type_args) else {
             return HashMap::new();
@@ -2113,7 +2114,7 @@ impl TypeChecker {
     }
 
     /// Extracts type arguments from a custom type.
-    fn extract_type_args_from_type(&self, obj_type: &Type) -> Option<Vec<crate::ast::Expression>> {
+    fn extract_type_args_from_type(&self, obj_type: &Type) -> Option<Vec<TypeArgument>> {
         if let TypeKind::Custom(_, args) = &obj_type.kind {
             args.clone()
         } else {
@@ -2125,14 +2126,14 @@ impl TypeChecker {
     fn build_enum_method_generic_mapping(
         &mut self,
         enum_def: &crate::type_checker::context::EnumDefinition,
-        type_args: &Option<Vec<crate::ast::Expression>>,
+        type_args: &Option<Vec<crate::ast::TypeArgument>>,
     ) -> HashMap<String, Type> {
         let mut mapping = HashMap::new();
         if let (Some(args), Some(generics)) = (type_args, &enum_def.generics) {
             if generics.len() == args.len() {
                 for (param, arg_expr) in generics.iter().zip(args.iter()) {
                     let arg_type = self
-                        .extract_type_from_expression(arg_expr)
+                        .extract_type_from_argument(arg_expr)
                         .unwrap_or(make_type(TypeKind::Error));
                     mapping.insert(param.name.clone(), arg_type);
                 }
@@ -2414,7 +2415,7 @@ impl TypeChecker {
         name: &str,
         variant_types: &[Type],
         def: &crate::type_checker::context::EnumDefinition,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
     ) -> Type {
         let substituted_variant_types =
             self.substitute_variant_types(variant_types, def, type_args);
@@ -2434,7 +2435,7 @@ impl TypeChecker {
         &mut self,
         variant_types: &[Type],
         def: &crate::type_checker::context::EnumDefinition,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
     ) -> Vec<Type> {
         if let Some(generics) = &def.generics {
             if let Some(args) = type_args {
@@ -2442,7 +2443,7 @@ impl TypeChecker {
                     let mut mapping = HashMap::new();
                     for (param, arg_expr) in generics.iter().zip(args.iter()) {
                         let arg_type = self
-                            .extract_type_from_expression(arg_expr)
+                            .extract_type_from_argument(arg_expr)
                             .unwrap_or(make_type(TypeKind::Error));
                         mapping.insert(param.name.clone(), arg_type);
                     }
@@ -2475,8 +2476,8 @@ impl TypeChecker {
     fn build_variant_generics(
         &self,
         def: &crate::type_checker::context::EnumDefinition,
-        type_args: &Option<Vec<Expression>>,
-    ) -> (Option<Vec<Expression>>, Option<Vec<Expression>>) {
+        type_args: &Option<Vec<TypeArgument>>,
+    ) -> (Option<Vec<Expression>>, Option<Vec<TypeArgument>>) {
         if type_args.is_none() {
             if let Some(generics) = &def.generics {
                 let gen_exprs: Vec<Expression> = generics
@@ -2489,10 +2490,10 @@ impl TypeChecker {
                         ast_factory::generic_type_with_kind(&g.name, constraint_expr, g.kind)
                     })
                     .collect();
-                let ret_args: Vec<Expression> = generics
+                let ret_args: Vec<TypeArgument> = generics
                     .iter()
                     .map(|g| {
-                        self.create_type_expression(make_type(TypeKind::Generic(
+                        self.create_type_argument(make_type(TypeKind::Generic(
                             g.name.clone(),
                             g.constraint.clone().map(Box::new),
                             g.kind,

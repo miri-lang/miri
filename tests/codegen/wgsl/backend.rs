@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
 use miri::ast::types::{Type, TypeKind};
 use miri::codegen::backend::Backend;
@@ -22,8 +21,8 @@ fn dummy_span() -> Span {
 fn f32_array_type() -> Type {
     let span = dummy_span();
     let f32_ty = Type::new(TypeKind::F32, span);
-    let f32_expr = Expression::new(0, ExpressionKind::Type(Box::new(f32_ty), false), span);
-    Type::new(TypeKind::List(Box::new(f32_expr)), span)
+    let f32_arg = miri::ast::type_arguments::type_argument(f32_ty);
+    Type::new(TypeKind::List(Box::new(f32_arg)), span)
 }
 
 /// Construct a minimal MIR body equivalent to:

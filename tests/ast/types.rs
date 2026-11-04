@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::factory::{identifier, int_literal_expression};
+use miri::ast::type_arguments::{type_argument, value_argument, TypeArgument};
 use miri::ast::types::{
     is_vector_component, BuiltinCollectionKind, Type, TypeKind, VECTOR_COMPONENT_TYPE_NAMES,
 };
@@ -11,8 +11,13 @@ fn span() -> Span {
     Span { start: 0, end: 0 }
 }
 
-fn boxed(expr: miri::ast::Expression) -> Box<miri::ast::Expression> {
-    Box::new(expr)
+fn boxed(argument: TypeArgument) -> Box<TypeArgument> {
+    Box::new(argument)
+}
+
+/// A type argument naming the type `name`, as the parser writes one.
+fn named(name: &str) -> TypeArgument {
+    type_argument(Type::new(TypeKind::Custom(name.to_string(), None), span()))
 }
 
 #[test]
@@ -68,20 +73,19 @@ fn test_builtin_collection_name_roundtrip() {
 #[test]
 fn test_as_builtin_collection_canonical_variants() {
     assert_eq!(
-        TypeKind::List(boxed(identifier("T"))).as_builtin_collection(),
+        TypeKind::List(boxed(named("T"))).as_builtin_collection(),
         Some(BuiltinCollectionKind::List)
     );
     assert_eq!(
-        TypeKind::Array(boxed(identifier("T")), boxed(int_literal_expression(4)))
-            .as_builtin_collection(),
+        TypeKind::Array(boxed(named("T")), boxed(value_argument(4))).as_builtin_collection(),
         Some(BuiltinCollectionKind::Array)
     );
     assert_eq!(
-        TypeKind::Map(boxed(identifier("K")), boxed(identifier("V"))).as_builtin_collection(),
+        TypeKind::Map(boxed(named("K")), boxed(named("V"))).as_builtin_collection(),
         Some(BuiltinCollectionKind::Map)
     );
     assert_eq!(
-        TypeKind::Set(boxed(identifier("T"))).as_builtin_collection(),
+        TypeKind::Set(boxed(named("T"))).as_builtin_collection(),
         Some(BuiltinCollectionKind::Set)
     );
 }
@@ -121,14 +125,14 @@ fn test_as_builtin_collection_other_types() {
         None
     );
     assert_eq!(
-        TypeKind::Tuple(vec![identifier("a"), identifier("b")]).as_builtin_collection(),
+        TypeKind::Tuple(vec![named("a"), named("b")]).as_builtin_collection(),
         None
     );
 }
 
 #[test]
 fn test_is_copy_tuple_defaults_to_move() {
-    let t = TypeKind::Tuple(vec![identifier("a"), identifier("b")]);
+    let t = TypeKind::Tuple(vec![named("a"), named("b")]);
     assert!(
         !t.is_copy(),
         "Tuple defaults to Move; element types are not resolved at this layer"
@@ -164,11 +168,11 @@ fn test_is_copy_primitives() {
 
 #[test]
 fn test_is_copy_complex_types_require_move() {
-    let inner_int = || Box::new(identifier("int"));
+    let inner_int = || Box::new(named("int"));
     let pairs: Vec<TypeKind> = vec![
         TypeKind::String,
         TypeKind::List(inner_int()),
-        TypeKind::Array(inner_int(), Box::new(int_literal_expression(4))),
+        TypeKind::Array(inner_int(), Box::new(value_argument(4))),
         TypeKind::Map(inner_int(), inner_int()),
         TypeKind::Set(inner_int()),
         TypeKind::Result(inner_int(), inner_int()),

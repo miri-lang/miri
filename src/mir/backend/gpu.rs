@@ -5,6 +5,7 @@
 //!
 //! This module contains types that are specific to GPU backends (CUDA, Metal, SPIR-V, WebGPU).
 
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::TypeKind;
 use crate::mir::Operand;
 use std::fmt;
@@ -19,8 +20,8 @@ pub use crate::type_checker::GpuBufferInit;
 ///
 /// Folded by the same evaluator the type checker requires such an extent to
 /// satisfy, so a size the checker accepted is the size the backend declares.
-pub fn fixed_array_extent(size: &crate::ast::expression::Expression) -> Option<i128> {
-    crate::type_checker::TypeChecker::try_eval_const_int(size)
+pub fn fixed_array_extent(size: &TypeArgument) -> Option<i128> {
+    crate::type_checker::TypeChecker::try_eval_const_argument(size, None)
 }
 
 /// Largest non-negative value representable as a signed 32-bit GPU index.

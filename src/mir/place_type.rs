@@ -14,8 +14,9 @@
 //! element and key arguments are declared at. This is the one slot-type
 //! authority: every pass and check that asks where a value is going asks it.
 
-use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::type_identity;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, TUPLE_TYPE_NAME};
 use crate::mir::lowering::type_argument;
@@ -208,11 +209,11 @@ impl<'a> PlaceTypes<'a> {
     fn spells_unbound_argument(
         &self,
         params: &[&str],
-        args: &[Expression],
+        args: &[TypeArgument],
         spelling: Spelling,
     ) -> bool {
         args.iter().enumerate().any(|(index, arg)| {
-            let ExpressionKind::Type(ty, _) = &arg.node else {
+            let TypeArgKind::Type(ty, _) = &arg.node else {
                 return false;
             };
             let is_unsettled = params
@@ -455,7 +456,7 @@ fn indexed_element_type(collection: &Type) -> Option<Type> {
 
 /// The element expression of a collection type, or its value for a map;
 /// `None` for every other kind.
-fn collection_element(kind: &TypeKind) -> Option<&Expression> {
+fn collection_element(kind: &TypeKind) -> Option<&TypeArgument> {
     match kind {
         TypeKind::Custom(name, Some(args)) => match BuiltinCollectionKind::from_name(name)? {
             BuiltinCollectionKind::Array
@@ -501,15 +502,8 @@ fn collection_element(kind: &TypeKind) -> Option<&Expression> {
     }
 }
 
-/// The type an element expression of a collection or tuple type denotes: a
-/// written type, or a bare name, which names a type as written.
-fn element_type(element: &Expression) -> Option<Type> {
-    if let ExpressionKind::Identifier(name, _) = &element.node {
-        return Some(Type::new(
-            TypeKind::Custom(name.clone(), None),
-            element.span,
-        ));
-    }
+/// The type an element argument of a collection or tuple type denotes.
+fn element_type(element: &TypeArgument) -> Option<Type> {
     type_argument(element)
 }
 
@@ -688,7 +682,7 @@ fn function_parameters(ty: &Type) -> Option<Vec<Type>> {
     function
         .params
         .iter()
-        .map(|param| type_argument(&param.typ))
+        .map(|param| crate::mir::instantiation::written_component_type(&param.typ))
         .collect()
 }
 
@@ -738,7 +732,7 @@ pub fn element_slot(collection: &Type, role: ElementRole) -> Option<Type> {
 
 /// Which built-in collection `ty` is, and the type arguments it is written
 /// with, in either spelling.
-fn collection_arguments(ty: &Type) -> Option<(BuiltinCollectionKind, Vec<&Expression>)> {
+fn collection_arguments(ty: &Type) -> Option<(BuiltinCollectionKind, Vec<&TypeArgument>)> {
     if let TypeKind::Custom(name, Some(args)) = &ty.kind {
         return Some((
             BuiltinCollectionKind::from_name(name)?,

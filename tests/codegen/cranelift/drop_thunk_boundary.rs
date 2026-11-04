@@ -9,6 +9,7 @@
 //! codegen error naming the instantiation, never as a fallback to the shared
 //! thunk that would leak the managed field.
 
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::backend::Backend;
@@ -68,7 +69,7 @@ fn definitions() -> HashMap<String, TypeDefinition> {
 fn body_releasing_a_box_of_string() -> Body {
     let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
     body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::default()));
-    let string_arg = miri::ast::factory::type_expr_non_null(ty(TypeKind::String));
+    let string_arg = type_argument(ty(TypeKind::String));
     body.new_local(LocalDecl::new(
         ty(TypeKind::Custom("Box".to_string(), Some(vec![string_arg]))),
         Span::default(),
@@ -114,12 +115,14 @@ fn a_release_the_settled_facts_cover_compiles() {
     compile(facts, &body).expect("the facts settled over this body cover its release");
 }
 
-/// A type argument spelled as a name, not a resolved type: what lowering
+/// A value argument still spelled as a name, not folded: what lowering
 /// hands the backend only when it failed to substitute one.
-fn unresolved_argument() -> miri::ast::expression::Expression {
-    miri::ast::expression::Expression::new(
+fn unresolved_argument() -> miri::ast::type_arguments::TypeArgument {
+    miri::ast::node::IdNode::new(
         0,
-        miri::ast::expression::ExpressionKind::Identifier("T".to_string(), None),
+        miri::ast::type_arguments::TypeArgKind::Value(miri::ast::type_arguments::ValueArg::Name(
+            "T".to_string(),
+        )),
         Span::default(),
     )
 }
@@ -143,12 +146,12 @@ fn body_releasing(kind: TypeKind) -> Body {
 /// read is refused: skipping the elements would leak every counted one.
 #[test]
 fn a_release_whose_element_type_is_unresolved_is_refused() {
-    let string = || miri::ast::factory::type_expr_non_null(ty(TypeKind::String));
+    let string = || type_argument(ty(TypeKind::String));
     for kind in [
         TypeKind::List(Box::new(unresolved_argument())),
         TypeKind::Array(
             Box::new(unresolved_argument()),
-            Box::new(miri::ast::factory::type_expr_non_null(ty(TypeKind::Int))),
+            Box::new(type_argument(ty(TypeKind::Int))),
         ),
         TypeKind::Map(Box::new(string()), Box::new(unresolved_argument())),
         TypeKind::Tuple(vec![string(), unresolved_argument()]),

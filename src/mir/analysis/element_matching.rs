@@ -19,7 +19,7 @@
 //! parameter the body leaves open is reported as such, for the call handing
 //! that body a container to answer.
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::{argument_type, TypeArgument};
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
     ORDERING_METHOD_NAME,
@@ -87,14 +87,14 @@ pub fn matched_element(
     | TypeKind::Set(element)
     | TypeKind::Map(element, _) = &container.kind
     {
-        return written_type(element).cloned();
+        return argument_type(element).cloned();
     }
     let TypeKind::Custom(name, args) = &container.kind else {
         return None;
     };
     BuiltinCollectionKind::from_name(name)?;
     match args {
-        Some(args) => args.first().and_then(written_type).cloned(),
+        Some(args) => args.first().and_then(argument_type).cloned(),
         None => {
             let parameter = definitions.get(name)?.generics()?.first()?;
             let kind = TypeKind::Generic(parameter.name.clone(), None, parameter.kind);
@@ -181,8 +181,8 @@ impl Walk<'_, '_> {
         }
     }
 
-    fn visit_written(&mut self, expression: &Expression, depth: usize) {
-        match written_type(expression) {
+    fn visit_written(&mut self, argument: &TypeArgument, depth: usize) {
+        match argument_type(argument) {
             Some(ty) => self.visit(&ty.kind, depth),
             None => self.found.runs_unknown_code = true,
         }
@@ -248,12 +248,4 @@ impl Walk<'_, '_> {
                     .any(|method| class_method_declaration(class, method, definitions).is_some())
             })
     }
-}
-
-/// The type an expression spells, when it spells one.
-fn written_type(expression: &Expression) -> Option<&Type> {
-    let ExpressionKind::Type(ty, _) = &expression.node else {
-        return None;
-    };
-    Some(ty)
 }

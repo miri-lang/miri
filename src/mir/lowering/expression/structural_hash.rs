@@ -22,6 +22,7 @@ use super::structural_equality::{
     emit_corrupt_discriminant_panic, emit_variant_switch, materialize_field, read_discriminant,
     substituted_member_types,
 };
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -204,7 +205,7 @@ fn emit_named_type_hash(
     ctx: &mut LoweringContext,
     span: Span,
     name: &str,
-    args: Option<&[crate::ast::expression::Expression]>,
+    args: Option<&[TypeArgument]>,
     value: Operand,
 ) -> Result<Local, LoweringError> {
     if let Some((owner, method)) =
@@ -246,7 +247,7 @@ fn emit_enum_hash(
     ctx: &mut LoweringContext,
     span: Span,
     enum_name: &str,
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
     value: Operand,
 ) -> Result<Local, LoweringError> {
     let Some(TypeDefinition::Enum(enum_def)) = ctx.type_checker.type_definitions().get(enum_name)
@@ -308,7 +309,7 @@ fn emit_struct_hash(
     ctx: &mut LoweringContext,
     span: Span,
     name: &str,
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
     value: Operand,
 ) -> Result<Local, LoweringError> {
     let Some(TypeDefinition::Struct(struct_def)) = ctx.type_checker.type_definitions().get(name)
@@ -347,7 +348,7 @@ fn emit_tuple_hash(
     ctx: &mut LoweringContext,
     span: Span,
     kind: &TypeKind,
-    elements: &[crate::ast::expression::Expression],
+    elements: &[TypeArgument],
     value: Operand,
 ) -> Result<Local, LoweringError> {
     if ctx.body.value_layout(kind).is_none() {
@@ -356,7 +357,7 @@ fn emit_tuple_hash(
     let element_types: Vec<Type> = elements
         .iter()
         .filter_map(|element| {
-            let crate::ast::expression::ExpressionKind::Type(ty, _) = &element.node else {
+            let crate::ast::type_arguments::TypeArgKind::Type(ty, _) = &element.node else {
                 return None;
             };
             Some(ty.as_ref().clone())

@@ -208,11 +208,15 @@ impl TypeChecker {
             TypeDeclarationKind::None,
         ));
         let t_expr = ast_factory::type_expr_non_null(t_param.clone());
-        let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
+        let void_arg =
+            crate::ast::type_arguments::type_argument(ast_factory::make_type(TypeKind::Void));
 
         let return_type = ast_factory::make_type(TypeKind::Custom(
             "Result".to_string(),
-            Some(vec![t_expr.clone(), void_expr]),
+            Some(vec![
+                crate::ast::type_arguments::type_argument(t_param.clone()),
+                void_arg,
+            ]),
         ));
 
         ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
@@ -237,11 +241,15 @@ impl TypeChecker {
             TypeDeclarationKind::None,
         ));
         let e_expr = ast_factory::type_expr_non_null(e_param.clone());
-        let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
+        let void_arg =
+            crate::ast::type_arguments::type_argument(ast_factory::make_type(TypeKind::Void));
 
         let return_type = ast_factory::make_type(TypeKind::Custom(
             "Result".to_string(),
-            Some(vec![void_expr, e_expr.clone()]),
+            Some(vec![
+                void_arg,
+                crate::ast::type_arguments::type_argument(e_param.clone()),
+            ]),
         ));
 
         ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
@@ -533,7 +541,7 @@ impl TypeChecker {
             let clause_args = self.extends_clause_arguments(context).map(|args| {
                 args.iter()
                     .cloned()
-                    .map(ast_factory::type_expr_non_null)
+                    .map(crate::ast::type_arguments::type_argument)
                     .collect()
             });
             ast_factory::make_type(TypeKind::Custom(base_class.clone(), clause_args))

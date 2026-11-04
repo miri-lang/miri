@@ -26,7 +26,8 @@ use crate::mir::lowering::expression::match_expr::{
     emit_regex_predicate_test, emit_simple_predicate_test,
 };
 use crate::mir::lowering::helpers::{
-    bind_pattern, is_option_some_pattern, literal_to_u128, resolve_type, variant_payload_types,
+    bind_pattern, is_option_some_pattern, literal_to_u128, resolve_argument_type,
+    variant_payload_types,
 };
 
 /// Whether `pattern`, written in a payload position, can fail to match.
@@ -271,7 +272,7 @@ fn bind_testing_tuple_elements(
         }
         let element_ty = element_types
             .get(position)
-            .map(|ty| resolve_type(ctx.type_checker, ty))
+            .map(|ty| resolve_argument_type(ctx.type_checker, ty))
             .ok_or_else(|| unsupported_nesting(span))?;
         let element_local = read_payload(ctx, subject, position, element_ty, span);
         test_payload(ctx, element, element_local, span, fail)?;

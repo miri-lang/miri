@@ -7,6 +7,7 @@
 //! Enum and struct fields are compared recursively, managed types (String, etc.) use
 //! the runtime equality helper, and scalars use primitive `BinOp::Eq`.
 
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind, EQUALS_METHOD_NAME};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -417,7 +418,7 @@ fn emit_named_type_equality(
     ctx: &mut LoweringContext,
     span: Span,
     name: &str,
-    args: Option<&[crate::ast::expression::Expression]>,
+    args: Option<&[TypeArgument]>,
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
@@ -507,7 +508,7 @@ fn emit_enum_or_struct_equality(
     ctx: &mut LoweringContext,
     span: Span,
     name: &str,
-    args: Option<&[crate::ast::expression::Expression]>,
+    args: Option<&[TypeArgument]>,
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
@@ -553,7 +554,7 @@ fn emit_enum_equality(
     ctx: &mut LoweringContext,
     span: Span,
     enum_name: &str,
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
@@ -738,7 +739,7 @@ fn emit_discriminant_agreement(
 /// a bare parameter, which carries no layout and no comparison of its own.
 pub(super) fn substituted_member_types(
     declared_types: &[Type],
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
     generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
 ) -> Vec<Type> {
     let (Some(args), Some(generics)) = (type_args, generics) else {
@@ -935,7 +936,7 @@ fn emit_struct_field_equality(
     lhs_op: Operand,
     rhs_op: Operand,
     is_eq: bool,
-    type_args: Option<&[crate::ast::expression::Expression]>,
+    type_args: Option<&[TypeArgument]>,
 ) -> Result<crate::mir::Local, LoweringError> {
     let Some(crate::type_checker::context::TypeDefinition::Struct(struct_def)) =
         ctx.type_checker.type_definitions().get(name)
@@ -956,11 +957,11 @@ fn emit_struct_field_equality(
 }
 
 /// The types a tuple's elements are written at.
-fn tuple_element_types(elements: &[crate::ast::expression::Expression]) -> Vec<Type> {
+fn tuple_element_types(elements: &[TypeArgument]) -> Vec<Type> {
     elements
         .iter()
         .filter_map(|element| {
-            let crate::ast::expression::ExpressionKind::Type(ty, _) = &element.node else {
+            let crate::ast::type_arguments::TypeArgKind::Type(ty, _) = &element.node else {
                 return None;
             };
             Some(ty.as_ref().clone())

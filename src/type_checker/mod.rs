@@ -279,7 +279,7 @@ pub struct TypeChecker {
     /// A diagnostic left to speak for such a node renders at the file's first
     /// byte — pointing at whatever happens to sit on line 1 instead of at the
     /// expression that needed the type. Set for the length of one such
-    /// resolution by `resolve_type_expression_at`.
+    /// resolution by `resolve_type_argument_at`.
     pub(crate) synthesized_type_use_site: Option<Span>,
     /// Whether the type expression about to be resolved may be a type set.
     ///

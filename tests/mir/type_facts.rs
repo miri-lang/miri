@@ -5,7 +5,7 @@
 //! compiled body holds a value of, closed over what their fields store — not
 //! only the ones whose method bodies were lowered.
 
-use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
@@ -32,7 +32,7 @@ fn parameter(name: &str) -> Type {
 fn instance(name: &str, args: Vec<Type>) -> Type {
     ty(TypeKind::Custom(
         name.to_string(),
-        Some(args.into_iter().map(type_expr_non_null).collect()),
+        Some(args.into_iter().map(type_argument).collect()),
     ))
 }
 
@@ -233,7 +233,7 @@ mod drop_hook_reach {
     //! Whether releasing a value may run a drop hook anywhere inside it.
 
     use super::{generic_class, instance, parameter, string, ty};
-    use miri::ast::factory::type_expr_non_null;
+    use miri::ast::type_arguments::type_argument;
     use miri::ast::types::{Type, TypeKind};
     use miri::ast::MemberVisibility;
     use miri::mir::type_facts::{
@@ -320,8 +320,8 @@ mod drop_hook_reach {
         let definitions = definitions();
         let reach = DropHookReach::new(&definitions);
         let tuple = ty(TypeKind::Tuple(vec![
-            type_expr_non_null(ty(TypeKind::Int)),
-            type_expr_non_null(named("Res")),
+            type_argument(ty(TypeKind::Int)),
+            type_argument(named("Res")),
         ]));
         for held in [
             named("Res"),

@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::statement::BindingResidency;
+use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -102,8 +103,8 @@ impl TypeChecker {
     /// A parameter the body declares agrees only with the same parameter by
     /// name. Anything else is left to the general rule.
     fn argument_parameters_agree(
-        declared: &Expression,
-        inferred: &Expression,
+        declared: &TypeArgument,
+        inferred: &TypeArgument,
         context: &Context,
     ) -> bool {
         let Some(declared_param) = Self::declared_parameter_in_scope(declared, context) else {
@@ -114,7 +115,10 @@ impl TypeChecker {
 
     /// The name of the enclosing body's type parameter a written argument is,
     /// or `None` when it names anything else.
-    fn declared_parameter_in_scope<'e>(arg: &'e Expression, context: &Context) -> Option<&'e str> {
+    fn declared_parameter_in_scope<'e>(
+        arg: &'e TypeArgument,
+        context: &Context,
+    ) -> Option<&'e str> {
         let name = Self::written_parameter_name(arg)?;
         matches!(
             context.resolve_type_definition(name),
@@ -125,8 +129,8 @@ impl TypeChecker {
 
     /// The name of the type parameter a written type argument is, or `None`
     /// when it names something else.
-    fn written_parameter_name(arg: &Expression) -> Option<&str> {
-        let ExpressionKind::Type(ty, _) = &arg.node else {
+    fn written_parameter_name(arg: &TypeArgument) -> Option<&str> {
+        let TypeArgKind::Type(ty, _) = &arg.node else {
             return None;
         };
         let TypeKind::Generic(name, _, _) = &ty.kind else {
@@ -496,7 +500,7 @@ impl TypeChecker {
     pub(crate) fn check_gpu_i32_range_array_expr(
         &mut self,
         expr: &Expression,
-        elem_expr: &Expression,
+        elem_expr: &TypeArgument,
         context: &Context,
     ) {
         let ExpressionKind::Array(elements, _) = &expr.node else {
@@ -708,7 +712,7 @@ impl TypeChecker {
                 if let (TypeKind::List(target_inner), ExpressionKind::List(elements)) =
                     (&declared_type.kind, &init.node)
                 {
-                    if let Ok(target_inner_type) = self.extract_type_from_expression(target_inner) {
+                    if let Ok(target_inner_type) = self.extract_type_from_argument(target_inner) {
                         if self.is_integer(&target_inner_type) {
                             compatible =
                                 self.check_integer_list_literal(elements, &target_inner_type);

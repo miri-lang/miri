@@ -5,7 +5,7 @@
 //! releases, at the instantiation the thunk is emitted for.
 
 use crate::type_checker::utils::type_checker_result;
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, VEC3_TYPE_NAME};
 use miri::error::syntax::Span;
 use miri::mir::type_facts::{
@@ -35,10 +35,10 @@ fn custom(name: &str) -> TypeKind {
     TypeKind::Custom(name.to_string(), None)
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
-    Expression::new(
+fn type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument::new(
         0,
-        ExpressionKind::Type(Box::new(ty(kind)), false),
+        TypeArgKind::Type(Box::new(ty(kind)), false),
         Span::default(),
     )
 }
@@ -314,7 +314,9 @@ fn test_concrete_element_kinds_are_resolved() {
         TypeKind::Function(Box::new(miri::ast::types::FunctionTypeData {
             generics: None,
             params: Vec::new(),
-            return_type: Some(Box::new(type_expr(TypeKind::Void))),
+            return_type: Some(Box::new(miri::ast::factory::type_expr_non_null(ty(
+                TypeKind::Void,
+            )))),
         })),
         TypeKind::Meta(Box::new(ty(TypeKind::Int))),
         TypeKind::Option(Box::new(ty(TypeKind::String))),

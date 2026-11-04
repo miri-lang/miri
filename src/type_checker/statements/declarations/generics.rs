@@ -66,11 +66,11 @@ impl TypeChecker {
         generics: Option<&[Expression]>,
         context: &Context,
     ) -> Type {
-        let type_args: Vec<Expression> = generics
+        let type_args: Vec<TypeArgument> = generics
             .unwrap_or_default()
             .iter()
             .filter_map(|generic| self.generic_parameter_type(generic, context))
-            .map(|param| self.create_type_expression(param))
+            .map(|param| self.create_type_argument(param))
             .collect();
         let type_args = (!type_args.is_empty()).then_some(type_args);
         make_type(TypeKind::Custom(name.to_string(), type_args))

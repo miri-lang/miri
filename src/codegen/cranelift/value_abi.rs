@@ -31,7 +31,7 @@ use crate::codegen::cranelift::value_locals::{
 };
 use crate::error::CodegenError;
 use crate::mir::body::written_back_out_params;
-use crate::mir::instantiation::type_argument;
+use crate::mir::instantiation::written_component_type;
 use crate::mir::type_facts::{ScalarKind, ValueLayout};
 use crate::mir::value_arguments::{argument_place, exposure_of, Exposure};
 use crate::mir::{ArgMode, Body, Local, Operand, Place};
@@ -454,10 +454,14 @@ pub fn function_type_signature(
     let declared = function
         .params
         .iter()
-        .filter_map(|param| type_argument(&param.typ))
+        .filter_map(|param| written_component_type(&param.typ))
         .map(|param_type| passing_of(&param_type, values, ptr_type));
     let params: Vec<Passing> = leading.iter().copied().chain(declared).collect();
-    let result = match function.return_type.as_deref().and_then(type_argument) {
+    let result = match function
+        .return_type
+        .as_deref()
+        .and_then(written_component_type)
+    {
         Some(ret_type) => returning_of(&ret_type, values, ptr_type),
         None => Returning::Nothing,
     };

@@ -454,11 +454,7 @@ fn generic_implementor() -> HashMap<String, TypeDefinition> {
 fn instance_type(args: &[TypeKind]) -> Type {
     let exprs = args
         .iter()
-        .map(|kind| miri::ast::expression::Expression {
-            id: 0,
-            span: span(),
-            node: miri::ast::ExpressionKind::Type(Box::new(Type::new(kind.clone(), span())), false),
-        })
+        .map(|kind| miri::ast::type_arguments::type_argument(Type::new(kind.clone(), span())))
         .collect();
     Type::new(TypeKind::Custom("Impl".to_string(), Some(exprs)), span())
 }

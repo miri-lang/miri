@@ -103,7 +103,7 @@ pub(crate) fn spelled(ty: &crate::ast::types::Type) -> String {
     let TypeKind::Custom(name, Some(arguments)) = &normalized.kind else {
         return normalized.to_string();
     };
-    let arguments: Vec<String> = arguments.iter().map(spelled_argument).collect();
+    let arguments: Vec<String> = arguments.iter().map(spelled_type_argument).collect();
     format!("{name}<{}>", arguments.join(", "))
 }
 
@@ -119,6 +119,22 @@ fn spelled_argument(argument: &crate::ast::Expression) -> String {
         };
     }
     argument.node.to_string()
+}
+
+/// A type argument as a diagnostic spells it: a type through [`spelled`],
+/// with the `?` it was written with, and a value as written.
+fn spelled_type_argument(argument: &crate::ast::TypeArgument) -> String {
+    match &argument.node {
+        crate::ast::type_arguments::TypeArgKind::Type(ty, nullable) => {
+            let written = spelled(ty);
+            if *nullable {
+                format!("{written}?")
+            } else {
+                written
+            }
+        }
+        crate::ast::type_arguments::TypeArgKind::Value(value) => value.to_string(),
+    }
 }
 
 /// A function type as a diagnostic spells it, with each parameter and the

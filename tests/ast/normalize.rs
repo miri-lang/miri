@@ -13,6 +13,7 @@ use miri::ast::normalize::{normalize, normalize_type};
 use miri::ast::pattern::{MatchBranch, Pattern};
 use miri::ast::program::Program;
 use miri::ast::statement::{ClassData, Statement, StatementKind};
+use miri::ast::type_arguments::{type_argument, value_argument, TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 
@@ -24,8 +25,13 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn int_expr() -> Box<miri::ast::Expression> {
-    Box::new(identifier("int"))
+fn int_expr() -> Box<TypeArgument> {
+    Box::new(named("int"))
+}
+
+/// A type argument naming the type `name`, as the parser writes one.
+fn named(name: &str) -> TypeArgument {
+    type_argument(Type::new(TypeKind::Custom(name.to_string(), None), span()))
 }
 
 fn assert_custom(t: &Type, name: &str) {
@@ -44,10 +50,7 @@ fn test_normalize_list_to_custom() {
 
 #[test]
 fn test_normalize_array_to_custom() {
-    let mut t = ty(TypeKind::Array(
-        int_expr(),
-        Box::new(int_literal_expression(4)),
-    ));
+    let mut t = ty(TypeKind::Array(int_expr(), Box::new(value_argument(4))));
     normalize_type(&mut t);
     assert_custom(&t, "Array");
 }
@@ -97,7 +100,7 @@ fn test_normalize_linear_recurses_into_inner() {
 fn test_normalize_custom_with_args_preserved() {
     let mut t = ty(TypeKind::Custom(
         "MyType".to_string(),
-        Some(vec![identifier("T")]),
+        Some(vec![named("T")]),
     ));
     normalize_type(&mut t);
     match &t.kind {
@@ -401,7 +404,7 @@ fn test_normalize_walks_if_then_branch() {
 #[test]
 fn test_normalize_handles_nested_collection_in_set_inside_option() {
     let mut t = ty(TypeKind::Option(Box::new(ty(TypeKind::Set(Box::new(
-        type_expr_non_null(type_list(type_string())),
+        type_argument(type_list(type_string())),
     ))))));
     normalize_type(&mut t);
     let TypeKind::Option(inner) = &t.kind else {
@@ -411,8 +414,8 @@ fn test_normalize_handles_nested_collection_in_set_inside_option() {
         panic!("expected Custom Set");
     };
     assert_eq!(set_name, "Set");
-    let ExpressionKind::Type(list_ty, _) = &args[0].node else {
-        panic!("expected Type expression");
+    let TypeArgKind::Type(list_ty, _) = &args[0].node else {
+        panic!("expected a type argument");
     };
     let TypeKind::Custom(list_name, _) = &list_ty.kind else {
         panic!("expected Custom List");

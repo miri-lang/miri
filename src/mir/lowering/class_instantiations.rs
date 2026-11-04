@@ -24,7 +24,7 @@ use super::instantiation_limits::{
     invalid_value_argument, mentions_open_parameter, polymorphic_recursion,
     unnameable_type_argument, value_growth_note, ExceededLimit, Growth,
 };
-use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -418,7 +418,7 @@ fn method_named(
 
 /// The type an argument of a generic-class reference stands for in a
 /// diagnostic: its type or value, or the expression it still is.
-fn spelled_argument(arg: &Expression) -> Type {
+fn spelled_argument(arg: &TypeArgument) -> Type {
     instantiation_argument(arg)
         .unwrap_or_else(|| crate::type_checker::generics::value_generic_marker_type(arg.clone()))
 }
@@ -511,7 +511,7 @@ impl LoweringContext<'_> {
         &self,
         class: &str,
         args: &[Type],
-        (position, arg): (usize, &Expression),
+        (position, arg): (usize, &TypeArgument),
         span: Span,
     ) -> Result<(), LoweringError> {
         let Some(cause) =
@@ -532,9 +532,11 @@ impl LoweringContext<'_> {
     /// Whether the registry holds an instance of `class` that builds the one
     /// this body runs at through `arg` at `position`: the body is then a step
     /// of a chain `arg` grows, not the first instance written.
-    fn is_built_by_itself(&self, class: &str, arg: &Expression, position: usize) -> bool {
-        let value_of =
-            |ty: &Type| extract_value_generic(ty).and_then(TypeChecker::try_eval_const_int);
+    fn is_built_by_itself(&self, class: &str, arg: &TypeArgument, position: usize) -> bool {
+        let value_of = |ty: &Type| {
+            extract_value_generic(ty)
+                .and_then(|value| TypeChecker::try_eval_const_argument(value, None))
+        };
         let own = self_instance(&self.body, class);
         let Some(own_value) = own
             .as_ref()
@@ -555,7 +557,7 @@ impl LoweringContext<'_> {
                 .zip(earlier.iter().cloned())
                 .collect();
             fold_value_generic_arithmetic(arg, &mapping)
-                .and_then(|folded| TypeChecker::try_eval_const_int(&folded))
+                .and_then(|folded| TypeChecker::try_eval_const_argument(&folded, None))
                 == Some(own_value)
         })
     }

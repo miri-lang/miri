@@ -13,6 +13,7 @@
 //! may share the body: two types alike here are compiled alike.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::argument_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::option_layout::{LayerRepr, OptionalLayers};
 use crate::mir::rc::is_counted_in;
@@ -105,13 +106,13 @@ fn held(kind: &TypeKind, scope: LayoutScope<'_>) -> Held {
 pub fn written_type_arguments(kind: &TypeKind) -> Box<dyn Iterator<Item = &Type> + '_> {
     match kind {
         TypeKind::Tuple(elements) | TypeKind::Custom(_, Some(elements)) => {
-            Box::new(elements.iter().filter_map(written_type))
+            Box::new(elements.iter().filter_map(argument_type))
         }
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Array(element, _) => {
-            Box::new(written_type(element).into_iter())
+            Box::new(argument_type(element).into_iter())
         }
         TypeKind::Map(key, value) => {
-            Box::new(written_type(key).into_iter().chain(written_type(value)))
+            Box::new(argument_type(key).into_iter().chain(argument_type(value)))
         }
         TypeKind::Option(payload) => Box::new(std::iter::once(payload.as_ref())),
         TypeKind::Function(function) => Box::new(
@@ -152,7 +153,8 @@ pub fn written_type_arguments(kind: &TypeKind) -> Box<dyn Iterator<Item = &Type>
     }
 }
 
-/// The type a type expression writes, or `None` for a value expression.
+/// The type a closure type's parameter or return is written as, or `None`
+/// for any other expression.
 fn written_type(expr: &Expression) -> Option<&Type> {
     let ExpressionKind::Type(ty, _) = &expr.node else {
         return None;

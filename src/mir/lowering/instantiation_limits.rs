@@ -27,7 +27,7 @@
 
 use super::instantiation_argument;
 use crate::ast::expression::Expression;
-use crate::ast::formatter::expression_text;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind, TUPLE_TYPE_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -36,6 +36,7 @@ pub(crate) use crate::mir::instantiation::shape::constructor_parts;
 pub use crate::mir::instantiation::shape::{
     deepest_argument_depth, instance_type_depth, mentions_open_parameter, MAX_INSTANCE_TYPE_DEPTH,
 };
+use crate::mir::instantiation::written_component_type;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::generics::{extract_value_generic_kind, UnfoldableValue};
 use std::borrow::Cow;
@@ -192,21 +193,20 @@ pub fn polymorphic_recursion(
 pub(crate) fn invalid_value_argument(
     class: &str,
     args: &[Type],
-    argument: &Expression,
-    bindings: &[(&str, &Expression)],
+    argument: &TypeArgument,
+    bindings: &[(&str, &TypeArgument)],
     cause: UnfoldableValue,
     span: Span,
 ) -> LoweringError {
     let instance = spelled_instance(class, args, SPELLED_LEVELS);
     let bound: Vec<String> = bindings
         .iter()
-        .map(|(name, value)| format!("{name} = {}", expression_text(value)))
+        .map(|(name, value)| format!("{name} = {}", value.node))
         .collect();
     let why = match cause {
         UnfoldableValue::NotConstant => "is not a compile-time constant",
         UnfoldableValue::OutOfRange => "does not fit in a 128-bit integer",
         UnfoldableValue::DivisionByZero => "divides by zero",
-        UnfoldableValue::UnsupportedOperator => "uses an operator a value argument cannot fold",
         UnfoldableValue::NotPositive => "is not greater than zero",
     };
     // An argument the substitution already folded names no parameter: the
@@ -218,10 +218,7 @@ pub(crate) fn invalid_value_argument(
     };
     LoweringError::coded(
         DiagnosticCode::MirInvalidInstantiationArgument,
-        format!(
-            "instantiating `{instance}`{at}: `{}` {why}",
-            expression_text(argument)
-        ),
+        format!("instantiating `{instance}`{at}: `{}` {why}", argument.node),
         span,
         Some(VALUE_ARGUMENT_HELP.to_string()),
     )
@@ -323,7 +320,7 @@ pub fn spelled_type(ty: &Type, levels: usize) -> String {
 /// Append `kind` as Miri spells it, `levels` constructors deep.
 fn push_type(out: &mut String, kind: &TypeKind, levels: usize) {
     if let Some(value) = extract_value_generic_kind(kind) {
-        out.push_str(&expression_text(value));
+        out.push_str(&value.node.to_string());
         return;
     }
     match kind {
@@ -386,7 +383,7 @@ fn push_type(out: &mut String, kind: &TypeKind, levels: usize) {
 fn push_applied<'e>(
     out: &mut String,
     head: &str,
-    parts: impl IntoIterator<Item = &'e Expression>,
+    parts: impl IntoIterator<Item = &'e TypeArgument>,
     levels: usize,
 ) {
     push_angled(out, head, parts.into_iter().map(argument_type), levels);
@@ -397,12 +394,12 @@ fn push_function(out: &mut String, function: &FunctionTypeData, levels: usize) {
     let params = function
         .params
         .iter()
-        .map(|param| argument_type(&param.typ));
+        .map(|param| component_type(&param.typ));
     out.push_str("fn");
     push_listed(out, ("(", ")"), params, levels);
     if let Some(ret) = &function.return_type {
         out.push(' ');
-        push_type(out, &argument_type(ret).kind, levels.saturating_sub(1));
+        push_type(out, &component_type(ret).kind, levels.saturating_sub(1));
     }
 }
 
@@ -444,12 +441,18 @@ fn push_listed<'t>(
 }
 
 /// The type a type-constructor argument stands for: the type it spells, or a
-/// value argument's marker; an argument that is neither is spelled as the
-/// expression it is.
-fn argument_type(arg: &Expression) -> Cow<'static, Type> {
+/// value argument's marker; a value not yet folded is spelled as written.
+fn argument_type(arg: &TypeArgument) -> Cow<'static, Type> {
     Cow::Owned(
         instantiation_argument(arg).unwrap_or_else(|| {
             crate::type_checker::generics::value_generic_marker_type(arg.clone())
         }),
+    )
+}
+
+/// The type a closure type's parameter or return is written as.
+fn component_type(written: &Expression) -> Cow<'static, Type> {
+    Cow::Owned(
+        written_component_type(written).unwrap_or_else(|| Type::new(TypeKind::Error, written.span)),
     )
 }

@@ -4,6 +4,7 @@
 use std::vec;
 
 use miri::ast::factory::*;
+use miri::ast::type_arguments::TypeArgument;
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::*;
 use miri::error::syntax::{SyntaxError, SyntaxErrorKind};
@@ -209,15 +210,20 @@ pub fn run_parser_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind
     }
 }
 
-pub fn type_list_expr(inner: Expression) -> Type {
+/// A type argument naming `t` with a nullable mark, as `T?` writes one.
+pub fn optional_argument(t: Type) -> TypeArgument {
+    miri::ast::type_arguments::marked_type_argument(t, true, miri::error::syntax::Span::default())
+}
+
+pub fn type_list_expr(inner: TypeArgument) -> Type {
     make_type(TypeKind::Custom("List".to_string(), Some(vec![inner])))
 }
 
-pub fn type_map_expr(key: Expression, value: Expression) -> Type {
+pub fn type_map_expr(key: TypeArgument, value: TypeArgument) -> Type {
     make_type(TypeKind::Custom("Map".to_string(), Some(vec![key, value])))
 }
 
-pub fn type_tuple_expr(elements: Vec<Expression>) -> Type {
+pub fn type_tuple_expr(elements: Vec<TypeArgument>) -> Type {
     make_type(TypeKind::Tuple(elements))
 }
 

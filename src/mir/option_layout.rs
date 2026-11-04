@@ -19,7 +19,7 @@
 //! T`) is a `Node`, `Opt<Node>` (`type Opt<T> is T?`) is a `Node?`, and an
 //! optional of an alias naming `Node?` is a `Node??`.
 
-use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::{apply_generic_sub, instantiation_argument};
 use crate::mir::rc::is_builtin_atomic;
@@ -318,7 +318,7 @@ pub fn payload_is_nullable_pointer(kind: &TypeKind, scope: LayoutScope<'_>) -> b
 /// here; one that does not resolve is a cycle, which names nothing.
 fn names_allocation(
     name: &str,
-    args: Option<&[Expression]>,
+    args: Option<&[TypeArgument]>,
     definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
     if BuiltinCollectionKind::from_name(name).is_some() {

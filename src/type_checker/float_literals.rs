@@ -251,14 +251,14 @@ impl TypeChecker {
     pub(crate) fn sequence_element_type(&self, collection: &Type) -> Option<Type> {
         match &collection.kind {
             TypeKind::List(inner) | TypeKind::Set(inner) | TypeKind::Array(inner, _) => {
-                self.extract_type_from_expression(inner).ok()
+                self.extract_type_from_argument(inner).ok()
             }
             TypeKind::Custom(name, Some(args)) => {
                 match BuiltinCollectionKind::from_name(name.as_str())? {
                     BuiltinCollectionKind::List
                     | BuiltinCollectionKind::Array
                     | BuiltinCollectionKind::Set => {
-                        self.extract_type_from_expression(args.first()?).ok()
+                        self.extract_type_from_argument(args.first()?).ok()
                     }
                     BuiltinCollectionKind::Map => None,
                 }
@@ -270,7 +270,7 @@ impl TypeChecker {
     /// `collection` with its element type replaced, every other part of the
     /// type (an array's size) left as it was.
     fn with_element_type(&mut self, collection: &Type, element: &Type) -> Option<Type> {
-        let element_expr = self.create_type_expression(element.clone());
+        let element_expr = self.create_type_argument(element.clone());
         let kind = match &collection.kind {
             TypeKind::List(_) => TypeKind::List(Box::new(element_expr)),
             TypeKind::Set(_) => TypeKind::Set(Box::new(element_expr)),

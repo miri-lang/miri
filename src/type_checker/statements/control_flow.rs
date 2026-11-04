@@ -1113,7 +1113,7 @@ impl TypeChecker {
     fn bind_tuple_destructure(
         &mut self,
         decls: &[VariableDeclaration],
-        exprs: &[Expression],
+        exprs: &[TypeArgument],
         span: Span,
         context: &mut Context,
     ) {
@@ -1126,10 +1126,10 @@ impl TypeChecker {
             return;
         }
         let key_type = self
-            .extract_type_from_expression(&exprs[0])
+            .extract_type_from_argument(&exprs[0])
             .unwrap_or(make_type(TypeKind::Error));
         let val_type = self
-            .extract_type_from_expression(&exprs[1])
+            .extract_type_from_argument(&exprs[1])
             .unwrap_or(make_type(TypeKind::Error));
 
         let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
@@ -1174,7 +1174,7 @@ impl TypeChecker {
                 if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
                     && args.len() == 2 =>
             {
-                self.extract_type_from_expression(&args[1])
+                self.extract_type_from_argument(&args[1])
                     .unwrap_or_else(|_| make_type(TypeKind::Error))
             }
             _ => make_type(TypeKind::Error),

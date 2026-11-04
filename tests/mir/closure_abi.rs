@@ -9,6 +9,7 @@
 use crate::mir::utils::runtime_callee_stating;
 use miri::ast::common::Parameter;
 use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{FunctionTypeData, Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::closure_abi::pass_closures_with_trampolines;
@@ -93,7 +94,7 @@ fn calling_sort_with(params: &[ParamUse], args: &[TypeKind]) -> Body {
 }
 
 fn list_of_int() -> TypeKind {
-    TypeKind::List(Box::new(type_expr_non_null(ty(TypeKind::Int))))
+    TypeKind::List(Box::new(type_argument(ty(TypeKind::Int))))
 }
 
 /// For each argument of the call `body` ends with, the trampoline it names,
@@ -177,7 +178,7 @@ fn a_closure_of_another_arity_than_the_contract_is_refused() {
 
 #[test]
 fn a_closure_over_values_wider_than_the_list_s_elements_is_refused() {
-    let narrow = TypeKind::List(Box::new(type_expr_non_null(ty(TypeKind::I32))));
+    let narrow = TypeKind::List(Box::new(type_argument(ty(TypeKind::I32))));
     let mut body = calling_sort_with(&[LIST, COMPARATOR], &[narrow, function_of(2)]);
     let refusal = pass_closures_with_trampolines(&mut body).expect_err("the width is refused");
     assert!(

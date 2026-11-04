@@ -45,6 +45,7 @@
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::math_intrinsic::MathIntrinsic;
+use crate::ast::type_arguments::{rewritten, TypeArgKind, ValueArg};
 use crate::ast::types::{vec_type_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -719,11 +720,11 @@ impl TypeChecker {
     /// Detects vector builtin functions (dot, length, normalize, cross, reflect, mix)
     /// and infers their return type based on argument types.
     /// Returns `Some(return_type)` if this is a detected builtin, `None` otherwise.
-    fn extract_vec_elem_type(&self, vec_args: Option<&Vec<Expression>>) -> Option<Type> {
+    fn extract_vec_elem_type(&self, vec_args: Option<&Vec<TypeArgument>>) -> Option<Type> {
         vec_args
             .and_then(|args| args.first())
             .and_then(|elem_expr| {
-                if let ExpressionKind::Type(ty, _) = &elem_expr.node {
+                if let TypeArgKind::Type(ty, _) = &elem_expr.node {
                     Some((**ty).clone())
                 } else {
                     None
@@ -735,7 +736,7 @@ impl TypeChecker {
         &mut self,
         positional_args: &[(&Expression, Type)],
         first_arg_type: &Type,
-        vec_args: Option<&Vec<Expression>>,
+        vec_args: Option<&Vec<TypeArgument>>,
         span: Span,
     ) -> Option<Type> {
         if positional_args.len() != 2 {
@@ -783,7 +784,7 @@ impl TypeChecker {
         &mut self,
         positional_args: &[(&Expression, Type)],
         first_arg_type: &Type,
-        vec_args: Option<&Vec<Expression>>,
+        vec_args: Option<&Vec<TypeArgument>>,
         span: Span,
     ) -> Option<Type> {
         if positional_args.len() != 1 {
@@ -818,7 +819,7 @@ impl TypeChecker {
         &mut self,
         positional_args: &[(&Expression, Type)],
         first_arg_type: &Type,
-        vec_args: Option<&Vec<Expression>>,
+        vec_args: Option<&Vec<TypeArgument>>,
         span: Span,
     ) -> Option<Type> {
         if positional_args.len() != 1 {
@@ -884,7 +885,7 @@ impl TypeChecker {
         &mut self,
         positional_args: &[(&Expression, Type)],
         first_arg_type: &Type,
-        vec_args: Option<&Vec<Expression>>,
+        vec_args: Option<&Vec<TypeArgument>>,
         span: Span,
     ) -> Option<Type> {
         if positional_args.len() != 2 {
@@ -932,7 +933,7 @@ impl TypeChecker {
         &mut self,
         positional_args: &[(&Expression, Type)],
         first_arg_type: &Type,
-        vec_args: Option<&Vec<Expression>>,
+        vec_args: Option<&Vec<TypeArgument>>,
         span: Span,
     ) -> Option<Type> {
         if positional_args.len() != 3 {
@@ -1741,7 +1742,9 @@ impl TypeChecker {
             return None;
         }
         let elem_type_expr = cargs.first()?.clone();
-        let array_size = cargs.get(1).and_then(Self::try_eval_const_int);
+        let array_size = cargs
+            .get(1)
+            .and_then(|size| Self::try_eval_const_argument(size, None));
 
         // Record the argument's type for downstream passes, then require a range.
         let range = &args[0];
@@ -1880,7 +1883,9 @@ impl TypeChecker {
                 if BuiltinCollectionKind::from_name(cname.as_str())
                     == Some(BuiltinCollectionKind::Array) =>
             {
-                cargs.get(1).and_then(Self::try_eval_const_int)
+                cargs
+                    .get(1)
+                    .and_then(|size| Self::try_eval_const_argument(size, None))
             }
             TypeKind::Tuple(elements) => Some(elements.len() as i128),
             _ => Self::constant_text(recv, context).map(|text| text.chars().count() as i128),
@@ -2127,12 +2132,15 @@ impl TypeChecker {
                 .into_iter()
                 .zip(written)
                 .map(|(name, argument)| {
-                    let bound = if Self::try_eval_const_int_with_context(argument, context)
-                        .is_some()
-                    {
-                        crate::type_checker::generics::value_generic_marker_type(argument.clone())
-                    } else {
-                        self.resolve_type_expression(argument, context)
+                    let bound = match Self::try_eval_const_int_with_context(argument, context) {
+                        Some(value) => {
+                            crate::type_checker::generics::value_generic_marker_type(IdNode::new(
+                                argument.id,
+                                TypeArgKind::Value(ValueArg::Int(value)),
+                                argument.span,
+                            ))
+                        }
+                        None => self.resolve_type_expression(argument, context),
                     };
                     (name, bound)
                 })
@@ -2320,11 +2328,12 @@ impl TypeChecker {
         }
         for (slot, value) in written.iter().zip(passed.iter()) {
             let named = match &slot.node {
-                ExpressionKind::Identifier(name, None) => Some(name),
-                _ => None,
+                TypeArgKind::Value(ValueArg::Name(name)) => Some(name),
+                TypeArgKind::Value(ValueArg::Int(_) | ValueArg::Binary(..))
+                | TypeArgKind::Type(..) => None,
             };
             if let Some(name) = named.filter(|name| marked.contains_key(name.as_str())) {
-                let is_value = self.extract_type_from_expression(value).is_err();
+                let is_value = self.extract_type_from_argument(value).is_err();
                 if is_value && !generic_map.contains_key(name) {
                     generic_map.insert(
                         name.clone(),
@@ -2334,8 +2343,8 @@ impl TypeChecker {
                 continue;
             }
             if let (Ok(inner), Ok(inner_arg)) = (
-                self.extract_type_from_expression(slot),
-                self.extract_type_from_expression(value),
+                self.extract_type_from_argument(slot),
+                self.extract_type_from_argument(value),
             ) {
                 self.bind_value_generics(&inner, &inner_arg, marked, generic_map);
             }
@@ -2528,7 +2537,7 @@ impl TypeChecker {
         ) else {
             return false;
         };
-        let size = |expr| Self::try_eval_const_int_with_context(expr, context);
+        let size = |arg| Self::try_eval_const_argument(arg, Some(context));
         param_element == arg_element
             && size(param_size).is_some()
             && size(param_size) == size(arg_size)
@@ -2757,7 +2766,7 @@ impl TypeChecker {
         let args = args.clone();
         let mut resolved = Vec::with_capacity(args.len());
         for arg in &args {
-            let Ok(concrete) = self.extract_type_from_expression(arg) else {
+            let Ok(concrete) = self.extract_type_from_argument(arg) else {
                 return;
             };
             resolved.push(concrete);
@@ -2771,7 +2780,7 @@ impl TypeChecker {
     fn try_infer_list_constructor(
         &mut self,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         positional_args: &[(&Expression, Type)],
         span: Span,
         context: &mut Context,
@@ -2792,7 +2801,7 @@ impl TypeChecker {
                 );
                 return Some(make_type(TypeKind::Error));
             }
-            let elem_type = self.resolve_type_expression(&args[0], context);
+            let elem_type = self.resolve_type_argument(&args[0], context);
             if let Some((arg_expr, arg_type)) = positional_args.first() {
                 // The type argument is the declared element width, so the
                 // literals written in the argument take it — otherwise each
@@ -2823,7 +2832,7 @@ impl TypeChecker {
             }
             return Some(make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
-                Some(vec![self.create_type_expression(elem_type)]),
+                Some(vec![self.create_type_argument(elem_type)]),
             )));
         }
 
@@ -2838,10 +2847,10 @@ impl TypeChecker {
                 );
                 return Some(make_type(TypeKind::Error));
             };
-            let elem_type = self.resolve_type_expression(elem_expr, context);
+            let elem_type = self.resolve_type_argument(elem_expr, context);
             return Some(make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
-                Some(vec![self.create_type_expression(elem_type)]),
+                Some(vec![self.create_type_argument(elem_type)]),
             )));
         }
 
@@ -2877,7 +2886,7 @@ impl TypeChecker {
         let Some(actual_elem) = sequence_element_expression(arg_type) else {
             return false;
         };
-        let Ok(actual_elem_type) = self.extract_type_from_expression(actual_elem) else {
+        let Ok(actual_elem_type) = self.extract_type_from_argument(actual_elem) else {
             return false;
         };
         // An empty literal carries no element type to disagree with.
@@ -2902,7 +2911,7 @@ impl TypeChecker {
                 return false;
             }
         }
-        let declared_elem = self.create_type_expression(elem_type.clone());
+        let declared_elem = self.create_type_argument(elem_type.clone());
         self.check_inner_type_compatible(&declared_elem, actual_elem, context)
     }
 
@@ -2936,13 +2945,13 @@ impl TypeChecker {
         }
         let declared = [k_type, v_type];
         for (slot, written) in cargs.iter().enumerate() {
-            let Ok(written_type) = self.extract_type_from_expression(written) else {
+            let Ok(written_type) = self.extract_type_from_argument(written) else {
                 return false;
             };
             if matches!(written_type.kind, TypeKind::Void) {
                 continue;
             }
-            let declared_slot = self.create_type_expression(declared[slot].clone());
+            let declared_slot = self.create_type_argument(declared[slot].clone());
             if !self.check_inner_type_compatible(&declared_slot, written, context) {
                 return false;
             }
@@ -2953,7 +2962,7 @@ impl TypeChecker {
     fn try_infer_map_constructor(
         &mut self,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         positional_args: &[(&Expression, Type)],
         span: Span,
         context: &mut Context,
@@ -2964,8 +2973,8 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 2 {
-                let k_type = self.resolve_type_expression(&args[0], context);
-                let v_type = self.resolve_type_expression(&args[1], context);
+                let k_type = self.resolve_type_argument(&args[0], context);
+                let v_type = self.resolve_type_argument(&args[1], context);
                 // As for a set: the type arguments say what the map holds, not
                 // whether the argument is something it can be built from.
                 if let Some((arg_expr, arg_type)) = positional_args.first() {
@@ -2986,8 +2995,8 @@ impl TypeChecker {
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Map.name().to_string(),
                     Some(vec![
-                        self.create_type_expression(k_type),
-                        self.create_type_expression(v_type),
+                        self.create_type_argument(k_type),
+                        self.create_type_argument(v_type),
                     ]),
                 )));
             } else {
@@ -3072,21 +3081,21 @@ impl TypeChecker {
             }
             _ => return false,
         };
-        let Ok(written_type) = self.extract_type_from_expression(written) else {
+        let Ok(written_type) = self.extract_type_from_argument(written) else {
             return false;
         };
         // An empty literal carries no element type to disagree with.
         if matches!(written_type.kind, TypeKind::Void) {
             return true;
         }
-        let declared = self.create_type_expression(elem_type.clone());
+        let declared = self.create_type_argument(elem_type.clone());
         self.check_inner_type_compatible(&declared, written, context)
     }
 
     fn try_infer_set_constructor(
         &mut self,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         positional_args: &[(&Expression, Type)],
         span: Span,
         context: &mut Context,
@@ -3097,7 +3106,7 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 1 {
-                let elem_type = self.resolve_type_expression(&args[0], context);
+                let elem_type = self.resolve_type_argument(&args[0], context);
                 // Writing the element type does not excuse the argument from
                 // being one the set can be built from: lowering reads it only
                 // when it is a set literal, and drops anything else silently.
@@ -3119,7 +3128,7 @@ impl TypeChecker {
                 }
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Set.name().to_string(),
-                    Some(vec![self.create_type_expression(elem_type)]),
+                    Some(vec![self.create_type_argument(elem_type)]),
                 )));
             } else {
                 self.report_error(
@@ -3167,7 +3176,7 @@ impl TypeChecker {
         &mut self,
         def: &crate::type_checker::context::ClassDefinition,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &Context,
     ) {
@@ -3259,7 +3268,7 @@ impl TypeChecker {
         def: &crate::type_checker::context::ClassDefinition,
         positional_args: &[(&Expression, Type)],
         named_args: &mut HashMap<String, (&Expression, Type, Span)>,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
     ) {
@@ -3267,8 +3276,8 @@ impl TypeChecker {
         if let Some(generics) = &def.generics {
             if let Some(targs) = type_args {
                 for (g, ta) in generics.iter().zip(targs.iter()) {
-                    let arg_ty = if self.extract_type_from_expression(ta).is_ok() {
-                        self.resolve_type_expression(ta, context)
+                    let arg_ty = if self.extract_type_from_argument(ta).is_ok() {
+                        self.resolve_type_argument(ta, context)
                     } else {
                         crate::type_checker::generics::value_generic_marker_type(ta.clone())
                     };
@@ -3367,7 +3376,7 @@ impl TypeChecker {
         init_method: &crate::type_checker::context::MethodInfo,
         positional_args: &[(&Expression, Type)],
         named_args: &mut HashMap<String, (&Expression, Type, Span)>,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
     ) {
@@ -3375,8 +3384,8 @@ impl TypeChecker {
         if let Some(generics) = &def.generics {
             if let Some(targs) = type_args {
                 for (g, ta) in generics.iter().zip(targs.iter()) {
-                    let arg_ty = if self.extract_type_from_expression(ta).is_ok() {
-                        self.resolve_type_expression(ta, context)
+                    let arg_ty = if self.extract_type_from_argument(ta).is_ok() {
+                        self.resolve_type_argument(ta, context)
                     } else {
                         crate::type_checker::generics::value_generic_marker_type(ta.clone())
                     };
@@ -3465,7 +3474,7 @@ impl TypeChecker {
         &mut self,
         def: crate::type_checker::context::StructDefinition,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         positional_args: &[(&Expression, Type)],
         mut named_args: HashMap<String, (&Expression, Type, Span)>,
         span: Span,
@@ -3480,7 +3489,7 @@ impl TypeChecker {
         // argument would otherwise infer (e.g. `u32` over the default `Int`).
         if let (Some(gens), Some(args)) = (&def.generics, type_args) {
             for (g, arg) in gens.iter().zip(args.iter()) {
-                if let ExpressionKind::Type(ty, _) = &arg.node {
+                if let TypeArgKind::Type(ty, _) = &arg.node {
                     generic_map.insert(g.name.clone(), (**ty).clone());
                 }
             }
@@ -3567,7 +3576,7 @@ impl TypeChecker {
                         .cloned()
                         .unwrap_or(make_type(TypeKind::Error))
                 })
-                .map(|t| self.create_type_expression(t))
+                .map(|t| self.create_type_argument(t))
                 .collect()
         });
 
@@ -3582,7 +3591,7 @@ impl TypeChecker {
     fn try_infer_array_constructor(
         &mut self,
         name: &str,
-        type_args: &Option<Vec<Expression>>,
+        type_args: &Option<Vec<TypeArgument>>,
         positional_args: &[(&Expression, Type)],
         span: Span,
         context: &mut Context,
@@ -3593,7 +3602,7 @@ impl TypeChecker {
 
         if let Some(args) = type_args {
             if args.len() == 2 {
-                let elem_type = self.resolve_type_expression(&args[0], context);
+                let elem_type = self.resolve_type_argument(&args[0], context);
                 let size_expr = args[1].clone();
 
                 // Validate that the size expression is a compile-time constant,
@@ -3601,7 +3610,7 @@ impl TypeChecker {
                 // over them (`Array<T, W * W>()`). Fold it to a literal so the
                 // context-free const-eval in MIR lowering sees an integer.
                 let Some(size_value) =
-                    TypeChecker::try_eval_const_int_with_context(&size_expr, context)
+                    TypeChecker::try_eval_const_argument(&size_expr, Some(context))
                 else {
                     self.report_error(DiagnosticCode::TypBuiltinConstructor,
                         "Array<T, N>() requires a compile-time constant size; use integer literals or simple arithmetic like '4 * 4'".to_string(),
@@ -3609,10 +3618,8 @@ impl TypeChecker {
                     );
                     return Some(make_type(TypeKind::Error));
                 };
-                let size_expr = ast_factory::literal_with_span(
-                    ast_factory::int_literal(size_value),
-                    size_expr.span,
-                );
+                let size_expr =
+                    rewritten(&size_expr, TypeArgKind::Value(ValueArg::Int(size_value)));
 
                 // The constructor takes either nothing, leaving every element at
                 // its default, or one argument per element. Any other count was
@@ -3642,7 +3649,7 @@ impl TypeChecker {
 
                 return Some(make_type(TypeKind::Custom(
                     BuiltinCollectionKind::Array.name().to_string(),
-                    Some(vec![self.create_type_expression(elem_type), size_expr]),
+                    Some(vec![self.create_type_argument(elem_type), size_expr]),
                 )));
             } else {
                 self.report_error(
@@ -3773,7 +3780,7 @@ fn type_arg_is_concrete(ty: &Type) -> bool {
         TypeKind::Generic(_, _, _) => false,
         TypeKind::Custom(_, Some(args)) | TypeKind::Tuple(args) => {
             args.iter().all(|arg| match &arg.node {
-                ExpressionKind::Type(inner, _) => type_arg_is_concrete(inner),
+                TypeArgKind::Type(inner, _) => type_arg_is_concrete(inner),
                 _ => false,
             })
         }
@@ -3788,7 +3795,7 @@ fn type_arg_is_concrete(ty: &Type) -> bool {
 ///
 /// These are exactly the two shapes MIR's sequence lowering knows how to copy
 /// element-wise, so the type checker recognizes the same pair.
-fn sequence_element_expression(ty: &Type) -> Option<&Expression> {
+fn sequence_element_expression(ty: &Type) -> Option<&TypeArgument> {
     match &ty.kind {
         TypeKind::List(inner) | TypeKind::Array(inner, _) => Some(inner),
         TypeKind::Custom(name, Some(args))
@@ -3923,7 +3930,7 @@ fn arguments_by_parameter<'a>(
 
 /// The argument slots of an array or a class type, in order: an array's
 /// element and size, or a class's type arguments.
-fn generic_slots(kind: &TypeKind) -> Option<Vec<&Expression>> {
+fn generic_slots(kind: &TypeKind) -> Option<Vec<&TypeArgument>> {
     if let Some((element, size)) = crate::ast::types::array_element_and_size(kind) {
         return Some(vec![element, size]);
     }

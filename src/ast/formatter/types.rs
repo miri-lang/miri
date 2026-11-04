@@ -20,6 +20,7 @@
 //! reader is shown one type one way whichever of the two it came from.
 
 use crate::ast::expression::Expression;
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument};
 use crate::ast::types::{
     BuiltinCollectionKind, FunctionTypeData, Type, TypeDeclarationKind, TypeKind, TUPLE_TYPE_NAME,
 };
@@ -52,7 +53,7 @@ fn written_class_name<'a>(
     sink: &Sink,
     kind: &'a TypeKind,
     span: Span,
-) -> Option<(&'static str, Vec<&'a Expression>)> {
+) -> Option<(&'static str, Vec<&'a TypeArgument>)> {
     let (name, arguments) = class_spelling(kind)?;
     let written = sink.source_text(span)?;
     let rest = written.strip_prefix(name)?;
@@ -65,7 +66,7 @@ fn written_class_name<'a>(
 
 /// The class name a collection type can be written with, and the type
 /// arguments that spelling carries.
-fn class_spelling(kind: &TypeKind) -> Option<(&'static str, Vec<&Expression>)> {
+fn class_spelling(kind: &TypeKind) -> Option<(&'static str, Vec<&TypeArgument>)> {
     match kind {
         TypeKind::List(inner) => Some((BuiltinCollectionKind::List.name(), vec![inner])),
         TypeKind::Set(inner) => Some((BuiltinCollectionKind::Set.name(), vec![inner])),
@@ -157,68 +158,68 @@ pub fn type_kind(sink: &mut Sink, kind: &TypeKind) {
 }
 
 /// `[T]`
-fn bracketed(sink: &mut Sink, inner: &Expression) {
+fn bracketed(sink: &mut Sink, inner: &TypeArgument) {
     sink.emit("[");
-    format_expression(sink, inner, 0);
+    type_argument(sink, inner);
     sink.emit("]");
 }
 
 /// `{T}`
-fn braced(sink: &mut Sink, inner: &Expression) {
+fn braced(sink: &mut Sink, inner: &TypeArgument) {
     sink.emit("{");
-    format_expression(sink, inner, 0);
+    type_argument(sink, inner);
     sink.emit("}");
 }
 
 /// `[T; N]`
-fn sized_array(sink: &mut Sink, inner: &Expression, size: &Expression) {
+fn sized_array(sink: &mut Sink, inner: &TypeArgument, size: &TypeArgument) {
     sink.emit("[");
-    format_expression(sink, inner, 0);
+    type_argument(sink, inner);
     sink.emit("; ");
-    format_expression(sink, size, 0);
+    type_argument(sink, size);
     sink.emit("]");
 }
 
 /// `{K: V}`
-fn map(sink: &mut Sink, key: &Expression, value: &Expression) {
+fn map(sink: &mut Sink, key: &TypeArgument, value: &TypeArgument) {
     sink.emit("{");
-    format_expression(sink, key, 0);
+    type_argument(sink, key);
     sink.emit(": ");
-    format_expression(sink, value, 0);
+    type_argument(sink, value);
     sink.emit("}");
 }
 
 /// `(A, B)`
-fn tuple(sink: &mut Sink, members: &[Expression]) {
+fn tuple(sink: &mut Sink, members: &[TypeArgument]) {
     sink.emit("(");
     for (index, member) in members.iter().enumerate() {
         if index > 0 {
             sink.emit(", ");
         }
-        format_expression(sink, member, 0);
+        type_argument(sink, member);
     }
     sink.emit(")");
 }
 
 /// `A or B or C`
-fn one_of(sink: &mut Sink, members: &[Expression]) {
+fn one_of(sink: &mut Sink, members: &[TypeArgument]) {
     for (index, member) in members.iter().enumerate() {
         if index > 0 {
             sink.emit(" or ");
         }
-        format_expression(sink, member, 0);
+        type_argument(sink, member);
     }
 }
 
 /// `Name<A, B>`
-fn angled(sink: &mut Sink, name: &str, arguments: &[&Expression]) {
+fn angled(sink: &mut Sink, name: &str, arguments: &[&TypeArgument]) {
     sink.emit(name);
     sink.emit("<");
     for (index, argument) in arguments.iter().enumerate() {
         if index > 0 {
             sink.emit(", ");
         }
-        format_expression(sink, argument, 0);
+        type_argument(sink, argument);
     }
     sink.emit(">");
 }
@@ -260,7 +261,7 @@ fn generic(
 }
 
 /// `Name` or `Name<A, B>`, or the sugar when `Name` is a built-in collection.
-fn custom(sink: &mut Sink, name: &str, arguments: Option<&[Expression]>) {
+fn custom(sink: &mut Sink, name: &str, arguments: Option<&[TypeArgument]>) {
     let collection = BuiltinCollectionKind::from_name(name);
     if let (Some(collection), Some(arguments)) = (collection, arguments) {
         if collection_sugar(sink, collection, arguments) {
@@ -268,7 +269,7 @@ fn custom(sink: &mut Sink, name: &str, arguments: Option<&[Expression]>) {
         }
     }
     sink.emit(name);
-    generic_arguments(sink, arguments);
+    type_arguments(sink, arguments);
 }
 
 /// Render a collection the type checker named by its class in the sugar, when
@@ -276,7 +277,7 @@ fn custom(sink: &mut Sink, name: &str, arguments: Option<&[Expression]>) {
 fn collection_sugar(
     sink: &mut Sink,
     collection: BuiltinCollectionKind,
-    arguments: &[Expression],
+    arguments: &[TypeArgument],
 ) -> bool {
     match (collection, arguments) {
         (BuiltinCollectionKind::List, [inner]) => bracketed(sink, inner),
@@ -310,4 +311,28 @@ pub fn generic_arguments(sink: &mut Sink, arguments: Option<&[Expression]>) {
         format_expression(sink, argument, 0);
     }
     sink.emit(">");
+}
+
+/// `<A, B>` for a type's arguments, or nothing when there are none.
+fn type_arguments(sink: &mut Sink, arguments: Option<&[TypeArgument]>) {
+    let Some(arguments) = arguments.filter(|arguments| !arguments.is_empty()) else {
+        return;
+    };
+    sink.emit("<");
+    for (index, argument) in arguments.iter().enumerate() {
+        if index > 0 {
+            sink.emit(", ");
+        }
+        type_argument(sink, argument);
+    }
+    sink.emit(">");
+}
+
+/// One type argument: a type as written, or a value as the expression it was
+/// written as.
+fn type_argument(sink: &mut Sink, argument: &TypeArgument) {
+    match &argument.node {
+        TypeArgKind::Type(ty, nullable) => type_expression(sink, ty, *nullable, argument.span),
+        TypeArgKind::Value(value) => format_expression(sink, &value.expression(argument.span), 0),
+    }
 }

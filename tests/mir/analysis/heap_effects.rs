@@ -10,7 +10,7 @@
 
 use crate::mir::utils::runtime_callee;
 use miri::ast::common::MemberVisibility;
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::analysis::heap_effects::{call_flags, stamp_quiet_calls, HeapEffects, Phase};
@@ -82,8 +82,8 @@ pub fn registry() -> TypeKind {
     TypeKind::Custom("Registry".to_string(), None)
 }
 
-fn type_expression(kind: TypeKind) -> Expression {
-    Expression::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+fn type_expression(kind: TypeKind) -> TypeArgument {
+    TypeArgument::new(0, TypeArgKind::Type(Box::new(ty(kind)), false), span())
 }
 
 pub fn node_map() -> TypeKind {

@@ -102,13 +102,23 @@ mod type_arguments {
     //! one that does not is refused where the body is lowered, so no backend
     //! ever guesses what the argument holds.
 
-    use miri::ast::factory::{identifier, type_expr_non_null};
+    use miri::ast::node::IdNode;
+    use miri::ast::type_arguments::{type_argument, TypeArgKind, TypeArgument, ValueArg};
     use miri::ast::types::{Type, TypeKind};
     use miri::error::syntax::Span;
     use miri::mir::{Body, ExecutionModel, LocalDecl};
 
     fn ty(kind: TypeKind) -> Type {
         Type::new(kind, Span::default())
+    }
+
+    /// A value argument still spelled as `name`: it names no type.
+    fn value(name: &str) -> TypeArgument {
+        IdNode::new(
+            0,
+            TypeArgKind::Value(ValueArg::Name(name.to_string())),
+            Span::default(),
+        )
     }
 
     fn body_holding(held: Type) -> Body {
@@ -122,7 +132,7 @@ mod type_arguments {
 
     #[test]
     fn a_list_of_a_type_is_valid() {
-        let list = ty(TypeKind::List(Box::new(type_expr_non_null(ty(
+        let list = ty(TypeKind::List(Box::new(type_argument(ty(
             TypeKind::String,
         )))));
         assert_eq!(body_holding(list).validate(), Ok(()));
@@ -130,7 +140,7 @@ mod type_arguments {
 
     #[test]
     fn a_list_whose_element_names_no_type_is_refused() {
-        let list = ty(TypeKind::List(Box::new(identifier("T"))));
+        let list = ty(TypeKind::List(Box::new(value("T"))));
         let refusal = body_holding(list).validate().unwrap_err();
         assert!(refusal.contains("type argument"), "{refusal}");
     }
@@ -138,8 +148,8 @@ mod type_arguments {
     #[test]
     fn a_map_value_that_names_no_type_is_refused() {
         let map = ty(TypeKind::Map(
-            Box::new(type_expr_non_null(ty(TypeKind::String))),
-            Box::new(identifier("V")),
+            Box::new(type_argument(ty(TypeKind::String))),
+            Box::new(value("V")),
         ));
         assert!(body_holding(map).validate().is_err());
     }
@@ -147,8 +157,8 @@ mod type_arguments {
     #[test]
     fn a_tuple_slot_inside_an_option_that_names_no_type_is_refused() {
         let tuple = ty(TypeKind::Tuple(vec![
-            type_expr_non_null(ty(TypeKind::Int)),
-            identifier("U"),
+            type_argument(ty(TypeKind::Int)),
+            value("U"),
         ]));
         let optional = ty(TypeKind::Option(Box::new(tuple)));
         assert!(body_holding(optional).validate().is_err());
@@ -157,8 +167,8 @@ mod type_arguments {
     #[test]
     fn an_array_size_is_a_value_not_a_type() {
         let array = ty(TypeKind::Array(
-            Box::new(type_expr_non_null(ty(TypeKind::Int))),
-            Box::new(identifier("N")),
+            Box::new(type_argument(ty(TypeKind::Int))),
+            Box::new(value("N")),
         ));
         assert_eq!(body_holding(array).validate(), Ok(()));
     }

@@ -15,6 +15,7 @@ use super::context::{
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
+use crate::ast::type_arguments::{rewritten, value_argument, TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{
     is_range_type_name, is_vector_component, range_type_kind, scalar_width, vec_dim, vec_type_dim,
     BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME,
@@ -61,11 +62,8 @@ pub(crate) fn uniform_element_type(element_types: &[Type]) -> Option<&Type> {
 /// elements of the type `element` spells: the element type, then the length
 /// as the class's value parameter. Each shape of tuple is its own instance,
 /// so a method's `self` is that tuple as it is held.
-pub(crate) fn tuple_class_arguments(element: Expression, length: usize) -> [Expression; 2] {
-    [
-        element,
-        crate::ast::factory::int_literal_expression(length as i128),
-    ]
+pub(crate) fn tuple_class_arguments(element: TypeArgument, length: usize) -> [TypeArgument; 2] {
+    [element, value_argument(length as i128)]
 }
 
 fn unspecified_element_type() -> Type {
@@ -407,7 +405,7 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
                     .as_ref()
                     .and_then(|args| args.first())
                     .is_some_and(|first_arg| {
-                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                        if let TypeArgKind::Type(elem_ty, _) = &first_arg.node {
                             matches!(
                                 elem_ty.kind,
                                 TypeKind::Int
@@ -427,7 +425,7 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
                     .as_ref()
                     .and_then(|args| args.first())
                     .is_some_and(|first_arg| {
-                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                        if let TypeArgKind::Type(elem_ty, _) = &first_arg.node {
                             matches!(elem_ty.kind, TypeKind::U32 | TypeKind::I32)
                         } else {
                             false
@@ -486,7 +484,7 @@ fn gpu_array_element_kind(kind: &TypeKind) -> Option<&TypeKind> {
         _ => return None,
     };
     match &element_expr.node {
-        ExpressionKind::Type(ty, _) => Some(&ty.kind),
+        TypeArgKind::Type(ty, _) => Some(&ty.kind),
         _ => None,
     }
 }
@@ -557,7 +555,7 @@ fn accelerable_inner(
                     .as_ref()
                     .and_then(|args| args.first())
                     .is_some_and(|first_arg| {
-                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                        if let TypeArgKind::Type(elem_ty, _) = &first_arg.node {
                             matches!(
                                 elem_ty.kind,
                                 TypeKind::Int
@@ -577,7 +575,7 @@ fn accelerable_inner(
                     .as_ref()
                     .and_then(|args| args.first())
                     .is_some_and(|first_arg| {
-                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                        if let TypeArgKind::Type(elem_ty, _) = &first_arg.node {
                             matches!(elem_ty.kind, TypeKind::U32 | TypeKind::I32)
                         } else {
                             false
@@ -649,24 +647,24 @@ fn type_implements_accelerable(
 /// Every type-valued generic argument must itself be accelerable. Value generics
 /// (e.g. the `Size` of `Array<T, Size>`) are not types and impose no constraint.
 fn type_args_are_accelerable(
-    args: Option<&[crate::ast::expression::Expression]>,
+    args: Option<&[TypeArgument]>,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     allow_generic: bool,
 ) -> bool {
     let Some(args) = args else { return true };
     args.iter().all(|arg| match &arg.node {
-        ExpressionKind::Type(ty, _) => accelerable_inner(&ty.kind, type_definitions, allow_generic),
+        TypeArgKind::Type(ty, _) => accelerable_inner(&ty.kind, type_definitions, allow_generic),
         _ => true,
     })
 }
 
 fn expr_type_is_accelerable(
-    expr: &crate::ast::expression::Expression,
+    expr: &TypeArgument,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     allow_generic: bool,
 ) -> bool {
     match &expr.node {
-        ExpressionKind::Type(ty, _) => accelerable_inner(&ty.kind, type_definitions, allow_generic),
+        TypeArgKind::Type(ty, _) => accelerable_inner(&ty.kind, type_definitions, allow_generic),
         _ => false,
     }
 }
@@ -864,7 +862,7 @@ fn accelerable_byte_size_inner(
 /// width), or a user `struct`/`class` (sum of field widths).
 fn accelerable_custom_byte_size(
     name: &str,
-    args: Option<&[crate::ast::expression::Expression]>,
+    args: Option<&[TypeArgument]>,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     in_progress: &mut Vec<String>,
 ) -> Option<usize> {
@@ -920,14 +918,14 @@ fn struct_like_byte_size(
 /// Sum of the byte widths of a list of type-argument expressions (tuple
 /// elements), or `None` if any element lacks a marshalled width.
 fn sum_expr_byte_sizes(
-    elements: &[crate::ast::expression::Expression],
+    elements: &[TypeArgument],
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
     in_progress: &mut Vec<String>,
 ) -> Option<usize> {
     elements
         .iter()
         .map(|expr| match &expr.node {
-            ExpressionKind::Type(ty, _) => {
+            TypeArgKind::Type(ty, _) => {
                 accelerable_byte_size_inner(&ty.kind, type_definitions, in_progress)
             }
             _ => None,
@@ -935,7 +933,7 @@ fn sum_expr_byte_sizes(
         .sum()
 }
 
-fn first_type_arg_is_gpu_compatible(args: Option<&[crate::ast::expression::Expression]>) -> bool {
+fn first_type_arg_is_gpu_compatible(args: Option<&[TypeArgument]>) -> bool {
     let Some(args) = args else { return false };
     let Some(first) = args.first() else {
         return false;
@@ -946,8 +944,8 @@ fn first_type_arg_is_gpu_compatible(args: Option<&[crate::ast::expression::Expre
 /// After type resolution, generic args are wrapped as `ExpressionKind::Type`.
 /// Any other shape means the arg was never resolved — treat as not GPU-compatible
 /// so the bug surfaces loudly instead of silently admitting unknown types.
-fn first_expr_type_is_gpu_compatible(expr: &crate::ast::expression::Expression) -> bool {
-    if let ExpressionKind::Type(ty, _) = &expr.node {
+fn first_expr_type_is_gpu_compatible(expr: &TypeArgument) -> bool {
+    if let TypeArgKind::Type(ty, _) = &expr.node {
         is_gpu_compatible(&ty.kind)
     } else {
         false
@@ -1003,18 +1001,18 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
 
 /// Extracts the component `TypeKind` from a vector type's argument list
 /// (`VecN<T>` → `T`), or `None` if the first argument is not a resolved type.
-fn vector_component_kind(args: &[Expression]) -> Option<&TypeKind> {
+fn vector_component_kind(args: &[TypeArgument]) -> Option<&TypeKind> {
     match &args.first()?.node {
-        ExpressionKind::Type(ty, _) => Some(&ty.kind),
+        TypeArgKind::Type(ty, _) => Some(&ty.kind),
         _ => None,
     }
 }
 
 /// Extracts the inner `TypeKind` from an `Atomic<T>` type's argument list,
 /// or `None` if the argument is not a resolved type.
-fn atomic_component_kind(args: &[Expression]) -> Option<&TypeKind> {
+fn atomic_component_kind(args: &[TypeArgument]) -> Option<&TypeKind> {
     match &args.first()?.node {
-        ExpressionKind::Type(ty, _) => Some(&ty.kind),
+        TypeArgKind::Type(ty, _) => Some(&ty.kind),
         _ => None,
     }
 }
@@ -1133,8 +1131,8 @@ pub fn is_residency_gated_buffer(kind: &TypeKind) -> bool {
     }
 }
 
-fn extract_element_type(expr: &crate::ast::expression::Expression) -> Option<Type> {
-    if let ExpressionKind::Type(ty, _) = &expr.node {
+fn extract_element_type(expr: &TypeArgument) -> Option<Type> {
+    if let TypeArgKind::Type(ty, _) = &expr.node {
         Some((**ty).clone())
     } else {
         None
@@ -1189,8 +1187,8 @@ pub fn type_mentions_f16(kind: &TypeKind) -> bool {
     }
 }
 
-fn expr_mentions_f16(expr: &crate::ast::expression::Expression) -> bool {
-    matches!(&expr.node, ExpressionKind::Type(ty, _) if type_mentions_f16(&ty.kind))
+fn expr_mentions_f16(expr: &TypeArgument) -> bool {
+    matches!(&expr.node, TypeArgKind::Type(ty, _) if type_mentions_f16(&ty.kind))
 }
 
 // Re-export the shared element-type resolver from ast::types so it is available
@@ -1268,12 +1266,12 @@ fn is_auto_copy_inner<'a>(
 }
 
 fn is_auto_copy_tuple<'a>(
-    elements: &'a [crate::ast::expression::Expression],
+    elements: &'a [TypeArgument],
     type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
     visited: &mut std::collections::HashSet<&'a str>,
 ) -> bool {
     elements.iter().all(|elem_expr| {
-        if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
+        if let crate::ast::type_arguments::TypeArgKind::Type(ty, _) = &elem_expr.node {
             is_auto_copy_inner(&ty.kind, type_definitions, visited)
         } else {
             false
@@ -1382,7 +1380,7 @@ fn estimated_type_size<'a>(
         TypeKind::Tuple(elements) => elements
             .iter()
             .map(|elem_expr| {
-                if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
+                if let TypeArgKind::Type(ty, _) = &elem_expr.node {
                     estimated_type_size(&ty.kind, type_definitions, visited)
                 } else {
                     8
@@ -1613,16 +1611,16 @@ impl TypeChecker {
     /// this scan never injects a spurious error for a value-generic argument.
     pub(crate) fn resolve_type_arg_tuple(
         &mut self,
-        args: &[Expression],
+        args: &[TypeArgument],
         context: &Context,
     ) -> Option<Vec<Type>> {
         let mut resolved = Vec::with_capacity(args.len());
         for arg in args {
-            if self.extract_type_from_expression(arg).is_err() {
+            if self.extract_type_from_argument(arg).is_err() {
                 resolved.push(crate::type_checker::generics::value_generic_slot(arg)?);
                 continue;
             }
-            resolved.push(self.resolve_type_expression(arg, context));
+            resolved.push(self.resolve_type_argument(arg, context));
         }
         Some(resolved)
     }
@@ -1655,6 +1653,59 @@ impl TypeChecker {
         }
     }
 
+    /// A type argument naming the resolved type `ty`, written nowhere in the
+    /// source.
+    pub(crate) fn create_type_argument(&self, ty: Type) -> TypeArgument {
+        IdNode::new(0, TypeArgKind::Type(Box::new(ty), false), Span::new(0, 0))
+    }
+
+    /// The type expression a type argument is resolved as: the type it names,
+    /// at the argument's own place, so what a name in it resolves to is
+    /// recorded against the argument. `None` for a value.
+    pub(crate) fn argument_expression(argument: &TypeArgument) -> Option<Expression> {
+        match &argument.node {
+            TypeArgKind::Type(ty, nullable) => Some(IdNode::new(
+                argument.id,
+                ExpressionKind::Type(ty.clone(), *nullable),
+                argument.span,
+            )),
+            TypeArgKind::Value(_) => None,
+        }
+    }
+
+    /// Resolves a type argument written where a type is required; a value
+    /// there is reported.
+    pub(crate) fn resolve_type_argument(
+        &mut self,
+        argument: &TypeArgument,
+        context: &Context,
+    ) -> Type {
+        match Self::argument_expression(argument) {
+            Some(expr) => self.resolve_type_expression(&expr, context),
+            None => {
+                self.type_set_allowed = false;
+                self.report_error(
+                    DiagnosticCode::TypTypeNotFound,
+                    "Expected type expression".to_string(),
+                    argument.span,
+                );
+                Self::error_type()
+            }
+        }
+    }
+
+    /// The type a type argument names, with a nullable mark read as an
+    /// optional; see [`Self::extract_type_from_expression`].
+    pub(crate) fn extract_type_from_argument(
+        &self,
+        argument: &TypeArgument,
+    ) -> Result<Type, String> {
+        match Self::argument_expression(argument) {
+            Some(expr) => self.extract_type_from_expression(&expr),
+            None => Err("Expected type expression".to_string()),
+        }
+    }
+
     /// Creates a type expression from a Type.
     pub(crate) fn create_type_expression(&self, ty: Type) -> Expression {
         IdNode::new(
@@ -1672,13 +1723,13 @@ impl TypeChecker {
     fn tuple_loop_element_type(
         &mut self,
         tuple: &Type,
-        elements: &[Expression],
+        elements: &[TypeArgument],
         span: Span,
     ) -> Type {
         let element_types: Vec<Type> = elements
             .iter()
             .map(|element| {
-                self.extract_type_from_expression(element)
+                self.extract_type_from_argument(element)
                     .unwrap_or_else(|_| Self::error_type())
             })
             .collect();
@@ -1721,7 +1772,7 @@ impl TypeChecker {
                 if let Some(args) = args {
                     if !args.is_empty() {
                         return self
-                            .extract_type_from_expression(&args[0])
+                            .extract_type_from_argument(&args[0])
                             .unwrap_or_else(|_| Self::error_type());
                     }
                 } else {
@@ -1742,7 +1793,7 @@ impl TypeChecker {
                 if let Some(args) = args {
                     if let Some(arg) = args.first() {
                         return self
-                            .extract_type_from_expression(arg)
+                            .extract_type_from_argument(arg)
                             .unwrap_or_else(|_| Self::error_type());
                     }
                 }
@@ -1787,7 +1838,7 @@ impl TypeChecker {
             .iter()
             .flatten()
             .map(|arg| {
-                self.extract_type_from_expression(arg)
+                self.extract_type_from_argument(arg)
                     .unwrap_or_else(|_| Self::error_type())
             })
             .collect();
@@ -2050,14 +2101,15 @@ impl TypeChecker {
 
     /// Resolves a type set's members, folding a member that is itself a set
     /// into this one, so `type Number is Real or int` holds every `Real`.
-    fn resolve_type_set(&mut self, members: Vec<Expression>, context: &Context) -> Type {
+    fn resolve_type_set(&mut self, members: Vec<TypeArgument>, context: &Context) -> Type {
         let mut resolved: Vec<Type> = Vec::with_capacity(members.len());
         for member in &members {
-            let member_type = self.resolve_bound_type(member, context);
+            self.type_set_allowed = true;
+            let member_type = self.resolve_type_argument(member, context);
             let parts = match member_type.kind {
                 TypeKind::OneOf(nested) => nested
                     .iter()
-                    .filter_map(|part| self.extract_type_from_expression(part).ok())
+                    .filter_map(|part| self.extract_type_from_argument(part).ok())
                     .collect(),
                 _ => vec![member_type],
             };
@@ -2069,26 +2121,26 @@ impl TypeChecker {
         }
         let members = resolved
             .into_iter()
-            .map(|member| self.create_type_expression(member))
+            .map(|member| self.create_type_argument(member))
             .collect();
         make_type(TypeKind::OneOf(members))
     }
 
-    /// Resolves a type expression the compiler built from another module's
+    /// Resolves a type argument the compiler built from another module's
     /// declaration, reporting whatever it cannot resolve at `use_site`.
     ///
-    /// The nodes of such an expression carry no source range of their own, so
-    /// every report about one would otherwise render at the file's first byte.
-    /// `use_site` is the expression the reader actually wrote — the one that
-    /// needed the declared type read here.
-    pub(crate) fn resolve_type_expression_at(
+    /// Such an argument carries no source range of its own, so every report
+    /// about one would otherwise render at the file's first byte. `use_site`
+    /// is the expression the reader actually wrote — the one that needed the
+    /// declared type read here.
+    pub(crate) fn resolve_type_argument_at(
         &mut self,
-        expr: &Expression,
+        argument: &TypeArgument,
         use_site: Span,
         context: &Context,
     ) -> Type {
         let previous = self.synthesized_type_use_site.replace(use_site);
-        let resolved = self.resolve_type_expression(expr, context);
+        let resolved = self.resolve_type_argument(argument, context);
         self.synthesized_type_use_site = previous;
         resolved
     }
@@ -2112,37 +2164,37 @@ impl TypeChecker {
         }
     }
 
-    fn resolve_list_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
-        let resolved_inner = self.resolve_type_expression(&inner, context);
+    fn resolve_list_type(&mut self, inner: Box<TypeArgument>, context: &Context) -> Type {
+        let resolved_inner = self.resolve_type_argument(&inner, context);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
-            Some(vec![self.create_type_expression(resolved_inner)]),
+            Some(vec![self.create_type_argument(resolved_inner)]),
         ))
     }
 
-    fn resolve_set_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
-        let resolved_inner = self.resolve_type_expression(&inner, context);
+    fn resolve_set_type(&mut self, inner: Box<TypeArgument>, context: &Context) -> Type {
+        let resolved_inner = self.resolve_type_argument(&inner, context);
         self.refuse_optional_member(MatchedBy::SetElement, &resolved_inner, inner.span);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
-            Some(vec![self.create_type_expression(resolved_inner)]),
+            Some(vec![self.create_type_argument(resolved_inner)]),
         ))
     }
 
     fn resolve_map_type(
         &mut self,
-        k: Box<Expression>,
-        v: Box<Expression>,
+        k: Box<TypeArgument>,
+        v: Box<TypeArgument>,
         context: &Context,
     ) -> Type {
-        let rk = self.resolve_type_expression(&k, context);
+        let rk = self.resolve_type_argument(&k, context);
         self.refuse_optional_member(MatchedBy::MapKey, &rk, k.span);
-        let rv = self.resolve_type_expression(&v, context);
+        let rv = self.resolve_type_argument(&v, context);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
-                self.create_type_expression(rk),
-                self.create_type_expression(rv),
+                self.create_type_argument(rk),
+                self.create_type_argument(rv),
             ]),
         ))
     }
@@ -2183,48 +2235,47 @@ impl TypeChecker {
 
     fn resolve_array_type(
         &mut self,
-        inner: Box<Expression>,
-        size: Box<Expression>,
+        inner: Box<TypeArgument>,
+        size: Box<TypeArgument>,
         context: &Context,
     ) -> Type {
-        let resolved_inner = self.resolve_type_expression(&inner, context);
-        let folded_size = if let Some(val) = Self::try_eval_const_int(&size) {
-            Box::new(crate::ast::factory::int_literal_expression(val))
-        } else {
-            size
+        let resolved_inner = self.resolve_type_argument(&inner, context);
+        let folded_size = match Self::try_eval_const_argument(&size, None) {
+            Some(value) => crate::ast::type_arguments::rewritten(
+                &size,
+                TypeArgKind::Value(ValueArg::Int(value)),
+            ),
+            None => *size,
         };
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
-            Some(vec![
-                self.create_type_expression(resolved_inner),
-                *folded_size,
-            ]),
+            Some(vec![self.create_type_argument(resolved_inner), folded_size]),
         ))
     }
 
     fn resolve_result_type(
         &mut self,
-        ok: Box<Expression>,
-        err: Box<Expression>,
+        ok: Box<TypeArgument>,
+        err: Box<TypeArgument>,
         context: &Context,
     ) -> Type {
-        let ok_type = self.resolve_type_expression(&ok, context);
-        let err_type = self.resolve_type_expression(&err, context);
+        let ok_type = self.resolve_type_argument(&ok, context);
+        let err_type = self.resolve_type_argument(&err, context);
         make_type(TypeKind::Custom(
             "Result".to_string(),
             Some(vec![
-                self.create_type_expression(ok_type),
-                self.create_type_expression(err_type),
+                self.create_type_argument(ok_type),
+                self.create_type_argument(err_type),
             ]),
         ))
     }
 
-    fn resolve_tuple_type(&mut self, elements: Vec<Expression>, context: &Context) -> Type {
-        let resolved_elements: Vec<Expression> = elements
+    fn resolve_tuple_type(&mut self, elements: Vec<TypeArgument>, context: &Context) -> Type {
+        let resolved_elements: Vec<TypeArgument> = elements
             .iter()
-            .map(|elem_expr| {
-                let resolved = self.resolve_type_expression(elem_expr, context);
-                self.create_type_expression(resolved)
+            .map(|element| {
+                let resolved = self.resolve_type_argument(element, context);
+                self.create_type_argument(resolved)
             })
             .collect();
         make_type(TypeKind::Tuple(resolved_elements))
@@ -2234,7 +2285,7 @@ impl TypeChecker {
     fn resolve_custom_type(
         &mut self,
         name: &str,
-        args: Option<Vec<Expression>>,
+        args: Option<Vec<TypeArgument>>,
         expr: &Expression,
         context: &Context,
     ) -> Type {
@@ -2269,8 +2320,8 @@ impl TypeChecker {
             args_vec
                 .iter()
                 .map(|arg| {
-                    let resolved_type = self.resolve_type_expression(arg, context);
-                    self.create_type_expression(resolved_type)
+                    let resolved_type = self.resolve_type_argument(arg, context);
+                    self.create_type_argument(resolved_type)
                 })
                 .collect()
         });
@@ -2288,7 +2339,7 @@ impl TypeChecker {
     fn resolve_written_type_name(
         &mut self,
         name: &str,
-        resolved_args: Option<Vec<Expression>>,
+        resolved_args: Option<Vec<TypeArgument>>,
         expr: &Expression,
         context: &Context,
     ) -> Type {
@@ -2406,7 +2457,7 @@ impl TypeChecker {
     fn resolve_builtin_type_alias(
         &mut self,
         name: &str,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         // Try collection types first (capitalized: "Array", "List", "Map", "Set")
@@ -2439,79 +2490,78 @@ impl TypeChecker {
 
     fn resolve_alias_map(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         let args = args.as_ref()?;
         if args.len() != 2 {
             return None;
         }
-        let k = self.resolve_type_expression(&args[0], context);
+        let k = self.resolve_type_argument(&args[0], context);
         self.refuse_optional_member(MatchedBy::MapKey, &k, args[0].span);
         self.refuse_unmatchable_element(MatchedBy::MapKey, &k, args[0].span, context);
-        let v = self.resolve_type_expression(&args[1], context);
+        let v = self.resolve_type_argument(&args[1], context);
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
-                self.create_type_expression(k),
-                self.create_type_expression(v),
+                self.create_type_argument(k),
+                self.create_type_argument(v),
             ]),
         )))
     }
 
     fn resolve_alias_array(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         let args = args.as_ref()?;
         if args.len() != 2 {
             return None;
         }
-        let elem = self.resolve_type_expression(&args[0], context);
+        let elem = self.resolve_type_argument(&args[0], context);
         let size = &args[1];
-        let folded_size = if let Some(val) = Self::try_eval_const_int(size) {
-            Box::new(crate::ast::factory::int_literal_expression(val))
-        } else {
-            Box::new(size.clone())
+        let folded_size = match Self::try_eval_const_argument(size, None) {
+            Some(val) => rewritten(size, TypeArgKind::Value(ValueArg::Int(val))),
+            None => size.clone(),
         };
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
-            Some(vec![self.create_type_expression(elem), *folded_size]),
+            Some(vec![self.create_type_argument(elem), folded_size]),
         )))
     }
 
     fn resolve_alias_list(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         let args = args.as_ref()?;
         if args.len() != 1 {
             return None;
         }
-        let t = self.resolve_type_expression(&args[0], context);
+        let t = self.resolve_type_argument(&args[0], context);
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
-            Some(vec![self.create_type_expression(t)]),
+            Some(vec![self.create_type_argument(t)]),
         )))
     }
 
     fn resolve_alias_set(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         let args = args.as_ref()?;
         if args.len() != 1 {
             return None;
         }
-        let t = self.resolve_type_expression(&args[0], context);
+        let t = self.resolve_type_argument(&args[0], context);
         self.refuse_optional_member(MatchedBy::SetElement, &t, args[0].span);
         self.refuse_unmatchable_element(MatchedBy::SetElement, &t, args[0].span, context);
         Some(make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
-            Some(vec![self.create_type_expression(t)]),
+            Some(vec![self.create_type_argument(t)]),
         )))
     }
 
@@ -2524,7 +2574,7 @@ impl TypeChecker {
     pub(crate) fn refuse_unmatchable_collection_argument(
         &mut self,
         class: &str,
-        resolved_args: &[Expression],
+        resolved_args: &[TypeArgument],
         written_args: &[Expression],
         span: Span,
         context: &Context,
@@ -2542,7 +2592,7 @@ impl TypeChecker {
         } else {
             written.span
         };
-        if let Ok(ty) = self.extract_type_from_expression(resolved) {
+        if let Ok(ty) = self.extract_type_from_argument(resolved) {
             self.refuse_unmatchable_element(role, &ty, at, context);
         }
     }
@@ -2596,16 +2646,16 @@ impl TypeChecker {
 
     fn resolve_alias_range(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         match args {
             Some(args) if args.len() == 1 => {
-                let t = self.resolve_type_expression(&args[0], context);
-                Some(make_type(range_type_kind(self.create_type_expression(t))))
+                let t = self.resolve_type_argument(&args[0], context);
+                Some(make_type(range_type_kind(self.create_type_argument(t))))
             }
             None => Some(make_type(range_type_kind(
-                self.create_type_expression(make_type(TypeKind::Int)),
+                self.create_type_argument(make_type(TypeKind::Int)),
             ))),
             _ => None,
         }
@@ -2613,27 +2663,27 @@ impl TypeChecker {
 
     fn resolve_alias_option(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         let args = args.as_ref()?;
         if args.len() != 1 {
             return None;
         }
-        let t = self.resolve_type_expression(&args[0], context);
+        let t = self.resolve_type_argument(&args[0], context);
         Some(make_type(TypeKind::Option(Box::new(t))))
     }
 
     fn resolve_alias_linear(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         context: &Context,
     ) -> Option<Type> {
         let args = args.as_ref()?;
         if args.len() != 1 {
             return None;
         }
-        let t = self.resolve_type_expression(&args[0], context);
+        let t = self.resolve_type_argument(&args[0], context);
         Some(make_type(TypeKind::Linear(Box::new(t))))
     }
 
@@ -2642,7 +2692,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         def: TypeDefinition,
-        resolved_args: Option<Vec<Expression>>,
+        resolved_args: Option<Vec<TypeArgument>>,
         expr: &Expression,
         context: &Context,
     ) -> Type {
@@ -2703,7 +2753,7 @@ impl TypeChecker {
     fn own_definition_type(
         name: &str,
         def: &TypeDefinition,
-        args: Option<&[Expression]>,
+        args: Option<&[TypeArgument]>,
         context: &Context,
     ) -> Option<Type> {
         if args.is_some() || context.current_class.as_deref() != Some(name) {
@@ -2744,14 +2794,13 @@ impl TypeChecker {
     pub(crate) fn validate_vector_component(
         &mut self,
         name: &str,
-        args: Option<&[Expression]>,
+        args: Option<&[TypeArgument]>,
         span: Span,
     ) {
         if vec_dim(name).is_none() || span.is_empty() {
             return;
         }
-        let Some(ExpressionKind::Type(component, _)) =
-            args.and_then(|a| a.first()).map(|a| &a.node)
+        let Some(TypeArgKind::Type(component, _)) = args.and_then(|a| a.first()).map(|a| &a.node)
         else {
             return;
         };
@@ -2798,7 +2847,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         alias_def: super::context::AliasDefinition,
-        resolved_args: Option<Vec<Expression>>,
+        resolved_args: Option<Vec<TypeArgument>>,
         expr: &Expression,
         _context: &Context,
     ) -> Type {
@@ -2816,7 +2865,7 @@ impl TypeChecker {
             if let Some(args) = &resolved_args {
                 for (gen_def, arg_expr) in gen_defs.iter().zip(args.iter()) {
                     let arg_type = self
-                        .extract_type_from_expression(arg_expr)
+                        .extract_type_from_argument(arg_expr)
                         .unwrap_or_else(|_| Self::error_type());
                     mapping.insert(gen_def.name.clone(), arg_type);
                 }
@@ -2950,14 +2999,6 @@ impl TypeChecker {
         }
     }
 
-    /// Tries to evaluate a constant integer expression at compile time.
-    ///
-    /// Supports integer literals, unary negate/plus, and binary arithmetic
-    /// operations on constant sub-expressions. Does not resolve identifiers.
-    pub(crate) fn try_eval_const_int(expr: &Expression) -> Option<i128> {
-        Self::eval_const_int_inner(expr, None)
-    }
-
     /// Tries to evaluate a constant integer expression at compile time,
     /// with context for resolving constant identifiers.
     pub(crate) fn try_eval_const_int_with_context(
@@ -2984,6 +3025,25 @@ impl TypeChecker {
         match &info.value {
             Some(Literal::Integer(val)) => val.as_i128(),
             _ => None,
+        }
+    }
+
+    /// The integer a value generic's argument folds to: a value, or a bare
+    /// name read as a constant (a value slot parses `SIZE` as a type);
+    /// `None` for any other type, or a name with no constant value.
+    pub(crate) fn try_eval_const_argument(
+        argument: &TypeArgument,
+        context: Option<&Context>,
+    ) -> Option<i128> {
+        match &argument.node {
+            TypeArgKind::Value(value) => {
+                value.fold(&mut |name| Self::resolve_const_int(name, context))
+            }
+            TypeArgKind::Type(ty, false) => match &ty.kind {
+                TypeKind::Custom(name, None) => Self::resolve_const_int(name, context),
+                _ => None,
+            },
+            TypeArgKind::Type(_, true) => None,
         }
     }
 
@@ -3453,7 +3513,7 @@ impl TypeChecker {
             }
             // Tuple fields are inline, so check them
             TypeKind::Tuple(elements) => elements.iter().any(|expr| {
-                if let ExpressionKind::Type(t, _) = &expr.node {
+                if let TypeArgKind::Type(t, _) = &expr.node {
                     self.contains_type_directly(target_name, &t.kind, visited)
                 } else {
                     false

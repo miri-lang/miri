@@ -392,14 +392,14 @@ fn resolve_loop_elem_type(
             unreachable!("collection types are normalized to Custom before this point")
         }
         TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
-            super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
+            super::resolve_argument_type(ctx.type_checker, &elem_type_exprs[0])
         }
         TypeKind::Custom(name, Some(args))
             if (BuiltinCollectionKind::from_name(name).is_some()
                 || name == crate::ast::types::TUPLE_TYPE_NAME)
                 && !args.is_empty() =>
         {
-            super::resolve_type(ctx.type_checker, &args[0])
+            super::resolve_argument_type(ctx.type_checker, &args[0])
         }
         // A class implementing `Iterable<T>` yields `T`. Falling through to the
         // iterable's own type would give the loop variable the class's type, so a
@@ -445,7 +445,7 @@ fn resolve_map_value_type(
             if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
                 && args.len() == 2 =>
         {
-            super::resolve_type(ctx.type_checker, &args[1])
+            super::resolve_argument_type(ctx.type_checker, &args[1])
         }
         _ => Type::new(TypeKind::Int, *span),
     }
@@ -1087,7 +1087,7 @@ pub fn lower_for(
 fn range_value_element(ctx: &LoweringContext, iterable: &Expression) -> Option<Type> {
     let ty = ctx.recorded_type(iterable.id)?;
     let element = crate::ast::types::range_element_expression(&ty.kind)?;
-    Some(ctx.resolved_type(element))
+    Some(ctx.resolved_argument_type(element))
 }
 
 /// Lower `for x in r` over a range value `r`.

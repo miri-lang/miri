@@ -34,7 +34,6 @@ use crate::ast::factory::{make_type, type_expr_non_null};
 use crate::ast::types::{atomic_inner_kind, FunctionTypeData, Type, TypeKind, VALUE_WORD_BYTES};
 use crate::error::syntax::Span;
 use crate::mir::element_abi::element_layout;
-use crate::mir::instantiation::type_argument;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::{Symbol, TrampolineArgument, TrampolineShape, TrampolineWord};
 use crate::mir::{ArgMode, Body, FunctionConstant, Operand, TerminatorKind};
@@ -227,7 +226,7 @@ fn trampoline_shape(body: &Body, function: &FunctionTypeData) -> Result<Trampoli
 
 /// The type a closure parameter or result is written as.
 fn written_kind(expr: &crate::ast::expression::Expression) -> Result<TypeKind, String> {
-    type_argument(expr)
+    crate::mir::instantiation::written_component_type(expr)
         .map(|ty| ty.kind)
         .ok_or_else(|| "a closure handed to the runtime names a type this pass cannot read".into())
 }

@@ -31,7 +31,9 @@ pub(crate) fn lower_tuple_expr(
     let element_types: Vec<Type> = if let TypeKind::Tuple(declared) = &ty.kind {
         declared
             .iter()
-            .map(|element| canonical_declared_type(ctx.type_checker, &ctx.resolved_type(element)))
+            .map(|element| {
+                canonical_declared_type(ctx.type_checker, &ctx.resolved_argument_type(element))
+            })
             .collect()
     } else {
         Vec::new()
@@ -88,10 +90,12 @@ fn built_tuple_type(recorded: &Type, element_types: Vec<Type>) -> Type {
 pub(crate) fn tuple_of(element_types: Vec<Type>, span: crate::error::syntax::Span) -> Type {
     let elements = element_types
         .into_iter()
-        .map(|element| Expression {
-            id: 0,
-            span,
-            node: ExpressionKind::Type(Box::new(element), false),
+        .map(|element| {
+            crate::ast::IdNode::new(
+                0,
+                crate::ast::type_arguments::TypeArgKind::Type(Box::new(element), false),
+                span,
+            )
         })
         .collect();
     Type::new(TypeKind::Tuple(elements), span)

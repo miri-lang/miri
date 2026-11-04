@@ -9,6 +9,7 @@
 //! only an instantiation reveals. Both say it in the words built here.
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::types::{array_element_and_size, Type, TypeKind};
 use crate::type_checker::diagnostics::spelled;
 
@@ -70,7 +71,7 @@ fn atomic_replacement(ty: &Type) -> Option<String> {
     let (element, size) = array_element_and_size(&ty.kind)?;
     let unsigned = matches!(
         &element.node,
-        ExpressionKind::Type(element, _) if matches!(element.kind, TypeKind::U32)
+        TypeArgKind::Type(element, _) if matches!(element.kind, TypeKind::U32)
     );
     let integer = if unsigned { "u32" } else { "i32" };
     Some(format!("Array<Atomic<{integer}>, {}>", size.node))

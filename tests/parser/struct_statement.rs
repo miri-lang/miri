@@ -8,6 +8,7 @@ use miri::ast::factory::{
     return_statement, struct_member, struct_statement, type_bool, type_custom, type_expr_non_null,
     type_expr_option, type_float, type_int, type_list, type_map, type_string,
 };
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::TypeDeclarationKind;
 use miri::ast::MemberVisibility;
 use miri::error::syntax::SyntaxErrorKind;
@@ -222,7 +223,7 @@ fn test_struct_with_nested_generic_member() {
                 "items",
                 type_expr_non_null(type_list(type_custom(
                     "Optional",
-                    Some(vec![type_expr_non_null(type_custom("T", None))]),
+                    Some(vec![type_argument(type_custom("T", None))]),
                 ))),
             )],
             vec![],

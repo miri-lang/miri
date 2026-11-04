@@ -9,6 +9,7 @@
 //! choice, so resolution and the stages after checking read it back rather
 //! than deciding again.
 
+use crate::ast::type_arguments::{argument_type, TypeArgKind, TypeArgument};
 use crate::ast::type_identity;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::{Expression, ExpressionKind, MemberVisibility};
@@ -226,12 +227,7 @@ impl TypeChecker {
         let (written, wrapped) = type_components(kind);
         written
             .into_iter()
-            .find_map(|expr| {
-                let ExpressionKind::Type(ty, _) = &expr.node else {
-                    return None;
-                };
-                self.hidden_private_type_in(&ty.kind)
-            })
+            .find_map(|ty| self.hidden_private_type_in(&ty.kind))
             .or_else(|| wrapped.and_then(|ty| self.hidden_private_type_in(&ty.kind)))
     }
 
@@ -252,12 +248,12 @@ impl TypeChecker {
     }
 
     fn qualified_kind(&self, kind: &TypeKind, id: usize) -> TypeKind {
-        let one = |expr: &Expression| Box::new(self.qualified_expression(expr));
+        let one = |arg: &TypeArgument| Box::new(self.qualified_argument(arg));
         let inner = |ty: &Type| Box::new(self.qualified_type(ty, id));
         match kind {
             TypeKind::Custom(name, args) => {
                 let name = self.modules.qualified_type_names.get(&id).unwrap_or(name);
-                let args = args.as_deref().map(|args| self.qualified_expressions(args));
+                let args = args.as_deref().map(|args| self.qualified_arguments(args));
                 TypeKind::Custom(name.clone(), args)
             }
             TypeKind::List(element) => TypeKind::List(one(element)),
@@ -266,8 +262,8 @@ impl TypeChecker {
             TypeKind::Array(element, size) => TypeKind::Array(one(element), size.clone()),
             TypeKind::Map(key, value) => TypeKind::Map(one(key), one(value)),
             TypeKind::Result(ok, err) => TypeKind::Result(one(ok), one(err)),
-            TypeKind::Tuple(elements) => TypeKind::Tuple(self.qualified_expressions(elements)),
-            TypeKind::OneOf(members) => TypeKind::OneOf(self.qualified_expressions(members)),
+            TypeKind::Tuple(elements) => TypeKind::Tuple(self.qualified_arguments(elements)),
+            TypeKind::OneOf(members) => TypeKind::OneOf(self.qualified_arguments(members)),
             TypeKind::Option(payload) => TypeKind::Option(inner(payload)),
             TypeKind::Meta(of) => TypeKind::Meta(inner(of)),
             TypeKind::Linear(of) => TypeKind::Linear(inner(of)),
@@ -312,15 +308,24 @@ impl TypeChecker {
         qualified
     }
 
-    fn qualified_expressions(&self, exprs: &[Expression]) -> Vec<Expression> {
-        exprs
-            .iter()
-            .map(|expr| self.qualified_expression(expr))
+    fn qualified_arguments(&self, args: &[TypeArgument]) -> Vec<TypeArgument> {
+        args.iter()
+            .map(|arg| self.qualified_argument(arg))
             .collect()
     }
 
-    /// `expr`, a type argument or a component of a type, with the names it
-    /// writes qualified; any other expression as it is.
+    /// `arg` with the names the type it names writes qualified; a value as it
+    /// is.
+    fn qualified_argument(&self, arg: &TypeArgument) -> TypeArgument {
+        let mut qualified = arg.clone();
+        if let TypeArgKind::Type(written, _) = &mut qualified.node {
+            **written = self.qualified_type(written, arg.id);
+        }
+        qualified
+    }
+
+    /// `expr`, a component of a closure type, with the names it writes
+    /// qualified; any other expression as it is.
     fn qualified_expression(&self, expr: &Expression) -> Expression {
         let mut qualified = expr.clone();
         if let ExpressionKind::Type(written, _) = &mut qualified.node {
@@ -334,29 +339,41 @@ impl TypeChecker {
     }
 }
 
-/// The parts of a type that are types themselves: the expressions its
-/// arguments, elements and a closure's signature are written in, and the type
-/// an optional, a metatype or a linear type wraps.
-fn type_components(kind: &TypeKind) -> (Vec<&Expression>, Option<&Type>) {
+/// The parts of a type that are types themselves: the types its arguments,
+/// elements and a closure's signature are written as, and the type an
+/// optional, a metatype or a linear type wraps.
+fn type_components(kind: &TypeKind) -> (Vec<&Type>, Option<&Type>) {
     match kind {
-        TypeKind::Custom(_, args) => (args.iter().flatten().collect(), None),
+        TypeKind::Custom(_, args) => (
+            args.iter().flatten().filter_map(argument_type).collect(),
+            None,
+        ),
         TypeKind::List(element)
         | TypeKind::Set(element)
         | TypeKind::Future(element)
-        | TypeKind::Array(element, _) => (vec![element], None),
-        TypeKind::Map(first, second) | TypeKind::Result(first, second) => {
-            (vec![first, second], None)
+        | TypeKind::Array(element, _) => (argument_type(element).into_iter().collect(), None),
+        TypeKind::Map(first, second) | TypeKind::Result(first, second) => (
+            [first, second]
+                .into_iter()
+                .filter_map(|arg| argument_type(arg))
+                .collect(),
+            None,
+        ),
+        TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => {
+            (elements.iter().filter_map(argument_type).collect(), None)
         }
-        TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => (elements.iter().collect(), None),
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             (Vec::new(), Some(inner))
         }
         TypeKind::Function(function) => {
             let params = function.params.iter().map(|param| &*param.typ);
-            (
-                params.chain(function.return_type.as_deref()).collect(),
-                None,
-            )
+            let written = params
+                .chain(function.return_type.as_deref())
+                .filter_map(|expr| match &expr.node {
+                    ExpressionKind::Type(ty, _) => Some(&**ty),
+                    _ => None,
+                });
+            (written.collect(), None)
         }
         TypeKind::Int
         | TypeKind::I8

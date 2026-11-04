@@ -9,7 +9,7 @@
 
 use cranelift_codegen::ir::{types, AbiParam, Signature};
 use cranelift_codegen::isa::CallConv;
-use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::value_abi::{body_signature, miri_signature, Passing, Returning};
@@ -41,7 +41,7 @@ fn tuple_of(kinds: &[TypeKind]) -> TypeKind {
     TypeKind::Tuple(
         kinds
             .iter()
-            .map(|kind| type_expr_non_null(ty(kind.clone())))
+            .map(|kind| type_argument(ty(kind.clone())))
             .collect(),
     )
 }
@@ -275,14 +275,7 @@ fn a_managed_struct_is_never_held_as_bytes() {
 #[test]
 fn a_body_over_optionals_held_as_bytes_takes_them_by_address_and_returns_their_members() {
     let written_option = |payload: TypeKind| {
-        TypeKind::Custom(
-            "Option".to_string(),
-            Some(vec![miri::ast::expression::Expression::new(
-                0,
-                miri::ast::expression::ExpressionKind::Type(Box::new(ty(payload)), false),
-                Span::default(),
-            )]),
-        )
+        TypeKind::Custom("Option".to_string(), Some(vec![type_argument(ty(payload))]))
     };
     let of_i32 = [types::I8, types::I32];
     let of_point = [types::I8, types::I64, types::F64];

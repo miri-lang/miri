@@ -85,7 +85,7 @@ impl TypeChecker {
             }
         }
 
-        let type_expr = self.create_type_expression(start_type);
+        let type_expr = self.create_type_argument(start_type);
         make_type(TypeKind::Custom("Range".to_string(), Some(vec![type_expr])))
     }
 }

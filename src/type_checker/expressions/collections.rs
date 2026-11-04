@@ -43,6 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory::make_type;
+use crate::ast::type_arguments::{value_argument, written_argument, TypeArgKind, TypeArgument};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -57,7 +58,7 @@ impl TypeChecker {
         if elements.is_empty() {
             return make_type(TypeKind::Custom(
                 BuiltinCollectionKind::List.name().to_string(),
-                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+                Some(vec![self.create_type_argument(make_type(TypeKind::Void))]),
             ));
         }
 
@@ -72,7 +73,7 @@ impl TypeChecker {
 
         let list = make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
-            Some(vec![self.create_type_expression(element_type)]),
+            Some(vec![self.create_type_argument(element_type)]),
         ));
         self.record_elements_cloned(&list, elements[0].span, context);
         list
@@ -206,7 +207,7 @@ impl TypeChecker {
         let element_types = expected_args
             .iter()
             .take(element_count)
-            .map(|arg| self.extract_type_from_expression(arg).ok())
+            .map(|arg| self.extract_type_from_argument(arg).ok())
             .collect::<Option<Vec<Type>>>()?;
         for (value, position) in values {
             let element_type = element_types.get(position)?;
@@ -323,10 +324,8 @@ impl TypeChecker {
             .iter()
             .zip(declared)
             .map(|(argument, declared)| {
-                let (
-                    ExpressionKind::Type(argument_ty, false),
-                    ExpressionKind::Type(declared_ty, false),
-                ) = (&argument.node, &declared.node)
+                let (TypeArgKind::Type(argument_ty, false), TypeArgKind::Type(declared_ty, false)) =
+                    (&argument.node, &declared.node)
                 else {
                     return argument.clone();
                 };
@@ -355,7 +354,7 @@ impl TypeChecker {
     fn tuple_literal_fits(
         &mut self,
         expected: &Type,
-        declared: &[Expression],
+        declared: &[TypeArgument],
         values: &[Expression],
         expr: &Expression,
         context: &mut Context,
@@ -364,7 +363,7 @@ impl TypeChecker {
             return false;
         }
         for (value, declared_element) in values.iter().zip(declared) {
-            let Ok(element) = self.extract_type_from_expression(declared_element) else {
+            let Ok(element) = self.extract_type_from_argument(declared_element) else {
                 return false;
             };
             let Some(value_type) = self.get_type(value.id).cloned() else {
@@ -407,7 +406,7 @@ impl TypeChecker {
         };
         let mut arguments = arguments;
         if let Some(first) = arguments.first_mut() {
-            *first = self.create_type_expression(element.clone());
+            *first = self.create_type_argument(element.clone());
             // Every element was accepted at `element`, so the literal is
             // built at it, a scalar argument it took from its literals
             // included, not only an argument it left open.
@@ -604,7 +603,7 @@ impl TypeChecker {
                 return;
             };
             for (value, element_type) in elements.iter().zip(element_types) {
-                if let Ok(element_type) = self.extract_type_from_expression(element_type) {
+                if let Ok(element_type) = self.extract_type_from_argument(element_type) {
                     self.settle_at_expected(value, &element_type, context, built_elsewhere);
                 }
             }
@@ -706,9 +705,9 @@ impl TypeChecker {
         };
         BuiltinCollectionKind::from_name(name)?;
         let (first, rest) = args.split_first()?;
-        let held = self.extract_type_from_expression(first).ok()?;
+        let held = self.extract_type_from_argument(first).ok()?;
         let filled = fill_open_arguments(&held, &element);
-        let mut settled_args = vec![self.create_type_expression(filled)];
+        let mut settled_args = vec![self.create_type_argument(filled)];
         settled_args.extend(rest.iter().cloned());
         Some(Type::new(
             TypeKind::Custom(name.clone(), Some(settled_args)),
@@ -826,7 +825,7 @@ impl TypeChecker {
             .filter_map(|(generic, arg)| {
                 Some((
                     generic.name.clone(),
-                    self.extract_type_from_expression(arg).ok()?,
+                    self.extract_type_from_argument(arg).ok()?,
                 ))
             })
             .collect();
@@ -873,7 +872,7 @@ impl TypeChecker {
             return None;
         };
         BuiltinCollectionKind::from_name(name)?;
-        self.extract_type_from_expression(args.first()?).ok()
+        self.extract_type_from_argument(args.first()?).ok()
     }
 
     /// Record `joined` as the type of `expr` — one branch of a conditional or
@@ -915,11 +914,14 @@ impl TypeChecker {
         size: &Expression,
         context: &mut Context,
     ) -> Type {
+        // The parser writes a literal's size as the count of its elements.
+        let size = written_argument(size.clone())
+            .unwrap_or_else(|_| value_argument(elements.len() as i128));
         if elements.is_empty() {
-            let inner_type_expr = self.create_type_expression(make_type(TypeKind::Void));
+            let inner_type_expr = self.create_type_argument(make_type(TypeKind::Void));
             return make_type(TypeKind::Custom(
                 BuiltinCollectionKind::Array.name().to_string(),
-                Some(vec![inner_type_expr, size.clone()]),
+                Some(vec![inner_type_expr, size]),
             ));
         }
 
@@ -934,10 +936,7 @@ impl TypeChecker {
 
         let array = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
-            Some(vec![
-                self.create_type_expression(element_type),
-                size.clone(),
-            ]),
+            Some(vec![self.create_type_argument(element_type), size]),
         ));
         self.record_elements_cloned(&array, elements[0].span, context);
         array
@@ -952,8 +951,8 @@ impl TypeChecker {
             return make_type(TypeKind::Custom(
                 BuiltinCollectionKind::Map.name().to_string(),
                 Some(vec![
-                    self.create_type_expression(make_type(TypeKind::Void)),
-                    self.create_type_expression(make_type(TypeKind::Void)),
+                    self.create_type_argument(make_type(TypeKind::Void)),
+                    self.create_type_argument(make_type(TypeKind::Void)),
                 ]),
             ));
         }
@@ -973,8 +972,8 @@ impl TypeChecker {
         let map = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
-                self.create_type_expression(key_type),
-                self.create_type_expression(val_type),
+                self.create_type_argument(key_type),
+                self.create_type_argument(val_type),
             ]),
         ));
         self.record_elements_cloned(&map, first_key.span, context);
@@ -985,7 +984,7 @@ impl TypeChecker {
         if elements.is_empty() {
             return make_type(TypeKind::Custom(
                 BuiltinCollectionKind::Set.name().to_string(),
-                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+                Some(vec![self.create_type_argument(make_type(TypeKind::Void))]),
             ));
         }
 
@@ -1004,7 +1003,7 @@ impl TypeChecker {
 
         let set = make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
-            Some(vec![self.create_type_expression(first_type)]),
+            Some(vec![self.create_type_argument(first_type)]),
         ));
         self.record_elements_cloned(&set, elements[0].span, context);
         set
@@ -1101,7 +1100,7 @@ impl TypeChecker {
         let mut element_types = Vec::with_capacity(elements.len());
         for element in elements {
             let ty = self.infer_expression(element, context);
-            element_types.push(self.create_type_expression(ty));
+            element_types.push(self.create_type_argument(ty));
         }
         make_type(TypeKind::Tuple(element_types))
     }
@@ -1138,15 +1137,15 @@ pub(crate) fn fill_open_arguments_where(
         };
     }
     let fill = |known: &Type, other: &Type| fill_open_arguments_where(known, other, is_open);
-    let fill_all = |known: &[Expression], other: &[Expression]| -> Vec<Expression> {
+    let fill_all = |known: &[TypeArgument], other: &[TypeArgument]| -> Vec<TypeArgument> {
         known
             .iter()
             .zip(other)
-            .map(|(known, other)| fill_open_expression(known, other, is_open))
+            .map(|(known, other)| fill_open_argument(known, other, is_open))
             .collect()
     };
     let fill_one =
-        |known: &Expression, other: &Expression| fill_open_expression(known, other, is_open);
+        |known: &TypeArgument, other: &TypeArgument| fill_open_argument(known, other, is_open);
     let kind = match (&known.kind, &other.kind) {
         (TypeKind::Custom(name, Some(args)), TypeKind::Custom(other_name, Some(other_args)))
             if name == other_name && args.len() == other_args.len() =>
@@ -1184,18 +1183,18 @@ pub(crate) fn fill_open_arguments_where(
 
 /// A type argument written as an expression, filled like
 /// [`fill_open_arguments_where`]; a value argument (an array's size) is kept.
-fn fill_open_expression(
-    known: &Expression,
-    other: &Expression,
+fn fill_open_argument(
+    known: &TypeArgument,
+    other: &TypeArgument,
     is_open: &dyn Fn(&str) -> bool,
-) -> Expression {
-    let (ExpressionKind::Type(known_ty, nullable), ExpressionKind::Type(other_ty, _)) =
+) -> TypeArgument {
+    let (TypeArgKind::Type(known_ty, nullable), TypeArgKind::Type(other_ty, _)) =
         (&known.node, &other.node)
     else {
         return known.clone();
     };
     let mut filled = known.clone();
-    filled.node = ExpressionKind::Type(
+    filled.node = TypeArgKind::Type(
         Box::new(fill_open_arguments_where(known_ty, other_ty, is_open)),
         *nullable,
     );

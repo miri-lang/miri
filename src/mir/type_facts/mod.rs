@@ -22,7 +22,7 @@ mod element_identity;
 mod release_plan;
 pub mod unsharing;
 
-use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::Type;
 use crate::mir::dispatch::VtableFills;
 use crate::mir::symbol::{Symbol, ThunkKind};
@@ -172,7 +172,7 @@ impl TypeFacts {
     pub fn drop_thunk(
         &self,
         name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
         open: &HashSet<String>,
         bound: &HashSet<String>,
     ) -> Result<DropThunk, DropThunkRefusal> {
@@ -205,7 +205,7 @@ impl TypeFacts {
     /// instance carrying `args`, in layout order; `None` when `name` names no
     /// struct or class. Every read of a field type at an instantiation asks
     /// here, so layout, drop and projection agree on what a field holds.
-    pub fn field_types(&self, name: &str, args: Option<&[Expression]>) -> Option<Vec<Type>> {
+    pub fn field_types(&self, name: &str, args: Option<&[TypeArgument]>) -> Option<Vec<Type>> {
         crate::mir::instantiation::field_types(&self.definitions, name, args)
     }
 

@@ -44,6 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
+use crate::ast::type_arguments::{written_argument, TypeArgKind, ValueArg};
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -99,8 +100,10 @@ impl TypeChecker {
                 Some(ast_factory::make_type(TypeKind::Custom(
                     "Result".to_string(),
                     Some(vec![
-                        ast_factory::type_expr_non_null(val_type),
-                        ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void)),
+                        crate::ast::type_arguments::type_argument(val_type),
+                        crate::ast::type_arguments::type_argument(ast_factory::make_type(
+                            TypeKind::Void,
+                        )),
                     ]),
                 )))
             }
@@ -117,8 +120,10 @@ impl TypeChecker {
                 Some(ast_factory::make_type(TypeKind::Custom(
                     "Result".to_string(),
                     Some(vec![
-                        ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void)),
-                        ast_factory::type_expr_non_null(val_type),
+                        crate::ast::type_arguments::type_argument(ast_factory::make_type(
+                            TypeKind::Void,
+                        )),
+                        crate::ast::type_arguments::type_argument(val_type),
                     ]),
                 )))
             }
@@ -235,7 +240,7 @@ impl TypeChecker {
         &mut self,
         enum_def: &crate::type_checker::context::EnumDefinition,
         generic_mapping: &HashMap<String, Type>,
-    ) -> Option<Vec<Expression>> {
+    ) -> Option<Vec<TypeArgument>> {
         enum_def.generics.as_ref().map(|generics| {
             generics
                 .iter()
@@ -244,7 +249,7 @@ impl TypeChecker {
                         .get(&g.name)
                         .cloned()
                         .unwrap_or_else(|| ast_factory::make_type(TypeKind::Error));
-                    self.create_type_expression(ty)
+                    self.create_type_argument(ty)
                 })
                 .collect()
         })
@@ -434,37 +439,44 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if let TypeKind::Custom(name, _) = &inner.kind {
-            let resolved_args: Vec<Expression> = args
+            let resolved_args: Vec<TypeArgument> = args
                 .iter()
                 .map(|arg| {
                     // A constant value argument (`Array<float, SIZE>`,
-                    // `Array<T, W * W>`) folds to its literal value so the
-                    // downstream sized-constructor const-eval sees an integer
-                    // literal instead of an unknown type name. A value
-                    // argument counts what an instance holds, so one that is
-                    // not positive is refused.
+                    // `Array<T, W * W>`) folds to its value so the downstream
+                    // sized-constructor const-eval sees an integer instead of
+                    // an unknown type name. A value argument counts what an
+                    // instance holds, so one that is not positive is refused.
                     if let Some(value) = TypeChecker::try_eval_const_int_with_context(arg, context)
                     {
+                        let folded =
+                            IdNode::new(arg.id, TypeArgKind::Value(ValueArg::Int(value)), arg.span);
                         if value <= 0 {
-                            self.report_non_positive_value_argument(name, arg, value);
+                            self.report_non_positive_value_argument(name, &folded, value);
                         }
-                        return ast_factory::literal_with_span(
-                            ast_factory::int_literal(value),
-                            arg.span,
-                        );
+                        return folded;
                     }
                     // Type generics resolve through the normal `Type → Type`
-                    // pipeline; value generics (a literal `3` in
-                    // `Foo<float, 3>`) carry through verbatim. Routing the
-                    // literal through `resolve_type_expression` would report
-                    // "Expected type expression" and collapse the slot to
-                    // `Error`, which then propagates into every field
+                    // pipeline; value generics carry through as written.
+                    // Routing a value through `resolve_type_argument` would
+                    // report "Expected type expression" and collapse the slot
+                    // to `Error`, which then propagates into every field
                     // substitution downstream.
-                    if self.extract_type_from_expression(arg).is_ok() {
-                        let ty = self.resolve_type_expression(arg, context);
-                        self.create_type_expression(ty)
-                    } else {
-                        self.value_argument(name, arg, context)
+                    match written_argument(arg.clone()) {
+                        Ok(written) if self.extract_type_from_argument(&written).is_ok() => {
+                            let ty = self.resolve_type_argument(&written, context);
+                            self.create_type_argument(ty)
+                        }
+                        Ok(written) => self.value_argument(name, &written, context),
+                        Err(refused) => {
+                            let text = crate::ast::formatter::expression_text(&refused);
+                            if is_integer_literal(&refused) {
+                                self.report_value_argument_out_of_range(name, &text, refused.span);
+                            } else {
+                                self.report_non_constant_value_argument(name, &text, refused.span);
+                            }
+                            self.create_type_argument(Self::error_type())
+                        }
                     }
                 })
                 .collect();
@@ -485,12 +497,17 @@ impl TypeChecker {
 
     /// The value argument `arg` of `class` with every named constant replaced
     /// by its value, reporting an operand that is not a compile-time constant.
-    fn value_argument(&mut self, class: &str, arg: &Expression, context: &Context) -> Expression {
+    fn value_argument(
+        &mut self,
+        class: &str,
+        arg: &TypeArgument,
+        context: &Context,
+    ) -> TypeArgument {
         let inlined = crate::type_checker::generics::inline_value_constants(arg, context);
         if let Some(operand) =
             crate::type_checker::generics::non_constant_value_operand(&inlined, context)
         {
-            self.report_non_constant_value_argument(class, operand);
+            self.report_non_constant_value_argument(class, &operand, arg.span);
         }
         inlined
     }
@@ -551,4 +568,16 @@ pub(crate) fn yielded_expression(stmt: &Statement) -> Option<&Expression> {
         | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(..) => None,
     }
+}
+
+/// Whether `expr` is an integer literal, negated or not: written as a value
+/// argument and still refused, it is one that does not fit in 128 bits.
+fn is_integer_literal(expr: &Expression) -> bool {
+    if let ExpressionKind::Unary(crate::ast::operator::UnaryOp::Negate, inner) = &expr.node {
+        return is_integer_literal(inner);
+    }
+    matches!(
+        &expr.node,
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+    )
 }

@@ -796,8 +796,7 @@ fn expand_nested_generic_instantiations(
                     };
                     let mut resolved = Vec::with_capacity(nested_args.len());
                     for arg in nested_args {
-                        let Ok(concrete_arg) = type_checker.extract_type_from_expression(arg)
-                        else {
+                        let Ok(concrete_arg) = type_checker.extract_type_from_argument(arg) else {
                             break;
                         };
                         resolved.push(concrete_arg);

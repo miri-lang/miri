@@ -22,7 +22,8 @@
 //! runs. The name is bound nowhere else.
 
 use super::{local_display_name, VerificationViolation};
-use crate::ast::expression::ExpressionKind;
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::rvalue::{AggregateKind, Rvalue};
@@ -123,8 +124,8 @@ fn own_parameter_arguments(
 }
 
 /// The name a bare written type argument spells, parameter or type.
-fn bare_name(arg: &crate::ast::expression::Expression) -> Option<&str> {
-    let ExpressionKind::Type(ty, _) = &arg.node else {
+fn bare_name(arg: &TypeArgument) -> Option<&str> {
+    let TypeArgKind::Type(ty, _) = &arg.node else {
         return None;
     };
     let (TypeKind::Custom(name, None) | TypeKind::Generic(name, None, _)) = &ty.kind else {

@@ -24,6 +24,7 @@
 //! the body still reads the set's own name as the set — which, as the type of a
 //! value, is refused there as everywhere else.
 
+use crate::ast::type_arguments::TypeArgKind;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -345,6 +346,14 @@ fn visit_type_names(expression: &mut Expression, visit: &mut impl FnMut(&mut Str
     }
 }
 
+/// [`visit_type_names`] for a type argument; a value names no type.
+fn visit_argument_names(argument: &mut TypeArgument, visit: &mut impl FnMut(&mut String)) {
+    match &mut argument.node {
+        TypeArgKind::Type(written, _) => visit_kind_names(written, visit),
+        TypeArgKind::Value(_) => {}
+    }
+}
+
 fn visit_kind_names(written: &mut Type, visit: &mut impl FnMut(&mut String)) {
     match &mut written.kind {
         TypeKind::Custom(name, arguments) => {
@@ -352,20 +361,20 @@ fn visit_kind_names(written: &mut Type, visit: &mut impl FnMut(&mut String)) {
                 visit(name);
             }
             for argument in arguments.iter_mut().flatten() {
-                visit_type_names(argument, visit);
+                visit_argument_names(argument, visit);
             }
         }
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
-            visit_type_names(element, visit)
+            visit_argument_names(element, visit)
         }
-        TypeKind::Array(element, _) => visit_type_names(element, visit),
+        TypeKind::Array(element, _) => visit_argument_names(element, visit),
         TypeKind::Map(first, second) | TypeKind::Result(first, second) => {
-            visit_type_names(first, visit);
-            visit_type_names(second, visit);
+            visit_argument_names(first, visit);
+            visit_argument_names(second, visit);
         }
         TypeKind::Tuple(elements) | TypeKind::OneOf(elements) => elements
             .iter_mut()
-            .for_each(|element| visit_type_names(element, visit)),
+            .for_each(|element| visit_argument_names(element, visit)),
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             visit_kind_names(inner, visit)
         }

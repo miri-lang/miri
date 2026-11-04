@@ -6,6 +6,7 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::pattern::Pattern;
 use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -36,6 +37,16 @@ pub fn ensure_place(ctx: &mut LoweringContext, operand: Operand, span: Span) -> 
             });
             Place::new(temp)
         }
+    }
+}
+
+/// The type a type argument names, resolved as [`resolve_type`] resolves the
+/// type expression it is written as; a value has no type and resolves to
+/// `TypeKind::Error`.
+pub fn resolve_argument_type(tc: &TypeChecker, arg: &TypeArgument) -> Type {
+    match TypeChecker::argument_expression(arg) {
+        Some(expr) => resolve_type(tc, &expr),
+        None => Type::new(TypeKind::Error, arg.span),
     }
 }
 
@@ -174,7 +185,7 @@ pub fn bind_pattern(
             let element_types: Vec<Type> = if let TypeKind::Tuple(elems) = &tuple_ty.kind {
                 elems
                     .iter()
-                    .map(|e| resolve_type(ctx.type_checker, e))
+                    .map(|e| resolve_argument_type(ctx.type_checker, e))
                     .collect()
             } else {
                 // Fallback: use the whole tuple type (should not happen after type checking)
@@ -356,7 +367,7 @@ pub(crate) fn variant_payload_types(
 /// The type checker normalizes `Result<T, E>` to `TypeKind::Custom`, but the
 /// dedicated `TypeKind::Result` spelling also reaches lowering, so both forms
 /// are recognized. Any other type carries no enum instantiation arguments.
-fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<Expression>> {
+fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<TypeArgument>> {
     if let TypeKind::Custom(_, Some(args)) = kind {
         Some(args.clone())
     } else if let TypeKind::Result(ok_ty, err_ty) = kind {
@@ -384,7 +395,7 @@ fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<Expression>> {
 /// either side leaks (no release) or double-frees (release without retain).
 fn substitute_variant_field_types(
     declared: &[Type],
-    type_args: Option<&[Expression]>,
+    type_args: Option<&[TypeArgument]>,
     enum_def: &crate::type_checker::context::EnumDefinition,
 ) -> Vec<Type> {
     declared

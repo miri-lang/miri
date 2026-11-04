@@ -23,15 +23,18 @@ passes a `gpu frame` block runs, with literal-count repeats expanded).
 
 ## Type arguments
 
-A type's arguments are stored as the expressions they were written as, so a
-value generic's argument (the `4` of `Array<int, 4>`) fits the slot a type
-argument does. `type_arguments.rs` is how every stage past the type checker
-reads them: `argument_type` gives the type an argument names, or nothing when
-it names a value, and `unresolved_type_argument` finds an argument written
-where a type is required that names none, which `Body::validate` refuses. The
-backends read type arguments only through it and never match on an expression
-kind; `make audit` refuses an AST expression or factory import under
-`src/codegen`.
+A type's arguments are `TypeArgument`s (`type_arguments.rs`): each is a type,
+with the nullable mark it was written with, or a value generic's value (the
+`4` of `Array<int, 4>`). A value is an integer, a name — a constant's, or a
+value parameter's in a generic body — or arithmetic over them; no other
+expression can stand where a type argument is written, and the parser refuses
+one there. Substitution and the type checker's folding leave only integers for
+the stages past it. `argument_type` gives the type an argument names, or
+nothing when it names a value, `argument_value` the integer a folded value
+holds, and `unresolved_type_argument` finds a value written where a type is
+required, which `Body::validate` refuses. A closure type's parameters and
+return are still written as expressions. `make audit` refuses an AST
+expression or factory import under `src/codegen`.
 
 ## Rendering back to source
 

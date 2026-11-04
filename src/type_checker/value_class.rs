@@ -26,7 +26,8 @@
 //! leaves open is that parameter; inside a definition, a name is either one
 //! of the definition's own parameters or a type from the table.
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
     is_range_type_name, vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME,
     AUTO_COPY_MAX_SIZE, EQUALS_METHOD_NAME, OPTION_TYPE_NAME,
@@ -322,8 +323,8 @@ struct Argument<'n, 'a> {
 
 impl<'n, 'a> Argument<'n, 'a> {
     /// The argument `expression` spells, or `None` for a value argument.
-    fn written(expression: &'a Expression, names: Names<'n, 'a>) -> Option<Self> {
-        let ExpressionKind::Type(ty, is_nullable) = &expression.node else {
+    fn written(expression: &'a TypeArgument, names: Names<'n, 'a>) -> Option<Self> {
+        let TypeArgKind::Type(ty, is_nullable) = &expression.node else {
             return None;
         };
         Some(Self {
@@ -345,7 +346,7 @@ impl<'n, 'a> Argument<'n, 'a> {
 /// The frame of a definition with `generics`, written with `args` in `names`.
 fn bind<'n, 'a>(
     generics: Option<&'a [GenericDefinition]>,
-    args: Option<&'a [Expression]>,
+    args: Option<&'a [TypeArgument]>,
     names: Names<'n, 'a>,
 ) -> Vec<Binding<'n, 'a>> {
     let args = args.unwrap_or_default();
@@ -445,7 +446,7 @@ impl<'a> Classifier<'a> {
         &mut self,
         kind: &'a TypeKind,
         name: &'a str,
-        args: &'a Option<Vec<Expression>>,
+        args: &'a Option<Vec<TypeArgument>>,
         names: Names<'_, 'a>,
     ) -> Verdict {
         if args.is_none() {
@@ -474,7 +475,7 @@ impl<'a> Classifier<'a> {
     fn classify_definition(
         &mut self,
         name: &str,
-        args: Option<&'a [Expression]>,
+        args: Option<&'a [TypeArgument]>,
         names: Names<'_, 'a>,
     ) -> Verdict {
         match self.definitions.get(name) {
@@ -508,7 +509,7 @@ impl<'a> Classifier<'a> {
     fn classify_enum(
         &mut self,
         definition: &'a EnumDefinition,
-        args: Option<&'a [Expression]>,
+        args: Option<&'a [TypeArgument]>,
         names: Names<'_, 'a>,
     ) -> Verdict {
         let frame = bind(definition.generics.as_deref(), args, names);
@@ -542,7 +543,7 @@ impl<'a> Classifier<'a> {
     fn classify_struct(
         &mut self,
         definition: &'a StructDefinition,
-        args: Option<&'a [Expression]>,
+        args: Option<&'a [TypeArgument]>,
         names: Names<'_, 'a>,
     ) -> Verdict {
         let frame = bind(definition.generics.as_deref(), args, names);
@@ -554,7 +555,7 @@ impl<'a> Classifier<'a> {
         self.classify_aggregate(members)
     }
 
-    fn classify_tuple(&mut self, elements: &'a [Expression], names: Names<'_, 'a>) -> Verdict {
+    fn classify_tuple(&mut self, elements: &'a [TypeArgument], names: Names<'_, 'a>) -> Verdict {
         let members = elements
             .iter()
             .map(|element| Argument::written(element, names))
@@ -594,11 +595,11 @@ impl<'a> Classifier<'a> {
     fn classify_vector(
         &mut self,
         dim: u8,
-        args: Option<&'a [Expression]>,
+        args: Option<&'a [TypeArgument]>,
         names: Names<'_, 'a>,
     ) -> Verdict {
         let component = args
-            .and_then(<[Expression]>::first)
+            .and_then(<[TypeArgument]>::first)
             .and_then(|component| Argument::written(component, names));
         match component.map(|component| self.classify_argument(component)) {
             Some(Verdict::Class(ValueClass::Scalar(scalar))) => {
@@ -744,7 +745,7 @@ fn collection_verdict(has_arguments: bool) -> Verdict {
 /// that component. A user type that only shares the name carries none.
 fn atomic_component<'n, 'a>(
     name: &str,
-    args: Option<&'a [Expression]>,
+    args: Option<&'a [TypeArgument]>,
     names: Names<'n, 'a>,
 ) -> Option<Argument<'n, 'a>> {
     if name != ATOMIC_TYPE_NAME {
@@ -758,7 +759,7 @@ fn atomic_component<'n, 'a>(
 /// no consumer of the authority meets two layouts for one type.
 fn option_payload<'n, 'a>(
     name: &str,
-    args: Option<&'a [Expression]>,
+    args: Option<&'a [TypeArgument]>,
     names: Names<'n, 'a>,
 ) -> Option<Argument<'n, 'a>> {
     if name != OPTION_TYPE_NAME {
@@ -774,7 +775,7 @@ fn option_payload<'n, 'a>(
 /// built as the tuple of its start, its end and whether the end is included.
 fn range_element<'n, 'a>(
     name: &str,
-    args: Option<&'a [Expression]>,
+    args: Option<&'a [TypeArgument]>,
     names: Names<'n, 'a>,
 ) -> Option<Argument<'n, 'a>> {
     if !is_range_type_name(name) {

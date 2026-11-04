@@ -3,9 +3,9 @@
 
 use super::expr;
 use super::expression::generic_type_expression;
-use super::literal::int_literal_expression;
 use super::primitives::identifier;
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::{type_argument, value_argument, TypeArgument};
 use crate::ast::types::{
     BuiltinCollectionKind, FunctionTypeData, Type, TypeDeclarationKind, TypeKind, RESULT_TYPE_NAME,
 };
@@ -119,7 +119,7 @@ pub fn type_u8() -> Type {
 pub fn type_list(inner: Type) -> Type {
     make_type(TypeKind::Custom(
         BuiltinCollectionKind::List.name().to_string(),
-        Some(vec![type_expr_non_null(inner)]),
+        Some(vec![type_argument(inner)]),
     ))
 }
 
@@ -127,10 +127,7 @@ pub fn type_list(inner: Type) -> Type {
 pub fn type_array(inner: Type, size: i128) -> Type {
     make_type(TypeKind::Custom(
         BuiltinCollectionKind::Array.name().to_string(),
-        Some(vec![
-            type_expr_non_null(inner),
-            int_literal_expression(size),
-        ]),
+        Some(vec![type_argument(inner), value_argument(size)]),
     ))
 }
 
@@ -138,7 +135,7 @@ pub fn type_array(inner: Type, size: i128) -> Type {
 pub fn type_map(k: Type, v: Type) -> Type {
     make_type(TypeKind::Custom(
         BuiltinCollectionKind::Map.name().to_string(),
-        Some(vec![type_expr_non_null(k), type_expr_non_null(v)]),
+        Some(vec![type_argument(k), type_argument(v)]),
     ))
 }
 
@@ -146,14 +143,14 @@ pub fn type_map(k: Type, v: Type) -> Type {
 pub fn type_set(inner: Type) -> Type {
     make_type(TypeKind::Custom(
         BuiltinCollectionKind::Set.name().to_string(),
-        Some(vec![type_expr_non_null(inner)]),
+        Some(vec![type_argument(inner)]),
     ))
 }
 
 /// Creates a `Tuple` type.
 pub fn type_tuple(elements: Vec<Type>) -> Type {
     make_type(TypeKind::Tuple(
-        elements.into_iter().map(type_expr_non_null).collect(),
+        elements.into_iter().map(type_argument).collect(),
     ))
 }
 
@@ -170,18 +167,18 @@ pub fn type_option(inner: Type) -> Type {
 pub fn type_result(ok: Type, err: Type) -> Type {
     make_type(TypeKind::Custom(
         RESULT_TYPE_NAME.to_string(),
-        Some(vec![type_expr_non_null(ok), type_expr_non_null(err)]),
+        Some(vec![type_argument(ok), type_argument(err)]),
     ))
 }
 
 /// Creates a custom type (e.g., struct or class instance).
-pub fn type_custom(name: &str, args: Option<Vec<Expression>>) -> Type {
+pub fn type_custom(name: &str, args: Option<Vec<TypeArgument>>) -> Type {
     make_type(TypeKind::Custom(name.to_string(), args))
 }
 
 /// Creates a `Future` type.
 pub fn type_future(inner: Type) -> Type {
-    make_type(TypeKind::Future(Box::new(type_expr_non_null(inner))))
+    make_type(TypeKind::Future(Box::new(type_argument(inner))))
 }
 
 /// Creates a function signature type.

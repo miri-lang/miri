@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::expression::ExpressionKind;
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::rc::is_slot_counted;
 use miri::type_checker::value_class::LayoutScope;
 use std::collections::HashMap;
 
-fn expr_ty(kind: TypeKind) -> Expression {
-    Expression {
+fn expr_ty(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(Type::new(kind, Span::default())), false),
+        node: TypeArgKind::Type(Box::new(Type::new(kind, Span::default())), false),
         span: Span::default(),
     }
 }

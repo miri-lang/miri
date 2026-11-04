@@ -15,7 +15,6 @@
 //! - lowered real Miri sources, which prove the synthetic decisions are the
 //!   ones the pipeline actually reaches.
 
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::statement::StatementKind as AstStatementKind;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
@@ -44,8 +43,8 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
-    Expression::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+fn type_expr(kind: TypeKind) -> miri::ast::type_arguments::TypeArgument {
+    miri::ast::type_arguments::type_argument(ty(kind))
 }
 
 /// The post-normalization spelling of a collection type: `Custom(name, [args])`.

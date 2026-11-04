@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use miri::ast::factory::make_type;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::Type;
 use miri::ast::types::{TypeDeclarationKind, TypeKind};
 use miri::ast::{Statement, StatementKind};
@@ -501,7 +502,6 @@ fn generic_bounded_by_trait_is_not_resource() {
 // variant cannot compile until it is classified — and asserts the capability
 // ladder `Storage ⊂ kernel-usable`.
 
-use miri::ast::factory::type_expr_non_null;
 use miri::ast::types::FunctionTypeData;
 use miri::type_checker::utils::{
     gpu_scalar_class, is_accelerable, is_gpu_buffer_element, is_gpu_compatible, GpuScalarClass,
@@ -553,7 +553,7 @@ fn expected_scalar_class(kind: &TypeKind) -> GpuScalarClass {
 /// One representative value of every `TypeKind` variant — the universe the
 /// coherence matrix ranges over.
 fn one_of_every_type_kind() -> Vec<TypeKind> {
-    let elem = || Box::new(type_expr_non_null(make_type(TypeKind::Int)));
+    let elem = || Box::new(type_argument(make_type(TypeKind::Int)));
     let ty = || Box::new(make_type(TypeKind::Int));
     vec![
         TypeKind::Int,
@@ -581,7 +581,7 @@ fn one_of_every_type_kind() -> Vec<TypeKind> {
         TypeKind::Array(elem(), elem()),
         TypeKind::Map(elem(), elem()),
         TypeKind::Set(elem()),
-        TypeKind::Tuple(vec![type_expr_non_null(make_type(TypeKind::Int))]),
+        TypeKind::Tuple(vec![type_argument(make_type(TypeKind::Int))]),
         TypeKind::Result(elem(), elem()),
         TypeKind::Future(elem()),
         TypeKind::Option(ty()),
@@ -706,7 +706,7 @@ fn custom(name: &str, args: Vec<TypeKind>) -> TypeKind {
         name.to_string(),
         Some(
             args.into_iter()
-                .map(|kind| type_expr_non_null(make_type(kind)))
+                .map(|kind| type_argument(make_type(kind)))
                 .collect(),
         ),
     )
@@ -746,8 +746,8 @@ fn binding_kind_collections_and_aggregates_are_storage() {
         custom(array_name(), vec![TypeKind::I32, TypeKind::Int]),
         custom(list_name(), vec![TypeKind::F32]),
         TypeKind::Tuple(vec![
-            type_expr_non_null(make_type(TypeKind::I32)),
-            type_expr_non_null(make_type(TypeKind::F32)),
+            type_argument(make_type(TypeKind::I32)),
+            type_argument(make_type(TypeKind::F32)),
         ]),
     ];
     for kind in cases {
@@ -772,8 +772,8 @@ fn binding_kind_unbindable_types_are_none() {
     assert_eq!(accelerable_binding_kind(&TypeKind::String), None);
     assert_eq!(
         accelerable_binding_kind(&TypeKind::Map(
-            Box::new(type_expr_non_null(make_type(TypeKind::Int))),
-            Box::new(type_expr_non_null(make_type(TypeKind::Int))),
+            Box::new(type_argument(make_type(TypeKind::Int))),
+            Box::new(type_argument(make_type(TypeKind::Int))),
         )),
         None
     );
@@ -842,8 +842,8 @@ fn byte_size_tuple_is_sum_of_fields() {
     assert_eq!(
         accelerable_byte_size(
             &TypeKind::Tuple(vec![
-                type_expr_non_null(make_type(TypeKind::I32)),
-                type_expr_non_null(make_type(TypeKind::F64)),
+                type_argument(make_type(TypeKind::I32)),
+                type_argument(make_type(TypeKind::F64)),
             ]),
             &defs
         ),

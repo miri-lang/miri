@@ -8,7 +8,7 @@
 //! parameter to a local, and a caller passing it one — so each test pins the
 //! exact shape that makes a parameter owned or keeps it borrowed.
 
-use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind, VEC3_TYPE_NAME};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
@@ -161,7 +161,7 @@ fn owned(facts: &ProgramFacts, index: usize) -> Vec<bool> {
 }
 
 fn named(name: &str, args: Vec<Type>) -> Type {
-    let args = (!args.is_empty()).then(|| args.into_iter().map(type_expr_non_null).collect());
+    let args = (!args.is_empty()).then(|| args.into_iter().map(type_argument).collect());
     Type::new(TypeKind::Custom(name.to_string(), args), span())
 }
 

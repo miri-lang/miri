@@ -3,7 +3,7 @@
 
 //! The declared type a place reaches, read projection by projection.
 
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind, TUPLE_TYPE_NAME};
 use miri::error::syntax::Span;
 use miri::mir::place::PlaceElem;
@@ -14,10 +14,10 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
 
-fn written(kind: TypeKind) -> Expression {
-    Expression {
+fn written(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
         span: Span::default(),
     }
 }

@@ -2,7 +2,9 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::Parameter;
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::Expression;
+pub use crate::ast::type_arguments::TypeArgument;
+use crate::ast::type_arguments::{argument_type, TypeArgKind};
 use crate::error::syntax::Span;
 use std::fmt;
 
@@ -178,7 +180,7 @@ pub fn is_range_type_name(name: &str) -> bool {
 }
 
 /// The element type expression of `kind` when it is `Range<T>`.
-pub fn range_element_expression(kind: &TypeKind) -> Option<&Expression> {
+pub fn range_element_expression(kind: &TypeKind) -> Option<&TypeArgument> {
     let TypeKind::Custom(name, Some(args)) = kind else {
         return None;
     };
@@ -186,7 +188,7 @@ pub fn range_element_expression(kind: &TypeKind) -> Option<&Expression> {
 }
 
 /// The range type `Range<T>` over the element type expression `element`.
-pub fn range_type_kind(element: Expression) -> TypeKind {
+pub fn range_type_kind(element: TypeArgument) -> TypeKind {
     TypeKind::Custom(RANGE_TYPE_NAME.to_string(), Some(vec![element]))
 }
 
@@ -400,24 +402,19 @@ pub fn primitive_type_kind(name: &str) -> Option<TypeKind> {
     Some(kind)
 }
 
-/// Resolves a type expression to a `TypeKind`, covering forms produced by the
-/// pipeline: a `Type(...)` node (post-normalization), a bare identifier, or a
-/// literal identifier.
+/// The kind of type a type argument names: the type it was written as, or a
+/// primitive a bare name spells.
 ///
 /// Used to validate collection element types without requiring a full type
-/// resolution pass. Returns the resolved `TypeKind` if the expression is a type
-/// identifier; returns `None` otherwise.
-pub fn resolve_element_type_kind(expr: &crate::ast::expression::Expression) -> Option<TypeKind> {
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::literal::Literal;
-
-    let name = match &expr.node {
-        ExpressionKind::Type(inner, _) => return Some(inner.kind.clone()),
-        ExpressionKind::Identifier(name, _) => name.as_str(),
-        ExpressionKind::Literal(Literal::Identifier(name)) => name.as_str(),
-        _ => return None,
-    };
-    primitive_type_kind(name)
+/// resolution pass. Returns `None` for any other value.
+pub fn resolve_element_type_kind(argument: &TypeArgument) -> Option<TypeKind> {
+    match &argument.node {
+        TypeArgKind::Type(inner, _) => Some(inner.kind.clone()),
+        TypeArgKind::Value(crate::ast::type_arguments::ValueArg::Name(name)) => {
+            primitive_type_kind(name)
+        }
+        TypeArgKind::Value(_) => None,
+    }
 }
 
 /// Data for a function type, boxed to reduce `TypeKind` enum size.
@@ -504,28 +501,28 @@ pub enum TypeKind {
     ///
     /// **Parser-only variant.** Normalized to `TypeKind::Custom("List", [T])`
     /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
-    List(Box<Expression>),
+    List(Box<TypeArgument>),
     /// Array type (e.g., `[i32; 4]`).
     ///
     /// **Parser-only variant.** Normalized to `TypeKind::Custom("Array", [T, N])`
     /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
-    Array(Box<Expression>, Box<Expression>),
+    Array(Box<TypeArgument>, Box<TypeArgument>),
     /// Map type (e.g., `{string: i32}`).
     ///
     /// **Parser-only variant.** Normalized to `TypeKind::Custom("Map", [K, V])`
     /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
-    Map(Box<Expression>, Box<Expression>),
+    Map(Box<TypeArgument>, Box<TypeArgument>),
     /// Tuple type (e.g., `(i32, string)`).
-    Tuple(Vec<Expression>),
+    Tuple(Vec<TypeArgument>),
     /// Set type (e.g., `{i32}`).
     ///
     /// **Parser-only variant.** Normalized to `TypeKind::Custom("Set", [T])`
     /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
-    Set(Box<Expression>),
+    Set(Box<TypeArgument>),
     /// Result type (e.g., `result<i32, string>`).
-    Result(Box<Expression>, Box<Expression>),
+    Result(Box<TypeArgument>, Box<TypeArgument>),
     /// Future type (e.g., `future<i32>`).
-    Future(Box<Expression>),
+    Future(Box<TypeArgument>),
     /// Function type (e.g., `fn<T>(x int) float`). Boxed to reduce enum size.
     Function(Box<FunctionTypeData>),
 
@@ -533,7 +530,7 @@ pub enum TypeKind {
     Generic(String, Option<Box<Type>>, TypeDeclarationKind),
 
     /// Custom type (e.g., struct name).
-    Custom(String, Option<Vec<Expression>>),
+    Custom(String, Option<Vec<TypeArgument>>),
     /// Metatype (type of a type).
     Meta(Box<Type>),
     /// Option type wrapper (e.g., `T?` or `Option<T>`).
@@ -551,7 +548,7 @@ pub enum TypeKind {
     /// `is` in a type parameter (`<T is f32 or float>`), and a type parameter
     /// bounded by it is bound to exactly one member at each call. The type
     /// checker refuses it in every value position, so no later phase sees it.
-    OneOf(Vec<Expression>),
+    OneOf(Vec<TypeArgument>),
 }
 
 /// Represents a type declaration kind
@@ -707,10 +704,7 @@ impl TypeKind {
             | TypeKind::Void
             | TypeKind::Error => return None,
         };
-        let crate::ast::expression::ExpressionKind::Type(ty, _) = &element.node else {
-            return None;
-        };
-        Some(&ty.kind)
+        Some(&crate::ast::type_arguments::argument_type(element)?.kind)
     }
 
     /// Returns the `BuiltinCollectionKind` if this type is a built-in collection,
@@ -805,7 +799,7 @@ impl fmt::Display for TypeKind {
     }
 }
 
-fn fmt_tuple(f: &mut fmt::Formatter<'_>, elements: &[Expression]) -> fmt::Result {
+fn fmt_tuple(f: &mut fmt::Formatter<'_>, elements: &[TypeArgument]) -> fmt::Result {
     f.write_str("Tuple(")?;
     if let Some((first, rest)) = elements.split_first() {
         write!(f, "{}", first.node)?;
@@ -817,7 +811,7 @@ fn fmt_tuple(f: &mut fmt::Formatter<'_>, elements: &[Expression]) -> fmt::Result
 }
 
 /// `A or B or C`: a type set spelled as it is written.
-fn fmt_one_of(f: &mut fmt::Formatter<'_>, members: &[Expression]) -> fmt::Result {
+fn fmt_one_of(f: &mut fmt::Formatter<'_>, members: &[TypeArgument]) -> fmt::Result {
     if let Some((first, rest)) = members.split_first() {
         write!(f, "{}", first.node)?;
         for member in rest {
@@ -842,7 +836,11 @@ fn fmt_function(f: &mut fmt::Formatter<'_>, func: &FunctionTypeData) -> fmt::Res
     Ok(())
 }
 
-fn fmt_custom(f: &mut fmt::Formatter<'_>, name: &str, args: Option<&[Expression]>) -> fmt::Result {
+fn fmt_custom(
+    f: &mut fmt::Formatter<'_>,
+    name: &str,
+    args: Option<&[TypeArgument]>,
+) -> fmt::Result {
     // A value generic stands for the value it wraps, and its marker names no
     // type anyone wrote. Showing the marker would put a compiler-internal name
     // in front of a reader who asked about their own `Wrap<int, 3>`.
@@ -902,7 +900,7 @@ pub fn vec_type_dim(kind: &TypeKind) -> Option<u8> {
 }
 
 /// [`vec_type_dim`] for a type written as `name` with `type_args`.
-pub fn written_vec_dim(name: &str, type_args: Option<&[Expression]>) -> Option<u8> {
+pub fn written_vec_dim(name: &str, type_args: Option<&[TypeArgument]>) -> Option<u8> {
     if !names_a_component(type_args) {
         return None;
     }
@@ -912,10 +910,10 @@ pub fn written_vec_dim(name: &str, type_args: Option<&[Expression]>) -> Option<u
 /// Whether a type-argument list opens with a type — the form a compiler-known
 /// inline value type is always written in. A value-generic argument carries a
 /// literal instead and names no component.
-fn names_a_component(type_args: Option<&[Expression]>) -> bool {
+fn names_a_component(type_args: Option<&[TypeArgument]>) -> bool {
     matches!(
         type_args.and_then(|args| args.first()).map(|arg| &arg.node),
-        Some(ExpressionKind::Type(_, _))
+        Some(TypeArgKind::Type(_, _))
     )
 }
 
@@ -977,15 +975,12 @@ pub fn atomic_inner_kind(kind: &TypeKind) -> Option<&TypeKind> {
     if name != ATOMIC_TYPE_NAME || args.len() != 1 {
         return None;
     }
-    match &args[0].node {
-        ExpressionKind::Type(inner, _) => Some(&inner.kind),
-        _ => None,
-    }
+    argument_type(&args[0]).map(|inner| &inner.kind)
 }
 
 /// The element type and the written size of an `Array<E, N>` type, in either
 /// its normalized `Custom` form or the `Array(E, N)` form the parser builds.
-pub fn array_element_and_size(kind: &TypeKind) -> Option<(&Expression, &Expression)> {
+pub fn array_element_and_size(kind: &TypeKind) -> Option<(&TypeArgument, &TypeArgument)> {
     match kind {
         TypeKind::Array(element, size) => Some((element, size)),
         TypeKind::Custom(name, Some(args))
@@ -1004,9 +999,8 @@ pub fn array_element_and_size(kind: &TypeKind) -> Option<(&Expression, &Expressi
 /// element is unknown, so it stays quiet rather than report the same missing
 /// name again under another code.
 pub fn is_unresolved(kind: &TypeKind) -> bool {
-    let written = |expression: &Expression| match &expression.node {
-        ExpressionKind::Type(inner, _) => is_unresolved(&inner.kind),
-        _ => false,
+    let written = |argument: &TypeArgument| {
+        argument_type(argument).is_some_and(|inner| is_unresolved(&inner.kind))
     };
     match kind {
         TypeKind::Error => true,
@@ -1023,10 +1017,7 @@ pub fn is_unresolved(kind: &TypeKind) -> bool {
 /// `Array<Atomic<i32>, N>`. A readback of the buffer indexes as that type.
 pub fn atomic_buffer_element(kind: &TypeKind) -> Option<&TypeKind> {
     let (element, _) = array_element_and_size(kind)?;
-    let ExpressionKind::Type(element, _) = &element.node else {
-        return None;
-    };
-    atomic_inner_kind(&element.kind)
+    atomic_inner_kind(&argument_type(element)?.kind)
 }
 
 /// True if `kind` is `Array<Atomic<i32>, N>` or `Array<Atomic<u32>, N>`: the
@@ -1036,7 +1027,7 @@ pub fn is_atomic_integer_buffer(kind: &TypeKind) -> bool {
     let Some((element, _)) = array_element_and_size(kind) else {
         return false;
     };
-    let ExpressionKind::Type(element, _) = &element.node else {
+    let Some(element) = argument_type(element) else {
         return false;
     };
     matches!(

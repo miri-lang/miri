@@ -6,7 +6,7 @@
 //! A tuple of scalars is held as its bytes by every program, so these bodies
 //! need no type table: the classifier is set over an empty one.
 
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
@@ -30,10 +30,10 @@ pub fn ty(kind: TypeKind) -> Type {
 }
 
 /// The type expression naming `kind`.
-pub fn type_expr(kind: TypeKind) -> Expression {
-    Expression {
+pub fn type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
         span: span(),
     }
 }

@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use cranelift_codegen::ir::types;
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::layout::{
@@ -30,10 +30,10 @@ fn t(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
 
-fn create_type_expr(kind: TypeKind) -> Expression {
-    Expression {
+fn create_type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(t(kind)), false),
+        node: TypeArgKind::Type(Box::new(t(kind)), false),
         span: Span::default(),
     }
 }

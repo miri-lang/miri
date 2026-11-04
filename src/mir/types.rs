@@ -17,6 +17,7 @@
 //! [`TypeKind`]: crate::ast::types::TypeKind
 //! [`LocalDecl`]: crate::mir::LocalDecl
 
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument};
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 
 /// A resolved, AST-expression-free type for use in MIR analysis.
@@ -122,19 +123,22 @@ impl MirType {
             TypeKind::Error | TypeKind::OneOf(_) => MirType::Error,
             // Canonical collection variants are normalized to Custom before MIR lowering.
             // They are handled below in the Custom arm.
-            TypeKind::List(elem) => MirType::List(Box::new(Self::from_expr(elem))),
-            TypeKind::Array(elem, _size) => MirType::Array(Box::new(Self::from_expr(elem))),
-            TypeKind::Map(k, v) => {
-                MirType::Map(Box::new(Self::from_expr(k)), Box::new(Self::from_expr(v)))
+            TypeKind::List(elem) => MirType::List(Box::new(Self::from_argument(elem))),
+            TypeKind::Array(elem, _size) => MirType::Array(Box::new(Self::from_argument(elem))),
+            TypeKind::Map(k, v) => MirType::Map(
+                Box::new(Self::from_argument(k)),
+                Box::new(Self::from_argument(v)),
+            ),
+            TypeKind::Set(elem) => MirType::Set(Box::new(Self::from_argument(elem))),
+            TypeKind::Tuple(elems) => {
+                MirType::Tuple(elems.iter().map(Self::from_argument).collect())
             }
-            TypeKind::Set(elem) => MirType::Set(Box::new(Self::from_expr(elem))),
-            TypeKind::Tuple(elems) => MirType::Tuple(elems.iter().map(Self::from_expr).collect()),
             TypeKind::Result(ok, err) => MirType::Result(
-                Box::new(Self::from_expr(ok)),
-                Box::new(Self::from_expr(err)),
+                Box::new(Self::from_argument(ok)),
+                Box::new(Self::from_argument(err)),
             ),
             TypeKind::Option(inner) => MirType::Option(Box::new(Self::from_type_kind(&inner.kind))),
-            TypeKind::Future(inner) => MirType::Future(Box::new(Self::from_expr(inner))),
+            TypeKind::Future(inner) => MirType::Future(Box::new(Self::from_argument(inner))),
             // Generic type parameters — never concrete managed types.
             TypeKind::Generic(_, _, _) => MirType::Generic,
             // Closures are heap-allocated and RC-managed.
@@ -151,12 +155,12 @@ impl MirType {
     /// When `args` is `None`, the name appears as an unresolved self-reference
     /// inside a stdlib class body — keep it as `MirType::Custom`, an element
     /// value rather than a collection.
-    fn from_custom(name: &str, args: Option<&[crate::ast::expression::Expression]>) -> Self {
+    fn from_custom(name: &str, args: Option<&[TypeArgument]>) -> Self {
         // The atomic element type is stored as its scalar component, so it is
         // that scalar to every analysis — a user type sharing the name is not.
         if name == crate::ast::types::ATOMIC_TYPE_NAME {
             if let Some(component) = crate::mir::rc::atomic_component(args) {
-                return Self::from_expr(component);
+                return Self::from_argument(component);
             }
         }
         let Some(builtin) = BuiltinCollectionKind::from_name(name) else {
@@ -167,7 +171,7 @@ impl MirType {
         };
         let arg_or_unknown = |idx: usize| {
             args.get(idx)
-                .map(Self::from_expr)
+                .map(Self::from_argument)
                 .unwrap_or(MirType::Unknown)
         };
         match builtin {
@@ -180,27 +184,14 @@ impl MirType {
         }
     }
 
-    /// Resolves a type expression node into a [`MirType`].
-    ///
-    /// The parser encodes type arguments inside collection type annotations
-    /// (e.g. `[T]`, `[T; N]`, `{K: V}`) as [`Expression`] nodes rather than
-    /// [`Type`] nodes.  This helper handles the two common forms:
-    ///
-    /// - `ExpressionKind::Type(ty, is_nullable)` — a fully-formed type node;
-    ///   recurse, wrapping in [`MirType::Option`] when the node is nullable.
-    ///   `int?` and `Option<int>` name one type, and an element that loses the
-    ///   nullable half looks like a bare value the pass need not release.
-    /// - `ExpressionKind::Identifier(name, _)` — a bare name like `"String"`,
-    ///   `"MyClass"`, or a generic parameter; mapped to `Custom(name)`.
-    ///
-    /// Any other expression form (e.g. a size literal in `[T; 4]`) maps to
+    /// The [`MirType`] a type argument names. A nullable argument is the
+    /// option it denotes: `int?` and `Option<int>` name one type, and an
+    /// element that loses the nullable half looks like a bare value the pass
+    /// need not release. A value (the size in `[T; 4]`) is
     /// [`MirType::Unknown`].
-    ///
-    /// [`Expression`]: crate::ast::expression::Expression
-    /// [`Type`]: crate::ast::types::Type
-    fn from_expr(expr: &crate::ast::expression::Expression) -> Self {
-        match &expr.node {
-            crate::ast::expression::ExpressionKind::Type(ty, is_nullable) => {
+    fn from_argument(arg: &TypeArgument) -> Self {
+        match &arg.node {
+            TypeArgKind::Type(ty, is_nullable) => {
                 let resolved = Self::from_type_kind(&ty.kind);
                 if *is_nullable {
                     MirType::Option(Box::new(resolved))
@@ -208,14 +199,7 @@ impl MirType {
                     resolved
                 }
             }
-            crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                // A bare identifier in element-type position is a type name,
-                // kept as written; whether it is a class, a generic parameter
-                // or a collection's own name is decided where the type table
-                // and the body's type parameters are known.
-                MirType::Custom(name.clone())
-            }
-            _ => MirType::Unknown,
+            TypeArgKind::Value(_) => MirType::Unknown,
         }
     }
 }

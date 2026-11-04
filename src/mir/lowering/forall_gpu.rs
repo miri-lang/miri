@@ -1243,7 +1243,7 @@ fn buffer_has_atomic_element(kind: &TypeKind) -> bool {
     };
     matches!(
         elem_node,
-        crate::ast::expression::ExpressionKind::Type(elem_ty, _)
+        crate::ast::type_arguments::TypeArgKind::Type(elem_ty, _)
             if matches!(&elem_ty.kind, TypeKind::Custom(n, _) if n == crate::ast::types::ATOMIC_TYPE_NAME)
     )
 }

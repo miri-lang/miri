@@ -8,6 +8,7 @@
 
 use super::context::{class_implements_trait, resolve_method_source, Context, TypeDefinition};
 use super::TypeChecker;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
     common_numeric_type, scalar_width, vec_dim, BuiltinCollectionKind, Type, TypeKind,
     EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
@@ -227,7 +228,7 @@ impl TypeChecker {
         if let TypeKind::Custom(vec_name, Some(args)) = &left.kind {
             if vec_dim(vec_name).is_some() && self.is_numeric(right) {
                 if let Some(first_arg) = args.first() {
-                    if let crate::ast::expression::ExpressionKind::Type(elem_type, _) =
+                    if let crate::ast::type_arguments::TypeArgKind::Type(elem_type, _) =
                         &first_arg.node
                     {
                         if self.is_numeric(elem_type) {
@@ -242,7 +243,7 @@ impl TypeChecker {
         if let TypeKind::Custom(vec_name, Some(args)) = &right.kind {
             if vec_dim(vec_name).is_some() && self.is_numeric(left) {
                 if let Some(first_arg) = args.first() {
-                    if let crate::ast::expression::ExpressionKind::Type(elem_type, _) =
+                    if let crate::ast::type_arguments::TypeArgKind::Type(elem_type, _) =
                         &first_arg.node
                     {
                         if self.is_numeric(elem_type) {
@@ -463,7 +464,7 @@ impl TypeChecker {
                     )
                 ) && !args.is_empty() =>
             {
-                let inner = self.resolve_type_expression(&args[0], context);
+                let inner = self.resolve_type_argument(&args[0], context);
                 if self.are_compatible(&inner, left, context) {
                     Ok(bool_type())
                 } else {
@@ -478,7 +479,7 @@ impl TypeChecker {
                     == Some(BuiltinCollectionKind::Map)
                     && !args.is_empty() =>
             {
-                let key = self.resolve_type_expression(&args[0], context);
+                let key = self.resolve_type_argument(&args[0], context);
                 if self.are_compatible(&key, left, context) {
                     Ok(bool_type())
                 } else {
@@ -489,7 +490,7 @@ impl TypeChecker {
                 }
             }
             TypeKind::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
-                let range_type = self.resolve_type_expression(&args[0], context);
+                let range_type = self.resolve_type_argument(&args[0], context);
                 if self.are_compatible(&range_type, left, context) {
                     Ok(bool_type())
                 } else {
@@ -563,12 +564,12 @@ impl TypeChecker {
             }
             UnaryOp::Await => {
                 if let TypeKind::Future(inner_expr) = &expr_type.kind {
-                    self.extract_type_from_expression(inner_expr)
+                    self.extract_type_from_argument(inner_expr)
                 } else if let TypeKind::Custom(name, args) = &expr_type.kind {
                     if name == "Future" {
                         if let Some(args) = args {
                             if let Some(arg) = args.first() {
-                                return self.extract_type_from_expression(arg);
+                                return self.extract_type_from_argument(arg);
                             }
                         }
                         return Ok(crate::ast::factory::make_type(TypeKind::Void));
@@ -677,7 +678,7 @@ impl TypeChecker {
             }
             TypeKind::Result(ok_expr, err_expr) => {
                 for expr in [ok_expr, err_expr] {
-                    if let crate::ast::expression::ExpressionKind::Type(ty, _) = &expr.node {
+                    if let crate::ast::type_arguments::TypeArgKind::Type(ty, _) = &expr.node {
                         self.check_structural_comparability(&ty.kind, visiting, depth + 1)?;
                     }
                 }
@@ -702,7 +703,7 @@ impl TypeChecker {
     fn check_named_type_comparability(
         &self,
         name: &str,
-        args: Option<&[crate::ast::expression::Expression]>,
+        args: Option<&[TypeArgument]>,
         visiting: &mut Vec<String>,
         depth: usize,
     ) -> Result<(), String> {
@@ -771,7 +772,7 @@ impl TypeChecker {
                 self.part_lacking_hash(&inner.kind, visiting)
             }
             TypeKind::Result(ok, err) => [ok, err].into_iter().find_map(|expr| match &expr.node {
-                crate::ast::expression::ExpressionKind::Type(ty, _) => {
+                crate::ast::type_arguments::TypeArgKind::Type(ty, _) => {
                     self.part_lacking_hash(&ty.kind, visiting)
                 }
                 _ => None,
@@ -786,7 +787,7 @@ impl TypeChecker {
     fn named_type_lacking_hash(
         &self,
         name: &str,
-        args: Option<&[crate::ast::expression::Expression]>,
+        args: Option<&[TypeArgument]>,
         visiting: &mut Vec<String>,
     ) -> Option<String> {
         if self.type_declares_method(name, HASH_METHOD_NAME) {

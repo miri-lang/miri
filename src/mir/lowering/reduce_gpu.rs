@@ -11,6 +11,7 @@
 use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::Literal;
 use crate::ast::operator::BinaryOp;
+use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -241,7 +242,9 @@ fn extract_array_length_from_type(arr_ty: &Type, span: Span) -> Result<i64, Lowe
     if let TypeKind::Custom(name, Some(type_args)) = &arr_ty.kind {
         if name == BuiltinCollectionKind::Array.name() && type_args.len() >= 2 {
             // The second type_arg is the size expression; try to const-eval it.
-            if let Some(val) = crate::type_checker::TypeChecker::try_eval_const_int(&type_args[1]) {
+            if let Some(val) =
+                crate::type_checker::TypeChecker::try_eval_const_argument(&type_args[1], None)
+            {
                 return Ok(val as i64);
             }
         }
@@ -257,7 +260,7 @@ fn extract_element_type(arr_ty: &Type) -> Result<Type, LoweringError> {
     if let TypeKind::Custom(name, Some(type_args)) = &arr_ty.kind {
         if name == BuiltinCollectionKind::Array.name() && !type_args.is_empty() {
             // The type_args are expressions, so we need to check if they're type expressions.
-            if let ExpressionKind::Type(elem_type, _) = &type_args[0].node {
+            if let TypeArgKind::Type(elem_type, _) = &type_args[0].node {
                 return Ok(elem_type.as_ref().clone());
             }
         }
@@ -384,18 +387,20 @@ fn setup_reduce_kernel_params(
         TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![
-                crate::ast::expression::Expression {
-                    id: 0,
-                    node: ExpressionKind::Type(Box::new(elem_ty), false),
+                crate::ast::IdNode::new(
+                    0,
+                    crate::ast::type_arguments::TypeArgKind::Type(Box::new(elem_ty), false),
                     span,
-                },
-                crate::ast::expression::Expression {
-                    id: 0,
-                    node: ExpressionKind::Literal(Literal::Integer(
-                        crate::ast::literal::IntegerLiteral::I64(i64::from(workgroup_size)),
-                    )),
+                ),
+                crate::ast::IdNode::new(
+                    0,
+                    crate::ast::type_arguments::TypeArgKind::Value(
+                        crate::ast::type_arguments::ValueArg::Int(i128::from(i64::from(
+                            workgroup_size,
+                        ))),
+                    ),
                     span,
-                },
+                ),
             ]),
         ),
         span,
@@ -1001,18 +1006,18 @@ fn setup_reduce_output_buffer(
         TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![
-                crate::ast::expression::Expression {
-                    id: 0,
-                    node: ExpressionKind::Type(Box::new(elem_ty.clone()), false),
+                crate::ast::IdNode::new(
+                    0,
+                    crate::ast::type_arguments::TypeArgKind::Type(Box::new(elem_ty.clone()), false),
                     span,
-                },
-                crate::ast::expression::Expression {
-                    id: 0,
-                    node: ExpressionKind::Literal(Literal::Integer(
-                        crate::ast::literal::IntegerLiteral::I64(1),
-                    )),
+                ),
+                crate::ast::IdNode::new(
+                    0,
+                    crate::ast::type_arguments::TypeArgKind::Value(
+                        crate::ast::type_arguments::ValueArg::Int(i128::from(1)),
+                    ),
                     span,
-                },
+                ),
             ]),
         ),
         span,

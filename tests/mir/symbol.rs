@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::mir::utils::{runtime_callee, runtime_callee_stating};
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeKind};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::syntax::Span;
@@ -23,9 +24,7 @@ fn module(path: &str) -> ModuleId {
 }
 
 fn list_of(element: TypeKind) -> Type {
-    ty(TypeKind::List(Box::new(
-        miri::ast::factory::type_expr_non_null(ty(element)),
-    )))
+    ty(TypeKind::List(Box::new(type_argument(ty(element)))))
 }
 
 #[test]

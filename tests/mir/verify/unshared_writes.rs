@@ -11,8 +11,8 @@
 
 use crate::mir::utils::{runtime_callee, runtime_callee_stating};
 use miri::ast::common::MemberVisibility;
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
@@ -39,8 +39,8 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
-    Expression::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+fn type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument::new(0, TypeArgKind::Type(Box::new(ty(kind)), false), span())
 }
 
 fn int() -> TypeKind {
@@ -60,11 +60,7 @@ fn map_of_lists() -> TypeKind {
 }
 
 fn array() -> TypeKind {
-    let size = Expression::new(
-        0,
-        ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I64(3))),
-        span(),
-    );
+    let size = miri::ast::type_arguments::value_argument(3);
     TypeKind::Array(Box::new(type_expr(int())), Box::new(size))
 }
 

@@ -40,6 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
+use crate::ast::type_arguments::{written_argument, TypeArgKind, ValueArg};
 use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME, STRING_TYPE_NAME};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -351,8 +352,16 @@ impl TypeChecker {
             return;
         };
         let generics = base.generics.clone();
-        if generics.as_ref().map_or(0, Vec::len) == args.len() {
-            self.validate_generics(&Some(args.to_vec()), &generics, context, span);
+        let Ok(arguments) = args
+            .iter()
+            .cloned()
+            .map(written_argument)
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            return;
+        };
+        if generics.as_ref().map_or(0, Vec::len) == arguments.len() {
+            self.validate_generics(&Some(arguments), &generics, context, span);
         }
     }
 
@@ -1650,40 +1659,21 @@ impl TypeChecker {
         }
     }
 
-    /// Find the first generic parameter name referenced in a type expression
+    /// Find the first generic parameter name a value argument names.
+    // TODO: a type argument naming a class parameter (the `T` of `List<T>` in
+    // a static method's signature) is not searched, so the static method is
+    // accepted; whether to refuse it there too is an open question.
     fn find_generic_in_type_expression(
         &self,
-        expr: &Expression,
+        expr: &TypeArgument,
         generic_names: &[&str],
     ) -> Option<String> {
         match &expr.node {
-            ExpressionKind::Identifier(name, _) => {
-                if generic_names.contains(&name.as_str()) {
-                    Some(name.clone())
-                } else {
-                    None
-                }
+            TypeArgKind::Value(ValueArg::Name(name)) if generic_names.contains(&name.as_str()) => {
+                Some(name.clone())
             }
-            ExpressionKind::TypeDeclaration(inner, type_args, _, _) => {
-                // Check the base type first
-                if let ExpressionKind::Identifier(name, _) = &inner.node {
-                    if generic_names.contains(&name.as_str()) {
-                        return Some(name.clone());
-                    }
-                }
-                // Check type arguments recursively
-                if let Some(args) = type_args {
-                    for arg in args {
-                        if let Some(found) =
-                            self.find_generic_in_type_expression(arg, generic_names)
-                        {
-                            return Some(found);
-                        }
-                    }
-                }
-                None
-            }
-            _ => None,
+            TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Int(_) | ValueArg::Binary(..))
+            | TypeArgKind::Type(..) => None,
         }
     }
 
@@ -1757,8 +1747,8 @@ impl TypeChecker {
     /// Whether `ty` is a function type or holds one among its type arguments,
     /// at any depth.
     fn holds_function_type(&self, ty: &Type) -> bool {
-        let holds = |expr: &Expression| {
-            self.extract_type_from_expression(expr)
+        let holds = |expr: &TypeArgument| {
+            self.extract_type_from_argument(expr)
                 .is_ok_and(|inner| self.holds_function_type(&inner))
         };
         match &ty.kind {

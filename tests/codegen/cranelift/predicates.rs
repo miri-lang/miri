@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
 };
@@ -17,12 +17,8 @@ fn mk_type(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn mk_expr_type(kind: TypeKind) -> Expression {
-    Expression::new(
-        0,
-        ExpressionKind::Type(Box::new(mk_type(kind)), false),
-        span(),
-    )
+fn mk_expr_type(kind: TypeKind) -> TypeArgument {
+    TypeArgument::new(0, TypeArgKind::Type(Box::new(mk_type(kind)), false), span())
 }
 
 #[test]

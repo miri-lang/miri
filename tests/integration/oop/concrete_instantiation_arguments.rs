@@ -255,28 +255,24 @@ fn main()
     );
 }
 
-/// A value argument past the signed 128-bit range, grown from a written
-/// unsigned one, is refused.
+/// A value argument written past the signed 128-bit range is refused where
+/// it is written, as an integer that does not fit, not as a non-constant.
 #[test]
-fn test_a_value_argument_grown_past_the_signed_range_is_refused() {
-    assert_build_error(
-        r#"
+fn test_a_value_argument_written_past_the_signed_range_is_refused_where_written() {
+    let source = r#"
 use system.io
 
 class Buf<T, Size>
     v T
     fn init(v T)
         self.v = v
-    fn grown() int
-        let b = Buf<T, Size + 1>(self.v)
-        return 1
 
 fn main()
     let b = Buf<String, 170141183460469231731687303715884105728>("a" + "b")
-    println(f"{b.grown()}")
-"#,
-        "MER_MIR_017",
-    );
+    println(b.v)
+"#;
+    assert_build_error(source, "MER_TYP_068");
+    assert_build_error(source, "does not fit in a 128-bit integer");
 }
 
 /// A value argument that folds below zero at its instantiation is refused

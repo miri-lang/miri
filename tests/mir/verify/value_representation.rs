@@ -9,7 +9,7 @@
 //! program holds as its bytes, and pins one violation.
 
 use crate::mir::utils::runtime_callee_stating;
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{FunctionTypeData, Type, TypeDeclarationKind, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
@@ -37,10 +37,10 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
-    Expression {
+fn type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
         span: span(),
     }
 }
@@ -588,7 +588,7 @@ fn a_function_signature_is_checked_with_a_private_type_written_by_its_name() {
         TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
             params: Vec::new(),
-            return_type: Some(Box::new(type_expr(kind))),
+            return_type: Some(Box::new(miri::ast::factory::type_expr_non_null(ty(kind)))),
         }))
     };
     let mut body = body_of(

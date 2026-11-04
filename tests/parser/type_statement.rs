@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{parser_error_test, parser_test, type_map_expr};
+use super::utils::{optional_argument, parser_error_test, parser_test, type_map_expr};
 use miri::ast::factory::{
     generic_type, type_custom, type_declaration, type_expr_non_null, type_expr_option, type_int,
     type_statement, type_string,
 };
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::TypeDeclarationKind;
 use miri::ast::{opt_expr, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
@@ -40,8 +41,8 @@ type UserMap is {String: User?}
                 None,
                 TypeDeclarationKind::Is,
                 opt_expr(type_expr_non_null(type_map_expr(
-                    type_expr_non_null(type_string()),
-                    type_expr_option(type_custom("User", None)),
+                    type_argument(type_string()),
+                    optional_argument(type_custom("User", None)),
                 ))),
             )],
             MemberVisibility::Public,

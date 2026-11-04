@@ -13,7 +13,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::expression::ExpressionKind;
+use crate::ast::type_arguments::{TypeArgKind, ValueArg};
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind, STRING_TYPE_NAME,
 };
@@ -219,9 +219,9 @@ impl TypeChecker {
     fn inherited_arguments_compatible(
         &self,
         sup: &str,
-        sup_args: &Option<Vec<crate::ast::Expression>>,
+        sup_args: &Option<Vec<crate::ast::TypeArgument>>,
         sub: &str,
-        sub_args: &Option<Vec<crate::ast::Expression>>,
+        sub_args: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> bool {
         let Some(sup_args) = sup_args else {
@@ -242,14 +242,14 @@ impl TypeChecker {
     /// its parameter to, `pinned` — a value for a value parameter.
     fn argument_agrees_with(
         &self,
-        written: &crate::ast::Expression,
+        written: &crate::ast::TypeArgument,
         pinned: &Type,
         context: &Context,
     ) -> bool {
         if let Some(value) = super::generics::extract_value_generic(pinned) {
             return Self::value_arguments_agree(written, value, context) == Some(true);
         }
-        self.extract_type_from_expression(written)
+        self.extract_type_from_argument(written)
             .is_ok_and(|written| self.type_arguments_agree(&written, pinned, context))
     }
 
@@ -284,8 +284,8 @@ impl TypeChecker {
     fn enum_instantiation_is_open(
         &self,
         name: &str,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> bool {
         if args1.is_some() == args2.is_some() {
@@ -300,8 +300,8 @@ impl TypeChecker {
     /// Checks if generic arguments are compatible.
     fn check_generic_args_compatible(
         &self,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> bool {
         match (args1, args2) {
@@ -317,10 +317,10 @@ impl TypeChecker {
                         continue;
                     }
                     let t1 = self
-                        .extract_type_from_expression(arg1)
+                        .extract_type_from_argument(arg1)
                         .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
                     let t2 = self
-                        .extract_type_from_expression(arg2)
+                        .extract_type_from_argument(arg2)
                         .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
                     if !self.type_arguments_agree(&t1, &t2, context) {
                         return false;
@@ -342,8 +342,8 @@ impl TypeChecker {
     /// fold agree only when they name the same value parameter; a value against
     /// a type, or a value that cannot be compared, is a mismatch.
     fn value_arguments_agree(
-        arg1: &crate::ast::Expression,
-        arg2: &crate::ast::Expression,
+        arg1: &crate::ast::TypeArgument,
+        arg2: &crate::ast::TypeArgument,
         context: &Context,
     ) -> Option<bool> {
         let (v1, v2) = (value_argument(arg1), value_argument(arg2));
@@ -354,15 +354,17 @@ impl TypeChecker {
             return Some(false);
         };
         let folded = (
-            Self::try_eval_const_int_with_context(v1, context),
-            Self::try_eval_const_int_with_context(v2, context),
+            Self::try_eval_const_argument(v1, Some(context)),
+            Self::try_eval_const_argument(v2, Some(context)),
         );
         Some(match folded {
             (Some(n1), Some(n2)) => n1 == n2,
             _ => matches!(
                 (&v1.node, &v2.node),
-                (ExpressionKind::Identifier(n1, None), ExpressionKind::Identifier(n2, None))
-                    if n1 == n2
+                (
+                    TypeArgKind::Value(ValueArg::Name(n1)),
+                    TypeArgKind::Value(ValueArg::Name(n2))
+                ) if n1 == n2
             ),
         })
     }
@@ -419,8 +421,8 @@ impl TypeChecker {
     fn check_builtin_collection(
         &self,
         name: &str,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> Option<bool> {
         match BuiltinCollectionKind::from_name(name) {
@@ -438,8 +440,8 @@ impl TypeChecker {
     /// Checks array type compatibility (element type and size).
     fn check_array_compatibility(
         &self,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> Option<bool> {
         let (inner1, size1) = match args1.as_deref() {
@@ -457,8 +459,8 @@ impl TypeChecker {
         // type-position `Array<T, SIZE>` (struct field, parameter, return)
         // compares equal to the literal the constructor form produces.
         match (
-            Self::try_eval_const_int_with_context(size1, context),
-            Self::try_eval_const_int_with_context(size2, context),
+            Self::try_eval_const_argument(size1, Some(context)),
+            Self::try_eval_const_argument(size2, Some(context)),
         ) {
             (Some(s1), Some(s2)) => Some(s1 == s2),
             _ => Some(size1 == size2),
@@ -468,8 +470,8 @@ impl TypeChecker {
     /// Checks List/Set type compatibility (element type only).
     fn check_list_set_compatibility(
         &self,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> Option<bool> {
         let inner1 = match args1.as_deref() {
@@ -486,8 +488,8 @@ impl TypeChecker {
     /// Checks Map type compatibility (key and value types).
     fn check_map_compatibility(
         &self,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> Option<bool> {
         let (k1, v1) = match args1.as_deref() {
@@ -499,16 +501,16 @@ impl TypeChecker {
             _ => return Some(false),
         };
         if let (Ok(k2_t), Ok(v2_t)) = (
-            self.extract_type_from_expression(k2),
-            self.extract_type_from_expression(v2),
+            self.extract_type_from_argument(k2),
+            self.extract_type_from_argument(v2),
         ) {
             // Empty map compatible with any map type
             if matches!(k2_t.kind, TypeKind::Void) && matches!(v2_t.kind, TypeKind::Void) {
                 return Some(true);
             }
             if let (Ok(k1_t), Ok(v1_t)) = (
-                self.extract_type_from_expression(k1),
-                self.extract_type_from_expression(v1),
+                self.extract_type_from_argument(k1),
+                self.extract_type_from_argument(v1),
             ) {
                 return Some(
                     self.type_arguments_agree(&k1_t, &k2_t, context)
@@ -529,16 +531,16 @@ impl TypeChecker {
 
     pub(crate) fn check_inner_type_compatible(
         &self,
-        inner1: &crate::ast::Expression,
-        inner2: &crate::ast::Expression,
+        inner1: &crate::ast::TypeArgument,
+        inner2: &crate::ast::TypeArgument,
         context: &Context,
     ) -> bool {
-        if let Ok(t2_inner) = self.extract_type_from_expression(inner2) {
+        if let Ok(t2_inner) = self.extract_type_from_argument(inner2) {
             // Empty collection compatible with any element type
             if matches!(t2_inner.kind, TypeKind::Void) {
                 return true;
             }
-            if let Ok(t1_inner) = self.extract_type_from_expression(inner1) {
+            if let Ok(t1_inner) = self.extract_type_from_argument(inner1) {
                 // Special case: Int literal vs specific integer type
                 if matches!(t2_inner.kind, TypeKind::Int)
                     && self.is_integer(&t1_inner)
@@ -573,17 +575,17 @@ impl TypeChecker {
     /// Checks Result type compatibility (for legacy TypeKind::Result pairs).
     fn check_result_compatible(
         &self,
-        ok1: &crate::ast::Expression,
-        err1: &crate::ast::Expression,
-        ok2: &crate::ast::Expression,
-        err2: &crate::ast::Expression,
+        ok1: &crate::ast::TypeArgument,
+        err1: &crate::ast::TypeArgument,
+        ok2: &crate::ast::TypeArgument,
+        err2: &crate::ast::TypeArgument,
         context: &Context,
     ) -> bool {
         if let (Ok(ok1_t), Ok(err1_t), Ok(ok2_t), Ok(err2_t)) = (
-            self.extract_type_from_expression(ok1),
-            self.extract_type_from_expression(err1),
-            self.extract_type_from_expression(ok2),
-            self.extract_type_from_expression(err2),
+            self.extract_type_from_argument(ok1),
+            self.extract_type_from_argument(err1),
+            self.extract_type_from_argument(ok2),
+            self.extract_type_from_argument(err2),
         ) {
             let ok_compatible = matches!(ok1_t.kind, TypeKind::Void)
                 || matches!(ok2_t.kind, TypeKind::Void)
@@ -604,15 +606,15 @@ impl TypeChecker {
     /// the void must be compatible with whatever the declared type says.
     fn check_result_args_compatible(
         &self,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
+        args1: &Option<Vec<crate::ast::TypeArgument>>,
+        args2: &Option<Vec<crate::ast::TypeArgument>>,
         context: &Context,
     ) -> bool {
         let void_type = crate::ast::factory::make_type(TypeKind::Void);
-        let get_arg = |args: &Option<Vec<crate::ast::Expression>>, idx: usize| {
+        let get_arg = |args: &Option<Vec<crate::ast::TypeArgument>>, idx: usize| {
             args.as_ref()
                 .and_then(|v| v.get(idx))
-                .and_then(|e| self.extract_type_from_expression(e).ok())
+                .and_then(|e| self.extract_type_from_argument(e).ok())
                 .unwrap_or_else(|| void_type.clone())
         };
 
@@ -639,10 +641,10 @@ impl TypeChecker {
             }
             for (a_expr, b_expr) in e1.iter().zip(e2.iter()) {
                 let a = self
-                    .extract_type_from_expression(a_expr)
+                    .extract_type_from_argument(a_expr)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
                 let b = self
-                    .extract_type_from_expression(b_expr)
+                    .extract_type_from_argument(b_expr)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
                 // Invariant, like every other type argument: a tuple is stored
                 // element by element at its own layout, and nothing converts a
@@ -924,16 +926,16 @@ impl TypeChecker {
     /// Whether `ty` is a member of the set `members`. A set — the bound of a
     /// caller's own type parameter — is within it when each of its members is,
     /// since a call can bind that parameter to any one of them.
-    fn is_within_type_set(&self, ty: &Type, members: &[crate::ast::Expression]) -> bool {
+    fn is_within_type_set(&self, ty: &Type, members: &[crate::ast::TypeArgument]) -> bool {
         let is_member = |kind: &TypeKind| {
             members.iter().any(|member| {
-                self.extract_type_from_expression(member)
+                self.extract_type_from_argument(member)
                     .is_ok_and(|member| member.kind == *kind)
             })
         };
         match &ty.kind {
             TypeKind::OneOf(subset) => subset.iter().all(|part| {
-                self.extract_type_from_expression(part)
+                self.extract_type_from_argument(part)
                     .is_ok_and(|part| is_member(&part.kind))
             }),
             kind => is_member(kind),
@@ -1134,13 +1136,13 @@ impl TypeChecker {
     }
 }
 
-/// The value a generic argument stands for: the expression a value-generic
+/// The value a generic argument stands for: the argument a value-generic
 /// marker wraps, or the argument itself when it is written as a value rather
 /// than a type. `None` for a type argument.
-fn value_argument(arg: &crate::ast::Expression) -> Option<&crate::ast::Expression> {
+fn value_argument(arg: &crate::ast::TypeArgument) -> Option<&crate::ast::TypeArgument> {
     match &arg.node {
-        ExpressionKind::Type(ty, _) => super::generics::extract_value_generic(ty),
-        _ => Some(arg),
+        TypeArgKind::Type(ty, _) => super::generics::extract_value_generic(ty),
+        TypeArgKind::Value(_) => Some(arg),
     }
 }
 

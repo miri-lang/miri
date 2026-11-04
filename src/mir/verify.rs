@@ -90,6 +90,7 @@
 //! `--verify-mir` flag, makes findings fatal.
 
 use crate::ast::literal::Literal;
+use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::types::BuiltinCollectionKind;
 use crate::mir::body::DeviceHandleId;
 use crate::mir::facts::{OwnershipFacts, ProgramFacts};
@@ -1582,13 +1583,12 @@ fn concrete_collection_slot(
     slot: usize,
     body: &Body,
 ) -> Option<crate::ast::types::Type> {
-    use crate::ast::expression::ExpressionKind;
     use crate::ast::types::TypeKind;
     let TypeKind::Custom(name, Some(args)) = &collection_ty.kind else {
         return None;
     };
     BuiltinCollectionKind::from_name(name)?;
-    let ExpressionKind::Type(ty, _) = &args.get(slot)?.node else {
+    let TypeArgKind::Type(ty, _) = &args.get(slot)?.node else {
         return None;
     };
     pinned_type(ty, body)
@@ -1637,13 +1637,12 @@ fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::
 /// a class reference. An `Array`'s size argument is a value, not a type, so it is
 /// never mistaken for an element.
 fn holds_reference_counted_elements(body: &Body, kind: &crate::ast::types::TypeKind) -> bool {
-    use crate::ast::expression::ExpressionKind;
     let crate::ast::types::TypeKind::Custom(name, Some(args)) = kind else {
         return false;
     };
     BuiltinCollectionKind::from_name(name).is_some()
         && args.iter().any(|arg| {
-            matches!(&arg.node, ExpressionKind::Type(ty, _)
+            matches!(&arg.node, TypeArgKind::Type(ty, _)
                 if crate::mir::rc::is_slot_counted(&ty.kind, body.layout_scope()))
         })
         && crate::mir::lowering::can_be_monomorphized_at(kind)

@@ -4,9 +4,8 @@
 //! The bounds on the class instantiations a program may need: how deep one
 //! instance nests, and how an instance is spelled when it is refused.
 
-use miri::ast::expression::Expression;
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind, VALUE_GENERIC_MARKER};
-use miri::ast::ExpressionKind;
 use miri::error::syntax::Span;
 use miri::mir::lowering::instantiation_limits::{
     has_value_argument, instance_type_depth, mentions_open_parameter, polymorphic_recursion,
@@ -19,11 +18,11 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::new(0, 0))
 }
 
-fn argument(kind: TypeKind) -> Expression {
-    Expression {
+fn argument(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
         span: Span::new(0, 0),
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
     }
 }
 
@@ -35,11 +34,7 @@ fn generic(name: &str, args: Vec<TypeKind>) -> TypeKind {
 }
 
 fn value(size: i128) -> Type {
-    let literal = Expression {
-        id: 0,
-        span: Span::new(0, 0),
-        node: ExpressionKind::Literal(miri::ast::factory::int_literal(size)),
-    };
+    let literal = miri::ast::type_arguments::value_argument(size);
     ty(TypeKind::Custom(
         VALUE_GENERIC_MARKER.to_string(),
         Some(vec![literal]),

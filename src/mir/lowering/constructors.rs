@@ -4,6 +4,9 @@
 //! Constructor lowering — struct and class constructors.
 
 use crate::ast::expression::Expression;
+use crate::ast::node::IdNode;
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
@@ -38,7 +41,7 @@ pub fn lower_struct_constructor(
     struct_name: &str,
     def: &StructDefinition,
     args: &[Expression],
-    type_args: Option<&[Expression]>,
+    type_args: Option<&[TypeArgument]>,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     // A compiler-known vector is written with its component; a program's own
@@ -89,7 +92,7 @@ pub fn lower_struct_constructor(
         Type::new(
             TypeKind::Custom(
                 struct_name.to_string(),
-                type_args.map(<[Expression]>::to_vec),
+                type_args.map(<[TypeArgument]>::to_vec),
             ),
             *span,
         )
@@ -195,7 +198,7 @@ fn partition_constructor_args<'a>(
 /// constructor names, or an empty one for a struct that declares none.
 fn struct_type_arguments(
     def: &StructDefinition,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&[TypeArgument]>,
 ) -> HashMap<String, Type> {
     let (Some(generics), Some(args)) = (def.generics.as_ref(), type_args) else {
         return HashMap::new();
@@ -204,17 +207,17 @@ fn struct_type_arguments(
         .iter()
         .zip(args)
         .filter_map(|(generic, arg)| match &arg.node {
-            ExpressionKind::Type(ty, _) => Some((generic.name.clone(), ty.as_ref().clone())),
+            TypeArgKind::Type(ty, _) => Some((generic.name.clone(), ty.as_ref().clone())),
             _ => None,
         })
         .collect()
 }
 
 /// Extracts concrete element type for vector type instantiation arguments if present.
-fn extract_vec_concrete_elem_type(type_args: Option<&[Expression]>) -> Option<Type> {
+fn extract_vec_concrete_elem_type(type_args: Option<&[TypeArgument]>) -> Option<Type> {
     if let Some(args) = type_args {
         if let Some(first_arg) = args.first() {
-            if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+            if let TypeArgKind::Type(elem_ty, _) = &first_arg.node {
                 return Some(elem_ty.as_ref().clone());
             }
         }
@@ -231,11 +234,11 @@ fn build_struct_constructor_type(
 ) -> Type {
     if is_vec {
         if let Some(concrete_elem) = concrete_elem_type {
-            let synthetic_args = vec![Expression {
-                id: 0,
+            let synthetic_args = vec![IdNode::new(
+                0,
+                TypeArgKind::Type(Box::new(concrete_elem.clone()), false),
                 span,
-                node: ExpressionKind::Type(Box::new(concrete_elem.clone()), false),
-            }];
+            )];
             Type::new(
                 TypeKind::Custom(struct_name.to_string(), Some(synthetic_args)),
                 span,
@@ -1043,8 +1046,8 @@ pub(crate) fn lower_array_constructor(
     // declaration-collection pass, so a const-sized constructor resolves the same
     // whether it appears at module scope or inside a function body declared
     // earlier in source order.
-    let size_value =
-        crate::type_checker::TypeChecker::try_eval_const_int(&size_expr).ok_or_else(|| {
+    let size_value = crate::type_checker::TypeChecker::try_eval_const_argument(&size_expr, None)
+        .ok_or_else(|| {
             LoweringError::unsupported_expression(
                 "Array<T, N>() requires a compile-time constant size".to_string(),
                 size_expr.span,
@@ -1138,76 +1141,12 @@ pub(crate) fn lower_array_constructor(
     Ok(result_op)
 }
 
-/// Infer type from a generic argument expression.
-/// Used when the type checker doesn't have a stored type for the generic arg.
-fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Option<Type> {
-    use crate::ast::expression::ExpressionKind;
-
+/// The type a generic argument names, used when the type checker has no
+/// stored type for it; `None` for a value.
+fn infer_type_from_generic_arg(arg: &TypeArgument, _ctx: &LoweringContext) -> Option<Type> {
     match &arg.node {
-        ExpressionKind::Type(inner_ty, _) => {
-            // Type expressions created by create_type_expression
-            Some((**inner_ty).clone())
-        }
-        ExpressionKind::Identifier(name, _) => {
-            // Simple identifier like a primitive keyword or a type-table name.
-            let kind = match name.as_str() {
-                "int" => TypeKind::Int,
-                "i32" => TypeKind::I32,
-                "i64" => TypeKind::I64,
-                "i8" => TypeKind::I8,
-                "i16" => TypeKind::I16,
-                "u32" => TypeKind::U32,
-                "u64" => TypeKind::U64,
-                "u8" => TypeKind::U8,
-                "u16" => TypeKind::U16,
-                "f32" => TypeKind::F32,
-                "f64" => TypeKind::F64,
-                "float" => TypeKind::Float,
-                "bool" => TypeKind::Boolean,
-                n if n == types::STRING_TYPE_NAME => TypeKind::String,
-                _ => {
-                    // Any other name (stdlib collections included) resolves
-                    // through the type table, never by string special-case.
-                    if ctx
-                        .type_checker
-                        .type_table
-                        .global_type_definitions
-                        .contains_key(name)
-                    {
-                        TypeKind::Custom(name.clone(), None)
-                    } else {
-                        return None;
-                    }
-                }
-            };
-            Some(Type::new(kind, arg.span))
-        }
-        ExpressionKind::TypeDeclaration(base_expr, Some(generics), _, _) => {
-            // Generic type application like `List<int>` or `Map<int, string>`.
-            // The base name resolves through the type table — no stdlib
-            // special-casing — and every generic argument must itself infer.
-            if let ExpressionKind::Identifier(name, _) = &base_expr.node {
-                if generics.is_empty()
-                    || !ctx
-                        .type_checker
-                        .type_table
-                        .global_type_definitions
-                        .contains_key(name)
-                    || !generics
-                        .iter()
-                        .all(|g| infer_type_from_generic_arg(g, ctx).is_some())
-                {
-                    return None;
-                }
-                Some(Type::new(
-                    TypeKind::Custom(name.clone(), Some(generics.clone())),
-                    arg.span,
-                ))
-            } else {
-                None
-            }
-        }
-        _ => None,
+        TypeArgKind::Type(inner_ty, _) => Some((**inner_ty).clone()),
+        TypeArgKind::Value(_) => None,
     }
 }
 

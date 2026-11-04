@@ -602,11 +602,7 @@ fn a_field_passed_from_inside_a_value_local_is_read_in_place() {
 
 /// A tuple of two [`point`]s, which a runtime index can pick between.
 fn twin_points() -> TypeKind {
-    let member = || miri::ast::expression::Expression {
-        id: 0,
-        node: miri::ast::expression::ExpressionKind::Type(Box::new(ty(point())), false),
-        span: span(),
-    };
+    let member = || miri::ast::type_arguments::type_argument(ty(point()));
     TypeKind::Tuple(vec![member(), member()])
 }
 

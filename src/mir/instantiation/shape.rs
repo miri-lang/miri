@@ -9,8 +9,8 @@
 //! the drop-instantiation closure the backend reads bounds itself by the same
 //! measure, so a type one side refuses is refused by the other.
 
-use super::instantiation_argument;
-use crate::ast::expression::{Expression, ExpressionKind};
+use super::{instantiation_argument, written_component_type};
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::symbol::token::{type_kind_to_mangle_str, MAX_TOKEN_DEPTH};
 use crate::type_checker::context::TypeDefinition;
@@ -117,15 +117,14 @@ pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
     if extract_value_generic_kind(&ty.kind).is_some() {
         return leaf();
     }
-    let arguments = |exprs: &[&Expression]| -> Vec<Type> {
-        exprs
-            .iter()
-            .filter_map(|expr| instantiation_argument(expr))
+    let arguments = |args: &[&TypeArgument]| -> Vec<Type> {
+        args.iter()
+            .filter_map(|arg| instantiation_argument(arg))
             .collect()
     };
     match &ty.kind {
         TypeKind::Custom(name, args) => {
-            let args: Vec<&Expression> = args.iter().flatten().collect();
+            let args: Vec<&TypeArgument> = args.iter().flatten().collect();
             (Cow::Borrowed(name.as_str()), arguments(&args))
         }
         TypeKind::Generic(name, _, _) => (Cow::Borrowed(name.as_str()), Vec::new()),
@@ -133,11 +132,11 @@ pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
         TypeKind::Linear(inner) => (Cow::Borrowed("0linear"), vec![(**inner).clone()]),
         TypeKind::Meta(inner) => (Cow::Borrowed("0meta"), vec![(**inner).clone()]),
         TypeKind::Tuple(elements) => {
-            let elements: Vec<&Expression> = elements.iter().collect();
+            let elements: Vec<&TypeArgument> = elements.iter().collect();
             (Cow::Borrowed("0tuple"), arguments(&elements))
         }
         TypeKind::OneOf(members) => {
-            let members: Vec<&Expression> = members.iter().collect();
+            let members: Vec<&TypeArgument> = members.iter().collect();
             (Cow::Borrowed("0oneof"), arguments(&members))
         }
         TypeKind::List(element) => (Cow::Borrowed("0list"), arguments(&[element])),
@@ -147,10 +146,12 @@ pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
         TypeKind::Map(key, value) => (Cow::Borrowed("0map"), arguments(&[key, value])),
         TypeKind::Result(ok, err) => (Cow::Borrowed("0result"), arguments(&[ok, err])),
         TypeKind::Function(function) => {
-            let mut parts: Vec<&Expression> =
-                function.params.iter().map(|param| &*param.typ).collect();
-            parts.extend(function.return_type.as_deref());
-            (Cow::Borrowed("0fn"), arguments(&parts))
+            let parts = function.params.iter().map(|param| &*param.typ);
+            let parts = parts.chain(function.return_type.as_deref());
+            (
+                Cow::Borrowed("0fn"),
+                parts.filter_map(written_component_type).collect(),
+            )
         }
         TypeKind::Int
         | TypeKind::I8
@@ -193,7 +194,7 @@ fn collect_open_parameter_names(
     // A value argument still written as an expression (`Size`, `Size + 1`)
     // leaves open every value parameter it reads.
     if let Some(value) = extract_value_generic_kind(&ty.kind) {
-        names.extend(value_parameter_names(value).unwrap_or_default());
+        names.extend(value_parameter_names(value));
         return;
     }
     let open_name = if let TypeKind::Custom(name, None) = &ty.kind {
@@ -309,44 +310,24 @@ pub fn is_partially_bound_instantiation(
 }
 
 /// The parameters an unfolded value argument reads — `Size` in `Size`, or in
-/// `Size + 1` — or `None` when `arg` is no value expression at all.
-pub fn value_parameter_names(arg: &Expression) -> Option<Vec<String>> {
+/// `Size + 1`; none for a type argument.
+pub fn value_parameter_names(arg: &TypeArgument) -> Vec<String> {
+    fn names(value: &ValueArg, found: &mut Vec<String>) {
+        match value {
+            ValueArg::Int(_) => {}
+            ValueArg::Name(name) => found.push(name.clone()),
+            ValueArg::Binary(_, left, right) => {
+                names(left, found);
+                names(right, found);
+            }
+        }
+    }
     match &arg.node {
-        ExpressionKind::Identifier(name, _) => Some(vec![name.clone()]),
-        ExpressionKind::Literal(literal) => {
-            matches!(literal, crate::ast::literal::Literal::Integer(_)).then(Vec::new)
+        TypeArgKind::Value(value) => {
+            let mut found = Vec::new();
+            names(value, &mut found);
+            found
         }
-        ExpressionKind::Unary(_, operand) => value_parameter_names(operand),
-        ExpressionKind::Binary(left, _, right) => {
-            let mut names = value_parameter_names(left)?;
-            names.extend(value_parameter_names(right)?);
-            Some(names)
-        }
-        ExpressionKind::Logical(..)
-        | ExpressionKind::Assignment(..)
-        | ExpressionKind::Conditional(..)
-        | ExpressionKind::Range(..)
-        | ExpressionKind::Guard(..)
-        | ExpressionKind::Member(..)
-        | ExpressionKind::Index(..)
-        | ExpressionKind::Call(..)
-        | ExpressionKind::ImportPath(..)
-        | ExpressionKind::Type(..)
-        | ExpressionKind::GenericType(..)
-        | ExpressionKind::TypeDeclaration(..)
-        | ExpressionKind::EnumValue(..)
-        | ExpressionKind::StructMember(..)
-        | ExpressionKind::Lambda(..)
-        | ExpressionKind::List(..)
-        | ExpressionKind::Array(..)
-        | ExpressionKind::Map(..)
-        | ExpressionKind::Tuple(..)
-        | ExpressionKind::Set(..)
-        | ExpressionKind::Match(..)
-        | ExpressionKind::FormattedString(..)
-        | ExpressionKind::NamedArgument(..)
-        | ExpressionKind::Super
-        | ExpressionKind::Block(..)
-        | ExpressionKind::Cast(..) => None,
+        TypeArgKind::Type(..) => Vec::new(),
     }
 }

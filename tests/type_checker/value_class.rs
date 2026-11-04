@@ -7,7 +7,8 @@
 
 use crate::type_checker::utils::type_checker_result;
 use miri::ast::expression::ExpressionKind;
-use miri::ast::factory::{make_type, type_expr_non_null};
+use miri::ast::factory::make_type;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{
     Type, TypeKind, ATOMIC_TYPE_NAME, VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME,
 };
@@ -389,7 +390,7 @@ fn probe(link Link)
 fn written_with_component(name: &str, component: TypeKind) -> TypeKind {
     TypeKind::Custom(
         name.to_string(),
-        Some(vec![type_expr_non_null(make_type(component))]),
+        Some(vec![type_argument(make_type(component))]),
     )
 }
 

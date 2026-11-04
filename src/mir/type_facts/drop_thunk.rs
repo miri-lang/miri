@@ -7,7 +7,7 @@
 //! was built at.
 
 use super::TypeFacts;
-use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::Type;
 use crate::mir::instantiation::{self, shape};
 use crate::mir::symbol::{Symbol, ThunkKind};
@@ -62,14 +62,13 @@ impl DropThunk {
 /// released by a thunk that skips every field written at a parameter and
 /// leaks what it holds: a parameter the body's substitution bound
 /// (the bound parameters it is handed), a parameter neither left open nor unbound,
-/// an instantiation no thunk is emitted for, and an argument that is
-/// neither a type nor a value.
+/// and an instantiation no thunk is emitted for.
 ///
 /// [`TypeFacts::drop_instantiations_of`]: crate::mir::type_facts::TypeFacts::drop_instantiations_of
 pub(crate) fn drop_thunk(
     facts: &TypeFacts,
     name: &str,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&[TypeArgument]>,
     open_params: &HashSet<String>,
     bound_params: &HashSet<String>,
 ) -> Result<DropThunk, DropThunkRefusal> {
@@ -100,7 +99,7 @@ pub(crate) fn drop_thunk(
         }
         return Ok(DropThunk::SharedBody);
     };
-    let (args, open) = instantiation_arguments(name, arg_exprs, facts)?;
+    let (args, open) = instantiation_arguments(arg_exprs, facts);
     let args = shape::with_unbound_arguments_normalized(facts.definitions(), name, &args);
     if let Some(missed) = open.iter().find(|param| bound_params.contains(*param)) {
         return Err(DropThunkRefusal(format!(
@@ -175,10 +174,9 @@ fn is_unbound_parameter(
 /// anywhere inside a type argument, or one an unfolded value argument
 /// (`Size`, `Size + 1`) reads.
 fn instantiation_arguments(
-    name: &str,
-    arg_exprs: &[Expression],
+    arg_exprs: &[TypeArgument],
     facts: &TypeFacts,
-) -> Result<(Vec<Type>, Vec<String>), DropThunkRefusal> {
+) -> (Vec<Type>, Vec<String>) {
     let mut args = Vec::with_capacity(arg_exprs.len());
     let mut open = Vec::new();
     for arg in arg_exprs {
@@ -187,27 +185,16 @@ fn instantiation_arguments(
                 open.extend(facts.open_parameter_names(&ty));
                 args.push(ty);
             }
-            None => {
-                let names = shape::value_parameter_names(arg).ok_or_else(|| {
-                    DropThunkRefusal(format!(
-                        "a `{name}` value carries a type argument that is neither a type \
-                         nor a value: {:?}",
-                        arg.node
-                    ))
-                })?;
-                open.extend(names);
-            }
+            None => open.extend(shape::value_parameter_names(arg)),
         }
     }
-    Ok((args, open))
+    (args, open)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::factory::type_expr_non_null;
-    use crate::ast::literal::Literal;
+    use crate::ast::type_arguments::{type_argument, TypeArgKind, ValueArg};
     use crate::ast::types::TypeDeclarationKind;
     use crate::ast::types::TypeKind;
     use crate::ast::{IdNode, MemberVisibility};
@@ -303,7 +290,7 @@ mod tests {
     fn choose_in(
         facts: &TypeFacts,
         name: &str,
-        args: Option<&[Expression]>,
+        args: Option<&[TypeArgument]>,
         open: &[&str],
     ) -> Result<DropThunk, DropThunkRefusal> {
         let open_params: HashSet<String> = open.iter().map(|name| name.to_string()).collect();
@@ -314,7 +301,7 @@ mod tests {
     fn choose(
         facts: &TypeFacts,
         name: &str,
-        args: Option<&[Expression]>,
+        args: Option<&[TypeArgument]>,
     ) -> Result<DropThunk, DropThunkRefusal> {
         choose_in(facts, name, args, &[])
     }
@@ -332,7 +319,7 @@ mod tests {
     fn choose_bound(
         facts: &TypeFacts,
         name: &str,
-        args: Option<&[Expression]>,
+        args: Option<&[TypeArgument]>,
         bound: &[&str],
     ) -> Result<DropThunk, DropThunkRefusal> {
         let bound_params: HashSet<String> = bound.iter().map(|name| name.to_string()).collect();
@@ -351,7 +338,7 @@ mod tests {
 
     #[test]
     fn a_partly_unbound_instantiation_is_released_by_its_own_thunk() {
-        let args = [type_arg(TypeKind::String), type_expr_non_null(generic("B"))];
+        let args = [type_arg(TypeKind::String), type_argument(generic("B"))];
         assert_eq!(
             choose(&facts(), "Duo", Some(&args)).ok(),
             Some(DropThunk::PerInstantiation(vec![
@@ -365,16 +352,20 @@ mod tests {
     fn a_parameter_at_another_types_position_is_not_taken_for_unbound() {
         // `B` is `Duo`'s second parameter, not its first: nothing but an open
         // body could name it there.
-        let args = [type_expr_non_null(generic("B")), type_arg(TypeKind::String)];
+        let args = [type_argument(generic("B")), type_arg(TypeKind::String)];
         assert!(choose(&facts(), "Duo", Some(&args)).is_err());
     }
 
-    fn type_arg(kind: TypeKind) -> Expression {
-        type_expr_non_null(ty(kind))
+    fn type_arg(kind: TypeKind) -> TypeArgument {
+        type_argument(ty(kind))
     }
 
-    fn expression(node: ExpressionKind) -> Expression {
-        IdNode::new(0, node, Span::default())
+    fn size_parameter() -> TypeArgument {
+        IdNode::new(
+            0,
+            TypeArgKind::Value(ValueArg::Name("Size".to_string())),
+            Span::default(),
+        )
     }
 
     #[test]
@@ -410,7 +401,7 @@ mod tests {
         );
     }
 
-    fn open_parameter() -> Expression {
+    fn open_parameter() -> TypeArgument {
         type_arg(TypeKind::Generic(
             "T".to_string(),
             None,
@@ -453,10 +444,7 @@ mod tests {
 
     #[test]
     fn an_unfolded_size_argument_the_body_leaves_open_is_released_by_the_shared_body_thunk() {
-        let args = [expression(ExpressionKind::Identifier(
-            "Size".to_string(),
-            None,
-        ))];
+        let args = [size_parameter()];
         assert_eq!(
             choose_in(&facts(), "Box", Some(&args), &["Size"]).ok(),
             Some(DropThunk::SharedBody)
@@ -465,10 +453,7 @@ mod tests {
 
     #[test]
     fn an_unfolded_size_argument_the_body_does_not_leave_open_is_refused() {
-        let args = [expression(ExpressionKind::Identifier(
-            "Size".to_string(),
-            None,
-        ))];
+        let args = [size_parameter()];
         assert!(choose(&facts(), "Box", Some(&args)).is_err());
     }
 
@@ -482,14 +467,5 @@ mod tests {
             message.contains("no drop thunk is emitted for"),
             "{message}"
         );
-    }
-
-    #[test]
-    fn an_argument_that_is_neither_a_type_nor_a_value_is_refused() {
-        let args = [expression(ExpressionKind::Literal(Literal::Boolean(true)))];
-        let Err(DropThunkRefusal(message)) = choose(&facts(), "Box", Some(&args)) else {
-            panic!("an argument naming no instantiation must be reported");
-        };
-        assert!(message.contains("neither a type nor a value"), "{message}");
     }
 }

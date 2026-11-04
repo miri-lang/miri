@@ -15,7 +15,7 @@
 //! MIR bodies through the public backend and look for the exported symbol in
 //! the artifact bytes.
 
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions};
 use miri::codegen::Backend;
@@ -31,8 +31,8 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
-    Expression::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+fn type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument::new(0, TypeArgKind::Type(Box::new(ty(kind)), false), span())
 }
 
 fn list_of(elem: TypeKind) -> TypeKind {

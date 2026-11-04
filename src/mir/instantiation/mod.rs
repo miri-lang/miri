@@ -15,46 +15,54 @@ pub(crate) mod inherited;
 pub mod shape;
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::{rewritten, TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{Type, TypeKind};
 use crate::type_checker::context::{ClassDefinition, GenericDefinition, TypeDefinition};
 use std::collections::HashMap;
 
-/// Apply a generic substitution mapping to an Expression that contains a type,
-/// replacing generic parameters in the wrapped type.
-fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> Expression {
-    match &expr.node {
-        ExpressionKind::Type(ty, is_ref) => {
-            let new_ty = apply_generic_sub(ty, subs);
-            Expression {
-                id: expr.id,
-                span: expr.span,
-                node: ExpressionKind::Type(Box::new(new_ty), *is_ref),
-            }
-        }
-        // A type argument written as a bare name (`List<T>`) parses as an
-        // identifier rather than a resolved type, so it needs the same
-        // substitution: without it the argument keeps naming the generic
-        // parameter and the instantiation is never recognised as concrete.
-        ExpressionKind::Identifier(name, _) => match subs.get(name.as_str()) {
-            Some(concrete) => Expression {
-                id: expr.id,
-                span: expr.span,
-                node: ExpressionKind::Type(Box::new(concrete.clone()), false),
-            },
-            None => expr.clone(),
+/// Apply a generic substitution mapping to a type argument, replacing generic
+/// parameters in the type it names.
+fn substitute_in_type_expr(arg: &TypeArgument, subs: &HashMap<String, Type>) -> TypeArgument {
+    match &arg.node {
+        TypeArgKind::Type(ty, nullable) => rewritten(
+            arg,
+            TypeArgKind::Type(Box::new(apply_generic_sub(ty, subs)), *nullable),
+        ),
+        // A value naming a parameter stands for what the parameter is bound
+        // to.
+        TypeArgKind::Value(ValueArg::Name(name)) => match subs.get(name.as_str()) {
+            Some(concrete) => rewritten(arg, TypeArgKind::Type(Box::new(concrete.clone()), false)),
+            None => arg.clone(),
         },
         // A value argument computed from the parameters (`Size + 1`) names one
         // instantiation once they are bound; folded, it is spelled like any
         // other value argument. One that does not fold stays as written, and
         // constructor lowering refuses the instance it would build.
-        ExpressionKind::Binary(..) | ExpressionKind::Unary(..) => {
-            crate::type_checker::generics::fold_value_generic_arithmetic(expr, subs)
-                .unwrap_or_else(|| expr.clone())
+        TypeArgKind::Value(ValueArg::Binary(..)) => {
+            crate::type_checker::generics::fold_value_generic_arithmetic(arg, subs)
+                .unwrap_or_else(|| arg.clone())
         }
-        // A literal value argument is already concrete, and no other
-        // expression is written in a type-argument position, so none of these
-        // holds a parameter to substitute.
+        // An integer is already concrete.
+        TypeArgKind::Value(ValueArg::Int(_)) => arg.clone(),
+    }
+}
+
+/// Apply a generic substitution mapping to a closure type's component — a
+/// parameter or return type, or a generic it declares — replacing generic
+/// parameters in the type it writes. A generic declaration holds no parameter
+/// to substitute and is kept as written.
+fn substitute_in_written_type(expr: &Expression, subs: &HashMap<String, Type>) -> Expression {
+    let node = match &expr.node {
+        ExpressionKind::Type(ty, nullable) => {
+            ExpressionKind::Type(Box::new(apply_generic_sub(ty, subs)), *nullable)
+        }
+        ExpressionKind::Identifier(name, _) => match subs.get(name.as_str()) {
+            Some(concrete) => ExpressionKind::Type(Box::new(concrete.clone()), false),
+            None => return expr.clone(),
+        },
         ExpressionKind::Literal(..)
+        | ExpressionKind::Binary(..)
+        | ExpressionKind::Unary(..)
         | ExpressionKind::Logical(..)
         | ExpressionKind::Assignment(..)
         | ExpressionKind::Conditional(..)
@@ -77,9 +85,14 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
         | ExpressionKind::Match(..)
         | ExpressionKind::FormattedString(..)
         | ExpressionKind::NamedArgument(..)
-        | ExpressionKind::Super
         | ExpressionKind::Block(..)
-        | ExpressionKind::Cast(..) => expr.clone(),
+        | ExpressionKind::Cast(..)
+        | ExpressionKind::Super => return expr.clone(),
+    };
+    Expression {
+        id: expr.id,
+        span: expr.span,
+        node,
     }
 }
 
@@ -100,7 +113,7 @@ fn substitute_in_type_expr(expr: &Expression, subs: &HashMap<String, Type>) -> E
 // or as marker types to ensure proper field drop and release behavior.
 pub(crate) fn instantiated_member_type<'a>(
     params: impl IntoIterator<Item = &'a str>,
-    args: &[Expression],
+    args: &[TypeArgument],
     field_ty: &Type,
 ) -> Type {
     let subs: HashMap<String, Type> = params
@@ -119,7 +132,7 @@ pub(crate) fn instantiated_member_type<'a>(
 /// arguments, leaves the member as declared.
 pub(crate) fn member_type_at(
     generics: Option<&[GenericDefinition]>,
-    args: Option<&[Expression]>,
+    args: Option<&[TypeArgument]>,
     declared: &Type,
 ) -> Type {
     let (Some(generics), Some(args)) = (generics, args) else {
@@ -158,7 +171,7 @@ pub(crate) fn is_open_parameter(
 pub(crate) fn field_types(
     definitions: &HashMap<String, TypeDefinition>,
     name: &str,
-    args: Option<&[Expression]>,
+    args: Option<&[TypeArgument]>,
 ) -> Option<Vec<Type>> {
     match definitions.get(name)? {
         TypeDefinition::Struct(def) => Some(
@@ -182,7 +195,7 @@ pub(crate) fn field_type(
     definitions: &HashMap<String, TypeDefinition>,
     instance: Option<&Type>,
     name: &str,
-    args: Option<&[Expression]>,
+    args: Option<&[TypeArgument]>,
     index: usize,
 ) -> Option<Type> {
     let args = args.or_else(|| match instance.map(|ty| &ty.kind) {
@@ -197,7 +210,7 @@ fn class_field_types(
     definitions: &HashMap<String, TypeDefinition>,
     name: &str,
     def: &ClassDefinition,
-    args: Option<&[Expression]>,
+    args: Option<&[TypeArgument]>,
 ) -> Vec<Type> {
     let Some(args) = args else {
         return inherited::declared_field_types(definitions, name);
@@ -223,8 +236,8 @@ fn class_field_types(
 ///
 /// A nullable argument (`T` at `int?`) denotes the option it stands for, so it
 /// is folded into `Option` here rather than by every caller.
-pub(crate) fn type_argument(arg: &Expression) -> Option<Type> {
-    let ExpressionKind::Type(arg_ty, is_nullable) = &arg.node else {
+pub(crate) fn type_argument(arg: &TypeArgument) -> Option<Type> {
+    let TypeArgKind::Type(arg_ty, is_nullable) = &arg.node else {
         return None;
     };
     Some(if *is_nullable {
@@ -234,9 +247,22 @@ pub(crate) fn type_argument(arg: &Expression) -> Option<Type> {
     })
 }
 
+/// The type a closure type's parameter or return is written as, a nullable
+/// mark read as the option it denotes; `None` for anything else.
+pub(crate) fn written_component_type(expr: &Expression) -> Option<Type> {
+    let ExpressionKind::Type(ty, nullable) = &expr.node else {
+        return None;
+    };
+    Some(if *nullable {
+        Type::new(TypeKind::Option(ty.clone()), ty.span)
+    } else {
+        (**ty).clone()
+    })
+}
+
 /// Every argument of `args` as the type it denotes (see [`type_argument`]), or
 /// `None` when any of them is a value rather than a type.
-pub(crate) fn type_arguments(args: &[Expression]) -> Option<Vec<Type>> {
+pub(crate) fn type_arguments(args: &[TypeArgument]) -> Option<Vec<Type>> {
     args.iter().map(type_argument).collect()
 }
 
@@ -247,7 +273,7 @@ pub(crate) fn type_arguments(args: &[Expression]) -> Option<Vec<Type>> {
 ///
 /// A static call, a vtable and a drop thunk all name an instantiation from
 /// what this answers, so they cannot spell one instantiation two ways.
-pub(crate) fn instantiation_argument(arg: &Expression) -> Option<Type> {
+pub(crate) fn instantiation_argument(arg: &TypeArgument) -> Option<Type> {
     type_argument(arg).or_else(|| crate::type_checker::generics::value_generic_slot(arg))
 }
 
@@ -256,7 +282,7 @@ pub(crate) fn instantiation_argument(arg: &Expression) -> Option<Type> {
 /// that is neither a type nor a value, a count that disagrees, or an argument
 /// [`is_monomorphized_instantiation`] rejects.
 pub(crate) fn monomorphized_arguments(
-    arg_exprs: &[Expression],
+    arg_exprs: &[TypeArgument],
     arity: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
 ) -> Option<Vec<Type>> {
@@ -388,21 +414,21 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
             use crate::ast::common::Parameter as AstParameter;
             let new_generics = fdata.generics.as_ref().map(|gens| {
                 gens.iter()
-                    .map(|gen| substitute_in_type_expr(gen, subs))
+                    .map(|gen| substitute_in_written_type(gen, subs))
                     .collect()
             });
             let new_params = fdata
                 .params
                 .iter()
                 .map(|p| AstParameter {
-                    typ: Box::new(substitute_in_type_expr(&p.typ, subs)),
+                    typ: Box::new(substitute_in_written_type(&p.typ, subs)),
                     ..p.clone()
                 })
                 .collect();
             let new_return_type = fdata
                 .return_type
                 .as_ref()
-                .map(|rt| Box::new(substitute_in_type_expr(rt, subs)));
+                .map(|rt| Box::new(substitute_in_written_type(rt, subs)));
             let new_fdata = crate::ast::types::FunctionTypeData {
                 generics: new_generics,
                 params: new_params,

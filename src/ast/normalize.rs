@@ -16,6 +16,7 @@ use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind, LambdaData, LeftHandSideExpression};
 use crate::ast::pattern::MatchBranch;
 use crate::ast::statement::{ClassData, FunctionDeclarationData, Statement, StatementKind};
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::Program;
 
@@ -317,27 +318,27 @@ pub fn normalize_type(ty: &mut Type) {
 
 fn normalize_type_children(kind: &mut TypeKind) {
     match kind {
-        TypeKind::List(inner) => normalize_expr(inner),
+        TypeKind::List(inner) => normalize_arg(inner),
         TypeKind::Array(inner, size) => {
-            normalize_expr(inner);
-            normalize_expr(size);
+            normalize_arg(inner);
+            normalize_arg(size);
         }
         TypeKind::Map(k, v) => {
-            normalize_expr(k);
-            normalize_expr(v);
+            normalize_arg(k);
+            normalize_arg(v);
         }
-        TypeKind::Set(inner) => normalize_expr(inner),
-        TypeKind::Custom(_, Some(args)) => normalize_expr_list(args),
+        TypeKind::Set(inner) => normalize_arg(inner),
+        TypeKind::Custom(_, Some(args)) => args.iter_mut().for_each(normalize_arg),
         TypeKind::Custom(_, None) => {}
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             normalize_type(inner);
         }
         TypeKind::Result(ok, err) => {
-            normalize_expr(ok);
-            normalize_expr(err);
+            normalize_arg(ok);
+            normalize_arg(err);
         }
-        TypeKind::Future(inner) => normalize_expr(inner),
-        TypeKind::Tuple(elems) | TypeKind::OneOf(elems) => normalize_expr_list(elems),
+        TypeKind::Future(inner) => normalize_arg(inner),
+        TypeKind::Tuple(elems) | TypeKind::OneOf(elems) => elems.iter_mut().for_each(normalize_arg),
         TypeKind::Generic(_, Some(c), _) => normalize_type(c),
         TypeKind::Generic(_, None, _) => {}
         TypeKind::Function(func_data) => {
@@ -365,6 +366,14 @@ fn normalize_type_children(kind: &mut TypeKind) {
         | TypeKind::RawPtr
         | TypeKind::Void
         | TypeKind::Error => {}
+    }
+}
+
+/// Normalize the type a type argument names; a value has nothing to normalize.
+fn normalize_arg(arg: &mut TypeArgument) {
+    match &mut arg.node {
+        TypeArgKind::Type(ty, _) => normalize_type(ty),
+        TypeArgKind::Value(_) => {}
     }
 }
 

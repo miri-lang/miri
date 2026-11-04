@@ -402,7 +402,7 @@ mod tests {
     fn parent_arguments_are_remapped_through_the_extends_clause() {
         let list_of_u = Type::new(
             TypeKind::List(Box::new(
-                crate::type_checker::TypeChecker::new().create_type_expression(generic_type("U")),
+                crate::type_checker::TypeChecker::new().create_type_argument(generic_type("U")),
             )),
             span(),
         );
@@ -504,7 +504,7 @@ mod tests {
     fn list_of(element: Type) -> Type {
         Type::new(
             TypeKind::List(Box::new(
-                crate::type_checker::TypeChecker::new().create_type_expression(element),
+                crate::type_checker::TypeChecker::new().create_type_argument(element),
             )),
             span(),
         )
@@ -550,7 +550,7 @@ mod tests {
         let TypeKind::List(element) = &fields[0].kind else {
             panic!("expected a list field, got {:?}", fields[0].kind);
         };
-        let crate::ast::expression::ExpressionKind::Type(element, _) = &element.node else {
+        let crate::ast::type_arguments::TypeArgKind::Type(element, _) = &element.node else {
             panic!("expected a resolved element type argument");
         };
         assert_eq!(element.kind, TypeKind::String);

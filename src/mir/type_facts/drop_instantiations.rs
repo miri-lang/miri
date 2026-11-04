@@ -28,8 +28,7 @@
 //! would reference a symbol nothing defines.
 
 use super::DropInstantiationRefusal;
-use crate::ast::expression::Expression;
-use crate::ast::factory::type_expr_non_null;
+use crate::ast::type_arguments::{type_argument, TypeArgument};
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::shape::{
     constructor_parts, instance_type_depth, is_partially_bound_instantiation,
@@ -194,7 +193,7 @@ impl Closure<'_> {
     /// pass admits nothing new.
     fn close(&mut self) -> Result<(), DropInstantiationRefusal> {
         while let Some((name, args)) = self.pending.pop() {
-            let arg_exprs: Vec<Expression> = args.into_iter().map(type_expr_non_null).collect();
+            let arg_exprs: Vec<TypeArgument> = args.into_iter().map(type_argument).collect();
             for member in stored_member_types(self.definitions, &name, Some(&arg_exprs)) {
                 self.walk(&member, 0)?;
             }
@@ -269,7 +268,7 @@ fn declared_member_types(definitions: &HashMap<String, TypeDefinition>, name: &s
 pub(super) fn stored_member_types(
     definitions: &HashMap<String, TypeDefinition>,
     name: &str,
-    args: Option<&[Expression]>,
+    args: Option<&[TypeArgument]>,
 ) -> Vec<Type> {
     match definitions.get(name) {
         Some(TypeDefinition::Enum(def)) => def

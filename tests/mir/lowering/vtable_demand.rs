@@ -5,9 +5,8 @@
 //! reads, through a receiver the instance can stand behind, is filled.
 
 use crate::type_checker::utils::type_checker_result;
-use miri::ast::expression::Expression;
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
-use miri::ast::ExpressionKind;
 use miri::diagnostics::DiagnosticCode;
 use miri::error::lowering::{LoweringError, LoweringErrorKind};
 use miri::error::syntax::Span;
@@ -70,11 +69,11 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, span())
 }
 
-fn argument(kind: TypeKind) -> Expression {
-    Expression {
+fn argument(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
         span: span(),
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
     }
 }
 
@@ -489,11 +488,7 @@ fn buf_at(size: i128) -> TypeKind {
         "Buf".to_string(),
         Some(vec![
             argument(TypeKind::Int),
-            Expression {
-                id: 0,
-                span: span(),
-                node: ExpressionKind::Literal(miri::ast::factory::int_literal(size)),
-            },
+            miri::ast::type_arguments::value_argument(size),
         ]),
     )
 }

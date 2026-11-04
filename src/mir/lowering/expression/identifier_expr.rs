@@ -296,7 +296,7 @@ fn lower_value_generic(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let value = crate::type_checker::generics::extract_value_generic(bound)
-        .and_then(crate::type_checker::TypeChecker::try_eval_const_int)
+        .and_then(|value| crate::type_checker::TypeChecker::try_eval_const_argument(value, None))
         .and_then(|value| i64::try_from(value).ok())
         .ok_or_else(|| {
             LoweringError::coded(

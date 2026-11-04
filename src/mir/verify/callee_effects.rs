@@ -41,10 +41,11 @@
 //! argument in place. Its caller makes such a receiver unique before the
 //! call when its type is one a write copies.
 
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use std::collections::{HashMap, HashSet};
 
 use super::borrow_reach::{reach_of, Reach};
-use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::TypeKind;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::type_facts::DropHookReach;
@@ -420,8 +421,8 @@ fn handed(body: &Body, places: &PlaceTypes, args: &[Operand]) -> Handed {
 /// a value, and one that replaces a value writes the map in place, which
 /// `runtime_call_status` refuses before asking.
 fn built_of(kind: &TypeKind, open: &HashSet<String>) -> Handed {
-    let of_expression = |expression: &Expression| {
-        if let ExpressionKind::Type(ty, _) = &expression.node {
+    let of_expression = |expression: &TypeArgument| {
+        if let TypeArgKind::Type(ty, _) = &expression.node {
             built_of(&ty.kind, open)
         } else {
             Handed::Other

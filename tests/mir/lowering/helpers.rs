@@ -4,7 +4,6 @@
 //! When two spellings of a type are one value lowering may pass through
 //! untouched, and when they need a coercion between them.
 
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::lowering::helpers::spellings_of_one_value;
@@ -26,11 +25,7 @@ fn generic(name: &str) -> TypeKind {
 }
 
 fn list_of(kind: TypeKind) -> TypeKind {
-    let element = Expression::new(
-        0,
-        ExpressionKind::Type(Box::new(ty(kind)), false),
-        Span::default(),
-    );
+    let element = miri::ast::type_arguments::type_argument(ty(kind));
     TypeKind::Custom("List".to_string(), Some(vec![element]))
 }
 

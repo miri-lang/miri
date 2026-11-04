@@ -13,8 +13,9 @@ use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
+use crate::ast::type_arguments::{rewritten, ArithOp, TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
-use crate::ast::{BinaryOp, Expression, ExpressionKind, UnaryOp};
+use crate::ast::{Expression, ExpressionKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use std::collections::{HashMap, HashSet};
@@ -24,9 +25,9 @@ use std::collections::{HashMap, HashSet};
 /// `HashMap<String, Type>` substitution map. Generic params can be either
 /// type-typed or value-typed in their declared class, but `substitute_type`
 /// is keyed by name → `Type`; wrapping the value expression as
-/// `Custom("__value_generic__", Some([expr]))` lets us look up value
-/// generics out of the same map in size-expression positions
-/// (`substitute_value_generic_in_expr`) without threading a second mapping
+/// `Custom("__value_generic__", Some([argument]))` lets us look up value
+/// generics out of the same map in size positions
+/// (`substitute_value_generic`) without threading a second mapping
 /// through every callsite of `substitute_type`.
 pub(crate) use crate::ast::types::VALUE_GENERIC_MARKER;
 
@@ -56,7 +57,7 @@ thread_local! {
 /// `mir::instantiation::member_type_at`, which substitutes the whole type.
 pub(crate) fn substitute_generic_field_kind(
     field_kind: &TypeKind,
-    type_args: Option<&[Expression]>,
+    type_args: Option<&[TypeArgument]>,
     def_generics: Option<&Vec<GenericDefinition>>,
 ) -> TypeKind {
     // Only a bare generic-parameter spelling can be substituted; a concrete
@@ -70,7 +71,7 @@ pub(crate) fn substitute_generic_field_kind(
     let Some(pos) = generics.iter().position(|g| g.name == param_name) else {
         return field_kind.clone();
     };
-    if let Some(ExpressionKind::Type(ty, _)) = args.get(pos).map(|a| &a.node) {
+    if let Some(TypeArgKind::Type(ty, _)) = args.get(pos).map(|a| &a.node) {
         ty.kind.clone()
     } else {
         field_kind.clone()
@@ -105,24 +106,24 @@ pub(crate) fn generic_parameter_name(kind: &TypeKind) -> Option<&str> {
     }
 }
 
-/// Wrap a value-generic argument expression as a sentinel `Type` so it can
-/// share the `HashMap<String, Type>` mapping used for type generics.
-pub(crate) fn value_generic_marker_type(expr: Expression) -> Type {
+/// Wrap a value-generic argument as a sentinel `Type` so it can share the
+/// `HashMap<String, Type>` mapping used for type generics.
+pub(crate) fn value_generic_marker_type(argument: TypeArgument) -> Type {
     make_type(TypeKind::Custom(
         VALUE_GENERIC_MARKER.to_string(),
-        Some(vec![expr]),
+        Some(vec![argument]),
     ))
 }
 
-/// If `ty` is a value-generic marker wrapping a stored expression, return
-/// a borrow of that expression. Otherwise `None`.
-pub(crate) fn extract_value_generic(ty: &Type) -> Option<&Expression> {
+/// If `ty` is a value-generic marker wrapping a stored argument, return a
+/// borrow of that argument. Otherwise `None`.
+pub(crate) fn extract_value_generic(ty: &Type) -> Option<&TypeArgument> {
     extract_value_generic_kind(&ty.kind)
 }
 
 /// [`extract_value_generic`] against a bare kind, for callers that hold one
 /// without the surrounding [`Type`] — the symbol mangler reads kinds.
-pub(crate) fn extract_value_generic_kind(kind: &TypeKind) -> Option<&Expression> {
+pub(crate) fn extract_value_generic_kind(kind: &TypeKind) -> Option<&TypeArgument> {
     match kind {
         TypeKind::Custom(name, Some(args)) if name == VALUE_GENERIC_MARKER && args.len() == 1 => {
             Some(&args[0])
@@ -136,56 +137,48 @@ pub(crate) fn extract_value_generic_kind(kind: &TypeKind) -> Option<&Expression>
 ///
 /// A class can declare either kind of parameter, and an instantiation is
 /// recorded as one `Vec<Type>` regardless — so the `3` in `Array<T, 3>` rides
-/// in the same tuple as a value-generic marker. Only a folded integer constant
-/// qualifies: a size still written as an expression names no single
+/// in the same tuple as a value-generic marker. Only a folded integer
+/// qualifies: a size still written as arithmetic or a name names no single
 /// instantiation, and wrapping it would mangle two different sizes to one
 /// symbol.
-pub(crate) fn value_generic_slot(arg: &Expression) -> Option<Type> {
+pub(crate) fn value_generic_slot(arg: &TypeArgument) -> Option<Type> {
     match &arg.node {
-        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_)) => {
-            Some(value_generic_marker_type(arg.clone()))
+        TypeArgKind::Value(ValueArg::Int(_)) => Some(value_generic_marker_type(arg.clone())),
+        TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..)) | TypeArgKind::Type(..) => {
+            None
         }
-        _ => None,
     }
 }
 
-/// Walk `expr` and substitute identifier references that name a value generic
-/// in `mapping` with the stored expression. Identifiers that resolve to type
-/// generics are left untouched — those flow through `substitute_type`. Used
-/// by `substitute_array` (and any other size-position substitution) so that
-/// e.g. `Array<T, Size>` inside a class body lowers to `Array<float, 3>` when
-/// the class is instantiated as `Wrap<float, 3>`.
-pub(crate) fn substitute_value_generic_in_expr(
-    expr: &Expression,
+/// `arg` with a value generic it names replaced by the argument `mapping`
+/// binds it to. A name `mapping` binds to a type flows through
+/// `substitute_type` instead, and anything else is kept as written. Used by
+/// `substitute_array` (and any other size-position substitution) so that
+/// `Array<T, Size>` inside a class body lowers to `Array<float, 3>` when the
+/// class is instantiated as `Wrap<float, 3>`.
+pub(crate) fn substitute_value_generic(
+    arg: &TypeArgument,
     mapping: &HashMap<String, Type>,
-) -> Expression {
-    if let ExpressionKind::Identifier(name, None) = &expr.node {
-        if let Some(ty) = mapping.get(name) {
-            if let Some(value_expr) = extract_value_generic(ty) {
-                return value_expr.clone();
-            }
-        }
-    }
-    expr.clone()
+) -> TypeArgument {
+    let bound = written_name(arg)
+        .and_then(|name| mapping.get(name))
+        .and_then(extract_value_generic);
+    bound.unwrap_or(arg).clone()
 }
 
 /// A value argument computed from value parameters — the `Size + 1` in
-/// `Buf<T, Size + 1>` — folded to the integer literal it denotes once
-/// `mapping` binds each parameter it names to a constant.
+/// `Buf<T, Size + 1>` — folded to the integer it denotes once `mapping` binds
+/// each parameter it names to a value.
 ///
-/// `None` when the expression names something `mapping` does not bind to a
+/// `None` when the argument names something `mapping` does not bind to a
 /// value, or does not evaluate to an integer: it then names no single
 /// instantiation and stays as written.
 pub(crate) fn fold_value_generic_arithmetic(
-    expr: &Expression,
+    arg: &TypeArgument,
     mapping: &HashMap<String, Type>,
-) -> Option<Expression> {
-    let substituted = substitute_value_names(expr, mapping)?;
-    let value = TypeChecker::try_eval_const_int(&substituted)?;
-    Some(crate::ast::factory::literal_with_span(
-        crate::ast::factory::int_literal(value),
-        expr.span,
-    ))
+) -> Option<TypeArgument> {
+    let value = written_value(arg)?.fold(&mut |name| bound_int(name, mapping))?;
+    Some(rewritten(arg, TypeArgKind::Value(ValueArg::Int(value))))
 }
 
 /// Why a value argument whose every parameter is bound has no valid value.
@@ -196,8 +189,6 @@ pub(crate) enum UnfoldableValue {
     NotConstant,
     /// A division or remainder by an operand that is zero.
     DivisionByZero,
-    /// An operator the folder does not evaluate (`<<`, `==`, …).
-    UnsupportedOperator,
     /// A result, or an operand, outside the signed 128-bit range.
     OutOfRange,
     /// A result of zero or below: a value argument counts what an instance
@@ -205,32 +196,33 @@ pub(crate) enum UnfoldableValue {
     NotPositive,
 }
 
-/// Why the value argument `expr` has no valid value once `mapping` binds every
-/// parameter it names. `None` when it folds to a value above zero, or when it names a parameter of
-/// `open` — one the body declares and `mapping` leaves unbound — since then it
-/// is not yet a value at all. An operand that is neither an integer, a
-/// parameter `mapping` binds to a value, nor one of `open` has no value
-/// whatever is bound, and is [`UnfoldableValue::NotConstant`].
+/// Why the value argument `arg` has no valid value once `mapping` binds every
+/// parameter it names. `None` when it folds to a value above zero, or when it
+/// names a parameter of `open` — one the body declares and `mapping` leaves
+/// unbound — since then it is not yet a value at all. An operand that is
+/// neither an integer, a parameter `mapping` binds to a value, nor one of
+/// `open` has no value whatever is bound, and is
+/// [`UnfoldableValue::NotConstant`].
 pub(crate) fn unfoldable_value_argument(
-    expr: &Expression,
+    arg: &TypeArgument,
     mapping: &HashMap<String, Type>,
     open: &HashSet<String>,
 ) -> Option<UnfoldableValue> {
-    match value_operands(expr, mapping, open) {
+    let Some(value) = written_value(arg) else {
+        return Some(UnfoldableValue::NotConstant);
+    };
+    match value_operands(&value, mapping, open) {
         ValueOperands::Foreign => return Some(UnfoldableValue::NotConstant),
         ValueOperands::Open => return None,
         ValueOperands::Bound => {}
     }
-    let substituted = substitute_value_names(expr, mapping)?;
-    match TypeChecker::try_eval_const_int(&substituted) {
-        Some(value) if value > 0 => return None,
+    match value.fold(&mut |name| bound_int(name, mapping)) {
+        Some(folded) if folded > 0 => return None,
         Some(_) => return Some(UnfoldableValue::NotPositive),
         None => {}
     }
-    Some(if divides_by_zero(&substituted) {
+    Some(if divides_by_zero(&value, mapping) {
         UnfoldableValue::DivisionByZero
-    } else if has_unsupported_operator(&substituted) {
-        UnfoldableValue::UnsupportedOperator
     } else {
         UnfoldableValue::OutOfRange
     })
@@ -248,210 +240,105 @@ enum ValueOperands {
     Foreign,
 }
 
-/// Classify the operands of the value argument `expr` against the parameters
-/// `mapping` binds and the ones `open` leaves unbound.
+/// Classify the operands of `value` against the parameters `mapping` binds and
+/// the ones `open` leaves unbound.
 fn value_operands(
-    expr: &Expression,
+    value: &ValueArg,
     mapping: &HashMap<String, Type>,
     open: &HashSet<String>,
 ) -> ValueOperands {
-    match &expr.node {
-        ExpressionKind::Binary(left, _, right) => {
+    match value {
+        ValueArg::Int(_) => ValueOperands::Bound,
+        ValueArg::Name(name) if bound_argument(name, mapping).is_some() => ValueOperands::Bound,
+        ValueArg::Name(name) if open.contains(name) => ValueOperands::Open,
+        ValueArg::Name(_) => ValueOperands::Foreign,
+        ValueArg::Binary(_, left, right) => {
             value_operands(left, mapping, open).max(value_operands(right, mapping, open))
         }
-        ExpressionKind::Unary(_, inner) => value_operands(inner, mapping, open),
-        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_)) => ValueOperands::Bound,
-        _ => match written_name(expr) {
-            Some(name) if bound_value(name, mapping).is_some() => ValueOperands::Bound,
-            Some(name) if open.contains(name) => ValueOperands::Open,
-            Some(_) | None => ValueOperands::Foreign,
-        },
     }
 }
 
-/// Whether `expr` divides, or takes a remainder, by an operand that folds to
-/// zero.
-fn divides_by_zero(expr: &Expression) -> bool {
-    if let ExpressionKind::Binary(left, op, right) = &expr.node {
-        let by_zero = matches!(op, BinaryOp::Div | BinaryOp::Mod)
-            && TypeChecker::try_eval_const_int(right) == Some(0);
-        return by_zero || divides_by_zero(left) || divides_by_zero(right);
-    }
-    if let ExpressionKind::Unary(_, inner) = &expr.node {
-        return divides_by_zero(inner);
-    }
-    false
+/// Whether `value` divides, or takes a remainder, by an operand that folds to
+/// zero once `mapping` binds the parameters it names.
+fn divides_by_zero(value: &ValueArg, mapping: &HashMap<String, Type>) -> bool {
+    let ValueArg::Binary(op, left, right) = value else {
+        return false;
+    };
+    let by_zero = matches!(op, ArithOp::Div | ArithOp::Mod)
+        && right.fold(&mut |name| bound_int(name, mapping)) == Some(0);
+    by_zero || divides_by_zero(left, mapping) || divides_by_zero(right, mapping)
 }
 
-/// Whether `expr` applies an operator [`TypeChecker::try_eval_const_int`]
-/// does not evaluate.
-fn has_unsupported_operator(expr: &Expression) -> bool {
-    if let ExpressionKind::Binary(left, op, right) = &expr.node {
-        return !is_folded_binary_operator(*op)
-            || has_unsupported_operator(left)
-            || has_unsupported_operator(right);
-    }
-    if let ExpressionKind::Unary(op, inner) = &expr.node {
-        return !is_folded_unary_operator(*op) || has_unsupported_operator(inner);
-    }
-    false
-}
-
-/// Whether the constant folder evaluates the binary operator `op`.
-fn is_folded_binary_operator(op: BinaryOp) -> bool {
-    match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => true,
-        BinaryOp::BitwiseOr
-        | BinaryOp::BitwiseAnd
-        | BinaryOp::BitwiseXor
-        | BinaryOp::Equal
-        | BinaryOp::NotEqual
-        | BinaryOp::LessThan
-        | BinaryOp::LessThanEqual
-        | BinaryOp::GreaterThan
-        | BinaryOp::GreaterThanEqual
-        | BinaryOp::Not
-        | BinaryOp::And
-        | BinaryOp::Or
-        | BinaryOp::Range
-        | BinaryOp::In
-        | BinaryOp::NullCoalesce => false,
-    }
-}
-
-/// Whether the constant folder evaluates the unary operator `op`.
-fn is_folded_unary_operator(op: UnaryOp) -> bool {
-    match op {
-        UnaryOp::Negate | UnaryOp::Plus => true,
-        UnaryOp::Not
-        | UnaryOp::BitwiseNot
-        | UnaryOp::Decrement
-        | UnaryOp::Increment
-        | UnaryOp::Await => false,
-    }
-}
-
-/// Each value parameter `expr` names that `mapping` binds, with the value it
-/// is bound to, in the order `expr` first names them.
+/// Each value parameter `arg` names that `mapping` binds, with the argument
+/// it is bound to, in the order `arg` first names them.
 pub(crate) fn bound_value_names<'e>(
-    expr: &'e Expression,
+    arg: &'e TypeArgument,
     mapping: &'e HashMap<String, Type>,
-) -> Vec<(&'e str, &'e Expression)> {
-    let mut found: Vec<(&str, &Expression)> = Vec::new();
-    collect_bound_value_names(expr, mapping, &mut found);
-    found
-}
-
-fn collect_bound_value_names<'e>(
-    expr: &'e Expression,
-    mapping: &'e HashMap<String, Type>,
-    found: &mut Vec<(&'e str, &'e Expression)>,
-) {
-    if let Some(name) = written_name(expr) {
-        let bound = mapping.get(name).and_then(extract_value_generic);
+) -> Vec<(&'e str, &'e TypeArgument)> {
+    let mut names = Vec::new();
+    match &arg.node {
+        TypeArgKind::Value(value) => collect_value_names(value, &mut names),
+        TypeArgKind::Type(..) => names.extend(written_name(arg)),
+    }
+    let mut found: Vec<(&str, &TypeArgument)> = Vec::new();
+    for name in names {
+        let bound = bound_argument(name, mapping);
         if let Some(value) = bound.filter(|_| found.iter().all(|(seen, _)| *seen != name)) {
             found.push((name, value));
         }
-        return;
     }
-    if let ExpressionKind::Binary(left, _, right) = &expr.node {
-        collect_bound_value_names(left, mapping, found);
-        collect_bound_value_names(right, mapping, found);
-    } else if let ExpressionKind::Unary(_, inner) = &expr.node {
-        collect_bound_value_names(inner, mapping, found);
+    found
+}
+
+/// The names `value` is written with, in order.
+fn collect_value_names<'e>(value: &'e ValueArg, names: &mut Vec<&'e str>) {
+    match value {
+        ValueArg::Int(_) => {}
+        ValueArg::Name(name) => names.push(name),
+        ValueArg::Binary(_, left, right) => {
+            collect_value_names(left, names);
+            collect_value_names(right, names);
+        }
     }
 }
 
-/// `expr` with each value parameter it names replaced by the value `mapping`
-/// binds it to; `None` when it names anything else, or is not arithmetic.
-fn substitute_value_names(
-    expr: &Expression,
-    mapping: &HashMap<String, Type>,
-) -> Option<Expression> {
-    if let Some(name) = written_name(expr) {
-        return bound_value(name, mapping);
-    }
-    let rebuilt = |node: ExpressionKind| Expression {
-        id: expr.id,
-        span: expr.span,
-        node,
+/// A value argument written with named constants — the `Size + K` in
+/// `Buf<T, Size + K>` — with every constant replaced by its value, so the
+/// argument folds to one instantiation once the parameters are bound. A value
+/// parameter in scope shadows a constant of its name and stays as written, as
+/// does a type.
+pub(crate) fn inline_value_constants(arg: &TypeArgument, context: &Context) -> TypeArgument {
+    let Some(value) = written_value(arg) else {
+        return arg.clone();
     };
-    if let ExpressionKind::Binary(left, op, right) = &expr.node {
-        return Some(rebuilt(ExpressionKind::Binary(
-            Box::new(substitute_value_names(left, mapping)?),
-            *op,
-            Box::new(substitute_value_names(right, mapping)?),
-        )));
+    let inlined = value.substituted(&|name| constant_value(name, context).map(ValueArg::Int));
+    if matches!(inlined, ValueArg::Name(_)) {
+        // A bare name no constant binds stays the type-or-value name it was
+        // written as.
+        return arg.clone();
     }
-    if let ExpressionKind::Unary(op, inner) = &expr.node {
-        return Some(rebuilt(ExpressionKind::Unary(
-            *op,
-            Box::new(substitute_value_names(inner, mapping)?),
-        )));
-    }
-    matches!(
-        &expr.node,
-        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
-    )
-    .then(|| expr.clone())
+    rewritten(arg, TypeArgKind::Value(inlined))
 }
 
-/// A value argument written as arithmetic over value parameters and named
-/// constants — the `Size + K` in `Buf<T, Size + K>` — with every constant
-/// replaced by its value, so the argument folds to one instantiation once the
-/// parameters are bound. A value parameter in scope shadows a constant of its
-/// name and stays as written, as does anything that is not arithmetic.
-pub(crate) fn inline_value_constants(expr: &Expression, context: &Context) -> Expression {
-    let rebuilt = |node: ExpressionKind| Expression {
-        id: expr.id,
-        span: expr.span,
-        node,
-    };
-    if let ExpressionKind::Binary(left, op, right) = &expr.node {
-        return rebuilt(ExpressionKind::Binary(
-            Box::new(inline_value_constants(left, context)),
-            *op,
-            Box::new(inline_value_constants(right, context)),
-        ));
-    }
-    if let ExpressionKind::Unary(op, inner) = &expr.node {
-        return rebuilt(ExpressionKind::Unary(
-            *op,
-            Box::new(inline_value_constants(inner, context)),
-        ));
-    }
-    match written_name(expr).and_then(|name| constant_value(name, context)) {
-        Some(value) => crate::ast::factory::literal_with_span(
-            crate::ast::factory::int_literal(value),
-            expr.span,
-        ),
-        None => expr.clone(),
-    }
-}
-
-/// The first operand of the value argument `expr` that is not a compile-time
+/// The first operand of the value argument `arg` that is not a compile-time
 /// constant, or `None` when every operand is one.
 ///
-/// An operand is a compile-time constant when it is an integer literal, a name
+/// An operand is a compile-time constant when it is an integer, a name
 /// [`TypeChecker::resolve_const_int`] folds, or a generic parameter in scope —
 /// which the instantiation it runs at binds to a value. The operators are left
-/// to the fold that binds those parameters. Anything else — a binding computed
-/// while the program runs, a call, a field read — has no value until then, so
-/// an argument built from it names no single instantiation.
-pub(crate) fn non_constant_value_operand<'e>(
-    expr: &'e Expression,
-    context: &Context,
-) -> Option<&'e Expression> {
-    match &expr.node {
-        ExpressionKind::Binary(left, _, right) => non_constant_value_operand(left, context)
-            .or_else(|| non_constant_value_operand(right, context)),
-        ExpressionKind::Unary(_, inner) => non_constant_value_operand(inner, context),
-        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_)) => None,
-        _ => match written_name(expr) {
-            Some(name) if is_constant_name(name, context) => None,
-            Some(_) | None => Some(expr),
-        },
+/// to the fold that binds those parameters. A binding computed while the
+/// program runs has no value until then, so an argument built from it names no
+/// single instantiation.
+pub(crate) fn non_constant_value_operand(arg: &TypeArgument, context: &Context) -> Option<String> {
+    let mut names = Vec::new();
+    match &arg.node {
+        TypeArgKind::Value(value) => collect_value_names(value, &mut names),
+        TypeArgKind::Type(..) => names.extend(written_name(arg)),
     }
+    names
+        .into_iter()
+        .find(|name| !is_constant_name(name, context))
+        .map(str::to_string)
 }
 
 /// Whether `name` is a generic parameter in scope or a name that folds to an
@@ -464,17 +351,38 @@ fn is_constant_name(name: &str, context: &Context) -> bool {
 }
 
 impl TypeChecker {
-    /// Report `operand`, part of the value argument of `class`, as not being a
-    /// compile-time constant.
-    pub(crate) fn report_non_constant_value_argument(&mut self, class: &str, operand: &Expression) {
+    /// Report `operand`, named in the value argument of `class` written at
+    /// `span`, as not being a compile-time constant.
+    pub(crate) fn report_non_constant_value_argument(
+        &mut self,
+        class: &str,
+        operand: &str,
+        span: Span,
+    ) {
         self.report_error_with_help(
             DiagnosticCode::TypNonConstantValueArgument,
             format!(
-                "`{}` is not a compile-time constant, so the value argument of `{class}` names no instantiation",
-                crate::ast::formatter::expression_text(operand)
+                "`{operand}` is not a compile-time constant, so the value argument of `{class}` names no instantiation"
             ),
-            operand.span,
+            span,
             NON_CONSTANT_VALUE_HELP.to_string(),
+        );
+    }
+
+    /// Report the integer `written`, a value argument of `class` written at
+    /// `span`, as not fitting in the 128 bits a value argument holds.
+    pub(crate) fn report_value_argument_out_of_range(
+        &mut self,
+        class: &str,
+        written: &str,
+        span: Span,
+    ) {
+        self.report_error(
+            DiagnosticCode::TypIntegerLiteralOutOfRange,
+            format!(
+                "`{written}` does not fit in a 128-bit integer, so the value argument of `{class}` names no instantiation"
+            ),
+            span,
         );
     }
 
@@ -483,7 +391,7 @@ impl TypeChecker {
     pub(crate) fn report_non_positive_value_argument(
         &mut self,
         class: &str,
-        arg: &Expression,
+        arg: &TypeArgument,
         value: i128,
     ) {
         self.report_error_with_help(
@@ -515,24 +423,40 @@ fn constant_value(name: &str, context: &Context) -> Option<i128> {
     TypeChecker::resolve_const_int(name, Some(context))
 }
 
-/// The bare name `expr` writes, as an identifier or as a type argument
-/// naming no type (`Size` in `Array<T, Size>`).
-fn written_name(expr: &Expression) -> Option<&str> {
-    if let ExpressionKind::Identifier(name, None) = &expr.node {
-        return Some(name);
+/// The bare name `arg` writes: a value naming one, or a type argument naming
+/// no type (`Size` in `Array<T, Size>` parses as one).
+fn written_name(arg: &TypeArgument) -> Option<&str> {
+    match &arg.node {
+        TypeArgKind::Value(ValueArg::Name(name)) => Some(name),
+        TypeArgKind::Type(ty, false) => match &ty.kind {
+            TypeKind::Custom(name, None) => Some(name),
+            _ => None,
+        },
+        TypeArgKind::Value(ValueArg::Int(_) | ValueArg::Binary(..))
+        | TypeArgKind::Type(_, true) => None,
     }
-    let ExpressionKind::Type(ty, false) = &expr.node else {
-        return None;
-    };
-    let TypeKind::Custom(name, None) = &ty.kind else {
-        return None;
-    };
-    Some(name)
 }
 
-/// The value `mapping` binds the value parameter `name` to.
-fn bound_value(name: &str, mapping: &HashMap<String, Type>) -> Option<Expression> {
-    mapping.get(name).and_then(extract_value_generic).cloned()
+/// The value `arg` writes, a bare name included; `None` for a type.
+fn written_value(arg: &TypeArgument) -> Option<ValueArg> {
+    match &arg.node {
+        TypeArgKind::Value(value) => Some(value.clone()),
+        TypeArgKind::Type(..) => written_name(arg).map(|name| ValueArg::Name(name.to_string())),
+    }
+}
+
+/// The argument `mapping` binds the value parameter `name` to.
+fn bound_argument<'m>(name: &str, mapping: &'m HashMap<String, Type>) -> Option<&'m TypeArgument> {
+    mapping.get(name).and_then(extract_value_generic)
+}
+
+/// The integer `mapping` binds the value parameter `name` to: the argument it
+/// is bound to, folded with no names of its own.
+fn bound_int(name: &str, mapping: &HashMap<String, Type>) -> Option<i128> {
+    match &bound_argument(name, mapping)?.node {
+        TypeArgKind::Value(value) => value.fold(&mut |_| None),
+        TypeArgKind::Type(..) => None,
+    }
 }
 
 impl TypeChecker {
@@ -607,7 +531,7 @@ impl TypeChecker {
 
     fn infer_unnormalized_list(
         &self,
-        elem: &Expression,
+        elem: &TypeArgument,
         arg_type: &Type,
         mapping: &mut HashMap<String, Type>,
     ) {
@@ -620,8 +544,8 @@ impl TypeChecker {
 
     fn infer_unnormalized_map(
         &self,
-        k: &Expression,
-        v: &Expression,
+        k: &TypeArgument,
+        v: &TypeArgument,
         arg_type: &Type,
         mapping: &mut HashMap<String, Type>,
     ) {
@@ -634,7 +558,7 @@ impl TypeChecker {
 
     fn infer_unnormalized_set(
         &self,
-        elem: &Expression,
+        elem: &TypeArgument,
         arg_type: &Type,
         mapping: &mut HashMap<String, Type>,
     ) {
@@ -647,8 +571,8 @@ impl TypeChecker {
 
     fn infer_unnormalized_array(
         &self,
-        elem: &Expression,
-        size: &Expression,
+        elem: &TypeArgument,
+        size: &TypeArgument,
         arg_type: &Type,
         mapping: &mut HashMap<String, Type>,
     ) {
@@ -661,14 +585,14 @@ impl TypeChecker {
 
     fn infer_tuple_generics(
         &self,
-        p_elems: &[Expression],
-        a_elems: &[Expression],
+        p_elems: &[TypeArgument],
+        a_elems: &[TypeArgument],
         mapping: &mut HashMap<String, Type>,
     ) {
         for (p_elem_expr, a_elem_expr) in p_elems.iter().zip(a_elems.iter()) {
             if let (Ok(p_elem), Ok(a_elem)) = (
-                self.extract_type_from_expression(p_elem_expr),
-                self.extract_type_from_expression(a_elem_expr),
+                self.extract_type_from_argument(p_elem_expr),
+                self.extract_type_from_argument(a_elem_expr),
             ) {
                 self.infer_generic_types(&p_elem, &a_elem, mapping);
             }
@@ -677,16 +601,16 @@ impl TypeChecker {
 
     fn infer_custom_generics(
         &self,
-        p_args: &Option<Vec<Expression>>,
-        a_args: &Option<Vec<Expression>>,
+        p_args: &Option<Vec<TypeArgument>>,
+        a_args: &Option<Vec<TypeArgument>>,
         mapping: &mut HashMap<String, Type>,
     ) {
         if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
             if p_args.len() == a_args.len() {
                 for (p_arg_expr, a_arg_expr) in p_args.iter().zip(a_args.iter()) {
                     if let (Ok(p_arg), Ok(a_arg)) = (
-                        self.extract_type_from_expression(p_arg_expr),
-                        self.extract_type_from_expression(a_arg_expr),
+                        self.extract_type_from_argument(p_arg_expr),
+                        self.extract_type_from_argument(a_arg_expr),
                     ) {
                         self.infer_generic_types(&p_arg, &a_arg, mapping);
                     }
@@ -701,9 +625,9 @@ impl TypeChecker {
     fn infer_inherited_generics(
         &self,
         p_name: &str,
-        p_args: &Option<Vec<Expression>>,
+        p_args: &Option<Vec<TypeArgument>>,
         a_name: &str,
-        a_args: &Option<Vec<Expression>>,
+        a_args: &Option<Vec<TypeArgument>>,
         mapping: &mut HashMap<String, Type>,
     ) {
         let Some(p_args) = p_args else {
@@ -717,7 +641,7 @@ impl TypeChecker {
         };
         for (p_arg_expr, inherited) in p_args.iter().zip(inherited) {
             if let (Ok(p_arg), Some(inherited)) =
-                (self.extract_type_from_expression(p_arg_expr), inherited)
+                (self.extract_type_from_argument(p_arg_expr), inherited)
             {
                 self.infer_generic_types(&p_arg, &inherited, mapping);
             }
@@ -795,7 +719,7 @@ impl TypeChecker {
     fn substitute_custom(
         &self,
         name: &str,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         mapping: &HashMap<String, Type>,
     ) -> Type {
         if args.is_none() {
@@ -805,7 +729,7 @@ impl TypeChecker {
                 // original value expression out of the marker so the caller
                 // doesn't see the synthetic `Custom("__value_generic__", …)`.
                 if let Some(value_expr) = extract_value_generic(subst) {
-                    if let Ok(value_ty) = self.extract_type_from_expression(value_expr) {
+                    if let Ok(value_ty) = self.extract_type_from_argument(value_expr) {
                         return value_ty;
                     }
                 }
@@ -817,19 +741,19 @@ impl TypeChecker {
             args_vec
                 .iter()
                 .map(|arg| {
-                    if self.extract_type_from_expression(arg).is_ok() {
+                    if self.extract_type_from_argument(arg).is_ok() {
                         let arg_type = self
-                            .extract_type_from_expression(arg)
+                            .extract_type_from_argument(arg)
                             .unwrap_or(make_type(TypeKind::Error));
                         let subst_arg = self.substitute_type(&arg_type, mapping);
-                        self.create_type_expression(subst_arg)
+                        self.create_type_argument(subst_arg)
                     } else {
                         // Value-generic position (e.g. the `Size` slot in a
                         // resolved `Custom("Array", [..., Identifier("Size")])`).
                         // Rewrite identifier references through the value-generic
                         // marker mapping and keep the expression verbatim
                         // otherwise.
-                        substitute_value_generic_in_expr(arg, mapping)
+                        substitute_value_generic(arg, mapping)
                     }
                 })
                 .collect()
@@ -838,65 +762,65 @@ impl TypeChecker {
         make_type(TypeKind::Custom(name.to_string(), new_args))
     }
 
-    fn substitute_list(&self, elem_expr: &Expression, mapping: &HashMap<String, Type>) -> Type {
+    fn substitute_list(&self, elem_expr: &TypeArgument, mapping: &HashMap<String, Type>) -> Type {
         let elem = self
-            .extract_type_from_expression(elem_expr)
+            .extract_type_from_argument(elem_expr)
             .unwrap_or(make_type(TypeKind::Error));
         let subst_elem = self.substitute_type(&elem, mapping);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::List.name().to_string(),
-            Some(vec![self.create_type_expression(subst_elem)]),
+            Some(vec![self.create_type_argument(subst_elem)]),
         ))
     }
 
     fn substitute_map(
         &self,
-        k_expr: &Expression,
-        v_expr: &Expression,
+        k_expr: &TypeArgument,
+        v_expr: &TypeArgument,
         mapping: &HashMap<String, Type>,
     ) -> Type {
         let k = self
-            .extract_type_from_expression(k_expr)
+            .extract_type_from_argument(k_expr)
             .unwrap_or(make_type(TypeKind::Error));
         let v = self
-            .extract_type_from_expression(v_expr)
+            .extract_type_from_argument(v_expr)
             .unwrap_or(make_type(TypeKind::Error));
         let subst_k = self.substitute_type(&k, mapping);
         let subst_v = self.substitute_type(&v, mapping);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Map.name().to_string(),
             Some(vec![
-                self.create_type_expression(subst_k),
-                self.create_type_expression(subst_v),
+                self.create_type_argument(subst_k),
+                self.create_type_argument(subst_v),
             ]),
         ))
     }
 
-    fn substitute_set(&self, elem_expr: &Expression, mapping: &HashMap<String, Type>) -> Type {
+    fn substitute_set(&self, elem_expr: &TypeArgument, mapping: &HashMap<String, Type>) -> Type {
         let elem = self
-            .extract_type_from_expression(elem_expr)
+            .extract_type_from_argument(elem_expr)
             .unwrap_or(make_type(TypeKind::Error));
         let subst_elem = self.substitute_type(&elem, mapping);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Set.name().to_string(),
-            Some(vec![self.create_type_expression(subst_elem)]),
+            Some(vec![self.create_type_argument(subst_elem)]),
         ))
     }
 
     fn substitute_array(
         &self,
-        elem_expr: &Expression,
-        size_expr: &Expression,
+        elem_expr: &TypeArgument,
+        size_expr: &TypeArgument,
         mapping: &HashMap<String, Type>,
     ) -> Type {
         let elem = self
-            .extract_type_from_expression(elem_expr)
+            .extract_type_from_argument(elem_expr)
             .unwrap_or(make_type(TypeKind::Error));
         let subst_elem = self.substitute_type(&elem, mapping);
-        let subst_size = substitute_value_generic_in_expr(size_expr, mapping);
+        let subst_size = substitute_value_generic(size_expr, mapping);
         make_type(TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
-            Some(vec![self.create_type_expression(subst_elem), subst_size]),
+            Some(vec![self.create_type_argument(subst_elem), subst_size]),
         ))
     }
 
@@ -906,15 +830,15 @@ impl TypeChecker {
         )))
     }
 
-    fn substitute_tuple(&self, elements: &[Expression], mapping: &HashMap<String, Type>) -> Type {
+    fn substitute_tuple(&self, elements: &[TypeArgument], mapping: &HashMap<String, Type>) -> Type {
         let new_elements = elements
             .iter()
             .map(|elem_expr| {
                 let elem = self
-                    .extract_type_from_expression(elem_expr)
+                    .extract_type_from_argument(elem_expr)
                     .unwrap_or(make_type(TypeKind::Error));
                 let subst = self.substitute_type(&elem, mapping);
-                self.create_type_expression(subst)
+                self.create_type_argument(subst)
             })
             .collect();
         make_type(TypeKind::Tuple(new_elements))
@@ -922,20 +846,20 @@ impl TypeChecker {
 
     fn substitute_result(
         &self,
-        ok_expr: &Expression,
-        err_expr: &Expression,
+        ok_expr: &TypeArgument,
+        err_expr: &TypeArgument,
         mapping: &HashMap<String, Type>,
     ) -> Type {
         // The substituted type is spelled as the `Result` enum, as
         // `resolve_type_kind` spells a written one: the native kind carries no
         // drop, layout or payload reads past the type checker.
         let (ok, err) = if let (Ok(ok), Ok(err)) = (
-            self.extract_type_from_expression(ok_expr),
-            self.extract_type_from_expression(err_expr),
+            self.extract_type_from_argument(ok_expr),
+            self.extract_type_from_argument(err_expr),
         ) {
             (
-                self.create_type_expression(self.substitute_type(&ok, mapping)),
-                self.create_type_expression(self.substitute_type(&err, mapping)),
+                self.create_type_argument(self.substitute_type(&ok, mapping)),
+                self.create_type_argument(self.substitute_type(&err, mapping)),
             )
         } else {
             (ok_expr.clone(), err_expr.clone())
@@ -982,7 +906,7 @@ impl TypeChecker {
     /// Validates that provided generic arguments satisfy their constraints.
     pub(crate) fn validate_generics(
         &mut self,
-        args: &Option<Vec<Expression>>,
+        args: &Option<Vec<TypeArgument>>,
         params: &Option<Vec<GenericDefinition>>,
         context: &Context,
         span: Span,
@@ -1010,11 +934,11 @@ impl TypeChecker {
                 // value generics aren't modeled today; trying to validate one
                 // as if it were a type produces a spurious error at every
                 // instantiation site.
-                if self.extract_type_from_expression(arg_expr).is_err() {
+                if self.extract_type_from_argument(arg_expr).is_err() {
                     continue;
                 }
                 let param_def = &params_vec[i];
-                let arg_type = self.resolve_type_expression(arg_expr, context);
+                let arg_type = self.resolve_type_argument(arg_expr, context);
 
                 if let Some(constraint) = &param_def.constraint {
                     if !self.satisfies_constraint(&arg_type, constraint, &param_def.kind, context) {
@@ -1066,7 +990,10 @@ impl TypeChecker {
 // nesting depth this exercises is not expressible in a `.mi` source program.
 /// The type arguments `target` and `source` hold at the same positions, when
 /// both are built by the same constructor with the same arity; none otherwise.
-fn argument_pairs<'t>(target: &'t Type, source: &'t Type) -> Vec<(&'t Expression, &'t Expression)> {
+fn argument_pairs<'t>(
+    target: &'t Type,
+    source: &'t Type,
+) -> Vec<(&'t TypeArgument, &'t TypeArgument)> {
     if let (TypeKind::Custom(name, Some(args)), TypeKind::Custom(other, Some(other_args))) =
         (&target.kind, &source.kind)
     {
@@ -1166,7 +1093,7 @@ impl TypeChecker {
         // types, which the compatibility check reports on its own.
         let pairs = argument_pairs(target, source);
         for (target_arg, source_arg) in pairs {
-            if let (ExpressionKind::Type(target_ty, _), ExpressionKind::Type(source_ty, _)) =
+            if let (TypeArgKind::Type(target_ty, _), TypeArgKind::Type(source_ty, _)) =
                 (&target_arg.node, &source_arg.node)
             {
                 self.collect_slots_bound_by(target_ty, source_ty, context, bound);
@@ -1183,8 +1110,8 @@ impl TypeChecker {
     }
 
     fn collect_inference_slots(ty: &Type, context: &Context, slots: &mut Vec<String>) {
-        let mut argument = |arg: &Expression| {
-            if let ExpressionKind::Type(inner, _) = &arg.node {
+        let mut argument = |arg: &TypeArgument| {
+            if let TypeArgKind::Type(inner, _) = &arg.node {
                 Self::collect_inference_slots(inner, context, slots);
             }
         };
@@ -1298,35 +1225,29 @@ mod substitution_depth_tests {
 #[cfg(test)]
 mod value_argument_tests {
     use super::*;
-    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::ast::type_arguments::value_argument;
     use crate::ast::IdNode;
 
-    fn node(kind: ExpressionKind) -> Expression {
-        IdNode::new(0, kind, Span::new(0, 0))
+    fn plus(left: ValueArg, right: ValueArg) -> TypeArgument {
+        IdNode::new(
+            0,
+            TypeArgKind::Value(ValueArg::Binary(
+                ArithOp::Add,
+                Box::new(left),
+                Box::new(right),
+            )),
+            Span::new(0, 0),
+        )
     }
 
-    fn integer(value: i64) -> Expression {
-        node(ExpressionKind::Literal(Literal::Integer(
-            IntegerLiteral::I64(value),
-        )))
+    fn name(name: &str) -> ValueArg {
+        ValueArg::Name(name.to_string())
     }
 
-    fn name(name: &str) -> Expression {
-        node(ExpressionKind::Identifier(name.to_string(), None))
-    }
-
-    fn plus(left: Expression, right: Expression) -> Expression {
-        node(ExpressionKind::Binary(
-            Box::new(left),
-            BinaryOp::Add,
-            Box::new(right),
-        ))
-    }
-
-    fn size_bound_to(value: i64) -> HashMap<String, Type> {
+    fn size_bound_to(value: i128) -> HashMap<String, Type> {
         HashMap::from([(
             "Size".to_string(),
-            value_generic_marker_type(integer(value)),
+            value_generic_marker_type(value_argument(value)),
         )])
     }
 
@@ -1337,7 +1258,7 @@ mod value_argument_tests {
         let bound = size_bound_to(2);
         let open = HashSet::from(["Rest".to_string()]);
         assert_eq!(
-            unfoldable_value_argument(&plus(name("Size"), integer(1)), &bound, &open),
+            unfoldable_value_argument(&plus(name("Size"), ValueArg::Int(1)), &bound, &open),
             None
         );
         assert_eq!(

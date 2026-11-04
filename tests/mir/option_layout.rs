@@ -4,7 +4,7 @@
 //! An optional's layout: which layers stay boxed, and whether the innermost
 //! layer can spell its absence as a null payload pointer.
 
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{
     FunctionTypeData, Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, VEC2_TYPE_NAME,
     VEC3_TYPE_NAME, VEC4_TYPE_NAME,
@@ -26,10 +26,10 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
 
-fn type_expr(kind: TypeKind) -> Expression {
-    Expression::new(
+fn type_expr(kind: TypeKind) -> TypeArgument {
+    TypeArgument::new(
         0,
-        ExpressionKind::Type(Box::new(ty(kind)), false),
+        TypeArgKind::Type(Box::new(ty(kind)), false),
         Span::default(),
     )
 }

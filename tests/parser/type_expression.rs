@@ -2,8 +2,8 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{
-    parser_error_test, parser_test, type_list_expr, type_map_expr, type_statement_test,
-    type_tuple_expr,
+    optional_argument, parser_error_test, parser_test, type_list_expr, type_map_expr,
+    type_statement_test, type_tuple_expr,
 };
 use miri::ast::factory::{
     func, generic_type, let_variable, parameter, type_array, type_bool, type_custom,
@@ -12,6 +12,7 @@ use miri::ast::factory::{
     type_result, type_set, type_string, type_tuple, type_u128, type_u16, type_u32, type_u64,
     type_u8, variable_statement,
 };
+use miri::ast::type_arguments::type_argument;
 use miri::ast::{opt_expr, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
 
@@ -52,9 +53,9 @@ fn get_coordinates() (float, float?, float)?
 ",
         vec![func("get_coordinates")
             .return_type(type_expr_option(type_tuple_expr(vec![
-                type_expr_non_null(type_float()),
-                type_expr_option(type_float()),
-                type_expr_non_null(type_float()),
+                type_argument(type_float()),
+                optional_argument(type_float()),
+                type_argument(type_float()),
             ])))
             .build_empty_body()],
     );
@@ -79,8 +80,8 @@ fn get_data() MyContainer<[int]?, Future<String>>
             .return_type(type_expr_non_null(type_custom(
                 "MyContainer",
                 Some(vec![
-                    type_expr_option(type_list(type_int())),        // [int]?
-                    type_expr_non_null(type_future(type_string())), // future<string>
+                    optional_argument(type_list(type_int())),  // [int]?
+                    type_argument(type_future(type_string())), // future<string>
                 ]),
             )))
             .build_empty_body()],
@@ -132,14 +133,14 @@ fn test_deeply_nested_collection_type() {
         "[[{String: (int?, bool)}]?]?",
         type_expr_option(
             // The outer list is nullable: `[...]`?
-            type_list_expr(type_expr_option(
+            type_list_expr(optional_argument(
                 // The inner list is nullable: `[{...}]?`
-                type_list_expr(type_expr_non_null(type_map_expr(
+                type_list_expr(type_argument(type_map_expr(
                     // The map itself is not nullable
-                    type_expr_non_null(type_string()),
-                    type_expr_non_null(type_tuple_expr(vec![
-                        type_expr_option(type_int()), // int?
-                        type_expr_non_null(type_bool()),
+                    type_argument(type_string()),
+                    type_argument(type_tuple_expr(vec![
+                        optional_argument(type_int()), // int?
+                        type_argument(type_bool()),
                     ])),
                 ))),
             )),
@@ -419,4 +420,56 @@ fn test_function_type_with_trailing_comma() {
             MemberVisibility::Public,
         )],
     );
+}
+
+/// A value argument written as `value`.
+fn value(value: miri::ast::type_arguments::ValueArg) -> miri::ast::type_arguments::TypeArgument {
+    miri::ast::node::IdNode::new(
+        0,
+        miri::ast::type_arguments::TypeArgKind::Value(value),
+        miri::error::syntax::Span::default(),
+    )
+}
+
+#[test]
+fn a_value_argument_written_as_arithmetic_keeps_its_operator_and_operands() {
+    use miri::ast::type_arguments::{ArithOp, ValueArg};
+    type_statement_test(
+        "Buf<int, Size * 2>",
+        type_expr_non_null(type_custom(
+            "Buf",
+            Some(vec![
+                type_argument(type_int()),
+                value(ValueArg::Binary(
+                    ArithOp::Mul,
+                    Box::new(ValueArg::Name("Size".to_string())),
+                    Box::new(ValueArg::Int(2)),
+                )),
+            ]),
+        )),
+    );
+}
+
+#[test]
+fn a_negated_value_argument_is_the_negative_integer() {
+    use miri::ast::type_arguments::ValueArg;
+    type_statement_test(
+        "Buf<int, -1>",
+        type_expr_non_null(type_custom(
+            "Buf",
+            Some(vec![type_argument(type_int()), value(ValueArg::Int(-1))]),
+        )),
+    );
+}
+
+#[test]
+fn an_argument_that_is_neither_a_type_nor_a_value_is_refused() {
+    for written in ["let b Buf<int, \"four\">", "let b Buf<int, true>"] {
+        parser_error_test(
+            written,
+            &SyntaxErrorKind::InvalidTypeDeclaration {
+                expected: "a type, or an integer, a constant or arithmetic over them".to_string(),
+            },
+        );
+    }
 }

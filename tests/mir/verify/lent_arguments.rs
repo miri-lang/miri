@@ -266,15 +266,8 @@ fn a_field_set_lent_unretained_to_a_search_running_program_code_is_reported() {
 /// monomorphized method names it by, so only the key type decides what the
 /// search runs.
 fn map_slot_of_spelled_as_its_class() -> Body {
-    use miri::ast::expression::{Expression, ExpressionKind};
     use miri::ast::types::Type;
-    let argument = |kind| {
-        Expression::new(
-            0,
-            ExpressionKind::Type(Box::new(Type::new(kind, span())), false),
-            span(),
-        )
-    };
+    let argument = |kind| miri::ast::type_arguments::type_argument(Type::new(kind, span()));
     let map = TypeKind::Custom(
         "Map".to_string(),
         Some(vec![argument(TypeKind::Int), argument(node())]),

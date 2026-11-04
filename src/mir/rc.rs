@@ -10,7 +10,8 @@
 //!
 //! [`Body::is_counted`]: crate::mir::Body::is_counted
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{TypeKind, SELF_TYPE_NAME};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::value_class::{
@@ -165,15 +166,15 @@ fn is_never_counted(kind: &TypeKind) -> bool {
 /// That type is always written with its scalar component (`Atomic<u32>`), and
 /// is stored as that scalar. A user type that only shares the name carries no
 /// component, and is an ordinary heap object like any other class or struct.
-pub fn is_builtin_atomic(name: &str, args: Option<&[Expression]>) -> bool {
+pub fn is_builtin_atomic(name: &str, args: Option<&[TypeArgument]>) -> bool {
     name == crate::ast::types::ATOMIC_TYPE_NAME && atomic_component(args).is_some()
 }
 
 /// The scalar component `args` names for the atomic element type, if any.
-pub fn atomic_component(args: Option<&[Expression]>) -> Option<&Expression> {
+pub fn atomic_component(args: Option<&[TypeArgument]>) -> Option<&TypeArgument> {
     args?
         .first()
-        .filter(|arg| matches!(arg.node, ExpressionKind::Type(_, _)))
+        .filter(|arg| matches!(arg.node, TypeArgKind::Type(_, _)))
 }
 
 /// Whether a slot — a collection element, an optional's or an enum's payload,

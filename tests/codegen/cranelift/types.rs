@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use cranelift_codegen::ir::types;
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{FunctionTypeData, Type, TypeDeclarationKind, TypeKind};
 use miri::codegen::cranelift::translate_type;
 use miri::error::syntax::Span;
@@ -11,10 +11,10 @@ fn t(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
 
-fn e_ty(kind: TypeKind) -> Expression {
-    Expression {
+fn e_ty(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(t(kind)), false),
+        node: TypeArgKind::Type(Box::new(t(kind)), false),
         span: Span::default(),
     }
 }
@@ -122,13 +122,7 @@ fn test_translate_list() {
 #[test]
 fn test_translate_array() {
     let ptr_ty = types::I64;
-    let array_size = Expression {
-        id: 0,
-        node: ExpressionKind::Literal(miri::ast::literal::Literal::Integer(
-            miri::ast::literal::IntegerLiteral::I32(4),
-        )),
-        span: Span::default(),
-    };
+    let array_size = miri::ast::type_arguments::value_argument(4);
     assert_eq!(
         translate_type(
             &t(TypeKind::Array(
@@ -254,7 +248,9 @@ fn test_translate_function_type() {
             &t(TypeKind::Function(Box::new(FunctionTypeData {
                 generics: None,
                 params: vec![],
-                return_type: Some(Box::new(e_ty(TypeKind::Void))),
+                return_type: Some(Box::new(miri::ast::factory::type_expr_non_null(t(
+                    TypeKind::Void
+                )))),
             }))),
             ptr_ty
         ),

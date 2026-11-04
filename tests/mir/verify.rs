@@ -25,6 +25,7 @@ mod value_representation;
 
 use crate::mir::utils::runtime_callee;
 use miri::ast::literal::{IntegerLiteral, Literal};
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
@@ -204,11 +205,7 @@ fn body_of(local_tys: &[Type], arg_count: usize, blocks: Vec<BasicBlockData>) ->
 fn tuple_of(elements: Vec<Type>) -> Type {
     let elements = elements
         .into_iter()
-        .map(|element| miri::ast::expression::Expression {
-            id: 0,
-            node: miri::ast::expression::ExpressionKind::Type(Box::new(element), false),
-            span: span(),
-        })
+        .map(miri::ast::type_arguments::type_argument)
         .collect();
     Type::new(TypeKind::Tuple(elements), span())
 }
@@ -631,13 +628,7 @@ fn a_cast_carries_the_reference_of_the_local_it_reads() {
 /// the field, not the aggregate holding it.
 #[test]
 fn moving_out_of_a_projection_does_not_consume_its_base() {
-    let string_expr = || {
-        miri::ast::expression::Expression::new(
-            0,
-            miri::ast::expression::ExpressionKind::Type(Box::new(string_ty()), false),
-            span(),
-        )
-    };
+    let string_expr = || miri::ast::type_arguments::type_argument(string_ty());
     let tuple_ty = Type::new(TypeKind::Tuple(vec![string_expr(), string_expr()]), span());
     let field = Place {
         local: Local(1),
@@ -888,13 +879,7 @@ fn a_path_ending_in_a_diverging_call_carries_no_leak() {
 /// looking like one release too many.
 #[test]
 fn a_retained_field_read_credits_the_local_it_lands_in() {
-    let string_expr = || {
-        miri::ast::expression::Expression::new(
-            0,
-            miri::ast::expression::ExpressionKind::Type(Box::new(string_ty()), false),
-            span(),
-        )
-    };
+    let string_expr = || miri::ast::type_arguments::type_argument(string_ty());
     let tuple_ty = Type::new(TypeKind::Tuple(vec![string_expr(), string_expr()]), span());
     let field = Place {
         local: Local(1),
@@ -1766,7 +1751,7 @@ fn seeding_a_scalar_readback_wrapper_needs_no_readback() {
 fn collection_ty(class_name: &str, args: &[TypeKind]) -> Type {
     let args = args
         .iter()
-        .map(|kind| miri::ast::factory::type_expr_non_null(Type::new(kind.clone(), span())))
+        .map(|kind| type_argument(Type::new(kind.clone(), span())))
         .collect();
     Type::new(TypeKind::Custom(class_name.to_string(), Some(args)), span())
 }
@@ -2048,10 +2033,7 @@ fn a_map_key_narrower_than_its_slot_names_the_key_argument() {
 /// it never fails on a body it was asked to check.
 #[test]
 fn a_slot_spelled_as_a_canonical_collection_verifies_clean() {
-    let inner = TypeKind::Set(Box::new(miri::ast::factory::type_expr_non_null(Type::new(
-        TypeKind::Int,
-        span(),
-    ))));
+    let inner = TypeKind::Set(Box::new(type_argument(Type::new(TypeKind::Int, span()))));
     let body = element_call_body(
         collection_ty("Set", &[inner]),
         Type::new(TypeKind::Int, span()),

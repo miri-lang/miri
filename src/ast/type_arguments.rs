@@ -1,67 +1,219 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Reading the arguments a type is written with, without matching on the
-//! expressions they are stored as.
+//! The arguments a type is written with: each a type, or a value generic's
+//! value.
 //!
-//! A type argument is stored as the expression it was written as, so that a
-//! value generic's argument (the `4` of `Array<int, 4>`) fits the slot a type
-//! argument (the `String` of `List<String>`) does. A stage past the type
-//! checker reads an argument through [`argument_type`]: it is a type, or it is
-//! a value, and the stage never asks which expression it was written as.
+//! An argument is a type (the `String` of `List<String>`) or a value (the `4`
+//! of `Array<int, 4>`), and nothing else: no expression of any other kind can
+//! stand where a type argument is written. A value is an integer, a name — a
+//! constant's, or a value parameter's in a generic body — or arithmetic over
+//! them (`Array<f32, W * W>`); substitution and the type checker's folding
+//! leave only integers for the stages past it, which read them through
+//! [`argument_value`].
 //!
-//! TODO: the argument is still an AST expression underneath, so `TypeKind`
-//! can hold any expression where a type is required, and only
-//! [`unresolved_type_argument`] (run by `Body::validate`) catches one. Storing
-//! each argument as a type or a value in `TypeKind` itself would make that
-//! state unrepresentable; it touches the parser, the type checker, MIR and the
-//! backends together.
+//! An argument is a node like any other in the tree: it carries the span it
+//! was written at and the id the type checker keys what it resolved a written
+//! name to by. Two arguments are equal when they say the same thing, wherever
+//! they were written.
+
+use std::fmt;
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::factory::{int_literal_expression, type_expr_non_null};
+use crate::ast::factory::{self, next_id};
+use crate::ast::literal::Literal;
+use crate::ast::node::IdNode;
+use crate::ast::operator::{BinaryOp, UnaryOp};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::error::syntax::Span;
 
-/// One argument a type is written with: a type, or a value generic's value.
-pub type TypeArgument = Expression;
+/// One argument a type is written with.
+pub type TypeArgument = IdNode<TypeArgKind>;
 
 /// The arguments a type is written with, in order.
 pub type TypeArguments = [TypeArgument];
 
+/// What one type argument says.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeArgKind {
+    /// A type, and whether it was written with a nullable mark (`T?`). The
+    /// mark is read as an optional of the type; see [`argument_type_marked`].
+    Type(Box<Type>, bool),
+    /// A value generic's value.
+    Value(ValueArg),
+}
+
+/// A value generic's value, as written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ValueArg {
+    Int(i128),
+    /// A constant, or a value parameter of the generic declaration the
+    /// argument is written in.
+    Name(String),
+    Binary(ArithOp, Box<ValueArg>, Box<ValueArg>),
+}
+
+/// The arithmetic a value argument may be written with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
+impl ArithOp {
+    /// `l op r`, or `None` when it overflows or divides by zero.
+    pub fn apply(self, l: i128, r: i128) -> Option<i128> {
+        match self {
+            ArithOp::Add => l.checked_add(r),
+            ArithOp::Sub => l.checked_sub(r),
+            ArithOp::Mul => l.checked_mul(r),
+            ArithOp::Div => l.checked_div(r),
+            ArithOp::Mod => l.checked_rem(r),
+        }
+    }
+
+    fn symbol(self) -> &'static str {
+        match self {
+            ArithOp::Add => "+",
+            ArithOp::Sub => "-",
+            ArithOp::Mul => "*",
+            ArithOp::Div => "/",
+            ArithOp::Mod => "%",
+        }
+    }
+
+    fn binary(self) -> BinaryOp {
+        match self {
+            ArithOp::Add => BinaryOp::Add,
+            ArithOp::Sub => BinaryOp::Sub,
+            ArithOp::Mul => BinaryOp::Mul,
+            ArithOp::Div => BinaryOp::Div,
+            ArithOp::Mod => BinaryOp::Mod,
+        }
+    }
+
+    fn of(op: &BinaryOp) -> Option<Self> {
+        Some(match op {
+            BinaryOp::Add => ArithOp::Add,
+            BinaryOp::Sub => ArithOp::Sub,
+            BinaryOp::Mul => ArithOp::Mul,
+            BinaryOp::Div => ArithOp::Div,
+            BinaryOp::Mod => ArithOp::Mod,
+            BinaryOp::BitwiseOr
+            | BinaryOp::BitwiseAnd
+            | BinaryOp::BitwiseXor
+            | BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::LessThan
+            | BinaryOp::LessThanEqual
+            | BinaryOp::GreaterThan
+            | BinaryOp::GreaterThanEqual
+            | BinaryOp::Not
+            | BinaryOp::And
+            | BinaryOp::Or
+            | BinaryOp::Range
+            | BinaryOp::In
+            | BinaryOp::NullCoalesce => return None,
+        })
+    }
+}
+
+impl ValueArg {
+    /// The value, folding its arithmetic, with each name read through
+    /// `name`; `None` when a name has no value or the arithmetic overflows
+    /// or divides by zero.
+    pub fn fold(&self, name: &mut impl FnMut(&str) -> Option<i128>) -> Option<i128> {
+        match self {
+            ValueArg::Int(value) => Some(*value),
+            ValueArg::Name(n) => name(n),
+            ValueArg::Binary(op, l, r) => {
+                let l = l.fold(name)?;
+                let r = r.fold(name)?;
+                op.apply(l, r)
+            }
+        }
+    }
+
+    /// The value with each name `name` maps replaced by what it maps it to.
+    pub fn substituted(&self, name: &impl Fn(&str) -> Option<ValueArg>) -> ValueArg {
+        match self {
+            ValueArg::Int(_) => self.clone(),
+            ValueArg::Name(n) => name(n).unwrap_or_else(|| self.clone()),
+            ValueArg::Binary(op, l, r) => ValueArg::Binary(
+                *op,
+                Box::new(l.substituted(name)),
+                Box::new(r.substituted(name)),
+            ),
+        }
+    }
+}
+
+impl ValueArg {
+    /// The expression this value is written as, at `span`: what renders it
+    /// back to source the way any other expression is.
+    pub fn expression(&self, span: Span) -> Expression {
+        match self {
+            ValueArg::Int(value) if *value < 0 && *value != i128::MIN => factory::unary_with_span(
+                UnaryOp::Negate,
+                factory::int_literal_expression(-*value),
+                span,
+            ),
+            ValueArg::Int(value) => factory::int_literal_expression(*value),
+            ValueArg::Name(name) => factory::identifier_with_span(name, span),
+            ValueArg::Binary(op, l, r) => {
+                factory::binary_with_span(l.expression(span), op.binary(), r.expression(span), span)
+            }
+        }
+    }
+}
+
+impl fmt::Display for ValueArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueArg::Int(value) => write!(f, "{value}"),
+            ValueArg::Name(name) => f.write_str(name),
+            ValueArg::Binary(op, l, r) => {
+                let operand = |f: &mut fmt::Formatter<'_>, v: &ValueArg| match v {
+                    ValueArg::Binary(..) => write!(f, "({v})"),
+                    ValueArg::Int(_) | ValueArg::Name(_) => write!(f, "{v}"),
+                };
+                operand(f, l)?;
+                write!(f, " {} ", op.symbol())?;
+                operand(f, r)
+            }
+        }
+    }
+}
+
+impl fmt::Display for TypeArgKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeArgKind::Type(ty, _) => write!(f, "{ty}"),
+            TypeArgKind::Value(value) => write!(f, "{value}"),
+        }
+    }
+}
+
 /// The type `argument` names, or `None` when it names a value, such as an
 /// array's size. A nullable mark written on the argument (`T?`) is not read
-/// here; `mir::instantiation::type_argument` folds it into an optional.
-pub fn argument_type(argument: &Expression) -> Option<&Type> {
+/// here; [`argument_type_marked`] reads it.
+pub fn argument_type(argument: &TypeArgument) -> Option<&Type> {
     match &argument.node {
-        ExpressionKind::Type(ty, _) => Some(ty),
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Identifier(..)
-        | ExpressionKind::Binary(..)
-        | ExpressionKind::Logical(..)
-        | ExpressionKind::Unary(..)
-        | ExpressionKind::Assignment(..)
-        | ExpressionKind::Conditional(..)
-        | ExpressionKind::Range(..)
-        | ExpressionKind::Guard(..)
-        | ExpressionKind::Member(..)
-        | ExpressionKind::Index(..)
-        | ExpressionKind::Call(..)
-        | ExpressionKind::ImportPath(..)
-        | ExpressionKind::GenericType(..)
-        | ExpressionKind::TypeDeclaration(..)
-        | ExpressionKind::EnumValue(..)
-        | ExpressionKind::StructMember(..)
-        | ExpressionKind::Lambda(..)
-        | ExpressionKind::List(..)
-        | ExpressionKind::Array(..)
-        | ExpressionKind::Map(..)
-        | ExpressionKind::Tuple(..)
-        | ExpressionKind::Set(..)
-        | ExpressionKind::Match(..)
-        | ExpressionKind::FormattedString(..)
-        | ExpressionKind::NamedArgument(..)
-        | ExpressionKind::Super
-        | ExpressionKind::Block(..)
-        | ExpressionKind::Cast(..) => None,
+        TypeArgKind::Type(ty, _) => Some(ty),
+        TypeArgKind::Value(_) => None,
+    }
+}
+
+/// The type `argument` names, with a nullable mark written on it read as an
+/// optional of that type; `None` when it names a value.
+pub fn argument_type_marked(argument: &TypeArgument) -> Option<Type> {
+    match &argument.node {
+        TypeArgKind::Type(ty, false) => Some((**ty).clone()),
+        TypeArgKind::Type(ty, true) => Some(Type::new(TypeKind::Option(ty.clone()), ty.span)),
+        TypeArgKind::Value(_) => None,
     }
 }
 
@@ -71,9 +223,30 @@ pub fn argument_type_at(arguments: &TypeArguments, position: usize) -> Option<&T
     arguments.get(position).and_then(argument_type)
 }
 
-/// A type argument naming `ty`.
+/// The value `argument` holds once folded to an integer; `None` when it
+/// names a type, or a value not yet folded.
+pub fn argument_value(argument: &TypeArgument) -> Option<i128> {
+    match &argument.node {
+        TypeArgKind::Value(ValueArg::Int(value)) => Some(*value),
+        TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..)) | TypeArgKind::Type(..) => {
+            None
+        }
+    }
+}
+
+/// A type argument naming `ty`, written nowhere in the source.
 pub fn type_argument(ty: Type) -> TypeArgument {
-    type_expr_non_null(ty)
+    IdNode::new(
+        next_id(),
+        TypeArgKind::Type(Box::new(ty), false),
+        Span::new(0, 0),
+    )
+}
+
+/// A type argument naming `ty` written at `span`, with a nullable mark when
+/// `nullable`.
+pub fn marked_type_argument(ty: Type, nullable: bool, span: Span) -> TypeArgument {
+    IdNode::new(next_id(), TypeArgKind::Type(Box::new(ty), nullable), span)
 }
 
 /// Type arguments naming `types`, in order.
@@ -83,16 +256,24 @@ pub fn type_arguments(types: impl IntoIterator<Item = Type>) -> Vec<TypeArgument
 
 /// A value generic's argument holding `value`, such as an array's size.
 pub fn value_argument(value: i128) -> TypeArgument {
-    int_literal_expression(value)
+    IdNode::new(
+        next_id(),
+        TypeArgKind::Value(ValueArg::Int(value)),
+        Span::new(0, 0),
+    )
 }
 
+// TODO: the slots this searches only ever hold a type, yet are typed as a
+// `TypeArgument` that may hold a value, so the state it finds can be built and
+// `Body::validate` has to refuse it; typing those slots as types would make it
+// unrepresentable and this search unnecessary.
 /// The first argument within `kind` written where a type is required — a
 /// collection's element, a map's key or value, a tuple's slot, a result's or
-/// a future's payload — that names no type, searched through every type
+/// a future's payload — that names no type — a value where a type belongs — searched through every type
 /// argument `kind` holds. A value generic's own arguments may name values, so
 /// only the built-in collections' positions are required to be types.
-pub fn unresolved_type_argument(kind: &TypeKind) -> Option<&Expression> {
-    let required: Vec<&Expression> = match kind {
+pub fn unresolved_type_argument(kind: &TypeKind) -> Option<&TypeArgument> {
+    let required: Vec<&TypeArgument> = match kind {
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Array(element, _) => {
             vec![element]
         }
@@ -141,7 +322,7 @@ pub fn unresolved_type_argument(kind: &TypeKind) -> Option<&Expression> {
     if let Some(missing) = required.iter().find(|arg| argument_type(arg).is_none()) {
         return Some(missing);
     }
-    let held: Vec<&Expression> = if let TypeKind::Custom(_, Some(args)) = kind {
+    let held: Vec<&TypeArgument> = if let TypeKind::Custom(_, Some(args)) = kind {
         args.iter().collect()
     } else {
         required
@@ -149,4 +330,58 @@ pub fn unresolved_type_argument(kind: &TypeKind) -> Option<&Expression> {
     held.into_iter()
         .filter_map(argument_type)
         .find_map(|ty| unresolved_type_argument(&ty.kind))
+}
+
+/// `argument` saying `kind` instead, written at the same place.
+pub fn rewritten(argument: &TypeArgument, kind: TypeArgKind) -> TypeArgument {
+    IdNode::new(argument.id, kind, argument.span)
+}
+
+/// The type argument `expr` writes: a type expression's type, or the value an
+/// integer, a name or arithmetic over them spells. Any other expression is
+/// handed back for the parser to refuse.
+pub fn written_argument(expr: Expression) -> Result<TypeArgument, Expression> {
+    let kind = match &expr.node {
+        ExpressionKind::Type(ty, nullable) => TypeArgKind::Type(ty.clone(), *nullable),
+        _ => match written_value(&expr) {
+            Some(value) => TypeArgKind::Value(value),
+            None => return Err(expr),
+        },
+    };
+    Ok(IdNode::new(expr.id, kind, expr.span))
+}
+
+/// The value `expr` spells, when it is an integer, a name or arithmetic over
+/// them. A negated integer is folded into the integer, which is what lets
+/// `i128::MIN` be written.
+fn written_value(expr: &Expression) -> Option<ValueArg> {
+    match &expr.node {
+        // TODO: an integer past the 128-bit range is refused with the parser's
+        // generic "a type, or an integer, ..." message, which names what may be
+        // written rather than why this integer may not; it should say the value
+        // does not fit, as the instantiation-time refusal of a folded one does.
+        ExpressionKind::Literal(Literal::Integer(value)) => value.as_i128().map(ValueArg::Int),
+        ExpressionKind::Identifier(name, None) => Some(ValueArg::Name(name.clone())),
+        ExpressionKind::Type(ty, false) => match &ty.kind {
+            TypeKind::Custom(name, None) if !name.contains("::") => {
+                Some(ValueArg::Name(name.clone()))
+            }
+            _ => None,
+        },
+        ExpressionKind::Unary(UnaryOp::Negate, inner) => match &inner.node {
+            ExpressionKind::Literal(Literal::Integer(value)) => value.negated().map(ValueArg::Int),
+            _ => Some(ValueArg::Binary(
+                ArithOp::Sub,
+                Box::new(ValueArg::Int(0)),
+                Box::new(written_value(inner)?),
+            )),
+        },
+        ExpressionKind::Unary(UnaryOp::Plus, inner) => written_value(inner),
+        ExpressionKind::Binary(l, op, r) => Some(ValueArg::Binary(
+            ArithOp::of(op)?,
+            Box::new(written_value(l)?),
+            Box::new(written_value(r)?),
+        )),
+        _ => None,
+    }
 }

@@ -4,6 +4,8 @@
 //! Call lowering dispatcher, collection intrinsics, and constructor/direct-call fallbacks.
 
 use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
+use crate::ast::type_arguments::{rewritten, TypeArgKind};
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -592,14 +594,13 @@ fn substitute_collection_element_ty(obj_ty: &Type, subs: &HashMap<String, Type>)
     if subs.is_empty() {
         return obj_ty.clone();
     }
-    let sub_expr = |expr: &Expression| -> Expression {
+    let sub_expr = |expr: &TypeArgument| -> TypeArgument {
         match &expr.node {
-            ExpressionKind::Type(ty, is_ref) => Expression {
-                id: expr.id,
-                span: expr.span,
-                node: ExpressionKind::Type(Box::new(apply_generic_sub(ty, subs)), *is_ref),
-            },
-            _ => expr.clone(),
+            TypeArgKind::Type(ty, is_ref) => rewritten(
+                expr,
+                TypeArgKind::Type(Box::new(apply_generic_sub(ty, subs)), *is_ref),
+            ),
+            TypeArgKind::Value(_) => expr.clone(),
         }
     };
     let new_kind = match &obj_ty.kind {
@@ -984,7 +985,7 @@ pub(super) fn collection_slot_type(
     } else {
         return None;
     };
-    Some(ctx.resolved_type(arg))
+    Some(ctx.resolved_argument_type(arg))
 }
 
 /// Lower map.set(key, value) to miri_rt_map_set.

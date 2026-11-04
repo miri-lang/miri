@@ -14,7 +14,7 @@
 //! parameter, a class some subclass of which has a hook — and a type nested
 //! past the depth the mangler names are all taken to reach one.
 
-use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::member_type_at;
 use crate::mir::instantiation::shape::constructor_parts;
@@ -95,7 +95,7 @@ impl Walk<'_, '_> {
         &mut self,
         ty: &Type,
         name: &str,
-        args: Option<&[Expression]>,
+        args: Option<&[TypeArgument]>,
         depth: usize,
     ) -> bool {
         let definitions = self.reach.definitions;

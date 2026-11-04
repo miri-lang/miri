@@ -34,6 +34,7 @@ use crate::ast::implicit_methods::{
     operator_method_name, operator_receiver, CLONE_METHOD_NAME, CONSTRUCTION_METHOD_NAMES,
     EQUALS_METHOD_NAME, MEMBERSHIP_METHOD_NAME,
 };
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
 use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
@@ -111,7 +112,7 @@ impl TypeChecker {
     pub(crate) fn record_construction_sites(
         &mut self,
         class_name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
         span: Span,
         context: &Context,
     ) {
@@ -472,7 +473,7 @@ impl TypeChecker {
         &mut self,
         trait_name: &str,
         method: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
         span: Span,
     ) {
         if self.suppress_diagnostics {
@@ -739,7 +740,7 @@ impl TypeChecker {
     fn instance_substitution(
         &self,
         type_name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
     ) -> HashMap<String, Type> {
         self.generics_of(type_name)
             .iter()
@@ -753,7 +754,7 @@ impl TypeChecker {
     fn instance_arguments(
         &self,
         type_name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
     ) -> Vec<Option<Type>> {
         let written = type_args.unwrap_or_default();
         (0..self.generics_of(type_name).len())
@@ -763,8 +764,8 @@ impl TypeChecker {
 
     /// One written type argument as a substitution holds it: a type as
     /// itself, a value argument wrapped so the value survives substitution.
-    fn pinned_argument(&self, argument: &Expression) -> Type {
-        self.extract_type_from_expression(argument)
+    fn pinned_argument(&self, argument: &TypeArgument) -> Type {
+        self.extract_type_from_argument(argument)
             .unwrap_or_else(|_| super::generics::value_generic_marker_type(argument.clone()))
     }
 
@@ -1016,18 +1017,18 @@ fn type_head(kind: &TypeKind) -> TypeHead<'_> {
 fn type_parts(kind: &TypeKind) -> Vec<&TypeKind> {
     match kind {
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
-            spelled_type(element).into_iter().collect()
+            argument_kind(element).into_iter().collect()
         }
-        TypeKind::Array(element, size) => spelled_type(element)
+        TypeKind::Array(element, size) => argument_kind(element)
             .into_iter()
-            .chain(spelled_type(size))
+            .chain(argument_kind(size))
             .collect(),
-        TypeKind::Map(key, value) | TypeKind::Result(key, value) => spelled_type(key)
+        TypeKind::Map(key, value) | TypeKind::Result(key, value) => argument_kind(key)
             .into_iter()
-            .chain(spelled_type(value))
+            .chain(argument_kind(value))
             .collect(),
         TypeKind::Tuple(elements) | TypeKind::Custom(_, Some(elements)) => {
-            elements.iter().filter_map(spelled_type).collect()
+            elements.iter().filter_map(argument_kind).collect()
         }
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             vec![&inner.kind]
@@ -1065,7 +1066,12 @@ fn type_parts(kind: &TypeKind) -> Vec<&TypeKind> {
     }
 }
 
-/// The type an argument expression spells, or `None` for a value argument.
+/// The type an argument spells, or `None` for a value argument.
+fn argument_kind(argument: &TypeArgument) -> Option<&TypeKind> {
+    crate::ast::type_arguments::argument_type(argument).map(|ty| &ty.kind)
+}
+
+/// The kind of the type a closure type's parameter or return is written as.
 fn spelled_type(expr: &Expression) -> Option<&TypeKind> {
     if let crate::ast::expression::ExpressionKind::Type(ty, _) = &expr.node {
         return Some(&ty.kind);
@@ -1104,10 +1110,7 @@ mod tests {
             arguments
                 .into_iter()
                 .map(|argument| {
-                    crate::ast::factory::type_expression(
-                        Type::new(argument, Span::new(0, 0)),
-                        false,
-                    )
+                    crate::ast::type_arguments::type_argument(Type::new(argument, Span::new(0, 0)))
                 })
                 .collect()
         });

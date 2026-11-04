@@ -9,7 +9,6 @@
 //! the result stored back into it.
 
 use crate::mir::utils::runtime_callee;
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::BasicBlockData;
@@ -25,11 +24,7 @@ fn span() -> Span {
 }
 
 fn list_ty() -> Type {
-    let int = Expression::new(
-        0,
-        ExpressionKind::Type(Box::new(Type::new(TypeKind::Int, span())), false),
-        span(),
-    );
+    let int = miri::ast::type_arguments::type_argument(Type::new(TypeKind::Int, span()));
     Type::new(
         TypeKind::Custom("List".to_string(), Some(vec![int])),
         span(),

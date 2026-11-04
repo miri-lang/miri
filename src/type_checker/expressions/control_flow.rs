@@ -711,7 +711,7 @@ impl TypeChecker {
 
             let elem_types_cloned = elem_types.clone();
             for (i, pat) in patterns.iter().enumerate() {
-                let elem_type = self.resolve_type_expression(&elem_types_cloned[i], context);
+                let elem_type = self.resolve_type_argument(&elem_types_cloned[i], context);
                 self.check_pattern(pat, &elem_type, context, span, is_mutable);
             }
         } else {
@@ -1062,7 +1062,7 @@ impl TypeChecker {
                     .iter()
                     .zip(args.iter())
                     .filter_map(|(g, arg_expr)| {
-                        self.extract_type_from_expression(arg_expr)
+                        self.extract_type_from_argument(arg_expr)
                             .ok()
                             .map(|ty| (g.name.clone(), ty))
                     })

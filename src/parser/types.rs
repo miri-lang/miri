@@ -2,12 +2,13 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::factory as ast;
+use crate::ast::type_arguments::{written_argument, TypeArgument};
 use crate::ast::types::{
     primitive_type_kind, BuiltinCollectionKind, FunctionTypeData, Type, TypeKind, RESULT_TYPE_NAME,
     TUPLE_TYPE_NAME,
 };
 use crate::ast::*;
-use crate::error::syntax::{Span, SyntaxError};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::Parser;
@@ -63,6 +64,7 @@ impl<'source> Parser<'source> {
             }
         }
         let span = Span::new(start, self.last_consumed_end);
+        let members = self.type_arguments_of(members)?;
         Ok(Some(ast::type_expression_with_span(
             Type::new(TypeKind::OneOf(members), span),
             false,
@@ -85,14 +87,14 @@ impl<'source> Parser<'source> {
             let size_expr = self.expression()?;
             self.eat_token(&Token::RBracket)?;
             return Ok(ast::type_expr_non_null(ast::make_type(TypeKind::Array(
-                Box::new(element_type),
-                Box::new(size_expr),
+                Box::new(self.type_argument_of(element_type)?),
+                Box::new(self.type_argument_of(size_expr)?),
             ))));
         }
 
         self.eat_token(&Token::RBracket)?;
         Ok(ast::type_expr_non_null(ast::make_type(TypeKind::List(
-            Box::new(element_type),
+            Box::new(self.type_argument_of(element_type)?),
         ))))
     }
 
@@ -124,16 +126,16 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::RParen)?;
 
         Ok(ast::type_expr_non_null(ast::make_type(TypeKind::Tuple(
-            elements,
+            self.type_arguments_of(elements)?,
         ))))
     }
 
     fn brace_type(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LBrace)?;
-        let key_type = self.element_type_expression("Map key type")?;
+        let key_type = self.element_type_argument("Map key type")?;
         let kind = if self.match_lookahead_type(|t| t == &Token::Colon) {
             self.eat_token(&Token::Colon)?;
-            let value_type = self.element_type_expression("Map value type")?;
+            let value_type = self.element_type_argument("Map value type")?;
             self.eat_token(&Token::RBrace)?;
             TypeKind::Map(Box::new(key_type), Box::new(value_type))
         } else {
@@ -256,7 +258,9 @@ impl<'source> Parser<'source> {
                 &Token::LessThan,
                 &Token::GreaterThan,
             )?;
-            return Ok(ast::make_type(TypeKind::Tuple(inner)));
+            return Ok(ast::make_type(TypeKind::Tuple(
+                self.type_arguments_of(inner)?,
+            )));
         }
 
         if let Some(collection) = BuiltinCollectionKind::from_name(&type_name) {
@@ -299,6 +303,7 @@ impl<'source> Parser<'source> {
         match &self.lookahead {
             Some((Token::LessThan, _)) => {
                 let inner = self.multiple_generic_arguments()?;
+                let inner = self.type_arguments_of(inner)?;
                 Ok(ast::make_type(TypeKind::Custom(type_name, Some(inner))))
             }
             _ => Ok(ast::make_type(TypeKind::Custom(type_name, None))),
@@ -412,6 +417,38 @@ impl<'source> Parser<'source> {
             .ok_or_else(|| self.error_invalid_type_declaration(expected))
     }
 
+    /// A type written where a type argument is: a collection's element, a
+    /// map's key or value.
+    fn element_type_argument(&mut self, expected: &str) -> Result<TypeArgument, SyntaxError> {
+        let written = self.element_type_expression(expected)?;
+        self.type_argument_of(written)
+    }
+
+    /// The type argument `written` writes, or a refusal when it is neither a
+    /// type nor a value an integer, a name or arithmetic over them spells.
+    fn type_argument_of(&self, written: Expression) -> Result<TypeArgument, SyntaxError> {
+        written_argument(written).map_err(|refused| {
+            SyntaxError::new(
+                SyntaxErrorKind::InvalidTypeDeclaration {
+                    expected: "a type, or an integer, a constant or arithmetic over them"
+                        .to_string(),
+                },
+                refused.span,
+            )
+        })
+    }
+
+    /// The type arguments `written` write, in order.
+    fn type_arguments_of(
+        &self,
+        written: Vec<Expression>,
+    ) -> Result<Vec<TypeArgument>, SyntaxError> {
+        written
+            .into_iter()
+            .map(|argument| self.type_argument_of(argument))
+            .collect()
+    }
+
     pub(crate) fn multiple_element_type_expressions(
         &mut self,
         expected: &str,
@@ -441,10 +478,10 @@ impl<'source> Parser<'source> {
         create_type: F,
     ) -> Result<Type, SyntaxError>
     where
-        F: FnOnce(Box<Expression>) -> TypeKind,
+        F: FnOnce(Box<TypeArgument>) -> TypeKind,
     {
         self.eat_token(&Token::LessThan)?;
-        let inner_type = self.element_type_expression(expected)?;
+        let inner_type = self.element_type_argument(expected)?;
         self.eat_token(&Token::GreaterThan)?;
         Ok(ast::make_type(create_type(Box::new(inner_type))))
     }
@@ -456,12 +493,12 @@ impl<'source> Parser<'source> {
         create_type: F,
     ) -> Result<Type, SyntaxError>
     where
-        F: FnOnce(Box<Expression>, Box<Expression>) -> TypeKind,
+        F: FnOnce(Box<TypeArgument>, Box<TypeArgument>) -> TypeKind,
     {
         self.eat_token(&Token::LessThan)?;
-        let a_type = self.element_type_expression(expected_a)?;
+        let a_type = self.element_type_argument(expected_a)?;
         self.eat_token(&Token::Comma)?;
-        let b_type = self.element_type_expression(expected_b)?;
+        let b_type = self.element_type_argument(expected_b)?;
         self.eat_token(&Token::GreaterThan)?;
 
         Ok(ast::make_type(create_type(
@@ -472,14 +509,14 @@ impl<'source> Parser<'source> {
 
     pub(crate) fn generic_array_type_expression(&mut self) -> Result<Type, SyntaxError> {
         self.eat_token(&Token::LessThan)?;
-        let element_type = self.element_type_expression("Array element type")?;
+        let element_type = self.element_type_argument("Array element type")?;
         self.eat_token(&Token::Comma)?;
         let size_expr = self.additive_expression()?;
         self.eat_token(&Token::GreaterThan)?;
 
         Ok(ast::make_type(TypeKind::Array(
             Box::new(element_type),
-            Box::new(size_expr),
+            Box::new(self.type_argument_of(size_expr)?),
         )))
     }
 }

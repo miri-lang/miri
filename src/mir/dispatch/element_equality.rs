@@ -11,6 +11,7 @@
 //! per instantiation, which the container calls as it calls a class's
 //! `equals`.
 
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::monomorphized_arguments;
 use crate::mir::symbol::{Symbol, ThunkKind};
@@ -58,7 +59,7 @@ pub fn element_hash_symbol(
     ty: &TypeKind,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> Option<Symbol> {
-    let (name, args): (&str, Option<Vec<crate::ast::expression::Expression>>) = match ty {
+    let (name, args): (&str, Option<Vec<TypeArgument>>) = match ty {
         TypeKind::Custom(name, args) => (name.as_str(), args.clone()),
         TypeKind::List(element) => (
             BuiltinCollectionKind::List.name(),
@@ -109,7 +110,7 @@ pub fn matched_element_types(ty: &Type, found: &mut Vec<Type>) {
             let arg_types: Vec<&Type> = args
                 .iter()
                 .filter_map(|expr| match &expr.node {
-                    crate::ast::expression::ExpressionKind::Type(arg, _) => Some(arg.as_ref()),
+                    crate::ast::type_arguments::TypeArgKind::Type(arg, _) => Some(arg.as_ref()),
                     _ => None,
                 })
                 .collect();
@@ -129,7 +130,7 @@ pub fn matched_element_types(ty: &Type, found: &mut Vec<Type>) {
         TypeKind::Option(inner) | TypeKind::Linear(inner) => matched_element_types(inner, found),
         TypeKind::Tuple(elements) => {
             for element in elements {
-                if let crate::ast::expression::ExpressionKind::Type(inner, _) = &element.node {
+                if let crate::ast::type_arguments::TypeArgKind::Type(inner, _) = &element.node {
                     matched_element_types(inner, found);
                 }
             }

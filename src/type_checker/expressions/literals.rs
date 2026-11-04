@@ -44,6 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
+use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -420,25 +421,12 @@ impl TypeChecker {
             // Result to Custom form, but both forms may reach lowering.
             TypeKind::Result(ok_expr, err_expr) => {
                 // Recursively check both type arguments' formatability.
-                // Expression-typed arguments are resolved by pattern-matching on
-                // their structure (Type nodes, Identifiers) rather than a full lookup,
-                // so this is safe without circularity.
-                use crate::ast::expression::ExpressionKind;
-                let check_expr = |expr: &Expression| -> bool {
+                // Each argument's type is read off the argument rather than looked
+                // up, so this is safe without circularity.
+                let check_expr = |expr: &TypeArgument| -> bool {
                     match &expr.node {
-                        ExpressionKind::Type(t, _) => self.can_interpolate(&t.kind),
-                        ExpressionKind::Identifier(name, _) => {
-                            // Look up primitive types by name
-                            if let Some(prim_kind) = crate::ast::types::primitive_type_kind(name) {
-                                self.can_interpolate(&prim_kind)
-                            } else if self.type_definitions().contains_key(name) {
-                                // Custom type: check as enum
-                                self.check_enum_can_interpolate(name, None)
-                            } else {
-                                false
-                            }
-                        }
-                        _ => false,
+                        TypeArgKind::Type(t, _) => self.can_interpolate(&t.kind),
+                        TypeArgKind::Value(_) => false,
                     }
                 };
                 check_expr(ok_expr) && check_expr(err_expr)
@@ -487,7 +475,7 @@ impl TypeChecker {
     ///
     /// A depth bound prevents stack overflow on deeply-nested acyclic chains,
     /// where the cycle guard alone cannot help.
-    fn check_enum_can_interpolate(&self, name: &str, type_args: Option<&[Expression]>) -> bool {
+    fn check_enum_can_interpolate(&self, name: &str, type_args: Option<&[TypeArgument]>) -> bool {
         ENUM_INTERPOLATE_STATE.with(|state| {
             let mut s = state.borrow_mut();
             let is_top_level = s.depth == 0;
@@ -515,7 +503,7 @@ impl TypeChecker {
     fn check_enum_can_interpolate_impl(
         &self,
         name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
     ) -> bool {
         let should_return_early = ENUM_INTERPOLATE_STATE.with(|state| {
             let mut s = state.borrow_mut();

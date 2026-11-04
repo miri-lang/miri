@@ -12,7 +12,8 @@
 //! emits the release and decides nothing.
 
 use super::drop_plan::CountedSlot;
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::option_layout::{resolve_alias, LayoutScope};
 use crate::mir::rc::is_slot_counted;
@@ -46,7 +47,7 @@ pub enum ReleasePlan {
     /// (see [`super::DropThunk`] and [`super::Release`]).
     Named {
         name: String,
-        args: Option<Vec<Expression>>,
+        args: Option<Vec<TypeArgument>>,
     },
     /// A closure: its destructor releases its captures, then it is freed.
     Closure,
@@ -139,7 +140,7 @@ fn plan_of_other(
 
 /// The counted slots of the tuple `kind` holding `elements`.
 fn counted_slots(
-    elements: &[Expression],
+    elements: &[TypeArgument],
     kind: &TypeKind,
     scope: LayoutScope<'_>,
 ) -> Result<Vec<CountedSlot>, UnresolvedArgument> {
@@ -196,11 +197,11 @@ fn argument_type(kind: &TypeKind, position: usize) -> Result<&Type, UnresolvedAr
 /// argument substituted; one that is missing or spelled as anything but a
 /// type means it did not, and is refused.
 fn resolved_type<'k>(
-    argument: Option<&'k Expression>,
+    argument: Option<&'k TypeArgument>,
     kind: &TypeKind,
 ) -> Result<&'k Type, UnresolvedArgument> {
     match argument.map(|argument| &argument.node) {
-        Some(ExpressionKind::Type(ty, _)) => Ok(ty),
+        Some(TypeArgKind::Type(ty, _)) => Ok(ty),
         Some(_) | None => Err(UnresolvedArgument(format!(
             "a `{kind}` value is released with an unresolved type argument, so its \
              counted elements cannot be found"

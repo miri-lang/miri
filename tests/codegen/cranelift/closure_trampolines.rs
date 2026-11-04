@@ -13,6 +13,7 @@ use cranelift_codegen::ir::types;
 use cranelift_object::object::{File, Object, ObjectSymbol};
 use miri::ast::common::Parameter;
 use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{FunctionTypeData, Type, TypeKind};
 use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions, RuntimeImport};
 use miri::codegen::Backend;
@@ -52,7 +53,7 @@ fn comparator_of(element: TypeKind) -> TypeKind {
 fn sorting_by(element: TypeKind) -> Body {
     let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
     body.new_local(LocalDecl::new(ty(TypeKind::Void), Span::default()));
-    let list = TypeKind::List(Box::new(type_expr_non_null(ty(element.clone()))));
+    let list = TypeKind::List(Box::new(type_argument(ty(element.clone()))));
     let list = body.new_local(LocalDecl::new(ty(list), Span::default()));
     let closure = body.new_local(LocalDecl::new(ty(comparator_of(element)), Span::default()));
     let call = TerminatorKind::Call {

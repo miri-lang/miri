@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::mir::utils::{make_int_const, make_string_const, mir_lower_code};
-use miri::ast::expression::{Expression, ExpressionKind};
+use miri::ast::expression::ExpressionKind;
 use miri::ast::statement::{Statement, StatementKind as AstStatementKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
@@ -13,11 +13,8 @@ use miri::pipeline::Pipeline;
 
 /// The tuple type `(int, int)`.
 fn int_pair() -> Type {
-    let int = || Expression {
-        id: 0,
-        node: ExpressionKind::Type(Box::new(Type::new(TypeKind::Int, Span::default())), false),
-        span: Span::default(),
-    };
+    let int =
+        || miri::ast::type_arguments::type_argument(Type::new(TypeKind::Int, Span::default()));
     Type::new(TypeKind::Tuple(vec![int(), int()]), Span::default())
 }
 

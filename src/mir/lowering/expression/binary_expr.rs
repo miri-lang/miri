@@ -5,6 +5,7 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::implicit_methods::MEMBERSHIP_METHOD_NAME;
+use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -882,7 +883,7 @@ fn vector_component_type(vector_ty: &Type) -> Option<Type> {
         return None;
     };
     match &args.first()?.node {
-        ExpressionKind::Type(component, _) => Some(component.as_ref().clone()),
+        TypeArgKind::Type(component, _) => Some(component.as_ref().clone()),
         _ => None,
     }
 }

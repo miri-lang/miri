@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::type_argument;
 use miri::ast::types::{Type, TypeKind};
 use miri::codegen::cranelift::structural_elements::structural_thunk_symbol;
 use miri::error::syntax::Span;
@@ -14,8 +14,8 @@ fn ty(kind: TypeKind) -> Type {
 /// encoding at all.
 fn pair_with(kind: TypeKind) -> TypeKind {
     TypeKind::Tuple(vec![
-        type_expr_non_null(ty(TypeKind::Int)),
-        type_expr_non_null(ty(kind)),
+        type_argument(ty(TypeKind::Int)),
+        type_argument(ty(kind)),
     ])
 }
 
@@ -53,7 +53,7 @@ fn a_declared_type_named_like_a_built_in_kind_encodes_apart_from_it() {
 #[test]
 fn wrappers_around_one_payload_encode_apart() {
     let inner = || Box::new(ty(TypeKind::String));
-    let future = encoding(TypeKind::Future(Box::new(type_expr_non_null(ty(
+    let future = encoding(TypeKind::Future(Box::new(type_argument(ty(
         TypeKind::String,
     )))));
     let meta = encoding(TypeKind::Meta(inner()));
@@ -68,14 +68,14 @@ fn wrappers_around_one_payload_encode_apart() {
 fn body_holding_pairs_of_u(open: &[&str], bound: &[&str]) -> miri::mir::Body {
     let pair_of_u = TypeKind::Custom(
         "Pair".to_string(),
-        Some(vec![type_expr_non_null(ty(TypeKind::Custom(
+        Some(vec![type_argument(ty(TypeKind::Custom(
             "U".to_string(),
             None,
         )))]),
     );
     let list = TypeKind::Custom(
         "List".to_string(),
-        Some(vec![type_expr_non_null(ty(pair_with(pair_of_u)))]),
+        Some(vec![type_argument(ty(pair_with(pair_of_u)))]),
     );
     let mut body = miri::mir::Body::new(0, Span::default(), miri::mir::ExecutionModel::Cpu);
     body.new_local(miri::mir::LocalDecl::new(ty(list), Span::default()));

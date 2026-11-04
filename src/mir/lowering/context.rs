@@ -3,6 +3,7 @@
 
 use super::compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::Type;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -334,6 +335,12 @@ impl<'a> LoweringContext<'a> {
     /// integer — and one the callee's own claim on the value already accounts for.
     pub fn resolved_type(&self, expr: &Expression) -> Type {
         let named = super::resolve_type(self.type_checker, expr);
+        super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
+    }
+
+    /// [`Self::resolved_type`] for a type argument.
+    pub fn resolved_argument_type(&self, arg: &TypeArgument) -> Type {
+        let named = super::helpers::resolve_argument_type(self.type_checker, arg);
         super::apply_generic_sub(&self.resolve_self_in(&named), &self.generic_subs)
     }
 

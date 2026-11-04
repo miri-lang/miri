@@ -4,6 +4,8 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::statement::{BindingResidency as AstResidency, VariableDeclaration};
+use crate::ast::type_arguments::TypeArgument;
+use crate::ast::type_arguments::{rewritten, TypeArgKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::{BindingResidency as MirResidency, DeviceHandleId};
@@ -15,7 +17,7 @@ use crate::mir::{
 };
 
 use super::helpers::{coerce_rvalue_in, read_older_local_by_copy, release_coerced_source};
-use super::{lower_expression, resolve_type, LoweringContext};
+use super::{lower_expression, resolve_argument_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
 /// Fence outstanding device writes and copy the gpu binding `initializer` names
@@ -160,7 +162,7 @@ pub(crate) fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty:
         return resolved;
     };
     if name == crate::ast::types::OPTION_TYPE_NAME && args.len() == 1 {
-        let payload = canonical_declared_type(tc, &resolve_type(tc, &args[0]));
+        let payload = canonical_declared_type(tc, &resolve_argument_type(tc, &args[0]));
         return Type::new(TypeKind::Option(Box::new(payload)), resolved.span);
     }
     let canonical_args = args
@@ -175,15 +177,18 @@ pub(crate) fn canonical_declared_type(tc: &crate::type_checker::TypeChecker, ty:
 
 /// One type argument of a declared generic type, in canonical form.
 ///
-/// A type argument reaches lowering as an expression, and the nullable half of
-/// `int?` rides on that expression rather than on the type inside it. Readers
+/// The nullable half of `int?` rides on the type argument rather than on the
+/// type inside it. Readers
 /// that take the inner type alone — the element-drop path among them — then see
 /// a bare `int` and treat the element as a value with nothing to release.
 /// Folding the flag into the type is what makes `[int?]` and `[Option<int>]`
 /// the single type they are meant to be. Arguments that are not types, such as
 /// the size in `[T; N]`, are carried through untouched.
-fn canonical_type_argument(tc: &crate::type_checker::TypeChecker, arg: &Expression) -> Expression {
-    let ExpressionKind::Type(ty, is_nullable) = &arg.node else {
+fn canonical_type_argument(
+    tc: &crate::type_checker::TypeChecker,
+    arg: &TypeArgument,
+) -> TypeArgument {
+    let TypeArgKind::Type(ty, is_nullable) = &arg.node else {
         return arg.clone();
     };
     let inner = canonical_declared_type(tc, ty);
@@ -192,11 +197,7 @@ fn canonical_type_argument(tc: &crate::type_checker::TypeChecker, arg: &Expressi
     } else {
         inner
     };
-    Expression::new(
-        arg.id,
-        ExpressionKind::Type(Box::new(canonical), false),
-        arg.span,
-    )
+    rewritten(arg, TypeArgKind::Type(Box::new(canonical), false))
 }
 
 /// Resolves a declaration's type and initializer operand. Returns the

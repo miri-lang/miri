@@ -493,7 +493,7 @@ impl TypeChecker {
             .collect::<Option<Vec<Type>>>()?;
         let arguments = arguments
             .into_iter()
-            .map(|ty| self.create_type_expression(ty))
+            .map(|ty| self.create_type_argument(ty))
             .collect::<Vec<_>>();
         let arguments = (!arguments.is_empty()).then_some(arguments);
         Some(Type::new(

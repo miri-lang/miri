@@ -18,8 +18,8 @@ use crate::integration::memory::loop_headers_across_calls::{
     THROUGH_A_PASSED_CLOSURE, VIRTUAL_CALL, WRITER_THROUGH_A_COUNTED_FIELD,
 };
 use crate::mir::utils::runtime_callee;
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::literal::{IntegerLiteral, Literal};
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::analysis::dominators::DominatorTree;
@@ -55,11 +55,7 @@ pub(crate) fn ty(kind: TypeKind) -> Type {
 }
 
 pub(crate) fn list_of(element: TypeKind) -> Type {
-    let element = Expression {
-        id: 0,
-        node: ExpressionKind::Type(Box::new(ty(element)), false),
-        span: Span::default(),
-    };
+    let element = miri::ast::type_arguments::type_argument(ty(element));
     ty(TypeKind::List(Box::new(element)))
 }
 
@@ -1119,10 +1115,10 @@ fn test_a_copy_on_write_whose_result_the_list_takes_leaves_it_unrecorded() {
 }
 
 /// The type `kind` spelled as a type argument.
-fn type_expression(kind: TypeKind) -> Expression {
-    Expression {
+fn type_expression(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
         span: Span::default(),
     }
 }

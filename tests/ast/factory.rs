@@ -20,6 +20,7 @@ use miri::ast::pattern::MatchBranch;
 use miri::ast::statement::{
     IfStatementType, StatementKind, VariableDeclarationType, WhileStatementType,
 };
+use miri::ast::type_arguments::{type_argument, TypeArgKind};
 use miri::ast::types::{BuiltinCollectionKind, TypeKind, RESULT_TYPE_NAME};
 use miri::error::syntax::Span;
 
@@ -175,15 +176,15 @@ fn type_map_and_set_use_builtin_collection_names() {
 }
 
 #[test]
-fn type_tuple_wraps_elements_in_non_null_type_expressions() {
+fn type_tuple_wraps_elements_in_non_null_type_arguments() {
     let t = type_tuple(vec![type_int(), type_string()]);
     let TypeKind::Tuple(elements) = t.kind else {
         panic!("expected Tuple");
     };
     assert_eq!(elements.len(), 2);
     for e in &elements {
-        let ExpressionKind::Type(_, is_nullable) = e.node else {
-            panic!("expected Type expression element");
+        let TypeArgKind::Type(_, is_nullable) = e.node else {
+            panic!("expected a type argument element");
         };
         assert!(!is_nullable);
     }
@@ -191,7 +192,7 @@ fn type_tuple_wraps_elements_in_non_null_type_expressions() {
 
 #[test]
 fn type_custom_passes_through_name_and_args() {
-    let t = type_custom("MyClass", Some(vec![identifier("T")]));
+    let t = type_custom("MyClass", Some(vec![type_argument(type_custom("T", None))]));
     match t.kind {
         TypeKind::Custom(n, Some(args)) => {
             assert_eq!(n, "MyClass");

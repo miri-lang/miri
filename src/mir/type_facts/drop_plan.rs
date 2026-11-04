@@ -16,8 +16,7 @@
 //! of every struct, class and enum, and the thunk of every instantiation in
 //! the drop set.
 
-use crate::ast::expression::Expression;
-use crate::ast::factory::type_expr_non_null;
+use crate::ast::type_arguments::{type_argument, TypeArgument};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::{field_types, member_type_at, shape::open_parameter_names};
 use crate::mir::option_layout::LayoutScope;
@@ -131,11 +130,11 @@ pub(crate) fn drop_plan_in(
         .get(name)
         .and_then(TypeDefinition::generics)
         .is_some();
-    let arg_exprs: Vec<Expression> = args
+    let arg_exprs: Vec<TypeArgument> = args
         .unwrap_or_default()
         .iter()
         .cloned()
-        .map(type_expr_non_null)
+        .map(type_argument)
         .collect();
     let counted = |index: usize, ty: Type| {
         let skipped = is_generic && is_unresolved_element(&ty.kind, definitions);

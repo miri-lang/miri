@@ -396,16 +396,11 @@ mod tests {
 
     #[test]
     fn test_buffer_conversion_reads_the_collection_element() {
-        use crate::ast::expression::{Expression, ExpressionKind};
         use crate::ast::types::Type;
         use crate::error::syntax::Span;
         let element = |kind: TypeKind| {
             let ty = Type::new(kind, Span::new(0, 0));
-            Box::new(Expression::new(
-                0,
-                ExpressionKind::Type(Box::new(ty), false),
-                Span::new(0, 0),
-            ))
+            Box::new(crate::ast::type_arguments::type_argument(ty))
         };
         assert_eq!(
             buffer_conversion(&TypeKind::List(element(TypeKind::I16))),

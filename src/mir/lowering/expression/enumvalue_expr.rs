@@ -136,11 +136,12 @@ fn enum_payload_types(
     let Some(fields) = enum_def.variants.get(variant) else {
         return Vec::new();
     };
-    let arguments: &[Expression] = if let TypeKind::Custom(_, Some(args)) = &instance.kind {
-        args
-    } else {
-        &[]
-    };
+    let arguments: &[crate::ast::TypeArgument] =
+        if let TypeKind::Custom(_, Some(args)) = &instance.kind {
+            args
+        } else {
+            &[]
+        };
     let substitution: std::collections::HashMap<String, Type> = enum_def
         .generics
         .iter()

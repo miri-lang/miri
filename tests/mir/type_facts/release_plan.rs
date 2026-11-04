@@ -4,8 +4,7 @@
 //! What freeing a value does once its count reaches zero, and which captures
 //! a closure's destructor releases.
 
-use miri::ast::expression::{Expression, ExpressionKind};
-use miri::ast::factory::type_expr_non_null;
+use miri::ast::type_arguments::{type_argument, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::option_layout::LayoutScope;
@@ -19,8 +18,8 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
 
-fn arg(kind: TypeKind) -> Box<Expression> {
-    Box::new(type_expr_non_null(ty(kind)))
+fn arg(kind: TypeKind) -> Box<TypeArgument> {
+    Box::new(type_argument(ty(kind)))
 }
 
 fn plan(kind: &TypeKind) -> Result<ReleasePlan, UnresolvedArgument> {
@@ -98,9 +97,11 @@ fn a_tuple_releases_exactly_its_counted_slots_by_position() {
 
 #[test]
 fn a_collection_whose_type_argument_names_no_type_is_refused() {
-    let unresolved = Expression::new(
+    let unresolved = miri::ast::node::IdNode::new(
         0,
-        ExpressionKind::Identifier("T".to_string(), None),
+        miri::ast::type_arguments::TypeArgKind::Value(miri::ast::type_arguments::ValueArg::Name(
+            "T".to_string(),
+        )),
         Span::default(),
     );
     let list = TypeKind::List(Box::new(unresolved));

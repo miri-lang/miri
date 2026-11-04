@@ -22,6 +22,7 @@ use crate::ast::pattern::{MatchBranch, Pattern};
 use crate::ast::statement::{
     ClassData, FunctionDeclarationData, Statement, StatementKind, VariableDeclaration,
 };
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, OPTION_TYPE_NAME, RESULT_TYPE_NAME, STRING_TYPE_NAME,
     TUPLE_TYPE_NAME,
@@ -440,33 +441,33 @@ impl References {
             | TypeKind::Error => {}
             TypeKind::List(element) => {
                 self.record(BuiltinCollectionKind::List.name());
-                self.expression(element);
+                self.argument(element);
             }
             TypeKind::Set(element) => {
                 self.record(BuiltinCollectionKind::Set.name());
-                self.expression(element);
+                self.argument(element);
             }
-            TypeKind::Future(element) => self.expression(element),
+            TypeKind::Future(element) => self.argument(element),
             TypeKind::Array(element, size) => {
                 self.record(BuiltinCollectionKind::Array.name());
-                self.expression(element);
-                self.expression(size);
+                self.argument(element);
+                self.argument(size);
             }
             TypeKind::Map(key, value) => {
                 self.record(BuiltinCollectionKind::Map.name());
-                self.expression(key);
-                self.expression(value);
+                self.argument(key);
+                self.argument(value);
             }
             TypeKind::Result(ok, error) => {
                 self.record(RESULT_TYPE_NAME);
-                self.expression(ok);
-                self.expression(error);
+                self.argument(ok);
+                self.argument(error);
             }
             TypeKind::Tuple(elements) => {
                 self.record(TUPLE_TYPE_NAME);
-                self.expressions(elements);
+                self.arguments(elements);
             }
-            TypeKind::OneOf(members) => self.expressions(members),
+            TypeKind::OneOf(members) => self.arguments(members),
             TypeKind::Function(function) => {
                 self.expression_list(function.generics.as_deref());
                 self.parameters(&function.params);
@@ -482,13 +483,39 @@ impl References {
             }
             TypeKind::Custom(name, arguments) => {
                 self.record(name);
-                self.expression_list(arguments.as_deref());
+                self.arguments(arguments.as_deref().unwrap_or_default());
             }
             TypeKind::Option(inner) => {
                 self.record(OPTION_TYPE_NAME);
                 self.typ(inner);
             }
             TypeKind::Meta(inner) | TypeKind::Linear(inner) => self.typ(inner),
+        }
+    }
+
+    fn arguments(&mut self, arguments: &[TypeArgument]) {
+        for argument in arguments {
+            self.argument(argument);
+        }
+    }
+
+    /// A type argument names what its type names; a value argument names the
+    /// constants it is written with.
+    fn argument(&mut self, argument: &TypeArgument) {
+        match &argument.node {
+            TypeArgKind::Type(typ, _) => self.typ(typ),
+            TypeArgKind::Value(value) => self.value(value),
+        }
+    }
+
+    fn value(&mut self, value: &ValueArg) {
+        match value {
+            ValueArg::Int(_) => {}
+            ValueArg::Name(name) => self.record(name),
+            ValueArg::Binary(_, left, right) => {
+                self.value(left);
+                self.value(right);
+            }
         }
     }
 }

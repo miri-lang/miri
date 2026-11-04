@@ -7,8 +7,8 @@
 //! the block the readback is appended to and returns the block that continues
 //! after it.
 
-use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{IntegerLiteral, Literal};
+use crate::ast::type_arguments::{TypeArgKind, ValueArg};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::syntax::Span;
 use crate::mir::body::DeviceHandleId;
@@ -143,15 +143,13 @@ fn append_scalar_readback(
 
 /// `Array<T, 1>` for element type `element`.
 fn one_element_array(element: Type, span: Span) -> Type {
-    let type_arg = |node| Expression { id: 0, node, span };
+    let type_arg = |node| crate::ast::IdNode::new(0, node, span);
     Type::new(
         TypeKind::Custom(
             BuiltinCollectionKind::Array.name().to_string(),
             Some(vec![
-                type_arg(ExpressionKind::Type(Box::new(element), false)),
-                type_arg(ExpressionKind::Literal(Literal::Integer(
-                    IntegerLiteral::I64(1),
-                ))),
+                type_arg(TypeArgKind::Type(Box::new(element), false)),
+                type_arg(TypeArgKind::Value(ValueArg::Int(1))),
             ]),
         ),
         span,

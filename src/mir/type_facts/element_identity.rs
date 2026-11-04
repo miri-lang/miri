@@ -13,7 +13,7 @@
 //! and decides nothing.
 
 use super::TypeFacts;
-use crate::ast::expression::Expression;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME, STRING_TYPE_NAME,
 };
@@ -203,7 +203,7 @@ impl TypeFacts {
     pub fn element_method_instantiation(
         &self,
         class_name: &str,
-        type_args: Option<&[Expression]>,
+        type_args: Option<&[TypeArgument]>,
     ) -> Option<Vec<Type>> {
         self.definitions().get(class_name)?.generics()?;
         let concrete = type_args?
@@ -256,7 +256,7 @@ fn answering_type_name(question: ElementQuestion, kind: &TypeKind) -> Option<&st
 }
 
 /// The type arguments a custom element type is written with.
-fn custom_type_args(kind: &TypeKind) -> Option<&[Expression]> {
+fn custom_type_args(kind: &TypeKind) -> Option<&[TypeArgument]> {
     if let TypeKind::Custom(_, args) = kind {
         args.as_deref()
     } else {

@@ -8,6 +8,7 @@ use std::borrow::Cow;
 
 use crate::ast::expression::Expression;
 use crate::ast::statement::BindingResidency;
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::type_identity;
 use crate::ast::types::{FunctionTypeData, STRING_TYPE_NAME};
 use crate::ast::BuiltinCollectionKind as Collection;
@@ -95,8 +96,8 @@ fn type_kind_token<'a>(kind: &'a TypeKind, depth: usize) -> Cow<'a, str> {
     if depth >= MAX_TOKEN_DEPTH {
         return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
     }
-    if let Some(value_expr) = crate::type_checker::generics::extract_value_generic_kind(kind) {
-        return expression_token(value_expr, depth + 1);
+    if let Some(value) = crate::type_checker::generics::extract_value_generic_kind(kind) {
+        return argument_token(value, depth + 1);
     }
     let token: &'static str = match kind {
         TypeKind::Int => "int",
@@ -219,7 +220,7 @@ fn qualified_name_token<'a>(identity: &'a str) -> Cow<'a, str> {
 /// components, the same token a reference to that class spells.
 fn collection_token<'a>(
     collection: Collection,
-    args: impl IntoIterator<Item = &'a Expression>,
+    args: impl IntoIterator<Item = &'a TypeArgument>,
     depth: usize,
 ) -> Cow<'a, str> {
     compound_token(declared_name_token(collection.name()), args, depth)
@@ -260,12 +261,12 @@ fn closure_token<'a>(function: &'a FunctionTypeData, depth: usize) -> Cow<'a, st
 /// int>` → `Map_String_int`.
 fn compound_token<'a>(
     head: Cow<'a, str>,
-    args: impl IntoIterator<Item = &'a Expression>,
+    args: impl IntoIterator<Item = &'a TypeArgument>,
     depth: usize,
 ) -> Cow<'a, str> {
     join_tokens(
         head,
-        args.into_iter().map(|arg| expression_token(arg, depth + 1)),
+        args.into_iter().map(|arg| argument_token(arg, depth + 1)),
     )
 }
 
@@ -329,27 +330,39 @@ const QUALIFIED_NAME_HEAD: &str = "q";
 /// which resolves to the primitive before any declaration is consulted.
 const VOID_TOKEN: &str = "void";
 
-/// The token a generic argument expression contributes to a mangled name.
+/// The token a generic argument contributes to a mangled name.
 ///
 /// A type argument spells its type. A value generic — the `3` in `Array<T, 3>`
 /// — spells the constant itself, so two sizes of the same element type get two
-/// symbols instead of sharing one body between them. A size that is still an
-/// unfolded expression names no single instantiation and is open.
-fn expression_mangle_token<'a>(arg: &'a Expression) -> Cow<'a, str> {
-    expression_token(arg, 0)
+/// symbols instead of sharing one body between them. A size that is still
+/// unfolded names no single instantiation and is open.
+fn argument_mangle_token(arg: &TypeArgument) -> Cow<'_, str> {
+    argument_token(arg, 0)
 }
 
-/// [`expression_mangle_token`] one level into a type, carrying how far the
+/// [`argument_mangle_token`] one level into a type, carrying how far the
 /// descent has already gone.
-fn expression_token<'a>(arg: &'a Expression, depth: usize) -> Cow<'a, str> {
+fn argument_token(arg: &TypeArgument, depth: usize) -> Cow<'_, str> {
     if depth >= MAX_TOKEN_DEPTH {
         return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
     }
     match &arg.node {
-        ExpressionKind::Type(ty, _) => type_kind_token(&ty.kind, depth),
-        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(value)) => {
-            Cow::Owned(value.to_string())
+        TypeArgKind::Type(ty, _) => type_kind_token(&ty.kind, depth),
+        TypeArgKind::Value(ValueArg::Int(value)) => Cow::Owned(value.to_string()),
+        TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..)) => {
+            Cow::Borrowed(OPEN_PARAMETER_TOKEN)
         }
+    }
+}
+
+/// The token a closure type's parameter or return contributes: the type it
+/// is written as, open when it is not written as one.
+fn expression_token(expr: &Expression, depth: usize) -> Cow<'_, str> {
+    if depth >= MAX_TOKEN_DEPTH {
+        return Cow::Borrowed(UNSPELLABLE_TYPE_TOKEN);
+    }
+    match &expr.node {
+        ExpressionKind::Type(ty, _) => type_kind_token(&ty.kind, depth),
         _ => Cow::Borrowed(OPEN_PARAMETER_TOKEN),
     }
 }
@@ -361,15 +374,14 @@ pub(crate) fn kind_has_a_mangled_token(kind: &TypeKind) -> bool {
 }
 
 /// Whether the symbol mangler has a token for the generic argument `arg`. See
-/// [`expression_mangle_token`].
-pub(crate) fn argument_has_a_mangled_token(arg: &Expression) -> bool {
-    !is_nameless(&expression_mangle_token(arg))
+/// [`argument_mangle_token`].
+pub(crate) fn argument_has_a_mangled_token(arg: &TypeArgument) -> bool {
+    !is_nameless(&argument_mangle_token(arg))
 }
 
 #[cfg(test)]
 mod mangled_token_tests {
     use super::*;
-    use crate::ast::literal::{IntegerLiteral, Literal};
     use crate::ast::IdNode;
     use crate::ast::Type;
     use crate::error::syntax::Span;
@@ -382,19 +394,15 @@ mod mangled_token_tests {
         Type::new(kind, span())
     }
 
-    fn type_arg(kind: TypeKind) -> Expression {
-        IdNode::new(0, ExpressionKind::Type(Box::new(ty(kind)), false), span())
+    fn type_arg(kind: TypeKind) -> TypeArgument {
+        IdNode::new(0, TypeArgKind::Type(Box::new(ty(kind)), false), span())
     }
 
-    fn size_arg(value: i64) -> Expression {
-        IdNode::new(
-            0,
-            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I64(value))),
-            span(),
-        )
+    fn size_arg(value: i128) -> TypeArgument {
+        IdNode::new(0, TypeArgKind::Value(ValueArg::Int(value)), span())
     }
 
-    fn class_ref(name: &str, args: Vec<Expression>) -> TypeKind {
+    fn class_ref(name: &str, args: Vec<TypeArgument>) -> TypeKind {
         TypeKind::Custom(name.to_string(), Some(args))
     }
 
@@ -452,7 +460,7 @@ mod mangled_token_tests {
             .map(|(index, kind)| crate::ast::common::Parameter {
                 name: format!("p{index}"),
                 name_span: span(),
-                typ: Box::new(type_arg(kind)),
+                typ: Box::new(crate::ast::factory::type_expr_non_null(ty(kind))),
                 guard: None,
                 default_value: None,
                 is_out: false,
@@ -462,7 +470,8 @@ mod mangled_token_tests {
         TypeKind::Function(Box::new(FunctionTypeData {
             generics: None,
             params,
-            return_type: ret.map(|kind| Box::new(type_arg(kind))),
+            return_type: ret
+                .map(|kind| Box::new(crate::ast::factory::type_expr_non_null(ty(kind)))),
         }))
     }
 
@@ -658,18 +667,13 @@ mod mangled_token_tests {
         assert_eq!(token(named("void")), "4xvoid");
     }
 
-    /// A value argument past `i128` spells the value written, not the one it
-    /// wraps to.
+    /// A value argument spells the whole value it holds, to the last digit
+    /// of the widest one.
     #[test]
-    fn a_value_past_i128_spells_the_value_written() {
-        let big = IdNode::new(
-            0,
-            ExpressionKind::Literal(Literal::Integer(IntegerLiteral::U128(1 << 127))),
-            span(),
-        );
+    fn a_value_spells_the_whole_value_it_holds() {
         assert_eq!(
-            expression_mangle_token(&big),
-            "170141183460469231731687303715884105728"
+            argument_mangle_token(&size_arg(i128::MAX)),
+            "170141183460469231731687303715884105727"
         );
     }
 
@@ -715,7 +719,11 @@ mod mangled_token_tests {
     /// the receiver holding it gets no per-instantiation body.
     #[test]
     fn an_unfolded_size_has_no_token() {
-        let unfolded = IdNode::new(0, ExpressionKind::Identifier("N".to_string(), None), span());
+        let unfolded = IdNode::new(
+            0,
+            TypeArgKind::Value(ValueArg::Name("N".to_string())),
+            span(),
+        );
         assert!(!argument_has_a_mangled_token(&unfolded));
         assert!(!crate::mir::lowering::can_be_monomorphized_at(&class_ref(
             "Array",

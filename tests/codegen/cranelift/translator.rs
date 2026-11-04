@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{BuiltinCollectionKind, TypeKind};
 use miri::codegen::cranelift::translator::ElementShape;
 use miri::codegen::cranelift::FunctionTranslator;
 
-use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::Type;
 use miri::error::syntax::Span;
 
@@ -13,10 +13,10 @@ fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }
 
-fn expr_ty(kind: TypeKind) -> Expression {
-    Expression {
+fn expr_ty(kind: TypeKind) -> TypeArgument {
+    TypeArgument {
         id: 0,
-        node: ExpressionKind::Type(Box::new(ty(kind)), false),
+        node: TypeArgKind::Type(Box::new(ty(kind)), false),
         span: Span::default(),
     }
 }

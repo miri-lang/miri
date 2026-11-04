@@ -35,6 +35,8 @@ use super::type_mismatch::{MismatchExtras, TypeSides};
 use super::used_methods::held_value;
 use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
@@ -434,7 +436,7 @@ fn settle_requirements(requirements: &mut InstantiationRequirements, sites: &[&P
 
 /// The kind of a container spelled with its own type syntax (`[T]`, `{K: V}`,
 /// `{T}`), with its element — a map's key — as written.
-fn canonical_container_element(kind: &TypeKind) -> Option<(BuiltinCollectionKind, &Expression)> {
+fn canonical_container_element(kind: &TypeKind) -> Option<(BuiltinCollectionKind, &TypeArgument)> {
     if let TypeKind::List(element) = kind {
         return Some((BuiltinCollectionKind::List, element));
     }
@@ -451,11 +453,8 @@ fn canonical_container_element(kind: &TypeKind) -> Option<(BuiltinCollectionKind
 }
 
 /// The type a written type argument names, or `None` for a value argument.
-pub(super) fn written_type(argument: &Expression) -> Option<Type> {
-    let ExpressionKind::Type(ty, _) = &argument.node else {
-        return None;
-    };
-    Some((**ty).clone())
+pub(super) fn written_type(argument: &TypeArgument) -> Option<Type> {
+    crate::ast::type_arguments::argument_type(argument).cloned()
 }
 
 /// The generic-parameter name `ty` spells, when that name is in scope as a
@@ -535,7 +534,7 @@ pub(crate) fn spells_where(kind: &TypeKind, visit: &dyn Fn(&TypeKind) -> Visit) 
     }
     let spells = |kind: &TypeKind| spells_where(kind, visit);
     let spelled_by =
-        |expr: &Expression| matches!(&expr.node, ExpressionKind::Type(ty, _) if spells(&ty.kind));
+        |expr: &TypeArgument| matches!(&expr.node, TypeArgKind::Type(ty, _) if spells(&ty.kind));
     match kind {
         TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
             spelled_by(element)
@@ -551,8 +550,9 @@ pub(crate) fn spells_where(kind: &TypeKind, visit: &dyn Fn(&TypeKind) -> Visit) 
         }
         TypeKind::Generic(_, Some(bound), _) => spells(&bound.kind),
         TypeKind::Function(signature) => {
-            signature.params.iter().any(|param| spelled_by(&param.typ))
-                || signature.return_type.as_deref().is_some_and(spelled_by)
+            let written_by = |expr: &Expression| matches!(&expr.node, ExpressionKind::Type(ty, _) if spells(&ty.kind));
+            signature.params.iter().any(|param| written_by(&param.typ))
+                || signature.return_type.as_deref().is_some_and(written_by)
         }
         TypeKind::Custom(_, None)
         | TypeKind::Generic(_, None, _)
@@ -1519,7 +1519,7 @@ impl TypeChecker {
     pub(crate) fn supertype_arguments(
         &self,
         sub: &str,
-        sub_arguments: Option<&[Expression]>,
+        sub_arguments: Option<&[TypeArgument]>,
         sup: &str,
     ) -> Option<Vec<Option<Type>>> {
         let substitution: HashMap<String, Type> = self
@@ -1527,7 +1527,7 @@ impl TypeChecker {
             .iter()
             .zip(sub_arguments.unwrap_or_default())
             .filter_map(|(generic, argument)| {
-                let ty = self.extract_type_from_expression(argument).ok()?;
+                let ty = self.extract_type_from_argument(argument).ok()?;
                 Some((generic.name.clone(), ty))
             })
             .collect();

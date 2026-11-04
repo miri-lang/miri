@@ -48,6 +48,8 @@
 use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
 use crate::ast::pattern::{MatchBranch, Pattern};
 use crate::ast::statement::VariableDeclaration;
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::{Statement, StatementKind};
 use crate::type_checker::context::{
@@ -205,7 +207,7 @@ fn is_parameter_derived(
     }
     aggregate_elements(kind, definitions).is_some_and(|elements| {
         elements.iter().any(|element| {
-            let ExpressionKind::Type(ty, _) = &element.node else {
+            let TypeArgKind::Type(ty, _) = &element.node else {
                 return false;
             };
             holds(&ty.kind)
@@ -218,7 +220,7 @@ fn is_parameter_derived(
 fn aggregate_elements<'k>(
     kind: &'k TypeKind,
     definitions: &HashMap<String, TypeDefinition>,
-) -> Option<&'k [Expression]> {
+) -> Option<&'k [TypeArgument]> {
     if let TypeKind::Tuple(elements) = kind {
         return Some(elements);
     }
@@ -458,7 +460,7 @@ impl SettlementAudit<'_> {
     }
 
     fn mentions_parameter(&self, ty: &Type) -> bool {
-        let in_expr = |e: &Expression| matches!(&e.node, ExpressionKind::Type(inner, _) if self.mentions_parameter(inner));
+        let in_expr = |e: &TypeArgument| matches!(&e.node, TypeArgKind::Type(inner, _) if self.mentions_parameter(inner));
         match &ty.kind {
             TypeKind::Custom(_, None) | TypeKind::Generic(..) => {
                 is_generic_parameter_kind(&ty.kind, self.class_generics)
@@ -472,8 +474,9 @@ impl SettlementAudit<'_> {
                 self.mentions_parameter(inner)
             }
             TypeKind::Function(function) => {
-                function.params.iter().any(|param| in_expr(&param.typ))
-                    || function.return_type.as_deref().is_some_and(in_expr)
+                let in_written = |e: &Expression| matches!(&e.node, ExpressionKind::Type(inner, _) if self.mentions_parameter(inner));
+                function.params.iter().any(|param| in_written(&param.typ))
+                    || function.return_type.as_deref().is_some_and(in_written)
             }
             TypeKind::Int
             | TypeKind::I8

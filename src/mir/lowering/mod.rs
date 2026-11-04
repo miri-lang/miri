@@ -43,7 +43,10 @@ mod written_parameters;
 mod written_receiver;
 
 use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::node::IdNode;
 use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::type_arguments::TypeArgKind;
+use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -65,7 +68,10 @@ pub(crate) use crate::mir::instantiation::{
 pub use compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 pub use context::LoweringContext;
 pub use expression::lower_expression;
-pub use helpers::{bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_type};
+pub use helpers::{
+    bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_argument_type,
+    resolve_type,
+};
 pub use statement::lower_statement;
 use written_parameters::copy_written_parameters;
 
@@ -333,14 +339,14 @@ pub(crate) fn substitute_self_type(ty: &Type, self_type: &Type) -> Type {
 /// argument's expression id and span so the MIR type cache keeps resolving it.
 /// Arguments that do not wrap a type (a value generic's size literal) pass
 /// through untouched.
-fn substitute_self_in_type_args(args: &[Expression], self_type: &Type) -> Vec<Expression> {
+fn substitute_self_in_type_args(args: &[TypeArgument], self_type: &Type) -> Vec<TypeArgument> {
     args.iter()
         .map(|arg| {
-            let ExpressionKind::Type(inner, is_nullable) = &arg.node else {
+            let TypeArgKind::Type(inner, is_nullable) = &arg.node else {
                 return arg.clone();
             };
             let mut substituted = arg.clone();
-            substituted.node = ExpressionKind::Type(
+            substituted.node = TypeArgKind::Type(
                 Box::new(substitute_self_type(inner, self_type)),
                 *is_nullable,
             );
@@ -387,7 +393,7 @@ pub(crate) fn build_class_generic_substitution(
         return subs;
     };
     for (generic, arg) in def_generics.iter().zip(args) {
-        if let Ok(concrete) = tc.extract_type_from_expression(arg) {
+        if let Ok(concrete) = tc.extract_type_from_argument(arg) {
             subs.insert(generic.name.clone(), concrete);
         }
     }
@@ -811,17 +817,12 @@ pub fn monomorphized_self_type(
     }
     let args = generics
         .iter()
-        .map(|g| match subs.get(&g.name) {
-            Some(ty) => Expression {
-                id: 0,
-                span,
-                node: ExpressionKind::Type(Box::new(ty.clone()), false),
-            },
-            None => Expression {
-                id: 0,
-                span,
-                node: ExpressionKind::Identifier(g.name.clone(), None),
-            },
+        .map(|g| {
+            let ty = match subs.get(&g.name) {
+                Some(ty) => ty.clone(),
+                None => Type::new(TypeKind::Custom(g.name.clone(), None), span),
+            };
+            IdNode::new(0, TypeArgKind::Type(Box::new(ty), false), span)
         })
         .collect();
     Type::new(TypeKind::Custom(class_name.to_string(), Some(args)), span)
@@ -841,19 +842,9 @@ fn held_tuple_type(
     };
     let element = subs.get(&element.name)?;
     let length = crate::type_checker::generics::extract_value_generic(subs.get(&length.name)?)?;
-    let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(length)) = &length.node
-    else {
-        return None;
-    };
-    let element = Expression {
-        id: 0,
-        span,
-        node: ExpressionKind::Type(Box::new(element.clone()), false),
-    };
-    Some(Type::new(
-        TypeKind::Tuple(vec![element; length.to_usize()]),
-        span,
-    ))
+    let length = usize::try_from(crate::ast::type_arguments::argument_value(length)?).ok()?;
+    let element = IdNode::new(0, TypeArgKind::Type(Box::new(element.clone()), false), span);
+    Some(Type::new(TypeKind::Tuple(vec![element; length]), span))
 }
 
 fn lower_class_method_impl(
@@ -1120,21 +1111,38 @@ fn substitution_parameters(
 /// table does not define (`T` in `List<T>` before normalization), inside every
 /// type that can carry one — an optional, a collection, a tuple, a result, a
 /// future, a function's parameters and return.
+/// The type argument a closure type's parameter or return written as a type
+/// stands for.
+fn written_type_argument(expr: &Expression) -> Option<TypeArgument> {
+    let ExpressionKind::Type(ty, nullable) = &expr.node else {
+        return None;
+    };
+    Some(IdNode::new(
+        expr.id,
+        TypeArgKind::Type(ty.clone(), *nullable),
+        expr.span,
+    ))
+}
+
 fn collect_generic_names_from_type(
     ty: &Type,
     definitions: &HashMap<String, crate::type_checker::context::TypeDefinition>,
     params: &mut std::collections::HashSet<String>,
 ) {
     // A value argument (`3`, `Size + 1`) names no type parameter a body holds
-    // a value of, so only a type and a bare name are read.
-    let mut collect_argument = |arg: &Expression| {
-        if let ExpressionKind::Type(inner, _) = &arg.node {
-            collect_generic_names_from_type(inner, definitions, params);
-        } else if let ExpressionKind::Identifier(name, None) = &arg.node {
+    // a value of, so only a type is read. A bare name no definition owns is a
+    // parameter still awaiting its argument.
+    let mut collect_argument = |arg: &TypeArgument| {
+        let TypeArgKind::Type(inner, _) = &arg.node else {
+            return;
+        };
+        if let TypeKind::Custom(name, None) = &inner.kind {
             if !definitions.contains_key(name) {
                 params.insert(name.clone());
             }
+            return;
         }
+        collect_generic_names_from_type(inner, definitions, params);
     };
     match &ty.kind {
         TypeKind::Generic(name, _, _) => {
@@ -1161,9 +1169,14 @@ fn collect_generic_names_from_type(
             function
                 .params
                 .iter()
-                .for_each(|param| collect_argument(&param.typ));
-            if let Some(return_type) = &function.return_type {
-                collect_argument(return_type);
+                .filter_map(|param| written_type_argument(&param.typ))
+                .for_each(|arg| collect_argument(&arg));
+            if let Some(arg) = function
+                .return_type
+                .as_deref()
+                .and_then(written_type_argument)
+            {
+                collect_argument(&arg);
             }
         }
         // A named type without arguments and every type built from nothing
@@ -1596,7 +1609,7 @@ mod class_generic_substitution_tests {
     fn instantiation(tc: &TypeChecker, class: &str, args: Vec<Type>) -> Type {
         let arg_exprs = args
             .into_iter()
-            .map(|ty| tc.create_type_expression(ty))
+            .map(|ty| tc.create_type_argument(ty))
             .collect();
         Type::new(
             TypeKind::Custom(class.to_string(), Some(arg_exprs)),
@@ -1682,20 +1695,22 @@ mod class_generic_substitution_tests {
 
     #[test]
     fn rebuilt_type_params_keep_unsubstituted_names() {
-        // A value-generic (size) slot is not a type expression, so it stays
-        // unmapped and its name survives the rebuild.
+        // A value-generic (size) slot not yet folded is not a type, so it
+        // stays unmapped and its name survives the rebuild.
         let tc = TypeChecker::new();
         let defs = [generic("T"), generic("Size")];
         let size_expr = IdNode::new(
             0,
-            ExpressionKind::Literal(crate::ast::literal::Literal::None),
+            crate::ast::type_arguments::TypeArgKind::Value(
+                crate::ast::type_arguments::ValueArg::Name("Size".to_string()),
+            ),
             Span::new(0, 0),
         );
         let ty = Type::new(
             TypeKind::Custom(
                 "Buffer".to_string(),
                 Some(vec![
-                    tc.create_type_expression(Type::new(TypeKind::Float, Span::new(0, 0))),
+                    tc.create_type_argument(Type::new(TypeKind::Float, Span::new(0, 0))),
                     size_expr,
                 ]),
             ),
