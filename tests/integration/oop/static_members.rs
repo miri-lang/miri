@@ -331,6 +331,53 @@ fn main()
     );
 }
 
+/// A static method has one body whatever the class is instantiated at, so a
+/// call through an instantiated class is refused where it is written, with
+/// the spelling that calls it.
+#[test]
+fn test_static_call_through_an_instantiated_class_is_refused() {
+    let source = r#"
+use system.io
+
+class Box<T>
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+    public static fn seven() int
+        return 7
+
+fn main()
+    println(f"{Box<int>.seven()}")
+    "#;
+    assert_compiler_error(source, "MER_TYP_055");
+    assert_compiler_error(source, "Box.seven()");
+}
+
+/// The same static method called through the bare class runs.
+#[test]
+fn test_static_call_through_a_generic_class_runs() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Box<T>
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+    public static fn seven() int
+        return 7
+
+fn main()
+    println(f"{Box.seven()}")
+    "#,
+        "7",
+    );
+}
+
 #[test]
 fn test_duplicate_instance_and_static_method_names_is_error() {
     assert_compiler_error(

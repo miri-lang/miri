@@ -2189,6 +2189,22 @@ impl TypeChecker {
         }
     }
 
+    /// Refuses the static method `method` of the class `class` called through
+    /// an instantiation of the class (`Box<int>.seven()`): a static method has
+    /// one body whatever the class is instantiated at, so the type arguments
+    /// select nothing.
+    fn report_static_call_through_instantiation(&mut self, class: &str, method: &str, span: Span) {
+        self.report_error_with_help(
+            DiagnosticCode::TypStaticMethodRestriction,
+            format!(
+                "Static method '{method}' is called through an instantiation of '{class}', \
+                 but a static method has one body whatever the class is instantiated at"
+            ),
+            span,
+            format!("call it through the class itself: `{class}.{method}()`"),
+        );
+    }
+
     fn infer_member_meta(
         &mut self,
         inner_type: &Type,
@@ -2281,6 +2297,12 @@ impl TypeChecker {
                 self.find_static_method_in_chain_with_resolver(name, prop_name, &resolver)
             {
                 if method_info.is_static {
+                    if let TypeKind::Custom(_, Some(args)) = &inner_type.kind {
+                        if !args.is_empty() {
+                            self.report_static_call_through_instantiation(name, prop_name, span);
+                            return make_type(TypeKind::Error);
+                        }
+                    }
                     // Check visibility
                     if !self.check_member_visibility(
                         &method_info.visibility,
