@@ -275,6 +275,69 @@ fn main()
     assert_build_error(source, "does not fit in a 128-bit integer");
 }
 
+/// An integer value argument written in a type annotation names the
+/// instantiation a constructor call of the same arguments builds.
+#[test]
+fn test_an_integer_value_argument_in_a_type_annotation_names_the_constructed_instantiation() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let a Buf<String, 2> = Buf<String, 2>("a" + "b")
+    println(a.v)
+"#,
+        "ab",
+    );
+}
+
+/// An annotation naming a different value argument than the value it is
+/// given is a mismatch, not a coercion.
+#[test]
+fn test_a_value_argument_in_a_type_annotation_must_match_the_value_given() {
+    assert_build_error(
+        r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let b Buf<String, 3> = Buf<String, 2>("a" + "b")
+    println(b.v)
+"#,
+        "MER_TYP_002",
+    );
+}
+
+/// The same out-of-range value written in a type position reaches the type
+/// checker and is refused with the same code and reason, not with the
+/// parser's account of what a type argument may be.
+#[test]
+fn test_a_value_argument_past_the_signed_range_in_a_type_position_is_refused_as_out_of_range() {
+    let source = r#"
+use system.io
+
+class Buf<T, Size>
+    v T
+    fn init(v T)
+        self.v = v
+
+fn main()
+    let b Buf<String, 170141183460469231731687303715884105728> = Buf<String, 2>("a" + "b")
+    println(b.v)
+"#;
+    assert_build_error(source, "MER_TYP_068");
+    assert_build_error(source, "does not fit in a 128-bit integer");
+}
+
 /// A value argument that folds below zero at its instantiation is refused
 /// like one that reaches zero.
 #[test]

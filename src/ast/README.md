@@ -28,7 +28,9 @@ with the nullable mark it was written with, or a value generic's value (the
 `4` of `Array<int, 4>`). A value is an integer, a name — a constant's, or a
 value parameter's in a generic body — or arithmetic over them; no other
 expression can stand where a type argument is written, and the parser refuses
-one there. Substitution and the type checker's folding leave only integers for
+one there. An integer past the signed 128-bit range is kept as written
+(`ValueArg::OutOfRange`) so the type checker refuses it where it is written,
+as it does an oversized literal in an expression. Substitution and the type checker's folding leave only integers for
 the stages past it. `argument_type` gives the type an argument names, or
 nothing when it names a value, `argument_value` the integer a folded value
 holds, and `unresolved_type_argument` finds a value written where a type is

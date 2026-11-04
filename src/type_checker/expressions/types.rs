@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::type_arguments::{written_argument, TypeArgKind, ValueArg};
+use crate::ast::type_arguments::{rewritten, written_argument, TypeArgKind, ValueArg};
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -470,11 +470,7 @@ impl TypeChecker {
                         Ok(written) => self.value_argument(name, &written, context),
                         Err(refused) => {
                             let text = crate::ast::formatter::expression_text(&refused);
-                            if is_integer_literal(&refused) {
-                                self.report_value_argument_out_of_range(name, &text, refused.span);
-                            } else {
-                                self.report_non_constant_value_argument(name, &text, refused.span);
-                            }
+                            self.report_non_constant_value_argument(name, &text, refused.span);
                             self.create_type_argument(Self::error_type())
                         }
                     }
@@ -495,14 +491,28 @@ impl TypeChecker {
         }
     }
 
-    /// The value argument `arg` of `class` with every named constant replaced
-    /// by its value, reporting an operand that is not a compile-time constant.
-    fn value_argument(
+    /// The value argument `arg` of `class`, folded to its integer when it
+    /// has one and otherwise with every named constant replaced by its value.
+    /// An integer written past the signed 128-bit range, a value that is not
+    /// positive and an operand that is not a compile-time constant are
+    /// reported where `arg` is written.
+    pub(crate) fn value_argument(
         &mut self,
         class: &str,
         arg: &TypeArgument,
         context: &Context,
     ) -> TypeArgument {
+        if let Some(written) = crate::ast::type_arguments::out_of_range_value(arg) {
+            self.report_value_argument_out_of_range(class, &written.to_string(), arg.span);
+            return self.create_type_argument(Self::error_type());
+        }
+        if let Some(value) = Self::try_eval_const_argument(arg, Some(context)) {
+            let folded = rewritten(arg, TypeArgKind::Value(ValueArg::Int(value)));
+            if value <= 0 {
+                self.report_non_positive_value_argument(class, &folded, value);
+            }
+            return folded;
+        }
         let inlined = crate::type_checker::generics::inline_value_constants(arg, context);
         if let Some(operand) =
             crate::type_checker::generics::non_constant_value_operand(&inlined, context)
@@ -568,16 +578,4 @@ pub(crate) fn yielded_expression(stmt: &Statement) -> Option<&Expression> {
         | StatementKind::RuntimeFunctionDeclaration(..)
         | StatementKind::IntrinsicFunctionDeclaration(..) => None,
     }
-}
-
-/// Whether `expr` is an integer literal, negated or not: written as a value
-/// argument and still refused, it is one that does not fit in 128 bits.
-fn is_integer_literal(expr: &Expression) -> bool {
-    if let ExpressionKind::Unary(crate::ast::operator::UnaryOp::Negate, inner) = &expr.node {
-        return is_integer_literal(inner);
-    }
-    matches!(
-        &expr.node,
-        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
-    )
 }

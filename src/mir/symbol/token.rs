@@ -349,9 +349,9 @@ fn argument_token(arg: &TypeArgument, depth: usize) -> Cow<'_, str> {
     match &arg.node {
         TypeArgKind::Type(ty, _) => type_kind_token(&ty.kind, depth),
         TypeArgKind::Value(ValueArg::Int(value)) => Cow::Owned(value.to_string()),
-        TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..)) => {
-            Cow::Borrowed(OPEN_PARAMETER_TOKEN)
-        }
+        TypeArgKind::Value(
+            ValueArg::Name(_) | ValueArg::Binary(..) | ValueArg::OutOfRange { .. },
+        ) => Cow::Borrowed(OPEN_PARAMETER_TOKEN),
     }
 }
 

@@ -21,7 +21,7 @@ use std::fmt;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::factory::{self, next_id};
-use crate::ast::literal::Literal;
+use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::node::IdNode;
 use crate::ast::operator::{BinaryOp, UnaryOp};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
@@ -51,6 +51,13 @@ pub enum ValueArg {
     /// argument is written in.
     Name(String),
     Binary(ArithOp, Box<ValueArg>, Box<ValueArg>),
+    /// An integer written past the signed 128-bit range, kept as its sign and
+    /// magnitude so the type checker refuses it where it is written. It has
+    /// no value, so no stage past the type checker holds one.
+    OutOfRange {
+        negative: bool,
+        magnitude: u128,
+    },
 }
 
 /// The arithmetic a value argument may be written with.
@@ -128,6 +135,7 @@ impl ValueArg {
     pub fn fold(&self, name: &mut impl FnMut(&str) -> Option<i128>) -> Option<i128> {
         match self {
             ValueArg::Int(value) => Some(*value),
+            ValueArg::OutOfRange { .. } => None,
             ValueArg::Name(n) => name(n),
             ValueArg::Binary(op, l, r) => {
                 let l = l.fold(name)?;
@@ -140,7 +148,7 @@ impl ValueArg {
     /// The value with each name `name` maps replaced by what it maps it to.
     pub fn substituted(&self, name: &impl Fn(&str) -> Option<ValueArg>) -> ValueArg {
         match self {
-            ValueArg::Int(_) => self.clone(),
+            ValueArg::Int(_) | ValueArg::OutOfRange { .. } => self.clone(),
             ValueArg::Name(n) => name(n).unwrap_or_else(|| self.clone()),
             ValueArg::Binary(op, l, r) => ValueArg::Binary(
                 *op,
@@ -162,6 +170,20 @@ impl ValueArg {
                 span,
             ),
             ValueArg::Int(value) => factory::int_literal_expression(*value),
+            ValueArg::OutOfRange {
+                negative,
+                magnitude,
+            } => {
+                let literal = factory::literal_with_span(
+                    Literal::Integer(IntegerLiteral::U128(*magnitude)),
+                    span,
+                );
+                if *negative {
+                    factory::unary_with_span(UnaryOp::Negate, literal, span)
+                } else {
+                    literal
+                }
+            }
             ValueArg::Name(name) => factory::identifier_with_span(name, span),
             ValueArg::Binary(op, l, r) => {
                 factory::binary_with_span(l.expression(span), op.binary(), r.expression(span), span)
@@ -174,11 +196,19 @@ impl fmt::Display for ValueArg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ValueArg::Int(value) => write!(f, "{value}"),
+            ValueArg::OutOfRange {
+                negative,
+                magnitude,
+            } => {
+                write!(f, "{}{magnitude}", if *negative { "-" } else { "" })
+            }
             ValueArg::Name(name) => f.write_str(name),
             ValueArg::Binary(op, l, r) => {
                 let operand = |f: &mut fmt::Formatter<'_>, v: &ValueArg| match v {
                     ValueArg::Binary(..) => write!(f, "({v})"),
-                    ValueArg::Int(_) | ValueArg::Name(_) => write!(f, "{v}"),
+                    ValueArg::Int(_) | ValueArg::Name(_) | ValueArg::OutOfRange { .. } => {
+                        write!(f, "{v}")
+                    }
                 };
                 operand(f, l)?;
                 write!(f, " {} ", op.symbol())?;
@@ -228,9 +258,26 @@ pub fn argument_type_at(arguments: &TypeArguments, position: usize) -> Option<&T
 pub fn argument_value(argument: &TypeArgument) -> Option<i128> {
     match &argument.node {
         TypeArgKind::Value(ValueArg::Int(value)) => Some(*value),
-        TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..)) | TypeArgKind::Type(..) => {
-            None
+        TypeArgKind::Value(
+            ValueArg::Name(_) | ValueArg::Binary(..) | ValueArg::OutOfRange { .. },
+        )
+        | TypeArgKind::Type(..) => None,
+    }
+}
+
+/// The integer `argument` writes past the signed 128-bit range, as written,
+/// when it writes one anywhere in its arithmetic.
+pub fn out_of_range_value(argument: &TypeArgument) -> Option<&ValueArg> {
+    fn find(value: &ValueArg) -> Option<&ValueArg> {
+        match value {
+            ValueArg::OutOfRange { .. } => Some(value),
+            ValueArg::Binary(_, left, right) => find(left).or_else(|| find(right)),
+            ValueArg::Int(_) | ValueArg::Name(_) => None,
         }
+    }
+    match &argument.node {
+        TypeArgKind::Value(value) => find(value),
+        TypeArgKind::Type(..) => None,
     }
 }
 
@@ -359,11 +406,13 @@ pub fn written_argument(expr: Expression) -> Result<TypeArgument, Expression> {
 /// `i128::MIN` be written.
 fn written_value(expr: &Expression) -> Option<ValueArg> {
     match &expr.node {
-        // TODO: an integer past the 128-bit range is refused with the parser's
-        // generic "a type, or an integer, ..." message, which names what may be
-        // written rather than why this integer may not; it should say the value
-        // does not fit, as the instantiation-time refusal of a folded one does.
-        ExpressionKind::Literal(Literal::Integer(value)) => value.as_i128().map(ValueArg::Int),
+        ExpressionKind::Literal(Literal::Integer(value)) => Some(match value.above_i128() {
+            Some(magnitude) => ValueArg::OutOfRange {
+                negative: false,
+                magnitude,
+            },
+            None => ValueArg::Int(value.to_i128()),
+        }),
         ExpressionKind::Identifier(name, None) => Some(ValueArg::Name(name.clone())),
         ExpressionKind::Type(ty, false) => match &ty.kind {
             TypeKind::Custom(name, None) if !name.contains("::") => {
@@ -372,7 +421,13 @@ fn written_value(expr: &Expression) -> Option<ValueArg> {
             _ => None,
         },
         ExpressionKind::Unary(UnaryOp::Negate, inner) => match &inner.node {
-            ExpressionKind::Literal(Literal::Integer(value)) => value.negated().map(ValueArg::Int),
+            ExpressionKind::Literal(Literal::Integer(value)) => Some(match value.negated() {
+                Some(negated) => ValueArg::Int(negated),
+                None => ValueArg::OutOfRange {
+                    negative: true,
+                    magnitude: value.above_i128().unwrap_or_default(),
+                },
+            }),
             _ => Some(ValueArg::Binary(
                 ArithOp::Sub,
                 Box::new(ValueArg::Int(0)),

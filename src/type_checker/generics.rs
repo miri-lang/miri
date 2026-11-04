@@ -144,9 +144,10 @@ pub(crate) fn extract_value_generic_kind(kind: &TypeKind) -> Option<&TypeArgumen
 pub(crate) fn value_generic_slot(arg: &TypeArgument) -> Option<Type> {
     match &arg.node {
         TypeArgKind::Value(ValueArg::Int(_)) => Some(value_generic_marker_type(arg.clone())),
-        TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..)) | TypeArgKind::Type(..) => {
-            None
-        }
+        TypeArgKind::Value(
+            ValueArg::Name(_) | ValueArg::Binary(..) | ValueArg::OutOfRange { .. },
+        )
+        | TypeArgKind::Type(..) => None,
     }
 }
 
@@ -248,7 +249,7 @@ fn value_operands(
     open: &HashSet<String>,
 ) -> ValueOperands {
     match value {
-        ValueArg::Int(_) => ValueOperands::Bound,
+        ValueArg::Int(_) | ValueArg::OutOfRange { .. } => ValueOperands::Bound,
         ValueArg::Name(name) if bound_argument(name, mapping).is_some() => ValueOperands::Bound,
         ValueArg::Name(name) if open.contains(name) => ValueOperands::Open,
         ValueArg::Name(_) => ValueOperands::Foreign,
@@ -293,7 +294,7 @@ pub(crate) fn bound_value_names<'e>(
 /// The names `value` is written with, in order.
 fn collect_value_names<'e>(value: &'e ValueArg, names: &mut Vec<&'e str>) {
     match value {
-        ValueArg::Int(_) => {}
+        ValueArg::Int(_) | ValueArg::OutOfRange { .. } => {}
         ValueArg::Name(name) => names.push(name),
         ValueArg::Binary(_, left, right) => {
             collect_value_names(left, names);
@@ -432,7 +433,9 @@ fn written_name(arg: &TypeArgument) -> Option<&str> {
             TypeKind::Custom(name, None) => Some(name),
             _ => None,
         },
-        TypeArgKind::Value(ValueArg::Int(_) | ValueArg::Binary(..))
+        TypeArgKind::Value(
+            ValueArg::Int(_) | ValueArg::Binary(..) | ValueArg::OutOfRange { .. },
+        )
         | TypeArgKind::Type(_, true) => None,
     }
 }

@@ -510,7 +510,7 @@ impl References {
 
     fn value(&mut self, value: &ValueArg) {
         match value {
-            ValueArg::Int(_) => {}
+            ValueArg::Int(_) | ValueArg::OutOfRange { .. } => {}
             ValueArg::Name(name) => self.record(name),
             ValueArg::Binary(_, left, right) => {
                 self.value(left);

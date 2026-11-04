@@ -463,6 +463,53 @@ fn a_negated_value_argument_is_the_negative_integer() {
 }
 
 #[test]
+fn a_value_argument_past_the_signed_range_is_kept_for_the_type_checker_to_refuse() {
+    use miri::ast::type_arguments::ValueArg;
+    let magnitude = i128::MAX as u128 + 1;
+    type_statement_test(
+        "Buf<int, 170141183460469231731687303715884105728>",
+        type_expr_non_null(type_custom(
+            "Buf",
+            Some(vec![
+                type_argument(type_int()),
+                value(ValueArg::OutOfRange {
+                    negative: false,
+                    magnitude,
+                }),
+            ]),
+        )),
+    );
+    type_statement_test(
+        "Buf<int, -170141183460469231731687303715884105729>",
+        type_expr_non_null(type_custom(
+            "Buf",
+            Some(vec![
+                type_argument(type_int()),
+                value(ValueArg::OutOfRange {
+                    negative: true,
+                    magnitude: magnitude + 1,
+                }),
+            ]),
+        )),
+    );
+}
+
+#[test]
+fn the_most_negative_value_argument_is_an_integer() {
+    use miri::ast::type_arguments::ValueArg;
+    type_statement_test(
+        "Buf<int, -170141183460469231731687303715884105728>",
+        type_expr_non_null(type_custom(
+            "Buf",
+            Some(vec![
+                type_argument(type_int()),
+                value(ValueArg::Int(i128::MIN)),
+            ]),
+        )),
+    );
+}
+
+#[test]
 fn an_argument_that_is_neither_a_type_nor_a_value_is_refused() {
     for written in ["let b Buf<int, \"four\">", "let b Buf<int, true>"] {
         parser_error_test(

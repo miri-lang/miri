@@ -2319,9 +2319,21 @@ impl TypeChecker {
         let resolved_args = args.map(|args_vec| {
             args_vec
                 .iter()
-                .map(|arg| {
-                    let resolved_type = self.resolve_type_argument(arg, context);
-                    self.create_type_argument(resolved_type)
+                .map(|arg| match &arg.node {
+                    // TODO: only an integer is accepted as a value argument
+                    // in a written type. A constant (`Buf<T, K>`, which parses
+                    // as a type) or arithmetic (`Buf<T, 1 + 1>`) folds here,
+                    // but MIR lowering reads the annotation as written, so the
+                    // local is declared at an instantiation nothing builds.
+                    // MIR needs to read the folded type this checker records.
+                    TypeArgKind::Value(ValueArg::Int(_) | ValueArg::OutOfRange { .. }) => {
+                        self.value_argument(name, arg, context)
+                    }
+                    TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Binary(..))
+                    | TypeArgKind::Type(..) => {
+                        let resolved_type = self.resolve_type_argument(arg, context);
+                        self.create_type_argument(resolved_type)
+                    }
                 })
                 .collect()
         });

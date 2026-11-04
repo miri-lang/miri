@@ -42,8 +42,9 @@ fn substitute_in_type_expr(arg: &TypeArgument, subs: &HashMap<String, Type>) -> 
             crate::type_checker::generics::fold_value_generic_arithmetic(arg, subs)
                 .unwrap_or_else(|| arg.clone())
         }
-        // An integer is already concrete.
-        TypeArgKind::Value(ValueArg::Int(_)) => arg.clone(),
+        // An integer is already concrete, and one past the signed range has
+        // nothing to substitute.
+        TypeArgKind::Value(ValueArg::Int(_) | ValueArg::OutOfRange { .. }) => arg.clone(),
     }
 }
 

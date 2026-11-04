@@ -1672,7 +1672,12 @@ impl TypeChecker {
             TypeArgKind::Value(ValueArg::Name(name)) if generic_names.contains(&name.as_str()) => {
                 Some(name.clone())
             }
-            TypeArgKind::Value(ValueArg::Name(_) | ValueArg::Int(_) | ValueArg::Binary(..))
+            TypeArgKind::Value(
+                ValueArg::Name(_)
+                | ValueArg::Int(_)
+                | ValueArg::Binary(..)
+                | ValueArg::OutOfRange { .. },
+            )
             | TypeArgKind::Type(..) => None,
         }
     }

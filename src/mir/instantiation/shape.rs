@@ -314,7 +314,7 @@ pub fn is_partially_bound_instantiation(
 pub fn value_parameter_names(arg: &TypeArgument) -> Vec<String> {
     fn names(value: &ValueArg, found: &mut Vec<String>) {
         match value {
-            ValueArg::Int(_) => {}
+            ValueArg::Int(_) | ValueArg::OutOfRange { .. } => {}
             ValueArg::Name(name) => found.push(name.clone()),
             ValueArg::Binary(_, left, right) => {
                 names(left, found);

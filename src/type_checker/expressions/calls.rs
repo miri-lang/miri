@@ -2329,7 +2329,9 @@ impl TypeChecker {
         for (slot, value) in written.iter().zip(passed.iter()) {
             let named = match &slot.node {
                 TypeArgKind::Value(ValueArg::Name(name)) => Some(name),
-                TypeArgKind::Value(ValueArg::Int(_) | ValueArg::Binary(..))
+                TypeArgKind::Value(
+                    ValueArg::Int(_) | ValueArg::Binary(..) | ValueArg::OutOfRange { .. },
+                )
                 | TypeArgKind::Type(..) => None,
             };
             if let Some(name) = named.filter(|name| marked.contains_key(name.as_str())) {
