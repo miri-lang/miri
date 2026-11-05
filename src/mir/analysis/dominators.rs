@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::mir::analysis::traversal::reverse_postorder;
 use crate::mir::{BasicBlock, Body, TerminatorKind};
 use std::collections::{HashMap, HashSet};
 
@@ -114,56 +115,43 @@ fn compute_predecessors(body: &Body) -> HashMap<BasicBlock, Vec<BasicBlock>> {
     predecessors
 }
 
-/// Compute immediate dominators using the iterative algorithm.
-/// This is a simplified version of the Lengauer-Tarjan algorithm.
+/// Compute immediate dominators with the Cooper-Harvey-Kennedy iterative
+/// algorithm.
+///
+/// Blocks are visited, and compared, by their reverse-postorder number, not
+/// by their index. A pass may append a block (a loop preheader) after blocks
+/// it dominates, so an index says nothing about where a block sits in the
+/// graph, and intersecting on indices would report less dominance than holds.
+/// A block the entry cannot reach has no number, gets no dominator, and is
+/// never counted as a predecessor.
 fn compute_immediate_dominators(
     body: &Body,
     predecessors: &HashMap<BasicBlock, Vec<BasicBlock>>,
 ) -> HashMap<BasicBlock, BasicBlock> {
-    let num_blocks = body.basic_blocks.len();
     let entry_node = BasicBlock(0);
+    let order = reverse_postorder(body);
+    let mut rpo_number = vec![None; body.basic_blocks.len()];
+    for (number, &block) in order.iter().enumerate() {
+        rpo_number[block] = Some(number);
+    }
 
-    // Iterative dominator computation: idom(n) = LCA of predecessors in the dominator tree.
     let mut idoms: HashMap<BasicBlock, BasicBlock> = HashMap::new();
-
     let mut changed = true;
     while changed {
         changed = false;
-
-        for i in 1..num_blocks {
-            // Skip entry block 0
-            let node = BasicBlock(i); // This assumes blocks are 0..N
-            let preds = &predecessors[&node];
-
-            if preds.is_empty() {
-                continue; // Unreachable block
-            }
-
-            // Find first processed predecessor
-            let mut new_idom: Option<BasicBlock> = None;
-            for &pred in preds {
-                if idoms.contains_key(&pred) || pred == entry_node {
-                    new_idom = Some(pred);
-                    break;
-                }
-            }
-
-            if let Some(mut candidate) = new_idom {
-                for &pred in preds {
-                    if pred != candidate && (idoms.contains_key(&pred) || pred == entry_node) {
-                        candidate = intersect(&idoms, candidate, pred);
-                    }
-                }
-
-                if let Some(&current_idom) = idoms.get(&node) {
-                    if current_idom != candidate {
-                        idoms.insert(node, candidate);
-                        changed = true;
-                    }
-                } else {
-                    idoms.insert(node, candidate);
-                    changed = true;
-                }
+        for &block in order.iter().skip(1) {
+            let node = BasicBlock(block);
+            let mut processed = predecessors[&node].iter().copied().filter(|&pred| {
+                rpo_number[pred.0].is_some() && (pred == entry_node || idoms.contains_key(&pred))
+            });
+            let Some(first) = processed.next() else {
+                continue;
+            };
+            let candidate = processed.fold(first, |candidate, pred| {
+                intersect(&idoms, &rpo_number, candidate, pred)
+            });
+            if idoms.insert(node, candidate) != Some(candidate) {
+                changed = true;
             }
         }
     }
@@ -171,25 +159,26 @@ fn compute_immediate_dominators(
     idoms
 }
 
-/// Find the Lowest Common Ancestor of two nodes in the dominator tree built so far
-/// using the Cooper-Harvey-Kennedy finger-walk algorithm. This uses block indices
-/// as RPO numbers (since blocks are processed in ascending order) and requires
-/// zero allocations — just two walking pointers.
+/// The nearest common dominator of two blocks in the tree built so far: the
+/// Cooper-Harvey-Kennedy finger walk, each finger climbing while it sits
+/// later in reverse postorder than the other.
 fn intersect(
     idoms: &HashMap<BasicBlock, BasicBlock>,
+    rpo_number: &[Option<usize>],
     b1: BasicBlock,
     b2: BasicBlock,
 ) -> BasicBlock {
+    let number = |block: BasicBlock| rpo_number[block.0].unwrap_or(0);
     let mut finger1 = b1;
     let mut finger2 = b2;
     while finger1 != finger2 {
-        while finger1.0 > finger2.0 {
+        while number(finger1) > number(finger2) {
             match idoms.get(&finger1) {
                 Some(&parent) => finger1 = parent,
                 None => return BasicBlock(0),
             }
         }
-        while finger2.0 > finger1.0 {
+        while number(finger2) > number(finger1) {
             match idoms.get(&finger2) {
                 Some(&parent) => finger2 = parent,
                 None => return BasicBlock(0),

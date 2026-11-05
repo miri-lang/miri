@@ -224,3 +224,65 @@ fn test_dominance_frontier() {
     let df0 = dom_tree.dominance_frontiers.get(&BasicBlock(0)).unwrap();
     assert!(df0.is_empty());
 }
+
+/// A preheader a later pass appends after every other block still dominates
+/// the loop it enters: dominance follows the graph, not the order blocks are
+/// stored in.
+#[test]
+fn test_preheader_appended_last_dominates_its_loop() {
+    // 0 -> 3 (preheader) -> 1 (header) -> 2 (body) -> 1, and 1 -> 4 (exit)
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    for _ in 0..5 {
+        body.basic_blocks.push(create_empty_block());
+    }
+    body.basic_blocks[0].terminator = Some(create_goto(BasicBlock(3)));
+    body.basic_blocks[3].terminator = Some(create_goto(BasicBlock(1)));
+    body.basic_blocks[1].terminator = Some(create_branch(BasicBlock(2), BasicBlock(4)));
+    body.basic_blocks[2].terminator = Some(create_goto(BasicBlock(1)));
+    body.basic_blocks[4].terminator = Some(create_return());
+
+    let dom_tree = DominatorTree::compute(&body);
+
+    assert_eq!(
+        dom_tree.immediate_dominators.get(&BasicBlock(1)),
+        Some(&BasicBlock(3))
+    );
+    assert_eq!(
+        dom_tree.immediate_dominators.get(&BasicBlock(2)),
+        Some(&BasicBlock(1))
+    );
+    assert_eq!(
+        dom_tree.immediate_dominators.get(&BasicBlock(4)),
+        Some(&BasicBlock(1))
+    );
+    assert!(dom_tree.dominates(BasicBlock(3), BasicBlock(1)));
+    assert!(dom_tree.dominates(BasicBlock(3), BasicBlock(2)));
+    assert!(dom_tree.dominates(BasicBlock(3), BasicBlock(4)));
+    assert!(!dom_tree.dominates(BasicBlock(2), BasicBlock(4)));
+}
+
+/// Blocks the entry cannot reach have no dominator, and dominate nothing
+/// reachable, even when they jump into reachable code.
+#[test]
+fn test_unreachable_blocks_take_no_part_in_dominance() {
+    // 0 -> 1 -> 2 (return); 3 <-> 4 unreachable, 4 also jumps to 2
+    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
+    for _ in 0..5 {
+        body.basic_blocks.push(create_empty_block());
+    }
+    body.basic_blocks[0].terminator = Some(create_goto(BasicBlock(1)));
+    body.basic_blocks[1].terminator = Some(create_goto(BasicBlock(2)));
+    body.basic_blocks[2].terminator = Some(create_return());
+    body.basic_blocks[3].terminator = Some(create_goto(BasicBlock(4)));
+    body.basic_blocks[4].terminator = Some(create_branch(BasicBlock(3), BasicBlock(2)));
+
+    let dom_tree = DominatorTree::compute(&body);
+
+    assert_eq!(
+        dom_tree.immediate_dominators.get(&BasicBlock(2)),
+        Some(&BasicBlock(1))
+    );
+    assert_eq!(dom_tree.immediate_dominators.get(&BasicBlock(3)), None);
+    assert_eq!(dom_tree.immediate_dominators.get(&BasicBlock(4)), None);
+    assert!(dom_tree.dominates(BasicBlock(1), BasicBlock(2)));
+}
