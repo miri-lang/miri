@@ -124,6 +124,25 @@ println(f"{t.contains(99)}")
     );
 }
 
+/// A 128-bit element is compared by its whole value: an element that matches
+/// only in its low word is not found, and one that matches is.
+#[test]
+fn test_tuple_of_128_bit_integers_contains_its_elements() {
+    assert_runs_with_output(
+        r#"
+use system.collections.tuple
+
+let one i128 = 1
+let two i128 = 2
+let high i128 = 1 + 18446744073709551616
+let wide u128 = 7
+println(f"{(one, one).contains(one)} {(two, one).contains(one)} {(one, one).contains(two)}")
+println(f"{(high, two).contains(one)} {(one, high).contains(high)} {(wide, wide).contains(wide)}")
+"#,
+        "true true false\nfalse true true",
+    );
+}
+
 #[test]
 fn test_tuple_index_of() {
     assert_runs_with_output(
