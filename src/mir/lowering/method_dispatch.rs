@@ -23,7 +23,7 @@ use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::expression::unshare::{lent_parameter_write, TemporaryRoot};
 use super::written_receiver::{lower_pending_receiver, Receiver};
-use super::{apply_generic_sub, lower_expression, LoweringContext};
+use super::{apply_generic_sub, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -218,13 +218,21 @@ fn resolve_in_trait_hierarchy(
     })
 }
 
+/// A method call's operands, lowered: the receiver, the arguments and the
+/// allocator, how many arguments were written, and the first local lowering
+/// them made.
+pub(super) struct LoweredMethodCall {
+    pub args: Vec<Operand>,
+    pub written_count: usize,
+    pub arg_watermark: usize,
+}
+
 /// Emit a virtual method call through a vtable slot.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_virtual_method_call(
     ctx: &mut LoweringContext,
     vtable_slot: usize,
-    self_op: Receiver<'_>,
-    user_args: &[Expression],
+    call: LoweredMethodCall,
     method_info: &MethodInfo,
     arg_types: &[Type],
     destination: &Place,
@@ -233,11 +241,13 @@ pub(super) fn emit_virtual_method_call(
     obj_watermark: usize,
     span: Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let arg_watermark = ctx.body.local_decls.len();
-    let call_args = method_call_args(ctx, self_op, user_args, method_info, arg_types)?;
-
+    let LoweredMethodCall {
+        args: call_args,
+        written_count,
+        arg_watermark,
+    } = call;
     let arg_modes =
-        super::dispatch::build_method_arg_modes(method_info, user_args.len(), call_args.len());
+        super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::VirtualCall {
@@ -274,7 +284,7 @@ pub(super) fn emit_virtual_method_call(
 fn method_call_args(
     ctx: &mut LoweringContext,
     receiver: Receiver<'_>,
-    user_args: &[Expression],
+    user_args: MethodArguments<'_>,
     method_info: &MethodInfo,
     arg_types: &[Type],
 ) -> Result<Vec<Operand>, LoweringError> {
@@ -292,23 +302,22 @@ fn method_call_args(
 pub(super) fn emit_static_method_call(
     ctx: &mut LoweringContext,
     symbol: Symbol,
-    self_op: Receiver<'_>,
-    user_args: &[Expression],
+    call: LoweredMethodCall,
     method_info: &MethodInfo,
-    arg_types: &[Type],
     destination: &Place,
     op: &Operand,
     obj_temp_local: Option<Local>,
     obj_watermark: usize,
     span: Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let arg_watermark = ctx.body.local_decls.len();
-    let call_args = method_call_args(ctx, self_op, user_args, method_info, arg_types)?;
-
+    let LoweredMethodCall {
+        args: call_args,
+        written_count,
+        arg_watermark,
+    } = call;
     let func_op = Operand::function(symbol, span);
-
     let arg_modes =
-        super::dispatch::build_method_arg_modes(method_info, user_args.len(), call_args.len());
+        super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
@@ -432,24 +441,58 @@ pub(super) fn try_lower_method_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
+    let args = MethodArguments {
+        written: args,
+        lowered: &[],
+    };
+    lower_method_call_with(ctx, (span, call_expr_id), obj, method_expr, args, dest)
+}
+
+/// The arguments of a method call: the expressions written, and the
+/// operands of the leading ones lowered before the call began, in written
+/// order. The call lowers every argument past those, in order, after its
+/// receiver.
+#[derive(Clone, Copy)]
+pub(crate) struct MethodArguments<'a> {
+    pub written: &'a [Expression],
+    /// The operands of `written`'s first arguments, already lowered: `lhs in
+    /// rhs` evaluates its left side before the collection that receives the
+    /// call. A coercion to the parameter's type still applies to each.
+    pub lowered: &'a [Operand],
+}
+
+/// Lowers a method call on a class or trait object, as
+/// [`try_lower_method_call`] does, whose leading arguments may already be
+/// lowered.
+///
+/// A collection intrinsic lowers its arguments itself, so a call carrying a
+/// lowered argument is never taken for one.
+pub(crate) fn lower_method_call_with(
+    ctx: &mut LoweringContext,
+    (span, call_expr_id): (&Span, usize),
+    obj: &Expression,
+    method_expr: &Expression,
+    args: MethodArguments<'_>,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
     let Some((obj_ty, class_name, method_name)) = resolve_method_receiver(ctx, obj, method_expr)
     else {
         return Ok(None);
     };
 
-    if let Some(op) = super::dispatch::try_lower_collection_intrinsic(
-        ctx,
-        super::dispatch::CollectionIntrinsicCall {
+    if args.lowered.is_empty() {
+        let call = super::dispatch::CollectionIntrinsicCall {
             span,
             call_expr_id,
             obj,
             obj_ty: &obj_ty,
             method_name: &method_name,
-            args,
-        },
-        dest.as_ref().cloned(),
-    )? {
-        return Ok(Some(op));
+            args: args.written,
+        };
+        if let Some(op) = super::dispatch::try_lower_collection_intrinsic(ctx, call, dest.clone())?
+        {
+            return Ok(Some(op));
+        }
     }
 
     let Some((defining_class, method_info)) = resolve_inherited_method(
@@ -507,7 +550,7 @@ struct ResolvedMethod<'a> {
     method_name: &'a str,
     defining_class: &'a str,
     method_info: &'a MethodInfo,
-    args: &'a [Expression],
+    args: MethodArguments<'a>,
 }
 
 /// Emit a resolved user-method call via virtual (vtable) or static dispatch.
@@ -548,6 +591,12 @@ fn emit_method_call(
     (self_op, obj_temp_local, obj_watermark): (Receiver<'_>, Option<Local>, usize),
     (destination, op, arg_types): (&Place, &Operand, &[Type]),
 ) -> Result<Option<Operand>, LoweringError> {
+    let arg_watermark = ctx.body.local_decls.len();
+    let call = LoweredMethodCall {
+        args: method_call_args(ctx, self_op, m.args, m.method_info, arg_types)?,
+        written_count: m.args.written.len(),
+        arg_watermark,
+    };
     if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
         if let Some(slot) = vtable_slot_index(
             &ctx.vtable_layout(),
@@ -558,8 +607,7 @@ fn emit_method_call(
             return emit_virtual_method_call(
                 ctx,
                 slot,
-                self_op,
-                m.args,
+                call,
                 m.method_info,
                 arg_types,
                 destination,
@@ -577,10 +625,8 @@ fn emit_method_call(
     emit_static_method_call(
         ctx,
         symbol,
-        self_op,
-        m.args,
+        call,
         m.method_info,
-        arg_types,
         destination,
         op,
         obj_temp_local,
@@ -657,7 +703,7 @@ fn trait_receiver_substitution(
 /// parameter nothing here binds.
 fn lower_method_args(
     ctx: &mut LoweringContext,
-    args: &[Expression],
+    args: MethodArguments<'_>,
     method_info: &MethodInfo,
     arg_types: &[Type],
 ) -> Result<Vec<Operand>, LoweringError> {
@@ -666,10 +712,14 @@ fn lower_method_args(
         .iter()
         .map(|(name, _)| name.as_str())
         .collect();
-    let mut slots = Vec::with_capacity(args.len());
-    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
+    let bound = crate::ast::expression::bind_arguments_to_parameters(args.written, &names);
+    let mut slots = Vec::with_capacity(args.written.len());
+    for (written, (position, value)) in bound.into_iter().enumerate() {
         let watermark = ctx.body.local_decls.len();
-        let op = lower_expression(ctx, value, None)?;
+        let op = match args.lowered.get(written) {
+            Some(lowered) => lowered.clone(),
+            None => super::sequencing::lower_operand(ctx, value)?,
+        };
         let target = arg_types.get(position).filter(|target| {
             !method_info.is_param_out(position) && names_a_settled_type(ctx, target)
         });
@@ -681,7 +731,7 @@ fn lower_method_args(
         };
         super::dispatch::place_at_parameter(&mut slots, position, op);
     }
-    let span = args.first().map(|arg| arg.span).unwrap_or_default();
+    let span = args.written.first().map(|arg| arg.span).unwrap_or_default();
     super::dispatch::operands_in_parameter_order(slots, span)
 }
 
@@ -1221,7 +1271,7 @@ fn lower_method_receiver(
             return Ok(Operand::Copy(Place::new(self_local)));
         }
     }
-    lower_expression(ctx, obj, None)
+    super::sequencing::lower_operand(ctx, obj)
 }
 
 /// True when a call on a receiver of this static type may go through the

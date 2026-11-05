@@ -11,9 +11,9 @@ use crate::mir::{
 };
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::expression::tuple_expr::tuple_of;
 use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::sequencing::lower_operand;
 
 pub(crate) fn lower_range_expr(
     ctx: &mut LoweringContext,
@@ -26,15 +26,12 @@ pub(crate) fn lower_range_expr(
     // Lower range expression to a tuple aggregate (start, end, is_inclusive)
     // This provides enough info for backends to iterate the range
 
-    let start_op = lower_expression(ctx, start_expr, None)?;
+    let start_op = lower_operand(ctx, start_expr)?;
     let start_ty = ctx.resolved_type(start_expr);
 
     // End value - if not provided, create a "max" sentinel or just use start
     let (end_op, end_ty) = if let Some(end_expr) = end_expr_opt {
-        (
-            lower_expression(ctx, end_expr, None)?,
-            ctx.resolved_type(end_expr),
-        )
+        (lower_operand(ctx, end_expr)?, ctx.resolved_type(end_expr))
     } else {
         // Range with no end (used for iterable objects) - use start as placeholder
         (start_op.clone(), start_ty.clone())

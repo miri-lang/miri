@@ -129,6 +129,10 @@ pub struct LoweringContext<'a> {
     /// stable across builds. Defaults to a private allocator; the compilation
     /// driver injects the shared one via [`LoweringContext::use_compilation_ids`].
     pub compilation_ids: SharedCompilationIds,
+    /// The operands the type checker holds that this body has lowered
+    /// through [`super::sequencing::hold`]; see
+    /// [`super::sequencing::check_every_hold_lowered`].
+    pub held_reads: super::sequencing::HeldReads,
 }
 
 /// A source file as lowering reads spans against it: the number the body
@@ -238,6 +242,7 @@ impl<'a> LoweringContext<'a> {
             self_type: None,
             residency_handles: Vec::new(),
             compilation_ids: new_shared_compilation_ids(),
+            held_reads: super::sequencing::HeldReads::default(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
@@ -256,6 +261,7 @@ impl<'a> LoweringContext<'a> {
         ctx.read_source_like(parent);
         ctx.generic_subs = parent.generic_subs.clone();
         ctx.self_type = parent.self_type.clone();
+        ctx.held_reads = parent.held_reads.for_kernel();
         ctx
     }
 

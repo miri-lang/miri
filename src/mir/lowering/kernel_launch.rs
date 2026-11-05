@@ -14,7 +14,7 @@ use crate::mir::{GpuLaunchArgs, Operand, Place, Rvalue, Statement, StatementKind
 use crate::type_checker::launch_rules::{self, LaunchRefusal};
 
 use super::forall_gpu::needs_wire_conversion;
-use super::{lower_expression, LoweringContext};
+use super::LoweringContext;
 
 /// Aggregated result of analyzing GPU function arguments for a kernel launch.
 pub(super) struct ThreadedGpuFnArgs {
@@ -52,6 +52,10 @@ pub(super) fn process_gpu_fn_args(
         .cloned()
         .unwrap_or_default();
 
+    // TODO: read which parameter each argument binds, and whether it is
+    // `out`, through `bind_arguments_to_parameters`, as `body_writes` does.
+    // `out_params` is indexed by written position here, so a named argument
+    // written out of order is judged against another parameter's flag.
     let mut args = GpuFnArgs::default();
     for (arg_idx, arg) in call_args.iter().enumerate() {
         let arg_ty = ctx
@@ -59,7 +63,7 @@ pub(super) fn process_gpu_fn_args(
             .get_type(arg.id)
             .cloned()
             .unwrap_or_else(|| Type::new(TypeKind::Void, span));
-        let arg_op = lower_expression(ctx, arg, None)?;
+        let arg_op = super::sequencing::lower_operand(ctx, arg)?;
 
         if is_gpu_buffer_type(&arg_ty.kind) {
             let is_out = out_params.get(arg_idx).copied().unwrap_or(false);
@@ -239,8 +243,8 @@ pub(crate) fn try_lower_kernel_launch(
         return Err(LoweringError::invalid_gpu_launch_args(2, args.len(), *span));
     }
     let dimension_watermark = ctx.body.local_decls.len();
-    let grid_op = lower_expression(ctx, &args[0], None)?;
-    let block_op = lower_expression(ctx, &args[1], None)?;
+    let grid_op = super::sequencing::lower_operand(ctx, &args[0])?;
+    let block_op = super::sequencing::lower_operand(ctx, &args[1])?;
     let dimension_locals: Vec<crate::mir::Local> = [&grid_op, &block_op]
         .iter()
         .filter_map(|op| match op {
@@ -267,7 +271,7 @@ pub(crate) fn try_lower_kernel_launch(
             )
         } else {
             (
-                lower_expression(ctx, obj, None)?,
+                super::sequencing::lower_operand(ctx, obj)?,
                 None,
                 GpuFnArgs::default(),
             )

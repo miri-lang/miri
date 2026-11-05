@@ -18,9 +18,11 @@ use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::conform_lookup_operand;
-use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
-use crate::mir::lowering::method_dispatch::{operator_method_callee, resolve_inherited_method};
+use crate::mir::lowering::method_dispatch::{
+    lower_method_call_with, operator_method_callee, resolve_inherited_method, MethodArguments,
+};
+use crate::mir::lowering::sequencing::lower_operand;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
 
 #[allow(clippy::too_many_arguments)]
@@ -403,9 +405,14 @@ fn runtime_contains_fn(ctx: &LoweringContext, rhs: &Expression) -> Option<&'stat
     }
 }
 
-/// Lowers `lhs in rhs` on a list or an array as the call `rhs.contains(lhs)`,
-/// through the method dispatch a written call takes, so the elements are
-/// compared by the `equals` the instantiation answers.
+/// Lowers `lhs in rhs` on a list, an array or a string as the call
+/// `rhs.contains(lhs)`, through the method dispatch a written call takes, so
+/// the elements are compared by the `equals` the instantiation answers.
+///
+/// The left side is evaluated first, as every operator's is, though the call
+/// evaluates its receiver before its arguments: `lhs` is lowered here and
+/// handed to the call already lowered, and a temporary it was lowered into is
+/// released once the call has answered.
 fn lower_sequence_membership(
     ctx: &mut LoweringContext,
     lhs: &Expression,
@@ -413,26 +420,30 @@ fn lower_sequence_membership(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let lhs_watermark = ctx.body.local_decls.len();
+    let lhs_op = lower_operand(ctx, lhs)?;
     let method = Expression {
         id: expr.id,
         node: ExpressionKind::Identifier(MEMBERSHIP_METHOD_NAME.to_string(), None),
         span: expr.span,
     };
-    let call = crate::mir::lowering::method_dispatch::try_lower_method_call(
-        ctx,
-        &expr.span,
-        expr.id,
-        rhs,
-        &method,
-        std::slice::from_ref(lhs),
-        dest,
-    )?;
-    call.ok_or_else(|| {
+    let arguments = MethodArguments {
+        written: std::slice::from_ref(lhs),
+        lowered: std::slice::from_ref(&lhs_op),
+    };
+    let call = lower_method_call_with(ctx, (&expr.span, expr.id), rhs, &method, arguments, dest)?;
+    let call = call.ok_or_else(|| {
         LoweringError::unsupported_expression(
             format!("`in` on a collection without a `{MEMBERSHIP_METHOD_NAME}` method"),
             expr.span,
         )
-    })
+    })?;
+    if let Operand::Copy(place) | Operand::Move(place) = &lhs_op {
+        if place.projection.is_empty() {
+            ctx.emit_temp_drop(place.local, lhs_watermark, expr.span);
+        }
+    }
+    Ok(call)
 }
 
 fn lower_in_operator(
@@ -445,9 +456,9 @@ fn lower_in_operator(
     let Some(fn_name) = runtime_contains_fn(ctx, rhs) else {
         return lower_sequence_membership(ctx, lhs, rhs, expr, dest);
     };
-    let lhs_op = lower_expression(ctx, lhs, None)?;
+    let lhs_op = lower_operand(ctx, lhs)?;
     let rhs_watermark = ctx.body.local_decls.len();
-    let rhs_op = lower_expression(ctx, rhs, None)?;
+    let rhs_op = lower_operand(ctx, rhs)?;
 
     let lhs_op = conform_lookup_operand(ctx, lhs_op, lhs, rhs);
 
@@ -557,8 +568,8 @@ pub(crate) fn lower_binary_expr(
     }
 
     let arg_watermark = ctx.body.local_decls.len();
-    let lhs_op = lower_expression(ctx, lhs, None)?;
-    let rhs_op = lower_expression(ctx, rhs, None)?;
+    let lhs_op = lower_operand(ctx, lhs)?;
+    let rhs_op = lower_operand(ctx, rhs)?;
 
     // Operator traits cover `+` (concat) and `*` (repeat) as well as `==`/`!=`,
     // so this dispatch must stay ahead of — and outside — the equality-only
@@ -896,25 +907,10 @@ fn is_equality_operator(op: &crate::ast::operator::BinaryOp) -> bool {
     )
 }
 
-/// True when the type needs structural equality comparison: an enum, a
-/// struct, a tuple, an optional, a result, or a range, which is built from
-/// its members. A tuple compares each member at the member's own type, so a
-/// counted enum is compared by its payload and a class through its `equals`.
-///
-/// An `Atomic<T>` is declared as a struct but has no struct behind it to
-/// walk; host code never compares one (see [`reaches_machine_op_unchecked`]).
+/// True when `==` on a value of `kind` compares it member by member, as the
+/// type checker answers it.
 fn is_structural_equality_type(ctx: &LoweringContext, kind: &TypeKind) -> bool {
-    match kind {
-        TypeKind::Custom(_, _) if is_device_marker(kind) => false,
-        TypeKind::Custom(name, _) if crate::ast::types::is_range_type_name(name) => true,
-        TypeKind::Custom(name, _) => matches!(
-            ctx.type_checker.type_definitions().get(name),
-            Some(crate::type_checker::context::TypeDefinition::Enum(_))
-                | Some(crate::type_checker::context::TypeDefinition::Struct(_))
-        ),
-        TypeKind::Result(_, _) | TypeKind::Option(_) | TypeKind::Tuple(_) => true,
-        _ => false,
-    }
+    ctx.type_checker.compares_member_by_member(kind)
 }
 
 /// The two sides of a comparison of optionals, both at one optional type, and
@@ -1081,8 +1077,8 @@ pub(crate) fn lower_three_way_comparison(
     span: Span,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let lhs_op = lower_expression(ctx, lhs, None)?;
-    let rhs_op = lower_expression(ctx, rhs, None)?;
+    let lhs_op = lower_operand(ctx, lhs)?;
+    let rhs_op = lower_operand(ctx, rhs)?;
     let (lhs_op, rhs_op) = at_one_number_type(ctx, (lhs, lhs_op), (rhs, rhs_op), span);
     let int_ty = Type::new(TypeKind::Int, span);
     let ordered_as_int = |ctx: &mut LoweringContext, op: BinOp| {

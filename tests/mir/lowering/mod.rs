@@ -12,6 +12,7 @@ pub mod constant;
 pub mod device_handles;
 pub mod dispatch_symbols;
 pub mod enums;
+pub mod evaluation_order;
 pub mod forall_gpu;
 pub mod function;
 pub mod gpu;

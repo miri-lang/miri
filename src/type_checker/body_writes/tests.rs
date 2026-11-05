@@ -8,6 +8,16 @@ use crate::ast::Program;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 
+/// The mentions of the binding `name` in the body itself, outside any
+/// closure or nested function.
+fn of_binding<'s, 'b>(
+    uses: &'s BodyWrites<'b>,
+    name: &'s str,
+) -> impl Iterator<Item = &'s Mention<'b>> + 's {
+    (uses.mentions.iter())
+        .filter(move |mention| mention.scope == Scope::Body && mention.name() == name)
+}
+
 fn parse(source: &str) -> Program {
     let mut lexer = Lexer::new(source);
     let mut parser = Parser::new(&mut lexer, source);
@@ -38,7 +48,7 @@ fn body_of<'p>(program: &'p Program, name: &str) -> &'p Statement {
 fn roles_of(source: &str, function: &str, binding: &str) -> Vec<&'static str> {
     let program = parse(source);
     let uses = BodyWrites::of(body_of(&program, function));
-    let words = uses.of_binding(binding).map(|mention| match mention.role {
+    let words = of_binding(&uses, binding).map(|mention| match mention.role {
         Some(Role::Assigned) => "assigned",
         Some(Role::Receiver { .. }) => "receiver",
         Some(Role::Argument {
@@ -111,7 +121,7 @@ fn f(xs [int])
 "#;
     let program = parse(source);
     let uses = BodyWrites::of(body_of(&program, "f"));
-    assert_eq!(uses.of_binding("xs").count(), 0);
+    assert_eq!(of_binding(&uses, "xs").count(), 0);
     let scopes: Vec<Scope> = (uses.mentions.iter())
         .filter(|mention| mention.name() == "xs")
         .map(|mention| mention.scope)

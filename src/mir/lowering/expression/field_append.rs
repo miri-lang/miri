@@ -292,7 +292,7 @@ fn lower_owned_string(
     span: Span,
 ) -> Result<OwnedString, LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let lowered = lower_expression(ctx, expr, None)?;
+    let lowered = crate::mir::lowering::sequencing::lower_operand(ctx, expr)?;
     let place = ensure_place(ctx, lowered, expr.span);
     if is_fresh_temp(ctx, &place, watermark) {
         return Ok(OwnedString {

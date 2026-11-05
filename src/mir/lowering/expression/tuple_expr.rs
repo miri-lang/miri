@@ -10,8 +10,8 @@ use crate::mir::{AggregateKind, Operand, Place, Rvalue, StatementKind as MirStat
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::coerce_arg_to_declared;
-use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::sequencing::lower_operand;
 use crate::mir::lowering::variable::canonical_declared_type;
 
 pub(crate) fn lower_tuple_expr(
@@ -41,7 +41,7 @@ pub(crate) fn lower_tuple_expr(
     let mut ops: Vec<Operand> = Vec::with_capacity(elements.len());
     for (position, element) in elements.iter().enumerate() {
         let watermark = ctx.body.local_decls.len();
-        let op = lower_expression(ctx, element, None)?;
+        let op = lower_operand(ctx, element)?;
         ops.push(match element_types.get(position) {
             Some(target) => coerce_arg_to_declared(ctx, op, element, target, watermark),
             None => op,

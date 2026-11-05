@@ -15,9 +15,9 @@ use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::conform_lookup_operand;
-use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::expression::member_expr::{extract_integer_index, lower_tuple_element};
 use crate::mir::lowering::helpers::ensure_place;
+use crate::mir::lowering::sequencing::lower_operand;
 
 pub(crate) fn lower_index_expr(
     ctx: &mut LoweringContext,
@@ -41,7 +41,7 @@ pub(crate) fn lower_index_expr(
     // Watermark so we can release any managed temp created for `obj` (e.g. an
     // array literal). Only drop on Copy — Perceus IncRef's the source temp.
     let obj_watermark = ctx.body.local_decls.len();
-    let obj_operand = lower_expression(ctx, obj, None)?;
+    let obj_operand = lower_operand(ctx, obj)?;
 
     // A tuple indexed by an integer literal names one position, as `t.1` does;
     // only a tuple picked by a value is read through an `Index` projection.
@@ -52,7 +52,7 @@ pub(crate) fn lower_index_expr(
     let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
-    let index_operand = lower_expression(ctx, index_expr, None)?;
+    let index_operand = lower_operand(ctx, index_expr)?;
     let index_operand = crate::mir::lowering::helpers::index_at_int(ctx, index_operand, index_expr);
     let index_local = ensure_index_local(ctx, index_expr, index_operand);
 
@@ -107,7 +107,7 @@ fn lower_string_index_read(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
-    let obj_operand = lower_expression(ctx, obj, None)?;
+    let obj_operand = lower_operand(ctx, obj)?;
     let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
     let obj_place = ensure_place(ctx, obj_operand.clone(), obj.span);
 
@@ -152,7 +152,7 @@ fn lower_string_range_slice(
     destination: &Place,
 ) -> Result<(), LoweringError> {
     let start_watermark = ctx.body.local_decls.len();
-    let start_op = lower_expression(ctx, start_expr, None)?;
+    let start_op = lower_operand(ctx, start_expr)?;
     let start_op = crate::mir::lowering::helpers::index_at_int(ctx, start_op, start_expr);
     let start_place = match &start_op {
         Operand::Copy(p) | Operand::Move(p) => Some(p.local),
@@ -162,7 +162,7 @@ fn lower_string_range_slice(
     let (end_op, end_watermark, end_place) = if let Some(end_expr_box) = end_opt {
         let end_expr = end_expr_box.as_ref();
         let watermark = ctx.body.local_decls.len();
-        let raw_op = lower_expression(ctx, end_expr, None)?;
+        let raw_op = lower_operand(ctx, end_expr)?;
         let raw_op = crate::mir::lowering::helpers::index_at_int(ctx, raw_op, end_expr);
         let place = match &raw_op {
             Operand::Copy(p) | Operand::Move(p) => Some(p.local),
@@ -243,7 +243,7 @@ fn lower_string_char_at(
     destination: &Place,
 ) -> Result<(), LoweringError> {
     let index_watermark = ctx.body.local_decls.len();
-    let index_op = lower_expression(ctx, index_expr, None)?;
+    let index_op = lower_operand(ctx, index_expr)?;
     let index_op = crate::mir::lowering::helpers::index_at_int(ctx, index_op, index_expr);
     let index_place = match &index_op {
         Operand::Copy(place) | Operand::Move(place) => Some(place.local),
@@ -367,9 +367,11 @@ fn lower_map_index_read(
     key_expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_watermark = ctx.body.local_decls.len();
+    let obj_op = lower_operand(ctx, obj)?;
+    let snapshot = crate::mir::lowering::sequencing::held_temporary(ctx, &obj_op);
     let key_watermark = ctx.body.local_decls.len();
-    let key_op = lower_expression(ctx, key_expr, None)?;
+    let key_op = lower_operand(ctx, key_expr)?;
 
     let key_op = conform_lookup_operand(ctx, key_op, key_expr, obj);
     let key_place = match &key_op {
@@ -382,31 +384,7 @@ fn lower_map_index_read(
         expr.span,
     );
 
-    // Read through the active instantiation substitution, for the reason the
-    // list read gives: a value type recorded against a generic parameter says
-    // nothing about whether the entry is managed.
-    let result_ty = ctx
-        .recorded_type(expr.id)
-        .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
-
-    // Indexing reads through to the entry the map still owns, so the result is a
-    // borrow: the intrinsic does not raise the count, and releasing it would take
-    // a reference away from the map that is still holding the value. A borrowed
-    // result therefore always lands in a borrowed temp; a destination that owns
-    // what it holds, such as a `let` binding, takes a copy of it, which raises
-    // the count for the binding to release.
-    let borrows = ctx.is_counted(&result_ty.kind)
-        && (crate::mir::compiler_intrinsics::MAP_GET_CHECKED.effect()).hands_back_a_borrow();
-    let destination = match &dest {
-        Some(d) if !borrows => d.clone(),
-        Some(_) | None => {
-            let temp = ctx.push_temp(result_ty, expr.span);
-            if borrows {
-                ctx.mark_borrowed_temp(temp);
-            }
-            Place::new(temp)
-        }
-    };
+    let (destination, borrows) = map_read_destination(ctx, expr, dest.as_ref());
 
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -428,14 +406,72 @@ fn lower_map_index_read(
         ctx.emit_temp_drop(key_local, key_watermark, expr.span);
     }
 
-    match dest {
+    let result = match dest {
         Some(d) if borrows => {
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(destination))),
                 span: expr.span,
             });
-            Ok(Operand::Copy(d))
+            d
         }
-        Some(_) | None => Ok(Operand::Copy(destination)),
+        Some(_) | None => destination,
+    };
+    if let Some(snapshot) = snapshot {
+        release_map_snapshot(ctx, snapshot, &result, obj_watermark, expr.span);
+    }
+    Ok(Operand::Copy(result))
+}
+
+/// Where `map[key]`, the expression `expr`, lands its result, and whether
+/// that result borrows the entry the map holds.
+fn map_read_destination(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<&Place>,
+) -> (Place, bool) {
+    // Read through the active instantiation substitution, for the reason the
+    // list read gives: a value type recorded against a generic parameter says
+    // nothing about whether the entry is managed.
+    let result_ty = ctx
+        .recorded_type(expr.id)
+        .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
+
+    // Indexing reads through to the entry the map still owns, so the result is a
+    // borrow: the intrinsic does not raise the count, and releasing it would take
+    // a reference away from the map that is still holding the value. A borrowed
+    // result therefore always lands in a borrowed temp; a destination that owns
+    // what it holds, such as a `let` binding, takes a copy of it, which raises
+    // the count for the binding to release.
+    let borrows = ctx.is_counted(&result_ty.kind)
+        && (crate::mir::compiler_intrinsics::MAP_GET_CHECKED.effect()).hands_back_a_borrow();
+    let destination = match dest {
+        Some(d) if !borrows => d.clone(),
+        Some(_) | None => {
+            let temp = ctx.push_temp(result_ty, expr.span);
+            if borrows {
+                ctx.mark_borrowed_temp(temp);
+            }
+            Place::new(temp)
+        }
+    };
+    (destination, borrows)
+}
+
+/// Releases `snapshot`, the temporary a map was read into before its key
+/// could replace the binding, once the index result read off it, `result`,
+/// no longer needs it. A borrowed entry lives only as long as the map
+/// holding it, so the enclosing scope releases the temporary then, after
+/// every use of the result; an owned result needs it no longer.
+fn release_map_snapshot(
+    ctx: &mut LoweringContext,
+    snapshot: crate::mir::Local,
+    result: &Place,
+    watermark: usize,
+    span: crate::error::syntax::Span,
+) {
+    if ctx.borrowed_temps.contains(&result.local) {
+        ctx.register_scope_temp(snapshot);
+    } else {
+        ctx.emit_temp_drop(snapshot, watermark, span);
     }
 }

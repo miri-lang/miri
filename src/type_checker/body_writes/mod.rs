@@ -3,12 +3,13 @@
 
 //! Every mention of a binding in a body, with what the body does with it.
 //!
-//! Two questions are answered off a body before it is lowered: which methods
-//! write their receiver (`receiver_writes`), and which parameters a body
+//! Three questions are answered off a body before it is lowered: which
+//! methods write their receiver (`receiver_writes`), which parameters a body
 //! writes, so lowering binds a copy of each on entry
-//! (`mir::lowering::written_parameters`). Both are "does this body write
-//! through binding X", so both read this one walk, and a new kind of write is
-//! taught here once.
+//! (`mir::lowering::written_parameters`), and which operands a later operand
+//! may write, so lowering reads each on the spot (`mir::lowering::sequencing`).
+//! All are "does this code write through binding X", so all read this one
+//! walk, and a new kind of write is taught here once.
 //!
 //! The walk records each identifier, `self` and `super` it meets as a
 //! [`Mention`]: whether the spot only reads it ([`Place::Read`]: indexing it,
@@ -17,8 +18,15 @@
 //! an assignment, the receiver of a method call, an argument of a call), and
 //! whether it sits in a closure or a nested function the body declares. What
 //! counts as a write is each reader's own rule, applied to these facts.
+//!
+//! The walk also records every expression that evaluates a list of operands
+//! one after another ([`BodyWrites::sequences`]), every call and operator
+//! ([`BodyWrites::effects`]), and where each expression's own records lie
+//! ([`BodyWrites::extents`]), which is what [`HeldOperands`] reads to decide
+//! which operand a later one may write.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::ast::common::Parameter;
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -76,17 +84,36 @@ pub(crate) struct Mention<'b> {
     pub place: Place,
     pub role: Option<Role<'b>>,
     pub scope: Scope,
+    /// The id of the body the mention runs in: the function or closure body
+    /// innermost around it, [`OUTSIDE_ANY_BODY`] outside every one.
+    pub owner: usize,
 }
 
 impl<'b> Mention<'b> {
     /// The name the mention goes by: the identifier's, or `super`.
     pub(crate) fn name(&self) -> &'b str {
-        if let ExpressionKind::Identifier(name, _) = &self.expression.node {
-            name.as_str()
-        } else {
-            "super"
-        }
+        binding_name(self.expression).unwrap_or("super")
     }
+}
+
+/// The owner of what a walk meets outside every function and closure body.
+pub(crate) const OUTSIDE_ANY_BODY: usize = 0;
+
+/// An expression the walk records, with the id of the body it runs in, as a
+/// [`Mention::owner`] is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Recorded<'b> {
+    pub expression: &'b Expression,
+    pub owner: usize,
+}
+
+/// Where the records the walk made inside one expression lie: the walk
+/// records an expression's parts one after another, so they are a run of
+/// positions in [`BodyWrites::mentions`] and one in [`BodyWrites::effects`].
+#[derive(Debug, Clone)]
+pub(crate) struct Extent {
+    pub mentions: Range<usize>,
+    pub effects: Range<usize>,
 }
 
 /// A function or closure a body declares inside itself.
@@ -102,33 +129,79 @@ pub(crate) struct Function<'b> {
 pub(crate) struct BodyWrites<'b> {
     pub mentions: Vec<Mention<'b>>,
     pub functions: Vec<Function<'b>>,
+    /// Every expression that evaluates operands in sequence — a call, an
+    /// operator, an index, a range, an array, tuple or variant literal — at
+    /// any depth, closures and nested functions included, but no step of
+    /// the path an assignment writes.
+    pub sequences: Vec<Recorded<'b>>,
+    /// Every call and binary operator, in the order the walk meets them.
+    pub effects: Vec<Recorded<'b>>,
+    /// Where each walked expression's own records lie, by its address.
+    pub extents: HashMap<*const Expression, Extent>,
 }
 
 impl<'b> BodyWrites<'b> {
     /// The mentions in the function body `body`, whose last expression, when
     /// it ends in one, is the value it returns and so only read.
     pub(crate) fn of(body: &'b Statement) -> Self {
-        let mut walk = Walk {
-            roles: HashMap::new(),
-            scope: Scope::Body,
-            mentions: Vec::new(),
-            functions: Vec::new(),
-        };
+        let mut walk = Walk::default();
         walk.function_body(body);
-        Self {
-            mentions: walk.mentions,
-            functions: walk.functions,
-        }
+        walk.finish()
     }
+}
 
-    /// The mentions of the binding `name` in the body itself, outside any
-    /// closure or nested function.
-    pub(crate) fn of_binding<'s>(
-        &'s self,
-        name: &'s str,
-    ) -> impl Iterator<Item = &'s Mention<'b>> + 's {
-        (self.mentions.iter())
-            .filter(move |mention| mention.scope == Scope::Body && mention.name() == name)
+/// The parameters every function and closure `statements` declare writes,
+/// and the operands of every body lowering holds, at any depth: each
+/// statement of the program is walked once, and both read the one walk.
+pub(crate) fn analyse<'s>(
+    statements: impl Iterator<Item = &'s Statement>,
+    checker: &crate::type_checker::TypeChecker,
+) -> (ParameterWrites, HeldOperands) {
+    let mut parameters = ParameterWrites::default();
+    let mut held = HeldOperands::default();
+    for statement in statements {
+        for_each_member(statement, &mut |member| {
+            let writes = BodyWrites::of(member);
+            parameters.record(&writes, checker);
+            held.record(&writes, checker);
+        });
+    }
+    (parameters, held)
+}
+
+/// Calls `visit` on every statement of the program `statement` stands for:
+/// a block's statements and a type declaration's members in its place, at
+/// any depth, and any other statement itself.
+pub(crate) fn for_each_member<'s>(statement: &'s Statement, visit: &mut impl FnMut(&'s Statement)) {
+    let members: &'s [Statement] = match &statement.node {
+        StatementKind::Block(statements) => statements,
+        StatementKind::Class(class) => &class.body,
+        StatementKind::Struct(_, _, _, methods, _, _)
+        | StatementKind::Enum(_, _, _, methods, _, _)
+        | StatementKind::Trait(_, _, _, methods, _) => methods,
+        StatementKind::FunctionDeclaration(_)
+        | StatementKind::Expression(_)
+        | StatementKind::Variable(..)
+        | StatementKind::If(..)
+        | StatementKind::While(..)
+        | StatementKind::For(..)
+        | StatementKind::Forall { .. }
+        | StatementKind::GpuFrame(..)
+        | StatementKind::GpuFrameBlock(_)
+        | StatementKind::Return(_)
+        | StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(..)
+        | StatementKind::Type(..)
+        | StatementKind::RuntimeFunctionDeclaration(..)
+        | StatementKind::IntrinsicFunctionDeclaration(..) => {
+            visit(statement);
+            return;
+        }
+    };
+    for member in members {
+        for_each_member(member, visit);
     }
 }
 
@@ -145,11 +218,53 @@ struct Walk<'b> {
     /// The role of each path root met so far, by the root's address.
     roles: HashMap<*const Expression, Role<'b>>,
     scope: Scope,
+    /// The id of the function or closure body being walked.
+    owner: usize,
     mentions: Vec<Mention<'b>>,
     functions: Vec<Function<'b>>,
+    sequences: Vec<Recorded<'b>>,
+    effects: Vec<Recorded<'b>>,
+    extents: HashMap<*const Expression, Extent>,
+}
+
+impl Default for Walk<'_> {
+    fn default() -> Self {
+        Self {
+            roles: HashMap::new(),
+            scope: Scope::Body,
+            owner: OUTSIDE_ANY_BODY,
+            mentions: Vec::new(),
+            functions: Vec::new(),
+            sequences: Vec::new(),
+            effects: Vec::new(),
+            extents: HashMap::new(),
+        }
+    }
 }
 
 impl<'b> Walk<'b> {
+    fn finish(self) -> BodyWrites<'b> {
+        BodyWrites {
+            mentions: self.mentions,
+            functions: self.functions,
+            sequences: self.sequences,
+            effects: self.effects,
+            extents: self.extents,
+        }
+    }
+
+    /// Runs `walk` over `expression`, recording where the records it makes
+    /// lie.
+    fn extent(&mut self, expression: &'b Expression, walk: impl FnOnce(&mut Self)) {
+        let (mentions, effects) = (self.mentions.len(), self.effects.len());
+        walk(self);
+        let extent = Extent {
+            mentions: mentions..self.mentions.len(),
+            effects: effects..self.effects.len(),
+        };
+        self.extents.insert(expression as *const Expression, extent);
+    }
+
     fn function_body(&mut self, body: &'b Statement) {
         let statements = if let StatementKind::Block(statements) = &body.node {
             statements.as_slice()
@@ -199,7 +314,7 @@ impl<'b> Walk<'b> {
                         params: &declaration.params,
                         body,
                     });
-                    self.within(Scope::Nested, |walk| walk.statement(body));
+                    self.within(Scope::Nested, body, |walk| walk.statement(body));
                 }
             }
             StatementKind::Return(value) => {
@@ -221,15 +336,17 @@ impl<'b> Walk<'b> {
         }
     }
 
-    /// Runs `walk` with mentions recorded in `scope`, unless the walk is
-    /// already inside a closure, which every scope within it stays.
-    fn within(&mut self, scope: Scope, walk: impl FnOnce(&mut Self)) {
-        let outer = self.scope;
+    /// Runs `walk` over the function or closure body `body`, with mentions
+    /// recorded in `scope`, unless the walk is already inside a closure,
+    /// which every scope within it stays.
+    fn within(&mut self, scope: Scope, body: &Statement, walk: impl FnOnce(&mut Self)) {
+        let (outer, outer_owner) = (self.scope, self.owner);
         if outer != Scope::Closure {
             self.scope = scope;
         }
+        self.owner = body.id;
         walk(self);
-        self.scope = outer;
+        (self.scope, self.owner) = (outer, outer_owner);
     }
 
     fn statements(&mut self, statements: &'b [Statement]) {
@@ -253,18 +370,24 @@ impl<'b> Walk<'b> {
     /// `expression` where its value is only read: a binding standing there
     /// is mentioned as read.
     fn read(&mut self, expression: &'b Expression) {
-        let mut inner = expression;
-        while let ExpressionKind::NamedArgument(_, value) = &inner.node {
-            inner = value;
-        }
-        if is_binding(inner) {
-            self.mention(inner, Place::Read);
+        let inner = unlabelled(expression);
+        if binding_name(inner).is_some() {
+            self.extent(inner, |walk| walk.mention(inner, Place::Read));
         } else {
             self.expression(expression);
         }
     }
 
     fn expression(&mut self, expression: &'b Expression) {
+        self.extent(expression, |walk| {
+            walk.record_sequence(expression);
+            walk.parts(expression);
+        });
+    }
+
+    /// The expressions `expression` is built from, walked without recording
+    /// `expression` itself.
+    fn parts(&mut self, expression: &'b Expression) {
         match &expression.node {
             ExpressionKind::Identifier(..) | ExpressionKind::Super => {
                 self.mention(expression, Place::Value);
@@ -273,7 +396,7 @@ impl<'b> Walk<'b> {
             ExpressionKind::Assignment(target, _, value) => {
                 let target = target.expression();
                 self.assign_role(path_root(target), Role::Assigned);
-                self.expression(target);
+                self.write_target(target);
                 self.expression(value);
             }
             ExpressionKind::Index(collection, index) => {
@@ -321,7 +444,9 @@ impl<'b> Walk<'b> {
                     params: &lambda.params,
                     body: &lambda.body,
                 });
-                self.within(Scope::Closure, |walk| walk.function_body(&lambda.body));
+                self.within(Scope::Closure, &lambda.body, |walk| {
+                    walk.function_body(&lambda.body)
+                });
             }
             ExpressionKind::List(elements)
             | ExpressionKind::Set(elements)
@@ -342,6 +467,32 @@ impl<'b> Walk<'b> {
             | ExpressionKind::Type(..)
             | ExpressionKind::GenericType(..)
             | ExpressionKind::TypeDeclaration(..) => {}
+        }
+    }
+
+    /// The path an assignment writes. The assignment evaluates the path
+    /// itself, in its own order, so no step along it is a sequence of its
+    /// own; an index along it is an expression like any other.
+    fn write_target(&mut self, target: &'b Expression) {
+        if let ExpressionKind::Member(object, _) = &target.node {
+            self.write_target_step(object);
+        } else if let ExpressionKind::Index(collection, index) = &target.node {
+            self.write_target_step(collection);
+            self.expression(index);
+        } else {
+            self.parts(target);
+        }
+    }
+
+    /// The value a step of a written path steps into.
+    fn write_target_step(&mut self, object: &'b Expression) {
+        if matches!(
+            object.node,
+            ExpressionKind::Member(..) | ExpressionKind::Index(..)
+        ) {
+            self.write_target(object);
+        } else {
+            self.read(object);
         }
     }
 
@@ -369,8 +520,27 @@ impl<'b> Walk<'b> {
         self.expressions(arguments);
     }
 
+    /// Records `expression` when it evaluates operands in sequence, and as
+    /// an effect when it is a call or an operator.
+    fn record_sequence(&mut self, expression: &'b Expression) {
+        let is_effect = matches!(
+            expression.node,
+            ExpressionKind::Call(..) | ExpressionKind::Binary(..)
+        );
+        let recorded = Recorded {
+            expression,
+            owner: self.owner,
+        };
+        if is_effect {
+            self.effects.push(recorded);
+        }
+        if is_sequence(expression) {
+            self.sequences.push(recorded);
+        }
+    }
+
     fn assign_role(&mut self, root: &'b Expression, role: Role<'b>) {
-        if is_binding(root) {
+        if binding_name(root).is_some() {
             self.roles.insert(root as *const Expression, role);
         }
     }
@@ -382,38 +552,51 @@ impl<'b> Walk<'b> {
             place,
             role,
             scope: self.scope,
+            owner: self.owner,
         });
     }
 }
 
-/// Whether `expression` names a binding: an identifier, `self` or `super`.
-fn is_binding(expression: &Expression) -> bool {
-    matches!(
-        expression.node,
-        ExpressionKind::Identifier(..) | ExpressionKind::Super
-    )
+/// Whether `expression` evaluates operands one after another.
+fn is_sequence(expression: &Expression) -> bool {
+    !held_operands::sequence_slots(expression).is_empty()
+}
+
+/// The name of the binding `expression` is: an identifier's, `self`'s, or
+/// `super`.
+pub(crate) fn binding_name(expression: &Expression) -> Option<&str> {
+    if let ExpressionKind::Identifier(name, _) = &expression.node {
+        return Some(name);
+    }
+    matches!(expression.node, ExpressionKind::Super).then_some("super")
+}
+
+/// `expression` with any named-argument label taken off.
+pub(crate) fn unlabelled(expression: &Expression) -> &Expression {
+    let mut value = expression;
+    while let ExpressionKind::NamedArgument(_, inner) = &value.node {
+        value = inner;
+    }
+    value
 }
 
 /// The value an argument hands on, with any named-argument label and cast
 /// taken off, and whether a cast was among them.
-fn argument_value(argument: &Expression) -> (&Expression, bool) {
-    let mut value = argument;
+pub(crate) fn argument_value(argument: &Expression) -> (&Expression, bool) {
+    let mut value = unlabelled(argument);
     let mut through_cast = false;
-    loop {
-        match &value.node {
-            ExpressionKind::NamedArgument(_, inner) => value = inner,
-            ExpressionKind::Cast(inner, _) => {
-                value = inner;
-                through_cast = true;
-            }
-            _ => return (value, through_cast),
-        }
+    while let ExpressionKind::Cast(inner, _) = &value.node {
+        value = unlabelled(inner);
+        through_cast = true;
     }
+    (value, through_cast)
 }
 
+mod held_operands;
 mod parameters;
 mod receiver;
 
+pub use held_operands::{HeldOperand, HeldOperands};
 pub use parameters::ParameterWrites;
 pub use receiver::ReceiverWrites;
 

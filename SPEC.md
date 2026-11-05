@@ -9,6 +9,7 @@
 - [Core Concepts](#core-concepts)
 - [Types & Variables](#types--variables)
 - [Functions](#functions)
+  - [Evaluation Order](#evaluation-order)
 - [Control Flow](#control-flow)
 - [Pattern Matching](#pattern-matching)
 - [Strings](#strings)
@@ -94,6 +95,21 @@ fn half(n int > 0) int
 
 fn weekday(d String in {"mon", "tue", "wed", "thu", "fri"}) bool
     return true
+```
+
+### Evaluation Order
+
+Operands are evaluated left to right, each completely before the next begins, and each yields its value at the moment it is evaluated: a method call's receiver, then its arguments in the order written (named or positional); an operator's left side, then its right; the elements of a list, array, set, map or tuple literal; a constructor's arguments; an indexed value, then its index; a range's bounds. A later operand that changes what an earlier one read — through an `out` argument, an assignment, a method that changes its receiver, or a change to an object whose field was read — does not change the earlier value: with `var n = 1` and `bump` setting its `out` parameter to 99 and returning 0, `n + bump(n)` is `1`. `and`, `or` and `??` evaluate their right side only when needed, after the left. Two exceptions hold for now. An assignment's target indexes and, for `op=`, the target's current value are read after the value on the right is evaluated. A `gpu`-resident binding is read where the operation that uses it runs rather than where it is written, until a copy taken of it can carry its device buffer.
+
+```miri
+fn bump(n out int) int
+    n = 99
+    return 0
+
+fn main()
+    var n = 1
+    println(f"{n + bump(n)}")   // 1
+    println(f"{n}")             // 99
 ```
 
 ### Main Function

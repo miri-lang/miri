@@ -775,6 +775,11 @@ impl<'a> UseAfterMoveChecker<'a> {
         });
     }
 
+    // TODO: read which parameter an argument binds, and whether it is `out`,
+    // from `bind_arguments_to_parameters`, as `body_writes` does. This
+    // classifier counts a positional argument after a named one at the next
+    // positional slot, where the binding keeps its written position, so the
+    // two disagree on such a call.
     fn arg_classify(arg: &Expression, params: &[Parameter], pos_idx: &mut usize) -> (bool, usize) {
         match &arg.node {
             ExpressionKind::NamedArgument(name, _) => {

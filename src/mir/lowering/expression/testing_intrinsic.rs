@@ -22,7 +22,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::compiler_intrinsics::{self as intrinsics, Intrinsic};
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::expression::{emit_string_concat, emit_to_string, lower_expression};
+use crate::mir::lowering::expression::{emit_string_concat, emit_to_string};
+use crate::mir::lowering::sequencing::lower_operand;
 use crate::mir::place::Local;
 use crate::mir::{
     BasicBlock, BinOp, Constant, Discriminant, Operand, Place, Rvalue,
@@ -111,7 +112,7 @@ fn lower_assert(
         ));
     }
     let watermark = ctx.body.local_decls.len();
-    let cond_op = lower_expression(ctx, &args[0], None)?;
+    let cond_op = lower_operand(ctx, &args[0])?;
     let msg_op = lower_optional_string_arg(ctx, args.get(1), span)?;
 
     let path_op = build_path_operand(ctx, span);
@@ -235,7 +236,7 @@ fn lower_compared_value(
     span: Span,
 ) -> Result<Operand, LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let op = lower_expression(ctx, arg, None)?;
+    let op = lower_operand(ctx, arg)?;
     let names_no_type = matches!(compared_at, TypeKind::Generic(..) | TypeKind::Error)
         || matches!(compared_at, TypeKind::Custom(name, _)
             if !ctx.type_checker.type_definitions().contains_key(name));
@@ -384,7 +385,7 @@ fn lower_assert_panics(
         ));
     }
     let watermark = ctx.body.local_decls.len();
-    let closure_op = lower_expression(ctx, &args[0], None)?;
+    let closure_op = lower_operand(ctx, &args[0])?;
     let expected_op = lower_optional_string_arg(ctx, args.get(1), span)?;
 
     let path_op = build_path_operand(ctx, span);
@@ -502,7 +503,7 @@ fn lower_optional_string_arg(
     span: Span,
 ) -> Result<Operand, LoweringError> {
     match arg {
-        Some(expr) => lower_expression(ctx, expr, None),
+        Some(expr) => lower_operand(ctx, expr),
         None => Ok(string_literal_operand(ctx, span, String::new())),
     }
 }

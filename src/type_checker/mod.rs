@@ -68,6 +68,7 @@ pub(crate) mod module_loader;
 mod operators;
 pub(crate) mod pattern_coverage;
 mod reference_cycles;
+pub mod reference_sharing;
 pub(crate) mod runtime_settled;
 mod source_arithmetic;
 pub mod statements;
@@ -149,6 +150,10 @@ pub struct TypeChecker {
     /// The parameters each body writes, so lowering binds a copy of each on
     /// entry; see [`body_writes`].
     pub parameter_writes: body_writes::ParameterWrites,
+    /// The operands lowering reads into a temporary as they are evaluated,
+    /// because a later operand of the same sequence may write them; see
+    /// [`body_writes`].
+    pub held_operands: body_writes::HeldOperands,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
     pub runtime_effects: crate::runtime_effects::RuntimeEffects,
@@ -320,6 +325,7 @@ impl TypeChecker {
             imported_statements: Vec::new(),
             receiver_writes: body_writes::ReceiverWrites::default(),
             parameter_writes: body_writes::ParameterWrites::default(),
+            held_operands: body_writes::HeldOperands::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
@@ -659,7 +665,7 @@ impl TypeChecker {
             |name| self.type_identity_named_by(name).map(str::to_string),
             &self.runtime_effects,
         );
-        self.parameter_writes = body_writes::ParameterWrites::of(
+        (self.parameter_writes, self.held_operands) = body_writes::analyse(
             top_level_statements(program).chain(&self.imported_statements),
             self,
         );

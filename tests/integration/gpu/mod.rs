@@ -32,6 +32,7 @@ pub mod device;
 pub mod device_integer_width;
 pub mod div_mod_range;
 pub mod error_paths;
+pub mod evaluation_order;
 pub mod forall_const_bounds;
 pub mod forall_param_call;
 pub mod forall_routing;

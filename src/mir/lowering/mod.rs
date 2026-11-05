@@ -36,6 +36,7 @@ pub mod method_dispatch;
 pub mod reduce_gpu;
 pub mod requests;
 mod runtime_writes;
+pub(crate) mod sequencing;
 pub mod statement;
 pub mod variable;
 pub mod vtable_demand;
@@ -69,7 +70,7 @@ pub use compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 pub use context::LoweringContext;
 pub use expression::lower_expression;
 pub use helpers::{
-    bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_argument_type,
+    bind_pattern, literal_to_u128, lower_body_as_return, lower_to_local, resolve_argument_type,
     resolve_type,
 };
 pub use statement::lower_statement;
@@ -233,7 +234,7 @@ fn lower_function_body(
 
     // Lower body with support for implicit return
     if let Some(body_box) = body_stmt {
-        lower_as_return(&mut ctx, body_box, &ret_ty)?;
+        lower_body_as_return(&mut ctx, body_box, &ret_ty)?;
     }
     copies.close(&mut ctx, ast_func.span);
 
@@ -650,7 +651,7 @@ fn lower_instantiation_body(
     emit_parameter_guards(&mut ctx, name, params)?;
 
     if let Some(body_box) = body_stmt {
-        lower_as_return(&mut ctx, body_box, &ret_ty)?;
+        lower_body_as_return(&mut ctx, body_box, &ret_ty)?;
     }
     copies.close(&mut ctx, ast_func.span);
 
@@ -973,7 +974,7 @@ fn lower_class_method_body(
 
     // Lower body
     if let Some(body_box) = body_stmt {
-        lower_as_return(&mut ctx, body_box, &ret_ty)?;
+        lower_body_as_return(&mut ctx, body_box, &ret_ty)?;
     }
     copies.close(&mut ctx, ast_method.span);
 

@@ -170,7 +170,7 @@ fn lower_argument(
     ctx: &mut LoweringContext,
     value: &Expression,
 ) -> Result<Argument, LoweringError> {
-    let op = lower_expression(ctx, value, None)?;
+    let op = super::sequencing::lower_operand(ctx, value)?;
     let ty = super::dispatch::argument_type(ctx, &op, value);
     Ok((op, ty))
 }
@@ -449,7 +449,7 @@ fn lower_class_with_init(
     let mut slots = Vec::with_capacity(args.len());
     for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
-        let op = lower_expression(ctx, value, None)?;
+        let op = super::sequencing::lower_operand(ctx, value)?;
         let op = match init_params.get(position) {
             Some((_, target_ty)) => {
                 super::dispatch::coerce_arg_to_declared(ctx, op, value, target_ty, watermark)
@@ -823,7 +823,7 @@ fn lower_copy_from_source(
     destination: Place,
 ) -> Result<(), LoweringError> {
     let arg_watermark = ctx.body.local_decls.len();
-    let source_op = lower_expression(ctx, source, None)?;
+    let source_op = super::sequencing::lower_operand(ctx, source)?;
     let source_local = match &source_op {
         Operand::Copy(p) | Operand::Move(p) => Some(p.local),
         Operand::Constant(_) | Operand::Function(_) => None,

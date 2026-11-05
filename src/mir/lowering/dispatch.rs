@@ -46,6 +46,7 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 // Import private helpers from specialized modules.
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 use super::runtime_writes::{self, RuntimeCallee};
+use super::sequencing::lower_operand;
 use super::written_receiver::{PendingReceiver, Receiver};
 
 pub fn lower_call(
@@ -434,7 +435,7 @@ fn lower_plain_args(
 ) -> Result<Vec<Operand>, LoweringError> {
     let mut arg_ops = Vec::with_capacity(args.len());
     for arg in args {
-        arg_ops.push(lower_expression(ctx, arg, None)?);
+        arg_ops.push(lower_operand(ctx, arg)?);
     }
     Ok(arg_ops)
 }
@@ -526,9 +527,9 @@ fn lower_collection_element_access(
     // instantiation type makes codegen address the element at its true width and
     // stride (a `T = f32` element loads 4 bytes, not the pointer-width fallback).
     let obj_ty = substitute_collection_element_ty(obj_ty, &ctx.generic_subs);
-    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = lower_operand(ctx, obj)?;
     let obj_op_src = operand_src_local(&obj_op);
-    let index_op = lower_expression(ctx, &args[0], None)?;
+    let index_op = lower_operand(ctx, &args[0])?;
 
     let alias_ty = receiver_alias_type(ctx, &obj_op, &obj_ty);
     let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), alias_ty, *span);
@@ -872,7 +873,7 @@ pub(super) fn lower_stored_value(
     slot: usize,
 ) -> Result<(Operand, Type), LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let op = lower_expression(ctx, value_arg, None)?;
+    let op = lower_operand(ctx, value_arg)?;
     let op_ty = resolve_arg_type(ctx, value_arg, &op);
     let Some(slot_ty) = collection_slot_type(ctx, collection_ty, slot) else {
         return Ok((op, op_ty));
@@ -1149,7 +1150,7 @@ fn emit_list_insert(
     item_watermark: usize,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let index_op = lower_expression(ctx, index_arg, None)?;
+    let index_op = lower_operand(ctx, index_arg)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
     let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
@@ -1212,7 +1213,7 @@ fn emit_collection_set(
     obj_watermark: usize,
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
-    let index_op = lower_expression(ctx, index_arg, None)?;
+    let index_op = lower_operand(ctx, index_arg)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
     let item_op_src = operand_src_local(&item_op);
     let obj_op = receiver.make_own(ctx)?;
@@ -1390,9 +1391,9 @@ fn lower_gpu_slice(
     // argument, which it leaves alone, so the slice reads it back itself.
     super::variable::emit_cross_residency_readback(ctx, Some(obj), *span);
 
-    let obj_op = move_to_copy(lower_expression(ctx, obj, None)?);
-    let start_op = lower_expression(ctx, start, None)?;
-    let end_op = lower_expression(ctx, end, None)?;
+    let obj_op = move_to_copy(lower_operand(ctx, obj)?);
+    let start_op = lower_operand(ctx, start)?;
+    let end_op = lower_operand(ctx, end)?;
 
     let result_ty = ctx
         .type_checker
@@ -1934,7 +1935,7 @@ fn lower_and_coerce_args<'e>(
     for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
         let watermark = ctx.body.local_decls.len();
         let op = match runtime_writes::lower_call_argument(ctx, callee, position, value)? {
-            runtime_writes::CallArgument::Lowered(op) => op,
+            runtime_writes::CallArgument::Lowered(op) => super::sequencing::hold(ctx, op, value),
             runtime_writes::CallArgument::Written(pending) => {
                 written.push(WrittenArgument {
                     position,

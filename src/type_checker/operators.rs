@@ -8,13 +8,16 @@
 
 use super::context::{class_implements_trait, resolve_method_source, Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::type_arguments::TypeArgument;
+use crate::ast::implicit_methods::operator_method_name;
+use crate::ast::type_arguments::{TypeArgKind, TypeArgument};
 use crate::ast::types::{
-    common_numeric_type, scalar_width, vec_dim, BuiltinCollectionKind, Type, TypeKind,
-    EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
+    common_numeric_type, is_range_type_name, range_member_types, scalar_width, vec_dim,
+    BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
+    ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
 };
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
+use crate::error::syntax::Span;
 
 /// Bound on how deeply structural equality may nest before the compiler
 /// refuses. The comparison is expanded inline, so an unbounded chain would
@@ -699,6 +702,96 @@ impl TypeChecker {
         }
     }
 
+    /// Whether `==` on a value of `kind` whose type declares no `equals`
+    /// compares it member by member: an enum, a struct, a tuple, an optional,
+    /// a result, or a range, which is built from its members. A tuple
+    /// compares each member at the member's own type, so a counted enum is
+    /// compared by its payload and a class through its `equals`.
+    ///
+    /// An `Atomic<T>` is declared as a struct but has no struct behind it to
+    /// walk; host code never compares one. This is the one answer: the
+    /// lowering of `==` and the checker's own questions about it read it.
+    pub fn compares_member_by_member(&self, kind: &TypeKind) -> bool {
+        match kind {
+            TypeKind::Custom(name, _) if name == ATOMIC_TYPE_NAME => false,
+            TypeKind::Custom(name, _) if is_range_type_name(name) => true,
+            TypeKind::Custom(name, _) => matches!(
+                self.type_table.global_type_definitions.get(name),
+                Some(TypeDefinition::Enum(_) | TypeDefinition::Struct(_))
+            ),
+            TypeKind::Result(..) | TypeKind::Option(_) | TypeKind::Tuple(_) => true,
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(..)
+            | TypeKind::Map(..)
+            | TypeKind::Set(_)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(..)
+            | TypeKind::Meta(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_)
+            | TypeKind::OneOf(_) => false,
+        }
+    }
+
+    /// The members a derived `==` on a `name` value reads, at the type
+    /// arguments `args`: an enum's variant payloads, substituted, and a
+    /// struct's fields as declared. `None` for a type `==` does not compare
+    /// member by member.
+    fn derived_equality_members(
+        &self,
+        name: &str,
+        args: Option<&[TypeArgument]>,
+    ) -> Option<Vec<Type>> {
+        match self.type_table.global_type_definitions.get(name)? {
+            TypeDefinition::Enum(enum_def) => Some(
+                (enum_def.variants.values().flatten())
+                    .map(|payload_ty| {
+                        Type::new(
+                            crate::type_checker::generics::substitute_generic_field_kind(
+                                &payload_ty.kind,
+                                args,
+                                enum_def.generics.as_ref(),
+                            ),
+                            payload_ty.span,
+                        )
+                    })
+                    .collect(),
+            ),
+            TypeDefinition::Struct(struct_def) => Some(
+                struct_def
+                    .fields
+                    .iter()
+                    .map(|field| field.1.clone())
+                    .collect(),
+            ),
+            TypeDefinition::Class(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_) => None,
+        }
+    }
+
     /// Check a named type's payloads or fields, unless it defines `equals`.
     fn check_named_type_comparability(
         &self,
@@ -717,28 +810,8 @@ impl TypeChecker {
             ));
         }
 
-        let member_types: Vec<Type> = match self.type_table.global_type_definitions.get(name) {
-            Some(TypeDefinition::Enum(enum_def)) => enum_def
-                .variants
-                .values()
-                .flatten()
-                .map(|payload_ty| {
-                    Type::new(
-                        crate::type_checker::generics::substitute_generic_field_kind(
-                            &payload_ty.kind,
-                            args,
-                            enum_def.generics.as_ref(),
-                        ),
-                        payload_ty.span,
-                    )
-                })
-                .collect(),
-            Some(TypeDefinition::Struct(struct_def)) => struct_def
-                .fields
-                .iter()
-                .map(|field| field.1.clone())
-                .collect(),
-            _ => return Ok(()),
+        let Some(member_types) = self.derived_equality_members(name, args) else {
+            return Ok(());
         };
 
         visiting.push(name.to_string());
@@ -799,29 +872,7 @@ impl TypeChecker {
         if visiting.iter().any(|seen| seen == name) {
             return None;
         }
-        let member_types: Vec<Type> = match self.type_table.global_type_definitions.get(name) {
-            Some(TypeDefinition::Enum(enum_def)) => enum_def
-                .variants
-                .values()
-                .flatten()
-                .map(|payload_ty| {
-                    Type::new(
-                        crate::type_checker::generics::substitute_generic_field_kind(
-                            &payload_ty.kind,
-                            args,
-                            enum_def.generics.as_ref(),
-                        ),
-                        payload_ty.span,
-                    )
-                })
-                .collect(),
-            Some(TypeDefinition::Struct(struct_def)) => struct_def
-                .fields
-                .iter()
-                .map(|field| field.1.clone())
-                .collect(),
-            _ => return None,
-        };
+        let member_types = self.derived_equality_members(name, args)?;
         visiting.push(name.to_string());
         let lacking = member_types
             .iter()
@@ -848,5 +899,138 @@ impl TypeChecker {
     /// members.
     fn type_supplies_equality(&self, name: &str) -> bool {
         self.type_declares_method(name, EQUALS_METHOD_NAME)
+    }
+
+    /// Whether `op` applied to a left operand of type `left` may run a method
+    /// body: the one the operator table names, as the left operand's type
+    /// answers it, or for an equality an `equals` some part of a value
+    /// compared member by member declares. A membership test compares the
+    /// left operand against each element the way `==` does. A type parameter
+    /// may stand for a type that answers.
+    pub(crate) fn operator_may_run_method(&self, left: &Type, op: &BinaryOp) -> bool {
+        let op = if matches!(op, BinaryOp::In) {
+            &BinaryOp::Equal
+        } else {
+            op
+        };
+        let Some(method) = operator_method_name(op) else {
+            return false;
+        };
+        if method == EQUALS_METHOD_NAME {
+            return self.equality_may_run_method(&left.kind, &mut Vec::new());
+        }
+        let name = match &left.kind {
+            TypeKind::String => STRING_TYPE_NAME,
+            TypeKind::Custom(name, _) => name.as_str(),
+            kind => return matches!(kind, TypeKind::Generic(..)),
+        };
+        self.type_may_answer(name, method)
+    }
+
+    /// Whether comparing two values of `kind` with `==` may run an `equals`:
+    /// one a part's type declares, reached through every member a derived
+    /// comparison reads. `visiting` holds the named types the walk is inside.
+    fn equality_may_run_method(&self, kind: &TypeKind, visiting: &mut Vec<String>) -> bool {
+        match kind {
+            TypeKind::Generic(..) => true,
+            TypeKind::String => self.type_may_answer(STRING_TYPE_NAME, EQUALS_METHOD_NAME),
+            TypeKind::Option(inner) | TypeKind::Linear(inner) | TypeKind::Meta(inner) => {
+                self.equality_may_run_method(&inner.kind, visiting)
+            }
+            TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
+                self.arguments_may_run_equals([element.as_ref()], visiting)
+            }
+            TypeKind::Array(first, second)
+            | TypeKind::Map(first, second)
+            | TypeKind::Result(first, second) => {
+                self.arguments_may_run_equals([first.as_ref(), second.as_ref()], visiting)
+            }
+            TypeKind::Tuple(parts) | TypeKind::OneOf(parts) => {
+                self.arguments_may_run_equals(parts, visiting)
+            }
+            TypeKind::Custom(name, args) => {
+                self.named_equality_may_run_method(kind, (name, args.as_deref()), visiting)
+            }
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Function(_)
+            | TypeKind::Void
+            | TypeKind::Error => false,
+        }
+    }
+
+    /// Whether comparing the parts the type arguments `arguments` name may
+    /// run an `equals`.
+    fn arguments_may_run_equals<'a>(
+        &self,
+        arguments: impl IntoIterator<Item = &'a TypeArgument>,
+        visiting: &mut Vec<String>,
+    ) -> bool {
+        arguments.into_iter().any(|argument| match &argument.node {
+            TypeArgKind::Type(ty, _) => self.equality_may_run_method(&ty.kind, visiting),
+            TypeArgKind::Value(_) => false,
+        })
+    }
+
+    /// Whether comparing two values of the named type `kind` may run an
+    /// `equals`: its own, or one a member reaches when it is compared member
+    /// by member. Any other named type — a class without one — is compared
+    /// by identity.
+    fn named_equality_may_run_method(
+        &self,
+        kind: &TypeKind,
+        (name, args): (&str, Option<&[TypeArgument]>),
+        visiting: &mut Vec<String>,
+    ) -> bool {
+        if self.type_may_answer(name, EQUALS_METHOD_NAME) {
+            return true;
+        }
+        if !self.compares_member_by_member(kind) || visiting.iter().any(|seen| seen == name) {
+            return false;
+        }
+        let members = range_member_types(kind, Span::default())
+            .map(Vec::from)
+            .or_else(|| self.derived_equality_members(name, args));
+        let Some(members) = members else {
+            return false;
+        };
+        visiting.push(name.to_string());
+        let runs = members
+            .iter()
+            .any(|member| self.equality_may_run_method(&member.kind, visiting));
+        visiting.pop();
+        runs
+    }
+
+    /// Whether a value of the type `name` may answer `method` with a body:
+    /// a class or enum that declares or inherits it, and a trait, type
+    /// parameter, alias or unknown name, which may stand for one that does.
+    fn type_may_answer(&self, name: &str, method: &str) -> bool {
+        match self.type_table.global_type_definitions.get(name) {
+            Some(TypeDefinition::Class(_) | TypeDefinition::Enum(_)) => {
+                self.type_declares_method(name, method)
+            }
+            Some(TypeDefinition::Struct(_)) => false,
+            Some(
+                TypeDefinition::Trait(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_),
+            )
+            | None => true,
+        }
     }
 }

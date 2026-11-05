@@ -121,3 +121,27 @@ fn main()
 "#;
     assert_eq!(written(source), ["add.ys", "inner.zs"]);
 }
+
+/// Handing an `out` parameter on as another call's `out` argument writes
+/// it; a lent parameter is never written by being read, and the checker
+/// refuses one as an `out` argument, so only an `out` parameter's verdict
+/// reads the `out` rule.
+#[test]
+fn an_out_parameter_handed_on_as_an_out_argument_is_written() {
+    let source = r#"
+fn set(x out int) int
+    x = 5
+    return 0
+
+fn pass(n out int) int
+    return set(n)
+
+fn reads(n int) int
+    return n + 1
+
+fn main()
+    var k = 1
+    let r = pass(k) + reads(k)
+"#;
+    assert_eq!(written(source), ["set.x", "pass.n"]);
+}

@@ -988,7 +988,7 @@ pub fn lower_for(
             .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
         // Provide the name so push_local can decide to strip it or not based on is_release
         let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), *span);
-        let start_op = lower_expression(ctx, start, None)?;
+        let start_op = super::sequencing::lower_operand(ctx, start)?;
 
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(loop_var), Rvalue::Use(start_op)),
@@ -1007,7 +1007,7 @@ pub fn lower_for(
 
         // 2. Header: Check condition
         ctx.set_current_block(header_bb);
-        let end_op = lower_expression(ctx, end, None)?;
+        let end_op = super::sequencing::lower_operand(ctx, end)?;
         let end_local = crate::mir::lowering::helpers::ensure_place(ctx, end_op, *span).local;
         let end_op = Operand::Copy(Place::new(end_local));
         let current_val = Operand::Copy(Place::new(loop_var));

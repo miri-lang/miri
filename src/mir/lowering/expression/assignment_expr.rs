@@ -1149,6 +1149,9 @@ pub(crate) fn lower_assignment_expr(
     let ExpressionKind::Assignment(lhs, op, rhs) = &expr.node else {
         unreachable!()
     };
+    // TODO: the target's indexes and, for `op=`, its current value are read
+    // after the value is evaluated; whether assignment follows left-to-right
+    // like other operands is undecided.
     match &**lhs {
         crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) => {
             assign_to_identifier(ctx, id_expr, op, rhs, expr, dest)

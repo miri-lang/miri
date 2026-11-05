@@ -19,8 +19,9 @@ use std::rc::Rc;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::control_flow::lower_call;
-use crate::mir::lowering::expression::{lower_expression, testing_intrinsic};
+use crate::mir::lowering::expression::testing_intrinsic;
 use crate::mir::lowering::helpers::{gpu_math_return_type, resolve_type};
+use crate::mir::lowering::sequencing::lower_operand;
 
 pub(crate) fn lower_call_expr(
     ctx: &mut LoweringContext,
@@ -86,7 +87,7 @@ fn try_lower_option_some(
     }
 
     let arg_watermark = ctx.body.local_decls.len();
-    let inner_val = lower_expression(ctx, &args[0], None)?;
+    let inner_val = lower_operand(ctx, &args[0])?;
     let inner_val = widen_some_payload(ctx, inner_val, &args[0], expr);
     let optional = some_optional_type(ctx, &args[0], expr);
     let target = if let Some(d) = dest {
@@ -287,7 +288,7 @@ fn try_lower_gpu_shuffle_down(
     }
 
     // Lower the value operand
-    let value_op = lower_expression(ctx, &args[0], None)?;
+    let value_op = lower_operand(ctx, &args[0])?;
 
     // Extract the compile-time literal offset
     let offset = match &args[1].node {
@@ -430,11 +431,11 @@ fn try_lower_atomic_builtin(
         ));
     }
 
-    let buffer_op = lower_expression(ctx, &args[0], None)?;
-    let index_op = lower_expression(ctx, &args[1], None)?;
-    let value_op = lower_expression(ctx, &args[2], None)?;
+    let buffer_op = lower_operand(ctx, &args[0])?;
+    let index_op = lower_operand(ctx, &args[1])?;
+    let value_op = lower_operand(ctx, &args[2])?;
     let compare_expected = if op == GpuAtomicOp::CompareExchange {
-        Some(Box::new(lower_expression(ctx, &args[3], None)?))
+        Some(Box::new(lower_operand(ctx, &args[3])?))
     } else {
         None
     };
@@ -503,7 +504,7 @@ fn try_lower_vector_builtin(
 
     let mut arg_ops = Vec::with_capacity(args.len());
     for arg in args {
-        arg_ops.push(lower_expression(ctx, arg, None)?);
+        arg_ops.push(lower_operand(ctx, arg)?);
     }
 
     let return_ty = resolve_type(ctx.type_checker, expr);
@@ -542,7 +543,7 @@ fn try_lower_math_intrinsic(
     );
     let mut arg_ops = Vec::with_capacity(args.len());
     for arg in args {
-        let lowered = lower_expression(ctx, arg, None)?;
+        let lowered = lower_operand(ctx, arg)?;
         let arg_ty = ctx.recorded_type(arg.id);
         let converted = match arg_ty {
             Some(arg_ty)

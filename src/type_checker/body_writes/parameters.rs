@@ -14,7 +14,8 @@
 //! any closure or nested function, is
 //! - the target of an assignment, at any depth of fields and elements,
 //! - the receiver of a call of a method that writes a built-in collection
-//!   receiver, as [`super::ReceiverWrites`] reads it off the method's body, or
+//!   receiver, as [`super::ReceiverWrites`] reads it off the method's body,
+//! - an `out` argument, or
 //! - an argument a runtime entry point writes in place, as its declaration
 //!   states. A cast hands the runtime a value of its own and is not followed.
 //!
@@ -26,11 +27,10 @@
 
 use std::collections::HashSet;
 
-use super::{BodyWrites, Function, Mention, Role};
+use super::{BodyWrites, Mention, Role};
 use crate::ast::common::Parameter;
 use crate::ast::expression::{bind_arguments_to_parameters, Expression, ExpressionKind};
-use crate::ast::statement::{Statement, StatementKind};
-use crate::ast::types::TypeKind;
+use crate::ast::types::{FunctionTypeData, TypeKind};
 use crate::type_checker::{CalleeKind, TypeChecker};
 
 /// The parameters every body of a program writes.
@@ -46,90 +46,27 @@ impl ParameterWrites {
         self.written.contains(&parameter.typ.id)
     }
 
-    /// The written parameters of every function, method and closure
-    /// `statements` declare, at any depth.
-    pub(crate) fn of<'s>(
-        statements: impl Iterator<Item = &'s Statement>,
-        checker: &TypeChecker,
-    ) -> Self {
-        let mut writes = Self::default();
-        for statement in statements {
-            writes.declarations(statement, checker);
-        }
-        writes
-    }
-
-    /// Analyses the functions `statement` declares: a function or method
-    /// with the functions inside it, and the closures a statement outside
-    /// any function builds, a field initializer's included.
-    fn declarations(&mut self, statement: &Statement, checker: &TypeChecker) {
-        match &statement.node {
-            StatementKind::FunctionDeclaration(declaration) => {
-                if let Some(body) = declaration.body.as_deref() {
-                    let function = Function {
-                        params: &declaration.params,
-                        body,
-                    };
-                    for inner in self.function(function, checker) {
-                        self.function(inner, checker);
-                    }
-                }
-            }
-            StatementKind::Block(statements) => {
-                statements
-                    .iter()
-                    .for_each(|s| self.declarations(s, checker));
-            }
-            StatementKind::Class(class) => {
-                class
-                    .body
-                    .iter()
-                    .for_each(|s| self.declarations(s, checker));
-            }
-            StatementKind::Struct(_, _, _, methods, _, _)
-            | StatementKind::Enum(_, _, _, methods, _, _)
-            | StatementKind::Trait(_, _, _, methods, _) => {
-                methods.iter().for_each(|s| self.declarations(s, checker));
-            }
-            StatementKind::Expression(_)
-            | StatementKind::Variable(..)
-            | StatementKind::If(..)
-            | StatementKind::While(..)
-            | StatementKind::For(..)
-            | StatementKind::Forall { .. }
-            | StatementKind::GpuFrame(..)
-            | StatementKind::GpuFrameBlock(_)
-            | StatementKind::Return(_)
-            | StatementKind::Empty
-            | StatementKind::Break
-            | StatementKind::Continue
-            | StatementKind::Use(..)
-            | StatementKind::Type(..)
-            | StatementKind::RuntimeFunctionDeclaration(..)
-            | StatementKind::IntrinsicFunctionDeclaration(..) => {
-                for inner in BodyWrites::of(statement).functions {
-                    self.function(inner, checker);
+    /// Records the parameters each function and closure the body `writes`
+    /// walked declares, at any depth, writes in its own body.
+    pub(super) fn record(&mut self, writes: &BodyWrites, checker: &TypeChecker) {
+        let written: HashSet<(usize, &str)> = (writes.mentions.iter())
+            .filter(|mention| is_written(checker, mention))
+            .map(|mention| (mention.owner, mention.name()))
+            .collect();
+        for function in &writes.functions {
+            for param in function.params {
+                if written.contains(&(function.body.id, param.name.as_str())) {
+                    self.written.insert(param.typ.id);
                 }
             }
         }
-    }
-
-    /// Records the parameters `function` writes, and hands back every
-    /// function and closure it declares, at any depth.
-    fn function<'b>(&mut self, function: Function<'b>, checker: &TypeChecker) -> Vec<Function<'b>> {
-        let uses = BodyWrites::of(function.body);
-        for param in function.params {
-            if uses.of_binding(&param.name).any(|m| is_written(checker, m)) {
-                self.written.insert(param.typ.id);
-            }
-        }
-        uses.functions
     }
 }
 
 /// Whether `mention` of a binding writes it, or writes through a path
-/// starting at it.
-fn is_written(checker: &TypeChecker, mention: &Mention) -> bool {
+/// starting at it: as an assignment's target, a writing method's receiver,
+/// an `out` argument, or an argument a runtime entry point writes in place.
+pub(super) fn is_written(checker: &TypeChecker, mention: &Mention) -> bool {
     match mention.role {
         Some(Role::Assigned) => true,
         Some(Role::Receiver { object, method }) => writes_receiver(checker, object, method),
@@ -139,14 +76,32 @@ fn is_written(checker: &TypeChecker, mention: &Mention) -> bool {
             index,
             through_cast,
             ..
-        }) => !through_cast && runtime_writes_argument(checker, callee, arguments, index),
+        }) => writes_argument(checker, callee, arguments, index, through_cast),
         None => false,
     }
 }
 
+/// Whether a call of `callee` on `arguments` writes the one written
+/// `index`th: an `out` argument, or one a runtime entry point writes in place
+/// unless a cast, which hands the runtime a value of its own, stands between.
+pub(super) fn writes_argument(
+    checker: &TypeChecker,
+    callee: &Expression,
+    arguments: &[Expression],
+    index: usize,
+    through_cast: bool,
+) -> bool {
+    binds_out_parameter(checker, callee, arguments, index)
+        || !through_cast && runtime_writes_argument(checker, callee, arguments, index)
+}
+
 /// Whether calling `method` on `object` writes the built-in collection
 /// `object` is.
-fn writes_receiver(checker: &TypeChecker, object: &Expression, method: &Expression) -> bool {
+pub(super) fn writes_receiver(
+    checker: &TypeChecker,
+    object: &Expression,
+    method: &Expression,
+) -> bool {
     let ExpressionKind::Identifier(method, _) = &method.node else {
         return false;
     };
@@ -184,12 +139,38 @@ fn runtime_writes_argument(
     let Some(effect) = checker.runtime_effects.get(name.as_str()) else {
         return false;
     };
-    let Some(TypeKind::Function(signature)) = checker.get_type(callee.id).map(|ty| &ty.kind) else {
-        return false;
+    bound_parameter(checker, callee, arguments, index)
+        .is_some_and(|(position, _)| effect.writes_in_place(position))
+}
+
+/// Whether the argument written `index`th of a call of `callee` on
+/// `arguments` binds an `out` parameter, which the callee writes through.
+fn binds_out_parameter(
+    checker: &TypeChecker,
+    callee: &Expression,
+    arguments: &[Expression],
+    index: usize,
+) -> bool {
+    bound_parameter(checker, callee, arguments, index)
+        .and_then(|(position, signature)| signature.params.get(position))
+        .is_some_and(|param| param.is_out)
+}
+
+/// The position of the parameter the argument written `index`th of a call
+/// of `callee` on `arguments` binds, with the signature `callee` was checked
+/// at; `None` when `callee` is no function.
+fn bound_parameter<'c>(
+    checker: &'c TypeChecker,
+    callee: &Expression,
+    arguments: &[Expression],
+    index: usize,
+) -> Option<(usize, &'c FunctionTypeData)> {
+    let TypeKind::Function(signature) = &checker.get_type(callee.id)?.kind else {
+        return None;
     };
     let parameters: Vec<&str> = signature.params.iter().map(|p| p.name.as_str()).collect();
-    (bind_arguments_to_parameters(arguments, &parameters).get(index))
-        .is_some_and(|&(position, _)| effect.writes_in_place(position))
+    let &(position, _) = bind_arguments_to_parameters(arguments, &parameters).get(index)?;
+    Some((position, signature))
 }
 
 #[cfg(test)]

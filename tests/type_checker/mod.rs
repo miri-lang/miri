@@ -25,6 +25,7 @@ pub mod gpu_for;
 pub mod gpu_integer_width;
 pub mod gpu_launch;
 pub mod gpu_type_check;
+pub mod held_operands;
 pub mod inherited_members;
 pub mod integer;
 pub mod lambda;

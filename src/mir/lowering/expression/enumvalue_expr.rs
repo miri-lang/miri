@@ -13,8 +13,8 @@ use crate::mir::{
 use std::rc::Rc;
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::sequencing::lower_operand;
 
 pub(crate) fn lower_enumvalue_expr(
     ctx: &mut LoweringContext,
@@ -101,7 +101,7 @@ pub(crate) fn lower_enum_payload(
     let mut ops = Vec::with_capacity(args.len());
     for (position, arg) in args.iter().enumerate() {
         let watermark = ctx.body.local_decls.len();
-        let op = lower_expression(ctx, arg, None)?;
+        let op = lower_operand(ctx, arg)?;
         let op = match slots.get(position) {
             Some(slot) => {
                 let op_ty = crate::mir::lowering::dispatch::argument_type(ctx, &op, arg);

@@ -907,6 +907,19 @@ fn lower_return_expression(
     Ok(())
 }
 
+/// Lowers the function or closure body `body`, its final expression
+/// assigned to `_0`, and refuses it when an operand the type checker holds
+/// in it was not read where it is evaluated
+/// ([`super::sequencing::check_every_hold_lowered`]).
+pub fn lower_body_as_return(
+    ctx: &mut LoweringContext,
+    body: &Statement,
+    ret_ty: &Type,
+) -> Result<(), LoweringError> {
+    lower_as_return(ctx, body, ret_ty)?;
+    super::sequencing::check_every_hold_lowered(ctx, body)
+}
+
 /// Recursively lowers statements to assign the final expression to `_0` (return place).
 pub fn lower_as_return(
     ctx: &mut LoweringContext,

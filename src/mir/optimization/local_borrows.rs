@@ -69,7 +69,7 @@
 //!   emptying or releasing the map ends it — and is reached by other code,
 //!   since whatever else holds the collection can replace it.
 
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, STRING_TYPE_NAME};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
 use crate::mir::facts::OwnershipFacts;
 use crate::mir::optimization::perceus::{place_declared_type, Perceus, PerceusContext};
@@ -83,6 +83,7 @@ use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement, StatementKind,
 };
 use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::reference_sharing::{sharing, Sharing};
 use std::collections::{HashMap, HashSet};
 
 /// A statement's position: its block and its index in the block.
@@ -358,8 +359,11 @@ fn refused_locals(body: &Body, ctx: &PerceusContext, reads: &Reads) -> HashSet<L
         .iter()
         .flat_map(|(&local, sources)| sources.iter().map(move |(site, _)| (local, *site)))
         .collect();
-    let is_reference =
-        |local: Local| has_reference_semantics(&ctx.local_decls[local.0].ty.kind, definitions(ctx));
+    // A class instance, or a value of a trait only such classes implement, is
+    // a reference by design and never copied on write.
+    let is_reference = |local: Local| {
+        sharing(&ctx.local_decls[local.0].ty.kind, definitions(ctx)) == Sharing::Reference
+    };
     let is_copied = |local: Local| is_copied_on_write(body, &ctx.local_decls[local.0].ty);
     let mut refused = HashSet::new();
     for (block, data) in body.basic_blocks.iter().enumerate() {
@@ -878,98 +882,4 @@ fn holds_fields_by_value(kind: &TypeKind, definitions: &HashMap<String, TypeDefi
         | TypeKind::Linear(_)
         | TypeKind::OneOf(_) => false,
     }
-}
-
-/// Whether a value of `kind` is a reference by design, never copied on
-/// write: an instance of a class, or a value of a trait only such classes
-/// implement. A built-in collection and a string are classes that copy on
-/// write, and so are not.
-pub(crate) fn has_reference_semantics(
-    kind: &TypeKind,
-    definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
-    let TypeKind::Custom(name, _) = kind else {
-        return false;
-    };
-    match definitions.get(name) {
-        Some(TypeDefinition::Class(_)) => is_reference_class(name, definitions),
-        Some(TypeDefinition::Trait(_)) => implementers_are_reference_classes(name, definitions),
-        Some(
-            TypeDefinition::Struct(_)
-            | TypeDefinition::Enum(_)
-            | TypeDefinition::Generic(_)
-            | TypeDefinition::Alias(_),
-        )
-        | None => false,
-    }
-}
-
-/// The class `name` and every class it extends, nearest first.
-fn class_chain<'a>(
-    name: &'a str,
-    definitions: &'a HashMap<String, TypeDefinition>,
-) -> impl Iterator<Item = &'a str> {
-    let mut seen = HashSet::new();
-    std::iter::successors(Some(name), move |current| match definitions.get(*current) {
-        Some(TypeDefinition::Class(class)) => class.base_class.as_deref(),
-        Some(_) | None => None,
-    })
-    .take_while(move |current| seen.insert(*current))
-}
-
-/// Whether neither the class `name` nor any class it extends copies on write.
-fn is_reference_class(name: &str, definitions: &HashMap<String, TypeDefinition>) -> bool {
-    class_chain(name, definitions).all(|class| {
-        let copies_on_write = BuiltinCollectionKind::from_name(class).is_some();
-        // A string appends in place when nothing else holds it
-        // ([`crate::runtime_effects::RuntimeEffect::taken_positions`]), so it is a value too.
-        !copies_on_write && class != STRING_TYPE_NAME
-    })
-}
-
-/// Whether the trait `name`, or a trait extending it, is implemented, and
-/// only by reference classes. A trait no class implements has no value to
-/// judge by, and is not taken as a reference.
-fn implementers_are_reference_classes(
-    name: &str,
-    definitions: &HashMap<String, TypeDefinition>,
-) -> bool {
-    definitions
-        .iter()
-        .filter_map(|(class_name, definition)| match definition {
-            TypeDefinition::Class(class) => Some((class_name, class)),
-            TypeDefinition::Struct(_)
-            | TypeDefinition::Enum(_)
-            | TypeDefinition::Generic(_)
-            | TypeDefinition::Alias(_)
-            | TypeDefinition::Trait(_) => None,
-        })
-        .filter(|(class_name, _)| {
-            class_chain(class_name, definitions).any(|ancestor| {
-                matches!(definitions.get(ancestor), Some(TypeDefinition::Class(class))
-                    if class.traits.iter().any(|t| trait_extends(t, name, definitions)))
-            })
-        })
-        .try_fold(false, |_, (class_name, _)| {
-            is_reference_class(class_name, definitions).then_some(true)
-        })
-        .unwrap_or(false)
-}
-
-/// Whether the trait `name` is `target` or extends it.
-fn trait_extends(name: &str, target: &str, definitions: &HashMap<String, TypeDefinition>) -> bool {
-    let mut pending = vec![name];
-    let mut seen = HashSet::new();
-    while let Some(current) = pending.pop() {
-        if current == target {
-            return true;
-        }
-        if !seen.insert(current) {
-            continue;
-        }
-        if let Some(TypeDefinition::Trait(definition)) = definitions.get(current) {
-            pending.extend(definition.parent_traits.iter().map(String::as_str));
-        }
-    }
-    false
 }
