@@ -503,6 +503,8 @@ fn run_step(
         "Build" => {
             cmd.arg("build")
                 .arg(require(&spec.file, "file", &spec.kind)?)
+                .arg("--out")
+                .arg(work_dir.join("a.out"))
                 .arg("--format")
                 .arg("json");
         }

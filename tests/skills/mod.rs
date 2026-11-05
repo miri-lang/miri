@@ -224,6 +224,7 @@ fn run_miri_build(block: &SkillBlock) -> Result<serde_json::Value, String> {
     write!(file, "{}", block.code).map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     let test_path = file.path().to_str().unwrap().to_string();
+    let out_dir = tempfile::tempdir().map_err(|e| format!("Failed to create output dir: {}", e))?;
 
     let mut cmd = miri_cmd();
     let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -234,6 +235,8 @@ fn run_miri_build(block: &SkillBlock) -> Result<serde_json::Value, String> {
         .env("RUST_BACKTRACE", "0")
         .arg("build")
         .arg(&test_path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .arg("--format")
         .arg("json");
 

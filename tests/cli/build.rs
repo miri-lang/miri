@@ -21,13 +21,41 @@ const SIMPLE_MAIN: &str = r#"fn main() int
 fn test_build_valid_file() {
     let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
         .arg(path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .assert()
         .success()
         .stdout(predicates::str::contains("Build successful"));
+}
+
+/// A build told where to write leaves nothing in the temporary directory, so
+/// a caller that names its output owns everything the build produced.
+#[test]
+fn test_build_with_output_leaves_no_temporary_directory() {
+    let file = create_test_file(SIMPLE_MAIN);
+    let out_dir = tempfile::tempdir().unwrap();
+    let temp_root = tempfile::tempdir().unwrap();
+
+    miri_cmd()
+        .env("TMPDIR", temp_root.path())
+        .arg("build")
+        .arg(file.path())
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
+        .assert()
+        .success();
+
+    let left: Vec<_> = std::fs::read_dir(temp_root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "the build left {left:?} in TMPDIR");
+    assert!(out_dir.path().join("main").is_file());
 }
 
 #[test]
@@ -52,10 +80,13 @@ fn test_build_with_output() {
 fn test_build_release() {
     let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
         .arg(path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .arg("--release")
         .assert()
         .success();
@@ -65,10 +96,13 @@ fn test_build_release() {
 fn test_build_opt_level() {
     let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
         .arg(path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .arg("--opt-level")
         .arg("3")
         .assert()
@@ -94,10 +128,13 @@ fn test_build_invalid_opt_level() {
 fn test_build_cpu_backend_cranelift() {
     let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
         .arg(path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .arg("--cpu-backend")
         .arg("cranelift")
         .assert()

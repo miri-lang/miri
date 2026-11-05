@@ -272,6 +272,21 @@ fn test_fail_fixture(path: &Path) -> Result<usize, String> {
 
 /// The JSON envelope `command` prints for the program at `test_path`, once it
 /// is known to refuse the program with `expect_code` among its diagnostics.
+/// Point a `build` at an output inside a directory the caller holds, so the
+/// executable is removed with it; without one the compiler keeps a temporary
+/// directory per build that nothing removes. Other commands write nothing.
+fn name_owned_output(
+    cmd: &mut assert_cmd::Command,
+    command: &str,
+) -> Result<Option<tempfile::TempDir>, String> {
+    if command != "build" {
+        return Ok(None);
+    }
+    let dir = tempfile::tempdir().map_err(|e| format!("Failed to create output dir: {}", e))?;
+    cmd.arg("--out").arg(dir.path().join("main"));
+    Ok(Some(dir))
+}
+
 fn refusal_envelope(
     test_path: &str,
     command: &str,
@@ -294,6 +309,7 @@ fn refusal_envelope(
         .arg(test_path)
         .arg("--format")
         .arg("json");
+    let _output_dir = name_owned_output(&mut cmd, command)?;
 
     let output = cmd
         .output()
@@ -359,6 +375,7 @@ fn test_warn_fixture(path: &Path) -> Result<usize, String> {
         .arg(&test_path)
         .arg("--format")
         .arg("json");
+    let _output_dir = name_owned_output(&mut cmd, directives.command_or("check"))?;
 
     let output = cmd
         .output()
@@ -431,6 +448,7 @@ fn test_pass_fixture(path: &Path) -> Result<(), String> {
         .arg(&test_path)
         .arg("--format")
         .arg("json");
+    let _output_dir = name_owned_output(&mut cmd, directives.command_or("run"))?;
 
     let output = cmd
         .output()

@@ -91,6 +91,10 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
     // code and is returned immediately.
     let max_attempts = if gpu_run { 3 } else { 1 };
     const SIGNAL_KILLED_CHILD_CODE: i32 = 255;
+    // A build names its output inside a directory this call owns, so the
+    // executable is removed with it; without `-o` the compiler keeps a fresh
+    // temporary directory per build that nothing removes.
+    let build_dir = (command == "build").then(|| tempfile::tempdir().unwrap());
 
     let mut result = None;
     for attempt in 1..=max_attempts {
@@ -108,6 +112,9 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
             .arg(command)
             .arg(&path)
             .args(forced_opt_level_args(command));
+        if let Some(dir) = &build_dir {
+            cmd.arg("-o").arg(dir.path().join("a.out"));
+        }
 
         if !program_args.is_empty() {
             cmd.arg("--");

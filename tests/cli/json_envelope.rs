@@ -122,10 +122,13 @@ fn test_check_format_json_no_ansi() {
 fn test_build_format_json_success() {
     let file = create_test_file(VALID_MAIN);
     let path = file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
 
     let output = miri_cmd()
         .arg("build")
         .arg(path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .arg("--format")
         .arg("json")
         .output()
@@ -519,10 +522,13 @@ fn test_check_json_round_trip_error() {
 fn test_build_json_round_trip_success() {
     let file = create_test_file(VALID_MAIN);
     let path = file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
 
     let output = miri_cmd()
         .arg("build")
         .arg(path)
+        .arg("--out")
+        .arg(out_dir.path().join("main"))
         .arg("--format")
         .arg("json")
         .output()
@@ -769,13 +775,13 @@ fn test_adds()
 /// what was written to stderr.
 fn envelope_of(command: &str, content: &str) -> (serde_json::Value, String) {
     let file = create_test_file(content);
-    let output = miri_cmd()
-        .arg(command)
-        .arg(file.path())
-        .arg("--format")
-        .arg("json")
-        .output()
-        .unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let mut cmd = miri_cmd();
+    cmd.arg(command).arg(file.path());
+    if command == "build" {
+        cmd.arg("--out").arg(out_dir.path().join("main"));
+    }
+    let output = cmd.arg("--format").arg("json").output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let envelope = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout should be one JSON envelope ({e}):\n{stdout}"));
