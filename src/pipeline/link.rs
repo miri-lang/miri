@@ -26,6 +26,7 @@ impl Pipeline {
         // Link the math library (required for sin, cos, pow, etc. on Linux)
         cmd.arg("-lm");
         cmd.arg(DEAD_CODE_LINK_ARG);
+        cmd.args(NO_DEBUG_MAP_LINK_ARGS);
         cmd.args(runtime_build.executable_link_args());
 
         // Link required runtime libraries

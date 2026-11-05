@@ -30,14 +30,22 @@ TEST_THREADS ?= 8
 # measured with. Flags already in RUSTFLAGS are kept for both builds. The
 # runtimes listed here must be the ones `RuntimeKind::has_frame_pointer_build`
 # names in src/ast/common.rs.
+#
+# Every program links a runtime staticlib, and the staticlib's panic locations
+# name the files it was compiled from: this clone, the cargo registry and the
+# toolchain's sources, all under the home directory. A program is something its
+# author hands to other people, so both builds remap that prefix to `~`. A home
+# directory containing a space cannot be spelled in RUSTFLAGS and is left as is.
+REMAP_HOME_RUSTFLAGS := $(if $(and $(HOME),$(filter-out /,$(HOME)),$(if $(word 2,$(HOME)),,yes)),--remap-path-prefix=$(HOME)=~)
+RUNTIME_RUSTFLAGS := $(strip $(RUSTFLAGS) $(REMAP_HOME_RUSTFLAGS))
 FRAME_POINTER_RUNTIMES := src/runtime/core src/runtime/gpu
-FRAME_POINTER_RUSTFLAGS := $(strip $(RUSTFLAGS) -C force-frame-pointers=yes)
+FRAME_POINTER_RUSTFLAGS := $(strip $(RUNTIME_RUSTFLAGS) -C force-frame-pointers=yes)
 
 runtimes:
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Building $$rt (release staticlib — the profile the compiler links)"; \
-			cargo build --release --manifest-path "$$rt/Cargo.toml" || exit 1; \
+			RUSTFLAGS="$(RUNTIME_RUSTFLAGS)" cargo build --release --manifest-path "$$rt/Cargo.toml" || exit 1; \
 		done; \
 	fi
 	@for rt in $(FRAME_POINTER_RUNTIMES); do \

@@ -2108,3 +2108,46 @@ fn test_a_struct_result_comes_back_in_registers_from_every_kind_of_callee() {
         "7 0.25 4 2.0 5 0.5"
     );
 }
+
+/// A program reaching the runtime's strings, maps and sorting, so the
+/// executable links code the runtime staticlib took from the standard library.
+const RUNTIME_HEAVY: &str = r#"use system.io
+use system.collections.list
+use system.collections.map
+
+fn main()
+    var counts = Map<String, int>()
+    var words = List(["pear", "fig", "pear"])
+    words.sort()
+    for w in words
+        counts[w] = 1
+    println(f"{counts.length()} {words[0]}")
+"#;
+
+/// A built program is something its author hands to other people, so it
+/// carries no path under the home directory of the machine that built it.
+/// Every executable links the runtime staticlib, whose panic locations name
+/// the source files it was compiled from: the runtime's own, the cargo
+/// registry's and the toolchain's. `make runtimes` remaps that prefix, for
+/// the standard runtime and for the frame-pointer copy a profile build links.
+#[test]
+fn test_a_built_program_carries_no_home_directory_path() {
+    let Some(home) = std::env::var_os("HOME").filter(|home| home.len() > 1) else {
+        return;
+    };
+    let home = home.to_string_lossy().into_owned();
+    let source = create_test_file(RUNTIME_HEAVY);
+    let out_dir = tempfile::tempdir().unwrap();
+    for flags in [&[][..], &["--profile"][..]] {
+        let executable = build_with_flags(&source, out_dir.path(), flags);
+        let bytes = std::fs::read(&executable).unwrap();
+        let found = bytes
+            .windows(home.len())
+            .filter(|window| *window == home.as_bytes())
+            .count();
+        assert_eq!(
+            found, 0,
+            "the executable built with {flags:?} names the home directory {found} times"
+        );
+    }
+}

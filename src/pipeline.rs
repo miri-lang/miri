@@ -747,6 +747,19 @@ const DEAD_CODE_LINK_ARG: &str = if cfg!(target_os = "macos") {
     "-Wl,--gc-sections"
 };
 
+/// The linker arguments that keep the building machine's paths out of the
+/// executable. Apple's linker records, for a debugger to find the debug
+/// information later, the absolute path of every object and archive it links,
+/// the runtime libraries' included; a program is something its author hands to
+/// other people, so it links without that map. The symbol table stays, and a
+/// profile's sampler names functions from it. GNU and LLVM linkers on Linux
+/// record no such paths.
+const NO_DEBUG_MAP_LINK_ARGS: &[&str] = if cfg!(target_os = "macos") {
+    &["-Wl,-S"]
+} else {
+    &[]
+};
+
 /// Which build of a runtime's static library a program links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBuild {
