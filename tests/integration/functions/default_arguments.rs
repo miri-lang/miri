@@ -142,3 +142,51 @@ fn a_default_in_another_module_reads_its_earlier_parameter() {
         "2 50",
     );
 }
+
+#[test]
+fn a_generic_default_reads_an_earlier_parameter_at_each_instantiation() {
+    assert_heap_guard_output(
+        r#"
+fn second<T>(x T, y T = x) T
+    return y
+
+fn main()
+    let s = "a" + "b"
+    println(f"{second(3)} {second(s)} {second(1.5, 2.5)} {s}")
+"#,
+        "3 ab 2.5 ab",
+    );
+}
+
+#[test]
+fn a_generic_call_receives_a_default_naming_no_parameter() {
+    assert_runs_with_output(
+        r#"
+fn g<T>(x T, y int = 5) int
+    return y
+
+fn main()
+    println(f"{g(3)} {g(1.5, 7)}")
+"#,
+        "5 7",
+    );
+}
+
+#[test]
+fn a_generic_default_written_at_the_type_parameter_builds_at_the_call_argument() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn count<T>(x T, xs [T] = List<T>()) int
+    var all = xs
+    all.push(x)
+    return all.length()
+
+fn main()
+    let s = "a" + "b"
+    println(f"{count(1)} {count(s)} {count(2, List([1, 2]))}")
+"#,
+        "1 1 3",
+    );
+}

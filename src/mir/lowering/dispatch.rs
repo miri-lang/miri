@@ -410,17 +410,30 @@ fn lower_call_arguments(
         .type_checker
         .call_generic_mappings
         .contains_key(&call_expr_id);
-    let param_types = resolve_param_types(ctx, callee_id, is_generic_call);
-    let targets = if is_generic_call {
-        generic_call_parameter_types(ctx, callee_id, call_expr_id)
+    let param_types = resolve_param_types(ctx, callee_id);
+    let (targets, callee_subs) = if is_generic_call {
+        let subs = ctx
+            .instantiated_call_mapping(call_expr_id)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        (
+            generic_call_parameter_types(ctx, callee_id, call_expr_id),
+            subs,
+        )
     } else {
-        declared_parameter_types(ctx, &param_types)
+        (declared_parameter_types(ctx, &param_types), HashMap::new())
     };
     let param_names = callee_parameter_names(ctx, callee_id);
     let callee = RuntimeCallee::of(func, &targets);
     let (mut arg_slots, written) =
         lower_and_coerce_args(ctx, args, &targets, &param_names, callee)?;
-    fill_default_args(ctx, &mut arg_slots, &param_types, &targets, call)?;
+    let callee_params = CalleeParameters {
+        params: param_types.as_deref().unwrap_or_default(),
+        types: &targets,
+        subs: callee_subs,
+    };
+    fill_default_args(ctx, &mut arg_slots, callee_params, call)?;
     for argument in written {
         let op = argument.pending.make_own(ctx)?;
         let op = coerce_written_arg(ctx, op, argument.value, targets.get(argument.position));
@@ -1564,7 +1577,7 @@ fn lower_direct_call(
     // call reads it off the declaration too: the instance's body takes those
     // parameters by address, and a call that passed them by value would hand
     // it a value to write through.
-    let arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id, false), &arg_ops);
+    let arg_modes = build_arg_modes(&resolve_param_types(ctx, callee.id), &arg_ops);
 
     emit_call_terminator(
         ctx,
@@ -1770,11 +1783,7 @@ fn refuse_unnameable_call_mapping(
 fn resolve_param_types(
     ctx: &LoweringContext,
     func_id: usize,
-    is_generic_call: bool,
 ) -> Option<Vec<crate::ast::common::Parameter>> {
-    if is_generic_call {
-        return None;
-    }
     let func_ty = ctx.type_checker.get_type(func_id)?;
     if let TypeKind::Function(func_data) = &func_ty.kind {
         Some(func_data.params.clone())
@@ -2027,30 +2036,28 @@ pub(super) fn coerce_arg_to_declared(
 /// Supply the default of every parameter no written argument bound. A named
 /// argument may skip over a defaulted parameter, so the gap can sit anywhere,
 /// not only after the last written argument.
+///
+/// A default reads the callee's names, not the caller's: its earlier
+/// parameters ([`earlier_parameter_scope`]) and, for a generic callee, its
+/// own type parameters at the arguments this call binds them to.
 fn fill_default_args(
     ctx: &mut LoweringContext,
     slots: &mut Vec<Option<Operand>>,
-    param_types: &Option<Vec<crate::ast::common::Parameter>>,
-    targets: &[Type],
+    callee: CalleeParameters<'_>,
     call: CallSite,
 ) -> Result<(), LoweringError> {
-    let Some(params) = param_types else {
-        return Ok(());
-    };
-    for (position, param) in params.iter().enumerate() {
+    for (position, param) in callee.params.iter().enumerate() {
         if slots.get(position).is_some_and(Option::is_some) {
             continue;
         }
         if let Some(default_expr) = &param.default_value {
-            let earlier = params.get(..position).unwrap_or_default();
-            let earlier = EarlierParameters {
-                params: earlier,
-                types: targets,
-            };
-            let scope = earlier_parameter_scope(ctx, earlier, slots, default_expr, call.span)?;
+            let scope =
+                earlier_parameter_scope(ctx, &callee, position, slots, default_expr, call.span)?;
             let caller_scope = std::mem::replace(&mut ctx.variable_map, scope);
+            let caller_subs = std::mem::replace(&mut ctx.generic_subs, callee.subs.clone());
             let lowered = lower_default_argument(ctx, default_expr, call);
             ctx.variable_map = caller_scope;
+            ctx.generic_subs = caller_subs;
             place_at_parameter(slots, position, move_to_copy(lowered?));
         }
     }
@@ -2070,7 +2077,8 @@ fn fill_default_args(
 /// the default read one value.
 fn earlier_parameter_scope(
     ctx: &mut LoweringContext,
-    earlier: EarlierParameters<'_>,
+    callee: &CalleeParameters<'_>,
+    position: usize,
     slots: &mut [Option<Operand>],
     default_expr: &Expression,
     span: Span,
@@ -2082,7 +2090,8 @@ fn earlier_parameter_scope(
     if let Some(&allocator) = ctx.variable_map.get("allocator") {
         scope.insert(Rc::from("allocator"), allocator);
     }
-    for (position, (param, slot)) in earlier.params.iter().zip(slots.iter_mut()).enumerate() {
+    let earlier = callee.params.get(..position).unwrap_or_default();
+    for (position, (param, slot)) in earlier.iter().zip(slots.iter_mut()).enumerate() {
         let Some(op) = slot.as_mut().filter(|_| read.contains(&param.name)) else {
             continue;
         };
@@ -2091,7 +2100,7 @@ fn earlier_parameter_scope(
                 place.local
             }
             _ => {
-                let ty = earlier.types.get(position).cloned().ok_or_else(|| {
+                let ty = callee.types.get(position).cloned().ok_or_else(|| {
                     LoweringError::internal(
                         DiagnosticCode::MirCustomLoweringError,
                         format!(
@@ -2111,12 +2120,13 @@ fn earlier_parameter_scope(
     Ok(scope)
 }
 
-/// The parameters declared before a defaulted one, beside the types the call
-/// passes every parameter at.
-#[derive(Clone, Copy)]
-struct EarlierParameters<'a> {
+/// The parameters of the function a call reaches: as declared, the type the
+/// call passes each at, and the arguments it binds the function's type
+/// parameters to (none for a function that has none).
+struct CalleeParameters<'a> {
     params: &'a [crate::ast::common::Parameter],
     types: &'a [Type],
+    subs: HashMap<String, Type>,
 }
 
 /// A call that may give an omitted parameter its default: the expression
