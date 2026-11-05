@@ -332,3 +332,35 @@ fn test_a_module_file_is_checked_unwrapped() {
     let result = crate::utils::miri_check("fn helper() int\n    return 1\n");
     assert!(result.success, "{}", result.output());
 }
+
+/// The program's arguments are read through `system.os.Args`, so `main` takes
+/// none. A `main` declaring a parameter used to compile and then read a value
+/// nothing had passed it — a segmentation fault for a list of strings.
+#[test]
+fn test_main_declaring_a_parameter_is_refused() {
+    let code = "use system.io\n\nfn main(args [String])\n    println(f\"{args.length()}\")\n";
+    assert_compiler_error(code, "MER_TYP_084");
+    assert_compiler_error(code, "'main' takes no parameters");
+}
+
+#[test]
+fn test_main_declaring_a_scalar_parameter_is_refused() {
+    assert_compiler_error("fn main(n int) int\n    n\n", "MER_TYP_084");
+}
+
+/// The value `main` returns is the exit status, so it is an integer or
+/// nothing. A `String` result used to exit with the low byte of its address.
+#[test]
+fn test_main_returning_a_non_integer_is_refused() {
+    assert_compiler_error("fn main() String\n    \"x\"\n", "MER_TYP_084");
+    assert_compiler_error("fn main() bool\n    true\n", "MER_TYP_084");
+    assert_compiler_error("fn main() float\n    1.5\n", "MER_TYP_084");
+}
+
+#[test]
+fn test_main_returning_any_integer_width_sets_the_exit_status() {
+    for ty in ["int", "i32", "u8", "i64"] {
+        let code = format!("fn main() {ty}\n    return 0\n");
+        assert_runs(&code);
+    }
+}

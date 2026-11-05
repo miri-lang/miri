@@ -11,10 +11,12 @@
 
 use crate::ast::expression::ImportPathKind;
 use crate::ast::statement::{FunctionDeclarationData, StatementKind};
-use crate::ast::{Expression, ExpressionKind, Program, Statement};
+use crate::ast::types::{Type, TypeKind};
+use crate::ast::{Expression, ExpressionKind, Parameter, Program, Statement};
 use crate::diagnostics::{DiagnosticCode, RepairRequest};
 use crate::pipeline::is_script_body_statement;
 use crate::type_checker::hygiene::names::References;
+use crate::type_checker::module_loader::PROGRAM_MODULE;
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 
@@ -27,6 +29,55 @@ impl TypeChecker {
         }
         self.report_duplicate_function_declarations(program);
         self.report_duplicate_imports(program);
+    }
+
+    /// Refuses a program entry point whose signature the program could not be
+    /// started with: `main` is called with no arguments, and what it returns
+    /// is the process's exit status.
+    ///
+    /// A parameter would be read from an argument nothing passed, and a
+    /// result that is no integer would be taken for a status it does not
+    /// hold, so either is refused where it is written. Only the entry
+    /// program's own top-level `main` is the entry point; a method or a
+    /// nested function of that name, or one in an imported module, is not.
+    pub(crate) fn check_entry_point_signature(
+        &mut self,
+        declaration: EntryPointCandidate<'_>,
+        return_type: &Type,
+    ) {
+        if !declaration.is_entry_point(self.current_module()) {
+            return;
+        }
+        if let Some(param) = declaration.params.first() {
+            self.report_error_with_help(
+                DiagnosticCode::TypInvalidMainSignature,
+                format!(
+                    "'main' takes no parameters, but declares '{}': nothing passes the program \
+                     an argument for it",
+                    param.name
+                ),
+                param.name_span,
+                "remove the parameters; a program reads its command-line arguments while it \
+                 runs, not as parameters of 'main'."
+                    .to_string(),
+            );
+        }
+        let returns_status = matches!(return_type.kind, TypeKind::Void | TypeKind::Error)
+            || self.is_integer(return_type);
+        if let (false, Some(written)) = (returns_status, declaration.return_type) {
+            self.report_error_with_help(
+                DiagnosticCode::TypInvalidMainSignature,
+                format!(
+                    "'main' returns the program's exit status, so it returns an integer or \
+                     nothing, not '{}'",
+                    return_type
+                ),
+                written.span,
+                "declare 'main' with no return type, or return an integer status such as \
+                 'int'."
+                    .to_string(),
+            );
+        }
     }
 
     /// A statement beside a declared `main` is never lowered, because
@@ -249,6 +300,23 @@ fn bound_names(statement: &Statement) -> Vec<&str> {
         return declarations.iter().map(|d| d.name.as_str()).collect();
     }
     Vec::new()
+}
+
+/// A function declaration as the entry-point check reads it.
+pub(crate) struct EntryPointCandidate<'a> {
+    pub name: &'a str,
+    pub params: &'a [Parameter],
+    pub return_type: Option<&'a Expression>,
+    /// Declared as a member of a type.
+    pub is_member: bool,
+    /// Declared inside another function's body.
+    pub is_nested: bool,
+}
+
+impl EntryPointCandidate<'_> {
+    fn is_entry_point(&self, module: &str) -> bool {
+        self.name == "main" && !self.is_member && !self.is_nested && module == PROGRAM_MODULE
+    }
 }
 
 fn declares_main(program: &Program) -> bool {

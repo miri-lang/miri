@@ -1,0 +1,6 @@
+// expect: MER_TYP_084
+// summary: Triggers MER_TYP_084: 'main' declares a parameter.
+use system.io
+
+fn main(args [String])
+    println(f"{args.length()}")

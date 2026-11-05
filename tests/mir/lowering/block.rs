@@ -394,7 +394,7 @@ fn test_return_value_direct() {
 
 #[test]
 fn test_return_string_literal() {
-    let body = mir_lower_code("fn main() String: \"hello\"");
+    let body = mir_lower_code("fn f() String: \"hello\"");
     assert!(matches!(
         last_terminator(&body).kind,
         TerminatorKind::Return
@@ -403,7 +403,7 @@ fn test_return_string_literal() {
 
 #[test]
 fn test_return_boolean() {
-    let body = mir_lower_code("fn main() bool: true");
+    let body = mir_lower_code("fn f() bool: true");
     assert!(matches!(
         last_terminator(&body).kind,
         TerminatorKind::Return

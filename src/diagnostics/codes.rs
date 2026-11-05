@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (83 codes: 001-083)
+    // TYP — Type checker (84 codes: 001-084)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1072,6 +1072,13 @@ diagnostics!(
     "083",
     TypLoopOverMixedTuple,
     "Loop Over Mixed Tuple",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "084",
+    TypInvalidMainSignature,
+    "Invalid Main Signature",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

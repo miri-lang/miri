@@ -1,0 +1,7 @@
+// summary: Accepted counterpart of MER_TYP_084: 'main' reads its arguments through Args.
+use system.io
+use system.os
+
+fn main()
+    let args = Args()
+    println(f"{args.length()}")

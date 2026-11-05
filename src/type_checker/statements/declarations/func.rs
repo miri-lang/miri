@@ -50,6 +50,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::diagnostics::spelled;
+use crate::type_checker::statements::entry_point::EntryPointCandidate;
 use crate::type_checker::statements::returns::collect_tail_expression_spans;
 use crate::type_checker::statements::{check_returns, ReturnStatus};
 use crate::type_checker::type_mismatch::TypeSides;
@@ -153,6 +154,16 @@ impl TypeChecker {
         }
 
         let return_type = self.resolve_function_return_type(return_type_expr, context);
+        self.check_entry_point_signature(
+            EntryPointCandidate {
+                name,
+                params,
+                return_type: return_type_expr.as_deref(),
+                is_member,
+                is_nested: context.in_function,
+            },
+            &return_type,
+        );
         context.return_types.push(return_type.clone());
         context.inferred_return_types.push(None);
         let outer_returns_self = std::mem::replace(

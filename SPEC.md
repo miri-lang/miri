@@ -108,6 +108,8 @@ If no main function is defined, the program wraps all top-level code in a main f
 
 A `main` without a return type ends with exit status 0, and a bare `return` anywhere in it ends the program there with the same status. `return n` sets the status to `n`; a `main` declared `fn main() int` must return a value on every path.
 
+`main` takes no parameters, and returns nothing or an integer: any integer width is accepted, and the operating system keeps the status's low byte. A program reads its command-line arguments while it runs, through `Args` in `system.os`. A `main` declaring a parameter or returning anything else is refused (`MER_TYP_084`). Only the program's own top-level `main` is its entry point; a method, a nested function or an imported module's function named `main` is an ordinary function.
+
 ---
 
 ## Control Flow
