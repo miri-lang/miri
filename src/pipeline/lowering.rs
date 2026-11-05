@@ -2058,12 +2058,22 @@ impl Pipeline {
         symbols: &mut SymbolTable,
     ) -> Result<(), CompilerError> {
         let result = copy.result;
-        let ancestors = crate::type_checker::context::class_ancestry(
+        let definitions = result.type_checker.type_definitions();
+        // Each copy reads the ancestor's parameters at what the `extends`
+        // chain pins them to: `T` of `Base<T>` under `extends Base<int>` is
+        // `int` in the copy, as the trait-default copies read their pins.
+        let supertypes = result.type_checker.declaring_types_above(
             class_name,
-            result.type_checker.type_definitions(),
-        )
-        .skip(1);
+            &mir::lowering::inherited_instantiation::own_parameters_left_open(
+                definitions,
+                class_name,
+            ),
+        );
+        let unpinned = std::collections::HashMap::new();
+        let ancestors =
+            crate::type_checker::context::class_ancestry(class_name, definitions).skip(1);
         for (base_name, _) in ancestors {
+            let pinned = pins_of(&supertypes, base_name).unwrap_or(&unpinned);
             for method_stmt in abstract_methods.get(base_name).into_iter().flatten() {
                 let StatementKind::FunctionDeclaration(md) = &method_stmt.node else {
                     continue;
@@ -2071,12 +2081,6 @@ impl Pipeline {
                 if !Self::runs_inherited_body(result, class_name, &md.name, base_name) {
                     continue;
                 }
-                // TODO: the copy is lowered without the substitution the
-                // `extends` clause makes, so a generic abstract ancestor's
-                // parameter (`T` of `Base<T>` under `extends Base<int>`) stays
-                // unbound in the body and `--verify-mir` refuses it. The copy
-                // should be lowered at the ancestor's arguments, the way
-                // `declaring_class_instantiation` maps them.
                 let symbol = Symbol::method(class_name, &[], &md.name, &[]);
                 if !symbols
                     .claim_at(&symbol, method_stmt.span)
@@ -2084,11 +2088,12 @@ impl Pipeline {
                 {
                     continue;
                 }
-                let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
+                let mir_body = mir::lowering::lower_class_method_at_with_compilation_ids(
                     method_stmt,
                     self_type.clone(),
                     &result.type_checker,
                     copy.is_release,
+                    pinned,
                     copy.compilation_ids.clone(),
                 )
                 .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;

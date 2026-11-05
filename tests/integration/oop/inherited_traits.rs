@@ -655,3 +655,44 @@ fn main()
         "expected fn get() -> int",
     );
 }
+
+#[test]
+fn test_generic_abstract_base_body_runs_at_the_arguments_its_subclass_extends_it_at() {
+    // `fetch` is declared on `Base<T>` and compiled into each subclass. Under
+    // `extends Base<int>` and `extends Base<String>` its `T` is `int` and
+    // `String`: the copy holds a counted `String` as one, and the MIR it is
+    // lowered to names no parameter left unbound.
+    assert_runs_with_output(
+        r#"
+trait Holder<T>
+    fn get() T
+
+abstract class Base<T> implements Holder<T>
+    abstract fn label() T
+
+    fn fetch() T
+        return self.get()
+
+    fn named() T
+        return self.label()
+
+class IntBox extends Base<int>
+    fn get() int
+        return 7
+    fn label() int
+        return 1
+
+class StrBox extends Base<String>
+    fn get() String
+        return "s"
+    fn label() String
+        return "L"
+
+fn main()
+    let h Holder<int> = IntBox()
+    let b Base<String> = StrBox()
+    println(f"{IntBox().fetch()} {h.get()} {b.fetch()} {StrBox().named()} {IntBox().named()}")
+"#,
+        "7 7 s L 1",
+    );
+}
