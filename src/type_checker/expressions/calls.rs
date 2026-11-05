@@ -607,6 +607,12 @@ impl TypeChecker {
     /// Detects polymorphic math intrinsics (abs, min, max) and infers their return type
     /// based on the first argument's numeric type, bypassing the float-only stdlib signature.
     /// Returns `Some(return_type)` if this is a detected intrinsic, `None` otherwise.
+    // TODO: the builtins typed at their arguments (`abs`, `min`, `max`, the
+    // vector builtins, warp shuffles, atomics) are checked against the
+    // positional arguments only, so `max(b: 1, a: 5)` is refused as a call
+    // with no arguments. Binding the named ones to the intrinsic's declared
+    // parameters before these checks would accept them; lowering already
+    // binds by name.
     fn try_infer_polymorphic_math_call(
         &mut self,
         func: &Expression,

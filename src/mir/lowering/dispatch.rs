@@ -169,8 +169,12 @@ fn try_lower_module_alias_call(
         return Ok(None);
     };
     if let Some(intrinsic) = math_intrinsic_callee(ctx, method_expr) {
-        return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest.cloned())
-            .map(Some);
+        let call = MathCall {
+            signature_id: func.id,
+            call_expr_id,
+            span: *span,
+        };
+        return lower_math_intrinsic_call(ctx, call, intrinsic, args, dest.cloned()).map(Some);
     }
     lower_aliased_function_call(
         ctx,
@@ -265,7 +269,12 @@ fn lower_static_method_impl(
 ) -> Result<Option<Operand>, LoweringError> {
     // Static method call with no receiver
     let arg_watermark = ctx.body.local_decls.len();
-    let mut arg_ops = lower_plain_args(ctx, args)?;
+    let param_names: Vec<&str> = method_info
+        .params
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let mut arg_ops = lower_args_by_name(ctx, args, &param_names, *span)?;
     push_allocator_arg(ctx, &mut arg_ops);
 
     let return_ty = ctx
@@ -315,28 +324,83 @@ pub(crate) fn math_intrinsic_callee(
         .flatten()
 }
 
-/// Lower a call to a math intrinsic to a `MathIntrinsic` rvalue.
-fn lower_math_intrinsic_call(
+/// A call to a math intrinsic: the expression the type checker typed as the
+/// intrinsic (`pow`, or `M.pow` through a module alias), whose parameters the
+/// arguments bind, and the call expression itself.
+#[derive(Clone, Copy)]
+pub(crate) struct MathCall {
+    pub(crate) signature_id: usize,
+    pub(crate) call_expr_id: usize,
+    pub(crate) span: Span,
+}
+
+/// Lower a call to a math intrinsic to a `MathIntrinsic` rvalue, however the
+/// intrinsic is named: bare or through a module alias.
+///
+/// Each argument is evaluated in the order it is written and passed at the
+/// parameter it binds. `min` and `max` combine their arguments as an operator
+/// does: each is converted to the type the checker settled on, which holds
+/// all of them.
+pub(crate) fn lower_math_intrinsic_call(
     ctx: &mut LoweringContext,
-    span: &Span,
-    call_expr_id: usize,
+    call: MathCall,
     intrinsic: MathIntrinsic,
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let arg_ops = lower_plain_args(ctx, args)?;
+    let span = call.span;
     let return_ty = ctx
         .type_checker
-        .get_type(call_expr_id)
+        .get_type(call.call_expr_id)
         .cloned()
-        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
-    let return_ty = gpu_math_return_type(ctx, args, return_ty, *span);
-    let (target, ret_op) = call_destination(ctx, return_ty, dest, *span);
+        .unwrap_or_else(|| Type::new(TypeKind::Void, span));
+    let combines = matches!(intrinsic, MathIntrinsic::Min | MathIntrinsic::Max);
+    let param_names = callee_parameter_names(ctx, call.signature_id);
+    let names: Vec<&str> = param_names.iter().map(String::as_str).collect();
+    let mut slots = Vec::with_capacity(args.len());
+    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, &names) {
+        let lowered = lower_operand(ctx, value)?;
+        let op = if combines {
+            convert_to_combined(ctx, lowered, value, &return_ty, span)
+        } else {
+            lowered
+        };
+        place_at_parameter(&mut slots, position, op);
+    }
+    let arg_ops = operands_in_parameter_order(slots, span)?;
+    let return_ty = gpu_math_return_type(ctx, args, return_ty, span);
+    let (target, ret_op) = call_destination(ctx, return_ty, dest, span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(target, Rvalue::MathIntrinsic(intrinsic, arg_ops)),
-        span: *span,
+        span,
     });
     Ok(ret_op)
+}
+
+/// `operand`, the value of `value`, converted to the number type `combined`
+/// when it is another number type that `combined` holds.
+fn convert_to_combined(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    value: &Expression,
+    combined: &Type,
+    span: Span,
+) -> Operand {
+    let Some(value_ty) = ctx.recorded_type(value.id) else {
+        return operand;
+    };
+    if value_ty.kind == combined.kind
+        || crate::ast::types::common_numeric_type(&value_ty.kind, &combined.kind).is_none()
+    {
+        return operand;
+    }
+    let target = Type::new(combined.kind.clone(), span);
+    let temp = ctx.push_temp(target.clone(), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(temp), Rvalue::Cast(Box::new(operand), target)),
+        span,
+    });
+    Operand::Copy(Place::new(temp))
 }
 
 /// Lower a direct call to the function `callee` names through a module alias.
@@ -442,16 +506,23 @@ fn lower_call_arguments(
     operands_in_parameter_order(arg_slots, call.span)
 }
 
-/// Lower call arguments with plain expression lowering (no coercion).
-fn lower_plain_args(
+/// Lower call arguments with plain expression lowering (no coercion), each
+/// in the order it is written and passed at the parameter it binds: a named
+/// argument at the parameter of `param_names` it names, every other at its
+/// position.
+fn lower_args_by_name(
     ctx: &mut LoweringContext,
     args: &[Expression],
+    param_names: &[&str],
+    span: Span,
 ) -> Result<Vec<Operand>, LoweringError> {
-    let mut arg_ops = Vec::with_capacity(args.len());
-    for arg in args {
-        arg_ops.push(lower_operand(ctx, arg)?);
+    let mut slots = Vec::with_capacity(args.len());
+    for (position, value) in crate::ast::expression::bind_arguments_to_parameters(args, param_names)
+    {
+        let op = lower_operand(ctx, value)?;
+        place_at_parameter(&mut slots, position, op);
     }
-    Ok(arg_ops)
+    operands_in_parameter_order(slots, span)
 }
 
 /// Append the implicit `allocator` argument unless it is already present.

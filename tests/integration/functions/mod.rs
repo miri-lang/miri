@@ -11,6 +11,7 @@ pub mod evaluation_order;
 pub mod held_results;
 pub mod large_frames;
 pub mod main_return;
+pub mod named_arguments;
 pub mod nested;
 pub mod parameter_guards;
 pub mod recursive;
