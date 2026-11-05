@@ -50,6 +50,9 @@ impl TypeChecker {
 }
 
 /// A declaration is left alone unless it is private and the file never names it.
+// TODO: the program's entry file is imported by nobody, so its public functions
+// are as unreachable as private ones, yet an uncalled top-level `fn` there raises
+// no warning. Reporting it needs the checker to know the file is the entry module.
 fn is_reachable(declaration: &Declaration<'_>, references: &References) -> bool {
     !matches!(declaration.visibility, MemberVisibility::Private)
         || references.contains(declaration.name)
