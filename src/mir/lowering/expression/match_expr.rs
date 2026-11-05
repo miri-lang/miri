@@ -838,12 +838,18 @@ fn lower_match_subject(
 /// an expression that allocates — `match make_result()` — never releases what
 /// it returned, so an enum's payload outlives the match. A source local from
 /// before the subject was lowered is a binding with a scope of its own and is
-/// left to it.
+/// left to it, and so is a temp the subject expression already gave to a scope
+/// or only borrows: a field read off a call result (`match make().item`)
+/// registers the returned object itself, so taking it here as well would
+/// release it twice.
 ///
 /// The scope releases these in reverse, so the subject temp goes first.
 fn register_subject_temps(ctx: &mut LoweringContext, subject: &MatchSubject) {
     if let Some(source_local) = subject.source_local {
-        if source_local != subject.local && source_local.0 >= subject.watermark {
+        if source_local != subject.local
+            && ctx.is_expression_temp(source_local, subject.watermark)
+            && !ctx.is_owned_by_a_scope(source_local)
+        {
             ctx.register_scope_temp(source_local);
         }
     }

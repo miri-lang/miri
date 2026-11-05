@@ -513,3 +513,60 @@ fn main()
         "50",
     );
 }
+
+/// A match on a field read straight off a call result releases the returned
+/// object once: the field read already hands it to the enclosing scope, so
+/// the match must not release it a second time.
+#[test]
+fn test_match_on_field_of_call_result_releases_the_result_once() {
+    assert_runs_with_output(
+        r#"
+class Holder
+    var item String?
+    var name String
+
+    fn init(item String?, name String)
+        self.item = item
+        self.name = name
+
+fn make(item String?) Holder
+    return Holder(item, "n" + "m")
+
+fn main()
+    match make(Some("x" + "y")).item
+        Some(s): println(s)
+        None: println("none")
+    match make(None).item
+        Some(s): println(s)
+        None: println("none")
+    match make(None).name
+        "nm": println("named")
+        _: println("other")
+"#,
+        "xy\nnone\nnamed",
+    );
+}
+
+/// The same shape with a struct holder and an arm guard: the call result is
+/// released once whichever arm is taken.
+#[test]
+fn test_match_on_field_of_struct_call_result_releases_the_result_once() {
+    assert_runs_with_output(
+        r#"
+struct Pair
+    label String?
+    count int
+
+fn pair(n int) Pair
+    return Pair(label: Some(f"p{n}"), count: n)
+
+fn main()
+    for n in 0..3
+        match pair(n).label
+            Some(s) if n > 1: println(f"big {s}")
+            Some(s): println(f"small {s}")
+            None: println("none")
+"#,
+        "small p0\nsmall p1\nbig p2",
+    );
+}
