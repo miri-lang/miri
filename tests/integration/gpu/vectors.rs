@@ -1458,3 +1458,36 @@ fn main()
         "2.0 4.0 6.0 6.0 9.0 7.0 3 1",
     );
 }
+
+const COMPONENT_OFF_AN_INDEXED_ELEMENT: &str = "
+use system.gpu
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    gpu var v2 = [Vec2<f32>(1.0, 2.0), Vec2<f32>(3.0, 4.0)]
+    gpu forall i in 0..2
+        v2[i] = Vec2<f32>(v2[i].x + 10.0, v2[i].y + 20.0)
+    let host = v2
+    println(f'{host[0].x} {host[0].y} {host[1].x} {host[1].y}')
+";
+
+/// A component read straight off an indexed buffer element is named by the
+/// element's vector type, the way it is off a bound vector.
+#[test]
+fn a_component_read_off_an_indexed_vector_element_emits_valid_wgsl() {
+    use super::helpers::{assert_gpu_wgsl_valid, compile_to_wgsl};
+    assert_gpu_wgsl_valid(COMPONENT_OFF_AN_INDEXED_ELEMENT);
+    let wgsl = compile_to_wgsl(COMPONENT_OFF_AN_INDEXED_ELEMENT);
+    assert!(wgsl.contains("].x") && wgsl.contains("].y"), "{wgsl}");
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn a_component_read_off_an_indexed_vector_element_reads_its_value() {
+    use super::device::assert_gpu_runs_with_output;
+    assert_gpu_runs_with_output(COMPONENT_OFF_AN_INDEXED_ELEMENT, "11.0 22.0 13.0 24.0");
+}

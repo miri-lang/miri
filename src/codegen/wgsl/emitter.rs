@@ -1897,20 +1897,25 @@ impl<'a> BodyEmitter<'a> {
         } else {
             local_name(place.local)
         };
+        // The type the projection has reached so far: a field is named by the
+        // type it is read off, so `v[i].x` asks the element's vector type, not
+        // the buffer's.
+        let mut reached = self
+            .body
+            .local_decls
+            .get(place.local.0)
+            .map(|decl| decl.ty.kind.clone());
         for elem in &place.projection {
             match elem {
                 PlaceElem::Field(idx) => {
-                    if let Some(decl) = self.body.local_decls.get(place.local.0) {
-                        if let Some(swizzle) = vector_swizzle(&decl.ty.kind, *idx) {
-                            write!(rendered, ".{}", swizzle).map_err(emit_err)?;
-                        } else {
-                            write!(rendered, ".{}", idx).map_err(emit_err)?;
-                        }
-                    } else {
-                        write!(rendered, ".{}", idx).map_err(emit_err)?;
+                    match reached.as_ref().and_then(|kind| vector_swizzle(kind, *idx)) {
+                        Some(swizzle) => write!(rendered, ".{}", swizzle).map_err(emit_err)?,
+                        None => write!(rendered, ".{}", idx).map_err(emit_err)?,
                     }
+                    reached = None;
                 }
                 PlaceElem::Index(local, _) => {
+                    reached = reached.as_ref().and_then(collection_element_kind);
                     // naga rejects indexing `array<T>` with an `i64` value — array indices
                     // must be 32-bit. The narrowing policy (identity for `Int`, saturate for
                     // `I64`, none otherwise) is backend-neutral and lives in `mir::backend`;
