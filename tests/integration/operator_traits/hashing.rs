@@ -262,3 +262,34 @@ fn main()
         MISSING_HASH,
     );
 }
+
+#[test]
+fn a_struct_holding_a_counted_tuple_hashes_the_tuple_by_its_elements() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+use system.collections.map
+
+struct Key
+    pair (int, String)
+
+enum Tag
+    Named((String, int?))
+    Plain
+
+fn main()
+    let keys = Set<Key>()
+    keys.add(Key(pair: (1, 'a' + 'b')))
+    keys.add(Key(pair: (1, 'ab')))
+    keys.add(Key(pair: (2, 'ab')))
+    var tags = Map<Tag, int>()
+    tags[Tag.Named(('x' + 'y', Some(1)))] = 1
+    tags[Tag.Named(('xy', Some(1)))] = 2
+    tags[Tag.Named(('xy', None))] = 3
+    tags[Tag.Plain] = 4
+    println(f"{keys.length()} {keys.contains(Key(pair: (2, 'a' + 'b')))} {tags.length()}")
+    println(f"{Key(pair: (1, 'ab')).hash() == Key(pair: (1, 'a' + 'b')).hash()}")
+"#,
+        "2 true 3\ntrue",
+    );
+}

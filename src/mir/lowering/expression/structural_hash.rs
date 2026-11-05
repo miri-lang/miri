@@ -20,7 +20,7 @@
 
 use super::structural_equality::{
     emit_corrupt_discriminant_panic, emit_variant_switch, materialize_field, read_discriminant,
-    substituted_member_types,
+    substituted_member_types, tuple_element_types,
 };
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
@@ -118,7 +118,7 @@ pub fn emit_structural_hash(
             Some(&[element.as_ref().clone(), size.as_ref().clone()]),
             value,
         ),
-        TypeKind::Tuple(elements) => emit_tuple_hash(ctx, span, kind, elements, value),
+        TypeKind::Tuple(elements) => emit_tuple_hash(ctx, span, elements, value),
         // `==` compares these as one machine word — a map or set by the block
         // it points at, a function value by its closure — so they hash that
         // word, which two values `==` calls equal share.
@@ -326,56 +326,45 @@ fn emit_struct_hash(
         .map(|(_, field_ty, _)| field_ty.clone())
         .collect();
     let field_types = substituted_member_types(&declared, type_args, generics.as_ref());
+    emit_members_hash(ctx, span, &field_types, value)
+}
 
+/// Hash an aggregate whose members have `member_types`: each member hashed at
+/// its own type and folded in order, the order `==` compares them in.
+fn emit_members_hash(
+    ctx: &mut LoweringContext,
+    span: Span,
+    member_types: &[Type],
+    value: Operand,
+) -> Result<Local, LoweringError> {
     let place = crate::mir::lowering::helpers::ensure_place(ctx, value, span);
-    let mut hash = int_constant(ctx, field_types.len() as i128, span);
-    for (field_idx, field_ty) in field_types.iter().enumerate() {
-        let field = materialize_field(ctx, &place, PlaceElem::Field(field_idx), field_ty, span);
-        if ctx.is_counted(&field_ty.kind) {
-            ctx.register_scope_temp(field);
+    let mut hash = int_constant(ctx, member_types.len() as i128, span);
+    for (index, member_ty) in member_types.iter().enumerate() {
+        let member = materialize_field(ctx, &place, PlaceElem::Field(index), member_ty, span);
+        if ctx.is_counted(&member_ty.kind) {
+            ctx.register_scope_temp(member);
         }
-        let part =
-            emit_structural_hash(ctx, span, &field_ty.kind, Operand::Copy(Place::new(field)))?;
+        let part = emit_structural_hash(
+            ctx,
+            span,
+            &member_ty.kind,
+            Operand::Copy(Place::new(member)),
+        )?;
         hash = combine(ctx, hash, part, span)?;
     }
     Ok(hash)
 }
 
-/// Hash a tuple. One held as its bytes is hashed by its elements folded in
-/// order, none of them counted, so two such tuples `==` calls equal hash alike.
-/// Any other tuple is a counted allocation, and is hashed by its address.
+/// Hash a tuple by its elements folded in order, as `==` compares them,
+/// whether it is held as its bytes or is a counted allocation: two tuples `==`
+/// calls equal hash alike, so a struct or enum holding one does too.
 fn emit_tuple_hash(
     ctx: &mut LoweringContext,
     span: Span,
-    kind: &TypeKind,
     elements: &[TypeArgument],
     value: Operand,
 ) -> Result<Local, LoweringError> {
-    if ctx.body.value_layout(kind).is_none() {
-        return address_hash(ctx, span, value);
-    }
-    let element_types: Vec<Type> = elements
-        .iter()
-        .filter_map(|element| {
-            let crate::ast::type_arguments::TypeArgKind::Type(ty, _) = &element.node else {
-                return None;
-            };
-            Some(ty.as_ref().clone())
-        })
-        .collect();
-    let place = crate::mir::lowering::helpers::ensure_place(ctx, value, span);
-    let mut hash = int_constant(ctx, element_types.len() as i128, span);
-    for (index, element_ty) in element_types.iter().enumerate() {
-        let element = materialize_field(ctx, &place, PlaceElem::Field(index), element_ty, span);
-        let part = emit_structural_hash(
-            ctx,
-            span,
-            &element_ty.kind,
-            Operand::Copy(Place::new(element)),
-        )?;
-        hash = combine(ctx, hash, part, span)?;
-    }
-    Ok(hash)
+    emit_members_hash(ctx, span, &tuple_element_types(elements), value)
 }
 
 /// Call the `hash` body named `symbol` on `value`.

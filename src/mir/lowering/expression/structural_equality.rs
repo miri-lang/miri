@@ -957,7 +957,7 @@ fn emit_struct_field_equality(
 }
 
 /// The types a tuple's elements are written at.
-fn tuple_element_types(elements: &[TypeArgument]) -> Vec<Type> {
+pub(super) fn tuple_element_types(elements: &[TypeArgument]) -> Vec<Type> {
     elements
         .iter()
         .filter_map(|element| {
