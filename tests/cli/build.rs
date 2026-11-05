@@ -1053,15 +1053,11 @@ fn test_a_profile_build_without_the_frame_pointer_runtime_is_refused() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let bin_dir = tempfile::tempdir().unwrap();
     let compiler = bin_dir.path().join("miri");
-    // TODO: on Linux, running the copy can fail with "Text file busy": a child
-    // another test thread forks while the copy is open for writing inherits
-    // that descriptor until it execs. Spawning the copy needs a bounded retry
-    // on `ExecutableFileBusy`, shared by every test that copies and runs a
-    // binary.
     std::fs::copy(assert_cmd::cargo_bin!("miri"), &compiler).unwrap();
     let source = create_test_file(HASH_COMBINE);
     let build = |flag: &str| {
-        Command::new(&compiler)
+        let mut command = Command::new(&compiler);
+        command
             .arg("build")
             .arg(source.path())
             .arg("--out")
@@ -1072,9 +1068,8 @@ fn test_a_profile_build_without_the_frame_pointer_runtime_is_refused() {
                 "MIRI_RUNTIME_DIR",
                 manifest.join("src/runtime/core/target/release"),
             )
-            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"))
-            .output()
-            .unwrap()
+            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"));
+        output_of_fresh_binary(&mut command)
     };
 
     let release = build("--release");
@@ -1090,6 +1085,28 @@ fn test_a_profile_build_without_the_frame_pointer_runtime_is_refused() {
         stderr.contains("frame pointers") && stderr.contains("make runtimes"),
         "stderr: {stderr}"
     );
+}
+
+/// Run `command`, whose program this test process has just copied into
+/// place, retrying while the kernel refuses to execute it as busy.
+///
+/// Writing the file leaves it open for a moment, and a child another test
+/// thread forks in that moment holds a copy of the descriptor until it execs.
+/// While any such descriptor is open for writing, Linux refuses to execute
+/// the file with "Text file busy". The window closes on its own within
+/// milliseconds, so a bounded retry is the whole fix; any other error, or the
+/// last attempt's, is the test's failure.
+fn output_of_fresh_binary(command: &mut Command) -> std::process::Output {
+    const ATTEMPTS: u32 = 50;
+    for _ in 1..ATTEMPTS {
+        match command.output() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result.unwrap(),
+        }
+    }
+    command.output().unwrap()
 }
 
 /// An installed layout names its runtimes with `MIRI_RUNTIME_DIR` and keeps
@@ -1114,7 +1131,8 @@ fn test_a_profile_build_links_the_frame_pointer_runtime_beside_miri_runtime_dir(
     .unwrap();
     let source = create_test_file(HASH_COMBINE);
     let build = || {
-        Command::new(&compiler)
+        let mut command = Command::new(&compiler);
+        command
             .arg("build")
             .arg(source.path())
             .arg("--out")
@@ -1122,9 +1140,8 @@ fn test_a_profile_build_links_the_frame_pointer_runtime_beside_miri_runtime_dir(
             .arg("--profile")
             .current_dir(root.path())
             .env("MIRI_RUNTIME_DIR", &runtime)
-            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"))
-            .output()
-            .unwrap()
+            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"));
+        output_of_fresh_binary(&mut command)
     };
 
     let refused = build();
@@ -1190,16 +1207,16 @@ impl RuntimeLayout {
     /// The stderr of a `--profile` build of `source`, which must fail.
     fn refused_profile_build(&self, source: &NamedTempFile) -> String {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let output = Command::new(&self.compiler)
+        let mut command = Command::new(&self.compiler);
+        command
             .arg("build")
             .arg(source.path())
             .arg("--out")
             .arg(self.root.path().join("profiled"))
             .arg("--profile")
             .current_dir(self.root.path())
-            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"))
-            .output()
-            .unwrap();
+            .env("MIRI_STDLIB_PATH", manifest.join("src/stdlib"));
+        let output = output_of_fresh_binary(&mut command);
         assert!(!output.status.success(), "the profile build linked");
         String::from_utf8_lossy(&output.stderr).into_owned()
     }
