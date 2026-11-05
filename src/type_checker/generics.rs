@@ -907,13 +907,17 @@ impl TypeChecker {
     }
 
     /// Validates that provided generic arguments satisfy their constraints.
+    ///
+    /// Returns whether as many arguments were written as there are
+    /// parameters: when not, the count is reported and no argument is read
+    /// against a parameter, so the caller has no instantiation to build.
     pub(crate) fn validate_generics(
         &mut self,
         args: &Option<Vec<TypeArgument>>,
         params: &Option<Vec<GenericDefinition>>,
         context: &Context,
         span: Span,
-    ) {
+    ) -> bool {
         let args_len = args.as_ref().map_or(0, |v| v.len());
         let params_len = params.as_ref().map_or(0, |v| v.len());
 
@@ -926,7 +930,7 @@ impl TypeChecker {
                 ),
                 span,
             );
-            return;
+            return false;
         }
 
         if let (Some(args_vec), Some(params_vec)) = (args, params) {
@@ -957,6 +961,7 @@ impl TypeChecker {
                 }
             }
         }
+        true
     }
 
     /// Defines generic type parameters in the current scope.

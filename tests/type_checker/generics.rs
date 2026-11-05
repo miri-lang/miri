@@ -126,6 +126,69 @@ let p Pair<int>
     type_checker_error_test(source, "Generic argument count mismatch");
 }
 
+/// Type arguments written on a struct construction are held to the struct's
+/// parameters exactly as the same arguments written in an annotation are.
+#[test]
+fn test_struct_construction_with_too_many_type_arguments_is_refused() {
+    let source = "
+struct Box<T>
+    value T
+
+let b = Box<int, String>(value: 1)
+    ";
+    type_checker_error_test(source, "Generic argument count mismatch: expected 1, got 2");
+}
+
+#[test]
+fn test_struct_construction_with_too_few_type_arguments_is_refused() {
+    let source = "
+struct Pair<K, V>
+    key K
+    value V
+
+let p = Pair<int>(key: 1, value: 2)
+    ";
+    type_checker_error_test(source, "Generic argument count mismatch: expected 2, got 1");
+}
+
+#[test]
+fn test_type_arguments_on_a_non_generic_struct_construction_are_refused() {
+    let source = "
+struct Point
+    x int
+
+let p = Point<int>(x: 1)
+    ";
+    type_checker_error_test(source, "Generic argument count mismatch: expected 0, got 1");
+}
+
+#[test]
+fn test_struct_construction_type_argument_must_meet_its_bound() {
+    let source = "
+trait Named
+    fn name() String
+
+struct Tagged<T implements Named>
+    value T
+
+let t = Tagged<int>(value: 1)
+    ";
+    type_checker_error_test(source, "does not satisfy constraint");
+}
+
+#[test]
+fn test_struct_construction_with_matching_type_arguments_is_accepted() {
+    let source = "
+struct Pair<K, V>
+    key K
+    value V
+
+let p = Pair<int, String>(key: 1, value: \"one\")
+p.value
+    ";
+    type_checker_expr_type_test(source, type_string());
+}
+
 #[test]
 fn test_generic_struct_with_list() {
     let source = "

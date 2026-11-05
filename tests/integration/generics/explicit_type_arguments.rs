@@ -165,6 +165,31 @@ fn main()
     );
 }
 
+#[test]
+fn a_wrong_count_of_type_arguments_on_a_struct_construction_is_reported_once() {
+    let result = crate::utils::miri_check(
+        r#"
+struct Holder<T>
+    v T
+
+fn main()
+    let h = Holder<int, String>(v: 1)
+    println(f"{h.v}")
+    let w = h.v + 1
+"#,
+    );
+    let output = result.output();
+    assert!(
+        output.contains("MER_TYP_036"),
+        "expected MER_TYP_036:\n{output}"
+    );
+    assert_eq!(
+        output.matches("error[").count(),
+        1,
+        "the refused construction must not be reported again at its uses:\n{output}"
+    );
+}
+
 /// Explicit type arguments on a function reached through a module alias bind
 /// the same instantiation they do on a bare name.
 #[test]

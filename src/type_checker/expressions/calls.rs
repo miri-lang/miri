@@ -3482,6 +3482,14 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
+        // Type arguments written on the construction answer to the struct's
+        // parameters as they do in an annotation: their count, and the bound
+        // each parameter declares. A count that does not match leaves no
+        // instantiation to build.
+        if type_args.is_some() && !self.validate_generics(type_args, &def.generics, context, span) {
+            return make_type(TypeKind::Error);
+        }
+
         let mut pos_iter = positional_args.iter();
         let mut generic_map = HashMap::new();
 
