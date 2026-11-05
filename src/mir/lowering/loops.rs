@@ -994,6 +994,7 @@ pub fn lower_for(
             kind: StatementKind::Assign(Place::new(loop_var), Rvalue::Use(start_op)),
             span: *span,
         });
+        let end_local = range_end_once(ctx, end, span)?;
 
         let header_bb = ctx.new_basic_block();
         let body_bb = ctx.new_basic_block();
@@ -1007,8 +1008,6 @@ pub fn lower_for(
 
         // 2. Header: Check condition
         ctx.set_current_block(header_bb);
-        let end_op = super::sequencing::lower_operand(ctx, end)?;
-        let end_local = crate::mir::lowering::helpers::ensure_place(ctx, end_op, *span).local;
         let end_op = Operand::Copy(Place::new(end_local));
         let current_val = Operand::Copy(Place::new(loop_var));
 
@@ -1080,6 +1079,27 @@ pub fn lower_for(
         ));
     }
     Ok(())
+}
+
+/// The end of a `for` range, evaluated once before the first iteration into a
+/// temporary of its own, which every test of the loop reads.
+///
+/// The end is a value the range yields once, like any operand, so a call
+/// written there runs once and the body writing a binding the end names
+/// changes no later test. It is copied even when it is a binding already,
+/// since the body may write that binding.
+fn range_end_once(
+    ctx: &mut LoweringContext,
+    end: &Expression,
+    span: &Span,
+) -> Result<crate::mir::Local, LoweringError> {
+    let end_op = super::sequencing::lower_operand(ctx, end)?;
+    let end_ty = ctx
+        .recorded_type(end.id)
+        .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
+    let end_local = ctx.push_temp(end_ty, *span);
+    assign(ctx, end_local, Rvalue::Use(end_op), span);
+    Ok(end_local)
 }
 
 /// The element type of `iterable` when it is a range value — a range bound to

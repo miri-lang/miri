@@ -119,3 +119,31 @@ fn main()
         "2",
     );
 }
+
+/// A range's end is evaluated once, before the first iteration: a call
+/// written there runs once, and writing a binding the end reads changes no
+/// later test of the loop.
+#[test]
+fn a_for_range_end_is_evaluated_once() {
+    assert_runs_with_output(
+        r#"
+fn lim() int
+    println("lim")
+    return 3
+
+fn main()
+    for i in 0..lim()
+        println(f"{i}")
+    var n = 3
+    for i in 0..n
+        n = 1
+        println(f"n{i}")
+    var m = 1
+    for i in 0..=m
+        m = 5
+        println(f"m{i}")
+    println(f"{n} {m}")
+"#,
+        "lim\n0\n1\n2\nn0\nn1\nn2\nm0\nm1\n1 5",
+    );
+}
