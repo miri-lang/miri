@@ -508,3 +508,32 @@ fn main()
         "Immutability Violation",
     );
 }
+
+/// The value stored into a map entry may come from a call that clears a map
+/// it was handed: the call clears its own map, so the caller's entry is still
+/// there to take the store.
+#[test]
+fn test_an_entry_store_whose_value_clears_the_map_it_was_handed_keeps_the_entry() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+class Counter
+    public var count int
+    fn init()
+        self.count = 0
+
+fn wipe(m Map<String, Counter>) int
+    m.clear()
+    return m.length() + 5
+
+fn main()
+    var m = Map<String, Counter>()
+    m["a"] = Counter()
+    m["a"].count = wipe(m)
+    println(f"{m.length()} {m['a'].count}")
+"#,
+        "1 5",
+    );
+}
