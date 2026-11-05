@@ -897,7 +897,9 @@ fn is_equality_operator(op: &crate::ast::operator::BinaryOp) -> bool {
 }
 
 /// True when the type needs structural equality comparison: an enum, a
-/// struct, an optional, a result, or a range, which is built from its members.
+/// struct, a tuple, an optional, a result, or a range, which is built from
+/// its members. A tuple compares each member at the member's own type, so a
+/// counted enum is compared by its payload and a class through its `equals`.
 ///
 /// An `Atomic<T>` is declared as a struct but has no struct behind it to
 /// walk; host code never compares one (see [`reaches_machine_op_unchecked`]).
@@ -910,7 +912,7 @@ fn is_structural_equality_type(ctx: &LoweringContext, kind: &TypeKind) -> bool {
             Some(crate::type_checker::context::TypeDefinition::Enum(_))
                 | Some(crate::type_checker::context::TypeDefinition::Struct(_))
         ),
-        TypeKind::Result(_, _) | TypeKind::Option(_) => true,
+        TypeKind::Result(_, _) | TypeKind::Option(_) | TypeKind::Tuple(_) => true,
         _ => false,
     }
 }

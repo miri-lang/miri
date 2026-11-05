@@ -224,6 +224,44 @@ fn main()
     );
 }
 
+/// A tuple member is compared the way the same two values are compared on
+/// their own: a counted enum by its payload, a class through its own
+/// `equals`, never by where either lives.
+#[test]
+fn test_tuple_equality_compares_each_member_as_its_own_type_does() {
+    assert_runs_with_output(
+        r#"
+use system.ops
+
+enum Named
+    Text(String)
+    Empty
+
+class Point implements Equatable
+    v int
+    fn init(v int)
+        self.v = v
+    fn equals(other Point) bool
+        return self.v == other.v
+
+fn main()
+    let built = "x" + "y"
+    let a = (1, Named.Text(built))
+    let b = (1, Named.Text("xy"))
+    let c = (1, Named.Text("xz"))
+    println(f"{a == b} {a != b} {a == c} {Named.Text(built) == Named.Text('xy')}")
+    let p = (Point(3), "s")
+    let q = (Point(3), "s")
+    let r = (Point(4), "s")
+    println(f"{p == q} {p == r} {Point(3) == Point(3)}")
+    let n = ((1, Named.Empty), 2.5)
+    let m = ((1, Named.Empty), 2.5)
+    println(f"{n == m}")
+"#,
+        "true false false true\ntrue false true\ntrue",
+    );
+}
+
 #[test]
 fn test_recursive_enum_rejected() {
     assert_compiler_error(

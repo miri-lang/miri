@@ -7,8 +7,7 @@ use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::closure::CaptureLayout;
 use crate::codegen::cranelift::collection_header::header_offset;
 use crate::codegen::cranelift::layout::{
-    aggregate_layout, class_payload_layout, enum_payload_layout, field_layout, EnumLayout, Member,
-    PayloadLayout,
+    aggregate_layout, class_payload_layout, enum_payload_layout, EnumLayout, Member, PayloadLayout,
 };
 use crate::codegen::cranelift::rc::{ContainerSetter, ElementOrderSetters};
 use crate::codegen::cranelift::translator::{CallSite, FunctionTranslator, ModuleCtx, TypeCtx};
@@ -20,9 +19,7 @@ use crate::codegen::cranelift::value_locals::copy_value;
 use crate::error::CodegenError;
 use crate::mir::dispatch::VtableInstance;
 use crate::mir::symbol::{StringLiteralPart, Symbol};
-use crate::mir::type_facts::{
-    FieldRepr, LayoutShape, StructDefinition, TypeDefinition, ValueLayout,
-};
+use crate::mir::type_facts::{FieldRepr, LayoutShape, TypeDefinition, ValueLayout};
 use crate::mir::{
     AggregateKind, BinOp, Constant, FunctionConstant, Local, MathIntrinsic, Operand, Place, Rvalue,
     UnOp,
@@ -224,20 +221,14 @@ impl<'a> FunctionTranslator<'a> {
                 return Ok(Self::negate_unless_equality(builder, op, equal));
             }
         }
-        // Structural equality: compare field-by-field instead of pointer
-        // comparison for tuples and structs. Only takes the structural path
-        // when the operand denotes a *whole* aggregate. A `Copy(t.0)` is a
-        // primitive field load even though `operand_type_kind` reports the
-        // base local's tuple type — must not treat its value as a tuple pointer.
+        // A whole tuple or struct never reaches here: only a projected read
+        // does, and a `Copy(t.0)` is a field load even though
+        // `operand_type_kind` reports the base local's tuple type.
         if matches!(op, BinOp::Eq | BinOp::Ne)
             && Self::operand_has_no_projection(lhs)
             && Self::operand_has_no_projection(rhs)
         {
-            if let Some(result) =
-                Self::try_structural_equality(builder, ctx, lhs, rhs, locals, type_ctx)?
-            {
-                return Ok(Self::negate_unless_equality(builder, op, result));
-            }
+            Self::refuse_aggregate_equality(lhs, type_ctx)?;
         }
 
         let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
@@ -373,76 +364,26 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().select(negative, settled, as_unsigned)
     }
 
-    /// Returns the field-wise equality result for `lhs == rhs` when both
-    /// operands are whole tuples or whole structs; returns `Ok(None)`
-    /// otherwise so the caller falls back to primitive comparison.
-    fn try_structural_equality(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        lhs: &Operand,
-        rhs: &Operand,
-        locals: &HashMap<Local, Variable>,
-        type_ctx: &TypeCtx,
-    ) -> Result<Option<Value>, CodegenError> {
-        let lhs_kind = Self::operand_type_kind(lhs, type_ctx);
-        match lhs_kind {
-            TypeKind::Tuple(element_exprs) => {
-                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
-                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
-                Ok(Some(Self::translate_tuple_equality(
-                    builder,
-                    ctx,
-                    lhs_val,
-                    rhs_val,
-                    element_exprs,
-                    type_ctx,
-                )?))
-            }
-            TypeKind::Custom(name, _) => {
-                let Some(TypeDefinition::Struct(def)) = type_ctx.facts.definitions().get(name)
-                else {
-                    return Ok(None);
-                };
-                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx, None)?;
-                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx, None)?;
-                Ok(Some(Self::translate_struct_equality(
-                    builder, lhs_val, rhs_val, lhs_kind, def, type_ctx,
-                )?))
-            }
-            TypeKind::Int
-            | TypeKind::I8
-            | TypeKind::I16
-            | TypeKind::I32
-            | TypeKind::I64
-            | TypeKind::I128
-            | TypeKind::U8
-            | TypeKind::U16
-            | TypeKind::U32
-            | TypeKind::U64
-            | TypeKind::U128
-            | TypeKind::Float
-            | TypeKind::F16
-            | TypeKind::F32
-            | TypeKind::F64
-            | TypeKind::String
-            | TypeKind::Boolean
-            | TypeKind::Identifier
-            | TypeKind::RawPtr
-            | TypeKind::List(_)
-            | TypeKind::Array(_, _)
-            | TypeKind::Map(_, _)
-            | TypeKind::Set(_)
-            | TypeKind::Result(_, _)
-            | TypeKind::Future(_)
-            | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
-            | TypeKind::OneOf(_)
-            | TypeKind::Meta(_)
-            | TypeKind::Option(_)
-            | TypeKind::Void
-            | TypeKind::Error
-            | TypeKind::Linear(_) => Ok(None),
+    /// Refuses `==` or `!=` on two whole tuples or structs. MIR lowering
+    /// compares those member by member, each at its own type, so an enum
+    /// member is compared by its payload and a class through its `equals`;
+    /// comparing the two words here would compare where the values live.
+    fn refuse_aggregate_equality(lhs: &Operand, type_ctx: &TypeCtx) -> Result<(), CodegenError> {
+        let is_aggregate = match Self::operand_type_kind(lhs, type_ctx) {
+            TypeKind::Tuple(_) => true,
+            TypeKind::Custom(name, _) => matches!(
+                type_ctx.facts.definitions().get(name),
+                Some(TypeDefinition::Struct(_))
+            ),
+            _ => false,
+        };
+        if is_aggregate {
+            return Err(CodegenError::Internal(format!(
+                "equality of two whole {} values reached codegen; MIR lowering compares them member by member",
+                Self::operand_type_kind(lhs, type_ctx)
+            )));
         }
+        Ok(())
     }
 
     /// Translate an `Rvalue::Aggregate` to a Cranelift value.
@@ -3163,67 +3104,6 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Generate structural equality comparison for two tuples.
-    /// Compares each field and ANDs the results together.
-    fn translate_tuple_equality(
-        builder: &mut FunctionBuilder,
-        _ctx: &mut ModuleCtx,
-        lhs_ptr: Value,
-        rhs_ptr: Value,
-        element_exprs: &TypeArguments,
-        type_ctx: &TypeCtx,
-    ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let tuple_type = TypeKind::Tuple(element_exprs.to_vec());
-        if let Some(layout) = type_ctx.value_layout(&tuple_type) {
-            return Self::held_value_equality(builder, lhs_ptr, rhs_ptr, &layout, 0);
-        }
-
-        // Start with true (all fields equal so far)
-        let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
-
-        for i in 0..element_exprs.len() {
-            let (offset, member) = field_layout(&tuple_type, i, type_ctx.layout_scope(), ptr_type)?;
-            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member)?;
-            result = builder.ins().band(result, field_eq);
-        }
-
-        Ok(result)
-    }
-
-    /// Whether member `member` at `offset` of the two aggregates at `lhs` and
-    /// `rhs` is equal: a word compared as one, a value held inline compared
-    /// member by member.
-    ///
-    /// TODO: a word member that is a counted value compares the two
-    /// addresses, not the values: `(Named.Text(\"a\"), 1) == (Named.Text(\"a\"), 1)`
-    /// is false for an enum carrying a string, and an enum's own `equals` is
-    /// never called. A counted member needs its type's `equals` called here,
-    /// the way a struct's derived `==` calls it.
-    fn member_equality(
-        builder: &mut FunctionBuilder,
-        (lhs, rhs): (Value, Value),
-        offset: i32,
-        member: &Member,
-    ) -> Result<Value, CodegenError> {
-        match member {
-            Member::Word(ty) => {
-                let left = builder.ins().load(*ty, MemFlagsData::new(), lhs, offset);
-                let right = builder.ins().load(*ty, MemFlagsData::new(), rhs, offset);
-                Ok(if ty.is_float() {
-                    builder.ins().fcmp(FloatCC::Equal, left, right)
-                } else {
-                    builder.ins().icmp(IntCC::Equal, left, right)
-                })
-            }
-            Member::Inline(layout) => {
-                let lhs = builder.ins().iadd_imm_s(lhs, i64::from(offset));
-                let rhs = builder.ins().iadd_imm_s(rhs, i64::from(offset));
-                Self::held_value_equality(builder, lhs, rhs, layout, 0)
-            }
-        }
-    }
-
     /// Whether the two values held as their bytes at `lhs` and `rhs`, laid
     /// out as `layout` from `offset` on, are equal: every scalar compared as
     /// `==` compares it — a float as a number, so `-0.0` equals `0.0` and NaN
@@ -3312,33 +3192,6 @@ impl<'a> FunctionTranslator<'a> {
         let payloads_equal = Self::held_member_equality(builder, (lhs, rhs), payload)?;
         let settled = builder.ins().bor(absent, payloads_equal);
         Ok(builder.ins().band(same_presence, settled))
-    }
-
-    /// Generate structural equality comparison for two struct instances.
-    /// Compares each field and ANDs the results together.
-    fn translate_struct_equality(
-        builder: &mut FunctionBuilder,
-        lhs_ptr: Value,
-        rhs_ptr: Value,
-        struct_type: &TypeKind,
-        def: &StructDefinition,
-        type_ctx: &TypeCtx,
-    ) -> Result<Value, CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        if let Some(layout) = type_ctx.value_layout(struct_type) {
-            return Self::held_value_equality(builder, lhs_ptr, rhs_ptr, &layout, 0);
-        }
-
-        // Start with true (all fields equal so far)
-        let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
-
-        for i in 0..def.fields.len() {
-            let (offset, member) = field_layout(struct_type, i, type_ctx.layout_scope(), ptr_type)?;
-            let field_eq = Self::member_equality(builder, (lhs_ptr, rhs_ptr), offset, &member)?;
-            result = builder.ins().band(result, field_eq);
-        }
-
-        Ok(result)
     }
 
     /// Negate an integer, ending the program with the integer-overflow trap
