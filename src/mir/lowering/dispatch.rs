@@ -26,6 +26,7 @@ use super::helpers::{
 };
 use super::{apply_generic_sub, lower_expression, LoweringContext};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Context for lowering a collection intrinsic method (push/get/index).
 pub(super) struct CollectionIntrinsicCall<'a> {
@@ -419,7 +420,7 @@ fn lower_call_arguments(
     let callee = RuntimeCallee::of(func, &targets);
     let (mut arg_slots, written) =
         lower_and_coerce_args(ctx, args, &targets, &param_names, callee)?;
-    fill_default_args(ctx, &mut arg_slots, &param_types, call)?;
+    fill_default_args(ctx, &mut arg_slots, &param_types, &targets, call)?;
     for argument in written {
         let op = argument.pending.make_own(ctx)?;
         let op = coerce_written_arg(ctx, op, argument.value, targets.get(argument.position));
@@ -1644,9 +1645,13 @@ fn emit_direct_call_drops(
     dest_local: Local,
     span: Span,
 ) {
+    // A temporary is the call's once however many arguments it fills: a
+    // parameter's default may read the value an earlier argument passes, and
+    // both slots then name the same temporary.
+    let mut released = std::collections::HashSet::new();
     for arg_op in arg_ops {
         if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-            if place.local != dest_local {
+            if place.local != dest_local && released.insert(place.local) {
                 ctx.emit_temp_drop(place.local, arg_watermark, span);
             }
         }
@@ -2026,6 +2031,7 @@ fn fill_default_args(
     ctx: &mut LoweringContext,
     slots: &mut Vec<Option<Operand>>,
     param_types: &Option<Vec<crate::ast::common::Parameter>>,
+    targets: &[Type],
     call: CallSite,
 ) -> Result<(), LoweringError> {
     let Some(params) = param_types else {
@@ -2036,11 +2042,81 @@ fn fill_default_args(
             continue;
         }
         if let Some(default_expr) = &param.default_value {
-            let default_op = lower_default_argument(ctx, default_expr, call)?;
-            place_at_parameter(slots, position, default_op);
+            let earlier = params.get(..position).unwrap_or_default();
+            let earlier = EarlierParameters {
+                params: earlier,
+                types: targets,
+            };
+            let scope = earlier_parameter_scope(ctx, earlier, slots, default_expr, call.span)?;
+            let caller_scope = std::mem::replace(&mut ctx.variable_map, scope);
+            let lowered = lower_default_argument(ctx, default_expr, call);
+            ctx.variable_map = caller_scope;
+            place_at_parameter(slots, position, move_to_copy(lowered?));
         }
     }
     Ok(())
+}
+
+/// The names a parameter's default is lowered against: each parameter
+/// declared before it that the default names, bound to the value this call
+/// passes for it.
+///
+/// The default is written in the callee, so it reads the callee's names and
+/// none of the caller's: a caller binding that happens to share a name with a
+/// parameter is not in sight. The body's allocator stays bound, since the
+/// code the default runs is part of the calling body. An argument already held in a binding of its
+/// own is read from there; any other one (a constant, a field) is put in a
+/// temporary first, which the call then passes in its place, so the call and
+/// the default read one value.
+fn earlier_parameter_scope(
+    ctx: &mut LoweringContext,
+    earlier: EarlierParameters<'_>,
+    slots: &mut [Option<Operand>],
+    default_expr: &Expression,
+    span: Span,
+) -> Result<HashMap<Rc<str>, Local>, LoweringError> {
+    let read = crate::type_checker::hygiene::names::References::of_expression(default_expr);
+    let mut scope = HashMap::new();
+    // The allocator is not a name the default can write: it is the body's own,
+    // which every call the default makes passes on.
+    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+        scope.insert(Rc::from("allocator"), allocator);
+    }
+    for (position, (param, slot)) in earlier.params.iter().zip(slots.iter_mut()).enumerate() {
+        let Some(op) = slot.as_mut().filter(|_| read.contains(&param.name)) else {
+            continue;
+        };
+        let local = match op {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                place.local
+            }
+            _ => {
+                let ty = earlier.types.get(position).cloned().ok_or_else(|| {
+                    LoweringError::internal(
+                        DiagnosticCode::MirCustomLoweringError,
+                        format!(
+                            "a default reads parameter '{}', whose declared type the call does not know",
+                            param.name
+                        ),
+                        span,
+                    )
+                })?;
+                let temp = store_operand_temp(ctx, op.clone(), ty, span);
+                *op = Operand::Copy(Place::new(temp));
+                temp
+            }
+        };
+        scope.insert(Rc::from(param.name.as_str()), local);
+    }
+    Ok(scope)
+}
+
+/// The parameters declared before a defaulted one, beside the types the call
+/// passes every parameter at.
+#[derive(Clone, Copy)]
+struct EarlierParameters<'a> {
+    params: &'a [crate::ast::common::Parameter],
+    types: &'a [Type],
 }
 
 /// A call that may give an omitted parameter its default: the expression

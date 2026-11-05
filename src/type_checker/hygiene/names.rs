@@ -45,6 +45,13 @@ impl References {
         references
     }
 
+    /// Collects every name `expression` refers to, at any depth.
+    pub(crate) fn of_expression(expression: &Expression) -> Self {
+        let mut references = Self::default();
+        references.expression(expression);
+        references
+    }
+
     /// Collects every name a function's body reads, plus the names its own
     /// parameter list reads: a parameter used only as another parameter's
     /// default or guard is read by the declaration even though no statement

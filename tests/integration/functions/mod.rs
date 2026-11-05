@@ -6,6 +6,7 @@ pub use crate::integration::utils;
 pub mod advanced;
 pub mod arg_count;
 pub mod basic;
+pub mod default_arguments;
 pub mod evaluation_order;
 pub mod held_results;
 pub mod large_frames;
