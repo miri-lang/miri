@@ -469,7 +469,9 @@ var m = {"x": 1}
 m["y"] = 2
 ```
 
-Methods: `length`, `get`, `set`, `contains_key`, `remove`, `clear`, `is_empty`, `keys`, `values`.
+Methods: `length`, `get`, `set`, `contains_key`, `remove`, `clear`, `is_empty`, `clone`, `filter`, `map`, `reduce`.
+
+A map is iterated directly: `for k in m` visits each key, and `for k, v in m` each key with its value, in an unspecified order.
 
 The `get` method returns an option type (`V?`) — use pattern matching to handle missing keys safely.
 
