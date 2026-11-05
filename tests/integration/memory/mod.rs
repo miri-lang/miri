@@ -28,6 +28,7 @@ pub mod method_field_stores;
 pub mod nested_calls;
 pub mod null_coalesce;
 pub mod option_coercion;
+pub mod out_captures;
 pub mod out_parameter;
 pub mod owned_parameters;
 pub mod parameter_writes;

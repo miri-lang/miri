@@ -75,7 +75,8 @@ impl<'a> PerceusContext<'a> {
 /// A parameter the body takes over (`OwnershipFacts::owned_params`) is not borrowed: its
 /// binding moves the caller's reference out into a local the body releases.
 ///
-/// A capture the body assigns is not borrowed. Its value is replaced by one the
+/// A capture the body writes — assigns, makes a call's destination, or hands
+/// to an `out` parameter — is not borrowed. Its value is replaced by one the
 /// body owns, so it takes its own reference on entry and is then released like
 /// any other local — see [`Perceus::retain_written_captures`].
 ///
@@ -96,41 +97,12 @@ struct BorrowedLocals {
     reads: std::collections::HashSet<crate::mir::Local>,
 }
 
-/// The locals `body` assigns, or makes a direct call's destination: the
-/// writes that decide whether a capture is read-only. Narrower than
-/// [`Body::written_locals`], which also counts `out` arguments and the
-/// destinations of virtual calls and kernel launches.
-///
-/// Note: A capture written only through an `out` argument is currently categorized
-/// as read-only here. If passed to an `out` parameter and read back, the value stored
-/// by the callee may be released twice unless `Body::written_locals` is used to track
-/// `out` parameter writes.
-fn assigned_or_call_written_locals(body: &Body) -> std::collections::HashSet<crate::mir::Local> {
-    let call_destinations = body
-        .basic_blocks
-        .iter()
-        .filter_map(|block| block.terminator.as_ref())
-        .filter_map(|terminator| match &terminator.kind {
-            TerminatorKind::Call { destination, .. } => Some(destination),
-            TerminatorKind::Goto { .. }
-            | TerminatorKind::SwitchInt { .. }
-            | TerminatorKind::Return
-            | TerminatorKind::Unreachable
-            | TerminatorKind::GpuLaunch { .. }
-            | TerminatorKind::VirtualCall { .. } => None,
-        });
-    body.basic_blocks
-        .iter()
-        .flat_map(|block| &block.statements)
-        .filter_map(Statement::written_place)
-        .chain(call_destinations)
-        .map(|place| place.local)
-        .collect()
-}
-
 impl BorrowedLocals {
     fn of(body: &Body, ownership: &OwnershipFacts) -> Self {
-        let written = assigned_or_call_written_locals(body);
+        // Every write counts, an `out` argument's included: a callee that
+        // replaces a capture handed to it releases the value it replaces, so
+        // the body must own that value rather than borrow the environment's.
+        let written = body.written_locals();
         BorrowedLocals {
             arg_count: body.arg_count,
             owned_params: ownership.owned_params.clone(),
