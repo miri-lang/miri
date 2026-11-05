@@ -344,3 +344,16 @@ fn test_struct_fields_and_enum_variants_record_the_source_they_were_parsed_from(
     };
     assert_eq!(spelled(variants), vec!["Circle(float)", "Empty"]);
 }
+
+#[test]
+fn test_a_struct_type_parameter_named_twice_is_refused() {
+    parser_error_test(
+        "
+struct S<T, T>
+    a T
+",
+        &SyntaxErrorKind::DuplicateTypeParameter {
+            name: "T".to_string(),
+        },
+    );
+}

@@ -4,7 +4,7 @@
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::super::utils::is_inheritance_modifier;
@@ -17,7 +17,9 @@ impl<'source> Parser<'source> {
         let mut types = vec![self.generic_type()?];
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
-            types.push(self.generic_type()?);
+            let generic = self.generic_type()?;
+            refuse_repeated_type_parameter(&types, &generic)?;
+            types.push(generic);
         }
 
         self.eat_token(&Token::GreaterThan)?;
@@ -57,4 +59,39 @@ impl<'source> Parser<'source> {
 
         Ok(ast::generic_type_expression(identifier, typ, kind))
     }
+}
+
+/// The name a generic parameter declares, with where it is written.
+fn type_parameter_name(generic: &Expression) -> Option<(&str, Span)> {
+    let ExpressionKind::GenericType(name, _, _) = &generic.node else {
+        return None;
+    };
+    match &name.node {
+        ExpressionKind::Identifier(name_text, _) => Some((name_text.as_str(), name.span)),
+        _ => None,
+    }
+}
+
+/// Refuses `generic` when an earlier parameter of its list declares its name:
+/// the declaration could only ever mean one of the two.
+fn refuse_repeated_type_parameter(
+    earlier: &[Expression],
+    generic: &Expression,
+) -> Result<(), SyntaxError> {
+    let Some((name, span)) = type_parameter_name(generic) else {
+        return Ok(());
+    };
+    let repeated = earlier
+        .iter()
+        .filter_map(type_parameter_name)
+        .any(|(other, _)| other == name);
+    if !repeated {
+        return Ok(());
+    }
+    Err(SyntaxError::new(
+        SyntaxErrorKind::DuplicateTypeParameter {
+            name: name.to_string(),
+        },
+        span,
+    ))
 }

@@ -45,7 +45,7 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
-    Context, MethodInfo, SymbolInfo, TraitDefinition, TypeDefinition,
+    trait_is_or_extends, Context, MethodInfo, SymbolInfo, TraitDefinition, TypeDefinition,
 };
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
@@ -109,6 +109,7 @@ impl TypeChecker {
         }
 
         let parent_trait_names = self.resolve_parent_traits(parent_traits, context);
+        self.refuse_circular_trait_inheritance(&name, &parent_trait_names, name_expr.span);
         let parent_trait_args = self.resolve_parent_trait_args(parent_traits, context);
         let (methods, method_statements) = self.collect_trait_methods(body, context);
 
@@ -142,6 +143,27 @@ impl TypeChecker {
             self.register_type_definition(name.to_string(), TypeDefinition::Trait(trait_def));
         }
         self.register_trait_symbol(name, trait_type, visibility, context);
+    }
+
+    /// Refuses a trait among whose parents it is itself, directly or through
+    /// other traits. A cycle's requirements have no declaration to start from,
+    /// and a class implementing one would owe each trait's methods to the others.
+    fn refuse_circular_trait_inheritance(&mut self, name: &str, parents: &[String], span: Span) {
+        let definitions = &self.type_table.global_type_definitions;
+        if !parents
+            .iter()
+            .any(|parent| trait_is_or_extends(parent, name, definitions))
+        {
+            return;
+        }
+        self.report_error(
+            DiagnosticCode::TypTraitDefinition,
+            format!(
+                "Circular inheritance: trait '{}' eventually extends itself",
+                crate::type_checker::diagnostics::shown_type_name(name)
+            ),
+            span,
+        );
     }
 
     fn resolve_parent_traits(

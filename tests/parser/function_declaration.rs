@@ -752,3 +752,29 @@ fn test_error_out_used_as_parameter_name() {
         },
     );
 }
+
+#[test]
+fn test_a_parameter_named_twice_is_refused() {
+    parser_error_test(
+        "
+fn f(a int, a int) int
+    return a
+",
+        &SyntaxErrorKind::DuplicateParameter {
+            name: "a".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_a_type_parameter_named_twice_is_refused() {
+    parser_error_test(
+        "
+fn pick<T, T>(a T) T
+    return a
+",
+        &SyntaxErrorKind::DuplicateTypeParameter {
+            name: "T".to_string(),
+        },
+    );
+}

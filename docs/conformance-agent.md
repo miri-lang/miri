@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 97
+## Error fixtures (`fail/`) — 108
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -55,6 +55,7 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_PAR_019 | Triggers MER_PAR_019: Unsupported Attribute Target. |
 | MER_PAR_020 | Triggers MER_PAR_020: Unsupported C-Style Operator. |
 | MER_PAR_021 | Triggers MER_PAR_021: Recursion Limit Exceeded. |
+| MER_PAR_024 | Triggers MER_PAR_024: a function names one parameter twice. |
 | MER_RT_001 | Triggers MER_RT_001: an integer division whose divisor is zero at run time. |
 | MER_RT_002 | Triggers MER_RT_002: an integer remainder whose divisor is zero at run time. |
 | MER_RT_003 | Triggers MER_RT_003: an integer sum that does not fit its type at run time. |
@@ -141,7 +142,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 108
+## Accepted fixtures (`pass/`) — 117
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -191,6 +192,7 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_PAR_017 | Accepted counterpart of MER_PAR_017: Invalid Modifier Combination does not fire. |
 | MER_PAR_020 | Accepted counterpart of MER_PAR_020: Unsupported C-Style Operator does not fire. |
 | MER_PAR_021 | Accepted counterpart of MER_PAR_021: Recursion Limit Exceeded does not fire. |
+| MER_PAR_024 | Accepted counterpart of MER_PAR_024: each parameter has its own name. |
 | MER_RT_001 | Accepted counterpart of MER_RT_001: a non-zero divisor divides normally. |
 | MER_RT_002 | Accepted counterpart of MER_RT_002: a non-zero divisor yields a remainder. |
 | MER_RT_003 | Accepted counterpart of MER_RT_003: a sum that fits its type adds normally. |

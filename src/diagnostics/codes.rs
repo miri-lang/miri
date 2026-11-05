@@ -273,7 +273,7 @@ diagnostics!(
     Severity::Error,
     true,
     FixSafety::LocalEdit,
-    // PAR — Parser (23 codes: 001-023, two reserved)
+    // PAR — Parser (24 codes: 001-024, two reserved)
     "PAR",
     "001",
     ParUnexpectedToken,
@@ -434,6 +434,13 @@ diagnostics!(
     "Unexpected Operator",
     Severity::Error,
     true,
+    FixSafety::LocalEdit,
+    "PAR",
+    "024",
+    ParDuplicateParameter,
+    "Duplicate Parameter",
+    Severity::Error,
+    false,
     FixSafety::LocalEdit,
     // NAM — Naming and identifiers (3 codes: 001-003)
     "NAM",

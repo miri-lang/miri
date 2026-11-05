@@ -131,3 +131,30 @@ class File implements ReadWrite
     ";
     type_checker_error_test(code, "must implement method 'write'");
 }
+
+#[test]
+fn test_a_trait_that_extends_itself_is_refused() {
+    let code = "
+trait T extends T
+    fn f(self) int
+";
+    type_checker_error_test(
+        code,
+        "Circular inheritance: trait 'T' eventually extends itself",
+    );
+}
+
+#[test]
+fn test_two_traits_that_extend_each_other_are_refused() {
+    let code = "
+trait A extends B
+    fn f(self) int
+
+trait B extends A
+    fn g(self) int
+";
+    type_checker_error_test(
+        code,
+        "Circular inheritance: trait 'B' eventually extends itself",
+    );
+}

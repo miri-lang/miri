@@ -63,6 +63,7 @@ const VERIFIED: &[&str] = &[
     "MER_PAR_019",
     "MER_PAR_020",
     "MER_PAR_021",
+    "MER_PAR_024",
     "MER_TAR_001",
     "MER_TAR_002",
     "MER_TAR_003",

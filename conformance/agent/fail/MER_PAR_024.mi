@@ -1,0 +1,9 @@
+// expect: MER_PAR_024
+// summary: Triggers MER_PAR_024: a function names one parameter twice.
+use system.io
+
+fn dist(x float, x float) float
+    return x
+
+fn main()
+    println(f"{dist(1.0, 2.0)}")

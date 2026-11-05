@@ -1,0 +1,8 @@
+// summary: Accepted counterpart of MER_PAR_024: each parameter has its own name.
+use system.io
+
+fn dist(x float, y float) float
+    return y - x
+
+fn main()
+    println(f"{dist(1.0, 2.0)}")

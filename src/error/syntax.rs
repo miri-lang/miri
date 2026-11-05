@@ -101,6 +101,16 @@ pub enum SyntaxErrorKind {
         found: String,
         suggestion: String,
     },
+
+    /// A function's or lambda's parameter list names one parameter twice.
+    DuplicateParameter {
+        name: String,
+    },
+
+    /// A declaration's generic parameter list names one type parameter twice.
+    DuplicateTypeParameter {
+        name: String,
+    },
 }
 
 const HELP_INVALID_TOKEN: &str =
@@ -109,6 +119,8 @@ const HELP_UNEXPECTED_EOF: &str =
     "The file ended unexpectedly. Check for unclosed blocks or expressions.";
 const HELP_RECURSION_LIMIT: &str =
     "The expression or statement is nested too deeply. Simplify your code.";
+const HELP_DUPLICATE_PARAMETER: &str =
+    "Only one of the two could be read, so give each parameter its own name.";
 
 impl SyntaxErrorKind {
     /// Returns the error code, title, message, and help text for this error kind.
@@ -205,6 +217,12 @@ impl SyntaxErrorKind {
             K::RecursionLimitExceeded => {
                 p(DiagnosticCode::ParRecursionLimitExceeded).with_help(HELP_RECURSION_LIMIT)
             }
+            K::DuplicateParameter { name } => p(DiagnosticCode::ParDuplicateParameter)
+                .with_message(format!("Parameter '{}' is declared twice", name))
+                .with_help(HELP_DUPLICATE_PARAMETER),
+            K::DuplicateTypeParameter { name } => p(DiagnosticCode::ParDuplicateParameter)
+                .with_message(format!("Type parameter '{}' is declared twice", name))
+                .with_help(HELP_DUPLICATE_PARAMETER),
         }
     }
 }

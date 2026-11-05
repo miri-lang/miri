@@ -283,7 +283,9 @@ impl<'source> Parser<'source> {
             if self.lookahead_is_rparen() {
                 break;
             }
-            parameters.push(self.parameter()?);
+            let parameter = self.parameter()?;
+            refuse_repeated_parameter(&parameters, &parameter)?;
+            parameters.push(parameter);
         }
 
         Ok(parameters)
@@ -398,4 +400,22 @@ impl<'source> Parser<'source> {
             false
         }
     }
+}
+
+/// Refuses `parameter` when an earlier one in its list carries its name. Only
+/// one of the two could ever be read in the body, so the list says something
+/// other than what its author meant. `_` names nothing and may repeat.
+fn refuse_repeated_parameter(
+    earlier: &[Parameter],
+    parameter: &Parameter,
+) -> Result<(), SyntaxError> {
+    if parameter.name == "_" || earlier.iter().all(|other| other.name != parameter.name) {
+        return Ok(());
+    }
+    Err(SyntaxError::new(
+        SyntaxErrorKind::DuplicateParameter {
+            name: parameter.name.clone(),
+        },
+        parameter.name_span,
+    ))
 }

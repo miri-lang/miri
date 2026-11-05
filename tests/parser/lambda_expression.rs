@@ -497,3 +497,13 @@ let f = fn(x int) int
 
     assert_eq!(with_colon, without_colon);
 }
+
+#[test]
+fn test_a_lambda_parameter_named_twice_is_refused() {
+    parser_error_test(
+        "let g = fn(b int, b int) int: b",
+        &SyntaxErrorKind::DuplicateParameter {
+            name: "b".to_string(),
+        },
+    );
+}
