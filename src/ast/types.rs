@@ -187,6 +187,16 @@ pub fn range_element_expression(kind: &TypeKind) -> Option<&TypeArgument> {
     (name == RANGE_TYPE_NAME).then(|| args.first())?
 }
 
+/// The types of the members a `Range<T>` value is built from, in order: its
+/// start, its end, and whether the end is included. `None` for every kind
+/// that is not a range. Comparing and hashing a range read its members
+/// through this, so they read the parts its construction writes.
+pub fn range_member_types(kind: &TypeKind, span: Span) -> Option<[Type; 3]> {
+    let element =
+        crate::ast::type_arguments::argument_type_marked(range_element_expression(kind)?)?;
+    Some([element.clone(), element, Type::new(TypeKind::Boolean, span)])
+}
+
 /// The range type `Range<T>` over the element type expression `element`.
 pub fn range_type_kind(element: TypeArgument) -> TypeKind {
     TypeKind::Custom(RANGE_TYPE_NAME.to_string(), Some(vec![element]))

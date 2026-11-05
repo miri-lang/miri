@@ -104,3 +104,33 @@ fn main()
         "6\n6",
     );
 }
+
+#[test]
+fn ranges_compare_by_their_bounds_and_inclusiveness() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let a = 0..3
+    let b = 0..3
+    let c = 0..=3
+    println(f"{a == b} {a == (1..3)} {a == c} {a != (0..4)} {c == (0..=3)}")
+"#,
+        "true false false true true",
+    );
+}
+
+#[test]
+fn a_list_of_ranges_is_hashed_and_searched_by_value() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let l = List([0..3, 1..4])
+    let r = 1..4
+    println(f"{l.contains(0..3)} {l.contains(0..=3)} {l.hash() == List([0..3, r]).hash()}")
+    println(f"{(0..3).hash() == (0..3).hash()} {(0..3).hash() == (0..=3).hash()}")
+"#,
+        "true false true\ntrue false",
+    );
+}

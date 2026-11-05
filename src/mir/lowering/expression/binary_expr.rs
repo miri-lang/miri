@@ -896,13 +896,15 @@ fn is_equality_operator(op: &crate::ast::operator::BinaryOp) -> bool {
     )
 }
 
-/// True when the type needs structural equality comparison.
+/// True when the type needs structural equality comparison: an enum, a
+/// struct, an optional, a result, or a range, which is built from its members.
 ///
 /// An `Atomic<T>` is declared as a struct but has no struct behind it to
 /// walk; host code never compares one (see [`reaches_machine_op_unchecked`]).
 fn is_structural_equality_type(ctx: &LoweringContext, kind: &TypeKind) -> bool {
     match kind {
         TypeKind::Custom(_, _) if is_device_marker(kind) => false,
+        TypeKind::Custom(name, _) if crate::ast::types::is_range_type_name(name) => true,
         TypeKind::Custom(name, _) => matches!(
             ctx.type_checker.type_definitions().get(name),
             Some(crate::type_checker::context::TypeDefinition::Enum(_))

@@ -225,6 +225,11 @@ fn emit_named_type_hash(
         );
         return Ok(call_hash_method(ctx, span, symbol, value));
     }
+    // A range has no declaration: it is hashed by the members `==` compares.
+    let range = TypeKind::Custom(name.to_string(), args.map(<[_]>::to_vec));
+    if let Some(members) = crate::ast::types::range_member_types(&range, span) {
+        return emit_members_hash(ctx, span, &members, value);
+    }
     match ctx.type_checker.type_definitions().get(name) {
         Some(TypeDefinition::Enum(_)) => emit_enum_hash(ctx, span, name, args, value),
         Some(TypeDefinition::Struct(_)) => emit_struct_hash(ctx, span, name, args, value),
