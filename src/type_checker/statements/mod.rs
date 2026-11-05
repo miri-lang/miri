@@ -324,7 +324,38 @@ impl TypeChecker {
         self.check_class(class_data, context, span)
     }
 
+    /// Refuse an enum, struct, class or trait declared inside a function body.
+    ///
+    /// A type is defined for the program only from the top level of a file;
+    /// one declared in a body would be gone by the next statement, so it is
+    /// refused at its declaration rather than reported later as undefined.
+    /// Returns `true` when the declaration was refused.
+    fn refuse_type_declared_in_function(
+        &mut self,
+        statement: &Statement,
+        context: &Context,
+    ) -> bool {
+        if context.return_types.is_empty() {
+            return false;
+        }
+        let Some(name) = self.declared_type_name(statement) else {
+            return false;
+        };
+        self.report_error_with_help(
+            DiagnosticCode::TypTypeDeclaredInFunction,
+            format!(
+                "type '{name}' is declared inside a function: types are declared at the top level of a file"
+            ),
+            statement.span,
+            "move the declaration to the top level of the file, beside the function that uses it.".to_string(),
+        );
+        true
+    }
+
     fn check_statement_kind(&mut self, statement: &Statement, context: &mut Context) {
+        if self.refuse_type_declared_in_function(statement, context) {
+            return;
+        }
         match &statement.node {
             StatementKind::Variable(decls, vis) => {
                 self.check_variable_declaration(decls, vis, context, statement.span)

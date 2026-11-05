@@ -1,0 +1,11 @@
+// summary: Accepted counterpart of MER_TYP_085: the enum is declared at the top level of the file.
+use system.io
+
+enum Door
+    Open
+    Shut
+
+fn main()
+    let d = Door.Open
+    if d == Door.Open
+        println("open")

@@ -493,7 +493,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (84 codes: 001-084)
+    // TYP — Type checker (85 codes: 001-085)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1079,6 +1079,13 @@ diagnostics!(
     "084",
     TypInvalidMainSignature,
     "Invalid Main Signature",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "085",
+    TypTypeDeclaredInFunction,
+    "Type Declared Inside A Function",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

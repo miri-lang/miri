@@ -32,6 +32,7 @@
 - **Indentation-sensitive**: Like Python, no `{}` or `end` keywords are required for blocks.
 - **Inline blocks**: Use a colon `:` for single-statement blocks.
 - **Static Typing**: Explicit and inferred types.
+- **Types at the top level**: An `enum`, `struct`, `class` or `trait` is declared at the top level of a file. One declared inside a function or method body is refused (`MER_TYP_085`); a type only one function needs is declared beside it, `private` to keep it out of other modules.
 
 ---
 

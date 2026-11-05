@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
+use crate::type_checker::utils::{
+    type_checker_error_test, type_checker_error_with_help_test, type_checker_test,
+};
 
 #[test]
 fn test_struct_declaration_and_instantiation() {
@@ -238,4 +240,41 @@ struct Container<T includes Mixin>
 var c Container<int>
     ";
     type_checker_error_test(code, "does not satisfy constraint");
+}
+
+#[test]
+fn test_type_declared_inside_a_function_is_refused() {
+    // A type declared in a body would be gone by the next statement: the
+    // refusal names it at its declaration instead.
+    for (declaration, name) in [
+        ("    enum Local\n        A\n        B(int)", "Local"),
+        ("    struct Pair\n        x int", "Pair"),
+        ("    class Box\n        v int", "Box"),
+        ("    trait Sized\n        fn size() int", "Sized"),
+    ] {
+        let code = format!("fn main()\n{declaration}\n    println(\"x\")\n");
+        type_checker_error_with_help_test(
+            &code,
+            &format!("type '{name}' is declared inside a function"),
+            "move the declaration to the top level of the file",
+        );
+    }
+}
+
+#[test]
+fn test_type_declared_in_a_block_of_a_method_is_refused() {
+    type_checker_error_test(
+        "
+class Shop
+    fn open()
+        if true
+            enum Door
+                In
+                Out
+
+fn main()
+    Shop().open()
+",
+        "type 'Door' is declared inside a function",
+    );
 }

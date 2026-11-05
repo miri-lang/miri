@@ -1,0 +1,11 @@
+// expect: MER_TYP_085
+// summary: Triggers MER_TYP_085: an enum is declared inside a function body.
+use system.io
+
+fn main()
+    enum Door
+        Open
+        Shut
+    let d = Door.Open
+    if d == Door.Open
+        println("open")
