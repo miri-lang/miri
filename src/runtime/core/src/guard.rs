@@ -841,13 +841,15 @@ pub fn report_touch_and_abort(verdict: TouchVerdict, payload_ptr: usize) -> ! {
     };
 
     let msg = format_touch_report(verdict, record, Location::caller());
-    // No profile record here: writing one allocates, and the heap has just
-    // been found touched after release, so it is not trusted with that.
-
-    unsafe {
-        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
-        libc::_exit(99);
-    }
+    // A block touched after its release is its own fault; a header whose
+    // count no longer reads as one is the corruption the runtime's own checks
+    // report. Either leaves through `trap`, so the run reports a code and
+    // exits like any other fault.
+    let code = match verdict {
+        TouchVerdict::UseAfterFree => code::USE_AFTER_FREE,
+        TouchVerdict::HeaderCorrupt | TouchVerdict::Ok => code::HEAP_CORRUPTED,
+    };
+    trap(code, msg.trim_end())
 }
 
 /// Registers an allocation whose memory compiled code owns.

@@ -175,6 +175,11 @@ const VERIFIED_BY_RUN: &[&str] = &[
 /// cannot reach the code.
 const VERIFIED_BY_RUN_ON_GPU: &[&str] = &["MER_RT_013"];
 
+/// Codes whose `Before` example is verified through `miri run` with the heap
+/// guard on (`MIRI_HEAP_GUARD=1`): the guard is what tracks released blocks,
+/// so a run without it cannot reach the code.
+const VERIFIED_BY_GUARDED_RUN: &[&str] = &["MER_RT_018"];
+
 /// Codes whose `Before` example is verified through another command, given
 /// the file and the flags that make the request.
 ///
@@ -343,6 +348,8 @@ enum Surface {
     Check,
     /// `miri run`: what stops the program while it runs.
     Run,
+    /// `miri run` with the heap guard on: what only the guard sees.
+    GuardedRun,
     /// Another command, with the flags that make the request.
     Command(&'static str, &'static [&'static str]),
     /// `miri fix`, which lists the errors it read before its verdict on them,
@@ -355,7 +362,7 @@ impl Surface {
     fn command(self) -> &'static str {
         match self {
             Surface::Check => "check",
-            Surface::Run => "run",
+            Surface::Run | Surface::GuardedRun => "run",
             Surface::Command(command, _) => command,
             Surface::Fix(_) => "fix",
         }
@@ -364,7 +371,7 @@ impl Surface {
     /// The flags the request carries beyond the file.
     fn flags(self) -> &'static [&'static str] {
         match self {
-            Surface::Check | Surface::Run => &[],
+            Surface::Check | Surface::Run | Surface::GuardedRun => &[],
             Surface::Command(_, flags) | Surface::Fix(flags) => flags,
         }
     }
@@ -385,7 +392,7 @@ impl Surface {
         match self {
             Surface::Check | Surface::Fix(_) => matches!(status, 0 | 1),
             Surface::Command(..) => matches!(status, 0..=2),
-            Surface::Run => matches!(status, 0 | 1 | 129..=159),
+            Surface::Run | Surface::GuardedRun => matches!(status, 0 | 1 | 129..=159),
         }
     }
 
@@ -393,7 +400,7 @@ impl Surface {
     /// wherever the code is, since its verdict follows the errors it read.
     fn subject_index(self, reported: &[Diagnostic], wire: &str) -> Option<usize> {
         match self {
-            Surface::Check | Surface::Run | Surface::Command(..) => {
+            Surface::Check | Surface::Run | Surface::GuardedRun | Surface::Command(..) => {
                 (!reported.is_empty()).then_some(0)
             }
             Surface::Fix(_) => reported
@@ -405,7 +412,7 @@ impl Surface {
     /// Where the code must appear in what the command reports, in words.
     fn expected_position(self) -> &'static str {
         match self {
-            Surface::Check | Surface::Run | Surface::Command(..) => "first",
+            Surface::Check | Surface::Run | Surface::GuardedRun | Surface::Command(..) => "first",
             Surface::Fix(_) => "after the errors it read",
         }
     }
@@ -446,7 +453,11 @@ fn snippet_envelope(
 
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_miri"));
     let shown = path.display().to_string();
-    let output = Command::new(binary)
+    let mut command = Command::new(binary);
+    if matches!(surface, Surface::GuardedRun) {
+        command.env("MIRI_HEAP_GUARD", "1");
+    }
+    let output = command
         .args(surface.arguments(&shown))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output();
@@ -505,6 +516,9 @@ fn codes_of(reported: &[Diagnostic]) -> Vec<String> {
 fn verified_on_host() -> impl Iterator<Item = (&'static str, Surface)> {
     let checked = VERIFIED.iter().map(|wire| (*wire, Surface::Check));
     let run = VERIFIED_BY_RUN.iter().map(|wire| (*wire, Surface::Run));
+    let guarded = VERIFIED_BY_GUARDED_RUN
+        .iter()
+        .map(|wire| (*wire, Surface::GuardedRun));
     let commanded = VERIFIED_BY_COMMAND
         .iter()
         .map(|(wire, command, flags)| (*wire, Surface::Command(command, flags)));
@@ -517,6 +531,7 @@ fn verified_on_host() -> impl Iterator<Item = (&'static str, Surface)> {
         .map(|(wire, command, flags)| (*wire, Surface::Command(command, flags)));
     checked
         .chain(run)
+        .chain(guarded)
         .chain(commanded)
         .chain(fixed)
         .chain(unprofiled)
@@ -765,7 +780,7 @@ fn example_failures(
 /// that command and every flag in its `Before`, so a reader repeating it gets
 /// what the gate got.
 fn page_spelling_failure(code: DiagnosticCode, surface: Surface) -> Option<String> {
-    if matches!(surface, Surface::Check | Surface::Run) {
+    if matches!(surface, Surface::Check | Surface::Run | Surface::GuardedRun) {
         return None;
     }
     let doc = code.doc();
@@ -823,6 +838,7 @@ const NO_HELP_EMITTED: &[&str] = &[
     "MER_RT_015",
     "MER_RT_016",
     "MER_RT_017",
+    "MER_RT_018",
     "MER_TAR_001",
     "MER_TAR_002",
     "MER_TAR_004",

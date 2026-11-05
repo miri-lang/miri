@@ -61,6 +61,17 @@ runtime "core" fn miri_rt_test_simulate_double_free()
 public fn simulate_double_free()
     miri_rt_test_simulate_double_free()
 
+runtime "core" fn miri_rt_test_simulate_use_after_free()
+
+/// Releases a heap block, then hands it to the runtime as a value.
+///
+/// Under MIRI_HEAP_GUARD the runtime's entry check stops the program with
+/// MER_RT_018, naming where the block was allocated and released. Without the
+/// guard nothing reads the released block. Use in tests that verify the heap
+/// guard fires.
+public fn simulate_use_after_free()
+    miri_rt_test_simulate_use_after_free()
+
 runtime "core" fn miri_rt_test_simulate_shared_receiver()
 
 /// Hands a writing method's receiver check a collection two references hold.

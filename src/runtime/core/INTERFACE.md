@@ -167,6 +167,10 @@ bytes into a heap buffer of its own.
   fixed sentinel no live block holds there. Releasing a block that already carries it (a double
   release), or taking one whose sentinel changed (a write after release), traps
   with `MER_RT_015` in every build.
+- While `MIRI_HEAP_GUARD=1` is set, every intrinsic that receives a managed pointer
+  first asks the guard about it. A block already released traps with `MER_RT_018`,
+  naming where it was allocated and released; a header whose count no longer reads
+  as one traps with `MER_RT_015`.
 - **Poison mode.** In a build without `--release`, while `MIRI_LEAK_CHECK`,
   `MIRI_ALLOC_COUNT` or `MIRI_RC_STATS` is asked for or `MallocScribble` is set
   — so in every test run — the cache also fills each released block past those
@@ -235,7 +239,7 @@ read.
 
 The record is written at exit, from the `atexit` hook, `exit`, a runtime trap,
 or a leak report that ends the process, but not after the heap guard finds the
-heap corrupted, since writing it allocates.
+heap corrupted or a block touched after its release, since writing it allocates.
 
 ---
 

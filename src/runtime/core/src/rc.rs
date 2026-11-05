@@ -438,6 +438,26 @@ pub unsafe extern "C" fn miri_rt_test_simulate_double_free() {
     free_with_rc(ptr, payload_size);
 }
 
+/// Releases a heap block, then hands it to the runtime's entry check, as an
+/// intrinsic receiving a released value would.
+///
+/// Under `MIRI_HEAP_GUARD` the check stops the program with `MER_RT_018`
+/// naming where the block was allocated and released. Without the guard the
+/// check does nothing and the released block is never read.
+///
+/// # Safety
+/// This function is for testing only.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_use_after_free() {
+    let payload_size = 32;
+    let ptr = alloc_with_rc(payload_size);
+    if ptr.is_null() {
+        return;
+    }
+    free_with_rc(ptr, payload_size);
+    crate::guard::guard_check(ptr);
+}
+
 /// Hands a writing method's uniqueness check a receiver two references hold,
 /// to verify it stops the program with `MER_RT_017` instead of going on.
 ///

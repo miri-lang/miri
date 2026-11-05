@@ -43,6 +43,9 @@ pub(crate) mod code {
     pub(crate) const LIST_CHANGED_WHILE_SORTED: &str = "MER_RT_016";
     /// A writing method handed a receiver something else still holds.
     pub(crate) const RECEIVER_SHARED: &str = "MER_RT_017";
+    /// A heap block handed to the runtime after it was released, caught by
+    /// the heap guard.
+    pub(crate) const USE_AFTER_FREE: &str = "MER_RT_018";
 }
 
 /// Report a runtime fault under `code` and end the process.
@@ -57,9 +60,9 @@ pub(crate) fn trap(code: &str, message: &str) -> ! {
     eprintln!("Runtime error: {}", message);
     write_trap_report(code);
     // A profiled run keeps the samples it took up to the trap. Writing them
-    // allocates, which a heap the guard has just found corrupted cannot be
-    // trusted with, so that one trap leaves no record.
-    if code != code::HEAP_CORRUPTED {
+    // allocates, which a heap just found corrupted or touched after release
+    // cannot be trusted with, so those traps leave no record.
+    if code != code::HEAP_CORRUPTED && code != code::USE_AFTER_FREE {
         crate::profile::finish();
     }
     let _ = std::io::stderr().flush();

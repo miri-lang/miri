@@ -1309,7 +1309,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (17 codes: 001-017)
+    // RT — Runtime traps and assertion failures (18 codes: 001-018)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1429,6 +1429,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
+    "RT",
+    "018",
+    RtUseAfterFree,
+    "Use After Free",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // TAR — Target capabilities (10 codes: 001-010)
     "TAR",
     "001",

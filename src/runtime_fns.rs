@@ -49,6 +49,9 @@ pub mod rt {
     /// Test-only: hands the receiver uniqueness check a block two references
     /// hold, to verify it stops the program.
     pub const SIMULATE_SHARED_RECEIVER: &str = "miri_rt_test_simulate_shared_receiver";
+    /// Test-only: hands the heap guard's entry check a released block, to
+    /// verify it reports a use after free.
+    pub const SIMULATE_USE_AFTER_FREE: &str = "miri_rt_test_simulate_use_after_free";
     /// Test-only: frees a closure outright so the release compiled code makes
     /// afterwards is a double release the heap guard must report.
     pub const SIMULATE_CLOSURE_OVER_RELEASE: &str = "miri_rt_test_simulate_closure_over_release";
@@ -441,6 +444,7 @@ pub mod rt {
         CLOSURE_SIMULATE_LEAK,
         SIMULATE_DOUBLE_FREE,
         SIMULATE_SHARED_RECEIVER,
+        SIMULATE_USE_AFTER_FREE,
         SIMULATE_CLOSURE_OVER_RELEASE,
         SIMULATE_INLINE_OVER_RELEASE,
         BLOCK_ALLOC,

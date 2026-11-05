@@ -608,6 +608,7 @@ const CONFORMANCE_EXCLUSIONS: &[(&str, &str)] = &[
     ("MER_BLD_006", "Command-invocation diagnostic (miri view/patch); not reachable from .mi source"),
     ("MER_BLD_007", "Command-invocation diagnostic (miri view/patch); not reachable from .mi source"),
     ("MER_BLD_008", "Command-invocation diagnostic (every command that reads an input file); reports the path it was given rather than anything a .mi source can state"),
+    ("MER_RT_018", "Raised only under MIRI_HEAP_GUARD=1, the mode that tracks released blocks; the corpus runs without it, and tests/diagnostics/runtime_traps.rs runs the guarded trigger"),
     ("MER_TAR_010", "Raised only by `build --target web-gpu`; fixtures build for the native target, and tests/cli/web_gpu_buffers.rs covers every refusal"),
     ("MER_BLD_009", "Command-invocation diagnostic (miri patch --expect-sha); not reachable from .mi source"),
     ("MER_BLD_010", "Command-invocation diagnostic (miri patch token alignment); not reachable from .mi source"),
