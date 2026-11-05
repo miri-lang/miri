@@ -1,0 +1,21 @@
+{
+ "run_id": "20261105T125255Z",
+ "suspect": [
+  {
+   "cell": "sieve/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0858817868833266,
+   "baseline": 2.5727905503763253,
+   "tonight": 2.7937464001191814
+  },
+  {
+   "cell": "sieve/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.083464212538186,
+   "baseline": 2.9641189652329416,
+   "tonight": 3.2115168205356115
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
