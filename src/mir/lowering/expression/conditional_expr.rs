@@ -97,7 +97,7 @@ fn emit_conditional_switch(
 /// alone, while its scope exit still releases it on every path — a double free
 /// on the branch that moved it. Copying lets Perceus fund the result with a
 /// retain on each branch, so both paths reach the join owning the same counts.
-fn emit_conditional_branch_value(
+pub(super) fn emit_conditional_branch_value(
     ctx: &mut LoweringContext,
     branch_expr: &Expression,
     result_local: crate::mir::Local,

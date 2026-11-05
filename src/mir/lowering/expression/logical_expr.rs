@@ -142,6 +142,10 @@ fn emit_logical_short_circuit(
 }
 
 /// Evaluate the RHS in `rhs_bb`, store it into `result_local`, and goto join.
+///
+/// The right-hand side runs on one path only, so it is a branch value like a
+/// conditional's arm and is lowered as one: copied into the result, never
+/// moved, so a binding read there keeps its value on every path.
 fn emit_logical_rhs(
     ctx: &mut LoweringContext,
     rhs: &Expression,
@@ -151,22 +155,7 @@ fn emit_logical_rhs(
     expr: &Expression,
 ) -> Result<(), LoweringError> {
     ctx.set_current_block(rhs_bb);
-    let watermark = ctx.body.local_decls.len();
-    let rhs_op = lower_expression(ctx, rhs, None)?;
-    let rhs_local = match &rhs_op {
-        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-        Operand::Constant(_) | Operand::Function(_) => None,
-    };
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
-        span: expr.span,
-    });
-    // The assignment retains the value for the result, so a temp this branch
-    // allocated to produce it still holds a reference of its own. One that
-    // predates the branch belongs to an enclosing scope and is left alone.
-    if let Some(local) = rhs_local {
-        ctx.emit_temp_drop(local, watermark, expr.span);
-    }
+    super::conditional_expr::emit_conditional_branch_value(ctx, rhs, result_local)?;
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
