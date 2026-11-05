@@ -1090,3 +1090,34 @@ fn test_a_comment_beside_a_declaration_header_stays_on_that_line() {
         assert_renders_as_written(source);
     }
 }
+
+#[test]
+fn test_a_comment_beside_a_struct_field_stays_on_that_line() {
+    assert_renders_as_written("struct Point\n    x int // across\n    y int // down\n");
+}
+
+#[test]
+fn test_a_comment_above_a_struct_field_stays_above_it() {
+    assert_renders_as_written(
+        "struct Point\n    /// How far across.\n    x int\n    // down from the top\n    y int\n",
+    );
+}
+
+#[test]
+fn test_a_comment_beside_an_enum_variant_stays_on_that_line() {
+    assert_renders_as_written("enum Choice\n    First // the first\n    Second\n");
+}
+
+#[test]
+fn test_a_comment_above_an_enum_variant_stays_above_it() {
+    assert_renders_as_written(
+        "enum Choice\n    /// The first.\n    First\n    /// The second.\n    Second(int)\n",
+    );
+}
+
+#[test]
+fn test_member_comments_keep_their_places_beside_methods() {
+    assert_renders_as_written(
+        "struct Point // a point\n    x int // across\n\n    // the length\n    fn size() int\n        return 1\n",
+    );
+}

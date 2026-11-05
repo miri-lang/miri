@@ -141,6 +141,15 @@ pub enum VariableDeclarationType {
     Unmarked,
 }
 
+/// The comments written around one field of a struct or variant of an enum.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct MemberComments {
+    /// Comments on their own lines above the member.
+    pub leading: Vec<BufferedComment>,
+    /// The comment after the member on its own line.
+    pub trailing: Option<BufferedComment>,
+}
+
 /// Trivia (comments and whitespace metadata) attached to a statement.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct StatementTrivia {
@@ -153,6 +162,10 @@ pub struct StatementTrivia {
     /// finished until its block is, so without its own slot the comment would
     /// be claimed by the block's first statement and move down a line.
     pub opening_comment: Option<BufferedComment>,
+    /// On a struct or enum, the comments around each field or variant, in
+    /// declaration order. A field or variant is an expression and carries no
+    /// trivia of its own, so its comments are kept here beside it.
+    pub member_comments: Vec<MemberComments>,
     /// Comments written on their own lines after the statement, which no
     /// later statement claimed because none follows it in its block.
     pub trailing_lines: Vec<BufferedComment>,

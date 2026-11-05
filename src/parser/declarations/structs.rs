@@ -5,6 +5,7 @@ use crate::ast::factory as ast;
 use crate::ast::*;
 use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
+use crate::parser::statements::{DeclarationBody, DeclarationMember};
 
 use super::super::Parser;
 
@@ -19,35 +20,41 @@ impl<'source> Parser<'source> {
         let traits = self.inheritance_clause(&Token::Implements)?;
 
         let opening_comment = self.opening_comment();
-        let (fields, methods) = self.struct_body()?;
+        let body = self.struct_body()?;
 
-        if fields.is_empty() && methods.is_empty() {
+        if body.entries.is_empty() && body.methods.is_empty() {
             return Err(
                 self.error_missing_members(SyntaxErrorKind::MissingStructMembers, name.span)
             );
         }
 
-        let mut statement =
-            ast::struct_statement(name, generic_types, fields, methods, visibility, traits);
+        let mut statement = ast::struct_statement(
+            name,
+            generic_types,
+            body.entries,
+            body.methods,
+            visibility,
+            traits,
+        );
         statement.trivia.opening_comment = opening_comment;
+        statement.trivia.member_comments = body.member_comments;
         Ok(statement)
     }
 
     /// Parses a struct body which may contain field declarations and method declarations.
     /// Accepts both inline (`: field type`) and block (indented) forms.
-    fn struct_body(&mut self) -> Result<(Vec<Expression>, Vec<Statement>), SyntaxError> {
-        let mut fields = vec![];
-        let mut methods = vec![];
+    fn struct_body(&mut self) -> Result<DeclarationBody, SyntaxError> {
+        let mut body = DeclarationBody::default();
 
         match &self.lookahead {
             Some((Token::Colon, _)) => {
                 // Inline form — only fields allowed inline
                 self.eat_token(&Token::Colon)?;
                 if !self.lookahead_is_expression_end() && self.lookahead.is_some() {
-                    fields.push(self.struct_member_expression()?);
+                    body.entries.push(self.struct_member_expression()?);
                     while self.lookahead_is_comma() {
                         self.eat_token(&Token::Comma)?;
-                        fields.push(self.struct_member_expression()?);
+                        body.entries.push(self.struct_member_expression()?);
                     }
                 }
             }
@@ -57,20 +64,7 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
                     while !self.lookahead_is_dedent() {
-                        match &self.lookahead {
-                            Some((Token::Fn, _))
-                            | Some((Token::Async, _))
-                            | Some((Token::Gpu, _)) => {
-                                let start = self.current_token_span().start;
-                                let mut stmt =
-                                    self.function_declaration(MemberVisibility::Public)?;
-                                self.close_span(&mut stmt, start);
-                                methods.push(stmt);
-                            }
-                            _ => {
-                                fields.push(self.struct_member_expression()?);
-                            }
-                        }
+                        self.declaration_member(&mut body, Self::struct_member)?;
                         self.try_eat_expression_end()?;
                     }
                     self.eat_token(&Token::Dedent)?;
@@ -83,7 +77,17 @@ impl<'source> Parser<'source> {
             }
         }
 
-        Ok((fields, methods))
+        Ok(body)
+    }
+
+    /// A method or a field of a block-form struct body.
+    fn struct_member(&mut self) -> Result<DeclarationMember, SyntaxError> {
+        match &self.lookahead {
+            Some((Token::Fn, _)) | Some((Token::Async, _)) | Some((Token::Gpu, _)) => Ok(
+                DeclarationMember::method(self.function_declaration(MemberVisibility::Public)?),
+            ),
+            _ => Ok(DeclarationMember::Entry(self.struct_member_expression()?)),
+        }
     }
 
     pub(crate) fn struct_member_expression(&mut self) -> Result<Expression, SyntaxError> {

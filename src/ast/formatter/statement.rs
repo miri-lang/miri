@@ -14,8 +14,10 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::pattern::MatchBranch;
 use crate::ast::statement::{
     AcceleratorTarget, BindingResidency, ClassData, FunctionDeclarationData, IfStatementType,
-    Statement, StatementKind, VariableDeclaration, VariableDeclarationType, WhileStatementType,
+    MemberComments, Statement, StatementKind, VariableDeclaration, VariableDeclarationType,
+    WhileStatementType,
 };
+use crate::lexer::BufferedComment;
 
 use super::expression::expression as format_expression;
 use super::helpers::{function_modifiers, parameter_list, visibility};
@@ -55,7 +57,13 @@ fn trailing_lines(sink: &mut Sink, node: &Statement, indent: usize) {
 /// The comments written on their own lines above `node`, each on its own line
 /// at the statement's indentation.
 fn leading_comments(sink: &mut Sink, node: &Statement, indent: usize) {
-    for comment in &node.trivia.leading_comments {
+    comments_above(sink, &node.trivia.leading_comments, indent);
+}
+
+/// `comments`, each on its own line at `indent`, ending where the line they
+/// stand above begins.
+fn comments_above(sink: &mut Sink, comments: &[BufferedComment], indent: usize) {
+    for comment in comments {
         sink.keep_blank_line_above(comment.span.start);
         sink.emit(&comment.text);
         sink.emit_line(indent);
@@ -64,20 +72,42 @@ fn leading_comments(sink: &mut Sink, node: &Statement, indent: usize) {
 
 /// The comment written after `node`'s code on the same line.
 fn trailing_comment(sink: &mut Sink, node: &Statement) {
-    if let Some(comment) = &node.trivia.trailing_comment {
+    comment_beside(sink, node.trivia.trailing_comment.as_ref());
+}
+
+/// `comment`, after the code already on the line.
+fn comment_beside(sink: &mut Sink, comment: Option<&BufferedComment>) {
+    if let Some(comment) = comment {
         sink.emit(" ");
         sink.emit(&comment.text);
+    }
+}
+
+/// A field or variant at `indent` on a fresh line, with the comments written
+/// around it when the sink renders comments.
+fn declaration_entry(
+    sink: &mut Sink,
+    entry: &Expression,
+    comments: Option<&MemberComments>,
+    indent: usize,
+) {
+    sink.emit_line(indent);
+    let comments = comments.filter(|_| sink.renders_comments());
+    if let Some(comments) = comments {
+        comments_above(sink, &comments.leading, indent);
+    }
+    sink.keep_blank_line_above(entry.span.start);
+    format_expression(sink, entry, indent);
+    if let Some(comments) = comments {
+        comment_beside(sink, comments.trailing.as_ref());
     }
 }
 
 /// The comment written on the line that opens `node`'s body, after its
 /// header: rendered where the header ends, before the body's first line.
 fn opening_comment(sink: &mut Sink, node: &Statement) {
-    if let Some(comment) = &node.trivia.opening_comment {
-        if sink.renders_comments() {
-            sink.emit(" ");
-            sink.emit(&comment.text);
-        }
+    if sink.renders_comments() {
+        comment_beside(sink, node.trivia.opening_comment.as_ref());
     }
 }
 
@@ -637,10 +667,9 @@ fn enum_declaration(
     let mark = sink.mark();
     enum_header(sink, name, generics.as_deref(), level, entries, indent);
     opening_comment(sink, node);
-    for variant in variants {
-        sink.emit_line(indent + 1);
-        sink.keep_blank_line_above(variant.span.start);
-        format_expression(sink, variant, indent + 1);
+    for (index, variant) in variants.iter().enumerate() {
+        let comments = node.trivia.member_comments.get(index);
+        declaration_entry(sink, variant, comments, indent + 1);
     }
     for method in methods {
         sink.emit_line(indent + 1);
@@ -665,10 +694,9 @@ fn struct_declaration(
     let mark = sink.mark();
     struct_header(sink, name, generics.as_deref(), level, traits, indent);
     opening_comment(sink, node);
-    for field in fields {
-        sink.emit_line(indent + 1);
-        sink.keep_blank_line_above(field.span.start);
-        format_expression(sink, field, indent + 1);
+    for (index, field) in fields.iter().enumerate() {
+        let comments = node.trivia.member_comments.get(index);
+        declaration_entry(sink, field, comments, indent + 1);
     }
     for method in methods {
         sink.emit_line(indent + 1);

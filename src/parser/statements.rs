@@ -224,6 +224,33 @@ impl<'source> Parser<'source> {
         self.lexer.take_trailing_comments().pop()
     }
 
+    /// Parse one member of a struct or enum body with `member`, claiming the
+    /// comments written around it: a method keeps them on its own trivia, a
+    /// field or variant in `body.member_comments`, beside its position.
+    pub(crate) fn declaration_member(
+        &mut self,
+        body: &mut DeclarationBody,
+        member: impl FnOnce(&mut Self) -> Result<DeclarationMember, SyntaxError>,
+    ) -> Result<(), SyntaxError> {
+        let leading = self.lexer.take_leading_comments();
+        let start = self.current_token_span().start;
+        match member(self)? {
+            DeclarationMember::Method(method) => {
+                let mut method = *method;
+                self.close_span(&mut method, start);
+                self.claim_trivia(&mut method, leading);
+                body.methods.push(method);
+            }
+            DeclarationMember::Entry(entry) => {
+                let trailing = self.lexer.take_trailing_comments().pop();
+                body.member_comments
+                    .push(MemberComments { leading, trailing });
+                body.entries.push(entry);
+            }
+        }
+        Ok(())
+    }
+
     /// Give the comments written below the last statement of a block to that
     /// statement.
     ///
@@ -1295,4 +1322,26 @@ fn attach_leading(statement: &mut Statement, leading: Vec<BufferedComment>) {
         }
     }
     statement.trivia.leading_comments = leading;
+}
+
+/// What a struct or enum body declares: its fields or variants, the methods
+/// beside them, and the comments written around each field or variant.
+#[derive(Default)]
+pub(crate) struct DeclarationBody {
+    pub(crate) entries: Vec<Expression>,
+    pub(crate) methods: Vec<Statement>,
+    pub(crate) member_comments: Vec<MemberComments>,
+}
+
+/// One member of a struct or enum body. A method is boxed because a
+/// statement is several times the size of the field or variant expression.
+pub(crate) enum DeclarationMember {
+    Method(Box<Statement>),
+    Entry(Expression),
+}
+
+impl DeclarationMember {
+    pub(crate) fn method(method: Statement) -> Self {
+        Self::Method(Box::new(method))
+    }
 }

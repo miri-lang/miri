@@ -5,6 +5,7 @@ use crate::ast::factory as ast;
 use crate::ast::*;
 use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
+use crate::parser::statements::{DeclarationBody, DeclarationMember};
 
 use super::super::Parser;
 
@@ -36,21 +37,22 @@ impl<'source> Parser<'source> {
         let generic_types = self.generic_types_expression()?;
 
         let opening_comment = self.opening_comment();
-        let (variants, methods) = self.enum_body()?;
+        let body = self.enum_body()?;
 
-        if variants.is_empty() {
+        if body.entries.is_empty() {
             return Err(self.error_missing_members(SyntaxErrorKind::MissingEnumMembers, name.span));
         }
 
         let mut statement = ast::enum_statement(
             name,
             generic_types,
-            variants,
-            methods,
+            body.entries,
+            body.methods,
             visibility,
             attributes,
         );
         statement.trivia.opening_comment = opening_comment;
+        statement.trivia.member_comments = body.member_comments;
         Ok(statement)
     }
 
@@ -64,19 +66,18 @@ impl<'source> Parser<'source> {
     }
 
     /// Parses an enum body containing variant declarations and optionally method declarations.
-    fn enum_body(&mut self) -> Result<(Vec<Expression>, Vec<Statement>), SyntaxError> {
-        let mut variants = vec![];
-        let mut methods = vec![];
+    fn enum_body(&mut self) -> Result<DeclarationBody, SyntaxError> {
+        let mut body = DeclarationBody::default();
 
         match &self.lookahead {
             Some((Token::Colon, _)) => {
                 // Inline form — only variants allowed inline
                 self.eat_token(&Token::Colon)?;
                 if !self.lookahead_is_expression_end() && self.lookahead.is_some() {
-                    variants.push(self.enum_value_expression()?);
+                    body.entries.push(self.enum_value_expression()?);
                     while self.lookahead_is_comma() {
                         self.eat_token(&Token::Comma)?;
-                        variants.push(self.enum_value_expression()?);
+                        body.entries.push(self.enum_value_expression()?);
                     }
                 }
             }
@@ -86,43 +87,7 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
                     while !self.lookahead_is_dedent() {
-                        let start = self.current_token_span().start;
-                        let methods_before = methods.len();
-                        // Check for contextual `static` keyword followed by function keywords
-                        if self.is_contextual_static_before_fn() {
-                            // Don't consume the token; let function_declaration handle parsing `static`
-                            let stmt = self.function_declaration(MemberVisibility::Public)?;
-                            methods.push(stmt);
-                        } else {
-                            match &self.lookahead {
-                                Some((Token::Fn, _))
-                                | Some((Token::Async, _))
-                                | Some((Token::Gpu, _)) => {
-                                    let stmt =
-                                        self.function_declaration(MemberVisibility::Public)?;
-                                    methods.push(stmt);
-                                }
-                                Some((Token::Public, _)) => {
-                                    self.eat_token(&Token::Public)?;
-                                    let mut stmt =
-                                        self.function_declaration(MemberVisibility::Public)?;
-                                    stmt.trivia.written_modifiers.public = true;
-                                    methods.push(stmt);
-                                }
-                                Some((Token::Private, _)) => {
-                                    self.eat_token(&Token::Private)?;
-                                    let stmt =
-                                        self.function_declaration(MemberVisibility::Private)?;
-                                    methods.push(stmt);
-                                }
-                                _ => {
-                                    variants.push(self.enum_value_expression()?);
-                                }
-                            }
-                        }
-                        if let Some(method) = methods.get_mut(methods_before) {
-                            self.close_span(method, start);
-                        }
+                        self.declaration_member(&mut body, Self::enum_member)?;
                         self.try_eat_expression_end()?;
                     }
                     self.eat_token(&Token::Dedent)?;
@@ -135,6 +100,34 @@ impl<'source> Parser<'source> {
             }
         }
 
-        Ok((variants, methods))
+        Ok(body)
+    }
+
+    /// A method or a variant of a block-form enum body.
+    fn enum_member(&mut self) -> Result<DeclarationMember, SyntaxError> {
+        // The contextual `static` keyword is left for `function_declaration`.
+        if self.is_contextual_static_before_fn() {
+            return Ok(DeclarationMember::method(
+                self.function_declaration(MemberVisibility::Public)?,
+            ));
+        }
+        match &self.lookahead {
+            Some((Token::Fn, _)) | Some((Token::Async, _)) | Some((Token::Gpu, _)) => Ok(
+                DeclarationMember::method(self.function_declaration(MemberVisibility::Public)?),
+            ),
+            Some((Token::Public, _)) => {
+                self.eat_token(&Token::Public)?;
+                let mut method = self.function_declaration(MemberVisibility::Public)?;
+                method.trivia.written_modifiers.public = true;
+                Ok(DeclarationMember::method(method))
+            }
+            Some((Token::Private, _)) => {
+                self.eat_token(&Token::Private)?;
+                Ok(DeclarationMember::method(
+                    self.function_declaration(MemberVisibility::Private)?,
+                ))
+            }
+            _ => Ok(DeclarationMember::Entry(self.enum_value_expression()?)),
+        }
     }
 }
