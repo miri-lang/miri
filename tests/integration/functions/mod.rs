@@ -7,6 +7,7 @@ pub mod advanced;
 pub mod arg_count;
 pub mod basic;
 pub mod held_results;
+pub mod large_frames;
 pub mod main_return;
 pub mod nested;
 pub mod parameter_guards;

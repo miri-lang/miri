@@ -553,8 +553,8 @@ fn build_isa(
         .map_err(|e| CodegenError::TargetIsa(e.to_string()))
 }
 
-/// The shared Cranelift flags `options` select.
-fn isa_flags(options: &CraneliftOptions) -> Result<settings::Flags, String> {
+/// The shared Cranelift flags `options` select, for every target.
+pub fn isa_flags(options: &CraneliftOptions) -> Result<settings::Flags, String> {
     let mut builder = settings::builder();
     let requested = [
         ("opt_level", options.opt_level.setting_value()),
@@ -571,6 +571,15 @@ fn isa_flags(options: &CraneliftOptions) -> Result<settings::Flags, String> {
         // size of the code linked before it: an unrelated change elsewhere
         // cannot move a loop's speed by moving its address.
         ("log2_min_function_alignment", "6"),
+        // A frame larger than one guard page is touched a page at a time as
+        // it is allocated. Without it, a function whose frame outgrows the
+        // guard page below the stack moves the stack pointer past that page,
+        // and a deep enough recursion writes into whatever memory lies beyond
+        // instead of faulting. The probes are inline so no runtime symbol is
+        // needed, and only a frame past the page pays for them.
+        ("enable_probestack", "true"),
+        ("probestack_strategy", "inline"),
+        ("probestack_size_log2", "12"),
     ];
     for (name, value) in requested {
         builder.set(name, value).map_err(|e| e.to_string())?;

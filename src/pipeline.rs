@@ -1308,7 +1308,8 @@ impl Pipeline {
     /// when given, otherwise a unique temporary `a.out`.
     // TODO: the temporary directory is kept so the artifact outlives the
     // process, and nothing ever removes it, so every build without `-o`
-    // (the test suite's included) leaves a `miri_build_*` directory behind.
+    // leaves a `miri_build_*` directory behind. Where such a build should
+    // write instead is an open product decision.
     fn output_paths(out: Option<PathBuf>) -> Result<(PathBuf, PathBuf), CompilerError> {
         if let Some(out) = out {
             let work_dir = out
