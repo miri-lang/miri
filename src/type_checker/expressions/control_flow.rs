@@ -94,11 +94,12 @@ impl TypeChecker {
     /// An assignment performs a side effect; it does not produce a value the
     /// surrounding construct can hand back. Such an arm therefore constrains
     /// nothing about what the other arms produce.
+    ///
+    /// A block arm is judged by the expression it yields, its last statement,
+    /// as the same arm written on one line would be.
     fn arm_produces_value(&self, body: &Statement) -> bool {
-        match &body.node {
-            StatementKind::Expression(expr) => !self.is_assignment_expression(expr),
-            _ => true,
-        }
+        super::types::yielded_expression(body)
+            .is_none_or(|expr| !self.is_assignment_expression(expr))
     }
 
     /// Checks type agreement across non-void arms and returns the agreed type.
@@ -517,15 +518,11 @@ impl TypeChecker {
         }
     }
 
-    /// Returns the span of the expression inside a statement body.
-    ///
-    /// For statement kinds that are expressions (like an assignment or function call),
-    /// returns the expression's span. For other statement kinds, returns the statement's span.
+    /// Returns the span of the value a statement body yields: the expression
+    /// itself, or a block's last expression, which is where an arm's type
+    /// comes from. A body that yields no expression is spanned as a whole.
     fn get_body_expression_span(&self, body: &Statement) -> Span {
-        match &body.node {
-            StatementKind::Expression(expr) => expr.span,
-            _ => body.span,
-        }
+        super::types::yielded_expression(body).map_or(body.span, |expr| expr.span)
     }
 
     pub(crate) fn infer_conditional(

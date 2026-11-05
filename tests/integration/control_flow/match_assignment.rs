@@ -458,3 +458,76 @@ fn main()
 ";
     assert_compiler_error(code, "Match branch types mismatch");
 }
+
+/// A block arm ending in an assignment yields no value, as the same arm
+/// written on one line does, so arms ending in assignments of different types
+/// agree.
+#[test]
+fn test_match_block_arms_ending_in_assignments_of_different_types_compile() {
+    let code = "
+fn f(x int) int
+    var a = 0
+    var b = false
+    match x
+        1
+            a = 1
+            a += 5
+        _
+            b = true
+    a
+
+fn g(n int) int
+    var pc = 0
+    var running = true
+    while running
+        match pc
+            3
+                running = false
+            _
+                pc += 1
+    pc + n
+
+fn main()
+    println(f'{f(3)} {f(1)} {g(0)}')
+";
+    assert_runs_with_output(code, "0 6 3");
+}
+
+/// A block arm that yields a value still has to agree with the others.
+#[test]
+fn test_match_block_arm_yielding_a_mismatched_value_fails() {
+    let code = "
+fn f(x int) int
+    let v = match x
+        1
+            let y = x + 1
+            y
+        _
+            let z = x > 0
+            z
+    v
+
+fn main()
+    println(f'{f(1)}')
+";
+    assert_compiler_error(code, "Match branch types mismatch");
+}
+
+/// A match on an optional inside a loop, its block arms ending in assignments
+/// of different types, runs.
+#[test]
+fn test_match_on_an_optional_in_a_loop_with_assignment_block_arms_runs() {
+    let code = "
+fn main()
+    var run = 0
+    var searching = true
+    while searching
+        match 'ab'.code_at(run)
+            Some(_)
+                run = run + 1
+            None
+                searching = false
+    println(f'{run}')
+";
+    assert_runs_with_output(code, "2");
+}

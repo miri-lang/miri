@@ -514,3 +514,29 @@ fn show(o Shape?) int
         "Non-exhaustive match on Option. Missing variants: Some",
     );
 }
+
+/// A mismatched block arm is reported at the value the arm yields, not at the
+/// start of the file.
+#[test]
+fn test_match_block_arm_mismatch_points_at_the_yielded_value() {
+    let source = "
+let x = 1
+let v = match x
+    1
+        let y = x + 1
+        y
+    _
+        let z = x > 0
+        z
+";
+    let pipeline = miri::pipeline::Pipeline::new();
+    let Err(miri::error::CompilerError::TypeErrors { errors, .. }) = pipeline.frontend(source)
+    else {
+        panic!("expected a type error");
+    };
+    let mismatch = errors
+        .iter()
+        .find(|e| e.to_string().contains("Match branch types mismatch"))
+        .expect("a branch mismatch is reported");
+    assert_eq!(&source[mismatch.span.start..mismatch.span.end], "z");
+}
