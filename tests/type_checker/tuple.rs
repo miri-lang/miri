@@ -178,3 +178,22 @@ fn f() (int, String)
         "Invalid return type",
     );
 }
+
+/// A mismatch on a tuple literal is reported at the literal, parentheses
+/// included, not at the start of the file.
+#[test]
+fn test_tuple_literal_mismatch_points_at_the_literal() {
+    let source = "
+let t (int, String) = (1, true)
+";
+    let pipeline = miri::pipeline::Pipeline::new();
+    let Err(miri::error::CompilerError::TypeErrors { errors, .. }) = pipeline.frontend(source)
+    else {
+        panic!("expected a type error");
+    };
+    let mismatch = errors
+        .iter()
+        .find(|e| e.to_string().contains("Type mismatch for variable 't'"))
+        .expect("the mismatch is reported");
+    assert_eq!(&source[mismatch.span.start..mismatch.span.end], "(1, true)");
+}

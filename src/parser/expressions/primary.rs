@@ -118,12 +118,13 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn parenthesized_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let start = self.current_token_span().start;
         self.eat_token(&Token::LParen)?;
 
         // Handle the empty tuple `()` case.
         if self.match_lookahead_type(|t| t == &Token::RParen) {
             self.eat_token(&Token::RParen)?;
-            return Ok(ast::tuple(vec![]));
+            return Ok(ast::tuple_with_span(vec![], self.span_from(start)));
         }
 
         let first_expr = self.expression()?;
@@ -149,6 +150,12 @@ impl<'source> Parser<'source> {
         }
 
         self.eat_token(&Token::RParen)?;
-        Ok(ast::tuple(elements))
+        // A tuple covers its parentheses, so a diagnostic about it points at it.
+        Ok(ast::tuple_with_span(elements, self.span_from(start)))
+    }
+
+    /// The source from `start` through the last token consumed.
+    fn span_from(&self, start: usize) -> Span {
+        Span::new(start, self.last_consumed_end.max(start))
     }
 }

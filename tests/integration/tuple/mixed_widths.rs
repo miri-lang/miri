@@ -46,3 +46,41 @@ fn main()
         "tuple",
     );
 }
+
+#[test]
+fn a_tuple_literal_takes_the_widths_its_declared_type_names() {
+    assert_runs_with_output(
+        r#"
+fn half(p (u8, f32)) f32
+    return p.1 / 2.0
+
+fn widest() (i128, u64)
+    return (170141183460469231731687303715884105727, 18446744073709551615)
+
+fn main()
+    let a (i8, i8) = (3, -4)
+    let b (i8?, i8) = (3, 4)
+    let c (f32, int) = (1.5, 4)
+    let d (u8, (i16, f32)) = (200, (-300, 0.25))
+    let e = widest()
+    println(f"{a.0 + a.1} {b.1} {c.0} {d.0} {d.1.0} {d.1.1} {e.1}")
+    println(f"{e.0 == 170141183460469231731687303715884105727} {half((7, 2.5))}")
+    match b.0
+        Some(v): println(f"{v}")
+        None: println("none")
+"#,
+        "-1 4 1.5 200 -300 0.25 18446744073709551615\ntrue 1.25\n3",
+    );
+}
+
+#[test]
+fn a_tuple_literal_element_out_of_its_declared_width_is_refused() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let t (i8, i8) = (3, 300)
+    println(f"{t.0}")
+"#,
+        "Integer literal '300' is out of range for i8",
+    );
+}

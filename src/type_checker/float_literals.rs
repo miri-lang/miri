@@ -175,6 +175,14 @@ impl TypeChecker {
                 self.record_narrowed_type(expr, &narrowed);
                 Some(narrowed)
             }
+            // A tuple literal settles element by element, each element to the
+            // width its position is declared at, an integer as well as a float.
+            ExpressionKind::Tuple(elements) => {
+                let narrowed =
+                    self.settle_tuple_literal_elements(elements, (expected, inferred), context)?;
+                self.record_narrowed_type(expr, &narrowed);
+                Some(narrowed)
+            }
             // `a if c else b` with a literal on both sides is a literal either
             // way, and narrows as one.
             ExpressionKind::Conditional(then_expr, _, Some(else_expr), _) => {

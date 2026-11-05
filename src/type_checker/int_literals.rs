@@ -116,6 +116,14 @@ impl TypeChecker {
                 self.record_int_literal_width(expr, &widened);
                 Some(widened)
             }
+            // A tuple literal settles element by element, each element to the
+            // width its position is declared at, a float as well as an integer.
+            ExpressionKind::Tuple(elements) => {
+                let widened =
+                    self.settle_tuple_literal_elements(elements, (expected, inferred), context)?;
+                self.record_int_literal_width(expr, &widened);
+                Some(widened)
+            }
             // `a if c else b` with a literal on both sides is a literal either
             // way, and widens as one.
             ExpressionKind::Conditional(then_expr, _, Some(else_expr), _) => {
@@ -175,6 +183,57 @@ impl TypeChecker {
             return;
         };
         self.widen_int_literals(arg_expr, &expected, arg_type, context);
+    }
+
+    /// The type a tuple literal of `elements` has once each element takes the
+    /// width its position in `expected` declares, or `None` when no element
+    /// changes or the two tuple types do not line up with the literal. An
+    /// element no width applies to keeps its inferred type.
+    ///
+    /// One tuple can hold a float literal and an integer literal, so each
+    /// element is narrowed or widened, whichever applies. Callers try the two
+    /// walks one after the other, and a tuple must come out settled from
+    /// whichever of them reaches it first.
+    pub(crate) fn settle_tuple_literal_elements(
+        &mut self,
+        elements: &[Expression],
+        (expected, inferred): (&Type, &Type),
+        context: &Context,
+    ) -> Option<Type> {
+        let (TypeKind::Tuple(expected_args), TypeKind::Tuple(inferred_args)) =
+            (&expected.kind, &inferred.kind)
+        else {
+            return None;
+        };
+        if expected_args.len() != elements.len() || inferred_args.len() != elements.len() {
+            return None;
+        }
+        let mut changed = false;
+        let mut settled = Vec::with_capacity(elements.len());
+        for ((element, expected_arg), inferred_arg) in
+            elements.iter().zip(expected_args).zip(inferred_args)
+        {
+            let expected_element = crate::ast::type_arguments::argument_type_marked(expected_arg)?;
+            let inferred_element = crate::ast::type_arguments::argument_type_marked(inferred_arg)?;
+            let width = self
+                .narrow_float_literals(element, &expected_element, &inferred_element, context)
+                .or_else(|| {
+                    self.widen_int_literals(element, &expected_element, &inferred_element, context)
+                });
+            match width {
+                Some(width) => {
+                    changed = true;
+                    settled.push(width);
+                }
+                None => settled.push(inferred_element),
+            }
+        }
+        changed.then(|| {
+            Type::new(
+                TypeKind::Tuple(crate::ast::type_arguments::type_arguments(settled)),
+                inferred.span,
+            )
+        })
     }
 
     /// Records `ty` as the type of `expr`, replacing what inference recorded.
