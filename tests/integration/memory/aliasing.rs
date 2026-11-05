@@ -230,3 +230,92 @@ fn main()
         "3\n1\n2",
     );
 }
+
+/// A callee that replaces a field of an object while it still reads a list
+/// passed to it from that same field keeps reading the list it was given.
+#[test]
+fn test_parameter_survives_its_owner_replacing_the_field_it_came_from() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class H
+    var items [int]
+
+    fn init(items [int])
+        self.items = items
+
+    fn replace()
+        self.items = List([9, 9, 9, 9])
+
+fn total(l [int], hh H) int
+    var s = 0
+    for i in 0..l.length()
+        hh.replace()
+        s = s + l[i]
+    s
+
+fn main()
+    let h = H(List([1, 2, 3, 4, 5, 6, 7, 8]))
+    println(f"{total(h.items, h)}")
+    println(f"{h.items.length()}")
+"#,
+        "36\n4",
+    );
+}
+
+/// An object passed beside one of its own fields: storing a new value into
+/// that field through the object leaves the field argument readable.
+#[test]
+fn test_field_argument_survives_a_store_into_its_object() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+class Cn
+    var items [int]
+
+    fn init(items [int])
+        self.items = items
+
+fn sum_after_store(w Cn, extra [int]) int
+    var x = w
+    x.items = List([0, 0, 0])
+    return extra[0] + extra[1] + extra[2]
+
+fn main()
+    var c = Cn(List([1, 2, 3]))
+    println(f"{sum_after_store(c, c.items)} {c.items[0]}")
+"#,
+        "6 0",
+    );
+}
+
+/// A scalar-only struct read out of a list or array is a copy: writing the
+/// copy leaves the element alone.
+#[test]
+fn test_struct_read_out_of_a_collection_is_a_copy() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+use system.collections.array
+
+struct P
+    count int
+    weight int
+
+fn main()
+    var a = List([P(count: 1, weight: 2), P(count: 3, weight: 4)])
+    var p = a[0]
+    p.count = 150
+    var q = a[0]
+    q = a[1]
+    q.weight = 99
+    var arr = [P(count: 5, weight: 6)]
+    var r = arr[0]
+    r.count = 7
+    println(f"{a[0].count} {p.count} {a[1].weight} {q.weight} {arr[0].count} {r.count}")
+"#,
+        "1 150 4 99 5 7",
+    );
+}
