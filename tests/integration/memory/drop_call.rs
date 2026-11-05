@@ -27,14 +27,6 @@ fn assert_handle_prints(main: &str, expected: &str) {
     assert_heap_guard_output(&class_handle(main), expected);
 }
 
-fn assert_no_diagnostic(code: &str, diagnostic: &str) {
-    let output = crate::utils::miri_check(code).output();
-    assert!(
-        !output.contains(diagnostic),
-        "expected no {diagnostic}:\n{output}"
-    );
-}
-
 #[test]
 fn test_drop_call_runs_the_hook_once_at_the_call() {
     assert_handle_prints(

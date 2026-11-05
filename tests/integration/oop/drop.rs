@@ -370,6 +370,58 @@ fn main()
 }
 
 #[test]
+fn test_scope_exit_warning_suppressed_when_resource_is_returned() {
+    // A returned resource moves to the caller, which owns it from then on:
+    // the function's scope ends without it.
+    for body in [
+        "    let conn = Conn(handle: 1)\n    return conn",
+        "    var conn = Conn(handle: 1)\n    conn.handle = 2\n    return conn",
+        // Returned on one path only: the other still reads it, and is not a
+        // use of a moved value.
+        "    var conn = Conn(handle: 1)\n    if conn.handle > 0\n        return conn\n    conn.handle = 2\n    return conn",
+    ] {
+        let code = format!(
+            r#"
+class Conn
+    var handle int
+    fn drop(self)
+        return
+
+fn open() Conn
+{body}
+
+fn main()
+    let c = open()
+    c.drop()
+"#
+        );
+        assert_no_diagnostic(&code, "MER_OWN_001");
+    }
+}
+
+#[test]
+fn test_scope_exit_warning_kept_for_a_resource_beside_the_one_returned() {
+    assert_compiler_warning(
+        r#"
+class Conn
+    handle int
+    fn drop(self)
+        return
+
+fn open() Conn
+    let spare = Conn(handle: 1)
+    let conn = Conn(handle: 2)
+    return conn
+
+fn main()
+    let c = open()
+    c.drop()
+"#,
+        "resource 'spare' of type 'Conn' was not consumed before scope exit",
+    );
+}
+
+#[test]
 fn test_scope_exit_no_warning_for_non_resource_struct() {
     // Structs without fn drop are not resource types — no warning.
     assert_type_checks(

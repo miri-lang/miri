@@ -159,6 +159,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::Return(expr) => {
                 if let Some(e) = expr {
                     self.check_expr(e, consumed);
+                    self.consume_returned_resource(e, consumed);
                 }
             }
             StatementKind::If(cond, then, else_, _) => {
@@ -222,6 +223,33 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
+    }
+
+    /// A resource returned by name moves to the caller, which owns it from
+    /// then on, so the scope it was declared in ends without it — as it does
+    /// for one assigned to another binding.
+    fn consume_returned_resource(
+        &self,
+        returned: &Expression,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        let ExpressionKind::Identifier(name, _) = &returned.node else {
+            return;
+        };
+        let is_resource = self
+            .types
+            .get(&returned.id)
+            .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions));
+        if is_resource {
+            consumed.insert(
+                name.clone(),
+                ConsumedInfo {
+                    by_fn: "return".to_string(),
+                    at_span: returned.span,
+                    chain: vec![],
+                },
+            );
+        }
     }
 
     fn check_variable_stmt(

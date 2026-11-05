@@ -470,6 +470,16 @@ pub fn check_project(files: &[(&str, &str)]) -> String {
     output
 }
 
+/// Assert that checking `code` reports no diagnostic carrying `diagnostic`
+/// (a code such as `MER_OWN_001`, or any text of its message).
+pub fn assert_no_diagnostic(code: &str, diagnostic: &str) {
+    let output = miri_check(code).output();
+    assert!(
+        !output.contains(diagnostic),
+        "expected no {diagnostic}:\n{output}"
+    );
+}
+
 /// Assert that a multi-file project type-checks and says nothing carrying
 /// `code`.
 pub fn assert_project_no_warning(files: &[(&str, &str)], code: &str) {
