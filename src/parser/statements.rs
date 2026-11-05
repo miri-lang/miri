@@ -213,6 +213,17 @@ impl<'source> Parser<'source> {
         statement.trivia.trailing_comment = self.lexer.take_trailing_comments().pop();
     }
 
+    /// The comment written after the header that opens a body, on the
+    /// header's own line.
+    ///
+    /// The header has been read up to its line end, so a comment still
+    /// pending after code was written on that line. The header's statement is
+    /// not finished until its body is, so the body's first statement would
+    /// otherwise claim the comment as its own and move it down a line.
+    pub(crate) fn opening_comment(&mut self) -> Option<BufferedComment> {
+        self.lexer.take_trailing_comments().pop()
+    }
+
     /// Give the comments written below the last statement of a block to that
     /// statement.
     ///
@@ -1240,13 +1251,16 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn block_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let opening_comment = self.opening_comment();
         self.eat_token(&Token::Indent)?;
         let body = match &self.lookahead {
             Some((Token::Dedent, _)) => vec![],
             _ => self.statement_list()?,
         };
         self.eat_token(&Token::Dedent)?;
-        Ok(ast::block(body))
+        let mut block = ast::block(body);
+        block.trivia.opening_comment = opening_comment;
+        Ok(block)
     }
 }
 

@@ -70,6 +70,17 @@ fn trailing_comment(sink: &mut Sink, node: &Statement) {
     }
 }
 
+/// The comment written on the line that opens `node`'s body, after its
+/// header: rendered where the header ends, before the body's first line.
+fn opening_comment(sink: &mut Sink, node: &Statement) {
+    if let Some(comment) = &node.trivia.opening_comment {
+        if sink.renders_comments() {
+            sink.emit(" ");
+            sink.emit(&comment.text);
+        }
+    }
+}
+
 /// Render a statement's own code, without the comments around it.
 fn statement_code(sink: &mut Sink, node: &Statement, indent: usize) {
     match &node.node {
@@ -98,15 +109,17 @@ fn statement_code(sink: &mut Sink, node: &Statement, indent: usize) {
         StatementKind::Type(declarations, level) => type_alias(sink, declarations, level, indent),
         StatementKind::Enum(name, generics, variants, methods, level, attributes) => {
             enum_declaration(
-                sink, name, generics, variants, methods, level, attributes, indent,
+                sink, node, name, generics, variants, methods, level, attributes, indent,
             )
         }
         StatementKind::Struct(name, generics, fields, methods, level, traits) => {
-            struct_declaration(sink, name, generics, fields, methods, level, traits, indent)
+            struct_declaration(
+                sink, node, name, generics, fields, methods, level, traits, indent,
+            )
         }
-        StatementKind::Class(data) => class(sink, data, indent),
+        StatementKind::Class(data) => class(sink, node, data, indent),
         StatementKind::Trait(name, generics, parents, members, level) => {
-            trait_declaration(sink, name, generics, parents, members, level, indent)
+            trait_declaration(sink, node, name, generics, parents, members, level, indent)
         }
         StatementKind::RuntimeFunctionDeclaration(
             runtime,
@@ -233,6 +246,7 @@ pub fn body(sink: &mut Sink, node: &Statement, indent: usize) {
         statement(sink, node, indent);
         return;
     };
+    opening_comment(sink, node);
     for entry in statements {
         sink.emit_line(indent + 1);
         statement(sink, entry, indent + 1);
@@ -582,9 +596,10 @@ fn intrinsic_function(
 }
 
 /// A class declaration, with its span recorded.
-fn class(sink: &mut Sink, data: &ClassData, indent: usize) {
+fn class(sink: &mut Sink, node: &Statement, data: &ClassData, indent: usize) {
     let mark = sink.mark();
     class_header(sink, data, indent);
+    opening_comment(sink, node);
     members(sink, &data.body, indent);
     record_named(sink, mark, "class", &data.name);
 }
@@ -610,6 +625,7 @@ pub(super) fn class_header(sink: &mut Sink, data: &ClassData, indent: usize) {
 #[allow(clippy::too_many_arguments)]
 fn enum_declaration(
     sink: &mut Sink,
+    node: &Statement,
     name: &Expression,
     generics: &Option<Vec<Expression>>,
     variants: &[Expression],
@@ -620,6 +636,7 @@ fn enum_declaration(
 ) {
     let mark = sink.mark();
     enum_header(sink, name, generics.as_deref(), level, entries, indent);
+    opening_comment(sink, node);
     for variant in variants {
         sink.emit_line(indent + 1);
         sink.keep_blank_line_above(variant.span.start);
@@ -636,6 +653,7 @@ fn enum_declaration(
 #[allow(clippy::too_many_arguments)]
 fn struct_declaration(
     sink: &mut Sink,
+    node: &Statement,
     name: &Expression,
     generics: &Option<Vec<Expression>>,
     fields: &[Expression],
@@ -646,6 +664,7 @@ fn struct_declaration(
 ) {
     let mark = sink.mark();
     struct_header(sink, name, generics.as_deref(), level, traits, indent);
+    opening_comment(sink, node);
     for field in fields {
         sink.emit_line(indent + 1);
         sink.keep_blank_line_above(field.span.start);
@@ -659,8 +678,10 @@ fn struct_declaration(
 }
 
 /// A trait declaration and its member signatures.
+#[allow(clippy::too_many_arguments)]
 fn trait_declaration(
     sink: &mut Sink,
+    node: &Statement,
     name: &Expression,
     generics: &Option<Vec<Expression>>,
     parents: &[Expression],
@@ -670,6 +691,7 @@ fn trait_declaration(
 ) {
     let mark = sink.mark();
     trait_header(sink, name, generics.as_deref(), parents, level, indent);
+    opening_comment(sink, node);
     members(sink, body_members, indent);
     record_named(sink, mark, "trait", name);
 }

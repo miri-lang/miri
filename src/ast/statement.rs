@@ -148,6 +148,11 @@ pub struct StatementTrivia {
     pub leading_comments: Vec<BufferedComment>,
     /// An optional comment on the same line as the statement.
     pub trailing_comment: Option<BufferedComment>,
+    /// On a block, the comment written after the header that opens it, on
+    /// the header's own line (`for x in xs // each one`). The header is not
+    /// finished until its block is, so without its own slot the comment would
+    /// be claimed by the block's first statement and move down a line.
+    pub opening_comment: Option<BufferedComment>,
     /// Comments written on their own lines after the statement, which no
     /// later statement claimed because none follows it in its block.
     pub trailing_lines: Vec<BufferedComment>,

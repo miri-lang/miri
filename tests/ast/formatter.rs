@@ -1025,3 +1025,68 @@ fn test_a_bounded_type_parameter_renders_its_bound() {
         "got: {rendered}"
     );
 }
+
+/// Render `source`, which is already canonical, and assert it comes back
+/// byte for byte: a comment must stay on the line it was written on.
+fn assert_renders_as_written(source: &str) {
+    let program = parse(source).expect("the fixture parses");
+    let rendered = formatter::program(&program, source).text;
+    assert_eq!(
+        rendered, source,
+        "the render moved something\n--- rendered ---\n{rendered}\n--- written ---\n{source}"
+    );
+}
+
+#[test]
+fn test_a_comment_beside_a_function_header_stays_on_that_line() {
+    assert_renders_as_written(
+        "fn helper(a int) int // the header\n    let b = a + 1\n    return b\n",
+    );
+}
+
+#[test]
+fn test_a_comment_beside_a_loop_header_stays_on_that_line() {
+    assert_renders_as_written(
+        "fn main()\n    var total = 0\n    for x in 0..3 // each step\n        total += x\n    while total > 0 // count down\n        total -= 1\n",
+    );
+}
+
+#[test]
+fn test_a_comment_beside_a_branch_header_stays_on_that_line() {
+    assert_renders_as_written(
+        "fn sign(n int) int\n    if n > 0 // positive\n        return 1\n    else // the rest\n        return 0\n",
+    );
+}
+
+#[test]
+fn test_a_comment_beside_a_match_arm_header_stays_on_that_line() {
+    assert_renders_as_written(
+        "fn pick(n int) int\n    match n\n        0 // nothing\n            return 1\n        _\n            return n\n",
+    );
+}
+
+#[test]
+fn test_a_comment_beside_a_lambda_header_stays_on_that_line() {
+    assert_renders_as_written(
+        "fn main()\n    let g = fn(v int) int // doubles\n        let w = v * 2\n        return w\n",
+    );
+}
+
+#[test]
+fn test_a_header_comment_and_a_statement_comment_each_keep_their_line() {
+    assert_renders_as_written(
+        "fn helper(a int) int // the header\n    let b = a + 1 // the step\n    return b\n",
+    );
+}
+
+#[test]
+fn test_a_comment_beside_a_declaration_header_stays_on_that_line() {
+    for source in [
+        "class Box // a box\n    var v int\n\n    fn init(v int) // builds it\n        self.v = v\n",
+        "struct Point // a point\n    x int\n    y int\n",
+        "enum Choice // the choices\n    First\n    Second\n",
+        "trait Shape // a shape\n    fn area() float\n",
+    ] {
+        assert_renders_as_written(source);
+    }
+}

@@ -18,6 +18,7 @@ impl<'source> Parser<'source> {
         let generic_types = self.generic_types_expression()?;
         let traits = self.inheritance_clause(&Token::Implements)?;
 
+        let opening_comment = self.opening_comment();
         let (fields, methods) = self.struct_body()?;
 
         if fields.is_empty() && methods.is_empty() {
@@ -26,14 +27,10 @@ impl<'source> Parser<'source> {
             );
         }
 
-        Ok(ast::struct_statement(
-            name,
-            generic_types,
-            fields,
-            methods,
-            visibility,
-            traits,
-        ))
+        let mut statement =
+            ast::struct_statement(name, generic_types, fields, methods, visibility, traits);
+        statement.trivia.opening_comment = opening_comment;
+        Ok(statement)
     }
 
     /// Parses a struct body which may contain field declarations and method declarations.

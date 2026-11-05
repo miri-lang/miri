@@ -100,16 +100,19 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Class)?;
         let header = self.class_header()?;
+        let opening_comment = self.opening_comment();
         let body = self.class_body(BodyMode::Required)?;
 
-        Ok(ast::class_statement(
+        let mut statement = ast::class_statement(
             header.name,
             header.generics,
             header.base_class,
             header.traits,
             body,
             visibility,
-        ))
+        );
+        statement.trivia.opening_comment = opening_comment;
+        Ok(statement)
     }
 
     pub(crate) fn abstract_class_statement(
@@ -119,16 +122,19 @@ impl<'source> Parser<'source> {
         // The `abstract` keyword is consumed by the caller.
         self.eat_token(&Token::Class)?;
         let header = self.class_header()?;
+        let opening_comment = self.opening_comment();
         let body = self.class_body(BodyMode::Optional)?;
 
-        Ok(ast::abstract_class_statement(
+        let mut statement = ast::abstract_class_statement(
             header.name,
             header.generics,
             header.base_class,
             header.traits,
             body,
             visibility,
-        ))
+        );
+        statement.trivia.opening_comment = opening_comment;
+        Ok(statement)
     }
 
     pub(crate) fn trait_statement(
@@ -139,15 +145,13 @@ impl<'source> Parser<'source> {
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
         let parent_traits = self.inheritance_clause(&Token::Extends)?;
+        let opening_comment = self.opening_comment();
         let body = self.class_body(BodyMode::Optional)?;
 
-        Ok(ast::trait_statement(
-            name,
-            generic_types,
-            parent_traits,
-            body,
-            visibility,
-        ))
+        let mut statement =
+            ast::trait_statement(name, generic_types, parent_traits, body, visibility);
+        statement.trivia.opening_comment = opening_comment;
+        Ok(statement)
     }
 
     fn class_header(&mut self) -> Result<ClassHeader, SyntaxError> {

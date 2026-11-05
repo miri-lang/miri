@@ -35,20 +35,23 @@ impl<'source> Parser<'source> {
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
 
+        let opening_comment = self.opening_comment();
         let (variants, methods) = self.enum_body()?;
 
         if variants.is_empty() {
             return Err(self.error_missing_members(SyntaxErrorKind::MissingEnumMembers, name.span));
         }
 
-        Ok(ast::enum_statement(
+        let mut statement = ast::enum_statement(
             name,
             generic_types,
             variants,
             methods,
             visibility,
             attributes,
-        ))
+        );
+        statement.trivia.opening_comment = opening_comment;
+        Ok(statement)
     }
 
     /// Checks if the current lookahead is the contextual `static` keyword.
