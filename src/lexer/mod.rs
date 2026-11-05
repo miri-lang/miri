@@ -681,6 +681,43 @@ impl<'source> Lexer<'source> {
         self.take_comments(true)
     }
 
+    /// Takes the pending comments on their own lines that are indented at
+    /// least `column` deep, up to the first one indented less.
+    ///
+    /// The comments below a block's last statement are read before the
+    /// dedent that ends the block, so the block's own tail comments and the
+    /// ones written at the outer level, above whatever follows the block,
+    /// are pending together. Only the first are the block's; the rest stay
+    /// pending for the next statement to claim.
+    pub fn take_leading_comments_indented(&mut self, column: usize) -> Vec<BufferedComment> {
+        if self.pending_comments.is_empty() {
+            return Vec::new();
+        }
+        let pending = std::mem::take(&mut self.pending_comments);
+        let mut taken = Vec::new();
+        let mut reached_outer_level = false;
+        for comment in pending {
+            if comment.is_leading && !reached_outer_level {
+                if self.column_of(comment.span.start) >= column {
+                    taken.push(comment);
+                    continue;
+                }
+                reached_outer_level = true;
+            }
+            self.pending_comments.push(comment);
+        }
+        taken
+    }
+
+    /// The column of byte `offset` in the source: its distance from the start
+    /// of its line, in bytes.
+    pub fn column_of(&self, offset: usize) -> usize {
+        let before = self.source.get(..offset).unwrap_or(self.source);
+        before
+            .rfind('\n')
+            .map_or(before.len(), |newline| before.len() - newline - 1)
+    }
+
     /// Takes the pending comments that follow code on their own line.
     pub fn take_trailing_comments(&mut self) -> Vec<BufferedComment> {
         self.take_comments(false)

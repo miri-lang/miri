@@ -1121,3 +1121,28 @@ fn test_member_comments_keep_their_places_beside_methods() {
         "struct Point // a point\n    x int // across\n\n    // the length\n    fn size() int\n        return 1\n",
     );
 }
+
+/// A comment written at the outer level after a body belongs to what follows
+/// the body, and stays at the indentation it was written at.
+#[test]
+fn test_a_comment_after_a_function_body_stays_at_the_outer_level() {
+    assert_renders_as_written(
+        "fn a() int\n    return 1\n\n/// Doc for b.\nfn b() int\n    return 2\n",
+    );
+}
+
+#[test]
+fn test_a_comment_between_two_methods_stays_at_the_member_level() {
+    assert_renders_as_written(
+        "class A\n    var v int\n\n    fn f() int\n        self.v = 1\n        return 0\n\n    // Properties\n\n    /// Doc.\n    fn get() int\n        return self.v\n",
+    );
+}
+
+/// The comments below a body's last statement that are indented with the
+/// body stay with it; the ones written at the outer level move on.
+#[test]
+fn test_a_body_keeps_its_own_tail_comment_and_passes_on_the_outer_one() {
+    assert_renders_as_written(
+        "fn a() int\n    return 1\n    // tail of a\n\n// above b\nfn b() int\n    return 2\n",
+    );
+}

@@ -251,17 +251,20 @@ impl<'source> Parser<'source> {
         Ok(())
     }
 
-    /// Give the comments written below the last statement of a block to that
-    /// statement.
+    /// Give the comments written below the last statement of a block, at the
+    /// block's own indentation, to that statement.
     ///
-    /// Nothing follows them to claim them as leading comments, so without this
-    /// they would stay in the lexer's buffer and be lost — and a command that
-    /// rewrites a file from the tree would delete them.
+    /// Nothing inside the block follows them to claim them as leading
+    /// comments, so without this they would be lost — and a command that
+    /// rewrites a file from the tree would delete them. A comment indented
+    /// less than the block's statements was written at an outer level, above
+    /// what follows the block, and is left for that statement to claim.
     pub(crate) fn claim_orphaned_comments(&mut self, statements: &mut [Statement]) {
-        let orphaned = self.lexer.take_leading_comments();
-        if orphaned.is_empty() {
+        let Some(first) = statements.first() else {
             return;
-        }
+        };
+        let block_column = self.lexer.column_of(first.span.start);
+        let orphaned = self.lexer.take_leading_comments_indented(block_column);
         if let Some(last) = statements.last_mut() {
             last.trivia.trailing_lines.extend(orphaned);
         }
