@@ -448,6 +448,9 @@ impl TypeChecker {
         for branch in branches {
             context.enter_scope();
             self.check_arm_patterns(branch, subject_type, span, context);
+            if let Some(guard) = &branch.guard {
+                self.check_match_guard(guard, context);
+            }
 
             let body_type = self.infer_statement_type(&branch.body, context);
             let arm_span = self.get_body_expression_span(&branch.body);
@@ -479,6 +482,16 @@ impl TypeChecker {
             }
         }
         joined
+    }
+
+    /// Checks an arm's guard as a condition, in the scope its patterns bound:
+    /// every operand and call in it is typed and resolved like any other
+    /// expression, and it must yield a `bool`.
+    fn check_match_guard(&mut self, guard: &Expression, context: &mut Context) {
+        let guard_type = self.infer_expression(guard, context);
+        if !matches!(guard_type.kind, TypeKind::Boolean | TypeKind::Error) {
+            self.refuse_non_boolean_condition("Match guard", &guard_type, guard.span);
+        }
     }
 
     /// Give each arm whose value is a number written in the source (`0.0`,

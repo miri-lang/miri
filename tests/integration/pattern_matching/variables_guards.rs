@@ -139,3 +139,62 @@ fn main()
         "7 1 7",
     );
 }
+
+/// A guard is an ordinary condition: an enum compared with `==` there agrees
+/// with the same comparison outside the `match`.
+#[test]
+fn test_enum_equality_in_a_guard_agrees_with_the_same_comparison_outside() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+enum Instr
+    Set(int, int)
+    Halt
+
+fn main()
+    let code = List([Instr.Set(1, 2), Instr.Set(2, 4), Instr.Halt])
+    let x = 2
+    let outside = code[x] == Instr.Halt
+    match x
+        a if code[a] == Instr.Halt: println(f"{outside} halt")
+        _: println(f"{outside} other")
+    match 0
+        a if code[a] != Instr.Halt: println("not halt")
+        _: println("halt")
+"#,
+        "true halt\nnot halt",
+    );
+}
+
+#[test]
+fn test_a_free_function_call_in_a_guard() {
+    assert_runs_with_output(
+        r#"
+fn is_two(n int) bool
+    return n == 2
+
+fn main()
+    for x in 1..4
+        match x
+            a if is_two(a): println(f"{a} two")
+            a: println(f"{a} other")
+"#,
+        "1 other\n2 two\n3 other",
+    );
+}
+
+#[test]
+fn test_a_method_call_in_a_guard() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let s = "ab"
+    for x in 1..4
+        match x
+            a if s.length() == a: println(f"{a} len")
+            a: println(f"{a} no")
+"#,
+        "1 no\n2 len\n3 no",
+    );
+}

@@ -540,3 +540,27 @@ let v = match x
         .expect("a branch mismatch is reported");
     assert_eq!(&source[mismatch.span.start..mismatch.span.end], "z");
 }
+
+/// A guard is checked like any condition: its operands must type and it must
+/// yield a `bool`.
+#[test]
+fn test_match_guard_comparing_mismatched_types_is_refused() {
+    let source = "
+let x = 2
+match x
+    a if a == 's': 1
+    _: 0
+";
+    type_checker_error_test(source, "Type mismatch");
+}
+
+#[test]
+fn test_match_guard_that_is_not_a_boolean_is_refused() {
+    let source = "
+let x = 2
+match x
+    a if a + 1: 1
+    _: 0
+";
+    type_checker_error_test(source, "Match guard condition must be a boolean, got int");
+}
