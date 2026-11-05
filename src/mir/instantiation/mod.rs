@@ -471,6 +471,9 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 /// unmanaged, so a value stored into a field is never retained and the holder
 /// releases a reference it never took.
 ///
+/// A trait is managed the same way: a trait value is a counted instance
+/// reached through its vtable, so a body that stores one must retain it.
+///
 /// A named type is admitted only when the type table defines it. The same
 /// spelling carries a generic parameter still awaiting substitution (`T` reaches
 /// here as `Custom("T", None)`), and monomorphizing at a placeholder would name
@@ -492,7 +495,12 @@ pub(crate) fn is_monomorphizable_type_argument(
     };
     matches!(
         type_definitions.get(name),
-        Some(TypeDefinition::Class(_) | TypeDefinition::Struct(_) | TypeDefinition::Enum(_))
+        Some(
+            TypeDefinition::Class(_)
+                | TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Trait(_)
+        )
     )
 }
 

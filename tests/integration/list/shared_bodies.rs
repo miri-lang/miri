@@ -116,3 +116,77 @@ fn test_pop_on_an_int_list_shares_the_body_its_optional_result_is_held_like() {
         assert_runs_with_output(&popping(element), "some");
     }
 }
+
+const TRAIT_ELEMENTS: &str = r#"
+use system.collections.list
+use system.collections.map
+
+trait Shape
+    fn area() int
+
+class Sq implements Shape
+    s int
+    fn init(s int)
+        self.s = s
+    fn area() int
+        return self.s
+
+class Tri implements Shape
+    b int
+    fn init(b int)
+        self.b = b
+    fn area() int
+        return self.b * 10
+"#;
+
+#[test]
+fn test_sorted_by_on_a_list_of_trait_values_keeps_each_element_alive() {
+    // A trait value is a counted instance. The shared body would store each
+    // one into the sorted list without a reference of its own, and the two
+    // lists would then release every element twice.
+    assert_runs_with_output(
+        &format!(
+            "{TRAIT_ELEMENTS}
+fn main()
+    var shapes = List<Shape>()
+    shapes.push(Sq(2))
+    shapes.push(Tri(1))
+    shapes.push(Sq(1))
+    let best = shapes.sorted_by(fn(a Shape, b Shape) int: a.area() - b.area())
+    println(f\"{{best[0].area()}} {{best[2].area()}} {{shapes[0].area()}}\")
+"
+        ),
+        "1 10 2",
+    );
+}
+
+#[test]
+fn test_transforms_and_edits_on_a_list_of_trait_values_run_clean() {
+    assert_runs_with_output(
+        &format!(
+            "{TRAIT_ELEMENTS}
+fn main()
+    var shapes = List<Shape>()
+    shapes.push(Sq(3))
+    shapes.push(Tri(1))
+    shapes.push(Sq(2))
+    let big = shapes.filter(fn(s Shape) bool: s.area() > 2)
+    let rev = shapes.reversed()
+    let first = shapes.take(2)
+    let rest = shapes.skip(1)
+    let same = shapes.map(fn(s Shape) Shape: s)
+    var m = Map<String, Shape>()
+    m['a'] = shapes[0]
+    m['b'] = Tri(5)
+    shapes.pop()
+    shapes.insert(0, Tri(7))
+    shapes.remove_at(1)
+    var t = 0
+    for s in shapes
+        t = t + s.area()
+    println(f\"{{big.length()}} {{rev[0].area()}} {{first[1].area()}} {{rest[0].area()}} {{same[2].area()}} {{m['a'].area()}} {{m['b'].area()}} {{t}}\")
+"
+        ),
+        "2 2 10 10 2 3 50 80",
+    );
+}

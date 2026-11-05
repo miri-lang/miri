@@ -413,7 +413,8 @@ fn settle_verdict(
 /// level, matching what `==` does at the top level. A class that defines none
 /// keeps reference identity, which is also what `==` gives it; the assertion
 /// lowering refuses such a class up front rather than letting a test compare
-/// addresses.
+/// addresses. A trait value is an instance reached through its vtable and
+/// keeps identity too, as `==` and its derived hash give it.
 fn emit_named_type_equality(
     ctx: &mut LoweringContext,
     span: Span,
@@ -444,7 +445,10 @@ fn emit_named_type_equality(
     }
     if matches!(
         ctx.type_checker.type_definitions().get(name),
-        Some(crate::type_checker::context::TypeDefinition::Class(_))
+        Some(
+            crate::type_checker::context::TypeDefinition::Class(_)
+                | crate::type_checker::context::TypeDefinition::Trait(_)
+        )
     ) {
         return Ok(emit_scalar_equality(ctx, span, lhs_op, rhs_op, is_eq));
     }

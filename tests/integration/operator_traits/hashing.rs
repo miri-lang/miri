@@ -293,3 +293,39 @@ fn main()
         "2 true 3\ntrue",
     );
 }
+
+#[test]
+fn an_enum_holding_a_trait_value_compares_and_hashes_the_payload_by_identity() {
+    // A trait value keeps the identity its class has: the same instance is
+    // equal to itself, another instance built alike is not, and the derived
+    // hash follows. A list of such values compiles its `equals` the same way.
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+trait Shape
+    fn area() int
+
+class Sq implements Shape
+    s int
+    fn init(s int)
+        self.s = s
+    fn area() int
+        return self.s
+
+enum Holder
+    One(Shape)
+    Empty
+
+fn main()
+    let shape Shape = Sq(3)
+    let a = Holder.One(shape)
+    let b = Holder.One(shape)
+    let c = Holder.One(Sq(3))
+    let held = List([a, Holder.Empty])
+    let same = List([b, Holder.Empty])
+    println(f"{a == b} {a == c} {a == Holder.Empty} {a.hash() == b.hash()} {held == same}")
+"#,
+        "true false false true true",
+    );
+}
