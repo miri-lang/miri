@@ -6,5 +6,6 @@ pub use crate::integration::utils;
 pub mod declaration;
 pub mod mutability;
 pub mod nullable;
+pub mod redeclaration;
 pub mod scope;
 pub mod types;

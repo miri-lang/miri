@@ -24,7 +24,13 @@ use std::rc::Rc;
 /// and any shadowed variables are restored.
 #[derive(Debug, Clone)]
 pub struct ScopeData {
-    pub introduced: Vec<Rc<str>>,
+    /// Every binding this scope declared, with the local it declared. A `let`
+    /// may redeclare a name its own scope already bound, so a name can appear
+    /// here more than once, each time with its own local; the scope releases
+    /// each of those locals, not whatever the name resolves to when it ends.
+    pub introduced: Vec<(Rc<str>, Local)>,
+    /// The binding each name had when this scope began, for the names the
+    /// scope rebinds, restored when it ends.
     pub shadowed: HashMap<Rc<str>, Local>,
     /// Unnamed locals this scope releases alongside its bindings. A temp holds
     /// a value no name refers to, so nothing else can release it; giving the
@@ -594,16 +600,14 @@ impl<'a> LoweringContext<'a> {
                 .terminator
                 .is_none();
 
-            // Remove variables introduced in this scope
-            for name in scope.introduced.iter().rev() {
-                if let Some(local) = self.variable_map.remove(name) {
-                    if block_is_live {
-                        // Emit StorageDead for variables leaving scope
-                        self.push_statement(crate::mir::Statement {
-                            kind: StatementKind::StorageDead(Place::new(local)),
-                            span,
-                        });
-                    }
+            // Unbind and end every local this scope declared.
+            for (name, local) in scope.introduced.iter().rev() {
+                self.variable_map.remove(name);
+                if block_is_live {
+                    self.push_statement(crate::mir::Statement {
+                        kind: StatementKind::StorageDead(Place::new(*local)),
+                        span,
+                    });
                 }
             }
 
@@ -726,38 +730,16 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// The named locals and the temps that popping the scopes at `outermost..`
-    /// would release, innermost scope first.
-    ///
-    /// The pops are simulated: each scope sees the bindings its inner scopes
-    /// leave behind once they restore what they shadowed and drop what they
-    /// introduced, so a shadowed name releases the local of the scope that
-    /// bound it. Only the names the walk has popped past are overlaid on
-    /// `variable_map`; every other name still resolves through the map itself.
+    /// would release, innermost scope first: each scope's own declarations,
+    /// which it records by local, so a name two of them share releases both.
     fn scope_exit_drops(&self, outermost: usize) -> (Vec<Local>, Vec<Local>) {
         let mut to_drop: Vec<Local> = Vec::new();
         let mut temps_to_drop: Vec<Local> = Vec::new();
-        // `Some` is a binding a popped scope restored, `None` one it removed.
-        let mut popped: HashMap<&str, Option<Local>> = HashMap::new();
         let scopes = self.scope_stack.get(outermost..).unwrap_or(&[]);
 
         for scope in scopes.iter().rev() {
-            for name in scope.introduced.iter().rev() {
-                let binding = match popped.get(name.as_ref()) {
-                    Some(overlaid) => *overlaid,
-                    None => self.variable_map.get(name.as_ref()).copied(),
-                };
-                to_drop.extend(binding);
-            }
+            to_drop.extend(scope.introduced.iter().rev().map(|(_, local)| *local));
             temps_to_drop.extend(scope.owned_temps.iter().rev().copied());
-
-            for (name, &local) in &scope.shadowed {
-                popped.insert(name.as_ref(), Some(local));
-            }
-            for name in &scope.introduced {
-                if !scope.shadowed.contains_key(name) {
-                    popped.insert(name.as_ref(), None);
-                }
-            }
         }
         (to_drop, temps_to_drop)
     }
@@ -790,7 +772,7 @@ impl<'a> LoweringContext<'a> {
         // Track in current scope so scope exit removes it (and restores any
         // shadowed binding recorded later by `bind_local_name`).
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.introduced.push(name_rc);
+            scope.introduced.push((name_rc, local));
         }
 
         // Emit StorageLive for the new local
@@ -806,18 +788,25 @@ impl<'a> LoweringContext<'a> {
     /// previous one is restored on scope exit. Deferred from [`alloc_local`];
     /// emits no MIR.
     pub fn bind_local_name(&mut self, name: String, local: Local) {
-        let name_rc: Rc<str> = Rc::from(name);
-        match self.variable_map.entry(name_rc) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let old_local = *entry.get();
-                if let Some(scope) = self.scope_stack.last_mut() {
-                    scope.shadowed.insert(entry.key().clone(), old_local);
-                }
-                entry.insert(local);
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(local);
-            }
+        self.rebind(Rc::from(name), local);
+    }
+
+    /// Make `name` resolve to `local`, remembering in the innermost scope the
+    /// binding `name` had when that scope began, so ending the scope restores
+    /// it.
+    ///
+    /// Only the first rebinding in a scope records anything, and only when the
+    /// binding it replaces came from outside the scope: a `let` redeclaring a
+    /// name its own scope bound replaces a binding the scope ends itself, and
+    /// recording that one would bring it back once the scope is gone.
+    fn rebind(&mut self, name: Rc<str>, local: Local) {
+        let previous = self.variable_map.insert(name.clone(), local);
+        let (Some(previous), Some(scope)) = (previous, self.scope_stack.last_mut()) else {
+            return;
+        };
+        let declared_here = scope.introduced.iter().any(|(_, own)| *own == previous);
+        if !declared_here {
+            scope.shadowed.entry(name).or_insert(previous);
         }
     }
 
@@ -833,23 +822,10 @@ impl<'a> LoweringContext<'a> {
         decl.is_user_variable = true;
         let local = self.body.new_local(decl);
 
-        // Track in current scope and update variable map (single hash lookup via entry API)
         if let Some(scope) = self.scope_stack.last_mut() {
-            scope.introduced.push(name_rc.clone());
+            scope.introduced.push((name_rc.clone(), local));
         }
-
-        match self.variable_map.entry(name_rc) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let old_local = *entry.get();
-                if let Some(scope) = self.scope_stack.last_mut() {
-                    scope.shadowed.insert(entry.key().clone(), old_local);
-                }
-                entry.insert(local);
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(local);
-            }
-        }
+        self.rebind(name_rc, local);
         // implicit StorageLive: parameters are live upon entry
 
         local
