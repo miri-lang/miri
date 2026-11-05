@@ -421,7 +421,28 @@ impl TypeChecker {
             self.check_class_abstract_methods(&lineage, trait_names, name_expr);
         }
         for trait_name in trait_names {
-            self.check_class_trait_methods(&lineage, trait_name, trait_direct_args, name_expr);
+            self.check_class_trait_methods(
+                &lineage,
+                trait_name,
+                trait_direct_args,
+                is_abstract,
+                name_expr,
+            );
+        }
+        if let (false, Some(base_name)) = (is_abstract, base_class_name) {
+            for (trait_name, args) in self.traits_left_open_above(base_name, base_direct_args) {
+                if trait_names.contains(&trait_name) {
+                    continue;
+                }
+                let direct_args = HashMap::from([(trait_name.clone(), args)]);
+                self.check_class_trait_methods(
+                    &lineage,
+                    &trait_name,
+                    &direct_args,
+                    false,
+                    name_expr,
+                );
+            }
         }
         if let Some(ref base_name) = base_class_name {
             self.check_inherited_self_returns(name, base_name, trait_names, methods, name_expr);
@@ -1342,8 +1363,52 @@ impl TypeChecker {
         }
     }
 
+    /// The traits the abstract classes directly above a class implement,
+    /// each with its type arguments written in the class's own terms.
+    ///
+    /// An abstract class may leave a method of a trait it implements without a
+    /// body, so its first concrete descendant owes that trait's methods. The
+    /// walk stops at the first concrete ancestor, which already supplied every
+    /// method of every trait above it.
+    fn traits_left_open_above(
+        &self,
+        base_name: &str,
+        base_direct_args: &Option<Vec<Type>>,
+    ) -> Vec<(String, Vec<Type>)> {
+        let definitions = &self.type_table.global_type_definitions;
+        let mut open = Vec::new();
+        let mut args = base_direct_args.clone();
+        let mut subst: HashMap<String, Type> = HashMap::new();
+        for (_, ancestor) in class_ancestry(base_name, definitions) {
+            if !ancestor.is_abstract {
+                break;
+            }
+            subst = match (&ancestor.generics, &args) {
+                (Some(generics), Some(args)) if generics.len() == args.len() => generics
+                    .iter()
+                    .zip(args)
+                    .map(|(g, a)| (g.name.clone(), self.substitute_type(a, &subst)))
+                    .collect(),
+                _ => HashMap::new(),
+            };
+            for trait_name in &ancestor.traits {
+                let trait_args = ancestor
+                    .trait_args
+                    .get(trait_name)
+                    .map_or_else(Vec::new, |a| {
+                        a.iter().map(|t| self.substitute_type(t, &subst)).collect()
+                    });
+                open.push((trait_name.clone(), trait_args));
+            }
+            args = ancestor.base_class_args.clone();
+        }
+        open
+    }
+
     /// Validate class implements all required trait methods, with its own
     /// declarations or with those it inherits from the classes it extends.
+    /// An abstract class (`leaves_bodies_open`) may leave a method without a
+    /// body; its concrete descendants owe it.
     ///
     /// An inherited method whose return names `Self` is not compared here: the
     /// body it would inherit builds the ancestor, which
@@ -1353,6 +1418,7 @@ impl TypeChecker {
         lineage: &ClassLineage,
         trait_name: &str,
         trait_direct_args: &HashMap<String, Vec<Type>>,
+        leaves_bodies_open: bool,
         name_expr: &Expression,
     ) {
         let name = lineage.name;
@@ -1373,7 +1439,7 @@ impl TypeChecker {
                 .then(|| self.inherited_method(lineage, method_name))
                 .flatten();
             let Some(class_method) = own.or(inherited.as_ref()) else {
-                if method_info.is_abstract {
+                if method_info.is_abstract && !leaves_bodies_open {
                     missing_methods.push((method_name.clone(), origin_trait.clone()));
                 }
                 continue;

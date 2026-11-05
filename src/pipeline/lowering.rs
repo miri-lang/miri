@@ -2071,6 +2071,12 @@ impl Pipeline {
                 if !Self::runs_inherited_body(result, class_name, &md.name, base_name) {
                     continue;
                 }
+                // TODO: the copy is lowered without the substitution the
+                // `extends` clause makes, so a generic abstract ancestor's
+                // parameter (`T` of `Base<T>` under `extends Base<int>`) stays
+                // unbound in the body and `--verify-mir` refuses it. The copy
+                // should be lowered at the ancestor's arguments, the way
+                // `declaring_class_instantiation` maps them.
                 let symbol = Symbol::method(class_name, &[], &md.name, &[]);
                 if !symbols
                     .claim_at(&symbol, method_stmt.span)

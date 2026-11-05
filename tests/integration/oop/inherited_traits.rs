@@ -508,3 +508,150 @@ fn main()
         "3 eur",
     );
 }
+
+const ABSTRACT_SIZED_BASE: &str = r#"
+trait Sized
+    fn size() int
+
+abstract class Base implements Sized
+    fn twice() int
+        return self.size() * 2
+"#;
+
+#[test]
+fn test_abstract_class_leaves_a_trait_method_to_its_concrete_subclass() {
+    // The abstract class gives `size` no body; its own `twice` and a receiver
+    // typed as the abstract class both reach the subclass's body.
+    assert_runs_with_output(
+        &program(
+            ABSTRACT_SIZED_BASE,
+            r#"
+class Box extends Base
+    fn size() int
+        return 4
+
+fn report(b Base) int
+    return b.size()
+
+fn main()
+    let b = Box()
+    println(f"{report(b)} {b.twice()}")
+"#,
+        ),
+        "4 8",
+    );
+}
+
+#[test]
+fn test_trait_method_left_open_two_abstract_classes_up_reaches_the_concrete_body() {
+    assert_runs_with_output(
+        &program(
+            ABSTRACT_SIZED_BASE,
+            r#"
+abstract class Middle extends Base
+    fn thrice() int
+        return self.size() * 3
+
+class Leaf extends Middle
+    fn size() int
+        return 5
+
+fn total(s Sized, b Base, m Middle) int
+    return s.size() + b.size() + m.size() + b.twice() + m.thrice()
+
+fn main()
+    let leaf = Leaf()
+    println(f"{total(leaf, leaf, leaf)}")
+"#,
+        ),
+        "40",
+    );
+}
+
+#[test]
+fn test_subclass_converts_to_the_parent_of_a_trait_its_abstract_base_implements() {
+    // `Base implements Q` and `Q extends P`, so a `Leaf` is a `P` as well as a
+    // `Q`, and `p` reaches the body `Leaf` gives it.
+    assert_runs_with_output(
+        r#"
+trait P
+    fn p() int
+
+trait Q extends P
+    fn q() int
+
+abstract class Base implements Q
+    fn q() int
+        return 2
+
+class Leaf extends Base
+    fn p() int
+        return 1
+
+fn main()
+    let x P = Leaf()
+    let y Q = Leaf()
+    println(f"{x.p()} {y.q()} {y.p()}")
+"#,
+        "1 2 1",
+    );
+}
+
+#[test]
+fn test_concrete_subclass_without_the_trait_method_its_abstract_base_left_open_is_refused() {
+    assert_compiler_error(
+        &program(
+            ABSTRACT_SIZED_BASE,
+            r#"
+class Box extends Base
+    fn other() int
+        return 1
+
+fn main()
+    println(f"{Box().twice()}")
+"#,
+        ),
+        "Class 'Box' must implement method 'size' from trait 'Sized'",
+    );
+}
+
+#[test]
+fn test_subclass_method_mismatching_a_trait_its_abstract_base_implements_is_refused() {
+    assert_compiler_error(
+        &program(
+            ABSTRACT_SIZED_BASE,
+            r#"
+class Box extends Base
+    fn size() String
+        return "x"
+
+fn main()
+    println(f"{Box().twice()}")
+"#,
+        ),
+        "Method 'size' in class 'Box' does not match trait 'Sized' signature",
+    );
+}
+
+#[test]
+fn test_subclass_method_mismatching_a_generic_trait_at_its_base_arguments_is_refused() {
+    // `Base<int>` pins the trait's `T` to `int`, so the subclass owes `get() int`.
+    assert_compiler_error(
+        r#"
+trait Holder<T>
+    fn get() T
+
+abstract class Base<T> implements Holder<T>
+    fn show() String
+        return "s"
+
+class IntBox extends Base<int>
+    fn get() String
+        return "no"
+
+fn main()
+    println(IntBox().show())
+"#,
+        "expected fn get() -> int",
+    );
+}

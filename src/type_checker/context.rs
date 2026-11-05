@@ -556,6 +556,29 @@ pub fn inherited_trait_default<'a>(
     })
 }
 
+/// The trait method a `class_name` receiver reaches for `method_name` when no
+/// class in its chain declares it and no trait supplies a default: the
+/// abstract declaration of a trait the chain implements, which only an
+/// abstract class may leave without a body. Searched in the order
+/// [`inherited_trait_default`] uses.
+pub fn inherited_trait_requirement<'a>(
+    type_defs: &'a HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<TraitDefault<'a>> {
+    class_ancestry(class_name, type_defs).find_map(|(class_level, def)| {
+        def.traits.iter().find_map(|listed| {
+            trait_lineage(type_defs, listed).find_map(|(trait_name, trait_def)| {
+                trait_def.methods.get(method_name).map(|info| TraitDefault {
+                    class_level,
+                    trait_name,
+                    info,
+                })
+            })
+        })
+    })
+}
+
 /// The first of `traits`, in the order a class lists them, to supply a default
 /// `method_name` — itself or through a parent trait — paired with the trait
 /// that declares the default and its signature.

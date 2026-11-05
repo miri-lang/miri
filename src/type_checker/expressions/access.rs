@@ -54,7 +54,9 @@ use crate::diagnostics::repair::RepairRequest;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
-use crate::type_checker::context::{inherited_trait_default, Context, TypeDefinition};
+use crate::type_checker::context::{
+    inherited_trait_default, inherited_trait_requirement, Context, TypeDefinition,
+};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::expressions::identifiers::declares_type_parameters;
 use crate::type_checker::generics::value_generic_marker_type;
@@ -1828,6 +1830,8 @@ impl TypeChecker {
     /// directly, from a parent trait, or through a base class — chosen in the
     /// order [`resolve_method_source`] states and typed at what the clauses
     /// from the receiver up to the declaring trait pin that trait's parameters.
+    /// Without a default, the trait's abstract declaration types the call: an
+    /// abstract class may leave a trait method to its concrete descendants.
     ///
     /// [`resolve_method_source`]: crate::type_checker::context::resolve_method_source
     fn infer_member_class_trait_fallback(
@@ -1836,8 +1840,9 @@ impl TypeChecker {
         prop_name: &str,
         type_args: &Option<Vec<TypeArgument>>,
     ) -> Option<Type> {
-        let default =
-            inherited_trait_default(&self.type_table.global_type_definitions, name, prop_name)?;
+        let definitions = &self.type_table.global_type_definitions;
+        let default = inherited_trait_default(definitions, name, prop_name)
+            .or_else(|| inherited_trait_requirement(definitions, name, prop_name))?;
         let (trait_name, method_info) = (default.trait_name.to_string(), default.info.clone());
         let receiver_mapping = self.build_receiver_mapping(name, type_args);
         let supertypes = self.declaring_types_above(name, &receiver_mapping);

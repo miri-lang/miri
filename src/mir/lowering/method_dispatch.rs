@@ -13,8 +13,8 @@ use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::type_checker::context::{
-    class_needs_vtable, resolve_method_source, trait_lineage, MethodInfo, MethodSource,
-    TypeDefinition,
+    class_needs_vtable, inherited_trait_requirement, resolve_method_source, trait_lineage,
+    MethodInfo, MethodSource, TypeDefinition,
 };
 use crate::type_checker::utils::tuple_class_arguments;
 use crate::type_checker::value_class::LayoutScope;
@@ -139,6 +139,9 @@ pub(crate) fn residency_specialize_call(
 /// - Trait-typed receivers: walks the trait hierarchy to find the method.
 /// - Default trait methods: when no class in the chain gives the method a body,
 ///   the default a trait the chain implements supplies.
+/// - Trait requirements on an abstract receiver: a trait method no class in
+///   the chain declares and no trait supplies a default for resolves to the
+///   trait's declaration, reached through the receiver's vtable.
 pub(crate) fn resolve_inherited_method(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     class_name: &str,
@@ -156,7 +159,12 @@ pub(crate) fn resolve_inherited_method(
     }
 
     let caller_is_abstract = is_abstract_class(type_defs, class_name);
-    resolve_via_class_chain(type_defs, class_name, method_name, caller_is_abstract)
+    resolve_via_class_chain(type_defs, class_name, method_name, caller_is_abstract).or_else(|| {
+        caller_is_abstract
+            .then(|| inherited_trait_requirement(type_defs, class_name, method_name))
+            .flatten()
+            .map(|required| (required.trait_name.to_string(), required.info.clone()))
+    })
 }
 
 /// The owner a static call names for the body [`resolve_method_source`]

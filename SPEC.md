@@ -848,7 +848,7 @@ trait Printable
 
 ### Implementing Traits
 
-Use `implements` to attach one or more traits to a class. The class must provide implementations for all abstract trait methods.
+Use `implements` to attach one or more traits to a class. The class must provide implementations for all abstract trait methods. An abstract class may leave one without a body: each concrete class extending it provides it, and a call on the abstract class reaches that body. A class extending one that implements a trait is also an instance of every trait that trait extends.
 
 ```miri
 class Person implements Greetable
