@@ -263,3 +263,38 @@ fn test_f_string_empty_and_consecutive_interpolations() {
         ]))],
     );
 }
+
+/// The expression statement `source` holds, from its first statement.
+fn first_expression(source: &str) -> miri::ast::Expression {
+    let program = super::utils::parse_program(source);
+    let miri::ast::statement::StatementKind::Expression(expression) = &program.body[0].node else {
+        panic!("the fixture is one expression statement");
+    };
+    expression.clone()
+}
+
+#[test]
+fn test_an_f_string_records_the_source_it_was_parsed_from() {
+    for source in [r#"f"a{n}b""#, r#"f"{n}""#, r#"f"plain""#, r#"f"{n:>4}""#] {
+        let expression = first_expression(source);
+        assert_eq!(
+            &source[expression.span.start..expression.span.end],
+            source,
+            "an f-string's span runs from its `f\"` to its closing quote"
+        );
+    }
+}
+
+#[test]
+fn test_an_operator_on_an_f_string_starts_at_the_f_string() {
+    let source = "let y = 1\nf\"{n}\" + 1";
+    let program = super::utils::parse_program(source);
+    let miri::ast::statement::StatementKind::Expression(expression) = &program.body[1].node else {
+        panic!("the second statement is an expression");
+    };
+    assert_eq!(
+        &source[expression.span.start..expression.span.end],
+        "f\"{n}\" + 1",
+        "a binary expression's span starts where its f-string operand does"
+    );
+}

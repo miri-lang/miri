@@ -510,7 +510,7 @@ fn with_span_helpers_preserve_span() {
         tuple_with_span(vec![int(), int()], span),
         set_with_span(vec![int()], span),
         match_expression_with_span(int(), Vec::<MatchBranch>::new(), span),
-        f_string_with_span(vec![string_literal_expression("a")], span),
+        f_string_with_span(vec![string_literal_expression("a")], Vec::new(), span),
         type_expression_with_span(type_int(), false, span),
         generic_type_expression_with_span(id(), None, TypeDeclarationKind::None, span),
         conditional_with_span(

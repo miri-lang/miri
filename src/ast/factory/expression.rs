@@ -4,6 +4,7 @@
 use super::expr;
 use super::expr_with_span;
 use crate::ast::expression::{Expression, ExpressionKind, ImportPathKind, RangeExpressionType};
+use crate::ast::format_spec::FormatSpec;
 use crate::ast::operator::{AssignmentOp, BinaryOp, GuardOp, UnaryOp};
 use crate::ast::pattern::MatchBranch;
 use crate::ast::statement::IfStatementType;
@@ -112,9 +113,14 @@ pub fn match_expression_with_span(
     expr_with_span(ExpressionKind::Match(Box::new(subject), branches), span)
 }
 
-/// Creates a formatted string expression with a specific span.
-pub fn f_string_with_span(parts: Vec<Expression>, span: Span) -> Expression {
-    expr_with_span(ExpressionKind::FormattedString(parts, Vec::new()), span)
+/// Creates a formatted string expression with a specific span, whose
+/// interpolations at the given part indexes carry a format spec.
+pub fn f_string_with_span(
+    parts: Vec<Expression>,
+    specs: Vec<(usize, FormatSpec)>,
+    span: Span,
+) -> Expression {
+    expr_with_span(ExpressionKind::FormattedString(parts, specs), span)
 }
 
 /// Creates a type expression with a specific span.
