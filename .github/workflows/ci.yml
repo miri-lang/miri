@@ -106,7 +106,13 @@ jobs:
             src/runtime/core -> target
             src/runtime/gpu -> target
 
+      # The MIR verifiers run on every program the slice compiles: the test
+      # helpers turn them on for the compiler processes they spawn, and the
+      # variable here reaches the tests that drive the pipeline in-process.
+      # A verifier finding fails the test that compiled the program.
       - name: Run integration tests (slice ${{ matrix.shard }} of 3)
+        env:
+          MIRI_VERIFY_MIR: "1"
         run: make test-shard SHARD=${{ matrix.shard }}/3
 
       # Every test outside the integration binary, on the runner whose slice

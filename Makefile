@@ -1,4 +1,4 @@
-.PHONY: build release install test test-shard test-units lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full bench-regress
+.PHONY: build release install test test-verify test-shard test-units lint format clean audit gpu-browser-check runtimes conformance-agent grammar-check evals-replay evals-bless skills-check bench-smoke bench-full bench-regress
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -72,6 +72,12 @@ install: release
 
 test: test-units
 	cargo test --test mod -- --test-threads=$(TEST_THREADS)
+
+# The integration binary with the MIR verifiers on in the test process too,
+# as CI runs it, so the tests that drive the pipeline in-process are verified
+# along with the compiler processes the helpers spawn.
+test-verify: runtimes
+	MIRI_VERIFY_MIR=1 cargo test --test mod -- --test-threads=$(TEST_THREADS)
 
 # One slice of the integration binary, `make test-shard SHARD=2/3`, so CI can
 # spread it over parallel runners. tools/test_shard.py cuts the slices from the
