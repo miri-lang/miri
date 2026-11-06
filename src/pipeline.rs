@@ -1262,6 +1262,7 @@ impl Pipeline {
             .then(|| mir_listing(&lowered.bodies));
         let object = Self::compile_object(pipeline_result, lowered, opts, self.verify_mode())?;
         let (work_dir, out_path) = Self::output_paths(out_override)?;
+        self.refuse_overwriting_source(&out_path)?;
         fs::create_dir_all(&work_dir)?;
 
         // Derive a unique object path from the output path so that parallel
@@ -1317,12 +1318,33 @@ impl Pipeline {
         Ok(line_map::LineMap::new(&files, code_map)?.to_string())
     }
 
+    /// Refuses to write the executable over the file the program was read
+    /// from, which `miri build prog` would do for a source with no extension.
+    fn refuse_overwriting_source(&self, out_path: &Path) -> Result<(), CompilerError> {
+        let Some(source) = self.source_path() else {
+            return Ok(());
+        };
+        let same_file = match (Path::new(source).canonicalize(), out_path.canonicalize()) {
+            (Ok(source), Ok(out)) => source == out,
+            (Ok(_) | Err(_), Ok(_) | Err(_)) => false,
+        };
+        if !same_file {
+            return Ok(());
+        }
+        Err(CompilerError::Coded {
+            code: DiagnosticCode::BldOutputNotWritable,
+            message: format!(
+                "the executable would overwrite the source file {}",
+                out_path.display()
+            ),
+            help: Some("name the executable with `-o <path>`".to_string()),
+        })
+    }
+
     /// The directory the build works in and the executable's path: `out`
-    /// when given, otherwise a unique temporary `a.out`.
-    // TODO: the temporary directory is kept so the artifact outlives the
-    // process, and nothing ever removes it, so every build without `-o`
-    // leaves a `miri_build_*` directory behind. Where such a build should
-    // write instead is an open product decision.
+    /// when given, otherwise a unique temporary `a.out` that outlives the
+    /// process. `miri build` always names its output, so only a library
+    /// caller that wants the artifact kept takes the temporary one.
     fn output_paths(out: Option<PathBuf>) -> Result<(PathBuf, PathBuf), CompilerError> {
         if let Some(out) = out {
             let work_dir = out

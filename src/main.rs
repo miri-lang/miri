@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use miri::cli::{separator_hint, skill};
 use miri::cli::{Cli, ColorMode, Commands, DeterminismCommand, Format, SkillCommand};
+use miri::codegen::BuildTarget;
 use miri::diagnostics::json::{DiagnosticsEnvelope, JsonCommand, JsonDiagnostic, JsonGpuTelemetry};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::diagnostic::to_json;
@@ -70,10 +71,11 @@ fn run_command(cli: Cli) -> Result<()> {
                 format,
             } => {
                 let codegen = CodegenMode::from_flags(release, profile, opt_level);
+                let out_path = out.or_else(|| default_build_output(&path, target));
                 build_file(
                     path,
                     BuildOptions {
-                        out_path: out,
+                        out_path,
                         release: codegen.release,
                         opt_level: codegen.opt_level,
                         preserve_frame_pointers: codegen.preserve_frame_pointers,
@@ -424,6 +426,24 @@ fn trap_diagnostic(code: DiagnosticCode) -> JsonDiagnostic {
 /// reports that stand-in rather than a number the program chose: a program
 /// that exits with -1 is reported as 255, so the two cannot be confused.
 const NO_EXIT_STATUS: i32 = -1;
+
+/// Where `miri build` writes a native executable it was not told where to
+/// put: the working directory, under the source file's name without its last
+/// extension (`my.prog.mi` builds `my.prog`), as `cc` and `rustc` do. A
+/// browser bundle is not given one here and keeps its own default.
+// TODO: a `--target web-gpu` build without `-o` still writes its bundle into
+// a temporary directory nothing removes; it should take the same
+// working-directory default once the bundle's layout under it is settled.
+fn default_build_output(source: &std::path::Path, target: BuildTarget) -> Option<PathBuf> {
+    match target {
+        BuildTarget::Native => {
+            let mut name = source.file_stem()?.to_os_string();
+            name.push(std::env::consts::EXE_SUFFIX);
+            Some(PathBuf::from(name))
+        }
+        BuildTarget::WebGpu => None,
+    }
+}
 
 fn build_file(
     path: PathBuf,

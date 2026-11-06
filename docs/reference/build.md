@@ -2,6 +2,10 @@
 
 The `miri` command-line tool is the entry point for compilation. It invokes the full pipeline (lexer, parser, type checker, MIR lowering, code generation, and linking) and reports diagnostics to the user. The `miri explain` subcommand provides detailed guidance for diagnostic codes.
 
+## Output
+
+`miri build <input>` writes the executable to the path `-o` names. Without `-o`, a native build writes it to the working directory under the input's name without its last extension: `miri build prog.mi` writes `./prog`, and `miri build my.prog.mi` writes `./my.prog` (with `.exe` on Windows). A build that would write the executable over its own input — `miri build prog` for a source named `prog` — is refused with `MER_BLD_015`. `miri run` builds into a temporary directory it removes when the program ends.
+
 ## Build Errors
 
 Errors can occur at any stage of the pipeline. Use the diagnostic code and `miri explain` to understand the root cause and how to fix it. The compiler reports one or more errors before exiting with a non-zero status.

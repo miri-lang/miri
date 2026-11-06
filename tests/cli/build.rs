@@ -58,6 +58,74 @@ fn test_build_with_output_leaves_no_temporary_directory() {
     assert!(out_dir.path().join("main").is_file());
 }
 
+/// A build not told where to write puts the executable in the working
+/// directory, named after the source file, and leaves nothing in the
+/// temporary directory.
+#[test]
+fn test_build_without_output_writes_the_source_stem_in_the_working_directory() {
+    let work = tempfile::tempdir().unwrap();
+    let temp_root = tempfile::tempdir().unwrap();
+    let source = work.path().join("prog.mi");
+    std::fs::write(&source, SIMPLE_MAIN).unwrap();
+
+    miri_cmd()
+        .current_dir(work.path())
+        .env("TMPDIR", temp_root.path())
+        .arg("build")
+        .arg("prog.mi")
+        .assert()
+        .success();
+
+    let artifact = work
+        .path()
+        .join(format!("prog{}", std::env::consts::EXE_SUFFIX));
+    let status = Command::new(&artifact).status().unwrap();
+    assert_eq!(status.code(), Some(42), "the built program runs");
+    let left: Vec<_> = std::fs::read_dir(temp_root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "the build left {left:?} in TMPDIR");
+}
+
+/// Only the last extension is the source's: `my.prog.mi` builds `my.prog`.
+#[test]
+fn test_build_without_output_keeps_every_dot_of_the_stem() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("my.prog.mi"), SIMPLE_MAIN).unwrap();
+
+    miri_cmd()
+        .current_dir(work.path())
+        .arg("build")
+        .arg("my.prog.mi")
+        .assert()
+        .success();
+
+    let artifact = work
+        .path()
+        .join(format!("my.prog{}", std::env::consts::EXE_SUFFIX));
+    assert!(artifact.is_file(), "expected {artifact:?}");
+}
+
+/// A source without an extension would be overwritten by an executable named
+/// after its stem, so the build refuses and asks for `-o`; the source is kept.
+#[test]
+fn test_build_without_output_never_overwrites_its_source() {
+    let work = tempfile::tempdir().unwrap();
+    let source = work.path().join("prog");
+    std::fs::write(&source, SIMPLE_MAIN).unwrap();
+
+    miri_cmd()
+        .current_dir(work.path())
+        .arg("build")
+        .arg("prog")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("-o"));
+
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), SIMPLE_MAIN);
+}
+
 #[test]
 fn test_build_with_output() {
     let file = create_test_file(SIMPLE_MAIN);
