@@ -105,8 +105,11 @@ impl TypeChecker {
         }
 
         let index_type = self.infer_expression(index, context);
+        if is_indexed_by_key(&obj_type) {
+            return self.infer_index_regular(&obj_type, index, &index_type, span, context);
+        }
 
-        // Check for Range index (Slicing)
+        // A range indexing anything but a map slices it.
         if let TypeKind::Custom(name, args) = &index_type.kind {
             if crate::ast::types::is_range_type_name(name) {
                 // Ensure range is of integer type
@@ -2577,3 +2580,13 @@ fn inherited_member_candidates<'a>(
 /// The help a method read as a value is refused with.
 const METHOD_VALUE_HELP: &str =
     "call it, or wrap the call in a lambda to hand it on as a value: `fn() int: obj.method()`";
+
+/// True when `obj_type` is a map: it is indexed by its key, whatever the key's
+/// type, so a range there names an entry rather than a slice.
+fn is_indexed_by_key(obj_type: &Type) -> bool {
+    matches!(
+        &obj_type.kind,
+        TypeKind::Custom(name, _)
+            if BuiltinCollectionKind::from_name(name.as_str()) == Some(BuiltinCollectionKind::Map)
+    )
+}
