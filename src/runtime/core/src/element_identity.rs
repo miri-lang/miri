@@ -138,6 +138,12 @@ impl ElementIdentity {
         self.hash_fn = hash_fn;
     }
 
+    /// True when matching runs a callback compiled from Miri code, which can
+    /// reach and change the container doing the matching.
+    pub(crate) fn runs_miri_code(&self) -> bool {
+        self.equals_fn != 0 || self.hash_fn != 0
+    }
+
     /// The rule settling two resolved values.
     fn rule(&self) -> usize {
         self.kind & ((1 << RULE_BITS) - 1)

@@ -168,6 +168,39 @@ pub unsafe fn incref(ptr: *mut u8) {
     }
 }
 
+/// A reference a runtime operation holds on its own receiver while the
+/// operation may run Miri code.
+///
+/// An element's `equals`, `hash` or `clone` is Miri code, and it can reach the
+/// container the runtime is working on — through a field, say — and drop the
+/// last reference to it by replacing that field. The operation acts on the
+/// container it was called on, so it keeps that container alive until it
+/// returns; releasing the hold then frees it if nothing else holds it.
+pub(crate) struct Held {
+    payload: *mut u8,
+    release: unsafe extern "C" fn(*mut u8),
+}
+
+impl Held {
+    /// Holds `payload` until the returned value is dropped, then gives the
+    /// reference back through `release`, the container's own decref.
+    ///
+    /// # Safety
+    /// `payload` must point to the payload of a live block allocated with
+    /// [`alloc_with_rc`] that `release` frees when its count reaches zero.
+    pub(crate) unsafe fn new(payload: *mut u8, release: unsafe extern "C" fn(*mut u8)) -> Self {
+        incref(payload);
+        Self { payload, release }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: `new` took a reference to this block, so it is still live.
+        unsafe { (self.release)(self.payload) }
+    }
+}
+
 /// Whether a managed heap object is reachable through more than one reference.
 ///
 /// Compiled code asks this before writing into a value that has value

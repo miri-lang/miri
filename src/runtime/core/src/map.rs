@@ -665,7 +665,7 @@ pub mod ffi {
         if value.is_null() {
             return;
         }
-        let Some(map) = key_receiver(ptr, key, key_payload) else {
+        let Some((map, _held)) = key_receiver(ptr, key, key_payload) else {
             return;
         };
         require_fits_slot(value_payload, map.value_size);
@@ -691,7 +691,7 @@ pub mod ffi {
         out_payload: usize,
     ) {
         guard::guard_check(ptr as *mut u8);
-        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
+        let Some((map, _held)) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
             read_slot(out, ptr::null(), out_payload, 0);
             return;
         };
@@ -714,7 +714,7 @@ pub mod ffi {
         key_payload: usize,
     ) -> i64 {
         guard::guard_check(ptr as *mut u8);
-        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
+        let Some((map, _held)) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
             return -1;
         };
         with_slot_bytes(key, key_payload, map.key_size, |key| map.slot_of(key))
@@ -771,7 +771,7 @@ pub mod ffi {
             eprintln!("Runtime error: map index with no key");
             std::process::abort();
         }
-        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
+        let Some((map, _held)) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
             std::process::abort();
         };
         let result = with_slot_bytes(key, key_payload, map.key_size, |key| map.get(key));
@@ -795,7 +795,7 @@ pub mod ffi {
         key_payload: usize,
     ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        let Some(map) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
+        let Some((map, _held)) = key_receiver(ptr as *mut MiriMap, key, key_payload) else {
             return 0;
         };
         with_slot_bytes(key, key_payload, map.key_size, |key| {
@@ -815,7 +815,7 @@ pub mod ffi {
         key_payload: usize,
     ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        let Some(map) = key_receiver(ptr, key, key_payload) else {
+        let Some((map, _held)) = key_receiver(ptr, key, key_payload) else {
             return 0;
         };
         let key_size = map.key_size;
@@ -825,19 +825,28 @@ pub mod ffi {
     /// The map a key entry point works on, or `None` when there is no map or no
     /// key to work with.
     ///
+    /// When matching keys runs their own `equals` or `hash`, the map is held
+    /// for as long as the returned hold lives: that Miri code may drop the
+    /// last other reference to the map while the entry point is still working
+    /// on it.
+    ///
     /// A key whose width does not fit the map's key slots is a compiler defect
     /// that would store or look up part of a key, so the process is aborted.
     unsafe fn key_receiver<'a>(
         ptr: *mut MiriMap,
         key: *const u8,
         key_payload: usize,
-    ) -> Option<&'a mut MiriMap> {
+    ) -> Option<(&'a mut MiriMap, Option<crate::rc::Held>)> {
         if ptr.is_null() || key.is_null() {
             return None;
         }
         let map = &mut *ptr;
         require_fits_slot(key_payload, map.key_size);
-        Some(map)
+        let held = map
+            .key_identity
+            .runs_miri_code()
+            .then(|| crate::rc::Held::new(ptr as *mut u8, miri_rt_map_decref_element));
+        Some((map, held))
     }
 
     /// Clears all entries from the map.

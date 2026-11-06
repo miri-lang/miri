@@ -348,3 +348,73 @@ fn main()
         "1 true",
     );
 }
+
+/// A key whose `hash` replaces the field holding the map it is used with. The
+/// operation acts on the map it was called on, which the replacement must not
+/// free while the runtime is still walking it.
+const SELF_REPLACING_KEY: &str = r#"
+use system.collections.map
+
+class Holder
+    var m {Key: int}
+    var armed bool
+
+    fn replace()
+        if self.armed
+            self.armed = false
+            self.m = Map<Key, int>()
+
+class Key implements Equatable, Hashable
+    var h Holder?
+    var k int
+
+    fn equals(other Key) bool
+        return self.k == other.k
+
+    fn hash() int
+        match self.h
+            Some(h): h.replace()
+            None: return self.k.hash()
+        return self.k.hash()
+
+fn filled() Holder
+    var h = Holder(m: Map<Key, int>(), armed: false)
+    for i in 0..40
+        h.m.set(Key(h: None, k: i), i)
+    h.armed = true
+    return h
+"#;
+
+#[test]
+fn a_key_hash_that_replaces_the_map_being_written_leaves_it_alive() {
+    assert_heap_guard_output(
+        &format!(
+            "{SELF_REPLACING_KEY}
+fn main()
+    var h = filled()
+    h.m.set(Key(h: Some(h), k: 3), 99)
+    println(f\"{{h.m.length()}}\")
+"
+        ),
+        "0",
+    );
+}
+
+#[test]
+fn a_key_hash_that_replaces_the_map_being_read_leaves_it_alive() {
+    assert_heap_guard_output(
+        &format!(
+            "{SELF_REPLACING_KEY}
+fn main()
+    var h = filled()
+    let found = h.m.contains_key(Key(h: Some(h), k: 3))
+    h.armed = true
+    let value = h.m.get(Key(h: Some(h), k: 5)) ?? -1
+    h.armed = true
+    let removed = h.m.remove(Key(h: Some(h), k: 6))
+    println(f\"{{found}} {{value}} {{removed}} {{h.m.length()}}\")
+"
+        ),
+        "true -1 false 0",
+    );
+}

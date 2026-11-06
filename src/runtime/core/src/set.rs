@@ -434,7 +434,7 @@ pub mod ffi {
         payload: usize,
     ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        let Some(set) = element_receiver(ptr, elem, payload) else {
+        let Some((set, _held)) = element_receiver(ptr, elem, payload) else {
             return 0;
         };
         with_slot_bytes(elem, payload, set.elem_size, |elem| {
@@ -457,7 +457,7 @@ pub mod ffi {
         payload: usize,
     ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        let Some(set) = element_receiver(ptr as *mut MiriSet, elem, payload) else {
+        let Some((set, _held)) = element_receiver(ptr as *mut MiriSet, elem, payload) else {
             return 0;
         };
         with_slot_bytes(elem, payload, set.elem_size, |elem| {
@@ -475,7 +475,7 @@ pub mod ffi {
         payload: usize,
     ) -> u8 {
         guard::guard_check(ptr as *mut u8);
-        let Some(set) = element_receiver(ptr, elem, payload) else {
+        let Some((set, _held)) = element_receiver(ptr, elem, payload) else {
             return 0;
         };
         let Some(idx) = with_slot_bytes(elem, payload, set.elem_size, |elem| set.find_slot(elem))
@@ -492,19 +492,28 @@ pub mod ffi {
     /// The set an element entry point works on, or `None` when there is no set
     /// or no element to work with.
     ///
+    /// When matching elements runs their own `equals` or `hash`, the set is
+    /// held for as long as the returned hold lives: that Miri code may drop
+    /// the last other reference to the set while the entry point is still
+    /// working on it.
+    ///
     /// An element whose width does not fit the set's slots is a compiler defect
     /// that would store or look up part of a value, so the process is aborted.
     unsafe fn element_receiver<'a>(
         ptr: *mut MiriSet,
         elem: *const u8,
         payload: usize,
-    ) -> Option<&'a mut MiriSet> {
+    ) -> Option<(&'a mut MiriSet, Option<crate::rc::Held>)> {
         if ptr.is_null() || elem.is_null() {
             return None;
         }
         let set = &mut *ptr;
         require_fits_slot(payload, set.elem_size);
-        Some(set)
+        let held = set
+            .elem_identity
+            .runs_miri_code()
+            .then(|| crate::rc::Held::new(ptr as *mut u8, miri_rt_set_decref_element));
+        Some((set, held))
     }
 
     /// Removes all elements from the set.

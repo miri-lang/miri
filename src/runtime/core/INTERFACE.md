@@ -161,6 +161,12 @@ bytes into a heap buffer of its own.
   made its own first, so the method never copies its receiver on write: it calls
   `miri_rt_receiver_unique(receiver)`, which only reads the count and traps with
   `MER_RT_017` in every build when it is not 1 (an immortal object included).
+- A set or map whose elements match through their own `equals` or `hash` runs
+  Miri code from inside the runtime, and that code can drop the last other
+  reference to the container (by replacing the field holding it). Each element
+  or key entry point of such a container therefore holds a reference to it
+  (`rc::Held`) for as long as it runs: the operation finishes on the container
+  it was called on, which is freed afterwards if nothing else holds it.
 - Small blocks — up to 256 bytes, both `[RC][payload]` blocks and the blocks
   compiled code lays out itself — come from a per-thread cache of released blocks
   (`block_cache`) in front of the system allocator. A block it hands out holds

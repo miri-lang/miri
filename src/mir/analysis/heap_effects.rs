@@ -439,14 +439,14 @@ fn writes_unique_receiver(body: &Body) -> bool {
 }
 
 // TODO: a receiver exempted here is lent with no reference of its own, so a
-// callee that writes it in place and also runs code of the program — a
-// list's `remove` matching through an element's `equals`, a set's `add` or
-// `remove`, a map's `set` hashing a key — can run code that replaces the
-// field the receiver was read from and frees the collection being written.
-// Retaining the receiver for such a call does not help: the callee would
-// find it shared, copy it on write, and write a copy the field no longer
-// holds. Closing this needs the caller to keep the field's collection alive
-// some other way across a writing call that reaches program code.
+// callee that writes it in place and runs program code in a Miri loop over
+// it — a list's `remove`, whose `index_of` matches through an element's
+// `equals` — can run code that replaces the field the receiver was read from
+// and frees the list the loop is still reading. (A set or map hashing through
+// an element's own `hash` or `equals` holds itself inside the runtime for the
+// walk.) Retaining the receiver for such a call does not help: the callee
+// would find it shared, copy it on write, and write a copy the field no
+// longer holds. What the field should hold afterwards is undecided.
 /// Whether `body` writes what `local` holds in place: stores into it or
 /// through it, or hands it, whole or through a projection, to a runtime entry
 /// point that writes it in place or asks whether it is unique — the check a

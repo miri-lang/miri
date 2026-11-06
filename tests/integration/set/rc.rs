@@ -237,3 +237,70 @@ fn main()
         "1 true",
     );
 }
+
+/// An element whose `hash` replaces the field holding the set it is looked up
+/// in. The lookup acts on the set it was called on, which the replacement
+/// must not free while the runtime is still walking it.
+const SELF_REPLACING_ELEMENT: &str = r#"
+use system.collections.set
+
+class Holder
+    var s {Elem}
+    var armed bool
+
+    fn replace()
+        if self.armed
+            self.armed = false
+            self.s = Set<Elem>()
+
+class Elem implements Equatable, Hashable
+    var h Holder?
+    var k int
+
+    fn equals(other Elem) bool
+        return self.k == other.k
+
+    fn hash() int
+        match self.h
+            Some(h): h.replace()
+            None: return self.k.hash()
+        return self.k.hash()
+
+fn filled() Holder
+    var h = Holder(s: Set<Elem>(), armed: false)
+    for i in 0..40
+        h.s.add(Elem(h: None, k: i))
+    h.armed = true
+    return h
+"#;
+
+#[test]
+fn an_element_hash_that_replaces_the_set_being_added_to_leaves_it_alive() {
+    assert_heap_guard_output(
+        &format!(
+            "{SELF_REPLACING_ELEMENT}
+fn main()
+    var h = filled()
+    let added = h.s.add(Elem(h: Some(h), k: 3))
+    println(f\"{{added}} {{h.s.length()}}\")
+"
+        ),
+        "false 0",
+    );
+}
+
+#[test]
+fn an_element_hash_that_replaces_the_set_being_searched_leaves_it_alive() {
+    assert_heap_guard_output(
+        &format!(
+            "{SELF_REPLACING_ELEMENT}
+fn main()
+    var h = filled()
+    let found = h.s.contains(Elem(h: Some(h), k: 3))
+    let removed = h.s.remove(Elem(h: None, k: 4))
+    println(f\"{{found}} {{removed}} {{h.s.length()}}\")
+"
+        ),
+        "true false 0",
+    );
+}
