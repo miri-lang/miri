@@ -1221,3 +1221,53 @@ fn main()
         "<1> true 99",
     );
 }
+
+#[test]
+fn a_heap_string_field_read_by_an_operator_survives_a_right_side_that_replaces_it() {
+    assert_heap_guard_output(
+        r#"
+class C
+    var text String
+    fn replace() String
+        self.text = "z" + "q"
+        return "p"
+    fn joined() String
+        return self.text + self.replace()
+    fn before() bool
+        return self.text < self.replace()
+
+fn main()
+    let c = C(text: "o" + "ld")
+    println(c.joined())
+    let d = C(text: "a" + "b")
+    println(f"{d.before()} {d.text}")
+"#,
+        "oldp\ntrue zq",
+    );
+}
+
+#[test]
+fn a_map_entry_argument_survives_a_later_argument_that_replaces_the_map() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+class Holder
+    var m Map<int, String>
+    fn wipe() int
+        self.m = Map<int, String>()
+        return 0
+
+fn take(s String, k int) String
+    return s + f"{k}"
+
+fn main()
+    var mm = Map<int, String>()
+    mm[1] = "va" + "lue"
+    let h = Holder(m: mm)
+    mm = Map<int, String>()
+    println(f"{take(h.m[1], h.wipe())} {h.m.length()}")
+"#,
+        "value0 0",
+    );
+}
