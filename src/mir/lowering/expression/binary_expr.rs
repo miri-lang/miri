@@ -438,12 +438,27 @@ fn lower_sequence_membership(
             expr.span,
         )
     })?;
-    if let Operand::Copy(place) | Operand::Move(place) = &lhs_op {
+    release_membership_operand(ctx, &lhs_op, lhs_watermark, expr.span);
+    Ok(call)
+}
+
+/// Releases the temporary the left side of `in` was lowered into, once the
+/// membership test has answered.
+///
+/// Every membership test borrows the value it looks for, so a value built for
+/// the test (`f"k{i}" in seen`) is owned by nobody else and is released here.
+/// A named binding or a place read in place is left to its owner.
+fn release_membership_operand(
+    ctx: &mut LoweringContext,
+    op: &Operand,
+    watermark: usize,
+    span: Span,
+) {
+    if let Operand::Copy(place) | Operand::Move(place) = op {
         if place.projection.is_empty() {
-            ctx.emit_temp_drop(place.local, lhs_watermark, expr.span);
+            ctx.emit_temp_drop(place.local, watermark, span);
         }
     }
-    Ok(call)
 }
 
 fn lower_in_operator(
@@ -456,9 +471,11 @@ fn lower_in_operator(
     let Some(fn_name) = runtime_contains_fn(ctx, rhs) else {
         return lower_sequence_membership(ctx, lhs, rhs, expr, dest);
     };
+    let lhs_watermark = ctx.body.local_decls.len();
     let lhs_op = lower_operand(ctx, lhs)?;
     let rhs_watermark = ctx.body.local_decls.len();
     let rhs_op = lower_operand(ctx, rhs)?;
+    let looked_up = lhs_op.clone();
 
     let lhs_op = conform_lookup_operand(ctx, lhs_op, lhs, rhs);
 
@@ -491,6 +508,7 @@ fn lower_in_operator(
     if let Operand::Copy(place) | Operand::Move(place) = &rhs_op {
         ctx.emit_temp_drop(place.local, rhs_watermark, expr.span);
     }
+    release_membership_operand(ctx, &looked_up, lhs_watermark, expr.span);
 
     Ok(ret_op)
 }

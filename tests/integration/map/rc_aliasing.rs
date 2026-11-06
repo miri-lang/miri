@@ -329,3 +329,22 @@ fn main()
         "500",
     );
 }
+
+#[test]
+fn a_temporary_key_tested_for_membership_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<String, int>()
+    m["k1"] = 1
+    var hits = 0
+    for i in 0..3
+        if f"k{i}" in m
+            hits += 1
+    println(f"{hits} {('k' + '1') in m}")
+"#,
+        "1 true",
+    );
+}

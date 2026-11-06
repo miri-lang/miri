@@ -217,3 +217,23 @@ fn main()
         "2\n1\n0",
     );
 }
+
+#[test]
+fn a_temporary_tested_for_membership_is_released() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+
+fn main()
+    var seen = Set<String>()
+    seen.add("a1")
+    var hits = 0
+    for i in 0..3
+        if f"a{i}" in seen
+            hits += 1
+    let built = ("a" + "1") in seen
+    println(f"{hits} {built}")
+"#,
+        "1 true",
+    );
+}
