@@ -68,8 +68,19 @@ impl ElementOrder {
         self.compare_fn = compare_fn;
     }
 
+    /// Whether ordering runs the element type's own `compare`, Miri code that
+    /// may reach the container being sorted, rather than reading bytes.
+    pub(crate) fn runs_miri_code(&self) -> bool {
+        self.compare_fn != 0
+    }
+
     /// How the element stored at `left` orders against the one at `right`.
-    unsafe fn compare(&self, left: *const u8, right: *const u8, elem_size: usize) -> Ordering {
+    pub(crate) unsafe fn compare(
+        &self,
+        left: *const u8,
+        right: *const u8,
+        elem_size: usize,
+    ) -> Ordering {
         if self.compare_fn != 0 {
             return self.compare_through_callback(left, right);
         }
@@ -177,11 +188,17 @@ unsafe fn compare_floats(left: *const u8, right: *const u8, elem_size: usize) ->
 /// Sorts `len` elements of `elem_size` bytes each, in place, ascending by
 /// `order`.
 ///
-/// The positions are sorted with the standard library's stable sort, which
-/// makes O(n log n) comparisons and keeps elements that compare equal in the
-/// order they were given in; the element bytes are then moved into place once,
-/// through a buffer. An element is moved, never dropped or cloned, so whatever
-/// a managed element owns stays owned by exactly one slot.
+/// An element type's own `compare` orders through [`sort_elements_by`], the
+/// merge sort that stays a permutation whatever the comparator answers. An
+/// order read off the bytes is a total order: the positions are sorted with
+/// the standard library's stable sort, which keeps elements that compare
+/// equal in the order they were given in, and the element bytes are then moved
+/// into place once, through a buffer. Either way an element is moved, never
+/// dropped or cloned, so whatever a managed element owns stays owned by
+/// exactly one slot.
+///
+/// The caller decides whether `compare` can reach the elements being sorted:
+/// a list's sort holds its storage apart while `compare` runs.
 ///
 /// # Safety
 ///
@@ -199,7 +216,16 @@ pub(crate) unsafe fn sort_elements(
     let Some(total) = len.checked_mul(elem_size) else {
         return;
     };
-    if order.compare_fn == 0 && sort_scalars(data, len, elem_size, order.kind) {
+    if order.runs_miri_code() {
+        // An element type's own `compare` need not be a total order, and the
+        // standard library's sort may panic on one that is not; the merge
+        // sort yields a permutation whatever it answers.
+        sort_elements_by(data, len, elem_size, |left, right| unsafe {
+            order.compare(left, right, elem_size)
+        });
+        return;
+    }
+    if sort_scalars(data, len, elem_size, order.kind) {
         return;
     }
     let element = |i: usize| data.add(i * elem_size) as *const u8;
@@ -926,6 +952,35 @@ mod tests {
             let mut seen: Vec<i64> = pairs.iter().map(|pair| pair.1).collect();
             seen.sort_unstable();
             assert_eq!(seen, (0..n as i64).collect::<Vec<_>>(), "length {n}");
+        }
+    }
+
+    /// A registered `compare` that answers at random: no total order at all.
+    unsafe extern "C" fn compare_at_random(_: *const u8, _: *const u8) -> isize {
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        static STATE: AtomicU64 = AtomicU64::new(17);
+        let next = STATE
+            .load(AtomicOrdering::Relaxed)
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        STATE.store(next, AtomicOrdering::Relaxed);
+        ((next >> 33) % 3) as isize - 1
+    }
+
+    #[test]
+    fn a_registered_compare_that_is_no_order_still_leaves_a_permutation() {
+        for n in [2usize, 3, 31, 32, 33, 200, 1000] {
+            let mut values: Vec<usize> = (0..n).collect();
+            unsafe {
+                sort_elements(
+                    values.as_mut_ptr() as *mut u8,
+                    n,
+                    std::mem::size_of::<usize>(),
+                    ordered_through(compare_at_random),
+                );
+            }
+            values.sort_unstable();
+            assert_eq!(values, (0..n).collect::<Vec<_>>(), "length {n}");
         }
     }
 

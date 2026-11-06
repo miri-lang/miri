@@ -67,7 +67,11 @@ Both sortable containers carry an element order (`element_order.rs`): a kind
 saying whether `sort` reads an element's bytes as a signed, unsigned or float
 value, and a comparator that replaces that reading for elements whose bytes are
 a reference. Codegen registers both from the element type; `clone` and every
-list copied from an array keep them.
+list copied from an array keep them. A registered comparator is the element
+type's `compare`, Miri code: it orders through the same merge sort as
+`sort_by`, which stays a permutation whatever the comparator answers, and a
+list's `sort` holds its storage apart while it runs, as described for
+`sort_by` below.
 
 `miri_rt_list_sort_by(list, closure, trampoline)` sorts by a Miri comparator
 instead: a stable bottom-up merge sort (`element_order::sort_elements_by`) that

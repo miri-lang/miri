@@ -1087,6 +1087,11 @@ pub mod ffi {
     /// Elements are ordered by the comparator registered for the element type,
     /// or, when none is, by their bytes read as the signed, unsigned or float
     /// value the registered order kind names.
+    ///
+    /// A registered comparator is the element type's own `compare`, which runs
+    /// Miri code that may reach this list through the elements it is shown. So
+    /// it sorts the way [`miri_rt_list_sort_by`] does, with the list's storage
+    /// held apart from the list ([`sort_detached`]).
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
@@ -1095,7 +1100,17 @@ pub mod ffi {
             return;
         }
         let list = &mut *ptr;
-        crate::element_order::sort_elements(list.data, list.len, list.elem_size, list.elem_order);
+        let order = list.elem_order;
+        if !order.runs_miri_code() {
+            crate::element_order::sort_elements(list.data, list.len, list.elem_size, order);
+            return;
+        }
+        let elem_size = list.elem_size;
+        sort_detached(
+            ptr,
+            |left, right| order.compare(left, right, elem_size),
+            "the list was changed by the compare of an element it was being sorted by",
+        );
     }
 
     /// Sorts the list in place by a Miri comparator closure: stable, and
@@ -1105,18 +1120,8 @@ pub mod ffi {
     /// parameter types: it is handed the closure, the address of each
     /// element's bytes and the address of a result slot, which is zeroed
     /// before every call and read back as an `isize`. Nothing is counted: the
-    /// closure borrows the elements it is shown.
-    ///
-    /// The closure runs Miri code, which may reach this list. So the list's
-    /// storage is taken out of it for the length of the sort, leaving it empty,
-    /// and the sort holds a reference to it of its own: a closure that reads
-    /// the list sees no elements, and none can free it under the sort. A
-    /// closure that writes the list finds it shared and writes a copy, which
-    /// replaces it where the program holds it. When the sort ends with a list
-    /// nothing but the sort holds any longer — the program changed or
-    /// replaced it — or with one holding storage of its own again, the sorted
-    /// elements could reach no one, and the program stops with `MER_RT_016`
-    /// rather than drop them unseen.
+    /// closure borrows the elements it is shown. The closure runs Miri code,
+    /// so the sort holds the list's storage apart from it ([`sort_detached`]).
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_sort_by(
@@ -1131,25 +1136,47 @@ pub mod ffi {
         if ptr.is_null() {
             return;
         }
-        crate::rc::incref(ptr as *mut u8);
-        let elem_size = (*ptr).elem_size;
-        let storage = (*ptr).detach_storage();
-        crate::element_order::sort_elements_by(
-            storage.data,
-            storage.len,
-            elem_size,
+        sort_detached(
+            ptr,
             |left, right| {
                 let mut answer: isize = 0;
                 call(closure, left, right, &mut answer as *mut isize as *mut u8);
                 answer.cmp(&0)
             },
+            "the list was changed by the closure it was being sorted with",
         );
+    }
+
+    /// Sorts the list at `ptr` in place by `cmp`, a comparator that runs Miri
+    /// code: stable, and never reading outside the elements, whatever `cmp`
+    /// answers.
+    ///
+    /// Miri code may reach this list. So the list's storage is taken out of it
+    /// for the length of the sort, leaving it empty, and the sort holds a
+    /// reference to it of its own: code that reads the list sees no elements,
+    /// and none can free it or its elements under the sort. Code that writes
+    /// the list finds it shared and writes a copy, which replaces it where the
+    /// program holds it. When the sort ends with a list nothing but the sort
+    /// holds any longer — the program changed or replaced it — or with one
+    /// holding storage of its own again, the sorted elements could reach no
+    /// one, and the program stops with `MER_RT_016` and `message` rather than
+    /// drop them unseen.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a live list, and `cmp` must accept the elements it holds.
+    unsafe fn sort_detached(
+        ptr: *mut MiriList,
+        cmp: impl FnMut(*const u8, *const u8) -> std::cmp::Ordering,
+        message: &str,
+    ) {
+        crate::rc::incref(ptr as *mut u8);
+        let elem_size = (*ptr).elem_size;
+        let storage = (*ptr).detach_storage();
+        crate::element_order::sort_elements_by(storage.data, storage.len, elem_size, cmp);
         let is_still_held = crate::rc::miri_rt_rc_is_shared(ptr as *const u8);
         if !(*ptr).reattach_storage(storage) || !is_still_held {
-            crate::trap::trap(
-                crate::trap::code::LIST_CHANGED_WHILE_SORTED,
-                "the list was changed by the closure it was being sorted with",
-            );
+            crate::trap::trap(crate::trap::code::LIST_CHANGED_WHILE_SORTED, message);
         }
         miri_rt_list_decref_element(ptr as *mut u8);
     }

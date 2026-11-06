@@ -9,7 +9,9 @@
 //! compared here is built at run time, so the order allocations happen to fall
 //! in cannot supply a right answer by accident.
 
-use super::utils::{assert_compiler_error, assert_runs_with_output};
+use super::utils::{
+    assert_compiler_error, assert_heap_guard_output, assert_runs_with_output, assert_runtime_error,
+};
 
 #[test]
 fn test_sort_orders_runtime_built_strings_alphabetically() {
@@ -676,5 +678,103 @@ fn main()
     println(f"{mapped[0]},{mapped[1]} {kept[0]},{kept[1]}")
 "#,
         "5,18446744073709551615 5,18446744073709551615",
+    );
+}
+
+/// A list whose elements reach it back: each `Item` names the `Holder` whose
+/// list holds it, and `compare` pushes onto that list once, when armed.
+const SELF_REACHING_ITEMS: &str = r#"
+use system.collections.list
+
+class Holder
+    var items [Item]
+    var armed bool
+    fn grow(self)
+        if self.armed
+            self.armed = false
+            for j in 0..300
+                self.items.push(Item(h: None, k: 1000 + j))
+
+class Item implements Comparable
+    var h Holder?
+    var k int
+    fn compare(self, other Item) int
+        match self.h
+            Some(h): h.grow()
+            None: idle()
+        return self.k - other.k
+
+fn idle()
+    return
+"#;
+
+#[test]
+fn test_a_compare_that_grows_the_list_being_sorted_stops_the_program() {
+    assert_runtime_error(
+        &format!(
+            "{SELF_REACHING_ITEMS}
+fn main()
+    var h = Holder(items: List<Item>(), armed: false)
+    for i in 0..8
+        h.items.push(Item(h: Some(h), k: 8 - i))
+    h.armed = true
+    h.items.sort()
+    println(f\"{{h.items.length()}}\")
+"
+        ),
+        "the list was changed by the compare of an element it was being sorted by",
+    );
+}
+
+#[test]
+fn test_a_compare_that_reaches_the_list_without_changing_it_sorts_it() {
+    assert_heap_guard_output(
+        &format!(
+            "{SELF_REACHING_ITEMS}
+fn main()
+    var h = Holder(items: List<Item>(), armed: false)
+    for i in 0..8
+        h.items.push(Item(h: Some(h), k: 8 - i))
+    h.items.sort()
+    var out = \"\"
+    for it in h.items
+        out = out + f\"{{it.k}},\"
+    println(out)
+    for it in h.items
+        var unlinked = it
+        unlinked.h = None
+"
+        ),
+        "1,2,3,4,5,6,7,8,",
+    );
+}
+
+#[test]
+fn test_a_compare_that_is_no_order_still_keeps_every_element() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+class Coin implements Comparable
+    var k int
+    public fn compare(other Self) int
+        return (self.k * 7 + other.k * 3) % 3 - 1
+
+fn main()
+    var l = List<Coin>()
+    for i in 0..100
+        l.push(Coin(k: i))
+    l.sort()
+    var seen = List<int>()
+    for c in l
+        seen.push(c.k)
+    seen.sort()
+    var same = seen.length() == 100
+    for i in 0..100
+        if seen[i] != i
+            same = false
+    println(f"{same}")
+"#,
+        "true",
     );
 }

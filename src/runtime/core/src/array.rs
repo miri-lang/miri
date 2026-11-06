@@ -504,6 +504,11 @@ pub mod ffi {
     /// Elements are ordered by the comparator registered for the element type,
     /// or, when none is, by their bytes read as the signed, unsigned or float
     /// value the registered order kind names.
+    // TODO: unlike a list's sort, this runs an element's `compare` over the
+    // array's live storage. A `compare` reaches the array only through an
+    // element referring back to the array's owner, a reference cycle the type
+    // checker refuses on every store into an array found so far; no program
+    // reaching it has been found, so the array keeps no guard here yet.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {

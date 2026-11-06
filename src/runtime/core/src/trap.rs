@@ -39,7 +39,8 @@ pub(crate) mod code {
     /// A heap block released twice, written after its release, or released
     /// at a size larger than it was allocated at.
     pub(crate) const HEAP_CORRUPTED: &str = "MER_RT_015";
-    /// A list changed by the closure the runtime was sorting it with.
+    /// A list changed by the code the runtime was sorting it with: a closure,
+    /// or an element's own `compare`.
     pub(crate) const LIST_CHANGED_WHILE_SORTED: &str = "MER_RT_016";
     /// A writing method handed a receiver something else still holds.
     pub(crate) const RECEIVER_SHARED: &str = "MER_RT_017";

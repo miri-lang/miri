@@ -67,6 +67,11 @@ const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
 
 impl MiriSet {
     /// Returns the slot index for a given element.
+    // TODO: an element type's own `equals` and `hash` run Miri code while the
+    // probe walks the table. Code that reaches this set through an element and
+    // adds to it can grow the table under the walk, and the add then inserts an
+    // element the set already holds. Whether that stops the program, as a
+    // list's sort does, or restarts the lookup is undecided.
     unsafe fn find_slot(&self, elem: *const u8) -> Option<usize> {
         if self.capacity == 0 {
             return None;
