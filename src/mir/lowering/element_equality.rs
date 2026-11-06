@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! The bodies a set or map matches struct elements and keys through, and the
-//! hashes it places them by.
+//! The bodies a set or map matches struct, enum and tuple elements and keys
+//! through, and the hashes it places them by.
 //!
 //! An equality is `(a S, b S) -> bool`, lowered from the structural walk
 //! `a == b` lowers to, so a container agrees with the comparison the program
 //! would write by hand. A hash is `(a S) -> int`, lowered from the walk
 //! `a.hash()` lowers to, so two elements the equality calls equal hash alike.
 //! Every parameter is borrowed from the container, which keeps owning its
-//! elements.
+//! elements. A value held as its bytes is handed over as the address of the
+//! container's slot, as every Miri call hands one over, and a counted one as
+//! the word the slot holds.
 
 use super::context::LoweringContext;
 use super::expression::structural_equality::emit_structural_equality;

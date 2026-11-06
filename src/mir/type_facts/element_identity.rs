@@ -6,13 +6,14 @@
 //!
 //! The runtime sees an element only as the bytes of its slot. A set matching
 //! its elements, or a map its keys, must apply the rule `==` applies to them:
-//! a string by its content, a float by the number it holds, a struct or enum
-//! through the equality synthesized from its `==`, a class, list or array
-//! through its own `equals`. An [`ElementIdentity`] names that rule for one
+//! a string by its content, a float by the number it holds, a struct, tuple
+//! or enum through the equality synthesized from its `==`, an optional held
+//! as its bytes field by field, a class, list or array through its own
+//! `equals`. An [`ElementIdentity`] names that rule for one
 //! element type, read by the type the element is, so a backend registers it
 //! and decides nothing.
 
-use super::TypeFacts;
+use super::{TypeFacts, ValueLayout};
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME, STRING_TYPE_NAME,
@@ -69,8 +70,9 @@ pub enum FloatWidth {
 /// its keys, as the same one.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ElementIdentity {
-    /// No rule the runtime can apply: the element type names nothing
-    /// concrete, or nothing `==` compares. Nothing is registered.
+    /// Nothing is registered: the element type names nothing concrete, or
+    /// nothing `==` compares, or it is a tuple held as bytes that are its
+    /// value, which every container starts out matching by.
     Unregistered,
     /// The bytes of the value are the value.
     Bytes,
@@ -79,10 +81,10 @@ pub enum ElementIdentity {
     /// The value is a float of this width, matched by the number it holds, so
     /// `-0.0` and `0.0` are one element and every NaN is one element.
     Float(FloatWidth),
-    /// The value is held as its bytes, and its bytes are not its value: it is
-    /// matched field by field, through the structural `equals` and `hash`
-    /// thunks the backend emits for its layout.
-    FieldWise,
+    /// The value is an optional held as its bytes, and its bytes are not its
+    /// value: it is matched field by field, through the structural `equals`
+    /// and `hash` thunks named here, which the backend emits from its layout.
+    FieldWise(Box<EqualityThunks>),
     /// The value is matched through the thunks named here.
     Equals(Box<EqualityThunks>),
 }
@@ -100,16 +102,15 @@ impl TypeFacts {
     /// How a set matches two elements, or a map two keys, of `kind`, in code
     /// leaving the parameters `open` unbound: the rule `==` applies to them.
     ///
-    /// TODO: a range, and a tuple holding a counted value, get no rule here.
-    /// Neither has a declaration whose synthesized `equals` and `hash` could
-    /// be named, and neither is held as bytes the field-wise thunks can read.
-    /// So a set or map matches them by their slot word, a pointer, and keeps
-    /// equal values apart. They need `equals` and `hash` bodies synthesized
-    /// from the members `==` compares.
+    /// TODO: a range gets no rule here. It has no declaration whose
+    /// synthesized `equals` and `hash` could be named, and no structure the
+    /// structural symbol encodes, so a set or map matches it by its slot word,
+    /// a pointer, and keeps equal ranges apart. It needs `equals` and `hash`
+    /// bodies synthesized from the members `==` compares.
     pub fn element_identity(&self, kind: &TypeKind, open: &HashSet<String>) -> ElementIdentity {
         let scope = LayoutScope::new(self.definitions(), open);
-        if is_matched_field_wise(kind, scope) {
-            return ElementIdentity::FieldWise;
+        if let Some(thunks) = field_wise_thunks(kind, scope) {
+            return ElementIdentity::FieldWise(Box::new(thunks));
         }
         let equals = crate::mir::dispatch::synthesized_equality_symbol(kind, self.definitions())
             .or_else(|| self.element_method_thunk(ElementQuestion::Equals, kind));
@@ -304,17 +305,31 @@ fn is_element_equality(type_name: &str, method: &MethodInfo) -> bool {
         && matches!(method.return_type.kind, TypeKind::Boolean)
 }
 
-/// Whether an element of `kind` is held as its bytes, those bytes are not its
-/// value, and it has a structural thunk name: a tuple, an optional or a
-/// function value laid out inline.
-fn is_matched_field_wise(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
-    let named = matches!(
-        kind,
-        TypeKind::Tuple(_) | TypeKind::Option(_) | TypeKind::Function(_)
-    );
-    named
-        && crate::mir::type_facts::held_value_layout(kind, scope)
-            .is_some_and(|layout| !layout.is_compared_by_bytes())
+/// The layout of an element of `kind` matched through the field-wise thunks
+/// the backend emits from it: an optional held as its bytes, whose bytes are
+/// not its value. `None` for every other element; a tuple is matched through
+/// the equality synthesized from its `==` instead, wherever it is held.
+///
+/// TODO: this keeps a second authority for optional identity. A tuple's `==`
+/// and hash are lowered in MIR, but an optional held as its bytes is compared
+/// and hashed by a walk codegen derives from its layout. The two agree today
+/// only by convention; optional equals/hash bodies should be lowered from the
+/// same structural walk and these thunks deleted.
+pub fn field_wise_layout(kind: &TypeKind, scope: LayoutScope<'_>) -> Option<ValueLayout> {
+    if !matches!(kind, TypeKind::Option(_)) {
+        return None;
+    }
+    crate::mir::type_facts::held_value_layout(kind, scope)
+        .filter(|layout| !layout.is_compared_by_bytes())
+}
+
+/// The structural `equals` and `hash` thunks an element of `kind` is matched
+/// field by field through, when it is (see [`field_wise_layout`]).
+fn field_wise_thunks(kind: &TypeKind, scope: LayoutScope<'_>) -> Option<EqualityThunks> {
+    field_wise_layout(kind, scope)?;
+    let equals = Symbol::structural_thunk_of(ThunkKind::Equals, kind)?;
+    let hash = Symbol::structural_thunk_of(ThunkKind::Hash, kind);
+    Some(EqualityThunks { equals, hash })
 }
 
 /// True when an element of `kind` is a scalar, whose bytes are its value.

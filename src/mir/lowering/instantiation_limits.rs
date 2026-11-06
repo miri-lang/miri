@@ -149,6 +149,13 @@ pub struct Growth<'a> {
 
 /// The refusal of an instance of `class` at `args`, built at `span`, that
 /// passes `limit`, explained by how `growth` reached it.
+///
+/// TODO: two programs with no recursion reach this refusal. A `Set<(E, int)>`
+/// whose enum `E` carries a tuple payload is refused 33 levels deep, and so is
+/// a generic parameter that shadows a declared type of the same name
+/// (`struct T` beside `fn pairs<T>` holding a `Set<(T, String)>`). Some walk
+/// feeding the depth count treats a type that holds a tuple, or a parameter
+/// spelled like a declared type, as growing.
 pub fn polymorphic_recursion(
     class: &str,
     args: &[Type],

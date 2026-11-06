@@ -14,6 +14,8 @@ use miri::mir::symbol::{
 };
 use miri::type_checker::ModuleId;
 
+mod structural;
+
 fn ty(kind: TypeKind) -> Type {
     Type::new(kind, Span::default())
 }

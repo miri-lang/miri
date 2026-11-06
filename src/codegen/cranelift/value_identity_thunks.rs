@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! The `equals` and `hash` a set or map matches a tuple or an optional held
-//! as its bytes by.
+//! The `equals` and `hash` a set or map matches an optional held as its bytes
+//! by ([`crate::mir::type_facts::field_wise_layout`]).
 //!
-//! A tuple has no declaration whose synthesized equality could be named, and
-//! its bytes are not always its value: a float member makes `-0.0` equal to
-//! `0.0` and NaN equal to nothing, and padding between members holds
-//! unspecified bytes. Such a tuple is matched through two thunks generated
+//! An optional's bytes are never its value: an absent one's payload bytes are
+//! not part of it. Such an optional is matched through two thunks generated
 //! from its layout, each handed the address of an element's bytes: one
-//! compares the members as `==` does, and one hashes them consistently with
-//! it. A tuple whose bytes are its value is matched by its bytes and needs
-//! neither. An optional's bytes are never its value: an absent one's payload
-//! bytes are not part of it, so its tag is compared and hashed first, and its
-//! payload only when present. An enum's are not either: its tag is hashed,
-//! then the fields of the variant the tag names.
+//! compares its tag and then, when present, its payload as `==` does, and one
+//! hashes them consistently with it. The payload is walked by its layout: a
+//! tuple or struct member by member, so a float member makes `-0.0` equal to
+//! `0.0` and NaN equal to nothing and padding between members is never read,
+//! and an enum by its tag, then the fields of the variant the tag names.
+//!
+//! A tuple that is the element itself, rather than an optional's payload, is
+//! matched through the equality and hash the pipeline lowers from its `==`,
+//! as a struct is.
 
 use crate::codegen::cranelift::held_enums::{column_member, load_tag};
 use crate::codegen::cranelift::translator::FunctionTranslator;
@@ -34,7 +35,7 @@ use std::sync::Arc;
 /// The multiplier mixing each member into a value's hash.
 const HASH_MULTIPLIER: i64 = 0x0100_0000_01b3;
 
-/// Generate the `equals` and `hash` thunks of the tuple whose structural
+/// Generate the `equals` and `hash` thunks of the optional whose structural
 /// symbol suffix is `encoding`, laid out as `layout`.
 pub(crate) fn generate_value_identity_thunks(
     module: &mut ObjectModule,
@@ -43,7 +44,6 @@ pub(crate) fn generate_value_identity_thunks(
     encoding: &str,
     layout: &ValueLayout,
 ) -> Result<(), CodegenError> {
-    let ptr_type = isa.pointer_type();
     let equals = Symbol::structural_thunk(ThunkKind::Equals, encoding).link_name();
     define_thunk(
         module,
@@ -55,9 +55,15 @@ pub(crate) fn generate_value_identity_thunks(
         },
     )?;
     let hash = Symbol::structural_thunk(ThunkKind::Hash, encoding).link_name();
-    define_thunk(module, ctx, isa, (&hash, 1, ptr_type), |builder, params| {
-        hash_value(builder, params[0], layout)
-    })
+    // The runtime reads the hash as an `i64` (`ElementHashFn`), whatever the
+    // pointer width.
+    define_thunk(
+        module,
+        ctx,
+        isa,
+        (&hash, 1, cl_types::I64),
+        |builder, params| hash_value(builder, params[0], layout),
+    )
 }
 
 /// Declare and define the exported thunk `name` taking `arity` addresses and

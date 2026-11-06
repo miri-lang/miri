@@ -7,8 +7,8 @@
 //! A set, a map, or a sort tells two elements apart by the rule the compiler
 //! registered on the container when it was built: a string by its content, a
 //! number or a reference by its bytes, and anything else through a callback.
-//! A struct's or an enum's callback is the equality or hash the pipeline
-//! lowers from its `==` (`mir::dispatch::synthesized_equality_symbol`,
+//! A struct's, a tuple's or an enum's callback is the equality or hash the
+//! pipeline lowers from its `==` (`mir::dispatch::synthesized_equality_symbol`,
 //! `element_hash_symbol`), a body of the program whose own effects say what
 //! it does. A class with an `equals`, `hash` or `compare` of its own — or a
 //! subclass that has one — runs that method, and an element whose type is a
@@ -138,8 +138,10 @@ impl Walk<'_, '_> {
         match kind {
             TypeKind::Option(inner) | TypeKind::Linear(inner) => self.visit(&inner.kind, depth + 1),
             TypeKind::Tuple(parts) => {
-                for part in parts {
-                    self.visit_written(part, depth + 1);
+                if !self.record_synthesized_equality(kind) {
+                    for part in parts {
+                        self.visit_written(part, depth + 1);
+                    }
                 }
             }
             TypeKind::Custom(name, _) => self.visit_named(kind, name),
@@ -214,6 +216,20 @@ impl Walk<'_, '_> {
     /// A struct or an enum, matched through the equality and hash lowered
     /// for it; ordered through code no body of the program shows.
     fn visit_data(&mut self, kind: &TypeKind) {
+        if !self.record_synthesized_equality(kind) {
+            self.found.runs_unknown_code = true;
+        }
+    }
+
+    // TODO: this walk decides which callbacks a container runs by calling the
+    // dispatch functions directly, beside `TypeFacts::element_identity`, which
+    // decides the same rule for codegen. Both should read one rule so they
+    // cannot drift.
+    /// Record the equality, and the hash, lowered for `kind` from its `==` as
+    /// the callbacks matching it runs, and report whether it is matched
+    /// through them. A tuple matched that way runs its members' code only
+    /// through those bodies.
+    fn record_synthesized_equality(&mut self, kind: &TypeKind) -> bool {
         let equality = synthesized_equality_symbol(kind, self.definitions);
         match (self.question, equality) {
             (Question::Matches, Some(equality)) => {
@@ -221,10 +237,9 @@ impl Walk<'_, '_> {
                 self.found
                     .callbacks
                     .extend(element_hash_symbol(kind, self.definitions));
+                true
             }
-            (Question::Matches, None) | (Question::Orders, _) => {
-                self.found.runs_unknown_code = true;
-            }
+            (Question::Matches, None) | (Question::Orders, _) => false,
         }
     }
 

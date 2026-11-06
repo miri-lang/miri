@@ -4,16 +4,19 @@
 //! Which set elements and map keys are matched through an equality the
 //! compiler synthesizes, and the symbol that equality is compiled under.
 //!
-//! A struct's `==` walks its fields and an enum's compares its variant and
-//! payload, or calls the `equals` it declares, so their bytes — an address, or
-//! a bare discriminant — say nothing about whether two of them are equal. A set
-//! or map of them is matched through a body lowered from that same `==`, one
-//! per instantiation, which the container calls as it calls a class's
-//! `equals`.
+//! A struct's or a tuple's `==` walks its members and an enum's compares its
+//! variant and payload, or calls the `equals` it declares, so their bytes — an
+//! address, a bare discriminant, or members with padding between them — say
+//! nothing about whether two of them are equal. A set or map of them is
+//! matched through a body lowered from that same `==`, one per instantiation,
+//! which the container calls as it calls a class's `equals`. A tuple has no
+//! declaration to name that body after, so it is named by the structure of
+//! the tuple ([`Symbol::structural_thunk_of`]).
 
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::monomorphized_arguments;
+use crate::mir::option_layout::LayoutScope;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::type_checker::context::TypeDefinition;
 use std::collections::HashMap;
@@ -25,6 +28,9 @@ pub fn synthesized_equality_symbol(
     ty: &TypeKind,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> Option<Symbol> {
+    if let TypeKind::Tuple(_) = ty {
+        return tuple_thunk_symbol(ThunkKind::Equals, ty, type_defs);
+    }
     let TypeKind::Custom(name, arg_exprs) = ty else {
         return None;
     };
@@ -53,13 +59,15 @@ pub fn synthesized_equality_symbol(
 /// callback, and so is placed by the hash of its bytes, string or number.
 ///
 /// Every type matched through a callback gets one, consistent with it: a
-/// struct or enum hashes the parts its synthesized equality compares, and a
-/// class, list or array calls the `hash` it declares beside its `equals`.
+/// struct, tuple or enum hashes the parts its synthesized equality compares,
+/// and a class, list or array calls the `hash` it declares beside its
+/// `equals`.
 pub fn element_hash_symbol(
     ty: &TypeKind,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> Option<Symbol> {
     let (name, args): (&str, Option<Vec<TypeArgument>>) = match ty {
+        TypeKind::Tuple(_) => return tuple_thunk_symbol(ThunkKind::Hash, ty, type_defs),
         TypeKind::Custom(name, args) => (name.as_str(), args.clone()),
         TypeKind::List(element) => (
             BuiltinCollectionKind::List.name(),
@@ -99,6 +107,27 @@ pub fn element_hash_symbol(
         _ => Vec::new(),
     };
     Some(Symbol::type_thunk(ThunkKind::Hash, name, &args))
+}
+
+/// The `kind` body a set or map matches the tuple `ty` through, named by the
+/// tuple's structure; `None` when a member is written at a type no
+/// instantiation spells — a parameter a shared generic body leaves open —
+/// the rule a struct's type arguments meet, or when the tuple is held as
+/// bytes that are its value, which every container already matches by.
+fn tuple_thunk_symbol(
+    kind: ThunkKind,
+    ty: &TypeKind,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<Symbol> {
+    let TypeKind::Tuple(members) = ty else {
+        return None;
+    };
+    monomorphized_arguments(members, members.len(), type_defs)?;
+    let held = crate::mir::type_facts::held_value_layout(ty, LayoutScope::program(type_defs));
+    if held.is_some_and(|layout| layout.is_compared_by_bytes()) {
+        return None;
+    }
+    Symbol::structural_thunk_of(kind, ty)
 }
 
 /// The element and key types of every set and map `ty` spells, at any depth,

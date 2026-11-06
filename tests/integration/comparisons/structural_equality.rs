@@ -663,3 +663,17 @@ fn main()
         "function values cannot be compared",
     );
 }
+
+/// A tuple is compared member by member, so `==` on two tuples holding a
+/// function is refused as `==` on the functions is, rather than failing
+/// inside the compiler.
+#[test]
+fn tuples_holding_function_values_cannot_be_compared() {
+    let program = r#"
+fn main()
+    let f = fn(x int) int: x + 1
+    println(f"{(1, f) == (1, f)}")
+"#;
+    assert_compiler_error(program, "MER_TYP_002");
+    assert_compiler_error(program, "function values cannot be compared with `==`");
+}

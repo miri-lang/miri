@@ -9,7 +9,7 @@
 use super::context::{class_implements_trait, resolve_method_source, Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::implicit_methods::operator_method_name;
-use crate::ast::type_arguments::{TypeArgKind, TypeArgument};
+use crate::ast::type_arguments::{argument_type, TypeArgKind, TypeArgument};
 use crate::ast::types::{
     common_numeric_type, is_range_type_name, range_member_types, scalar_width, vec_dim,
     BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
@@ -674,21 +674,49 @@ impl TypeChecker {
                     .to_string(),
             );
         }
+        self.check_kind_comparability(kind, visiting, depth)
+    }
 
+    /// The comparability of a `kind` value, judged by its shape: a type
+    /// holding values of other types is comparable when they all are.
+    fn check_kind_comparability(
+        &self,
+        kind: &TypeKind,
+        visiting: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<(), String> {
         match kind {
             TypeKind::Option(inner) => {
                 self.check_structural_comparability(&inner.kind, visiting, depth + 1)
             }
-            TypeKind::Result(ok_expr, err_expr) => {
-                for expr in [ok_expr, err_expr] {
-                    if let crate::ast::type_arguments::TypeArgKind::Type(ty, _) = &expr.node {
-                        self.check_structural_comparability(&ty.kind, visiting, depth + 1)?;
-                    }
-                }
-                Ok(())
+            TypeKind::Result(ok, err) => {
+                self.check_members_comparability([ok.as_ref(), err.as_ref()], visiting, depth)
+            }
+            // A tuple is compared member by member, so each member must be
+            // comparable itself.
+            TypeKind::Tuple(members) => self.check_members_comparability(members, visiting, depth),
+            // A built-in collection is a type holding its elements, keys and
+            // values, so it is refused whenever one of them is.
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name).is_some() =>
+            {
+                self.check_members_comparability(args, visiting, depth)
             }
             TypeKind::Custom(name, args) => {
                 self.check_named_type_comparability(name, args.as_deref(), visiting, depth)
+            }
+            TypeKind::List(element) | TypeKind::Set(element) | TypeKind::Future(element) => {
+                self.check_members_comparability([element.as_ref()], visiting, depth)
+            }
+            TypeKind::Array(element, _) => {
+                self.check_members_comparability([element.as_ref()], visiting, depth)
+            }
+            TypeKind::Map(key, value) => {
+                self.check_members_comparability([key.as_ref(), value.as_ref()], visiting, depth)
+            }
+            TypeKind::OneOf(members) => self.check_members_comparability(members, visiting, depth),
+            TypeKind::Linear(inner) => {
+                self.check_structural_comparability(&inner.kind, visiting, depth + 1)
             }
             // Two function values carry code and captures, not a value `==`
             // could compare: one lambda written twice is two functions, and
@@ -698,8 +726,46 @@ impl TypeChecker {
                  they compute instead"
                     .to_string(),
             ),
-            _ => Ok(()),
+            // A type parameter is judged where it is bound; the rest hold no
+            // value of another type.
+            TypeKind::Generic(..)
+            | TypeKind::Meta(_)
+            | TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Void
+            | TypeKind::Error => Ok(()),
         }
+    }
+
+    /// Check that every type among `members`, the parts of a type `==`
+    /// compares one by one, is comparable itself.
+    fn check_members_comparability<'m>(
+        &self,
+        members: impl IntoIterator<Item = &'m TypeArgument>,
+        visiting: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<(), String> {
+        members
+            .into_iter()
+            .filter_map(argument_type)
+            .try_for_each(|ty| self.check_structural_comparability(&ty.kind, visiting, depth + 1))
     }
 
     /// Whether `==` on a value of `kind` whose type declares no `equals`

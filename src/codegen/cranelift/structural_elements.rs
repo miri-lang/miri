@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Naming and discovery for collection elements whose type has no declaration
+//! Discovery of the collection elements whose type has no declaration
 //! to name.
 //!
 //! A collection releases the entries it discards through a drop callback — a
@@ -9,191 +9,16 @@
 //! each of which needs the address of a decref function. An entry that is a
 //! named type already has one (`miri.TypeName.$decref`); a tuple, an option or a
 //! function value does not, because there is no declaration whose name could be
-//! mangled into a symbol. This module encodes such a type's structure into a
-//! symbol suffix, and finds every structural entry type a program uses so the
-//! matching thunk can be emitted before any body that references it is compiled.
+//! mangled into a symbol, so its thunk is named by the encoding of its
+//! structure ([`structural_thunk_encoding`]). This module finds every
+//! structural entry type a program uses so the matching thunk can be emitted
+//! before any body that references it is compiled.
 
 use crate::ast::type_arguments::{argument_type, argument_type_at, TypeArguments};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::mir::symbol::structural_thunk_encoding;
 use crate::mir::Body;
 use std::collections::{BTreeMap, HashSet};
-
-/// Symbol suffix naming the decref thunk for a structural type — a tuple, an
-/// option or a function value, the managed shapes carrying no declared name.
-/// `None` for every other kind, each of which already reaches a named thunk or
-/// a per-shape runtime helper.
-///
-/// Every function value releases alike whatever its signature: the closure
-/// carries its own capture destructor, so one thunk serves them all.
-///
-/// The encoding is a prefix code: `t<arity>.` introduces a tuple's elements,
-/// `o` an option's payload, `c<count>.` a generic instantiation's arguments,
-/// `u`, `k` and `z` the payload of a future, a meta type and a linear type,
-/// `n<len>.` a leading-length declared name and `b<len>.` a built-in kind's
-/// spelling — tagged apart from a declared name, since a program may declare
-/// a type spelled like one. Every form is self-delimiting, so two types with
-/// different drop behavior never encode alike and one thunk can never run
-/// another type's field layout. A `.` cannot appear in a Miri
-/// identifier, so the suffix also cannot collide with a user type's.
-pub fn structural_thunk_symbol(kind: &TypeKind) -> Option<String> {
-    match kind {
-        TypeKind::Tuple(_) | TypeKind::Option(_) | TypeKind::Function(_) => {
-            let mut encoded = String::from(".");
-            encode(kind, &mut encoded);
-            Some(encoded)
-        }
-        TypeKind::Custom(_, _)
-        | TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Boolean
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::OneOf(_)
-        | TypeKind::Meta(_)
-        | TypeKind::Void
-        | TypeKind::Error
-        | TypeKind::Linear(_) => None,
-    }
-}
-
-/// Append `kind`'s encoding to `out`. Composite kinds recurse through their
-/// component types; a component the drop path ignores — an array's length, a
-/// function's signature — is left out, so two types that drop identically share
-/// one thunk.
-fn encode(kind: &TypeKind, out: &mut String) {
-    match kind {
-        TypeKind::Tuple(elements) => {
-            encode_arity('t', elements.len(), out);
-            for element in elements {
-                encode_argument(argument_type(element), out);
-            }
-        }
-        TypeKind::OneOf(members) => {
-            encode_arity('o', members.len(), out);
-            for member in members {
-                encode_argument(argument_type(member), out);
-            }
-        }
-        TypeKind::Option(inner) => {
-            out.push('o');
-            encode(&inner.kind, out);
-        }
-        TypeKind::List(elem) | TypeKind::Array(elem, _) | TypeKind::Set(elem) => {
-            out.push('l');
-            encode_argument(argument_type(elem), out);
-        }
-        TypeKind::Map(key, value) => {
-            out.push('m');
-            encode_argument(argument_type(key), out);
-            encode_argument(argument_type(value), out);
-        }
-        TypeKind::Result(ok, err) => {
-            out.push('r');
-            encode_argument(argument_type(ok), out);
-            encode_argument(argument_type(err), out);
-        }
-        TypeKind::Custom(name, None) => encode_name(name, out),
-        TypeKind::Custom(name, Some(args)) => {
-            encode_arity('c', args.len(), out);
-            encode_name(name, out);
-            for arg in args {
-                encode_argument(argument_type(arg), out);
-            }
-        }
-        TypeKind::Future(inner) => {
-            out.push('u');
-            encode_argument(argument_type(inner), out);
-        }
-        TypeKind::Meta(inner) => {
-            out.push('k');
-            encode(&inner.kind, out);
-        }
-        TypeKind::Linear(inner) => {
-            out.push('z');
-            encode(&inner.kind, out);
-        }
-        TypeKind::Generic(name, _, _) => encode_name(name, out),
-        TypeKind::Int => encode_built_in("int", out),
-        TypeKind::I8 => encode_built_in("i8", out),
-        TypeKind::I16 => encode_built_in("i16", out),
-        TypeKind::I32 => encode_built_in("i32", out),
-        TypeKind::I64 => encode_built_in("i64", out),
-        TypeKind::I128 => encode_built_in("i128", out),
-        TypeKind::U8 => encode_built_in("u8", out),
-        TypeKind::U16 => encode_built_in("u16", out),
-        TypeKind::U32 => encode_built_in("u32", out),
-        TypeKind::U64 => encode_built_in("u64", out),
-        TypeKind::U128 => encode_built_in("u128", out),
-        TypeKind::Float => encode_built_in("float", out),
-        TypeKind::F16 => encode_built_in("f16", out),
-        TypeKind::F32 => encode_built_in("f32", out),
-        TypeKind::F64 => encode_built_in("f64", out),
-        TypeKind::String => encode_built_in(crate::ast::types::STRING_TYPE_NAME, out),
-        TypeKind::Boolean => encode_built_in("bool", out),
-        TypeKind::Identifier => encode_built_in("ident", out),
-        TypeKind::RawPtr => encode_built_in("rawptr", out),
-        TypeKind::Function(_) => encode_built_in("fn", out),
-        TypeKind::Void => encode_built_in("void", out),
-        TypeKind::Error => encode_built_in("error", out),
-    }
-}
-
-/// Append a composite form's tag and component count, as in `t2.` for a pair.
-fn encode_arity(tag: char, count: usize, out: &mut String) {
-    out.push(tag);
-    out.push_str(&count.to_string());
-    out.push('.');
-}
-
-/// Encode the type a type argument names. A value-generic argument names a
-/// value rather than a type and contributes no drop behavior, so it encodes
-/// as an empty name and keeps the surrounding form self-delimiting.
-fn encode_argument(argument: Option<&Type>, out: &mut String) {
-    match argument {
-        Some(ty) => encode(&ty.kind, out),
-        None => encode_name("", out),
-    }
-}
-
-/// Append a length-prefixed declared name.
-fn encode_name(name: &str, out: &mut String) {
-    encode_leaf('n', name, out);
-}
-
-/// Append a length-prefixed built-in kind's spelling, tagged apart from a
-/// declared name spelled the same.
-fn encode_built_in(spelling: &str, out: &mut String) {
-    encode_leaf('b', spelling, out);
-}
-
-/// Append `tag`, the length of `text`, `.` and `text`: a self-delimiting leaf.
-fn encode_leaf(tag: char, text: &str, out: &mut String) {
-    out.push(tag);
-    out.push_str(&text.len().to_string());
-    out.push('.');
-    out.push_str(text);
-}
 
 /// A structural collection-entry type, the symbol suffix its decref thunk is
 /// named by, and the parameters the bodies holding it leave open.
@@ -332,7 +157,7 @@ fn record(entry: Option<&Type>, found: &mut Vec<(String, TypeKind)>) {
     let Some(kind) = entry.map(|ty| &ty.kind) else {
         return;
     };
-    if let Some(symbol) = structural_thunk_symbol(kind) {
+    if let Some(symbol) = structural_thunk_encoding(kind) {
         found.push((symbol, kind.clone()));
     }
 }

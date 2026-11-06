@@ -40,7 +40,7 @@ use crate::codegen::backend::{
 };
 use crate::error::CodegenError;
 use crate::mir::option_layout::{LayoutScope, OptionalLayers};
-use crate::mir::symbol::{StringLiteralPart, Symbol};
+use crate::mir::symbol::{structural_thunk_encoding, StringLiteralPart, Symbol};
 use crate::mir::type_facts::TypeDefinition;
 use crate::mir::type_facts::TypeFacts;
 use crate::mir::Body;
@@ -1471,18 +1471,15 @@ fn call_runtime_directly(
 }
 
 /// The structural symbol suffix and layout of `kind` when a set or map
-/// matches it through the field-wise `equals` and `hash` thunks: a tuple or
-/// an optional held as its bytes whose bytes are not its value. `None` for
-/// every other kind.
-pub(crate) fn fieldwise_value_identity(
+/// matches it through the field-wise `equals` and `hash` thunks
+/// ([`crate::mir::type_facts::field_wise_layout`]). `None` for every other
+/// kind.
+fn fieldwise_value_identity(
     kind: &TypeKind,
     scope: LayoutScope<'_>,
 ) -> Option<(String, crate::mir::type_facts::ValueLayout)> {
-    let layout = crate::mir::type_facts::held_value_layout(kind, scope)?;
-    if layout.is_compared_by_bytes() {
-        return None;
-    }
-    let encoding = structural_elements::structural_thunk_symbol(kind)?;
+    let layout = crate::mir::type_facts::field_wise_layout(kind, scope)?;
+    let encoding = structural_thunk_encoding(kind)?;
     Some((encoding, layout))
 }
 

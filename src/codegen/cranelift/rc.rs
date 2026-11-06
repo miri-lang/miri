@@ -146,10 +146,7 @@ impl<'a> FunctionTranslator<'a> {
         if type_ctx.value_layout(elem_kind).is_some() {
             return Ok(None);
         }
-        if let Some(encoding) =
-            crate::codegen::cranelift::structural_elements::structural_thunk_symbol(elem_kind)
-        {
-            let thunk = Symbol::structural_thunk(ThunkKind::Decref, encoding);
+        if let Some(thunk) = Symbol::structural_thunk_of(ThunkKind::Decref, elem_kind) {
             let addr = Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)?;
             return Ok(Some(addr));
         }
@@ -358,35 +355,17 @@ impl<'a> FunctionTranslator<'a> {
                 FloatWidth::F32 => abi::BY_F32_VALUE as i64,
                 FloatWidth::F64 => abi::BY_F64_VALUE as i64,
             }),
-            ElementIdentity::FieldWise => {
-                let thunk = |kind| {
-                    Self::fieldwise_identity_thunk(kind, value_kind, type_ctx).ok_or_else(|| {
-                        CodegenError::Internal(format!(
-                            "a set or map element of `{value_kind}` is matched field by field, \
-                             but its layout names no structural thunk"
-                        ))
-                    })
-                };
-                let (equals, hash) = (thunk(ThunkKind::Equals)?, thunk(ThunkKind::Hash)?);
+            ElementIdentity::FieldWise(thunks) | ElementIdentity::Equals(thunks) => {
                 Self::register_equality(
                     builder,
                     ctx,
                     container_ptr,
-                    &equals,
-                    Some(&hash),
+                    &thunks.equals,
+                    thunks.hash.as_ref(),
                     type_ctx,
                     setters,
                 )?
             }
-            ElementIdentity::Equals(thunks) => Self::register_equality(
-                builder,
-                ctx,
-                container_ptr,
-                &thunks.equals,
-                thunks.hash.as_ref(),
-                type_ctx,
-                setters,
-            )?,
         };
         let held = type_ctx.value_layout(value_kind);
         let Some(word) = Self::element_identity_kind(rule, wrapping, held.as_ref(), type_ctx)
@@ -416,21 +395,6 @@ impl<'a> FunctionTranslator<'a> {
             (setters.set_hash_fn)(builder, ctx, container_ptr, hash)?;
         }
         Ok(ElementRule::OwnEquals)
-    }
-
-    /// The field-wise `equals` or `hash` thunk a set or map matches a tuple of
-    /// `value_kind` through, when it is held as its bytes and its bytes are
-    /// not its value (see [`crate::codegen::cranelift::value_identity_thunks`]).
-    fn fieldwise_identity_thunk(
-        kind: ThunkKind,
-        value_kind: &TypeKind,
-        type_ctx: &TypeCtx,
-    ) -> Option<Symbol> {
-        let (encoding, _) = crate::codegen::cranelift::fieldwise_value_identity(
-            value_kind,
-            type_ctx.layout_scope(),
-        )?;
-        Some(Symbol::structural_thunk(kind, encoding))
     }
 
     /// The element kind word registering `rule` for a value wrapped in the
@@ -1680,8 +1644,8 @@ impl<'a> FunctionTranslator<'a> {
     /// Generates the decref thunk of a structural type — a tuple, an option or
     /// a function value, which carries managed payload but has no declaration
     /// whose name could be mangled into a symbol. `encoding` comes from
-    /// [`crate::codegen::cranelift::structural_elements::structural_thunk_symbol`],
-    /// which encodes the type's structure so distinct types get distinct thunks.
+    /// [`crate::mir::symbol::structural_thunk_encoding`], which encodes the
+    /// type's structure so distinct types get distinct thunks.
     ///
     /// The body is the same inline decref-and-drop sequence a direct release
     /// emits, so the structural payload is released exactly as it would be at a

@@ -363,3 +363,39 @@ fn main()
         "11",
     );
 }
+
+/// A tuple holding a function is no more comparable than the function is, so
+/// it is refused as a key.
+#[test]
+fn a_tuple_holding_a_function_is_refused_as_a_map_key() {
+    let program = r#"
+use system.collections.map
+
+fn adder(k int) fn(int) int
+    return fn(n int) int: n + k
+
+fn main()
+    var m = Map<(int, fn(int) int), int>()
+    m[(1, adder(10))] = 1
+"#;
+    assert_compiler_error(program, "MER_TYP_002");
+    assert_compiler_error(program, "cannot be a Map key, which is matched by `==`");
+}
+
+/// A map holding function values is a type holding one, so a tuple holding
+/// such a map is refused as a key.
+#[test]
+fn a_tuple_holding_a_map_of_functions_is_refused_as_a_map_key() {
+    let program = r#"
+use system.collections.map
+
+fn main()
+    let f = fn(x int) int: x + 1
+    var fm = Map<int, fn(int) int>()
+    fm[1] = f
+    var m = Map<(int, Map<int, fn(int) int>), int>()
+    m[(1, fm)] = 1
+"#;
+    assert_compiler_error(program, "MER_TYP_002");
+    assert_compiler_error(program, "cannot be a Map key, which is matched by `==`");
+}

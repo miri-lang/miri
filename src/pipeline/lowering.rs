@@ -1318,38 +1318,15 @@ impl Pipeline {
         Ok(lowered)
     }
 
-    /// Lower the equality each set or map in `bodies` matches its struct
-    /// elements or keys through, and the hash it places every element matched
-    /// through an `equals` by, once per instantiation.
+    /// Lower the equality each set or map in `bodies` matches its struct,
+    /// enum or tuple elements or keys through, and the hash it places every
+    /// element matched through an `equals` by, once per instantiation.
     fn lower_element_equalities(
         result: &PipelineResult,
         bodies: &mut Vec<LoweredBody>,
         symbols: &mut SymbolTable,
     ) -> Result<(), CompilerError> {
-        let type_defs = result.type_checker.type_definitions();
-        let mut elements = Vec::new();
-        for lowered in bodies.iter() {
-            for decl in &lowered.body.local_decls {
-                mir::dispatch::matched_element_types(&decl.ty, &mut elements);
-            }
-        }
-        let mut wanted = HashMap::new();
-        for element in elements {
-            if let Some(symbol) =
-                mir::dispatch::synthesized_equality_symbol(&element.kind, type_defs)
-            {
-                wanted
-                    .entry(symbol)
-                    .or_insert((element.clone(), ElementBody::Equality));
-            }
-            if let Some(symbol) = mir::dispatch::element_hash_symbol(&element.kind, type_defs) {
-                wanted.entry(symbol).or_insert((element, ElementBody::Hash));
-            }
-        }
-        // Lowered in link-name order, so the bodies come out in one order
-        // whatever order the elements were found in.
-        let mut wanted: Vec<_> = wanted.into_iter().collect();
-        wanted.sort_by_cached_key(|(symbol, _)| symbol.link_name());
+        let wanted = Self::wanted_element_bodies(result, bodies)?;
         for (symbol, (element, kind)) in wanted {
             if !symbols
                 .claim_at(&symbol, element.span)
@@ -1366,6 +1343,38 @@ impl Pipeline {
             Self::push_lowered_body(bodies, symbols, symbol, lowered)?;
         }
         Ok(())
+    }
+
+    /// The equality and hash bodies the sets and maps of `bodies` match
+    /// their elements or keys through, each with the element type it is
+    /// lowered at, in link-name order so the bodies come out in one order
+    /// whatever order the elements were found in.
+    fn wanted_element_bodies(
+        result: &PipelineResult,
+        bodies: &[LoweredBody],
+    ) -> Result<Vec<WantedElementBody>, CompilerError> {
+        let type_defs = result.type_checker.type_definitions();
+        let mut elements = Vec::new();
+        for lowered in bodies {
+            for decl in &lowered.body.local_decls {
+                mir::dispatch::matched_element_types(&decl.ty, &mut elements);
+            }
+        }
+        let mut seen = HashSet::new();
+        let mut wanted = HashMap::new();
+        for element in elements.iter().filter(|element| seen.insert(&element.kind)) {
+            let equality = mir::dispatch::synthesized_equality_symbol(&element.kind, type_defs);
+            let hash = mir::dispatch::element_hash_symbol(&element.kind, type_defs);
+            let named = [(equality, ElementBody::Equality), (hash, ElementBody::Hash)];
+            for (symbol, body) in named {
+                if let Some(symbol) = symbol {
+                    want_element_body(&mut wanted, symbol, element, body)?;
+                }
+            }
+        }
+        let mut wanted: Vec<_> = wanted.into_iter().collect();
+        wanted.sort_by_cached_key(|(symbol, _)| symbol.link_name());
+        Ok(wanted)
     }
 
     /// Emit the generic-class methods and trait defaults the lowered bodies
@@ -2514,6 +2523,39 @@ impl Pipeline {
             Self::push_lowered_body(bodies, symbols, call.symbol, body)?;
         }
         Ok(())
+    }
+}
+
+/// A body a set or map matches its elements through: the symbol it is
+/// lowered under, the element type it is lowered at, and which body it is.
+type WantedElementBody = (Symbol, (Type, ElementBody));
+
+/// Record that `symbol` names the `body` lowered at `element`, refusing a
+/// symbol another element type already holds: the one body lowered under it
+/// would compare or hash the other type's values by the wrong layout.
+fn want_element_body(
+    wanted: &mut HashMap<Symbol, (Type, ElementBody)>,
+    symbol: Symbol,
+    element: &Type,
+    body: ElementBody,
+) -> Result<(), CompilerError> {
+    match wanted.entry(symbol) {
+        std::collections::hash_map::Entry::Vacant(slot) => {
+            slot.insert((element.clone(), body));
+            Ok(())
+        }
+        std::collections::hash_map::Entry::Occupied(held) => {
+            let (first, _) = held.get();
+            if first.kind.to_string() == element.kind.to_string() {
+                return Ok(());
+            }
+            Err(CompilerError::Internal(format!(
+                "the element types `{}` and `{}` both name `{}`",
+                first.kind,
+                element.kind,
+                held.key().link_name()
+            )))
+        }
     }
 }
 

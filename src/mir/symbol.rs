@@ -111,12 +111,14 @@
 //! so the bodies GPU code reaches are claimed a second time under that
 //! spelling, in a table of their own.
 
+mod structural;
 mod table;
 pub(crate) mod token;
 mod trampoline;
 mod wgsl;
 mod written;
 
+pub use structural::structural_thunk_encoding;
 pub use table::{Claim, ClaimRefusal, Namespace, SymbolCollision, SymbolTable};
 pub use trampoline::{TrampolineArgument, TrampolineShape, TrampolineWord};
 
@@ -440,8 +442,12 @@ impl Symbol {
     }
 
     /// The `kind` function emitted for a structural type — a tuple, an option
-    /// or a function value — identified by `encoding`, the spelling codegen
-    /// gives its structure.
+    /// or a function value — identified by `encoding`, the spelling
+    /// [`structural_thunk_encoding`] gives its structure.
+    ///
+    /// TODO: the subject is stored as an already-formatted string, and codegen
+    /// still passes strings it got back from the encoder. The subject should
+    /// carry the type and be encoded only when the link name is written.
     pub fn structural_thunk(kind: ThunkKind, encoding: impl Into<String>) -> Self {
         Self::of(SymbolKind::TypeThunk {
             kind,
