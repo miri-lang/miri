@@ -100,15 +100,13 @@ impl Check<'_> {
             Rvalue::Use(operand) => self.assignment(dest, operand),
             Rvalue::Cast(operand, _) => self.assignment(dest, operand),
             Rvalue::Aggregate(kind, operands) => {
-                let in_place = self
-                    .slots
-                    .declared(dest)
-                    .is_some_and(|ty| self.is_held(&ty));
+                let members = self.slots.aggregate(kind, dest);
+                let in_place = members.target().is_some_and(|ty| self.is_held(ty));
                 operands
                     .iter()
                     .enumerate()
                     .filter_map(|(slot, operand)| {
-                        let slot_ty = self.slots.aggregate_slot(kind, dest, slot);
+                        let slot_ty = members.slot(slot);
                         let meeting = self.member(slot_ty.as_ref(), operand, in_place)?;
                         Some(self.violation(dest.local, operand, &meeting, "a member"))
                     })

@@ -59,3 +59,23 @@ println(f"{t1 == t3}")
         "true\nfalse",
     );
 }
+
+/// A wide tuple literal holding every kind of member: each member is read
+/// against the tuple's declared type, which is read once for the literal,
+/// and every member keeps its own value and width.
+#[test]
+fn a_wide_tuple_of_mixed_members_keeps_every_member() {
+    let members: Vec<String> = (0..600)
+        .map(|i| match i % 4 {
+            0 => format!("{i}"),
+            1 => format!("Some({i})"),
+            2 => format!("\"s{i}\" + \"!\""),
+            _ => format!("{i}.5"),
+        })
+        .collect();
+    let code = format!(
+        "fn main()\n    let t = ({})\n    println(f\"{{t.0}} {{t.1}} {{t.2}} {{t.3}} {{t.597}} {{t.598}} {{t.599}}\")\n",
+        members.join(", ")
+    );
+    assert_heap_guard_output(&code, "0 Some(1) s2! 3.5 Some(597) s598! 599.5");
+}

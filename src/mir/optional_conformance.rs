@@ -117,14 +117,15 @@ fn statement_seams(
         Rvalue::Aggregate(kind, operands) => {
             // Built in place, a value held as its bytes clears a member the
             // absent constant fills; a counted aggregate has no bytes for it.
-            let builds_in_place = slots
-                .declared(dest)
+            let members = slots.aggregate(kind, dest);
+            let builds_in_place = members
+                .target()
                 .is_some_and(|ty| body.value_layout(&ty.kind).is_some());
             operands
                 .iter()
                 .enumerate()
                 .filter_map(|(slot, operand)| {
-                    let slot_ty = slots.aggregate_slot(kind, dest, slot)?;
+                    let slot_ty = members.slot(slot)?;
                     let absent = is_absent_constant(operand);
                     // A counted holder has no bytes to clear for the absent
                     // constant in any member held as bytes, optional or the

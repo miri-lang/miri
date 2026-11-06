@@ -155,8 +155,10 @@ impl<'a> Layouts<'a> {
                     .built_type_violation(dest, kind, &target)
                     .into_iter()
                     .collect();
+                let place_types = PlaceTypes::of(self.body);
+                let members = place_types.aggregate(kind, dest);
                 violations.extend(operands.iter().enumerate().filter_map(|(slot, operand)| {
-                    let slot_ty = self.aggregate_slot(kind, dest, slot)?;
+                    let slot_ty = members.slot(slot)?;
                     self.meeting_violation(dest, operand, &slot_ty, "aggregate slot")
                 }));
                 violations
@@ -370,17 +372,6 @@ impl<'a> Layouts<'a> {
     /// The type of the value at `place`; see [`PlaceTypes::declared`].
     pub(crate) fn place_type(&self, place: &Place) -> Option<Type> {
         PlaceTypes::of(self.body).declared(place)
-    }
-
-    /// The type member `slot` of an aggregate of `kind` built into `dest`
-    /// declares; see [`PlaceTypes::aggregate_slot`].
-    pub(crate) fn aggregate_slot(
-        &self,
-        kind: &AggregateKind,
-        dest: &Place,
-        slot: usize,
-    ) -> Option<Type> {
-        PlaceTypes::of(self.body).aggregate_slot(kind, dest, slot)
     }
 }
 

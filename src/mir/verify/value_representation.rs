@@ -317,11 +317,13 @@ impl<'a> Representations<'a> {
                 if target.is_none() {
                     return Vec::new();
                 }
+                let place_types = PlaceTypes::of(self.layouts.body);
+                let members = place_types.aggregate(kind, dest);
                 operands
                     .iter()
                     .enumerate()
                     .filter_map(|(slot, operand)| {
-                        let slot_ty = self.layouts.aggregate_slot(kind, dest, slot)?;
+                        let slot_ty = members.slot(slot)?;
                         self.meeting_violation(dest, operand, &slot_ty, "aggregate slot")
                     })
                     .collect()

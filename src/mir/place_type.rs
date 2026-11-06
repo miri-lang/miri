@@ -30,6 +30,39 @@ use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::{spells_where, Visit};
 use std::collections::HashMap;
 
+/// The members of one aggregate: what each slot of an aggregate built into a
+/// place declares, read against that place's declared type.
+///
+/// The place's type is read once, when the view is built, not once per slot:
+/// a literal of n members asks n questions of one type, and reading a tuple
+/// type of n members for each would make one literal cost n².
+pub struct AggregateSlots<'k, 'a> {
+    types: &'k PlaceTypes<'a>,
+    kind: &'k AggregateKind,
+    target: Option<Type>,
+    dest: Local,
+}
+
+impl AggregateSlots<'_, '_> {
+    /// The type member `slot` declares, or `None` where it cannot be read.
+    ///
+    /// A struct or class member is its field at the instance's type
+    /// arguments; an enum's slot 0 is its discriminant and each further one a
+    /// payload field of the variant, at the enum's arguments; a closure's are
+    /// its captures; a collection literal's are its elements, a map's keys
+    /// and values alternating.
+    pub fn slot(&self, slot: usize) -> Option<Type> {
+        let target = self.target.as_ref()?;
+        self.types
+            .aggregate_slot(self.kind, self.dest, target, slot)
+    }
+
+    /// The type the aggregate's destination declares.
+    pub fn target(&self) -> Option<&Type> {
+        self.target.as_ref()
+    }
+}
+
 /// The declarations a body keeps that say what type a place reaches.
 pub struct PlaceTypes<'a> {
     pub local_decls: &'a [LocalDecl],
@@ -75,21 +108,36 @@ impl<'a> PlaceTypes<'a> {
         }
     }
 
-    /// The type member `slot` of an aggregate of `kind` built into `dest`
-    /// declares, or `None` where it cannot be read.
-    ///
-    /// A struct or class member is its field at the instance's type
-    /// arguments; an enum's slot 0 is its discriminant and each further one a
-    /// payload field of the variant, at the enum's arguments; a closure's are
-    /// its captures; a collection literal's are its elements, a map's keys
-    /// and values alternating.
-    pub fn aggregate_slot(&self, kind: &AggregateKind, dest: &Place, slot: usize) -> Option<Type> {
-        let target = self.declared(dest)?;
+    /// The members of an aggregate of `kind` built into `dest`, read against
+    /// the type `dest` declares, which is read once for all of them.
+    pub fn aggregate<'k>(
+        &'k self,
+        kind: &'k AggregateKind,
+        dest: &Place,
+    ) -> AggregateSlots<'k, 'a> {
+        AggregateSlots {
+            types: self,
+            kind,
+            target: self.declared(dest),
+            dest: dest.local,
+        }
+    }
+
+    /// The type member `slot` of an aggregate of `kind` declares, read
+    /// against `target`, the type its destination `dest` declares; see
+    /// [`AggregateSlots::slot`].
+    fn aggregate_slot(
+        &self,
+        kind: &AggregateKind,
+        dest: Local,
+        target: &Type,
+        slot: usize,
+    ) -> Option<Type> {
         match kind {
             AggregateKind::Option(built) => optional_payload(built)
-                .or_else(|| (slot == 0).then(|| optional_payload(&target)).flatten()),
+                .or_else(|| (slot == 0).then(|| optional_payload(target)).flatten()),
             AggregateKind::Tuple(built) => {
-                tuple_member(built, slot).or_else(|| tuple_member(&target, slot))
+                tuple_member(built, slot).or_else(|| tuple_member(target, slot))
             }
             // The destination's declared type is the instance built: the
             // type the aggregate names was spelled where it was lowered, and
@@ -100,22 +148,20 @@ impl<'a> PlaceTypes<'a> {
                     (TypeKind::Custom(dest_name, _), TypeKind::Custom(built_name, _))
                         if dest_name == built_name
                 );
-                let instance = if names_one_type { &target } else { built };
+                let instance = if names_one_type { target } else { built };
                 self.instance_field(instance, slot)
             }
             AggregateKind::Enum(enum_name, variant) => {
                 if slot == 0 {
                     return Some(Type::new(TypeKind::Int, target.span));
                 }
-                self.variant_field(enum_name, variant, &target, slot - 1)
+                self.variant_field(enum_name, variant, target, slot - 1)
             }
-            AggregateKind::Closure(_, _) => self
-                .closure_capture_types
-                .get(&dest.local)?
-                .get(slot)
-                .cloned(),
+            AggregateKind::Closure(_, _) => {
+                self.closure_capture_types.get(&dest)?.get(slot).cloned()
+            }
             AggregateKind::Array | AggregateKind::List | AggregateKind::Set => {
-                indexed_element_type(&target)
+                indexed_element_type(target)
             }
             AggregateKind::Map => {
                 let role = if slot.is_multiple_of(2) {
@@ -123,7 +169,7 @@ impl<'a> PlaceTypes<'a> {
                 } else {
                     ElementRole::Value
                 };
-                element_slot(&target, role)
+                element_slot(target, role)
             }
             AggregateKind::FormattedString => Some(Type::new(TypeKind::String, target.span)),
         }

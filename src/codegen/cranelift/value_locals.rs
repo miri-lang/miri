@@ -342,12 +342,13 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
         let slots = crate::mir::place_type::PlaceTypes::of(body);
-        let builds_in_place = slots
-            .declared(place)
+        let members = slots.aggregate(kind, place);
+        let builds_in_place = members
+            .target()
             .is_some_and(|ty| type_ctx.value_layout(&ty.kind).is_some());
         let is_monomorphized = body.generics.open_params.is_empty();
         for (index, operand) in operands.iter().enumerate() {
-            let Some(slot) = slots.aggregate_slot(kind, place, index) else {
+            let Some(slot) = members.slot(index) else {
                 if is_monomorphized || (is_absent(operand) && !builds_in_place) {
                     return Err(CodegenError::Internal(format!(
                         "`{operand}` is stored into member {index} of `{place}`, whose type \
