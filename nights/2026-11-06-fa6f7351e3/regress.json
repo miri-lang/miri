@@ -1,0 +1,14 @@
+{
+ "run_id": "20261106T123843Z",
+ "suspect": [
+  {
+   "cell": "wordfreq/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0788332002567964,
+   "baseline": 5.025704123599369,
+   "tonight": 5.421896463206486
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
