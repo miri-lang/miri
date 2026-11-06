@@ -17,8 +17,9 @@ use crate::mir::{
 use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::dispatch::conform_lookup_operand;
+use crate::mir::lowering::dispatch::{conform_lookup_operand, conform_operand_to_slot};
 use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::loops::{lower_range_membership, numeric_range_element};
 use crate::mir::lowering::method_dispatch::{
     lower_method_call_with, operator_method_callee, resolve_inherited_method, MethodArguments,
 };
@@ -461,6 +462,32 @@ fn release_membership_operand(
     }
 }
 
+/// Lowers `lhs in rhs` on a range of numbers. The left side is evaluated
+/// first and converted to the range's element type, which the type checker
+/// required to hold it; the range then answers by its bounds.
+fn lower_range_membership_expr(
+    ctx: &mut LoweringContext,
+    lhs: &Expression,
+    rhs: &Expression,
+    element_ty: Type,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let lhs_op = lower_operand(ctx, lhs)?;
+    let lhs_ty = ctx.resolved_type(lhs);
+    let (value, _) = conform_operand_to_slot(ctx, lhs_op, lhs_ty, &element_ty, expr.span);
+    let holds = lower_range_membership(ctx, value, rhs, element_ty, &expr.span)?;
+    let held = Operand::Copy(Place::new(holds));
+    let Some(d) = dest else {
+        return Ok(held);
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(held)),
+        span: expr.span,
+    });
+    Ok(Operand::Copy(d))
+}
+
 fn lower_in_operator(
     ctx: &mut LoweringContext,
     lhs: &Expression,
@@ -468,6 +495,9 @@ fn lower_in_operator(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    if let Some(element_ty) = numeric_range_element(ctx, rhs) {
+        return lower_range_membership_expr(ctx, lhs, rhs, element_ty, expr, dest);
+    }
     let Some(fn_name) = runtime_contains_fn(ctx, rhs) else {
         return lower_sequence_membership(ctx, lhs, rhs, expr, dest);
     };

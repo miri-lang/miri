@@ -1217,28 +1217,82 @@ fn range_value_bounds(
     })
 }
 
-/// The local holding whether another pass runs: the variable is below the
-/// end, or at it and the end is included.
+/// The local holding whether `value` has not passed the range's end: it is
+/// below the end, or at it and the end is included. A loop runs another pass
+/// while this holds.
 fn range_value_condition(
     ctx: &mut LoweringContext,
-    loop_var: crate::mir::Local,
+    value: crate::mir::Local,
     bounds: &RangeValueBounds,
     span: &Span,
 ) -> crate::mir::Local {
-    let compare = |ctx: &mut LoweringContext, op, left: crate::mir::Local, right| {
-        let result = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
-        let rvalue = Rvalue::BinaryOp(
-            op,
-            Box::new(Operand::Copy(Place::new(left))),
-            Box::new(Operand::Copy(Place::new(right))),
-        );
-        assign(ctx, result, rvalue, span);
-        result
-    };
-    let below = compare(ctx, BinOp::Lt, loop_var, bounds.end);
-    let at_end = compare(ctx, BinOp::Eq, loop_var, bounds.end);
-    let at_included_end = compare(ctx, BinOp::BitAnd, at_end, bounds.inclusive);
-    compare(ctx, BinOp::BitOr, below, at_included_end)
+    let below = compare_locals(ctx, BinOp::Lt, value, bounds.end, span);
+    let at_end = compare_locals(ctx, BinOp::Eq, value, bounds.end, span);
+    let at_included_end = compare_locals(ctx, BinOp::BitAnd, at_end, bounds.inclusive, span);
+    compare_locals(ctx, BinOp::BitOr, below, at_included_end, span)
+}
+
+/// A new boolean local holding `left op right`.
+fn compare_locals(
+    ctx: &mut LoweringContext,
+    op: BinOp,
+    left: crate::mir::Local,
+    right: crate::mir::Local,
+    span: &Span,
+) -> crate::mir::Local {
+    let result = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+    let rvalue = Rvalue::BinaryOp(
+        op,
+        Box::new(Operand::Copy(Place::new(left))),
+        Box::new(Operand::Copy(Place::new(right))),
+    );
+    assign(ctx, result, rvalue, span);
+    result
+}
+
+/// The element type of `range_value` when it is a range of numbers, the
+/// ranges whose membership `in` answers by comparing against the bounds.
+// TODO: the type checker also accepts ranges of strings and booleans
+// (`"a".."c"`), which neither `in` nor a loop can lower, and a loop over a
+// range of floats has no step and crashes the backend. Which element types a
+// range may hold, and whether a float range can be iterated, is undecided.
+pub(crate) fn numeric_range_element(
+    ctx: &LoweringContext,
+    range_value: &Expression,
+) -> Option<Type> {
+    let element = range_value_element(ctx, range_value)?;
+    ctx.type_checker
+        .is_numeric_type(&element.kind)
+        .then_some(element)
+}
+
+/// Lower `value in range_value` for a range of numbers into a boolean local.
+///
+/// A value is in a range when the loop `for v in range_value` visits it: it is
+/// at or above the start, and the loop's own test, below the end or at an
+/// included end, holds for it. `value` is already lowered, before the range,
+/// and already of the range's element type.
+pub(crate) fn lower_range_membership(
+    ctx: &mut LoweringContext,
+    value: Operand,
+    range_value: &Expression,
+    element_ty: Type,
+    span: &Span,
+) -> Result<crate::mir::Local, LoweringError> {
+    let value_local = ctx.push_temp(element_ty.clone(), *span);
+    assign(ctx, value_local, Rvalue::Use(value), span);
+    let bounds = range_value_bounds(ctx, range_value, element_ty.clone(), span)?;
+    let start = ctx.push_temp(element_ty, *span);
+    assign(ctx, start, Rvalue::Use(bounds.start.clone()), span);
+    let from_start = compare_locals(ctx, BinOp::Ge, value_local, start, span);
+    let before_end = range_value_condition(ctx, value_local, &bounds, span);
+    Ok(compare_locals(
+        ctx,
+        BinOp::BitAnd,
+        from_start,
+        before_end,
+        span,
+    ))
 }
 
 /// Append `local = rvalue` to the current block.

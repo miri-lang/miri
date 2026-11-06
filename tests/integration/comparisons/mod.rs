@@ -10,6 +10,7 @@ pub mod inherited_generic_equality;
 pub mod integer;
 pub mod logical;
 pub mod ordering;
+pub mod range_membership;
 pub mod sorting;
 pub mod string;
 pub mod structural_equality;
