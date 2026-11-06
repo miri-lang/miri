@@ -264,6 +264,51 @@ fn main()
 }
 
 #[test]
+fn a_tuple_holding_a_class_without_hash_is_refused_as_a_set_element() {
+    assert_compiler_error(
+        &with(
+            POINT_WITHOUT_HASH,
+            r#"
+fn main()
+    var pairs = Set<(Point, int)>()
+    pairs.add((Point(x: 1, y: 2), 1))
+"#,
+        ),
+        MISSING_HASH,
+    );
+}
+
+#[test]
+fn a_tuple_holding_a_class_without_hash_is_refused_as_a_map_key() {
+    assert_compiler_error(
+        &with(
+            POINT_WITHOUT_HASH,
+            r#"
+fn main()
+    var named = Map<(int, Point), String>()
+    named[(1, Point(x: 1, y: 2))] = "a"
+"#,
+        ),
+        MISSING_HASH,
+    );
+}
+
+#[test]
+fn an_optional_nested_tuple_holding_a_class_without_hash_is_refused() {
+    assert_compiler_error(
+        &with(
+            POINT_WITHOUT_HASH,
+            r#"
+fn main()
+    var nested = Set<((int, Point), String)?>()
+    nested.add(Some(((1, Point(x: 1, y: 2)), "a")))
+"#,
+        ),
+        MISSING_HASH,
+    );
+}
+
+#[test]
 fn a_struct_holding_a_counted_tuple_hashes_the_tuple_by_its_elements() {
     assert_heap_guard_output(
         r#"

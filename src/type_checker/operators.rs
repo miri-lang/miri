@@ -822,15 +822,12 @@ impl TypeChecker {
         result
     }
 
-    /// True when the named type supplies an `equals` — its own, or for a class
-    /// one a class it extends declares — which the operator lowering dispatches
-    /// to in place of a derived structural comparison.
     /// The name of the type that keeps a value of `ty` from being hashed
     /// consistently with how `==` compares it, or `None` when every part of
     /// it can be.
     ///
     /// A hash is derived wherever equality is: a scalar, a string, an
-    /// optional, a struct or enum compared field by field, and a class
+    /// optional, a tuple, struct or enum compared member by member, and a class
     /// without `equals`, compared by identity. A type that writes its own
     /// `equals` decides alone which of its values are equal, so only a `hash`
     /// of its own can agree with it, and one without is the answer. A type
@@ -844,17 +841,33 @@ impl TypeChecker {
             TypeKind::Option(inner) | TypeKind::Linear(inner) => {
                 self.part_lacking_hash(&inner.kind, visiting)
             }
-            TypeKind::Result(ok, err) => [ok, err].into_iter().find_map(|expr| match &expr.node {
-                crate::ast::type_arguments::TypeArgKind::Type(ty, _) => {
-                    self.part_lacking_hash(&ty.kind, visiting)
-                }
-                _ => None,
-            }),
+            TypeKind::Result(ok, err) => {
+                self.arguments_lacking_hash([ok.as_ref(), err.as_ref()], visiting)
+            }
+            // A tuple is compared and hashed member by member, so a member
+            // that cannot be hashed consistently with its `==` leaves the
+            // whole tuple without one.
+            TypeKind::Tuple(members) => self.arguments_lacking_hash(members, visiting),
             TypeKind::Custom(name, args) => {
                 self.named_type_lacking_hash(name, args.as_deref(), visiting)
             }
             _ => None,
         }
+    }
+
+    fn arguments_lacking_hash<'a>(
+        &self,
+        arguments: impl IntoIterator<Item = &'a TypeArgument>,
+        visiting: &mut Vec<String>,
+    ) -> Option<String> {
+        arguments
+            .into_iter()
+            .find_map(|argument| match &argument.node {
+                crate::ast::type_arguments::TypeArgKind::Type(ty, _) => {
+                    self.part_lacking_hash(&ty.kind, visiting)
+                }
+                _ => None,
+            })
     }
 
     fn named_type_lacking_hash(
