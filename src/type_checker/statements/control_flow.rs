@@ -1055,11 +1055,28 @@ impl TypeChecker {
         match decls.len() {
             1 => self.bind_single_loop_variable(&decls[0], element_type, context),
             2 => self.bind_pair_loop_variables(decls, element_type, iterable_type, span, context),
-            _ => self.report_error(
-                DiagnosticCode::TypArgumentCountMismatch,
-                "Invalid number of loop variables".to_string(),
-                span,
-            ),
+            _ => {
+                self.report_error(
+                    DiagnosticCode::TypArgumentCountMismatch,
+                    "Invalid number of loop variables".to_string(),
+                    span,
+                );
+                return;
+            }
+        }
+        self.check_device_loop_variables(decls, context);
+    }
+
+    /// Refuses, inside a kernel, a loop variable of a type no device value
+    /// has, as a binding of that type is refused there.
+    fn check_device_loop_variables(&mut self, decls: &[VariableDeclaration], context: &Context) {
+        if !context.in_gpu_function {
+            return;
+        }
+        for decl in decls {
+            if let Some(info) = context.resolve_info(&decl.name) {
+                self.check_gpu_variable_type(&decl.name, &info.ty, context, decl.name_span);
+            }
         }
     }
 

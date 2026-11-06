@@ -16,6 +16,7 @@ A GPU function (`gpu fn`) has a signature that is not compatible with GPU execut
 - `Function '{func}' has 'out' parameter '{param}' which is not GPU-compatible`
 - `Function '{func}' parameter '{param}' has type '{type}' which is not GPU-compatible`
 - `Function calls host-only intrinsic which is not GPU-compatible`
+- `` a kernel cannot test membership in a `{range}`: its bounds are not values a kernel holds ``
 
 ## Before
 

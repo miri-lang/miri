@@ -1971,6 +1971,14 @@ impl<'a> BodyEmitter<'a> {
         }
     }
 
+    /// Whether `operand` holds a `bool`.
+    fn is_bool_operand(&self, operand: &Operand) -> bool {
+        matches!(
+            operand.ty_projected(self.body),
+            Some(crate::mir::types::MirType::Boolean)
+        )
+    }
+
     /// Check if a place refers to an indexed element of an atomic buffer.
     fn is_atomic_buffer_element(&self, place: &Place) -> bool {
         // Only apply to indexed buffer accesses
@@ -2000,6 +2008,9 @@ impl<'a> BodyEmitter<'a> {
                 let lhs_str = self.render_operand(lhs)?;
                 let rhs_str = self.render_operand(rhs)?;
                 let sym = binop_symbol(*op)?;
+                if is_ordering_binop(*op) && self.is_bool_operand(lhs) {
+                    return Ok(format!("(u32({}) {} u32({}))", lhs_str, sym, rhs_str));
+                }
 
                 // Browser-portability: `Int` is now i32 in WGSL, so div/mod on int no longer
                 // requires the i64 narrowing workaround. The workaround was needed only for
@@ -2272,6 +2283,15 @@ fn fixed_array_typename(kind: &TypeKind) -> Result<String, CodegenError> {
     let element = buffer_element_typename(kind)?;
     let extent = fixed_array_extent(kind)?;
     Ok(format!("array<{}, {}>", element, extent))
+}
+
+/// Whether `op` asks which of its operands sorts first.
+///
+/// WGSL orders no `bool`, so an ordering of two booleans is emitted over
+/// their `u32` values, where `false` (0) sorts before `true` (1) as it does
+/// on the host.
+fn is_ordering_binop(op: BinOp) -> bool {
+    matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
 }
 
 fn binop_symbol(op: BinOp) -> Result<&'static str, CodegenError> {

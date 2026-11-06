@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
 use crate::ast::{
-    BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
+    BinaryOp, BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
     VariableDeclaration, WhileStatementType,
 };
 use crate::error::lowering::LoweringError;
@@ -19,7 +19,7 @@ use crate::mir::{
     TerminatorKind,
 };
 
-use super::expression::range_expr::{range_fields, written_range_end_test};
+use super::expression::range_expr::{range_fields, written_inclusivity, written_range_end_test};
 use super::{lower_expression, lower_statement, LoweringContext};
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
@@ -1102,7 +1102,7 @@ fn range_end_once(
 
 /// The element type of `iterable` when it is a range value — a range bound to
 /// a name, passed in or returned, rather than written in the loop header.
-fn range_value_element(ctx: &LoweringContext, iterable: &Expression) -> Option<Type> {
+pub(crate) fn range_value_element(ctx: &LoweringContext, iterable: &Expression) -> Option<Type> {
     let ty = ctx.recorded_type(iterable.id)?;
     let element = crate::ast::types::range_element_expression(&ty.kind)?;
     Some(ctx.resolved_argument_type(element))
@@ -1188,6 +1188,34 @@ fn range_value_bounds(
     element_ty: Type,
     span: &Span,
 ) -> Result<RangeValueBounds, LoweringError> {
+    let parts = range_value_parts(ctx, range_value, span)?;
+    let end = ctx.push_temp(element_ty, *span);
+    assign(ctx, end, Rvalue::Use(parts.end), span);
+    let inclusive = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+    assign(ctx, inclusive, Rvalue::Use(parts.inclusive), span);
+    Ok(RangeValueBounds {
+        start: parts.start,
+        end,
+        inclusive,
+    })
+}
+
+/// The three fields of a range value, each read in place from the temp the
+/// value was evaluated into.
+struct RangeValueParts {
+    start: Operand,
+    end: Operand,
+    inclusive: Operand,
+}
+
+/// Evaluate `range_value` into a temp the enclosing scope owns, typed as the
+/// `Range<T>` it was recorded at, and name its fields in the places the
+/// declaration puts them.
+fn range_value_parts(
+    ctx: &mut LoweringContext,
+    range_value: &Expression,
+    span: &Span,
+) -> Result<RangeValueParts, LoweringError> {
     let fields = range_fields(ctx, *span)?;
     let range_ty = ctx.resolved_type(range_value);
     let parts = ctx.push_temp(range_ty, *span);
@@ -1201,14 +1229,10 @@ fn range_value_bounds(
             projection: vec![crate::mir::PlaceElem::Field(index)],
         })
     };
-    let end = ctx.push_temp(element_ty, *span);
-    assign(ctx, end, Rvalue::Use(part(fields.end)), span);
-    let inclusive = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
-    assign(ctx, inclusive, Rvalue::Use(part(fields.inclusive)), span);
-    Ok(RangeValueBounds {
+    Ok(RangeValueParts {
         start: part(fields.start),
-        end,
-        inclusive,
+        end: part(fields.end),
+        inclusive: part(fields.inclusive),
     })
 }
 
@@ -1243,22 +1267,6 @@ fn compare_locals(
     );
     assign(ctx, result, rvalue, span);
     result
-}
-
-/// The element type of `range_value` when it is a range of numbers, the
-/// ranges whose membership `in` answers by comparing against the bounds.
-// TODO: the type checker also accepts ranges of strings and booleans
-// (`"a".."c"`), which neither `in` nor a loop can lower, and a loop over a
-// range of floats has no step and crashes the backend. Which element types a
-// range may hold, and whether a float range can be iterated, is undecided.
-pub(crate) fn numeric_range_element(
-    ctx: &LoweringContext,
-    range_value: &Expression,
-) -> Option<Type> {
-    let element = range_value_element(ctx, range_value)?;
-    ctx.type_checker
-        .is_numeric_type(&element.kind)
-        .then_some(element)
 }
 
 /// The types a range membership test reads: the range's element type, and
@@ -1335,14 +1343,204 @@ fn converted_local(
     local
 }
 
+/// Lower `value in range_value` over a range of `element`, a type that orders
+/// through its `compare`, into a boolean local.
+///
+/// The test is `start <= value`, asked of the start, then `value < end`, or
+/// `value <= end` when the end is included, asked of the value: the two
+/// comparisons `<=` and `<` written in the source make. The value and each
+/// bound are evaluated once, left to right, and the end is not compared when
+/// the start already rules the value out. A bound or a value built for the
+/// test is released once both answers are in.
+pub(crate) fn lower_compared_range_membership(
+    ctx: &mut LoweringContext,
+    value: &Expression,
+    range_value: &Expression,
+    element: Type,
+    span: &Span,
+) -> Result<crate::mir::Local, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let value_op = super::sequencing::lower_operand(ctx, value)?;
+    let bounds = compared_bounds(ctx, range_value, span)?;
+    let test = MembershipTest {
+        value: (value_op, ctx.resolved_type(value)),
+        holds: ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span),
+        join: ctx.new_basic_block(),
+        // The operands above stay alive across both comparisons, so neither
+        // call may release them: each call's watermark sits above them.
+        watermark: ctx.body.local_decls.len(),
+        span: *span,
+    };
+    let at_end = ctx.new_basic_block();
+    let outside = ctx.new_basic_block();
+    let from_start = super::expression::binary_expr::lower_compare_call(
+        ctx,
+        &BinaryOp::LessThanEqual,
+        (bounds.start.clone(), &element),
+        test.value.0.clone(),
+        (*span, test.watermark),
+    )?;
+    switch_on(ctx, from_start, (at_end, outside), span);
+    ctx.set_current_block(outside);
+    hold(ctx, &test, false_operand(*span));
+    ctx.set_current_block(at_end);
+    lower_end_test(ctx, &test, &bounds)?;
+    ctx.set_current_block(test.join);
+    for operand in [&test.value.0, &bounds.start, &bounds.end] {
+        super::expression::binary_expr::release_membership_operand(ctx, operand, watermark, *span);
+    }
+    Ok(test.holds)
+}
+
+/// The bounds a membership test asks the element type's `compare` about,
+/// each evaluated once, and how the test reads the end.
+struct ComparedBounds {
+    start: Operand,
+    end: Operand,
+    end_test: EndTest,
+}
+
+/// How a membership test compares the value with the end of the range.
+enum EndTest {
+    /// A written range says whether it includes its end.
+    Written(bool),
+    /// A range value holds whether it does in this boolean local.
+    Flag(crate::mir::Local),
+}
+
+/// What one range membership test carries from its first comparison to its
+/// last: the value and its type, the local holding the answer, the block
+/// every path ends in, and the watermark the comparisons release above.
+struct MembershipTest {
+    value: (Operand, Type),
+    holds: crate::mir::Local,
+    join: crate::mir::BasicBlock,
+    watermark: usize,
+    span: Span,
+}
+
+/// Evaluate the bounds of `range_value`: the two written expressions in
+/// order, or the range value whose fields are read in place.
+fn compared_bounds(
+    ctx: &mut LoweringContext,
+    range_value: &Expression,
+    span: &Span,
+) -> Result<ComparedBounds, LoweringError> {
+    if let Some((start, end, kind)) = written_range_parts(range_value) {
+        if let Some(inclusive) = written_inclusivity(kind) {
+            let start = super::sequencing::lower_operand(ctx, start)?;
+            let end = super::sequencing::lower_operand(ctx, end)?;
+            return Ok(ComparedBounds {
+                start,
+                end,
+                end_test: EndTest::Written(inclusive),
+            });
+        }
+    }
+    let parts = range_value_parts(ctx, range_value, span)?;
+    let inclusive = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+    assign(ctx, inclusive, Rvalue::Use(parts.inclusive), span);
+    Ok(ComparedBounds {
+        start: parts.start,
+        end: parts.end,
+        end_test: EndTest::Flag(inclusive),
+    })
+}
+
+/// Compare the value with the end the way `bounds` says, and hold the answer.
+fn lower_end_test(
+    ctx: &mut LoweringContext,
+    test: &MembershipTest,
+    bounds: &ComparedBounds,
+) -> Result<(), LoweringError> {
+    let inclusive = match bounds.end_test {
+        EndTest::Written(true) => {
+            return hold_ordering(ctx, test, BinaryOp::LessThanEqual, bounds.end.clone())
+        }
+        EndTest::Written(false) => {
+            return hold_ordering(ctx, test, BinaryOp::LessThan, bounds.end.clone())
+        }
+        EndTest::Flag(inclusive) => inclusive,
+    };
+    let at_most = ctx.new_basic_block();
+    let below = ctx.new_basic_block();
+    let flag = Operand::Copy(Place::new(inclusive));
+    switch_on(ctx, flag, (at_most, below), &test.span);
+    ctx.set_current_block(at_most);
+    hold_ordering(ctx, test, BinaryOp::LessThanEqual, bounds.end.clone())?;
+    ctx.set_current_block(below);
+    hold_ordering(ctx, test, BinaryOp::LessThan, bounds.end.clone())
+}
+
+/// Hold `value op end` as the answer of the membership test.
+fn hold_ordering(
+    ctx: &mut LoweringContext,
+    test: &MembershipTest,
+    op: BinaryOp,
+    end: Operand,
+) -> Result<(), LoweringError> {
+    let (value, value_ty) = &test.value;
+    let answer = super::expression::binary_expr::lower_compare_call(
+        ctx,
+        &op,
+        (value.clone(), value_ty),
+        end,
+        (test.span, test.watermark),
+    )?;
+    hold(ctx, test, answer);
+    Ok(())
+}
+
+/// The boolean `false`, the answer for a value below the start.
+fn false_operand(span: Span) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Boolean, span),
+        literal: crate::ast::literal::Literal::Boolean(false),
+    }))
+}
+
+/// Write `answer` into the test's answer local and go to its join.
+fn hold(ctx: &mut LoweringContext, test: &MembershipTest, answer: Operand) {
+    assign(ctx, test.holds, Rvalue::Use(answer), &test.span);
+    goto(ctx, test.join, &test.span);
+}
+
+/// End the current block by going to `when_true` when `discr` holds and to
+/// `otherwise` when it does not.
+fn switch_on(
+    ctx: &mut LoweringContext,
+    discr: Operand,
+    (when_true, otherwise): (crate::mir::BasicBlock, crate::mir::BasicBlock),
+    span: &Span,
+) {
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr,
+            targets: vec![(Discriminant::bool_true(), when_true)],
+            otherwise,
+        },
+        *span,
+    ));
+}
+
 /// The start, the end and the comparison against the end of `range_value`
 /// when it is range syntax with both bounds written, which membership tests
 /// against directly; `None` for a range value.
 fn written_range_bounds(range_value: &Expression) -> Option<(&Expression, &Expression, BinOp)> {
+    let (start, end, kind) = written_range_parts(range_value)?;
+    Some((start, end, written_range_end_test(kind)?))
+}
+
+/// The start, the end and the kind of `range_value` when it is range syntax
+/// with both bounds written; `None` for a range value.
+fn written_range_parts(
+    range_value: &Expression,
+) -> Option<(&Expression, &Expression, &RangeExpressionType)> {
     let ExpressionKind::Range(start, Some(end), kind) = &range_value.node else {
         return None;
     };
-    Some((start, end, written_range_end_test(kind)?))
+    Some((start, end, kind))
 }
 
 /// A bound of range syntax read, the moment it is evaluated, into a local of

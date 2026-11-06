@@ -298,3 +298,70 @@ fn main()
         "MER_TAR_005",
     );
 }
+
+/// A kernel's loop variable is a device value like any binding, so a loop over
+/// a range of strings inside a kernel is refused as a binding of one would be.
+#[test]
+fn a_loop_over_a_range_of_strings_inside_a_kernel_is_refused() {
+    let output = refusal_of(
+        "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        var n = 0
+        for c in 'a'..'e'
+            n = n + 1
+        dst[i] = n
+",
+        "MER_TAR_008",
+    );
+    assert_mentions(&output, &["Variable 'c' has type 'String'"]);
+}
+
+/// A kernel holds no string or class value, so a membership test over a
+/// range of either inside one is refused rather than handed to the device
+/// code generator.
+#[test]
+fn membership_in_a_range_of_strings_inside_a_kernel_is_refused() {
+    let output = refusal_of(
+        "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        if 'b' in 'a'..'e': dst[i] = 1
+",
+        "MER_TAR_008",
+    );
+    assert_mentions(&output, &["`Range<String>`"]);
+}
+
+#[test]
+fn membership_in_a_range_of_class_values_inside_a_kernel_is_refused_once() {
+    let output = refusal_of(
+        "
+use system.collections.array
+
+class V implements Comparable
+    var n int
+    fn init(n int)
+        self.n = n
+    public fn compare(other V) int
+        return self.n - other.n
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        if V(2) in V(1)..V(3): dst[i] = 1
+",
+        "MER_TAR_008",
+    );
+    assert_mentions(&output, &["`Range<V>`"]);
+    assert!(
+        !output.contains("MER_TYP_002") && !output.contains("If condition"),
+        "the refusal must not spread to the condition around it:\n{output}"
+    );
+}

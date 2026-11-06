@@ -363,7 +363,7 @@ impl TypeChecker {
         );
     }
 
-    fn check_gpu_variable_type(
+    pub(super) fn check_gpu_variable_type(
         &mut self,
         name: &str,
         inferred_type: &Type,

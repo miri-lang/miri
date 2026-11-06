@@ -97,6 +97,87 @@ pub(crate) fn missing_ordering_at_instantiation_message(ty: &Type) -> String {
     )
 }
 
+/// How the values of a type that orders are asked which of them sorts first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueOrdering {
+    /// The machine compares the values themselves: numbers and `bool`.
+    Machine,
+    /// The type's own `compare`, which its `Comparable` implementation
+    /// supplies, answers.
+    Method,
+    /// A generic parameter, ordered by whatever each instantiation pins it to.
+    Deferred,
+}
+
+/// The class whose declaration answers which traits values of `kind`
+/// implement: `String`'s for a string, the named type's own for a named type,
+/// and none for a type no declaration stands behind.
+pub(crate) fn named_class(kind: &TypeKind) -> Option<&str> {
+    match kind {
+        TypeKind::String => Some(STRING_TYPE_NAME),
+        TypeKind::Custom(name, _) => Some(name.as_str()),
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F16
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(..)
+        | TypeKind::Map(..)
+        | TypeKind::Tuple(_)
+        | TypeKind::Set(_)
+        | TypeKind::Result(..)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(..)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_)
+        | TypeKind::OneOf(_) => None,
+    }
+}
+
+/// Why a range membership test `value in r` is refused.
+pub(crate) enum RangeMembershipRefusal {
+    /// The value and the bounds are of types that cannot be compared; the
+    /// message says which.
+    Mismatch(String),
+    /// The value and the bounds agree, but this type of theirs has no
+    /// ordering.
+    Unordered(Type),
+    /// Inside a kernel, the bounds are of a type no device value has.
+    OffDevice,
+}
+
+/// The message for a membership test of a `value` that cannot be compared
+/// with the `element` bounds of the range.
+fn membership_mismatch_message(value: &Type, element: &Type) -> String {
+    format!("Type mismatch: cannot check membership of {value} in range of {element}")
+}
+
+/// The message reported when a range membership test is applied to a value,
+/// or a range of values, of a type that defines no ordering.
+pub(crate) fn missing_range_ordering_message(ty: &Type) -> String {
+    format!(
+        "Type '{ty}' has no ordering: testing it against a range's bounds requires the {ORDERING_TRAIT_NAME} trait"
+    )
+}
+
 impl TypeChecker {
     /// Checks that binary operation operands have compatible types.
     ///
@@ -386,17 +467,62 @@ impl TypeChecker {
     }
 
     /// True when values of `ty` can be asked which of them sorts first.
+    pub(crate) fn orders_its_values(&self, ty: &Type) -> bool {
+        self.ordering_of(ty).is_some()
+    }
+
+    /// How values of `ty` are asked which of them sorts first, or `None` when
+    /// they cannot be. The checker refuses an ordering by it, and range
+    /// membership is lowered by it.
     ///
     /// The numeric types and `bool` order by value: `false` sorts before
     /// `true`, and the comparison the machine performs is over the value the
-    /// operand holds rather than over where it lives. A generic parameter is
-    /// accepted the way it is for arithmetic: the body of a generic function is
-    /// checked once, and the capability is decided where the parameter is
-    /// pinned to a concrete type.
-    pub(crate) fn orders_its_values(&self, ty: &Type) -> bool {
-        self.is_numeric(ty)
-            || matches!(ty.kind, TypeKind::Boolean | TypeKind::Generic(..))
-            || self.type_implements_trait(ty, ORDERING_TRAIT_NAME)
+    /// operand holds rather than over where it lives. A string or a named type
+    /// orders through the `compare` its `Comparable` implementation supplies.
+    /// A generic parameter is accepted the way it is for arithmetic: the body
+    /// of a generic function is checked once, and the capability is decided
+    /// where the parameter is pinned to a concrete type.
+    pub(crate) fn ordering_of(&self, ty: &Type) -> Option<ValueOrdering> {
+        match &ty.kind {
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F16
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean => Some(ValueOrdering::Machine),
+            TypeKind::String | TypeKind::Custom(..) => self
+                .type_implements_trait(ty, ORDERING_TRAIT_NAME)
+                .then_some(ValueOrdering::Method),
+            TypeKind::Generic(..) => Some(ValueOrdering::Deferred),
+            // The collection spellings only reach the checker before
+            // normalization turns them into named types, so none orders.
+            TypeKind::List(_)
+            | TypeKind::Array(..)
+            | TypeKind::Map(..)
+            | TypeKind::Set(_)
+            | TypeKind::Option(_)
+            | TypeKind::Tuple(_)
+            | TypeKind::Function(_)
+            | TypeKind::Result(..)
+            | TypeKind::Future(_)
+            | TypeKind::Linear(_)
+            | TypeKind::Meta(_)
+            | TypeKind::Void
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::OneOf(_)
+            | TypeKind::Error => None,
+        }
     }
 
     /// Checks logical operations (&&, ||).
@@ -492,7 +618,8 @@ impl TypeChecker {
                 }
             }
             TypeKind::Custom(name, Some(args)) if is_range_type_name(name) && args.len() == 1 => {
-                self.check_range_membership(left, &args[0], context)
+                let element = self.resolve_type_argument(&args[0], context);
+                self.check_range_membership(left, &element, context)
             }
             TypeKind::String => {
                 if matches!(left.kind, TypeKind::String) {
@@ -513,21 +640,77 @@ impl TypeChecker {
 
     /// Checks `x in r` on a range of `element`. It stands for `r.start <= x`
     /// and `x < r.end`, so it accepts exactly the operands those comparisons
-    /// accept.
+    /// accept, each with the operands in the order it is made in.
     fn check_range_membership(
-        &mut self,
+        &self,
         left: &Type,
-        element: &TypeArgument,
+        element: &Type,
         context: &Context,
     ) -> Result<Type, String> {
-        let range_type = self.resolve_type_argument(element, context);
-        self.check_ordering_op(left, &BinaryOp::GreaterThanEqual, &range_type, context)
-            .map_err(|_| {
-                format!(
-                    "Type mismatch: cannot check membership of {} in range of {}",
-                    left, range_type
-                )
-            })
+        self.check_ordering_op(element, &BinaryOp::LessThanEqual, left, context)
+            .and_then(|_| self.check_ordering_op(left, &BinaryOp::LessThan, element, context))
+            .map_err(|_| membership_mismatch_message(left, element))
+    }
+
+    /// What is wrong with `value in r` on a range of `element`, or `None`
+    /// when nothing is.
+    ///
+    /// Two types that do not agree are a mismatch before either is asked for
+    /// an ordering, so `p in 1..3` names the disagreement rather than the
+    /// ordering `p` lacks. Inside a kernel the element must be a value the
+    /// device holds.
+    pub(crate) fn range_membership_refusal(
+        &self,
+        value: &Type,
+        element: &Type,
+        context: &Context,
+    ) -> Option<RangeMembershipRefusal> {
+        let unordered = [value, element]
+            .into_iter()
+            .find(|ty| !self.orders_its_values(ty));
+        if let Some(unordered) = unordered {
+            return Some(if self.range_operands_agree(value, element, context) {
+                RangeMembershipRefusal::Unordered(unordered.clone())
+            } else {
+                RangeMembershipRefusal::Mismatch(membership_mismatch_message(value, element))
+            });
+        }
+        if let Err(message) = self.check_range_membership(value, element, context) {
+            return Some(RangeMembershipRefusal::Mismatch(message));
+        }
+        let off_device = context.in_gpu_function
+            && !crate::type_checker::utils::is_gpu_compatible(&element.kind);
+        off_device.then_some(RangeMembershipRefusal::OffDevice)
+    }
+
+    /// Whether the value and the bounds of a range membership test are of
+    /// types one of which holds the other, ordering aside.
+    fn range_operands_agree(&self, value: &Type, element: &Type, context: &Context) -> bool {
+        has_parameter_operand(value, element)
+            || self.are_compatible(element, value, context)
+            || self.are_compatible(value, element, context)
+    }
+
+    /// The element type of the range `right` that `x in right` tests `x`
+    /// against, or `None` when `op` is not `in` or `right` is not a range.
+    pub(crate) fn range_membership_element(
+        &mut self,
+        op: &BinaryOp,
+        right: &Type,
+        context: &Context,
+    ) -> Option<Type> {
+        if !matches!(op, BinaryOp::In) {
+            return None;
+        }
+        let TypeKind::Custom(name, Some(args)) = &right.kind else {
+            return None;
+        };
+        match args.as_slice() {
+            [element] if is_range_type_name(name) => {
+                Some(self.resolve_type_argument(element, context))
+            }
+            _ => None,
+        }
     }
 
     /// Checks unary operation operand types.
@@ -631,11 +814,6 @@ impl TypeChecker {
         }
     }
 
-    /// Checks whether a type implements a given trait: its class, or a class
-    /// it extends, lists the trait or a trait that extends it.
-    ///
-    /// Maps `TypeKind::String` to class `"String"`, `TypeKind::Custom(name, _)` to `name`,
-    /// and returns `false` for primitive types.
     /// Whether `ty` implements the trait whose method answers `op`, read from
     /// the one operator table lowering dispatches by.
     fn implements_operator_trait(&self, ty: &Type, op: &BinaryOp) -> bool {
@@ -643,17 +821,17 @@ impl TypeChecker {
             .is_some_and(|trait_name| self.type_implements_trait(ty, trait_name))
     }
 
+    /// Whether a type implements a given trait: its class, or a class it
+    /// extends, lists the trait or a trait that extends it. A type no class
+    /// declaration stands behind implements none.
     fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
-        let class_name = match &ty.kind {
-            TypeKind::String => STRING_TYPE_NAME,
-            TypeKind::Custom(name, _) => name.as_str(),
-            _ => return false,
-        };
-        class_implements_trait(
-            class_name,
-            trait_name,
-            &self.type_table.global_type_definitions,
-        )
+        named_class(&ty.kind).is_some_and(|class_name| {
+            class_implements_trait(
+                class_name,
+                trait_name,
+                &self.type_table.global_type_definitions,
+            )
+        })
     }
 
     /// Rejects a type whose shape cannot be compared structurally.
@@ -993,14 +1171,14 @@ impl TypeChecker {
     /// body: the one the operator table names, as the left operand's type
     /// answers it, or for an equality an `equals` some part of a value
     /// compared member by member declares. A membership test compares the
-    /// left operand against each element the way `==` does. A type parameter
+    /// left operand against each element of a collection the way `==` does,
+    /// and against the bounds of a range the way `<` does. A type parameter
     /// may stand for a type that answers.
     pub(crate) fn operator_may_run_method(&self, left: &Type, op: &BinaryOp) -> bool {
-        let op = if matches!(op, BinaryOp::In) {
-            &BinaryOp::Equal
-        } else {
-            op
-        };
+        if matches!(op, BinaryOp::In) {
+            return self.operator_may_run_method(left, &BinaryOp::Equal)
+                || self.operator_may_run_method(left, &BinaryOp::LessThan);
+        }
         let Some(method) = operator_method_name(op) else {
             return false;
         };
@@ -1116,6 +1294,139 @@ impl TypeChecker {
                 TypeDefinition::Trait(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_),
             )
             | None => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::type_arguments::type_argument;
+    use crate::error::syntax::Span;
+
+    fn ty(kind: TypeKind) -> Type {
+        Type::new(kind, Span::new(0, 0))
+    }
+
+    fn argument(kind: TypeKind) -> TypeArgument {
+        type_argument(ty(kind))
+    }
+
+    /// A checker that has seen a class implementing `Comparable` and one that
+    /// does not, beside every declaration the prelude brings.
+    fn checker() -> TypeChecker {
+        let source = "
+class Ranked implements Comparable
+    var n int
+    public fn compare(other Ranked) int
+        return self.n - other.n
+
+class Plain
+    var n int
+
+fn main()
+    let a = 1
+";
+        let mut lexer = crate::lexer::Lexer::new(source);
+        let mut parser = crate::parser::Parser::new(&mut lexer, source);
+        let mut program = match parser.parse() {
+            Ok(program) => program,
+            Err(error) => panic!("the source does not parse: {error:?}"),
+        };
+        let mut checker = TypeChecker::new();
+        if let Err(error) = checker.check(&mut program) {
+            panic!("the source does not type-check: {error:?}");
+        }
+        checker
+    }
+
+    #[test]
+    fn numbers_booleans_comparables_and_parameters_order() {
+        let checker = checker();
+        let machine = [
+            TypeKind::Int,
+            TypeKind::I8,
+            TypeKind::I16,
+            TypeKind::I32,
+            TypeKind::I64,
+            TypeKind::I128,
+            TypeKind::U8,
+            TypeKind::U16,
+            TypeKind::U32,
+            TypeKind::U64,
+            TypeKind::U128,
+            TypeKind::Float,
+            TypeKind::F16,
+            TypeKind::F32,
+            TypeKind::F64,
+            TypeKind::Boolean,
+        ];
+        for kind in machine {
+            assert_eq!(
+                checker.ordering_of(&ty(kind.clone())),
+                Some(ValueOrdering::Machine),
+                "{kind:?}"
+            );
+        }
+        let method = [
+            TypeKind::String,
+            TypeKind::Custom("Ranked".to_string(), None),
+        ];
+        for kind in method {
+            assert_eq!(
+                checker.ordering_of(&ty(kind.clone())),
+                Some(ValueOrdering::Method),
+                "{kind:?}"
+            );
+        }
+        let parameter = TypeKind::Generic(
+            "T".to_string(),
+            None,
+            crate::ast::types::TypeDeclarationKind::None,
+        );
+        assert_eq!(
+            checker.ordering_of(&ty(parameter)),
+            Some(ValueOrdering::Deferred)
+        );
+    }
+
+    #[test]
+    fn every_other_type_kind_has_no_ordering() {
+        let checker = checker();
+        let unordered = [
+            TypeKind::Custom("Plain".to_string(), None),
+            TypeKind::List(Box::new(argument(TypeKind::Int))),
+            TypeKind::Array(
+                Box::new(argument(TypeKind::Int)),
+                Box::new(argument(TypeKind::Int)),
+            ),
+            TypeKind::Map(
+                Box::new(argument(TypeKind::Int)),
+                Box::new(argument(TypeKind::Int)),
+            ),
+            TypeKind::Set(Box::new(argument(TypeKind::Int))),
+            TypeKind::Option(Box::new(ty(TypeKind::Int))),
+            TypeKind::Tuple(vec![argument(TypeKind::Int), argument(TypeKind::Int)]),
+            TypeKind::Result(
+                Box::new(argument(TypeKind::Int)),
+                Box::new(argument(TypeKind::String)),
+            ),
+            TypeKind::Future(Box::new(argument(TypeKind::Int))),
+            TypeKind::Function(Box::new(crate::ast::types::FunctionTypeData {
+                generics: None,
+                params: Vec::new(),
+                return_type: None,
+            })),
+            TypeKind::Linear(Box::new(ty(TypeKind::Int))),
+            TypeKind::Meta(Box::new(ty(TypeKind::Int))),
+            TypeKind::Void,
+            TypeKind::Identifier,
+            TypeKind::RawPtr,
+            TypeKind::OneOf(vec![argument(TypeKind::Int), argument(TypeKind::String)]),
+            TypeKind::Error,
+        ];
+        for kind in unordered {
+            assert_eq!(checker.ordering_of(&ty(kind.clone())), None, "{kind:?}");
         }
     }
 }

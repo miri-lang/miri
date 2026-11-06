@@ -19,12 +19,15 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{conform_lookup_operand, conform_operand_to_slot};
 use crate::mir::lowering::helpers::resolve_type;
-use crate::mir::lowering::loops::{lower_range_membership, numeric_range_element, MembershipTypes};
+use crate::mir::lowering::loops::{
+    lower_compared_range_membership, lower_range_membership, range_value_element, MembershipTypes,
+};
 use crate::mir::lowering::method_dispatch::{
     lower_method_call_with, operator_method_callee, resolve_inherited_method, MethodArguments,
 };
 use crate::mir::lowering::sequencing::lower_operand;
 use crate::type_checker::context::{MethodInfo, TypeDefinition};
+use crate::type_checker::{named_class, ValueOrdering};
 
 #[allow(clippy::too_many_arguments)]
 fn try_lower_binary_trait_method(
@@ -78,7 +81,7 @@ pub(crate) fn try_lower_operator_trait_call(
     let Some((method_name, result)) = binary_op_trait_method(op) else {
         return Ok(None);
     };
-    let Some((owner, method)) = operator_trait_class_name(&receiver_ty.kind)
+    let Some((owner, method)) = named_class(&receiver_ty.kind)
         .and_then(|class_name| operator_method_body(ctx, class_name, method_name))
     else {
         return Ok(None);
@@ -107,19 +110,7 @@ pub(crate) fn try_lower_operator_trait_call(
 /// instantiated body the substitution is empty and this is the recorded type.
 fn binary_trait_receiver_type(ctx: &LoweringContext, lhs: &Expression) -> Option<Type> {
     let receiver = ctx.recorded_type(lhs.id)?;
-    operator_trait_class_name(&receiver.kind)
-        .is_some()
-        .then_some(receiver)
-}
-
-/// The class name whose operator-trait methods apply to values of `kind`.
-/// Returning `Option<&str>` avoids heap allocations during binary operator trait resolution.
-pub(crate) fn operator_trait_class_name(kind: &TypeKind) -> Option<&str> {
-    match kind {
-        TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME),
-        TypeKind::Custom(name, _) => Some(name.as_str()),
-        _ => None,
-    }
+    named_class(&receiver.kind).is_some().then_some(receiver)
 }
 
 /// How the operator reads the value its trait method returned.
@@ -449,7 +440,7 @@ fn lower_sequence_membership(
 /// Every membership test borrows the value it looks for, so a value built for
 /// the test (`f"k{i}" in seen`) is owned by nobody else and is released here.
 /// A named binding or a place read in place is left to its owner.
-fn release_membership_operand(
+pub(crate) fn release_membership_operand(
     ctx: &mut LoweringContext,
     op: &Operand,
     watermark: usize,
@@ -495,6 +486,69 @@ fn lower_range_membership_expr(
     Ok(Operand::Copy(d))
 }
 
+/// Lowers `lhs in rhs` on a range of `element_ty`, by the ordering its
+/// element type has: the machine's comparisons, or the `compare` its
+/// `Comparable` implementation supplies.
+fn lower_range_membership_by_ordering(
+    ctx: &mut LoweringContext,
+    lhs: &Expression,
+    rhs: &Expression,
+    element_ty: Type,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    match ctx.type_checker.ordering_of(&element_ty) {
+        Some(ValueOrdering::Machine) => {
+            lower_range_membership_expr(ctx, lhs, rhs, element_ty, expr, dest)
+        }
+        Some(ValueOrdering::Method) => {
+            let holds = lower_compared_range_membership(ctx, lhs, rhs, element_ty, &expr.span)?;
+            Ok(deliver_comparison(ctx, holds, dest, expr.span))
+        }
+        Some(ValueOrdering::Deferred) | None => Err(unordered_operand(&element_ty, expr.span)),
+    }
+}
+
+/// `lhs op rhs` for the ordering operator `op` over a left operand of
+/// `lhs_ty`, a type that orders through the `compare` its `Comparable`
+/// implementation supplies: the call to that `compare`, made the way `<`
+/// written in the source makes it, read against zero. A temp an operand was
+/// lowered into at or above `arg_watermark` is released once the call has
+/// read it. Any other type is an internal error: the range membership this
+/// serves lowers a type the machine orders through its own comparisons.
+// TODO: written `<` decides between the `compare` call and the machine
+// comparison through `try_lower_binary_trait_method`, which asks whether the
+// type names a class rather than how the type checker says it orders; both
+// should key on `ordering_of`, so the two cannot disagree about a type.
+pub(crate) fn lower_compare_call(
+    ctx: &mut LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    (lhs_op, lhs_ty): (Operand, &Type),
+    rhs_op: Operand,
+    (span, arg_watermark): (Span, usize),
+) -> Result<Operand, LoweringError> {
+    match ctx.type_checker.ordering_of(lhs_ty) {
+        Some(ValueOrdering::Method) => {
+            let operands = OperatorOperands { lhs_op, rhs_op };
+            try_lower_operator_trait_call(ctx, lhs_ty, op, operands, span, None, arg_watermark)?
+                .ok_or_else(|| unordered_operand(lhs_ty, span))
+        }
+        Some(ValueOrdering::Machine | ValueOrdering::Deferred) | None => {
+            Err(unordered_operand(lhs_ty, span))
+        }
+    }
+}
+
+/// The internal error raised when lowering is asked to call `compare` on
+/// values of `ty`, a type the type checker does not order through one.
+fn unordered_operand(ty: &Type, span: Span) -> LoweringError {
+    LoweringError::internal(
+        crate::diagnostics::DiagnosticCode::CgInternalCodegenError,
+        format!("values of `{ty}` reached lowering to be ordered, but `{ty}` has no ordering"),
+        span,
+    )
+}
+
 fn lower_in_operator(
     ctx: &mut LoweringContext,
     lhs: &Expression,
@@ -502,8 +556,8 @@ fn lower_in_operator(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    if let Some(element_ty) = numeric_range_element(ctx, rhs) {
-        return lower_range_membership_expr(ctx, lhs, rhs, element_ty, expr, dest);
+    if let Some(element_ty) = range_value_element(ctx, rhs) {
+        return lower_range_membership_by_ordering(ctx, lhs, rhs, element_ty, expr, dest);
     }
     let Some(fn_name) = runtime_contains_fn(ctx, rhs) else {
         return lower_sequence_membership(ctx, lhs, rhs, expr, dest);

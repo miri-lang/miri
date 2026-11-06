@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::statement::BindingResidency;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, ORDERING_TRAIT_NAME};
 use crate::ast::MemberVisibility;
 use crate::ast::*;
 use crate::diagnostics::repair::ConcatPart;
@@ -54,6 +54,7 @@ use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::WrittenLiterals;
+use crate::type_checker::operators::{missing_range_ordering_message, RangeMembershipRefusal};
 use crate::type_checker::type_mismatch::{MismatchExtras, TypeSides};
 use crate::type_checker::TypeChecker;
 
@@ -339,6 +340,9 @@ impl TypeChecker {
             self.record_ordering_requirement(&left_ty, context);
             self.record_ordering_requirement(&right_ty, context);
         }
+        if let Some(element) = self.range_membership_element(op, &right_ty, context) {
+            return self.infer_range_membership((&left_ty, &right_ty), &element, span, context);
+        }
 
         if let Some(message) = self.missing_ordering(&left_ty, op, &right_ty, context) {
             let help = self.ordering_help(&left_ty, left, right, op);
@@ -401,6 +405,122 @@ impl TypeChecker {
                 ast_factory::make_type(TypeKind::Error)
             }
         }
+    }
+
+    /// The type of `value in r`, on the range type `range` whose bounds are
+    /// `element`s, reporting a refusal of the test.
+    ///
+    /// The test stands for `r.start <= value` and `value < r.end`, so it asks
+    /// what those comparisons ask, and the `compare` each of them runs is a
+    /// method the program uses. A bound already refused is not judged again.
+    /// The test is a `bool` whether or not it is refused, so a refusal does
+    /// not spread to the expression around it.
+    fn infer_range_membership(
+        &mut self,
+        (value, range): (&Type, &Type),
+        element: &Type,
+        span: Span,
+        context: &Context,
+    ) -> Type {
+        let tested = ast_factory::make_type(TypeKind::Boolean);
+        if crate::ast::types::is_unresolved(&element.kind) {
+            return tested;
+        }
+        self.record_ordering_requirement(value, context);
+        self.record_ordering_requirement(element, context);
+        match self.range_membership_refusal(value, element, context) {
+            Some(refusal) => {
+                self.report_range_membership_refusal(refusal, (value, range, element), span)
+            }
+            None => {
+                self.record_operator_method_sites(element, &BinaryOp::LessThanEqual, span, context);
+                self.record_operator_method_sites(value, &BinaryOp::LessThan, span, context);
+            }
+        }
+        tested
+    }
+
+    /// Report why `value in r`, `r` of the type `range` with `element`
+    /// bounds, is refused.
+    fn report_range_membership_refusal(
+        &mut self,
+        refusal: RangeMembershipRefusal,
+        (value, range, element): (&Type, &Type, &Type),
+        span: Span,
+    ) {
+        match refusal {
+            RangeMembershipRefusal::Mismatch(message) => self.push_type_mismatch(
+                DiagnosticCode::TypTypeMismatch,
+                message,
+                span,
+                TypeSides::of(value, range),
+                format!(
+                    "`x in r` compares `x` with the bounds of `r`, so it needs a value of type \
+                     `{element}` to test against a `{range}`"
+                ),
+                MismatchExtras {
+                    repair: None,
+                    related: Vec::new(),
+                },
+            ),
+            RangeMembershipRefusal::Unordered(unordered) => {
+                let help = self.range_ordering_help(&unordered);
+                self.report_error_with_help(
+                    DiagnosticCode::TypOrderingNotSupported,
+                    missing_range_ordering_message(&unordered),
+                    span,
+                    help,
+                );
+            }
+            RangeMembershipRefusal::OffDevice => self.report_error_with_help(
+                DiagnosticCode::TarGpuIncompatibleSignature,
+                format!(
+                    "a kernel cannot test membership in a `{range}`: its bounds are not \
+                     values a kernel holds"
+                ),
+                span,
+                "inside a kernel, test numbers, booleans and GPU types, or make the test in \
+                 host code"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// The help for `x in r` refused because `unordered`, the type of `x` or
+    /// of the range's bounds, has no ordering: unwrap an optional, test a
+    /// member of a struct or a tuple, or give any other type an ordering.
+    fn range_ordering_help(&self, unordered: &Type) -> String {
+        let member = self.first_orderable_member(unordered);
+        let way_out = match (&unordered.kind, member) {
+            (TypeKind::Option(_), _) => "unwrap the optional before testing it".to_string(),
+            (TypeKind::Tuple(_), _) => "test one of its elements instead".to_string(),
+            (_, Some(member)) if self.is_struct_type(unordered) => {
+                format!("test a member that orders, such as `{member}`")
+            }
+            (_, member) => format!(
+                "implement {ORDERING_TRAIT_NAME} on '{unordered}' with `public fn compare(other \
+                 Self) int`{}",
+                member.map_or_else(String::new, |member| format!(
+                    ", or test a member that orders, such as `{member}`"
+                ))
+            ),
+        };
+        format!(
+            "`x in r` compares `r.start <= x` and `x < r.end`, and '{unordered}' has no \
+             ordering: {way_out}."
+        )
+    }
+
+    /// Whether `ty` names a struct, whose values are data with no methods of
+    /// their own.
+    fn is_struct_type(&self, ty: &Type) -> bool {
+        let TypeKind::Custom(name, _) = &ty.kind else {
+            return false;
+        };
+        matches!(
+            self.type_table.global_type_definitions.get(name.as_str()),
+            Some(crate::type_checker::context::TypeDefinition::Struct(_))
+        )
     }
 
     /// The way out of an ordering operator applied to a type that has none.

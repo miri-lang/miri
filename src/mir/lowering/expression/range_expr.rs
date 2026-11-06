@@ -140,7 +140,7 @@ fn misshapen_range_syntax(span: Span) -> LoweringError {
 
 /// Whether range syntax of `range_type` includes its end, or `None` for an
 /// iterable object written in a loop header, which builds no range.
-fn written_inclusivity(range_type: &RangeExpressionType) -> Option<bool> {
+pub(crate) fn written_inclusivity(range_type: &RangeExpressionType) -> Option<bool> {
     match range_type {
         RangeExpressionType::Exclusive => Some(false),
         RangeExpressionType::Inclusive => Some(true),

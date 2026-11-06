@@ -66,6 +66,7 @@ pub mod literal_hooks;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
+pub(crate) use operators::{named_class, ValueOrdering};
 pub(crate) mod pattern_coverage;
 mod reference_cycles;
 pub mod reference_sharing;

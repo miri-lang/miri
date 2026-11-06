@@ -1115,3 +1115,122 @@ fn main()
 ";
     assert_gpu_runs_with_output(source, "00111110");
 }
+
+/// A kernel orders booleans the way the host does, `false` before `true`.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn boolean_ordering_round_trips_through_device() {
+    let source = "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        let t = i > 1
+        var v = 0
+        if t < true: v = v + 1
+        if t >= false: v = v + 10
+        if t > false: v = v + 100
+        if t <= false: v = v + 1000
+        dst[i] = v
+    let h = dst
+    var out = \"\"
+    for i in 0..4
+        out = out + f\"{h[i]} \"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "1011 1011 110 110");
+}
+
+/// A boolean tested against a range of booleans in a kernel answers as the
+/// two comparisons it stands for do.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn boolean_range_membership_round_trips_through_device() {
+    let source = "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        let t = i > 1
+        var v = 0
+        if t in false..=true: v = v + 1
+        if t in false..true: v = v + 10
+        dst[i] = v
+    let h = dst
+    var out = \"\"
+    for i in 0..4
+        out = out + f\"{h[i]} \"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "11 11 1 1");
+}
+
+/// A generic membership test pinned to `bool` inside a kernel answers as the
+/// written one does.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn generic_boolean_range_membership_round_trips_through_device() {
+    let source = "
+use system.collections.array
+
+fn within<T>(x T, a T, b T) bool
+    return x in a..b
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        let t = i > 1
+        var v = 0
+        if within(t, false, true): v = 1
+        dst[i] = v
+    let h = dst
+    var out = \"\"
+    for i in 0..4
+        out = out + f\"{h[i]} \"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "1 1 0 0");
+}
+
+/// An integer tested against a range ending at a captured count, and a float
+/// against a range between two captured floats, answer by their bounds in a
+/// kernel.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn captured_bound_range_membership_round_trips_through_device() {
+    let source = "
+use system.collections.array
+
+fn main()
+    let n = 3
+    let a = -0.25
+    let b = 0.5
+    gpu var dst = Array<int, 6>()
+    gpu forall i in 0..6
+        let x = (i as float) * 0.25 - 0.5
+        var v = 0
+        if i in 0..n: v = v + 1
+        if x in a..=b: v = v + 10
+        dst[i] = v
+    let h = dst
+    var out = \"\"
+    for i in 0..6
+        out = out + f\"{h[i]} \"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "1 11 11 10 10 0");
+}

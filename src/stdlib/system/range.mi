@@ -8,8 +8,9 @@
 /// struct's, two ranges are equal when their fields are, and its hash is
 /// derived from the same fields, so a range can be a set element or a map key.
 /// A `for` loop iterates a range of integers from `start` up to `end`, and
-/// the `in` operator tests a number against a range of numbers: `x in r`
-/// holds when `start <= x` and `x < end`, or `x <= end` when `inclusive`.
+/// the `in` operator tests a value against a range of any type `<` orders:
+/// `x in r` holds when `start <= x` and `x < end`, or `x <= end` when
+/// `inclusive`.
 public struct Range<T>
     start T
     end T

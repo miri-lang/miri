@@ -2372,3 +2372,24 @@ fn main()
 ",
     );
 }
+
+/// A kernel orders booleans, and tests one against a range of booleans,
+/// without an ordering WGSL lacks on `bool`.
+#[test]
+fn boolean_ordering_in_a_kernel_emits_naga_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 8>()
+    gpu forall i in 0..8
+        let t = i > 3
+        var v = 0
+        if t < true: v = v + 1
+        if t >= false: v = v + 10
+        if t in false..=true: v = v + 100
+        dst[i] = v
+",
+    );
+}
