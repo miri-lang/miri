@@ -29,6 +29,11 @@
 //!   reference to the object can write it. Such a place need not start at a
 //!   binding: a field of a call's result, or of a conditional's, is one too.
 //!
+//! A call writes the operands it is handed to write when it runs, after
+//! every operand is evaluated, so such a write reaches each other operand of
+//! the same call, written before it or after it: `bump(a, a)` with
+//! `bump(xs out [int], ys [int])` holds the second `a`.
+//!
 //! What a later operand runs in a closure it builds is not followed, since
 //! a closure captures the values it reads; nor is a global a called function
 //! writes, since only what the operands themselves name is followed.
@@ -117,16 +122,18 @@ impl HeldOperands {
         checker: &TypeChecker,
     ) {
         let operands = SequenceOperand::of_sequence(sequence.expression, checker);
+        let written_by_the_call = bindings_the_call_writes(&operands);
         let mut later = Later::default();
         for (position, operand) in operands.iter().enumerate().rev() {
-            let Some(next) = operands.get(position + 1) else {
-                continue;
-            };
-            later.join(next, writes.extents.get(&address(next.value)), index);
+            if let Some(next) = operands.get(position + 1) {
+                later.join(next, writes.extents.get(&address(next.value)), index);
+            }
             let Some(path) = PlacePath::of(operand, checker) else {
                 continue;
             };
-            if later.may_write(&path, sequence.owner, index) {
+            let written_when_called =
+                (path.bindings.iter()).any(|name| written_by_the_call.contains(name));
+            if written_when_called || later.may_write(&path, sequence.owner, index) {
                 self.hold(operand.value, sequence.owner);
             }
         }
@@ -260,6 +267,18 @@ impl<'b> Later<'b> {
                 && (lies_in(index.running.get(&owner), self.effects.as_ref())
                     || lies_in(index.assigned.get(&owner), Some(&mentions)))
     }
+}
+
+/// The bindings a call writes through the operands it is handed to write.
+/// The call writes them when it runs, after every operand is evaluated, so
+/// they are written after each operand of the call, before or after them in
+/// the order written: `bump(a, a)` with `bump(xs out [int], ys [int])` must
+/// still hand `ys` the list `a` held before the call.
+fn bindings_the_call_writes<'e>(operands: &[SequenceOperand<'e>]) -> HashSet<&'e str> {
+    (operands.iter())
+        .filter(|operand| operand.is_written_by_call)
+        .filter_map(|operand| binding_name(path_root(operand.value)))
+        .collect()
 }
 
 /// Stretches `range` to start where `earlier` does, an operand evaluated
