@@ -287,13 +287,9 @@ fn main()
     );
 }
 
-/// The same write from inside one of the class's own methods. It prints the
-/// right answer and passes the MIR verifier, but leaks one allocation — and
-/// the operator spelled out, `self.s = self.s + d`, leaks exactly the same
-/// one. The leak is the in-method field store's, not the compound spelling's,
-/// so this is ignored until that is fixed rather than counted against `+=`.
+/// The same write from inside one of the class's own methods concatenates
+/// and releases the string it replaces, under the heap guard.
 #[test]
-#[ignore]
 fn string_add_assign_on_a_field_inside_a_method_concatenates() {
     assert_heap_guard_output(
         r#"

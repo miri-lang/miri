@@ -857,10 +857,6 @@ fn main()
 
 // Test f32 instantiation of generic queryable trait default
 #[test]
-#[ignore = "f32 collection elements are refused at codegen: the element stride for \
-            floats narrower than a word is unresolved, so a stored value would \
-            read back as zero. The float (f64) instantiation above covers the \
-            same trait-default dispatch."]
 fn generic_queryable_f32_trait_default_uses_concrete_width() {
     assert_runs_with_output(
         "

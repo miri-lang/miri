@@ -167,13 +167,10 @@ println(f'{a[0][0]}')
     );
 }
 
-/// Reading a float through two chained index expressions yields the element's
-/// bit pattern reinterpreted as an integer: `[[1.5]]` read as `a[0][0]` gives
-/// 1069547520.0, which is the f32 encoding of 1.5. Binding the inner list first
-/// reads the same element correctly, and the integer element type is unaffected,
-/// so the defect is in the width the chained read loads, not in the stored data.
+/// A float read through two chained index expressions loads the element at
+/// its own width, as binding the inner list first does: `[[1.5]]` read as
+/// `a[0][0]` is 1.5, not the element's bit pattern read as another type.
 #[test]
-#[ignore = "a chained index read of a float element loads the wrong width and returns the bit pattern as an integer"]
 fn test_nested_list_float_chained_read() {
     assert_runs_with_output(
         r#"
