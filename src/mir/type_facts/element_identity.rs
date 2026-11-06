@@ -101,12 +101,6 @@ pub struct EqualityThunks {
 impl TypeFacts {
     /// How a set matches two elements, or a map two keys, of `kind`, in code
     /// leaving the parameters `open` unbound: the rule `==` applies to them.
-    ///
-    /// TODO: a range gets no rule here. It has no declaration whose
-    /// synthesized `equals` and `hash` could be named, and no structure the
-    /// structural symbol encodes, so a set or map matches it by its slot word,
-    /// a pointer, and keeps equal ranges apart. It needs `equals` and `hash`
-    /// bodies synthesized from the members `==` compares.
     pub fn element_identity(&self, kind: &TypeKind, open: &HashSet<String>) -> ElementIdentity {
         let scope = LayoutScope::new(self.definitions(), open);
         if let Some(thunks) = field_wise_thunks(kind, scope) {

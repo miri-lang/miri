@@ -452,12 +452,6 @@ fn emit_named_type_equality(
     ) {
         return Ok(emit_scalar_equality(ctx, span, lhs_op, rhs_op, is_eq));
     }
-    // A range has no declaration: it is compared member by member, as the
-    // start, end and inclusiveness it is built from.
-    let range = TypeKind::Custom(name.to_string(), args.map(<[_]>::to_vec));
-    if let Some(members) = crate::ast::types::range_member_types(&range, span) {
-        return emit_fields_equality(ctx, span, &members, (lhs_op, rhs_op), is_eq);
-    }
     emit_enum_or_struct_equality(ctx, span, name, args, lhs_op, rhs_op, is_eq)
 }
 

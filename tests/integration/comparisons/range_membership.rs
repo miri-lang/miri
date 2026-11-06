@@ -111,3 +111,115 @@ fn main()
         "pick: x must be in 0..10",
     );
 }
+
+#[test]
+fn a_written_range_evaluates_the_value_and_each_bound_once_left_to_right() {
+    assert_runs_with_output(
+        r#"
+fn note(log out String, tag String, v int) int
+    log = log + tag
+    return v
+
+fn main()
+    var log = ""
+    let a = note(log, "x", 3) in note(log, "a", 3)..note(log, "b", 5)
+    let b = note(log, "x", 5) in note(log, "a", 3)..=note(log, "b", 5)
+    let c = note(log, "x", 5) in note(log, "a", 3)..note(log, "b", 5)
+    println(f"{a} {b} {c} {log}")
+"#,
+        "true true false xabxabxab",
+    );
+}
+
+#[test]
+fn a_written_range_holds_an_i8_a_float_and_a_negative_value_by_its_bounds() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let w i8 = 4
+    let lo = 2
+    let hi = 4
+    println(f"{w in lo..hi} {w in lo..=hi} {1.5 in 1.0..2.0} {-1 in -1..0}")
+"#,
+        "false true true true",
+    );
+}
+
+#[test]
+fn a_written_range_tested_in_a_cpu_forall_holds_by_its_bounds() {
+    assert_runs_with_output(
+        r#"
+use system.collections.array
+
+fn main()
+    var dst = Array<int, 8>()
+    forall i in 0..8
+        if i in 2..5: dst[i] = 1
+        if i in 6..=7: dst[i] = 2
+    var out = ""
+    for i in 0..8
+        out = out + f"{dst[i]}"
+    println(out)
+"#,
+        "00111022",
+    );
+}
+
+#[test]
+fn a_float_is_in_a_range_of_f32_exactly_when_the_comparisons_say_so() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    let lo f32 = -0.5
+    let hi f32 = 0.5
+    let inside float = 0.25
+    let past float = 0.5000000001
+    println(f"{inside in lo..=hi} {past in lo..=hi} {past >= lo and past <= hi}")
+"#,
+        "true false false",
+    );
+}
+
+#[test]
+fn a_range_value_whose_end_was_written_tests_against_the_new_end() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var r = 0..3
+    let before = 4 in r
+    r.end = 5
+    println(f"{before} {4 in r} {5 in r}")
+"#,
+        "false true false",
+    );
+}
+
+#[test]
+fn membership_refuses_a_value_the_comparisons_refuse() {
+    assert_compiler_error(
+        r#"
+fn main()
+    let s = "b"
+    println(f"{s in 1..3}")
+"#,
+        "cannot check membership of String in range of int",
+    );
+}
+
+#[test]
+fn a_float_local_is_tested_against_float_literal_bounds() {
+    assert_runs_with_output(
+        r#"
+fn main()
+    var out = ""
+    for i in 0..8
+        let x = (i as float) * 0.25 - 1.0
+        if x in -0.5..=0.5
+            out = out + "1"
+        else
+            out = out + "0"
+    println(out)
+"#,
+        "00111110",
+    );
+}

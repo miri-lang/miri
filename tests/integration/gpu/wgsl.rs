@@ -2332,3 +2332,43 @@ fn main()
     assert!(compile_to_wgsl(source).contains("u32(_"));
     assert_gpu_wgsl_valid(source);
 }
+
+/// `i in 2..5` written in a kernel compares `i` against the two bounds and
+/// builds no range value, which a kernel has no layout for.
+#[test]
+fn written_range_membership_in_a_kernel_emits_naga_valid_wgsl() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 8>()
+    gpu forall i in 0..8
+        if i in 2..5: dst[i] = 1
+        if i in 6..=7: dst[i] = 2
+";
+    assert_gpu_wgsl_valid(source);
+    let wgsl = compile_to_wgsl(source);
+    assert!(
+        !wgsl.contains("struct Range"),
+        "a kernel testing a written range must not build one:\n{wgsl}"
+    );
+}
+
+/// A float tested against a range of float literals in a kernel lowers to
+/// naga-valid WGSL, as the two comparisons it stands for do.
+#[test]
+fn float_range_membership_in_a_kernel_emits_naga_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 8>()
+    gpu forall i in 0..8
+        let x = (i as float) * 0.25 - 1.0
+        if x in -0.5..=0.5: dst[i] = 1
+",
+    );
+}

@@ -218,16 +218,31 @@ fn main()
 }
 
 #[test]
-fn a_range_value_carries_the_tuple_of_its_bounds_and_its_flag() {
+fn a_range_value_is_built_as_a_range_struct_of_three_fields() {
     let body = mir_lower_code(
         r#"
 fn main()
     let r = 2..5
 "#,
     );
+    let built: Vec<String> = body
+        .basic_blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| match &statement.kind {
+            StatementKind::Assign(_, Rvalue::Aggregate(AggregateKind::Struct(ty), operands)) => {
+                Some(format!("{} with {} fields", ty.kind, operands.len()))
+            }
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        tuple_aggregate_types(&body),
-        vec!["Tuple(int, int, bool)".to_string()],
-        "a range value is built as `(start, end, inclusive)`:\n{body}"
+        built,
+        vec!["Range<int> with 3 fields".to_string()],
+        "a range value is built as the `Range` struct `(start, end, inclusive)`:\n{body}"
+    );
+    assert!(
+        tuple_aggregate_types(&body).is_empty(),
+        "a range value builds no tuple:\n{body}"
     );
 }

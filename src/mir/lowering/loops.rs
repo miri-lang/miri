@@ -19,6 +19,7 @@ use crate::mir::{
     TerminatorKind,
 };
 
+use super::expression::range_expr::{range_fields, written_range_end_test};
 use super::{lower_expression, lower_statement, LoweringContext};
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
@@ -1012,11 +1013,8 @@ pub fn lower_for(
         let current_val = Operand::Copy(Place::new(loop_var));
 
         // Compare: i < end or i <= end
-        let bin_op = match range_type {
-            RangeExpressionType::Exclusive => BinOp::Lt,
-            RangeExpressionType::Inclusive => BinOp::Le,
-            _ => return Err(LoweringError::unsupported_range_type(*span)),
-        };
+        let bin_op = written_range_end_test(range_type)
+            .ok_or_else(|| LoweringError::unsupported_range_type(*span))?;
 
         let bool_ty = Type::new(TypeKind::Boolean, *span);
         let cond_temp = ctx.push_temp(bool_ty, *span);
@@ -1182,20 +1180,17 @@ struct RangeValueBounds {
 }
 
 /// Evaluate `range_value` into a temp the loop's scope owns, typed as the
-/// `(start, end, inclusive)` tuple a range value is built as, and read its
-/// end and inclusive flag into locals of their own.
+/// `Range<T>` it was recorded at, and read its end and inclusive flag into
+/// locals of their own, each from the field the declaration places it in.
 fn range_value_bounds(
     ctx: &mut LoweringContext,
     range_value: &Expression,
     element_ty: Type,
     span: &Span,
 ) -> Result<RangeValueBounds, LoweringError> {
-    let bool_ty = Type::new(TypeKind::Boolean, *span);
-    let parts_ty = super::expression::tuple_expr::tuple_of(
-        vec![element_ty.clone(), element_ty.clone(), bool_ty.clone()],
-        *span,
-    );
-    let parts = ctx.push_temp(parts_ty, *span);
+    let fields = range_fields(ctx, *span)?;
+    let range_ty = ctx.resolved_type(range_value);
+    let parts = ctx.push_temp(range_ty, *span);
     lower_expression(ctx, range_value, Some(Place::new(parts)))?;
     if !ctx.borrowed_temps.contains(&parts) && !ctx.is_owned_by_a_scope(parts) {
         ctx.register_scope_temp(parts);
@@ -1207,11 +1202,11 @@ fn range_value_bounds(
         })
     };
     let end = ctx.push_temp(element_ty, *span);
-    assign(ctx, end, Rvalue::Use(part(1)), span);
-    let inclusive = ctx.push_temp(bool_ty, *span);
-    assign(ctx, inclusive, Rvalue::Use(part(2)), span);
+    assign(ctx, end, Rvalue::Use(part(fields.end)), span);
+    let inclusive = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+    assign(ctx, inclusive, Rvalue::Use(part(fields.inclusive)), span);
     Ok(RangeValueBounds {
-        start: part(0),
+        start: part(fields.start),
         end,
         inclusive,
     })
@@ -1266,26 +1261,58 @@ pub(crate) fn numeric_range_element(
         .then_some(element)
 }
 
+/// The types a range membership test reads: the range's element type, and
+/// the type the value and the bounds are compared at, the type holding both
+/// that `>=` and `<` compare them at.
+pub(crate) struct MembershipTypes {
+    pub element: Type,
+    pub compared: Type,
+}
+
 /// Lower `value in range_value` for a range of numbers into a boolean local.
 ///
-/// A value is in a range when the loop `for v in range_value` visits it: it is
-/// at or above the start, and the loop's own test, below the end or at an
-/// included end, holds for it. `value` is already lowered, before the range,
-/// and already of the range's element type.
+/// A value is in a range when it is at or above the start, and below the end
+/// or at an included end: the two comparisons it stands for, made at the type
+/// they would be made at. `value` is already lowered, before the range, and
+/// already of the compared type. A range written as syntax (`x in a..b`) is
+/// never built: its bounds are evaluated in order and compared against
+/// directly, the same on every target.
 pub(crate) fn lower_range_membership(
     ctx: &mut LoweringContext,
     value: Operand,
     range_value: &Expression,
-    element_ty: Type,
+    types: MembershipTypes,
     span: &Span,
 ) -> Result<crate::mir::Local, LoweringError> {
-    let value_local = ctx.push_temp(element_ty.clone(), *span);
+    let MembershipTypes { element, compared } = types;
+    let value_local = ctx.push_temp(compared.clone(), *span);
     assign(ctx, value_local, Rvalue::Use(value), span);
-    let bounds = range_value_bounds(ctx, range_value, element_ty.clone(), span)?;
-    let start = ctx.push_temp(element_ty, *span);
-    assign(ctx, start, Rvalue::Use(bounds.start.clone()), span);
-    let from_start = compare_locals(ctx, BinOp::Ge, value_local, start, span);
-    let before_end = range_value_condition(ctx, value_local, &bounds, span);
+    let (from_start, before_end) = match written_range_bounds(range_value) {
+        Some((start, end, below_end)) => {
+            let start = lower_range_bound(ctx, start, &compared)?;
+            let end = lower_range_bound(ctx, end, &compared)?;
+            let from_start = compare_locals(ctx, BinOp::Ge, value_local, start, span);
+            (
+                from_start,
+                compare_locals(ctx, below_end, value_local, end, span),
+            )
+        }
+        None => {
+            let bounds = range_value_bounds(ctx, range_value, element.clone(), span)?;
+            let start = converted_local(ctx, bounds.start, (&element, &compared), span);
+            let end = Operand::Copy(Place::new(bounds.end));
+            let bounds = RangeValueBounds {
+                start: Operand::Copy(Place::new(start)),
+                end: converted_local(ctx, end, (&element, &compared), span),
+                inclusive: bounds.inclusive,
+            };
+            let from_start = compare_locals(ctx, BinOp::Ge, value_local, start, span);
+            (
+                from_start,
+                range_value_condition(ctx, value_local, &bounds, span),
+            )
+        }
+    };
     Ok(compare_locals(
         ctx,
         BinOp::BitAnd,
@@ -1293,6 +1320,43 @@ pub(crate) fn lower_range_membership(
         before_end,
         span,
     ))
+}
+
+/// `op`, of the type `from`, read into a new local of the type `to`.
+fn converted_local(
+    ctx: &mut LoweringContext,
+    op: Operand,
+    (from, to): (&Type, &Type),
+    span: &Span,
+) -> crate::mir::Local {
+    let (op, _) = super::dispatch::conform_operand_to_slot(ctx, op, from.clone(), to, *span);
+    let local = ctx.push_temp(to.clone(), *span);
+    assign(ctx, local, Rvalue::Use(op), span);
+    local
+}
+
+/// The start, the end and the comparison against the end of `range_value`
+/// when it is range syntax with both bounds written, which membership tests
+/// against directly; `None` for a range value.
+fn written_range_bounds(range_value: &Expression) -> Option<(&Expression, &Expression, BinOp)> {
+    let ExpressionKind::Range(start, Some(end), kind) = &range_value.node else {
+        return None;
+    };
+    Some((start, end, written_range_end_test(kind)?))
+}
+
+/// A bound of range syntax read, the moment it is evaluated, into a local of
+/// the type membership compares at. Testing membership in range syntax
+/// compares against its bounds directly, so it builds no range value: a
+/// kernel has no layout for one.
+fn lower_range_bound(
+    ctx: &mut LoweringContext,
+    bound: &Expression,
+    compared: &Type,
+) -> Result<crate::mir::Local, LoweringError> {
+    let op = super::sequencing::lower_operand(ctx, bound)?;
+    let op_ty = ctx.resolved_type(bound);
+    Ok(converted_local(ctx, op, (&op_ty, compared), &bound.span))
 }
 
 /// Append `local = rvalue` to the current block.

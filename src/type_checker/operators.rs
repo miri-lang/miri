@@ -11,13 +11,12 @@ use super::TypeChecker;
 use crate::ast::implicit_methods::operator_method_name;
 use crate::ast::type_arguments::{argument_type, TypeArgKind, TypeArgument};
 use crate::ast::types::{
-    common_numeric_type, is_range_type_name, range_member_types, scalar_width, vec_dim,
-    BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME,
-    ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
+    common_numeric_type, is_range_type_name, scalar_width, vec_dim, BuiltinCollectionKind, Type,
+    TypeKind, ATOMIC_TYPE_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_TRAIT_NAME,
+    STRING_TYPE_NAME,
 };
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
-use crate::error::syntax::Span;
 
 /// Bound on how deeply structural equality may nest before the compiler
 /// refuses. The comparison is expanded inline, so an unbounded chain would
@@ -492,16 +491,8 @@ impl TypeChecker {
                     ))
                 }
             }
-            TypeKind::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
-                let range_type = self.resolve_type_argument(&args[0], context);
-                if self.are_compatible(&range_type, left, context) {
-                    Ok(bool_type())
-                } else {
-                    Err(format!(
-                        "Type mismatch: cannot check membership of {} in range of {}",
-                        left, range_type
-                    ))
-                }
+            TypeKind::Custom(name, Some(args)) if is_range_type_name(name) && args.len() == 1 => {
+                self.check_range_membership(left, &args[0], context)
             }
             TypeKind::String => {
                 if matches!(left.kind, TypeKind::String) {
@@ -518,6 +509,25 @@ impl TypeChecker {
                 right
             )),
         }
+    }
+
+    /// Checks `x in r` on a range of `element`. It stands for `r.start <= x`
+    /// and `x < r.end`, so it accepts exactly the operands those comparisons
+    /// accept.
+    fn check_range_membership(
+        &mut self,
+        left: &Type,
+        element: &TypeArgument,
+        context: &Context,
+    ) -> Result<Type, String> {
+        let range_type = self.resolve_type_argument(element, context);
+        self.check_ordering_op(left, &BinaryOp::GreaterThanEqual, &range_type, context)
+            .map_err(|_| {
+                format!(
+                    "Type mismatch: cannot check membership of {} in range of {}",
+                    left, range_type
+                )
+            })
     }
 
     /// Checks unary operation operand types.
@@ -769,8 +779,8 @@ impl TypeChecker {
     }
 
     /// Whether `==` on a value of `kind` whose type declares no `equals`
-    /// compares it member by member: an enum, a struct, a tuple, an optional,
-    /// a result, or a range, which is built from its members. A tuple
+    /// compares it member by member: an enum, a struct, a tuple, an optional
+    /// or a result. A tuple
     /// compares each member at the member's own type, so a counted enum is
     /// compared by its payload and a class through its `equals`.
     ///
@@ -780,7 +790,6 @@ impl TypeChecker {
     pub fn compares_member_by_member(&self, kind: &TypeKind) -> bool {
         match kind {
             TypeKind::Custom(name, _) if name == ATOMIC_TYPE_NAME => false,
-            TypeKind::Custom(name, _) if is_range_type_name(name) => true,
             TypeKind::Custom(name, _) => matches!(
                 self.type_table.global_type_definitions.get(name),
                 Some(TypeDefinition::Enum(_) | TypeDefinition::Struct(_))
@@ -1083,10 +1092,7 @@ impl TypeChecker {
         if !self.compares_member_by_member(kind) || visiting.iter().any(|seen| seen == name) {
             return false;
         }
-        let members = range_member_types(kind, Span::default())
-            .map(Vec::from)
-            .or_else(|| self.derived_equality_members(name, args));
-        let Some(members) = members else {
+        let Some(members) = self.derived_equality_members(name, args) else {
             return false;
         };
         visiting.push(name.to_string());

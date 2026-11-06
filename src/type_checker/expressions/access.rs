@@ -108,7 +108,7 @@ impl TypeChecker {
 
         // Check for Range index (Slicing)
         if let TypeKind::Custom(name, args) = &index_type.kind {
-            if name == "Range" {
+            if crate::ast::types::is_range_type_name(name) {
                 // Ensure range is of integer type
                 if let Some(args) = args {
                     if args.len() == 1 {

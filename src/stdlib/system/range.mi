@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// The value range syntax builds: `a..b` is `Range(start: a, end: b,
+/// inclusive: false)` and `a..=b` is `Range(start: a, end: b, inclusive: true)`.
+///
+/// A range is an ordinary struct. Its fields are read and written like any
+/// struct's, two ranges are equal when their fields are, and its hash is
+/// derived from the same fields, so a range can be a set element or a map key.
+/// A `for` loop iterates a range of integers from `start` up to `end`, and
+/// the `in` operator tests a number against a range of numbers: `x in r`
+/// holds when `start <= x` and `x < end`, or `x <= end` when `inclusive`.
+public struct Range<T>
+    start T
+    end T
+    inclusive bool

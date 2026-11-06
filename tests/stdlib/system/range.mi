@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.range`: range syntax builds the `Range` struct, whose
+// fields read back the bounds it was written with, and which compares equal
+// to one constructed from the same fields.
+
+use system.testing
+
+fn span(a int, b int) Range<int>
+    a..b
+
+fn test_syntax_fills_the_fields()
+    let r = 2..=5
+    assert_eq(r.start, 2)
+    assert_eq(r.end, 5)
+    assert(r.inclusive, "an inclusive range says so")
+    assert(not (2..5).inclusive, "an exclusive range says so")
+
+fn test_constructed_range_equals_syntax()
+    let built = Range(start: 0, end: 3, inclusive: false)
+    assert(built == 0..3, "fields equal, ranges equal")
+    assert(built == span(0, 3), "a returned range compares by its fields")
+    assert(built != 0..=3, "inclusiveness is compared")
+
+fn test_a_written_field_changes_the_iteration()
+    var r = 0..3
+    r.inclusive = true
+    var total = 0
+    for i in r
+        total = total + i
+    assert_eq(total, 6)
+
+fn main()
+    test_syntax_fills_the_fields()
+    test_constructed_range_equals_syntax()
+    test_a_written_field_changes_the_iteration()
+    println("system.range: OK")

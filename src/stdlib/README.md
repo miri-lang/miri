@@ -14,6 +14,7 @@ The Standard Library provides the built-in functionality available to all Miri p
 -   **`system.process`**: Process control (e.g., `exit(code)`).
 -   **`system.string`**: The core `String` class, extending the runtime representation with methods for concatenation, comparison, and formatting.
 -   **`system.result`**: The `Result<T, E>` enum returned by every fallible stdlib API.
+-   **`system.range`**: The `Range<T>` struct range syntax (`a..b`, `a..=b`) builds, with the public fields `start`, `end` and `inclusive`.
 -   **Collections (Planned)**: Modules for `List`, `Map`, `Set`, `Tuple` etc., implemented using runtime intrinsics.
 -   **Math (Planned)**: Standard mathematical constants and functions (`sin`, `cos`, `abs`, etc.).
 
@@ -25,9 +26,9 @@ The Standard Library provides the built-in functionality available to all Miri p
 
 ## The Implicit Prelude
 
-Four files under `system/` decide what a program gets without writing a `use`. Each lists only imports, so the compiler hardcodes no stdlib names.
+Four files under `system/` decide what a program gets without writing a `use`. Each lists only imports. The compiler names no stdlib module; it knows by name only the language items syntax binds to — the `Range` range syntax builds and the `Option` that `T?` stands for.
 
--   **`prelude.mi`**: re-exported by name and **reserved** — the rest of the stdlib is written against these types (`system.io`, `system.string`), so a program cannot declare its own type of the same name.
+-   **`prelude.mi`**: re-exported by name and **reserved** — the rest of the stdlib is written against these types (`system.io`, `system.string`), and range syntax builds the `Range` that `system.range` declares, so a program cannot declare its own type of the same name.
 -   **`prelude_shadowable.mi`**: re-exported by name but **skipped** for any module whose types the program declares itself (`system.result`). A program that declares its own `Result` keeps it, and importing a module that needs the stdlib one is reported as a conflict at the import.
 -   **`prelude_internal.mi`**: loaded for definitions only, so collection literals resolve their methods while naming `Array`/`List`/`Map`/`Set` still needs an explicit `use system.collections.*`.
 -   **`prelude_regex.mi`**: loaded for definitions only, and only for a file that writes a regex literal (`re"..."`) or a regex match pattern. `system.text` declares the class that syntax is built through and tested with, found by its `@regex_literal` and `@regex_match` methods, so the compiler names no regex class. Naming `Regex` still needs `use system.text`. A program without regex syntax never loads it, so its own `Result` stays declarable; one that writes regex syntax and declares its own `Result` is told of the conflict.

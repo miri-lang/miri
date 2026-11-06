@@ -1048,3 +1048,70 @@ fn main()
 // statements in GPU kernels currently hit a SwitchInt limitation in the WGSL structurizer.
 // The demo test (in tests/integration/gpu/demos.rs) will serve as the acceptance criterion
 // for rule correctness once it is created and value-verified on Metal.
+
+/// `x in a..b` written in a kernel compares `x` against each bound, at every
+/// integer width a kernel holds and at the edges of the `i32` range, and
+/// builds no range value.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn written_range_membership_round_trips_through_device() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let lo = 2
+    let hi = 5
+    let ulo u32 = 1
+    let uhi u32 = 3
+    gpu var dst = Array<int, 8>()
+    gpu forall i in 0..8
+        let k i32 = i as i32
+        let u u32 = i as u32
+        var v = 0
+        if k in lo..hi: v = v + 1
+        if u in ulo..=uhi: v = v + 10
+        if i - 4 in -2..2: v = v + 100
+        if i in 0..=2147483647: v = v + 1000
+        let z i32 = 0
+        let m i32 = 2147483647
+        if k in z..=m: v = v + 10000
+        if k in lo..=-1: v = v + 100000
+        dst[i] = v
+    let h = dst
+    var out = \"\"
+    for i in 0..8
+        out = out + f\"{h[i]} \"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "11000 11010 11111 11111 11101 11100 11000 11000");
+}
+
+/// A float tested against a range of float literals in a kernel is accepted
+/// wherever the two comparisons it stands for are, and answers as they do.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn float_range_membership_round_trips_through_device() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 8>()
+    gpu forall i in 0..8
+        let x = (i as float) * 0.25 - 1.0
+        if x in -0.5..=0.5: dst[i] = 1
+    let h = dst
+    var out = \"\"
+    for i in 0..8
+        out = out + f\"{h[i]}\"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "00111110");
+}

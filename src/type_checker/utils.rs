@@ -17,12 +17,11 @@ use crate::ast::factory::make_type;
 use crate::ast::gpu_wire::buffer_element_wire;
 use crate::ast::type_arguments::{rewritten, value_argument, TypeArgKind, TypeArgument, ValueArg};
 use crate::ast::types::{
-    is_range_type_name, is_vector_component, range_type_kind, scalar_width, vec_dim, vec_type_dim,
+    is_range_type_name, is_vector_component, scalar_width, vec_dim, vec_type_dim,
     BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, ATOMIC_TYPE_NAME,
     DIM3_TYPE_NAME, FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, ITERABLE_TRAIT_NAME,
     KERNEL_TYPE_NAME, LINEAR_TYPE_NAME, LIST_LOWERCASE_ALIAS, OPTION_TYPE_NAME,
-    RANGE_LOWERCASE_ALIAS, SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES,
-    WARP_CONTEXT_TYPE_NAME,
+    SET_LOWERCASE_ALIAS, TUPLE_TYPE_NAME, VECTOR_COMPONENT_TYPE_NAMES, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -2481,7 +2480,7 @@ impl TypeChecker {
         );
     }
 
-    /// Resolves built-in type aliases like Map<K,V>, List<T>, Set<T>, Range<T>.
+    /// Resolves built-in type aliases like Map<K,V>, List<T>, Set<T>.
     fn resolve_builtin_type_alias(
         &mut self,
         name: &str,
@@ -2509,9 +2508,6 @@ impl TypeChecker {
         match name {
             n if n == OPTION_TYPE_NAME => self.resolve_alias_option(args, context),
             n if n == LINEAR_TYPE_NAME => self.resolve_alias_linear(args, context),
-            n if is_range_type_name(n) || n == RANGE_LOWERCASE_ALIAS => {
-                self.resolve_alias_range(args, context)
-            }
             _ => None,
         }
     }
@@ -2670,23 +2666,6 @@ impl TypeChecker {
             context,
         );
         self.record_element_matching(ty, span, context);
-    }
-
-    fn resolve_alias_range(
-        &mut self,
-        args: &Option<Vec<TypeArgument>>,
-        context: &Context,
-    ) -> Option<Type> {
-        match args {
-            Some(args) if args.len() == 1 => {
-                let t = self.resolve_type_argument(&args[0], context);
-                Some(make_type(range_type_kind(self.create_type_argument(t))))
-            }
-            None => Some(make_type(range_type_kind(
-                self.create_type_argument(make_type(TypeKind::Int)),
-            ))),
-            _ => None,
-        }
     }
 
     fn resolve_alias_option(

@@ -176,6 +176,24 @@ forever
     print("Infinite")
 ```
 
+### Ranges
+
+`a..b` covers the values from `a` up to, but not including, `b`; `a..=b` includes `b`. Range syntax builds a `Range<T>`, a struct the prelude declares with three public fields, in this order: `start T`, `end T` and `inclusive bool`. The name is reserved for it, so a program cannot declare a type of its own called `Range`, and written as a type it names its element: `Range<int>` (a bare `Range` is refused for its missing type argument, and there is no lowercase `range`).
+
+A range is an ordinary struct. Its fields are read like any struct's (`r.start`, `r.end`, `r.inclusive`) and written through a `var` binding; it can be constructed by its fields, and it is compared and hashed by them, so `Range(start: 0, end: 3, inclusive: false) == 0..3` is `true` and a range can be a set element or a map key.
+
+```miri
+let r = 2..=5
+println(f"{r.start} {r.end} {r.inclusive}")   // 2 5 true
+
+var q = 0..3
+q.end = 5
+for i in q
+    print(i)                                  // 01234
+```
+
+`for i in r` runs from `start` while `i` is below `end`, or at it when `inclusive` holds. `x in r` on a range of numbers holds when `r.start <= x` and `x < r.end` (`x <= r.end` when `r.inclusive`), and accepts exactly the operands those comparisons accept. Written with range syntax on the right, `x in a..b` is `a <= x and x < b` (`x <= b` for `a..=b`): `x`, `a` and `b` are each evaluated once, left to right, and no range value is built, so the test is the same inside a `gpu forall` kernel. A range value itself has no device layout: binding one inside a kernel, passing one to a `gpu fn`, making one `gpu`-resident or iterating one with `gpu forall` is refused.
+
 ### Inline Control Flow
 
 ```miri

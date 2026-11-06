@@ -99,6 +99,7 @@ mi_suite_test!(test_system_ops, "ops.mi");
 mi_suite_test!(test_system_time, "time.mi");
 mi_suite_test!(test_system_testing, "testing.mi");
 mi_suite_test!(test_system_result, "result.mi");
+mi_suite_test!(test_system_range, "range.mi");
 mi_suite_test!(test_system_collections_array, "collections/array.mi");
 mi_suite_test!(test_system_collections_list, "collections/list.mi");
 mi_suite_test!(test_system_collections_set, "collections/set.mi");
@@ -154,6 +155,7 @@ fn every_mi_file_is_wired() {
         "time.mi",
         "testing.mi",
         "result.mi",
+        "range.mi",
         "collections/array.mi",
         "collections/list.mi",
         "collections/set.mi",

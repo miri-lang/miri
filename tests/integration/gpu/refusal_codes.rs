@@ -232,3 +232,69 @@ fn main()
     );
     assert!(result.success, "{}", result.output());
 }
+
+/// A range value has no device layout: binding one inside a kernel, taking one
+/// as a `gpu fn` parameter, placing one on the device or iterating one with
+/// `forall` is refused under the GPU code that names the restriction.
+#[test]
+fn a_range_bound_inside_a_kernel_is_refused() {
+    refusal_of(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        let r = 0..4
+        dst[i] = i
+",
+        "MER_TAR_008",
+    );
+}
+
+#[test]
+fn a_range_parameter_of_a_gpu_fn_is_refused() {
+    refusal_of(
+        "
+use system.gpu
+
+gpu fn total(r Range<int>)
+    let x = 1
+
+fn main()
+    let a = 1
+",
+        "MER_TAR_008",
+    );
+}
+
+#[test]
+fn a_device_resident_range_is_refused() {
+    refusal_of(
+        "
+use system.gpu
+
+fn main()
+    gpu let r = 0..10
+",
+        "MER_TAR_007",
+    );
+}
+
+#[test]
+fn a_forall_over_a_range_value_is_refused() {
+    refusal_of(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let r = 0..4
+    gpu var dst = Array<int, 4>()
+    gpu forall i in r
+        dst[i] = i
+",
+        "MER_TAR_005",
+    );
+}

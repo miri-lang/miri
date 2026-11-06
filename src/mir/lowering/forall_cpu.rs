@@ -13,7 +13,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{BinOp, Discriminant, Local, Operand, Place, Rvalue, Terminator, TerminatorKind};
+use crate::mir::{Discriminant, Local, Operand, Place, Rvalue, Terminator, TerminatorKind};
 
 use super::context::LoweringContext;
 use super::expression::lower_expression;
@@ -313,11 +313,8 @@ fn emit_loop_header(
 ) -> Result<(), LoweringError> {
     let current_val = Operand::Copy(Place::new(loop_var));
 
-    let bin_op = match range_type {
-        RangeExpressionType::Exclusive => BinOp::Lt,
-        RangeExpressionType::Inclusive => BinOp::Le,
-        _ => return Err(LoweringError::unsupported_range_type(*span)),
-    };
+    let bin_op = super::expression::range_expr::written_range_end_test(range_type)
+        .ok_or_else(|| LoweringError::unsupported_range_type(*span))?;
 
     let bool_ty = Type::new(TypeKind::Boolean, *span);
     let cond_temp = ctx.push_temp(bool_ty, *span);

@@ -19,7 +19,7 @@ use crate::runtime_fns::rt;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{conform_lookup_operand, conform_operand_to_slot};
 use crate::mir::lowering::helpers::resolve_type;
-use crate::mir::lowering::loops::{lower_range_membership, numeric_range_element};
+use crate::mir::lowering::loops::{lower_range_membership, numeric_range_element, MembershipTypes};
 use crate::mir::lowering::method_dispatch::{
     lower_method_call_with, operator_method_callee, resolve_inherited_method, MethodArguments,
 };
@@ -463,8 +463,9 @@ fn release_membership_operand(
 }
 
 /// Lowers `lhs in rhs` on a range of numbers. The left side is evaluated
-/// first and converted to the range's element type, which the type checker
-/// required to hold it; the range then answers by its bounds.
+/// first and converted to the type it is compared with the bounds at — the
+/// type holding both it and the range's element, as `>=` and `<` compare
+/// them; the range then answers by its bounds.
 fn lower_range_membership_expr(
     ctx: &mut LoweringContext,
     lhs: &Expression,
@@ -475,8 +476,14 @@ fn lower_range_membership_expr(
 ) -> Result<Operand, LoweringError> {
     let lhs_op = lower_operand(ctx, lhs)?;
     let lhs_ty = ctx.resolved_type(lhs);
-    let (value, _) = conform_operand_to_slot(ctx, lhs_op, lhs_ty, &element_ty, expr.span);
-    let holds = lower_range_membership(ctx, value, rhs, element_ty, &expr.span)?;
+    let compared = crate::ast::types::common_numeric_type(&lhs_ty.kind, &element_ty.kind)
+        .map_or_else(|| element_ty.clone(), |kind| Type::new(kind, expr.span));
+    let (value, _) = conform_operand_to_slot(ctx, lhs_op, lhs_ty, &compared, expr.span);
+    let types = MembershipTypes {
+        element: element_ty,
+        compared,
+    };
+    let holds = lower_range_membership(ctx, value, rhs, types, &expr.span)?;
     let held = Operand::Copy(Place::new(holds));
     let Some(d) = dest else {
         return Ok(held);

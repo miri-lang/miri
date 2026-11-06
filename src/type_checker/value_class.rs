@@ -29,8 +29,8 @@
 use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
-    is_range_type_name, vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME,
-    AUTO_COPY_MAX_SIZE, EQUALS_METHOD_NAME, OPTION_TYPE_NAME,
+    vec_type_dim, BuiltinCollectionKind, Type, TypeKind, ATOMIC_TYPE_NAME, AUTO_COPY_MAX_SIZE,
+    EQUALS_METHOD_NAME, OPTION_TYPE_NAME,
 };
 use crate::type_checker::context::{
     EnumDefinition, GenericDefinition, StructDefinition, TypeDefinition,
@@ -463,9 +463,6 @@ impl<'a> Classifier<'a> {
         if let Some(component) = atomic_component(name, args.as_deref(), names) {
             return self.classify_argument(component);
         }
-        if let Some(element) = range_element(name, args.as_deref(), names) {
-            return self.classify_range(element);
-        }
         if BuiltinCollectionKind::from_name(name).is_some() {
             return collection_verdict(args.is_some());
         }
@@ -613,23 +610,6 @@ impl<'a> Classifier<'a> {
         }
     }
 
-    /// A range over `element`: built as its start, its end and whether the
-    /// end is included, a tuple of those three.
-    fn classify_range(&mut self, element: Argument<'_, 'a>) -> Verdict {
-        let mut layout = LayoutBuilder::new(LayoutShape::Record);
-        for _ in 0..2 {
-            let Some(repr) = self.member_repr(element) else {
-                return Verdict::Pointer;
-            };
-            layout.push(repr);
-        }
-        layout.push(FieldRepr::Scalar(ScalarKind::Boolean));
-        match layout.finish() {
-            Some(layout) => Verdict::Class(ValueClass::Bitwise(layout)),
-            None => Verdict::Pointer,
-        }
-    }
-
     /// An optional of `payload`: a tag followed by the payload when the
     /// payload is a scalar, a value or an open parameter's word; the payload's
     /// own pointer when it is one; and a boxed layer otherwise — over an
@@ -769,22 +749,6 @@ fn option_payload<'n, 'a>(
         return None;
     };
     Argument::written(payload, names)
-}
-
-/// The element `T` of the compiler-known range type `Range<T>`, whose value is
-/// built as the tuple of its start, its end and whether the end is included.
-fn range_element<'n, 'a>(
-    name: &str,
-    args: Option<&'a [TypeArgument]>,
-    names: Names<'n, 'a>,
-) -> Option<Argument<'n, 'a>> {
-    if !is_range_type_name(name) {
-        return None;
-    }
-    let [element] = args? else {
-        return None;
-    };
-    Argument::written(element, names)
 }
 
 /// The scalar `kind` is, or `None` for every kind that is not one.

@@ -162,19 +162,26 @@ pub fn is_written_self(expr: &crate::ast::expression::Expression) -> bool {
 /// string literals across the compiler.
 pub const LINEAR_TYPE_NAME: &str = "Linear";
 
-/// Canonical name for the built-in `Range<T>` sequence type.
+/// The name binding range syntax to the struct it builds.
 ///
-/// `TypeKind::Custom(RANGE_TYPE_NAME, [elem_type])` is created by
-/// `resolve_builtin_type_alias` when dispatching on the name "range"
-/// (lowercase alias) or "Range". Centralized so type dispatch shares one
-/// spelling instead of scattering `"Range"` string literals.
+/// `a..b` and `a..=b` build a `Range<T>`, the generic struct the reserved
+/// prelude declares (`system.range`). The compiler knows the struct by this
+/// name, the way it knows `Option` by `OPTION_TYPE_NAME`. The positions and
+/// types of its fields come from the declaration; their names are fixed by
+/// the constants below, which range syntax fills.
 pub const RANGE_TYPE_NAME: &str = "Range";
 
-/// Whether `name` is the canonical spelling of the range type.
+/// The field of `Range<T>` holding the first value a range covers.
+pub const RANGE_START_FIELD: &str = "start";
+/// The field of `Range<T>` holding the value a range stops at.
+pub const RANGE_END_FIELD: &str = "end";
+/// The field of `Range<T>` saying whether the range covers its end.
+pub const RANGE_INCLUSIVE_FIELD: &str = "inclusive";
+
+/// Whether `name` is the name range syntax binds to.
 ///
-/// `Range<T>` is a language type, not a library one: it is the type of the
-/// `start..end` syntax and has no `.mi` declaration. Every stage asks these
-/// helpers rather than comparing names, so the spelling lives here alone.
+/// Every stage asks these helpers rather than comparing names, so the
+/// spelling lives here alone.
 pub fn is_range_type_name(name: &str) -> bool {
     name == RANGE_TYPE_NAME
 }
@@ -185,16 +192,6 @@ pub fn range_element_expression(kind: &TypeKind) -> Option<&TypeArgument> {
         return None;
     };
     (name == RANGE_TYPE_NAME).then(|| args.first())?
-}
-
-/// The types of the members a `Range<T>` value is built from, in order: its
-/// start, its end, and whether the end is included. `None` for every kind
-/// that is not a range. Comparing and hashing a range read its members
-/// through this, so they read the parts its construction writes.
-pub fn range_member_types(kind: &TypeKind, span: Span) -> Option<[Type; 3]> {
-    let element =
-        crate::ast::type_arguments::argument_type_marked(range_element_expression(kind)?)?;
-    Some([element.clone(), element, Type::new(TypeKind::Boolean, span)])
 }
 
 /// The range type `Range<T>` over the element type expression `element`.
@@ -208,7 +205,6 @@ pub fn range_type_kind(element: TypeArgument) -> TypeKind {
 /// the type checker.
 pub const LIST_LOWERCASE_ALIAS: &str = "list";
 pub const SET_LOWERCASE_ALIAS: &str = "set";
-pub const RANGE_LOWERCASE_ALIAS: &str = "range";
 
 /// Canonical class name for the compiler-builtin `Dim3` struct used in GPU
 /// kernel context fields.

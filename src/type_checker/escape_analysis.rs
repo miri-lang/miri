@@ -357,7 +357,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.classify(e, false, flow);
             }
             ExpressionKind::Range(start, end, _) => {
-                self.classify_range(start, end, flow);
+                self.classify_range(start, end, aliases_return, flow);
             }
             ExpressionKind::FormattedString(parts, _) => {
                 self.classify_formatted_string(parts, flow);
@@ -529,15 +529,18 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         self.classify(r, false, flow);
     }
 
+    /// A range's bounds are fields of the `Range` it builds, so they are part
+    /// of the returned value exactly as a tuple's members are.
     fn classify_range(
         &self,
         start: &Expression,
         end: &Option<Box<Expression>>,
+        aliases_return: bool,
         flow: &mut ReturnFlow,
     ) {
-        self.classify(start, false, flow);
+        self.classify(start, aliases_return, flow);
         if let Some(e) = end {
-            self.classify(e, false, flow);
+            self.classify(e, aliases_return, flow);
         }
     }
 
@@ -1880,6 +1883,14 @@ fn find_hop_in_return_expr(
         }
         ExpressionKind::EnumValue(_, vals) => {
             if vals.iter().any(|e| expr_contains_param(e, param_name)) {
+                Some(EscapeNextHop::ReturnAggregate)
+            } else {
+                None
+            }
+        }
+        ExpressionKind::Range(start, end, _) => {
+            let mut bounds = std::iter::once(start.as_ref()).chain(end.as_deref());
+            if bounds.any(|e| expr_contains_param(e, param_name)) {
                 Some(EscapeNextHop::ReturnAggregate)
             } else {
                 None

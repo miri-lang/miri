@@ -43,7 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{range_type_kind, Type};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
@@ -86,6 +86,6 @@ impl TypeChecker {
         }
 
         let type_expr = self.create_type_argument(start_type);
-        make_type(TypeKind::Custom("Range".to_string(), Some(vec![type_expr])))
+        make_type(range_type_kind(type_expr))
     }
 }

@@ -18,6 +18,10 @@
 /// their definitions are loaded from `prelude_internal.mi` (also at startup)
 /// with their names kept private, so a literal resolves while naming the type
 /// still requires an explicit `use system.collections.*`.
+///
+/// `system.range` declares the `Range` range syntax (`a..b`, `a..=b`)
+/// builds, so the name is reserved for it.
+use system.range
 use system.io
 use system.ops
 use system.string

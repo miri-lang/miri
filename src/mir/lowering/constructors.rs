@@ -110,18 +110,34 @@ pub fn lower_struct_constructor(
         ctx.body.local_decls[dest_local.0].ty = struct_ty.clone();
     }
 
+    Ok(store_struct_aggregate(
+        ctx,
+        destination,
+        (struct_ty, operands),
+        arg_watermark,
+        *span,
+    ))
+}
+
+/// Stores `operands` into `target` as a struct of `struct_ty`, then releases
+/// each temp built since `watermark` to hold a field value: the aggregate has
+/// taken its own reference to it. Returns the stored struct.
+pub(crate) fn store_struct_aggregate(
+    ctx: &mut LoweringContext,
+    target: Place,
+    (struct_ty, operands): (Type, Vec<Operand>),
+    watermark: usize,
+    span: Span,
+) -> Operand {
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
-            destination.clone(),
+            target.clone(),
             Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands.clone()),
         ),
-        span: *span,
+        span,
     });
-
-    let result_op = Operand::Copy(destination);
-    release_field_temps(ctx, &operands, dest_local, arg_watermark, *span);
-
-    Ok(result_op)
+    release_field_temps(ctx, &operands, target.local, watermark, span);
+    Operand::Copy(target)
 }
 
 /// A constructor argument brought to the type of the field it initializes.
@@ -134,7 +150,7 @@ pub fn lower_struct_constructor(
 /// built in, when this
 /// constructor created it, is then released, or it keeps a reference nothing
 /// ever gives back.
-fn coerce_to_field(
+pub(crate) fn coerce_to_field(
     ctx: &mut LoweringContext,
     (op, op_ty): Argument,
     field_ty: &Type,
@@ -163,10 +179,10 @@ fn coerce_to_field(
 /// argument read in place off another instance's field is a projected place,
 /// whose operand type is the instance's own, so an optional field handed on
 /// would look like a value that still needs wrapping in `Some`.
-type Argument = (Operand, Type);
+pub(crate) type Argument = (Operand, Type);
 
 /// Lowers `value` into an [`Argument`].
-fn lower_argument(
+pub(crate) fn lower_argument(
     ctx: &mut LoweringContext,
     value: &Expression,
 ) -> Result<Argument, LoweringError> {
