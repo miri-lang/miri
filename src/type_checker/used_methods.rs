@@ -35,7 +35,9 @@ use crate::ast::implicit_methods::{
     EQUALS_METHOD_NAME, MEMBERSHIP_METHOD_NAME,
 };
 use crate::ast::type_arguments::TypeArgument;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME};
+use crate::ast::types::{
+    BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME, STEPPING_METHOD_NAMES,
+};
 use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
@@ -159,6 +161,34 @@ impl TypeChecker {
             span,
             context,
         );
+    }
+
+    /// Record the methods a `for` loop over a range of `element` values runs
+    /// on each pass: `compare` to know when it has reached the end,
+    /// `successor` for the next value and, before the first pass, `steppable`
+    /// of both bounds. A class's own, or a default its trait supplies, is
+    /// compiled for the class; a bounded parameter's are the methods of
+    /// whichever class each site binds it to.
+    pub(crate) fn record_stepping_method_sites(
+        &mut self,
+        element: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        let instance = self.class_instance(element);
+        for method in STEPPING_METHOD_NAMES {
+            self.record_parameter_method_requirement(element, method, context);
+            if let Some((class_name, substitution)) = &instance {
+                self.record_receiver_method_sites(
+                    class_name,
+                    method,
+                    substitution,
+                    element,
+                    span,
+                    context,
+                );
+            }
+        }
     }
 
     /// Record the `equals` and `hash` a set or map built from, or asked about,

@@ -58,6 +58,14 @@ const TRAPS: &[Trap] = &[
         code: "MER_RT_017",
         source: SHARED_RECEIVER,
     },
+    Trap {
+        code: "MER_RT_019",
+        source: "fn main()\n    var lo = \"a\"\n    lo = lo + \"b\"\n    for c in lo..\"e\"\n        println(c)\n",
+    },
+    Trap {
+        code: "MER_RT_019",
+        source: "fn main()\n    var s = \"a\"\n    s = s + \"b\"\n    println(s.successor())\n",
+    },
 ];
 
 /// A program handing a writing method a receiver something else still holds.

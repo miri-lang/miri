@@ -519,12 +519,83 @@ pub extern "C" fn miri_rt_string_from_code_point(code: isize) -> *mut MiriString
     }
 }
 
+/// The one-character string holding the Unicode scalar after the one `ptr`
+/// holds, skipping the surrogates U+D800 to U+DFFF.
+///
+/// This is `String.successor()`, the step of a `for` loop over a range of
+/// one-character strings. A string that is not exactly one scalar, or that
+/// holds U+10FFFF, has no successor, and asking for one traps with MER_RT_019.
+///
+/// # Safety
+/// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_next_scalar(ptr: *const MiriString) -> *mut MiriString {
+    guard::guard_check(ptr as *mut u8);
+    let text = if ptr.is_null() { "" } else { (*ptr).as_str() };
+    let mut scalars = text.chars();
+    let (Some(scalar), None) = (scalars.next(), scalars.next()) else {
+        crate::trap::trap(
+            crate::trap::code::NOT_STEPPABLE,
+            &format!(
+                "\"{}\" has no successor: only a one-character string steps",
+                shown_start(text)
+            ),
+        );
+    };
+    match next_scalar(scalar) {
+        Some(next) => new_string(next.encode_utf8(&mut [0u8; 4])),
+        None => crate::trap::trap(
+            crate::trap::code::NOT_STEPPABLE,
+            "U+10FFFF has no successor: it is the last Unicode code point",
+        ),
+    }
+}
+
+/// The most characters of a string a trap message shows.
+const SHOWN_CHARACTERS: usize = 32;
+
+/// `text` as a trap message shows it: whole when it is short, otherwise its
+/// first [`SHOWN_CHARACTERS`] characters followed by an ellipsis.
+fn shown_start(text: &str) -> std::borrow::Cow<'_, str> {
+    match text.char_indices().nth(SHOWN_CHARACTERS) {
+        Some((cut, _)) => std::borrow::Cow::Owned(format!("{}…", &text[..cut])),
+        None => std::borrow::Cow::Borrowed(text),
+    }
+}
+
+/// The Unicode scalar after `scalar`, skipping the surrogate gap, or `None`
+/// after the last one.
+fn next_scalar(scalar: char) -> Option<char> {
+    match scalar {
+        '\u{D7FF}' => Some('\u{E000}'),
+        char::MAX => None,
+        other => char::from_u32(u32::from(other) + 1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::constructors::miri_rt_string_free;
     use super::super::into_raw_ptr;
     use super::*;
     use crate::rc::balance_guard;
+
+    #[test]
+    fn the_next_scalar_skips_the_surrogate_gap_and_ends_at_the_last() {
+        assert_eq!(next_scalar('a'), Some('b'));
+        assert_eq!(next_scalar('\u{D7FF}'), Some('\u{E000}'));
+        assert_eq!(next_scalar('\u{FFFF}'), Some('\u{10000}'));
+        assert_eq!(next_scalar(char::MAX), None);
+    }
+
+    #[test]
+    fn a_long_string_is_shown_by_its_start() {
+        assert_eq!(shown_start("abc"), "abc");
+        let long = "é".repeat(40);
+        assert_eq!(shown_start(&long), format!("{}…", "é".repeat(32)));
+        assert_eq!(shown_start(&"x".repeat(32)), "x".repeat(32));
+    }
 
     #[test]
     fn repeat_with_huge_count_returns_empty() {

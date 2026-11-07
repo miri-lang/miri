@@ -20,7 +20,9 @@ use crate::mir::{
 };
 
 use super::expression::range_expr::{range_fields, written_inclusivity, written_range_end_test};
+use super::stepped_range::{lower_for_over_stepped_range, lower_for_over_stepped_range_value};
 use super::{lower_expression, lower_statement, LoweringContext};
+use crate::type_checker::ValueStepping;
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     let (target, scope_depth) = match ctx.loop_stack.last() {
@@ -967,115 +969,141 @@ pub fn lower_for(
         return lower_for_over_iterable(ctx, span, decls, iterable, body);
     }
 
-    if let ExpressionKind::Range(start, end_opt, range_type) = &iterable.node {
-        // Range iteration: for i in start..end
-        let end = match end_opt.as_ref() {
-            Some(e) => e,
-            None => {
-                return Err(LoweringError::unsupported_expression(
-                    "Range iteration requires an upper bound".to_string(),
-                    *span,
-                ));
-            }
-        };
-
-        ctx.push_scope(); // For the loop variable
-
-        // 1. Initialize loop variable
-        // Assumed single declaration for now
-        let decl = &decls[0];
-        let loop_var_ty = ctx
-            .recorded_type(start.id)
-            .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
-        // Provide the name so push_local can decide to strip it or not based on is_release
-        let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), *span);
-        let start_op = super::sequencing::lower_operand(ctx, start)?;
-
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(loop_var), Rvalue::Use(start_op)),
-            span: *span,
-        });
-        let end_local = range_end_once(ctx, end, span)?;
-
-        let header_bb = ctx.new_basic_block();
-        let body_bb = ctx.new_basic_block();
-        let increment_bb = ctx.new_basic_block();
-        let exit_bb = ctx.new_basic_block();
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: header_bb },
-            *span,
-        ));
-
-        // 2. Header: Check condition
-        ctx.set_current_block(header_bb);
-        let end_op = Operand::Copy(Place::new(end_local));
-        let current_val = Operand::Copy(Place::new(loop_var));
-
-        // Compare: i < end or i <= end
-        let bin_op = written_range_end_test(range_type)
-            .ok_or_else(|| LoweringError::unsupported_range_type(*span))?;
-
-        let bool_ty = Type::new(TypeKind::Boolean, *span);
-        let cond_temp = ctx.push_temp(bool_ty, *span);
-
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(
-                Place::new(cond_temp),
-                Rvalue::BinaryOp(bin_op, Box::new(current_val), Box::new(end_op)),
-            ),
-            span: *span,
-        });
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::new(cond_temp)),
-                targets: vec![(Discriminant::bool_true(), body_bb)],
-                otherwise: exit_bb,
-            },
-            *span,
-        ));
-
-        // 3. Body
-        ctx.enter_loop(exit_bb, increment_bb); // Continue goes to increment
-        ctx.set_current_block(body_bb);
-        lower_statement(ctx, body)?;
-
-        if ctx.body.basic_blocks[ctx.current_block.0]
-            .terminator
-            .is_none()
-        {
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::Goto {
-                    target: increment_bb,
-                },
-                *span,
-            ));
-        }
-        ctx.exit_loop();
-
-        // 4. Increment
-        ctx.set_current_block(increment_bb);
-        emit_range_step(
-            ctx,
-            RangeStep {
-                loop_var,
-                loop_var_ty,
-                inclusive_end: (*range_type == RangeExpressionType::Inclusive).then_some(end_local),
-                header_bb,
-                exit_bb,
-            },
-            span,
-        );
-
-        ctx.set_current_block(exit_bb);
-        ctx.pop_scope(*span);
-    } else {
+    let ExpressionKind::Range(start, end_opt, range_type) = &iterable.node else {
         return Err(LoweringError::unsupported_expression(
             "For loop only supports Range or List iterables".to_string(),
             *span,
         ));
+    };
+    let Some(end) = end_opt.as_ref() else {
+        return Err(LoweringError::unsupported_expression(
+            "Range iteration requires an upper bound".to_string(),
+            *span,
+        ));
+    };
+    let element_ty = ctx.recorded_type(start.id).ok_or_else(|| {
+        LoweringError::internal(
+            crate::diagnostics::DiagnosticCode::CgInternalCodegenError,
+            "a range in a `for` header reached lowering with no recorded element type".to_string(),
+            *span,
+        )
+    })?;
+    let range = WrittenRange {
+        start,
+        end,
+        kind: range_type,
+    };
+    match ctx.type_checker.range_step(&element_ty) {
+        Ok(ValueStepping::Machine) => {
+            lower_for_over_written_range(ctx, span, &decls[0], range, element_ty, body)
+        }
+        Ok(ValueStepping::Method) => {
+            lower_for_over_stepped_range(ctx, span, &decls[0], range, element_ty, body)
+        }
+        Ok(ValueStepping::Deferred) | Err(_) => Err(unsteppable_element(&element_ty, *span)),
     }
+}
+
+/// The blocks one pass of a range loop runs between: the body, the step that
+/// follows it, where `continue` also goes, and the exit `break` takes.
+pub(super) struct PassBlocks {
+    pub body: crate::mir::BasicBlock,
+    pub step: crate::mir::BasicBlock,
+    pub exit: crate::mir::BasicBlock,
+}
+
+/// Lower `body` as one pass of a range loop: it starts at `blocks.body`,
+/// `break` leaves to `blocks.exit`, and `continue` and the end of the pass go
+/// to `blocks.step`.
+pub(super) fn lower_range_pass(
+    ctx: &mut LoweringContext,
+    body: &Statement,
+    blocks: &PassBlocks,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    ctx.enter_loop(blocks.exit, blocks.step);
+    ctx.set_current_block(blocks.body);
+    lower_statement(ctx, body)?;
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        goto(ctx, blocks.step, span);
+    }
+    ctx.exit_loop();
+    Ok(())
+}
+
+/// A range written in a `for` loop's header: its two bounds and whether it
+/// includes its end.
+pub(super) struct WrittenRange<'a> {
+    pub start: &'a Expression,
+    pub end: &'a Expression,
+    pub kind: &'a RangeExpressionType,
+}
+
+/// The internal error raised when lowering is asked to step through a range of
+/// `element` values, which the type checker refuses to step.
+fn unsteppable_element(element: &Type, span: Span) -> LoweringError {
+    LoweringError::internal(
+        crate::diagnostics::DiagnosticCode::CgInternalCodegenError,
+        format!("a range of `{element}` reached lowering to be stepped, but it cannot be stepped"),
+        span,
+    )
+}
+
+/// Lower `for i in start..end` over integers, which the machine steps by
+/// adding one.
+fn lower_for_over_written_range(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decl: &VariableDeclaration,
+    range: WrittenRange,
+    loop_var_ty: Type,
+    body: &Statement,
+) -> Result<(), LoweringError> {
+    ctx.push_scope();
+    let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), *span);
+    let start_op = super::sequencing::lower_operand(ctx, range.start)?;
+    assign(ctx, loop_var, Rvalue::Use(start_op), span);
+    let end_local = range_end_once(ctx, range.end, span)?;
+
+    let header_bb = ctx.new_basic_block();
+    let blocks = PassBlocks {
+        body: ctx.new_basic_block(),
+        step: ctx.new_basic_block(),
+        exit: ctx.new_basic_block(),
+    };
+    goto(ctx, header_bb, span);
+
+    // The header runs a pass while `i < end`, or `i <= end` when the end is
+    // included.
+    ctx.set_current_block(header_bb);
+    let bin_op = written_range_end_test(range.kind)
+        .ok_or_else(|| LoweringError::unsupported_range_type(*span))?;
+    let keep_going = compare_locals(ctx, bin_op, loop_var, end_local, span);
+    switch_on(
+        ctx,
+        Operand::Copy(Place::new(keep_going)),
+        (blocks.body, blocks.exit),
+        span,
+    );
+
+    // `continue` goes to the step.
+    lower_range_pass(ctx, body, &blocks, span)?;
+
+    ctx.set_current_block(blocks.step);
+    let inclusive_end = (*range.kind == RangeExpressionType::Inclusive).then_some(end_local);
+    let step = RangeStep {
+        loop_var,
+        loop_var_ty,
+        inclusive_end,
+        header_bb,
+        exit_bb: blocks.exit,
+    };
+    emit_range_step(ctx, step, span);
+    ctx.set_current_block(blocks.exit);
+    ctx.pop_scope(*span);
     Ok(())
 }
 
@@ -1108,13 +1136,37 @@ pub(crate) fn range_value_element(ctx: &LoweringContext, iterable: &Expression) 
     Some(ctx.resolved_argument_type(element))
 }
 
-/// Lower `for x in r` over a range value `r`.
+/// Lower `for x in r` over a range value `r`, stepping as its element type
+/// steps: the machine adds one to an integer, and any other `Steppable` type
+/// gives its own `successor`.
+fn lower_for_over_range_value(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decls: &[VariableDeclaration],
+    range_value: &Expression,
+    element_ty: Type,
+    body: &Statement,
+) -> Result<(), LoweringError> {
+    match ctx.type_checker.range_step(&element_ty) {
+        Ok(ValueStepping::Machine) => {
+            lower_for_over_integer_range_value(ctx, span, decls, range_value, element_ty, body)
+        }
+        Ok(ValueStepping::Method) => {
+            let decl = &decls[0];
+            lower_for_over_stepped_range_value(ctx, span, decl, range_value, element_ty, body)
+        }
+        Ok(ValueStepping::Deferred) | Err(_) => Err(unsteppable_element(&element_ty, *span)),
+    }
+}
+
+/// Lower `for i in r` over a range value `r` of integers, which the machine
+/// steps by adding one.
 ///
 /// A range value holds its start, its end and whether the end is included, so
 /// the loop reads all three from it once and runs from the start while the
 /// variable is below the end, or at it when the end is included. Each pass
 /// leaves at the end before stepping, as a range written in the header does.
-fn lower_for_over_range_value(
+fn lower_for_over_integer_range_value(
     ctx: &mut LoweringContext,
     span: &Span,
     decls: &[VariableDeclaration],
@@ -1128,9 +1180,11 @@ fn lower_for_over_range_value(
     assign(ctx, loop_var, Rvalue::Use(bounds.start.clone()), span);
 
     let header_bb = ctx.new_basic_block();
-    let body_bb = ctx.new_basic_block();
-    let increment_bb = ctx.new_basic_block();
-    let exit_bb = ctx.new_basic_block();
+    let blocks = PassBlocks {
+        body: ctx.new_basic_block(),
+        step: ctx.new_basic_block(),
+        exit: ctx.new_basic_block(),
+    };
     goto(ctx, header_bb, span);
 
     ctx.set_current_block(header_bb);
@@ -1138,24 +1192,15 @@ fn lower_for_over_range_value(
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
             discr: Operand::Copy(Place::new(keep_going)),
-            targets: vec![(Discriminant::bool_true(), body_bb)],
-            otherwise: exit_bb,
+            targets: vec![(Discriminant::bool_true(), blocks.body)],
+            otherwise: blocks.exit,
         },
         *span,
     ));
 
-    ctx.enter_loop(exit_bb, increment_bb);
-    ctx.set_current_block(body_bb);
-    lower_statement(ctx, body)?;
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        goto(ctx, increment_bb, span);
-    }
-    ctx.exit_loop();
+    lower_range_pass(ctx, body, &blocks, span)?;
 
-    ctx.set_current_block(increment_bb);
+    ctx.set_current_block(blocks.step);
     let step = RangeStep {
         loop_var,
         loop_var_ty: element_ty,
@@ -1163,10 +1208,10 @@ fn lower_for_over_range_value(
         // at the end is right for both kinds.
         inclusive_end: Some(bounds.end),
         header_bb,
-        exit_bb,
+        exit_bb: blocks.exit,
     };
     emit_range_step(ctx, step, span);
-    ctx.set_current_block(exit_bb);
+    ctx.set_current_block(blocks.exit);
     ctx.pop_scope(*span);
     Ok(())
 }
@@ -1202,16 +1247,16 @@ fn range_value_bounds(
 
 /// The three fields of a range value, each read in place from the temp the
 /// value was evaluated into.
-struct RangeValueParts {
-    start: Operand,
-    end: Operand,
-    inclusive: Operand,
+pub(super) struct RangeValueParts {
+    pub start: Operand,
+    pub end: Operand,
+    pub inclusive: Operand,
 }
 
 /// Evaluate `range_value` into a temp the enclosing scope owns, typed as the
 /// `Range<T>` it was recorded at, and name its fields in the places the
 /// declaration puts them.
-fn range_value_parts(
+pub(super) fn range_value_parts(
     ctx: &mut LoweringContext,
     range_value: &Expression,
     span: &Span,
@@ -1401,7 +1446,7 @@ struct ComparedBounds {
 }
 
 /// How a membership test compares the value with the end of the range.
-enum EndTest {
+pub(super) enum EndTest {
     /// A written range says whether it includes its end.
     Written(bool),
     /// A range value holds whether it does in this boolean local.
@@ -1508,7 +1553,7 @@ fn hold(ctx: &mut LoweringContext, test: &MembershipTest, answer: Operand) {
 
 /// End the current block by going to `when_true` when `discr` holds and to
 /// `otherwise` when it does not.
-fn switch_on(
+pub(super) fn switch_on(
     ctx: &mut LoweringContext,
     discr: Operand,
     (when_true, otherwise): (crate::mir::BasicBlock, crate::mir::BasicBlock),
@@ -1558,7 +1603,12 @@ fn lower_range_bound(
 }
 
 /// Append `local = rvalue` to the current block.
-fn assign(ctx: &mut LoweringContext, local: crate::mir::Local, rvalue: Rvalue, span: &Span) {
+pub(super) fn assign(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    rvalue: Rvalue,
+    span: &Span,
+) {
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(Place::new(local), rvalue),
         span: *span,
@@ -1566,7 +1616,7 @@ fn assign(ctx: &mut LoweringContext, local: crate::mir::Local, rvalue: Rvalue, s
 }
 
 /// End the current block with a jump to `target`.
-fn goto(ctx: &mut LoweringContext, target: crate::mir::BasicBlock, span: &Span) {
+pub(super) fn goto(ctx: &mut LoweringContext, target: crate::mir::BasicBlock, span: &Span) {
     ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
 }
 

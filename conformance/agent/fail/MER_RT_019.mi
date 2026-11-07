@@ -1,0 +1,10 @@
+// expect: MER_RT_019
+// command: run
+// summary: Triggers MER_RT_019: a range of strings starts at a computed bound of two characters.
+use system.io
+
+fn main()
+    var start = "a"
+    start = start + "b"
+    for c in start.."e"
+        println(c)

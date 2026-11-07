@@ -482,6 +482,21 @@ pub mod ffi {
         );
     }
 
+    /// Reports, as MER_RT_019, a bound of a range a `for` loop steps through
+    /// whose `steppable()` answered `false`, and ends the process.
+    ///
+    /// Called from compiled Miri code before the loop's first pass, once both
+    /// bounds are evaluated, so the body never runs from a bound it cannot
+    /// step from.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_range_bound_not_steppable_panic() {
+        trap(
+            code::NOT_STEPPABLE,
+            "a range bound cannot be stepped: its steppable() is false",
+        );
+    }
+
     /// Reports an integer remainder-by-zero as MER_RT_002 and ends the process.
     ///
     /// Called from compiled Miri code in place of a Cranelift `trapz`

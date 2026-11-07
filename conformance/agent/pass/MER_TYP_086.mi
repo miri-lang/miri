@@ -1,0 +1,10 @@
+// summary: Accepted counterpart of MER_TYP_086: the loop steps through integers and scales them.
+// expect-stdout: 0.5
+use system.io
+
+fn main()
+    var total = 0.0
+    for i in 0..2
+        let x = (i as float) * 0.5
+        total = total + x
+    println(f"{total}")

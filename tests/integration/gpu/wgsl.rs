@@ -2393,3 +2393,21 @@ fn main()
 ",
     );
 }
+
+/// An integer's `successor()` in a kernel is the checked `+ 1` the host
+/// computes, and its `steppable()` is `true`.
+#[test]
+fn integer_successor_in_a_kernel_emits_naga_valid_wgsl() {
+    assert_gpu_wgsl_valid(
+        "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 8>()
+    gpu forall i in 0..8
+        var v = i.successor()
+        if i.steppable(): v = v + 10
+        dst[i] = v
+",
+    );
+}

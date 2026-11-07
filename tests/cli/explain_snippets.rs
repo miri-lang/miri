@@ -144,6 +144,7 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_083",
     "MER_TYP_084",
     "MER_TYP_085",
+    "MER_TYP_086",
 ];
 
 /// Codes whose `Before` example is verified through `miri run`.
@@ -169,6 +170,7 @@ const VERIFIED_BY_RUN: &[&str] = &[
     "MER_RT_015",
     "MER_RT_016",
     "MER_RT_017",
+    "MER_RT_019",
 ];
 
 /// Codes whose `Before` example is verified through `miri run` on a machine
@@ -840,6 +842,7 @@ const NO_HELP_EMITTED: &[&str] = &[
     "MER_RT_016",
     "MER_RT_017",
     "MER_RT_018",
+    "MER_RT_019",
     "MER_TAR_001",
     "MER_TAR_002",
     "MER_TAR_004",

@@ -345,6 +345,109 @@ pub(super) fn emit_static_method_call(
     Ok(Some(op.clone()))
 }
 
+/// A call the compiler makes on a value already held in an operand, rather
+/// than one written in the source: the receiver's type, the method's name,
+/// and the operands the call passes, the receiver first.
+pub(crate) struct HeldReceiverCall<'a> {
+    pub receiver_ty: &'a Type,
+    pub method_name: &'a str,
+    pub args: Vec<Operand>,
+}
+
+/// Emit `call` into `destination`, dispatched the way a written call on a
+/// value of its receiver type is: through the vtable when the class has one,
+/// so a subclass's override answers, and to the body a written call names
+/// otherwise. The arguments are borrowed, as a written call's are.
+pub(crate) fn emit_held_receiver_method_call(
+    ctx: &mut LoweringContext,
+    call: HeldReceiverCall,
+    destination: &Place,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let HeldReceiverCall {
+        receiver_ty,
+        method_name,
+        mut args,
+    } = call;
+    let unresolved = || held_receiver_method_missing(receiver_ty, method_name, span);
+    let class_name = crate::type_checker::named_class(&receiver_ty.kind).ok_or_else(unresolved)?;
+    let (owner, method) =
+        super::expression::binary_expr::operator_method_body(ctx, class_name, method_name)
+            .ok_or_else(unresolved)?;
+    let arg_types: Vec<Type> = method
+        .params
+        .iter()
+        .map(|(_, declared)| super::substitute_self_type(declared, receiver_ty))
+        .collect();
+    let written_count = args.len().saturating_sub(1);
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        args.push(Operand::Copy(Place::new(alloc_local)));
+    }
+    let arg_watermark = ctx.body.local_decls.len();
+    let lowered = LoweredMethodCall {
+        args,
+        written_count,
+        arg_watermark,
+    };
+    let result = Operand::Copy(destination.clone());
+    if let Some(slot) = dispatch_slot(ctx, class_name, method_name) {
+        emit_virtual_method_call(
+            ctx,
+            slot,
+            lowered,
+            &method,
+            &arg_types,
+            destination,
+            &result,
+            None,
+            arg_watermark,
+            span,
+        )?;
+        return Ok(());
+    }
+    let (symbol, _) = operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
+    emit_static_method_call(
+        ctx,
+        symbol,
+        lowered,
+        &method,
+        destination,
+        &result,
+        None,
+        arg_watermark,
+        span,
+    )?;
+    Ok(())
+}
+
+/// The vtable slot a call of `method_name` on a `class_name` receiver goes
+/// through, or `None` when the call names one body directly.
+fn dispatch_slot(ctx: &LoweringContext, class_name: &str, method_name: &str) -> Option<usize> {
+    if !dispatches_virtually(ctx, class_name) {
+        return None;
+    }
+    vtable_slot_index(
+        &ctx.vtable_layout(),
+        class_name,
+        method_name,
+        ctx.type_checker.type_definitions(),
+    )
+}
+
+/// The internal error raised when the compiler is asked to call a method the
+/// receiver's type does not have.
+fn held_receiver_method_missing(
+    receiver_ty: &Type,
+    method_name: &str,
+    span: Span,
+) -> LoweringError {
+    LoweringError::internal(
+        crate::diagnostics::DiagnosticCode::CgInternalCodegenError,
+        format!("a call of `{method_name}` on `{receiver_ty}` reached lowering, which has no such method"),
+        span,
+    )
+}
+
 /// Resolve the receiver type override for inherited methods in abstract classes.
 pub(super) fn resolve_receiver_override(
     ctx: &LoweringContext,
@@ -1280,9 +1383,12 @@ fn lower_method_receiver(
 /// class, or overridden below the receiver — is the slot lookup's to say.
 /// `super` calls always dispatch statically.
 fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_name: &str) -> bool {
-    if matches!(&obj.node, ExpressionKind::Super) {
-        return false;
-    }
+    !matches!(&obj.node, ExpressionKind::Super) && dispatches_virtually(ctx, class_name)
+}
+
+/// Whether a call on a receiver of type `class_name` goes through its
+/// vtable: the receiver is a trait, or a class some subclass may override.
+fn dispatches_virtually(ctx: &LoweringContext, class_name: &str) -> bool {
     let defs = &ctx.type_checker.type_definitions();
     let is_trait = matches!(defs.get(class_name), Some(TypeDefinition::Trait(_)));
     is_trait || class_needs_vtable(class_name, defs)

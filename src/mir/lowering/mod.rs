@@ -38,6 +38,7 @@ pub mod requests;
 mod runtime_writes;
 pub(crate) mod sequencing;
 pub mod statement;
+mod stepped_range;
 pub mod variable;
 pub mod vtable_demand;
 mod written_parameters;
@@ -1516,26 +1517,52 @@ fn emit_guard_fail_branch(
         ),
         span,
     });
-    let unreachable_bb = ctx.new_basic_block();
+    emit_diverging_intrinsic_and_seal(
+        ctx,
+        &crate::mir::compiler_intrinsics::GUARD_FAILED_PANIC,
+        vec![Operand::Copy(Place::new(message))],
+        span,
+    );
+    ctx.set_current_block(continue_bb);
+}
+
+/// Call `intrinsic`, which never returns, with `args`, and continue in a new
+/// block that follows the call, which is returned and made current. The call
+/// writes no value; a caller that still reads one after it binds a default.
+pub(crate) fn emit_diverging_intrinsic(
+    ctx: &mut LoweringContext,
+    intrinsic: &crate::mir::compiler_intrinsics::Intrinsic,
+    args: Vec<Operand>,
+    span: crate::error::syntax::Span,
+) -> crate::mir::BasicBlock {
     let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
+    let after = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
-            func: Operand::runtime(
-                crate::mir::compiler_intrinsics::GUARD_FAILED_PANIC.callee(),
-                span,
-            ),
-            args: vec![Operand::Copy(Place::new(message))],
+            func: Operand::runtime(intrinsic.callee(), span),
+            args,
             arg_modes: Vec::new(),
             arg_handles: Vec::new(),
             flags: crate::mir::CallFlags::default(),
             destination: Place::new(void_temp),
-            target: Some(unreachable_bb),
+            target: Some(after),
         },
         span,
     ));
-    ctx.set_current_block(unreachable_bb);
+    ctx.set_current_block(after);
+    after
+}
+
+/// Call `intrinsic`, which never returns, with `args`, and end the block that
+/// follows the call as unreachable.
+pub(crate) fn emit_diverging_intrinsic_and_seal(
+    ctx: &mut LoweringContext,
+    intrinsic: &crate::mir::compiler_intrinsics::Intrinsic,
+    args: Vec<Operand>,
+    span: crate::error::syntax::Span,
+) {
+    emit_diverging_intrinsic(ctx, intrinsic, args, span);
     ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, span));
-    ctx.set_current_block(continue_bb);
 }
 
 /// Finalize the lowering context: pop root scope, ensure termination, and validate.

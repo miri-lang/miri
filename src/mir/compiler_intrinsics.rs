@@ -139,6 +139,8 @@ pub static ASSERT_NE_FAIL: Intrinsic = flagged(rt::ASSERT_NE_FAIL, &[W, W, W, S,
 pub static METHOD_NOT_CHECKED_PANIC: Intrinsic =
     flagged(rt::METHOD_NOT_CHECKED_PANIC, &[], DIVERGES);
 pub static GUARD_FAILED_PANIC: Intrinsic = flagged(rt::GUARD_FAILED_PANIC, &[W], DIVERGES);
+pub static RANGE_BOUND_NOT_STEPPABLE_PANIC: Intrinsic =
+    flagged(rt::RANGE_BOUND_NOT_STEPPABLE_PANIC, &[], DIVERGES);
 
 impl Intrinsic {
     /// The C name the runtime library exports the entry point under.
@@ -203,6 +205,7 @@ const INTRINSICS: &[&Intrinsic] = &[
     &ASSERT_NE_FAIL,
     &METHOD_NOT_CHECKED_PANIC,
     &GUARD_FAILED_PANIC,
+    &RANGE_BOUND_NOT_STEPPABLE_PANIC,
 ];
 
 /// The copy-on-write entry point of the built-in collection `kind`.

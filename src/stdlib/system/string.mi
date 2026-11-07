@@ -8,7 +8,7 @@ use system.memory
 ///
 /// Strings in Miri are immutable sequences of Unicode characters.
 /// All operations that modify a string return a new string instance.
-public class String implements Equatable, Hashable, Comparable, Addable, Multiplicable, Iterable<String>, Cloneable
+public class String implements Equatable, Hashable, Comparable, Steppable, Addable, Multiplicable, Iterable<String>, Cloneable
 
     // Intrinsic function declarations
     // These map to miri_rt_* functions in the Rust runtime.
@@ -74,6 +74,8 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     @reads("s, chars")
     runtime "core" fn miri_rt_string_index_of_any(s String, chars String, start int) int
     runtime "core" fn miri_rt_string_from_code_point(code int) String
+    @reads("s")
+    runtime "core" fn miri_rt_string_next_scalar(s String) String
 
     // Constructors
 
@@ -195,6 +197,28 @@ public class String implements Equatable, Hashable, Comparable, Addable, Multipl
     ///     "apple".compare("Apple") → 1
     public fn compare(other String) int
         return miri_rt_string_compare(self, other)
+
+    /// The one-character string holding the Unicode code point after this
+    /// one's, skipping the surrogates U+D800 to U+DFFF, which no string holds.
+    ///
+    /// This is how `for c in "a"..="e"` steps. A string that is not exactly one
+    /// character, or that holds U+10FFFF, the last code point, has no
+    /// successor, and asking for one stops the program (MER_RT_019).
+    ///
+    /// Example:
+    ///     "a".successor() → "b"
+    ///     "é".successor() → "ê"
+    public fn successor() String
+        return miri_rt_string_next_scalar(self)
+
+    /// Whether this string can start or end a range a `for` loop steps
+    /// through: it holds exactly one character.
+    ///
+    /// Example:
+    ///     "a".steppable() → true
+    ///     "ab".steppable() → false
+    public fn steppable() bool
+        return self.length() == 1
 
     // Operators
 

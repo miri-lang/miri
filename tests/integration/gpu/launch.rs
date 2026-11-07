@@ -1234,3 +1234,29 @@ fn main()
 ";
     assert_gpu_runs_with_output(source, "1 11 11 10 10 0");
 }
+
+/// An integer's `successor()` in a kernel gives the value one above, as on
+/// the host.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn integer_successor_round_trips_through_device() {
+    let source = "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        var v = i.successor()
+        if i.steppable(): v = v + 10
+        dst[i] = v
+    let h = dst
+    var out = \"\"
+    for i in 0..4
+        out = out + f\"{h[i]} \"
+    println(out)
+";
+    assert_gpu_runs_with_output(source, "11 12 13 14");
+}

@@ -6,6 +6,7 @@
 /// These traits define the protocols for operator overloading:
 /// - `Equatable`: enables `==` and `!=` operators
 /// - `Comparable`: enables `<`, `<=`, `>` and `>=` operators
+/// - `Steppable`: enables `for x in a..b` over a range of the type's values
 /// - `Addable`: enables `+` operator (concatenation, combination, etc.)
 
 /// Enables equality comparison (`==` and `!=`) for types that implement it.
@@ -67,6 +68,36 @@ public fn hash_combine(seed int, value int) int
 ///             return self.grams - other.grams
 public trait Comparable
     public fn compare(other Self) int
+
+/// Enables `for x in a..b` and `for x in a..=b` over a range of the type's
+/// values.
+///
+/// The loop starts at `a` and asks `successor` for each next value. It runs
+/// while the value sorts before the end, by the `compare` the type's
+/// `Comparable` implementation supplies, and an inclusive range leaves once it
+/// has run at the end, so no successor of the end is ever asked for. Before
+/// the first pass the loop asks `steppable` of both bounds; a bound for which
+/// it is false stops the program (MER_RT_019). A type whose every value can
+/// start or end a range keeps the default, which is `true`.
+///
+/// The integers meet this trait without declaring it, and `String` implements
+/// it for one-character strings, which step by Unicode code point.
+///
+/// Example:
+///     class Day implements Steppable
+///         number int
+///         public fn compare(other Self) int
+///             return self.number - other.number
+///         public fn successor() Self
+///             return Day(self.number + 1)
+///
+///     for day in Day(1)..=Day(7)
+///         println(f"{day.number}")
+public trait Steppable extends Comparable
+    public fn successor() Self
+
+    public fn steppable() bool
+        return true
 
 /// Enables the `+` operator for types that implement it.
 ///

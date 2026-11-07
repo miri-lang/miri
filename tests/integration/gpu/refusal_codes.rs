@@ -365,3 +365,45 @@ fn main()
         "the refusal must not spread to the condition around it:\n{output}"
     );
 }
+
+/// A kernel steps through a range of integers only: a float has no next
+/// value, so a loop over a float range inside a kernel is refused as one on
+/// the host is.
+#[test]
+fn a_loop_over_a_float_range_inside_a_kernel_is_refused() {
+    let output = refusal_of(
+        "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<float, 4>()
+    gpu forall i in 0..4
+        var total = 0.0
+        for x in 0.5..2.0
+            total = total + x
+        dst[i] = total
+",
+        "MER_TYP_086",
+    );
+    assert_mentions(&output, &["for i in 0..n"]);
+}
+
+/// `bool` has no successor on the device either.
+#[test]
+fn a_loop_over_a_bool_range_inside_a_kernel_is_refused() {
+    let output = refusal_of(
+        "
+use system.collections.array
+
+fn main()
+    gpu var dst = Array<int, 4>()
+    gpu forall i in 0..4
+        var n = 0
+        for b in false..true
+            n = n + 1
+        dst[i] = n
+",
+        "MER_TYP_086",
+    );
+    assert_mentions(&output, &["[false, true]"]);
+}

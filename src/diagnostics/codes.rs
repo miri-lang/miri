@@ -500,7 +500,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (85 codes: 001-085)
+    // TYP — Type checker (86 codes: 001-086)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1096,6 +1096,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "TYP",
+    "086",
+    TypRangeNotSteppable,
+    "Range Cannot Be Stepped",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // OWN — Ownership and resource management (5 codes: 001-005)
     "OWN",
     "001",
@@ -1316,7 +1323,7 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::LocalEdit,
-    // RT — Runtime traps and assertion failures (18 codes: 001-018)
+    // RT — Runtime traps and assertion failures (19 codes: 001-019)
     "RT",
     "001",
     RtDivisionByZero,
@@ -1443,6 +1450,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "RT",
+    "019",
+    RtValueNotSteppable,
+    "Value Cannot Be Stepped",
+    Severity::Error,
+    false,
+    FixSafety::LocalEdit,
     // TAR — Target capabilities (10 codes: 001-010)
     "TAR",
     "001",

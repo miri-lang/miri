@@ -136,6 +136,23 @@ fn test_split_on_a_longer_separator_still_works()
     assert_eq(parts[2], "")
     assert_eq(parts[3], "z")
 
+fn test_successor_steps_by_code_point()
+    assert_eq("a".successor(), "b")
+    assert_eq("é".successor(), "ê", "a two-byte character steps to the next code point")
+    let below_gap = String.from_code_point(0xD7FF) ?? ""
+    let above_gap = String.from_code_point(0xE000) ?? ""
+    assert_eq(below_gap.successor(), above_gap, "the surrogates are skipped")
+    var letters = ""
+    for c in "w"..="z"
+        letters = letters + c
+    assert_eq(letters, "wxyz", "a range of letters steps through each")
+
+fn test_steppable_is_one_character()
+    assert("a".steppable())
+    assert("🦀".steppable(), "one four-byte character")
+    assert(not "".steppable(), "the empty string")
+    assert(not "ab".steppable(), "two characters")
+
 fn main()
     test_length_and_size()
     test_is_empty()
@@ -153,4 +170,6 @@ fn main()
     test_lines_drop_one_trailing_newline_and_carriage_returns()
     test_split_on_one_byte_keeps_every_piece()
     test_split_on_a_longer_separator_still_works()
+    test_successor_steps_by_code_point()
+    test_steppable_is_one_character()
     println("system.string: OK")

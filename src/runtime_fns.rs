@@ -277,6 +277,10 @@ pub mod rt {
     /// argument does not satisfy its parameter's guard; takes the sentence
     /// naming the function, the parameter and the guard.
     pub const GUARD_FAILED_PANIC: &str = "miri_rt_guard_failed";
+    /// Compiler-internal: reports MER_RT_019 and ends the process when a
+    /// bound of a range a `for` loop steps through answers `steppable()` with
+    /// `false`, before the loop's first pass.
+    pub const RANGE_BOUND_NOT_STEPPABLE_PANIC: &str = "miri_rt_range_bound_not_steppable_panic";
 
     // String
     pub const STRING_NEW: &str = "miri_rt_string_new";
@@ -331,6 +335,7 @@ pub mod rt {
     pub const STRING_CODE_AT: &str = "miri_rt_string_code_at";
     pub const STRING_INDEX_OF_ANY: &str = "miri_rt_string_index_of_any";
     pub const STRING_FROM_CODE_POINT: &str = "miri_rt_string_from_code_point";
+    pub const STRING_NEXT_SCALAR: &str = "miri_rt_string_next_scalar";
 
     // String conversion
     /// Compiler-internal: used by the codegen for int → String coercions.
@@ -562,6 +567,7 @@ pub mod rt {
         GPU_LAUNCH_FAILED_PANIC,
         METHOD_NOT_CHECKED_PANIC,
         GUARD_FAILED_PANIC,
+        RANGE_BOUND_NOT_STEPPABLE_PANIC,
         // Filesystem
         FS_STATUS,
         FS_ERROR_MESSAGE,
@@ -629,6 +635,7 @@ pub mod rt {
         STRING_CODE_AT,
         STRING_INDEX_OF_ANY,
         STRING_FROM_CODE_POINT,
+        STRING_NEXT_SCALAR,
         // String conversion (compiler-internal)
         BOOL_TO_STRING,
         FLOAT_TO_STRING,

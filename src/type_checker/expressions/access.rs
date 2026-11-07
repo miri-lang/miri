@@ -868,7 +868,7 @@ impl TypeChecker {
                 return member;
             }
         }
-        if let Some(member) = self.derived_operator_member(obj_type, prop_name, context) {
+        if let Some(member) = self.derived_member_type(obj_type, prop_name, context) {
             return member;
         }
         let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);

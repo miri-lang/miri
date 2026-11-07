@@ -57,6 +57,30 @@ pub const HASH_METHOD_NAME: &str = "hash";
 /// sorts first, as a negative, zero or positive number.
 pub const ORDERING_METHOD_NAME: &str = "compare";
 
+/// The trait a type implements so `for x in a..b` can step through a range of
+/// its values. It extends [`ORDERING_TRAIT_NAME`]: the loop asks the order to
+/// know when it has reached the end, and [`SUCCESSOR_METHOD_NAME`] for the
+/// value after the current one.
+pub const STEPPING_TRAIT_NAME: &str = "Steppable";
+
+/// The method [`STEPPING_TRAIT_NAME`] declares for the value one step after
+/// the receiver.
+pub const SUCCESSOR_METHOD_NAME: &str = "successor";
+
+/// The method [`STEPPING_TRAIT_NAME`] declares for whether the receiver is a
+/// value a range of its type can start or end at. A loop asks it of both
+/// bounds before its first pass.
+pub const STEPPABLE_METHOD_NAME: &str = "steppable";
+
+/// The methods a `for` loop runs on a range's values when it steps through
+/// them with the values' own methods: the order, the step, and whether a
+/// bound can be stepped.
+pub const STEPPING_METHOD_NAMES: [&str; 3] = [
+    ORDERING_METHOD_NAME,
+    SUCCESSOR_METHOD_NAME,
+    STEPPABLE_METHOD_NAME,
+];
+
 /// Canonical name of the stdlib `Accelerable` capability trait.
 ///
 /// The residency gate dispatches on this trait to decide whether a type may

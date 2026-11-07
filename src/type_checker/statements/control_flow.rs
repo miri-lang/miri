@@ -43,11 +43,14 @@ use crate::ast::captures::collect_free_identifiers_excluding;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_writes::{visit_buffer_writes, BufferWrite};
 use crate::ast::statement;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{is_range_type_name, is_unresolved, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
+use crate::type_checker::operators::{
+    unsteppable_range_help, unsteppable_range_message, ValueStepping,
+};
 use crate::type_checker::utils::is_residency_gated_buffer;
 use crate::type_checker::TypeChecker;
 
@@ -196,6 +199,7 @@ impl TypeChecker {
     ) {
         let iterable_type = self.infer_expression(iterable, context);
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
+        self.check_range_steps(iterable, &iterable_type, &element_type, context);
 
         context.enter_scope();
         context.enter_loop();
@@ -216,6 +220,117 @@ impl TypeChecker {
 
         context.exit_loop();
         context.exit_scope();
+    }
+
+    /// Refuses a loop over a range whose element type cannot be stepped, or
+    /// over strings with a bound written as other than one character, and
+    /// records the methods a loop stepping through its own `successor` runs on
+    /// each pass, so a class used only by the loop is compiled.
+    fn check_range_steps(
+        &mut self,
+        iterable: &Expression,
+        iterable_type: &Type,
+        element: &Type,
+        context: &Context,
+    ) {
+        let TypeKind::Custom(name, _) = &iterable_type.kind else {
+            return;
+        };
+        if !is_range_type_name(name) || is_unresolved(&element.kind) {
+            return;
+        }
+        match self.range_step(element) {
+            Ok(ValueStepping::Machine) => {}
+            Ok(ValueStepping::Method | ValueStepping::Deferred) => {
+                self.refuse_written_bounds_of_other_than_one_character(iterable, element);
+                self.record_stepping_method_sites(element, iterable.span, context);
+            }
+            Err(why) => {
+                let function = context.current_function.as_deref();
+                self.report_error_with_help(
+                    DiagnosticCode::TypRangeNotSteppable,
+                    unsteppable_range_message(element),
+                    iterable.span,
+                    unsteppable_range_help(element, &why, function),
+                );
+            }
+        }
+    }
+
+    /// Holds a range `forall` walks to the stepping rule of `for`, and refuses
+    /// one stepped through `successor`: `forall` hands out its passes as
+    /// independent integer indices, while such a range reaches each value only
+    /// from the one before it.
+    fn check_forall_range_steps(
+        &mut self,
+        iterable: &Expression,
+        iterable_type: &Type,
+        element: &Type,
+        context: &Context,
+    ) {
+        let TypeKind::Custom(name, _) = &iterable_type.kind else {
+            return;
+        };
+        if !is_range_type_name(name) || is_unresolved(&element.kind) {
+            return;
+        }
+        match self.range_step(element) {
+            Ok(ValueStepping::Machine) => {}
+            Ok(ValueStepping::Method | ValueStepping::Deferred) => self.report_error_with_help(
+                DiagnosticCode::TarGpuParallelConstruct,
+                format!(
+                    "'forall' needs an integer range, but a range of '{element}' is stepped \
+                     through 'successor', one value after another"
+                ),
+                iterable.span,
+                "loop over it in order with `for`, or run `forall` over integer indices"
+                    .to_string(),
+            ),
+            Err(_) => self.check_range_steps(iterable, iterable_type, element, context),
+        }
+    }
+
+    /// Refuses a string written as a bound of a range of strings that is not
+    /// exactly one character: such a range steps by code point, and a string
+    /// of none or of several has no code point to start or end at. A bound
+    /// computed at run time is asked the same of its `steppable()` before the
+    /// loop's first pass.
+    ///
+    /// This is a deliberate compile-time hoist of `String.steppable()` in the
+    /// stdlib's `string.mi`, which answers `self.length() == 1`: the two must
+    /// agree on every literal, which `the_literal_rule_and_steppable_agree`
+    /// in the stepped-range tests pins. A change to either changes both.
+    fn refuse_written_bounds_of_other_than_one_character(
+        &mut self,
+        iterable: &Expression,
+        element: &Type,
+    ) {
+        if !matches!(element.kind, TypeKind::String) {
+            return;
+        }
+        let ExpressionKind::Range(start, Some(end), _) = &iterable.node else {
+            return;
+        };
+        for bound in [start.as_ref(), end.as_ref()] {
+            let ExpressionKind::Literal(Literal::String(text)) = &bound.node else {
+                continue;
+            };
+            let count = text.chars().count();
+            if count == 1 {
+                continue;
+            }
+            self.report_error_with_help(
+                DiagnosticCode::TypRangeNotSteppable,
+                format!(
+                    "A range of strings is stepped by code point, so its bound must be exactly \
+                     one character; \"{text}\" has {count} characters"
+                ),
+                bound.span,
+                "write one character, such as \"a\"..=\"z\", or loop over the characters of a \
+                 string with `for c in text`"
+                    .to_string(),
+            );
+        }
     }
 
     /// Refuses a loop that gives two of its variables the same name: one name
@@ -313,6 +428,7 @@ impl TypeChecker {
     ) {
         let iterable_type = self.infer_expression(iterable, context);
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
+        self.check_forall_range_steps(iterable, &iterable_type, &element_type, context);
 
         context.enter_scope();
         context.enter_loop();

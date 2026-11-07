@@ -14,6 +14,7 @@ pub mod loop_variables;
 pub mod match_assignment;
 pub mod range_struct;
 pub mod range_values;
+pub mod stepped_ranges;
 pub mod unless;
 pub mod until;
 pub mod while_for;

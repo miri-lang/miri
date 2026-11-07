@@ -332,7 +332,7 @@ fn return_adapted_method_call(
 }
 
 /// The integer zero an ordering result is compared against.
-fn zero_operand(span: Span) -> Operand {
+pub(crate) fn zero_operand(span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
         span,
         ty: Type::new(TypeKind::Int, span),
@@ -520,6 +520,11 @@ fn lower_range_membership_by_ordering(
 // comparison through `try_lower_binary_trait_method`, which asks whether the
 // type names a class rather than how the type checker says it orders; both
 // should key on `ordering_of`, so the two cannot disagree about a type.
+// TODO: the operator call reaches `compare` through `operator_method_callee`,
+// a static call, so a base-typed `a < b` (and range membership) runs the base
+// class's `compare` even when the value's subclass overrides it, while a
+// written `a.compare(b)` and the stepped `for` loop dispatch through the
+// vtable via `emit_held_receiver_method_call`.
 pub(crate) fn lower_compare_call(
     ctx: &mut LoweringContext,
     op: &crate::ast::operator::BinaryOp,
@@ -876,24 +881,12 @@ fn emit_unchecked_operator_trap(
     dest: Option<Place>,
 ) -> Operand {
     let span = expr.span;
-    let void_temp = ctx.push_temp(Type::new(TypeKind::Void, span), span);
-    let after = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: Operand::runtime(
-                crate::mir::compiler_intrinsics::METHOD_NOT_CHECKED_PANIC.callee(),
-                span,
-            ),
-            args: Vec::new(),
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(void_temp),
-            target: Some(after),
-        },
+    crate::mir::lowering::emit_diverging_intrinsic(
+        ctx,
+        &crate::mir::compiler_intrinsics::METHOD_NOT_CHECKED_PANIC,
+        Vec::new(),
         span,
-    ));
-    ctx.set_current_block(after);
+    );
     let result_ty = binary_result_type(ctx, op, expr);
     let target = match dest {
         Some(place) => place,

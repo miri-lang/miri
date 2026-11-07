@@ -1,0 +1,7 @@
+// expect: MER_TYP_086
+// summary: Triggers MER_TYP_086: a for loop steps through a range of floats.
+use system.io
+
+fn main()
+    for x in 0.0..1.0
+        println(f"{x}")

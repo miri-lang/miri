@@ -47,6 +47,10 @@ pub(crate) mod code {
     /// A heap block handed to the runtime after it was released, caught by
     /// the heap guard.
     pub(crate) const USE_AFTER_FREE: &str = "MER_RT_018";
+    /// A value a range was asked to step from that has no next value: a
+    /// bound whose `steppable()` is false, or a string that is not exactly
+    /// one character, or is the last code point, asked for its successor.
+    pub(crate) const NOT_STEPPABLE: &str = "MER_RT_019";
 }
 
 /// Report a runtime fault under `code` and end the process.

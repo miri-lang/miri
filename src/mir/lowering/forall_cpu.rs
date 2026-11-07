@@ -352,6 +352,12 @@ fn build_sequential_loop_dimension(
     end_expr: &Expression,
     range_type: &RangeExpressionType,
 ) -> Result<LoopBlocks, LoweringError> {
+    // TODO: the counter is always an `int`, whatever the range's element
+    // type. The checker binds the loop variable at that element type, so a
+    // 1-D CPU `forall` over a sub-word range such as a `u8` `250..255`
+    // compares and steps at a width the bounds were not computed at, and can
+    // wrap without ever reaching its end. The counter should take the range's
+    // element type, as `for` does.
     let loop_var_ty = Type::new(TypeKind::Int, *span);
     let loop_var = ctx.push_local(var_decl.name.clone(), loop_var_ty.clone(), *span);
     let start_op = lower_expression(ctx, start_expr, None)?;

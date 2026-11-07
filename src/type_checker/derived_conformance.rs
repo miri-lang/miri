@@ -25,7 +25,7 @@ use crate::ast::implicit_methods::{operator_naming_method, operator_naming_trait
 use crate::ast::operator::BinaryOp;
 use crate::ast::types::{
     FunctionTypeData, Type, TypeKind, ACCELERABLE_TRAIT_NAME, EQUALITY_TRAIT_NAME,
-    HASHING_TRAIT_NAME,
+    HASHING_TRAIT_NAME, STEPPABLE_METHOD_NAME, STEPPING_TRAIT_NAME, SUCCESSOR_METHOD_NAME,
 };
 use crate::ast::Parameter;
 use crate::type_checker::context::{Context, MethodInfo, TypeDefinition};
@@ -37,6 +37,9 @@ impl TypeChecker {
     pub(crate) fn derives_trait(&self, ty: &Type, trait_name: &str, context: &Context) -> bool {
         if trait_name == ACCELERABLE_TRAIT_NAME {
             return crate::type_checker::utils::is_accelerable(&ty.kind, self.type_definitions());
+        }
+        if trait_name == STEPPING_TRAIT_NAME {
+            return self.steps_by_machine(ty);
         }
         if !self.conforms_by_value(ty) {
             return false;
@@ -53,17 +56,35 @@ impl TypeChecker {
 
     /// The type of the method `method_name` a value of `ty` answers through
     /// the operator dispatching to it, or `None` when it answers none.
-    pub(crate) fn derived_operator_member(
+    pub(crate) fn derived_member_type(
         &self,
         ty: &Type,
         method_name: &str,
         context: &Context,
     ) -> Option<Type> {
+        if let Some(stepping) = self.derived_stepping_member(ty, method_name) {
+            return Some(stepping);
+        }
         let (_, method) = operator_naming_method(method_name)?;
         if !self.derives_trait(ty, method.trait_name, context) {
             return None;
         }
         let declared = self.derived_method_type(ty, method.trait_name, method.name)?;
+        Some(function_type(&declared))
+    }
+
+    /// The type of the `Steppable` method `method_name` a value of `ty` meeting
+    /// the trait by value answers: an integer's `successor()` is the integer
+    /// one above it, and its `steppable()` is `true`. `None` for any other
+    /// method or type.
+    fn derived_stepping_member(&self, ty: &Type, method_name: &str) -> Option<Type> {
+        if method_name != SUCCESSOR_METHOD_NAME && method_name != STEPPABLE_METHOD_NAME {
+            return None;
+        }
+        if !self.steps_by_machine(ty) {
+            return None;
+        }
+        let declared = self.derived_method_type(ty, STEPPING_TRAIT_NAME, method_name)?;
         Some(function_type(&declared))
     }
 

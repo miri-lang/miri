@@ -1,0 +1,11 @@
+// summary: Accepted counterpart of MER_RT_019: a computed bound of one character steps by code point.
+// expect-stdout: bcd
+use system.io
+
+fn main()
+    var start = "a"
+    start = start.successor()
+    var out = ""
+    for c in start.."e"
+        out = out + c
+    println(out)

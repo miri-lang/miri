@@ -6,14 +6,16 @@
 //! This module handles type validation for binary and unary operators,
 //! ensuring operands have compatible types for the requested operations.
 
-use super::context::{class_implements_trait, resolve_method_source, Context, TypeDefinition};
+use super::context::{
+    class_implements_trait, resolve_method_source, trait_is_or_extends, Context, TypeDefinition,
+};
 use super::TypeChecker;
 use crate::ast::implicit_methods::operator_method_name;
 use crate::ast::type_arguments::{argument_type, TypeArgKind, TypeArgument};
 use crate::ast::types::{
     common_numeric_type, is_range_type_name, scalar_width, vec_dim, BuiltinCollectionKind, Type,
     TypeKind, ATOMIC_TYPE_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_TRAIT_NAME,
-    STRING_TYPE_NAME,
+    STEPPING_TRAIT_NAME, STRING_TYPE_NAME,
 };
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
@@ -107,6 +109,90 @@ pub(crate) enum ValueOrdering {
     Method,
     /// A generic parameter, ordered by whatever each instantiation pins it to.
     Deferred,
+}
+
+/// How a `for` loop steps from one value of a range to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueStepping {
+    /// The machine adds one: the integers.
+    Machine,
+    /// The type's own `successor`, which its `Steppable` implementation
+    /// supplies, gives the next value, and its `compare` says when the loop
+    /// has reached the end.
+    Method,
+    /// A generic parameter bounded by `Steppable`, stepped the way each
+    /// instantiation's type steps.
+    Deferred,
+}
+
+/// Why a range of some type cannot be stepped through, which decides what a
+/// refusal suggests instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NoStep {
+    /// A float has no next value.
+    Float,
+    /// `bool` has two values and no successor.
+    Boolean,
+    /// A generic parameter whose bound does not include `Steppable`.
+    UnboundedParameter(String),
+    /// A value typed at the trait it is named by, which can hold a value of
+    /// any type implementing it, so two bounds need not step through each other.
+    TraitTyped(String),
+    /// Any other type that does not implement `Steppable`.
+    NotSteppable,
+}
+
+/// The message reported when a `for` loop steps through a range of `element`
+/// values, which cannot be stepped.
+pub(crate) fn unsteppable_range_message(element: &Type) -> String {
+    format!(
+        "Range of '{element}' cannot be stepped: `for` steps through a range with its element \
+         type's successor, which the {STEPPING_TRAIT_NAME} trait gives"
+    )
+}
+
+/// The help for a refusal of a `for` loop over a range of `element` values,
+/// which says what the loop can do instead. `function` names the function the
+/// loop is written in, when it is written in one.
+pub(crate) fn unsteppable_range_help(
+    element: &Type,
+    why: &NoStep,
+    function: Option<&str>,
+) -> String {
+    match why {
+        NoStep::Float => "iterate an integer range and scale it: `for i in 0..n` then \
+             `let x = start + (i as float) * step`; `x in a..b` still tests membership in a \
+             float range"
+            .to_string(),
+        NoStep::Boolean => "walk the two values in a list: `for b in [false, true]`; \
+             `x in a..b` still tests membership in a bool range"
+            .to_string(),
+        NoStep::UnboundedParameter(parameter) => format!(
+            "bound the parameter so every type it stands for can be stepped: {}",
+            stepping_parameter(function, parameter)
+        ),
+        NoStep::TraitTyped(name) => format!(
+            "a '{name}' may hold a value of any type implementing it, so take both bounds \
+             at one type parameter instead: {}",
+            stepping_parameter(function, "T")
+        ),
+        NoStep::NotSteppable => format!(
+            "implement {STEPPING_TRAIT_NAME} on '{element}' with `public fn compare(other Self) \
+             int` and `public fn successor() Self`, or loop over a list of the values; \
+             `x in a..b` still tests membership in a range of any type `<` orders"
+        ),
+    }
+}
+
+/// The declaration of a type parameter bounded by `Steppable`, written on
+/// `function` when the loop is written in one.
+fn stepping_parameter(function: Option<&str>, parameter: &str) -> String {
+    match function {
+        Some(function) => {
+            format!("`fn {function}<{parameter} implements {STEPPING_TRAIT_NAME}>(...)`")
+        }
+        None => format!("`<{parameter} implements {STEPPING_TRAIT_NAME}>`"),
+    }
 }
 
 /// The class whose declaration answers which traits values of `kind`
@@ -523,6 +609,96 @@ impl TypeChecker {
             | TypeKind::OneOf(_)
             | TypeKind::Error => None,
         }
+    }
+
+    /// How a `for` loop steps through a range of `ty` values, or why it
+    /// cannot. The checker refuses a loop by it, and the loop is lowered by
+    /// it.
+    ///
+    /// The integers add one. A type implementing `Steppable` — `String`, or a
+    /// class — steps with its own `successor` and orders with its own
+    /// `compare`. A generic parameter steps when its bound is `Steppable` or
+    /// a trait extending it; the body is checked once, so an unbounded one
+    /// is refused where it is written rather than at each instantiation.
+    pub(crate) fn range_step(&self, ty: &Type) -> Result<ValueStepping, NoStep> {
+        match &ty.kind {
+            TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64 => Err(NoStep::Float),
+            TypeKind::Boolean => Err(NoStep::Boolean),
+            TypeKind::Generic(name, bound, _) => {
+                if bound
+                    .as_deref()
+                    .is_some_and(|bound| self.bound_steps(bound))
+                {
+                    Ok(ValueStepping::Deferred)
+                } else {
+                    Err(NoStep::UnboundedParameter(name.clone()))
+                }
+            }
+            TypeKind::Custom(name, _) if self.names_a_trait(name) => {
+                Err(NoStep::TraitTyped(name.clone()))
+            }
+            TypeKind::String | TypeKind::Custom(..) => {
+                if self.type_implements_trait(ty, STEPPING_TRAIT_NAME) {
+                    Ok(ValueStepping::Method)
+                } else {
+                    Err(NoStep::NotSteppable)
+                }
+            }
+            // The integers meet `Steppable` without declaring it: the machine
+            // steps one by adding one.
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128 => Ok(ValueStepping::Machine),
+            TypeKind::List(_)
+            | TypeKind::Array(..)
+            | TypeKind::Map(..)
+            | TypeKind::Set(_)
+            | TypeKind::Option(_)
+            | TypeKind::Tuple(_)
+            | TypeKind::Function(_)
+            | TypeKind::Result(..)
+            | TypeKind::Future(_)
+            | TypeKind::Linear(_)
+            | TypeKind::Meta(_)
+            | TypeKind::Void
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::OneOf(_)
+            | TypeKind::Error => Err(NoStep::NotSteppable),
+        }
+    }
+
+    /// Whether values of `ty` meet `Steppable` by value, stepped by the
+    /// machine adding one rather than through a `successor` of their own.
+    pub(crate) fn steps_by_machine(&self, ty: &Type) -> bool {
+        self.range_step(ty) == Ok(ValueStepping::Machine)
+    }
+
+    /// Whether `name` names a trait.
+    fn names_a_trait(&self, name: &str) -> bool {
+        matches!(
+            self.type_table.global_type_definitions.get(name),
+            Some(crate::type_checker::context::TypeDefinition::Trait(_))
+        )
+    }
+
+    /// Whether a parameter bounded by `bound` steps: the bound is
+    /// `Steppable`, a trait extending it, or a class implementing it.
+    fn bound_steps(&self, bound: &Type) -> bool {
+        let TypeKind::Custom(name, _) = &bound.kind else {
+            return false;
+        };
+        let definitions = &self.type_table.global_type_definitions;
+        trait_is_or_extends(name, STEPPING_TRAIT_NAME, definitions)
+            || class_implements_trait(name, STEPPING_TRAIT_NAME, definitions)
     }
 
     /// Checks logical operations (&&, ||).
@@ -1312,14 +1488,24 @@ mod tests {
         type_argument(ty(kind))
     }
 
-    /// A checker that has seen a class implementing `Comparable` and one that
-    /// does not, beside every declaration the prelude brings.
+    /// A checker that has seen a class implementing `Comparable`, one
+    /// implementing `Steppable` and one implementing neither, beside every
+    /// declaration the prelude brings.
     fn checker() -> TypeChecker {
         let source = "
 class Ranked implements Comparable
     var n int
     public fn compare(other Ranked) int
         return self.n - other.n
+
+class Stepper implements Steppable
+    var n int
+    fn init(n int)
+        self.n = n
+    public fn compare(other Stepper) int
+        return self.n - other.n
+    public fn successor() Stepper
+        return Stepper(self.n + 1)
 
 class Plain
     var n int
@@ -1427,6 +1613,128 @@ fn main()
         ];
         for kind in unordered {
             assert_eq!(checker.ordering_of(&ty(kind.clone())), None, "{kind:?}");
+        }
+    }
+
+    /// One of every `TypeKind`, each spelled with an `int` inside where it
+    /// holds a type, with how a `for` loop steps through a range of it.
+    fn every_type_kind() -> Vec<(TypeKind, Result<ValueStepping, NoStep>)> {
+        let machine = [
+            TypeKind::Int,
+            TypeKind::I8,
+            TypeKind::I16,
+            TypeKind::I32,
+            TypeKind::I64,
+            TypeKind::I128,
+            TypeKind::U8,
+            TypeKind::U16,
+            TypeKind::U32,
+            TypeKind::U64,
+            TypeKind::U128,
+        ]
+        .map(|kind| (kind, Ok(ValueStepping::Machine)));
+        let float = [TypeKind::Float, TypeKind::F16, TypeKind::F32, TypeKind::F64]
+            .map(|kind| (kind, Err(NoStep::Float)));
+        let not_steppable = [
+            TypeKind::Custom("Ranked".to_string(), None),
+            TypeKind::Custom("Plain".to_string(), None),
+            TypeKind::List(Box::new(argument(TypeKind::Int))),
+            TypeKind::Array(
+                Box::new(argument(TypeKind::Int)),
+                Box::new(argument(TypeKind::Int)),
+            ),
+            TypeKind::Map(
+                Box::new(argument(TypeKind::Int)),
+                Box::new(argument(TypeKind::Int)),
+            ),
+            TypeKind::Set(Box::new(argument(TypeKind::Int))),
+            TypeKind::Option(Box::new(ty(TypeKind::Int))),
+            TypeKind::Tuple(vec![argument(TypeKind::Int), argument(TypeKind::Int)]),
+            TypeKind::Result(
+                Box::new(argument(TypeKind::Int)),
+                Box::new(argument(TypeKind::String)),
+            ),
+            TypeKind::Future(Box::new(argument(TypeKind::Int))),
+            TypeKind::Function(Box::new(crate::ast::types::FunctionTypeData {
+                generics: None,
+                params: Vec::new(),
+                return_type: None,
+            })),
+            TypeKind::Linear(Box::new(ty(TypeKind::Int))),
+            TypeKind::Meta(Box::new(ty(TypeKind::Int))),
+            TypeKind::Void,
+            TypeKind::Identifier,
+            TypeKind::RawPtr,
+            TypeKind::OneOf(vec![argument(TypeKind::Int), argument(TypeKind::String)]),
+            TypeKind::Error,
+        ]
+        .map(|kind| (kind, Err(NoStep::NotSteppable)));
+        machine
+            .into_iter()
+            .chain(float)
+            .chain(not_steppable)
+            .chain(stepped_by_declaration_or_bound())
+            .collect()
+    }
+
+    /// The types whose stepping their declaration or their bound decides,
+    /// with how a `for` loop steps through a range of each.
+    fn stepped_by_declaration_or_bound() -> Vec<(TypeKind, Result<ValueStepping, NoStep>)> {
+        let parameter = |bound: Option<&str>| {
+            TypeKind::Generic(
+                "T".to_string(),
+                bound.map(|name| Box::new(ty(TypeKind::Custom(name.to_string(), None)))),
+                crate::ast::types::TypeDeclarationKind::None,
+            )
+        };
+        let unbounded = || Err(NoStep::UnboundedParameter("T".to_string()));
+        vec![
+            (TypeKind::Boolean, Err(NoStep::Boolean)),
+            (TypeKind::String, Ok(ValueStepping::Method)),
+            (
+                TypeKind::Custom("Stepper".to_string(), None),
+                Ok(ValueStepping::Method),
+            ),
+            (parameter(Some("Steppable")), Ok(ValueStepping::Deferred)),
+            (
+                TypeKind::Custom("Steppable".to_string(), None),
+                Err(NoStep::TraitTyped("Steppable".to_string())),
+            ),
+            (parameter(Some("Comparable")), unbounded()),
+            (parameter(None), unbounded()),
+        ]
+    }
+
+    #[test]
+    fn only_the_integers_step_by_machine() {
+        let checker = checker();
+        for (kind, stepping) in every_type_kind() {
+            assert_eq!(
+                checker.steps_by_machine(&ty(kind.clone())),
+                stepping == Ok(ValueStepping::Machine),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_type_kind_steps_as_its_declaration_and_bound_say() {
+        let checker = checker();
+        for (kind, stepping) in every_type_kind() {
+            assert_eq!(checker.range_step(&ty(kind.clone())), stepping, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_type_that_steps_also_orders() {
+        let checker = checker();
+        for (kind, _) in every_type_kind() {
+            if checker.range_step(&ty(kind.clone())).is_ok() {
+                assert!(
+                    checker.ordering_of(&ty(kind.clone())).is_some(),
+                    "{kind:?} steps but has no ordering"
+                );
+            }
         }
     }
 }
