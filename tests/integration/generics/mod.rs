@@ -7,6 +7,7 @@ pub mod arithmetic;
 pub mod bare_parameter_elements;
 pub mod basic;
 pub mod bounded_parameter_methods;
+pub mod bounded_type_arguments;
 pub mod classes_inside_generic_functions;
 pub mod declaration_order;
 pub mod delegation;

@@ -465,7 +465,7 @@ impl TypeChecker {
                     match written_argument(arg.clone()) {
                         Ok(written) if self.extract_type_from_argument(&written).is_ok() => {
                             let ty = self.resolve_type_argument(&written, context);
-                            self.create_type_argument(ty)
+                            Self::resolved_type_argument(ty, written.span)
                         }
                         Ok(written) => self.value_argument(name, &written, context),
                         Err(refused) => {

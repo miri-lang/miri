@@ -900,6 +900,40 @@ impl TypeChecker {
         super::context::trait_is_or_extends(sub, sup, self.type_definitions())
     }
 
+    /// Whether `argument`, bound to a generic's parameter, meets the bound
+    /// `kind constraint` that parameter declares. This is the one answer for
+    /// a class's written type argument and for a call's bound parameter
+    /// alike.
+    ///
+    /// A type parameter of the enclosing body is judged by its own bound,
+    /// since every caller binds it to some type meeting that bound; one with
+    /// no bound meets none. A type set meets a trait, class or mixin bound
+    /// when each of its members does, as a caller may bind any one of them.
+    pub(crate) fn argument_meets_bound(
+        &self,
+        argument: &Type,
+        constraint: &Type,
+        kind: &TypeDeclarationKind,
+        context: &Context,
+    ) -> bool {
+        let subject = bounded_subject(argument, context);
+        let TypeKind::OneOf(members) = &subject.kind else {
+            return self.satisfies_constraint(&subject, constraint, kind, context);
+        };
+        match kind {
+            TypeDeclarationKind::Extends
+            | TypeDeclarationKind::Implements
+            | TypeDeclarationKind::Includes => members.iter().all(|member| {
+                self.extract_type_from_argument(member).is_ok_and(|member| {
+                    self.satisfies_constraint(&member, constraint, kind, context)
+                })
+            }),
+            TypeDeclarationKind::Is | TypeDeclarationKind::None => {
+                self.satisfies_constraint(&subject, constraint, kind, context)
+            }
+        }
+    }
+
     /// Checks if a type satisfies a constraint.
     pub(crate) fn satisfies_constraint(
         &self,
@@ -1143,6 +1177,30 @@ fn value_argument(arg: &crate::ast::TypeArgument) -> Option<&crate::ast::TypeArg
     match &arg.node {
         TypeArgKind::Type(ty, _) => super::generics::extract_value_generic(ty),
         TypeArgKind::Value(_) => Some(arg),
+    }
+}
+
+/// The type a bound is checked against for `argument`: a parameter of the
+/// enclosing body stands for whatever meets that parameter's own bound, so it
+/// is its bound that must meet the generic's. A parameter with no bound is
+/// its own subject, and meets no bound.
+fn bounded_subject(argument: &Type, context: &Context) -> Type {
+    let TypeKind::Generic(name, _, _) = &argument.kind else {
+        return argument.clone();
+    };
+    match context.resolve_type_definition(name) {
+        Some(TypeDefinition::Generic(definition)) => definition
+            .constraint
+            .clone()
+            .unwrap_or_else(|| argument.clone()),
+        Some(
+            TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Class(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => argument.clone(),
     }
 }
 

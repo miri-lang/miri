@@ -139,6 +139,9 @@ fn spelled_type_argument(argument: &crate::ast::TypeArgument) -> String {
 
 /// A function type as a diagnostic spells it, with each parameter and the
 /// result through [`spelled_argument`], so a nullable result keeps its `?`.
+// TODO: this prints the internal form `Function(int) -> int`, not the
+// `fn(int) int` a program writes, so a type copied out of a diagnostic does
+// not parse back; several integration tests pin the internal form.
 fn spelled_function(function: &crate::ast::types::FunctionTypeData) -> String {
     let parameters: Vec<String> = function
         .params

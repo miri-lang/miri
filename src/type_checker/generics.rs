@@ -10,11 +10,14 @@
 //! - Generic parameter definition
 
 use super::context::{Context, GenericDefinition, TypeDefinition};
+use super::diagnostics::spelled;
 use super::TypeChecker;
 use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
 use crate::ast::type_arguments::{rewritten, ArithOp, TypeArgKind, TypeArgument, ValueArg};
-use crate::ast::types::{BuiltinCollectionKind, FunctionTypeData, Type, TypeKind};
+use crate::ast::types::{
+    BuiltinCollectionKind, FunctionTypeData, Type, TypeDeclarationKind, TypeKind,
+};
 use crate::ast::{Expression, ExpressionKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
@@ -948,13 +951,11 @@ impl TypeChecker {
                 let arg_type = self.resolve_type_argument(arg_expr, context);
 
                 if let Some(constraint) = &param_def.constraint {
-                    if !self.satisfies_constraint(&arg_type, constraint, &param_def.kind, context) {
-                        self.report_error(
-                            DiagnosticCode::TypGenericTypeStructure,
-                            format!(
-                                "Type {} does not satisfy constraint {} {}",
-                                arg_type, param_def.kind, constraint
-                            ),
+                    if !self.argument_meets_bound(&arg_type, constraint, &param_def.kind, context) {
+                        self.report_unmet_bound(
+                            &arg_type,
+                            &param_def.kind,
+                            constraint,
                             arg_expr.span,
                         );
                     }
@@ -962,6 +963,27 @@ impl TypeChecker {
             }
         }
         true
+    }
+
+    /// Reports `argument` failing the bound `kind constraint` of the
+    /// parameter it binds, at `span`, with both types spelled as written.
+    pub(crate) fn report_unmet_bound(
+        &mut self,
+        argument: &Type,
+        kind: &TypeDeclarationKind,
+        constraint: &Type,
+        span: Span,
+    ) {
+        self.report_error(
+            DiagnosticCode::TypGenericTypeStructure,
+            format!(
+                "Type {} does not satisfy constraint {} {}",
+                spelled(argument),
+                kind,
+                spelled(constraint)
+            ),
+            span,
+        );
     }
 
     /// Defines generic type parameters in the current scope.

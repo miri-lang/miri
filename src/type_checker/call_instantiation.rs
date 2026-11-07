@@ -306,8 +306,7 @@ impl TypeChecker {
                 continue;
             };
             let constraint = self.substitute_type(&bound.constraint, &call.bound);
-            let subject = bounded_subject(argument, context);
-            if self.satisfies_constraint(&subject, &constraint, &bound.kind, context) {
+            if self.argument_meets_bound(argument, &constraint, &bound.kind, context) {
                 continue;
             }
             hold = false;
@@ -315,16 +314,7 @@ impl TypeChecker {
                 self.report_outside_type_set(&bound.parameter, argument, &constraint, call.span);
                 continue;
             }
-            self.report_error(
-                DiagnosticCode::TypGenericTypeStructure,
-                format!(
-                    "Type {} does not satisfy constraint {} {}",
-                    spelled(argument),
-                    bound.kind,
-                    spelled(&constraint)
-                ),
-                call.span,
-            );
+            self.report_unmet_bound(argument, &bound.kind, &constraint, call.span);
         }
         hold
     }
@@ -631,28 +621,5 @@ impl TypeChecker {
             ),
         };
         self.report_error(DiagnosticCode::TypTypeInference, message, call.span);
-    }
-}
-
-/// The type a bound is checked against for `argument`: a parameter of the
-/// calling body stands for whatever meets that parameter's own bound, so it
-/// is its bound that must meet the callee's.
-fn bounded_subject(argument: &Type, context: &Context) -> Type {
-    let TypeKind::Generic(name, _, _) = &argument.kind else {
-        return argument.clone();
-    };
-    match context.resolve_type_definition(name) {
-        Some(TypeDefinition::Generic(definition)) => definition
-            .constraint
-            .clone()
-            .unwrap_or_else(|| argument.clone()),
-        Some(
-            TypeDefinition::Struct(_)
-            | TypeDefinition::Enum(_)
-            | TypeDefinition::Class(_)
-            | TypeDefinition::Trait(_)
-            | TypeDefinition::Alias(_),
-        )
-        | None => argument.clone(),
     }
 }

@@ -1655,7 +1655,16 @@ impl TypeChecker {
     /// A type argument naming the resolved type `ty`, written nowhere in the
     /// source.
     pub(crate) fn create_type_argument(&self, ty: Type) -> TypeArgument {
-        IdNode::new(0, TypeArgKind::Type(Box::new(ty), false), Span::new(0, 0))
+        Self::resolved_type_argument(ty, Span::new(0, 0))
+    }
+
+    /// The resolved type `ty` of an argument written at `span`. It keeps the
+    /// place it was written, so a bound it fails is reported there.
+    // TODO: the parser gives the list shorthand `[int]` no span, and the span
+    // of `List<int>` covers only `List`, so a bound failure on `Box<[int]>`
+    // is still reported at 1:1.
+    pub(crate) fn resolved_type_argument(ty: Type, span: Span) -> TypeArgument {
+        IdNode::new(0, TypeArgKind::Type(Box::new(ty), false), span)
     }
 
     /// The type expression a type argument is resolved as: the type it names,
@@ -2331,7 +2340,7 @@ impl TypeChecker {
                     }
                     TypeArgKind::Type(..) => {
                         let resolved_type = self.resolve_type_argument(arg, context);
-                        self.create_type_argument(resolved_type)
+                        Self::resolved_type_argument(resolved_type, arg.span)
                     }
                 })
                 .collect()
