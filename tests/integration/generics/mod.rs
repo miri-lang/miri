@@ -17,6 +17,7 @@ pub mod explicit_type_arguments;
 pub mod extends;
 pub mod field_arguments;
 pub mod generic_type_drop_thunks;
+pub mod hidden_types;
 pub mod invariance;
 pub mod lambdas;
 pub mod literal_arguments;

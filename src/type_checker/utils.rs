@@ -1418,11 +1418,13 @@ fn estimated_enum_size<'a>(
 }
 
 impl TypeChecker {
-    /// Registers a type definition and marks it as visible to user code.
+    /// Registers a type definition, marks it as visible to user code, and
+    /// records it as declared by the module being checked.
     ///
     /// All type registrations should go through this method so that
-    /// `resolve_visible_type` works correctly.
+    /// `resolve_visible_type` and the per-module scope work correctly.
     pub(crate) fn register_type_definition(&mut self, name: String, def: TypeDefinition) {
+        self.modules.record_declared_type(&name);
         self.type_table.visible_type_names.insert(name.clone());
         self.type_table.global_type_definitions.insert(name, def);
         self.invalidate_shared_type_definitions();

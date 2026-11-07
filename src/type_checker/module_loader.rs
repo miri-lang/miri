@@ -126,6 +126,22 @@ pub struct ModuleLoader {
     /// names spelled as identities, or one with a value argument that folds,
     /// spelled with its folded value. Keyed by the type expression's id.
     pub written_type_spellings: HashMap<usize, crate::ast::types::Type>,
+    /// For each module, the program under [`PROGRAM_MODULE`] included, the
+    /// identity of every type its declarations registered.
+    pub declared_type_identities: HashMap<String, HashSet<String>>,
+    /// For each module, the program included, the `use` lines it wrote, in
+    /// the order they were checked.
+    pub module_uses: HashMap<String, Vec<ModuleUse>>,
+    /// The modules the prelude imports into every module.
+    pub prelude_modules: Vec<String>,
+}
+
+/// One `use` line: the module it imports and, for a selective import
+/// (`use m.{a, b}`), the names it selects.
+#[derive(Debug, Clone)]
+pub struct ModuleUse {
+    pub path: String,
+    pub selected: Option<HashSet<String>>,
 }
 
 impl Default for ModuleLoader {
@@ -159,6 +175,9 @@ impl ModuleLoader {
             spelling_recorded: false,
             folded_value_arguments: HashMap::new(),
             written_type_spellings: HashMap::new(),
+            declared_type_identities: HashMap::new(),
+            module_uses: HashMap::new(),
+            prelude_modules: Vec::new(),
         }
     }
 
@@ -193,6 +212,87 @@ impl ModuleLoader {
         self.private_type_identities
             .get(module_path)
             .is_some_and(|identities| identities.contains_key(name))
+    }
+
+    /// Records the type `identity` as declared by the module being checked.
+    pub fn record_declared_type(&mut self, identity: &str) {
+        self.declared_type_identities
+            .entry(self.current_module.clone())
+            .or_default()
+            .insert(identity.to_string());
+    }
+
+    /// Records `module_use` as a `use` line of the module being checked.
+    pub fn record_use(&mut self, module_use: ModuleUse) {
+        self.module_uses
+            .entry(self.current_module.clone())
+            .or_default()
+            .push(module_use);
+    }
+
+    /// How many `use` lines the module being checked has recorded.
+    pub fn recorded_use_count(&self) -> usize {
+        self.module_uses
+            .get(&self.current_module)
+            .map_or(0, Vec::len)
+    }
+
+    /// Forgets every `use` line the module being checked recorded after its
+    /// first `count`.
+    pub fn forget_uses_after(&mut self, count: usize) {
+        if let Some(uses) = self.module_uses.get_mut(&self.current_module) {
+            uses.truncate(count);
+        }
+    }
+
+    /// Whether the module being checked sees the type registered as
+    /// `identity`: it declares the type, one of its own `use` lines brings
+    /// it in, or the prelude does. A type declared anywhere else is out of
+    /// its reach, however many other modules see it.
+    pub fn current_module_sees(&self, identity: &str) -> bool {
+        let current = self.current_module.as_str();
+        self.declares(current, identity)
+            || self
+                .module_uses
+                .get(current)
+                .into_iter()
+                .flatten()
+                .any(|module_use| self.use_brings_in(module_use, identity))
+            || self
+                .prelude_modules
+                .iter()
+                .any(|path| self.whole_import_brings_in(path, identity))
+    }
+
+    /// Whether `module_use` brings the type `identity` into the module that
+    /// wrote it: a selective import only the names it selects.
+    fn use_brings_in(&self, module_use: &ModuleUse, identity: &str) -> bool {
+        match &module_use.selected {
+            Some(selected) => {
+                selected.contains(identity) && self.declares(&module_use.path, identity)
+            }
+            None => self.whole_import_brings_in(&module_use.path, identity),
+        }
+    }
+
+    /// Whether importing the whole module at `path` brings in the type
+    /// `identity`: one the module declares, or, for a module the prelude
+    /// preloaded, any type its first load made visible, which a later import
+    /// replays.
+    fn whole_import_brings_in(&self, path: &str, identity: &str) -> bool {
+        self.declares(path, identity)
+            || (self.implicitly_preloaded_modules.contains(path)
+                && self
+                    .module_visibility
+                    .get(path)
+                    .is_some_and(|names| names.iter().any(|name| name == identity)))
+    }
+
+    /// Whether the module `module` declares the type `identity`.
+    fn declares(&self, module: &str, identity: &str) -> bool {
+        self.declared_type_identities
+            .get(module)
+            .is_some_and(|identities| identities.contains(identity))
     }
 
     /// Names the module at `module_path` exposes that the program declared

@@ -47,7 +47,7 @@ use crate::error::SourceId;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::type_checker::context::{Context, SymbolInfo, TypeDefinition};
-use crate::type_checker::module_loader::ModuleSource;
+use crate::type_checker::module_loader::{ModuleSource, ModuleUse};
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -81,6 +81,10 @@ impl TypeChecker {
             );
             return;
         }
+        self.modules.record_use(ModuleUse {
+            path: path_str.clone(),
+            selected: Self::extract_selected_names(&import_kind),
+        });
 
         // Resolve file path
         let file_path = match self.resolve_module_path(&path_str, path.span) {
@@ -1161,7 +1165,8 @@ impl TypeChecker {
     /// compile. The already-loaded guard in [`check_use`] keeps an explicit
     /// `use system.string` in user code a no-op.
     pub(crate) fn load_prelude(&mut self, context: &mut Context) {
-        self.load_prelude_file("prelude.mi", context);
+        let imported = self.load_prelude_file("prelude.mi", context);
+        self.modules.prelude_modules.extend(imported);
         self.load_definitions_only("prelude_internal.mi", context);
     }
 
@@ -1193,8 +1198,10 @@ impl TypeChecker {
         let visible_before = self.type_table.visible_type_names.clone();
         let modules_before: HashSet<String> =
             self.modules.module_visibility.keys().cloned().collect();
+        let uses_before = self.modules.recorded_use_count();
         self.load_prelude_file(file_name, context);
         self.type_table.visible_type_names = visible_before;
+        self.modules.forget_uses_after(uses_before);
 
         // Every module loaded while processing the file — the listed modules
         // AND their transitive deps (queryable, ops, …) — is marked preloaded,
@@ -1241,6 +1248,9 @@ impl TypeChecker {
 
             if shadowed.is_empty() {
                 self.check_use(&path_expr, &None, context);
+                if let Some((path_str, _)) = Self::extract_import_path_with_kind(&path_expr) {
+                    self.modules.prelude_modules.push(path_str);
+                }
             } else {
                 self.modules.user_shadowed_types.extend(shadowed);
             }
@@ -1272,14 +1282,19 @@ impl TypeChecker {
     /// Parses one stdlib prelude file under `system/` and runs each of its
     /// top-level `use` statements as a normal import. Loading them at top level
     /// (rather than nested under a single synthetic import) keeps each module's
-    /// own symbols past the visibility filter.
-    fn load_prelude_file(&mut self, file_name: &str, context: &mut Context) {
+    /// own symbols past the visibility filter. Returns the path of every
+    /// module the file imports.
+    fn load_prelude_file(&mut self, file_name: &str, context: &mut Context) -> Vec<String> {
         let Some(imports) = Self::prelude_file_imports(file_name) else {
-            return;
+            return Vec::new();
         };
-        for (path_expr, alias_expr) in imports {
-            self.check_use(&path_expr, &alias_expr, context);
-        }
+        imports
+            .into_iter()
+            .filter_map(|(path_expr, alias_expr)| {
+                self.check_use(&path_expr, &alias_expr, context);
+                Self::extract_import_path_with_kind(&path_expr).map(|(path_str, _)| path_str)
+            })
+            .collect()
     }
 
     /// The imports a prelude file lists, or `None` when the file is absent or

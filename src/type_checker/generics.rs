@@ -986,22 +986,13 @@ impl TypeChecker {
     /// A parameter named after a type in scope is refused here, where it is
     /// declared; a callee's parameters defined again to check a call are not.
     pub(crate) fn define_generics(&mut self, generics: &[Expression], context: &mut Context) {
-        for (position, gen) in generics.iter().enumerate() {
-            let Some(definition) = self.generic_definition(gen, context) else {
-                continue;
-            };
-            if !self.resolving_declared_signature {
-                if let Some(name_span) = generic_name_span(gen) {
-                    let previous = position.checked_sub(1).and_then(|at| generics.get(at));
-                    self.refuse_type_parameter_hiding_a_type(
-                        &definition.name,
-                        name_span,
-                        previous,
-                        context,
-                    );
-                }
+        if !self.resolving_declared_signature {
+            self.refuse_type_parameters_hiding_types(generics, context);
+        }
+        for gen in generics {
+            if let Some(definition) = self.generic_definition(gen, context) {
+                context.define_type(definition.name.clone(), TypeDefinition::Generic(definition));
             }
-            context.define_type(definition.name.clone(), TypeDefinition::Generic(definition));
         }
     }
 
@@ -1052,14 +1043,6 @@ impl TypeChecker {
         }
         Bounds::new(bounds)
     }
-}
-
-/// Where the name a type parameter declares is written.
-fn generic_name_span(generic: &Expression) -> Option<Span> {
-    let ExpressionKind::GenericType(name, _, _) = &generic.node else {
-        return None;
-    };
-    Some(name.span)
 }
 
 // Stays inline rather than moving to `tests/type_checker/generics.rs`: both

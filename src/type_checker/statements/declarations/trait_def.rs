@@ -242,6 +242,11 @@ impl TypeChecker {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
                     self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypTraitDefinition);
+                    // A method without a body is never checked as a function,
+                    // so its own type parameters are checked here.
+                    if let Some(generics) = &decl.generics {
+                        self.refuse_type_parameters_hiding_types(generics, context);
+                    }
 
                     // Reject static methods in traits
                     if decl.properties.is_static {
