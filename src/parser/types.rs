@@ -15,6 +15,11 @@ use super::Parser;
 
 const FUTURE_TYPE_NAME: &str = "Future";
 
+/// What belongs after a type set's members instead of `and`: the set lists
+/// every type a parameter may be, so it is never one bound among several.
+const TYPE_SET_ALONE: &str =
+    "`or` between the members of a type set; a type set (`is`) is not combined with other bounds";
+
 impl<'source> Parser<'source> {
     /*
         TypeExpression
@@ -102,7 +107,7 @@ impl<'source> Parser<'source> {
     /// Refuses an `and` after a type set, whose members are alternatives
     /// joined with `or`: a set is not combined with other bounds.
     pub(crate) fn refuse_and_after_type_set(&self) -> Result<(), SyntaxError> {
-        self.refuse_and_after("`or` between the members of a type set")
+        self.refuse_and_after(TYPE_SET_ALONE)
     }
 
     /// Refuses an `and` where no list of bounds may continue; `expected`

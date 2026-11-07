@@ -872,7 +872,9 @@ fn test_error_a_type_set_joined_with_and() {
     parser_error_test(
         "fn f<T is int and String>()",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "`or` between the members of a type set".to_string(),
+            expected: "`or` between the members of a type set; a type set (`is`) is not \
+                       combined with other bounds"
+                .to_string(),
             found: "and".to_string(),
         },
     );

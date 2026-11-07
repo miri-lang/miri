@@ -766,35 +766,22 @@ impl TypeChecker {
         bounds.met_by(|bound| self.satisfies_constraint(t2, &bound.ty, &bound.kind, context))
     }
 
-    /// Whether a parameter bounded by `constraint` is, through its chain of
+    /// Whether a parameter bounded by `bounds` is, through its chains of
     /// `extends` bounds, the parameter `target`.
     ///
-    /// `U extends T` is a `T`; `U extends Animal` is not a `T extends Animal`,
-    /// since a caller binds `T` to a class `U` need not be. The chain is read
-    /// off the bound types themselves, each resolved where its parameter was
-    /// declared, never by looking a name up again: while a call is checked the
-    /// callee's parameters are in scope too, and a caller's `U` looked up by
-    /// name would find the callee's `U` and its bound.
+    /// `U extends T` is a `T`, and so is `U extends T and Named`; `U extends
+    /// Animal` is not a `T extends Animal`, since a caller binds `T` to a
+    /// class `U` need not be. Every `extends` bound of the list is followed.
+    /// The chains are read off the bound types themselves, each resolved where
+    /// its parameter was declared, never by looking a name up again: while a
+    /// call is checked the callee's parameters are in scope too, and a
+    /// caller's `U` looked up by name would find the callee's `U` and its
+    /// bound.
     fn bound_reaches(target: &str, bounds: &Bounds) -> bool {
-        std::iter::successors(Self::extends_bound(bounds), |bound| {
-            let TypeKind::Generic(_, next) = &bound.kind else {
-                return None;
-            };
-            Self::extends_bound(next)
+        bounds.extended().any(|bound| {
+            matches!(&bound.kind, TypeKind::Generic(name, next)
+                if name == target || Self::bound_reaches(target, next))
         })
-        .any(|bound| matches!(&bound.kind, TypeKind::Generic(name, _) if name == target))
-    }
-
-    /// The type a parameter's `extends` bound names, when that is the one
-    /// bound it declares.
-    // TODO: a parameter with several bounds (`U extends T and Named`) is not
-    // followed here, so `U` is not read as a `T`; the walk should follow every
-    // `extends` bound of the list.
-    fn extends_bound(bounds: &Bounds) -> Option<&Type> {
-        if bounds.len() != 1 {
-            return None;
-        }
-        bounds.extended().next()
     }
 
     /// The parameter a type written as a bare name stands for, when a

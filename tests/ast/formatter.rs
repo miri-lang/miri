@@ -1161,3 +1161,14 @@ fn test_several_bounds_render_joined_with_and() {
     );
     assert_ast_survives(source);
 }
+
+#[test]
+fn test_a_bound_list_written_with_extra_spaces_renders_canonically() {
+    let source = "fn f<T   implements  A  and  B>(x T) T\n    return x\n";
+    let rendered = assert_render_is_a_fixed_point(source);
+    assert!(
+        rendered.contains("fn f<T implements A and B>(x T) T"),
+        "got: {rendered}"
+    );
+    assert_ast_survives(source);
+}

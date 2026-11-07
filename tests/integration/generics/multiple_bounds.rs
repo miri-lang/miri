@@ -314,3 +314,269 @@ fn main()
         "does not satisfy constraint extends Named",
     );
 }
+
+const DOUBLER: &str = r##"
+use system.io
+
+trait Doubler
+    fn twice() Self
+
+trait Named
+    fn name() String
+
+class Word implements Doubler, Named
+    public var text String
+    public fn twice() Self
+        return Word(text: self.text + self.text)
+    public fn name() String
+        return self.text
+"##;
+
+#[test]
+fn a_self_returning_method_keeps_the_other_bounds_of_its_receiver() {
+    let code = format!(
+        "{DOUBLER}
+fn f<T implements Doubler and Named>(x T) String
+    return x.twice().name()
+
+fn main()
+    println(f(Word(text: \"ab\")))
+"
+    );
+    assert_runs_with_output(&code, "abab");
+}
+
+#[test]
+fn a_self_returning_method_keeps_the_other_bounds_of_a_class_field() {
+    let code = format!(
+        "{DOUBLER}
+class Box<T implements Named and Doubler>
+    public var v T
+    public fn show() String
+        let doubled = self.v.twice()
+        return doubled.name()
+
+fn main()
+    let b = Box<Word>(v: Word(text: \"q\"))
+    println(b.show())
+"
+    );
+    assert_runs_with_output(&code, "qq");
+}
+
+#[test]
+fn a_parameter_extending_another_and_a_trait_is_read_as_the_other() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Named
+    fn name() String
+
+class A implements Named
+    public fn name() String
+        return "a"
+
+fn up<T, U extends T and Named>(u U) T
+    return u
+
+fn main()
+    let a A = up<A, A>(A())
+    println(a.name())
+"#,
+        "a",
+    );
+}
+
+#[test]
+fn two_bounds_declaring_one_member_with_different_signatures_are_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+trait Named
+    fn name() String
+
+trait Labelled
+    fn name() int
+
+fn show<T implements Named and Labelled>(x T) String
+    return "x"
+
+fn main()
+    println("x")
+"#,
+        "the bounds `Named` and `Labelled` of `T` both declare `name` with different signatures",
+    );
+}
+
+#[test]
+fn two_bounds_declaring_one_member_with_the_same_signature_are_accepted() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Named
+    fn name() String
+
+trait Titled
+    fn name() String
+
+class P implements Named, Titled
+    public fn name() String
+        return "p"
+
+fn show<T implements Titled and Named>(x T) String
+    return x.name()
+
+fn main()
+    println(show(P()))
+"#,
+        "p",
+    );
+}
+
+#[test]
+fn a_bound_list_naming_two_unrelated_classes_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Animal
+    public var legs int
+
+class Robot
+    public var bolts int
+
+fn walk<T extends Animal and Robot>(x T) int
+    return 1
+
+fn main()
+    println("x")
+"#,
+        "a type extends at most one class",
+    );
+}
+
+#[test]
+fn a_bound_list_naming_two_related_classes_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Animal
+    public var legs int
+
+class Dog extends Animal
+
+fn walk<T extends Animal and Dog>(x T) int
+    return 1
+
+fn main()
+    println("x")
+"#,
+        "`T` names two classes, `Animal` and `Dog`",
+    );
+}
+
+#[test]
+fn a_bound_list_naming_one_class_and_traits_is_accepted() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Named
+    fn name() String
+
+trait Aged
+    fn age() int
+
+class Animal
+    public var legs int
+    public fn count() int
+        return self.legs
+
+class Dog extends Animal implements Named, Aged
+    public fn name() String
+        return "dog"
+    public fn age() int
+        return 3
+
+fn walk<T extends Animal and Named and Aged>(x T) String
+    return f"{x.name()} {x.age()} {x.count()}"
+
+fn main()
+    println(walk(Dog(legs: 4)))
+"#,
+        "dog 3 4",
+    );
+}
+
+#[test]
+fn a_repeated_bound_is_refused_as_redundant() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+fn big<T implements Comparable and Comparable>(a T, b T) T
+    if a < b
+        return b
+    return a
+
+fn main()
+    println(f"{big(3, 2)}")
+"#,
+        "the bound `Comparable` is written twice for `T`",
+    );
+}
+
+#[test]
+fn a_type_set_written_with_is_beside_another_bound_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.math
+
+fn f<T is Real and Hashable>(a T) int
+    return a.hash()
+
+fn main()
+    println("x")
+"#,
+        "a type set (`is`) is not combined with other bounds",
+    );
+}
+
+#[test]
+fn a_type_set_written_with_implements_beside_another_bound_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.math
+
+fn f<T implements Real and Hashable>(a T) int
+    return a.hash()
+
+fn main()
+    println("x")
+"#,
+        "a type set (`is Real`) is not combined with other bounds",
+    );
+}
+
+#[test]
+fn a_member_no_bound_declares_is_refused_naming_every_bound() {
+    let code = format!(
+        "{PEOPLE}
+fn f<T implements Named and Aged>(a T) String
+    return a.color()
+
+fn main()
+    println(\"x\")
+"
+    );
+    assert_compiler_error(
+        &code,
+        "no bound of `T` declares `color`: `T implements Named and Aged`",
+    );
+}

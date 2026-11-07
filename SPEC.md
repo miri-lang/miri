@@ -1140,6 +1140,8 @@ class Cache<K implements Hashable and Steppable, V>
 
 Inside the body the parameter has the methods and operators of every bound: `<` through `Comparable`, `hash()` and use as a `Set` element through `Hashable`. A member is read through the bound that declares it. A parameter of the caller is passed on to a bounded one when its own bounds entail each bound: with `trait Living extends Named, Aged`, a `T implements Living` meets `implements Named and Aged`, while a `T implements Named` does not. A type argument missing a bound is refused naming that bound (`MER_TYP_037`).
 
+A bound list that no type could meet, or that says something twice, is refused where it is written (`MER_TYP_037`): a list names at most one class, since a class extends one parent; a bound is not repeated; a type set (`is Real`) stands alone and is not combined with other bounds; and two bounds may declare a member of the same name only with the same signature. A member that no bound declares is refused naming every bound (`MER_TYP_033`).
+
 A comma separates type parameters, never bounds: `fn big<T implements Comparable, Hashable>` would declare a second, unbounded parameter named `Hashable`, hiding the trait for the whole declaration. A type parameter named after a type in scope is therefore refused where it is declared (`MER_TYP_064`); when the hidden type is a trait written after a bounded parameter, the help spells the bound list: `T implements Comparable and Hashable`.
 
 #### Binding type parameters

@@ -9,6 +9,7 @@ Where the compiler can name a likely intent it does so in the help line. A membe
 - `Type '{name}' has no field or method '{member}'`
 - `Type '{name}' has no field '{member}'`
 - `Type '{name}' does not have members`
+- `` no bound of `{parameter}` declares `{member}`: `{parameter} {bounds}` ``
 
 ## Help
 

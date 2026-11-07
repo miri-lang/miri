@@ -1020,24 +1020,34 @@ impl TypeChecker {
         };
         Some(GenericDefinition {
             name: name.clone(),
-            bounds: self.resolve_bounds(*kind, written, context),
+            bounds: self.resolve_bounds(name, *kind, written, context),
         })
     }
 
-    /// The bounds a parameter or a `type` declaration writes after `kind`,
-    /// each resolved, in written order, keeping the first of any written
-    /// twice. This is the one place a written bound list becomes [`Bounds`].
+    /// The bounds `subject`, a parameter or a `type` declaration, writes
+    /// after `kind`, each resolved, in written order, keeping the first of any
+    /// written twice. This is the one place a written bound list becomes
+    /// [`Bounds`], and where the list is validated (`validate_bounds`); a
+    /// callee's list resolved again to check a call was validated where it
+    /// was declared.
     pub(crate) fn resolve_bounds(
         &mut self,
+        subject: &str,
         kind: TypeDeclarationKind,
         written: &[Expression],
         context: &Context,
     ) -> Bounds {
-        let mut bounds: Vec<Bound> = Vec::with_capacity(written.len());
-        for bound in written {
-            let bound = self.resolve_bound_type(bound, context);
-            if !bounds.iter().any(|seen| seen.ty.kind == bound.kind) {
-                bounds.push(Bound::new(kind, bound));
+        let resolved: Vec<Bound> = written
+            .iter()
+            .map(|bound| Bound::new(kind, self.resolve_bound_type(bound, context)))
+            .collect();
+        if !self.resolving_declared_signature {
+            self.validate_bounds(subject, &resolved, written);
+        }
+        let mut bounds: Vec<Bound> = Vec::with_capacity(resolved.len());
+        for bound in resolved {
+            if !bounds.iter().any(|seen| seen.ty.kind == bound.ty.kind) {
+                bounds.push(bound);
             }
         }
         Bounds::new(bounds)

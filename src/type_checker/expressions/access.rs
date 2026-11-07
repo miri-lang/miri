@@ -823,6 +823,37 @@ impl TypeChecker {
         ))
     }
 
+    /// Refuse `member` read on a parameter with several bounds when none of
+    /// them declares it, naming every bound, since no one bound is the place
+    /// it is missing from. Whether it refused.
+    fn refuse_member_no_bound_declares(
+        &mut self,
+        receiver: &Type,
+        member: &str,
+        span: Span,
+    ) -> bool {
+        let TypeKind::Generic(name, bounds) = &receiver.kind else {
+            return false;
+        };
+        if bounds.len() < 2 || bounds.entail(|bound| self.declares_member(&bound.ty, member)) {
+            return false;
+        }
+        let named = bounds
+            .iter()
+            .map(|bound| format!("`{}`", bound.ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.report_error_with_help(
+            DiagnosticCode::TypFieldNotFound,
+            format!("no bound of `{name}` declares `{member}`: `{name} {bounds}`"),
+            span,
+            format!(
+                "use a member one of {named} declares, or add a bound that declares `{member}`"
+            ),
+        );
+        true
+    }
+
     /// The bound of `bounds` that declares `member`: the first that does, or
     /// the first of all when none does, so the member is reported missing
     /// from it. `None` only for a parameter with no bound.
@@ -906,6 +937,29 @@ impl TypeChecker {
                 .is_some_and(|info| info.is_parameter)
     }
 
+    /// The member a value of `obj_type` answers without reading a
+    /// declaration: a derived `hash` or operator method, or the error for a
+    /// member none of a parameter's several bounds declares. `None` when the
+    /// member is read from a declaration.
+    fn member_without_declaration(
+        &mut self,
+        obj_type: &Type,
+        prop_name: &str,
+        span: Span,
+        context: &Context,
+    ) -> Option<Type> {
+        if prop_name == HASH_METHOD_NAME {
+            if let Some(member) = self.derived_hash_member(obj_type, span, context) {
+                return Some(member);
+            }
+        }
+        if let Some(member) = self.derived_member_type(obj_type, prop_name, context) {
+            return Some(member);
+        }
+        self.refuse_member_no_bound_declares(obj_type, prop_name, span)
+            .then(|| make_type(TypeKind::Error))
+    }
+
     fn infer_member_dispatch(
         &mut self,
         obj_type: &Type,
@@ -914,16 +968,12 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Type {
-        let narrowed = self.receiver_at_declaring_bound(obj_type, prop_name);
-        let obj_type = narrowed.as_ref().unwrap_or(obj_type);
-        if prop_name == HASH_METHOD_NAME {
-            if let Some(member) = self.derived_hash_member(obj_type, span, context) {
-                return member;
-            }
-        }
-        if let Some(member) = self.derived_member_type(obj_type, prop_name, context) {
+        if let Some(member) = self.member_without_declaration(obj_type, prop_name, span, context) {
             return member;
         }
+        let receiver = obj_type;
+        let narrowed = self.receiver_at_declaring_bound(receiver, prop_name);
+        let obj_type = narrowed.as_ref().unwrap_or(receiver);
         let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);
         self.record_parameter_method_requirement(obj_type, prop_name, context);
 
@@ -943,7 +993,7 @@ impl TypeChecker {
             if let Some(result) = self.dispatch_type_definition_member(
                 name, prop_name, obj_type, &type_args, span, context, call_arity,
             ) {
-                return self.read_at_bounded_receiver(result, obj_type);
+                return self.read_at_bounded_receiver(result, obj_type, receiver);
             }
         }
 
@@ -978,12 +1028,17 @@ impl TypeChecker {
         }
     }
 
-    /// A member of the trait bounding `receiver`, read at the receiver: the
-    /// trait wrote its own instances as `Self`, which for a value of a type
+    /// A member of the trait bounding `lookup`, read at `receiver`: the trait
+    /// wrote its own instances as `Self`, which for a value of a type
     /// parameter is that parameter, so `a.compare(b)` with `a T` takes a `T`
     /// and `a.concat(b)` gives one. Any other member is returned as it is.
-    fn read_at_bounded_receiver(&self, member: Type, receiver: &Type) -> Type {
-        let TypeKind::Generic(_, bounds) = &receiver.kind else {
+    ///
+    /// `lookup` is the receiver narrowed to the one bound that declares the
+    /// member, and is used only to find that bound; `Self` is the receiver
+    /// with every bound it has, so `x.twice().name()` on a `T implements
+    /// Doubler and Named` reads `name` on a `T` that is still `Named`.
+    fn read_at_bounded_receiver(&self, member: Type, lookup: &Type, receiver: &Type) -> Type {
+        let TypeKind::Generic(_, bounds) = &lookup.kind else {
             return member;
         };
         let Some(bound) = bounds.only().map(|bound| &bound.ty) else {
