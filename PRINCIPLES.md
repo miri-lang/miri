@@ -16,6 +16,29 @@ Every section ends with a **Self-check** block. The `miri-audit` skill grades a 
 
 ---
 
+## 0.1 Miri's promises (the direction every decision takes)
+
+Miri's compiler is the harness: it exists to make a program that compiles a program that keeps working. Three promises follow, and every language, compiler, runtime and standard-library decision is judged against them.
+
+1. **If the program compiles, it is as correct as the compiler can make it.** The compiler catches a bug at the earliest stage that can see it: a mistake it could have refused is never left to show up at run time.
+2. **If the program compiles, there are no memory surprises.** No use after free, no double free, no leak, no out-of-bounds read or write, on any target.
+3. **The standard library and the built-ins never cause a runtime error.** They do not panic or trap: an operation that can fail on some inputs says so in its type (`T?`, `Result<T, E>`), and the caller decides what failure means.
+
+**How a decision follows from them (MUST):**
+- Between two designs, prefer the one that moves a failure from run time to compile time, or removes it. A silent wrong answer is the worst outcome, a runtime error the next worst, a compile error with a repair the best.
+- No implicit defaults that can be silently wrong: a behaviour that is right only sometimes (identity equality, an address hash, a guessed type) is not supplied by default; the program states it, or the compiler refuses with help that says what to write.
+- Be pragmatic about how the strictness feels, not about whether it is there: a refusal carries help naming the fix, rules are the same on every target, and strictness that prevents no runtime issue is not added.
+- When an existing behaviour breaks a promise, it is a defect to fix, not a precedent to copy.
+
+**Known gaps** (built-ins that still stop the program, each to be brought under promise 3 or justified): reading a missing map key with `m[k]`, indexing a list or array out of range, integer overflow and division by zero, and stepping a `String` that is not one character (`MER_RT_019`).
+
+**Self-check:**
+- [ ] Could this failure be caught at compile time instead of run time? If so, it is.
+- [ ] Does anything new in the stdlib or the runtime trap or panic on some input? If so, its type says it can fail instead.
+- [ ] Does a default here ever give a silently wrong answer? If so, it is not a default.
+
+---
+
 ## 1. Clean Architecture: the pipeline is the architecture
 
 Miri's architecture is a *pipeline of pure transformations* with an inner core (semantics) and outer rings (text, machine code, OS). The **dependency rule** is non-negotiable: dependencies point inward.

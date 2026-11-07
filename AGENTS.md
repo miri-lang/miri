@@ -9,6 +9,8 @@ This file is your core instruction manual. Refer to it and the principles within
 ## 0. Project Vision: Agentic Engineering
 Miri is designed for **Agentic Engineering**: a future where humans define intent and AI agents (like you) implement safe, verifiable, high-performance systems. Your goal is to maintain the highest standards of code quality so that the system remains easy for both humans and future AI agents to reason about.
 
+Every decision follows **Miri's promises** (`PRINCIPLES.md` §0.1): if a program compiles it is as correct as the compiler can make it, it has no memory surprises, and the standard library and built-ins never cause a runtime error. When choosing between designs, prefer the one that turns a runtime failure into a compile error with a repair.
+
 ---
 
 ## 0.1 Planning lives outside this repository (BINDING)
