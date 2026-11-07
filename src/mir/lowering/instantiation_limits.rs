@@ -13,7 +13,10 @@
 //! that needs one past a bound:
 //!
 //! - an instance whose type arguments nest more than
-//!   [`MAX_INSTANCE_TYPE_DEPTH`] type constructors deep, and
+//!   [`MAX_INSTANCE_TYPE_DEPTH`] type constructors deep,
+//! - an instance whose type arguments are built from more than
+//!   [`MAX_INSTANCE_TYPE_SIZE`] types, which a type doubling on every level
+//!   passes long before it nests past the depth bound, and
 //! - a class needing more than [`MAX_VALUE_INSTANCES_PER_CLASS`]
 //!   instantiations at value arguments.
 //!
@@ -34,7 +37,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 pub(crate) use crate::mir::instantiation::shape::constructor_parts;
 pub use crate::mir::instantiation::shape::{
-    deepest_argument_depth, instance_type_depth, mentions_open_parameter, MAX_INSTANCE_TYPE_DEPTH,
+    arguments_type_size, deepest_argument_depth, instance_type_depth, mentions_open_parameter,
+    MAX_INSTANCE_TYPE_DEPTH, MAX_INSTANCE_TYPE_SIZE,
 };
 use crate::mir::instantiation::written_component_type;
 use crate::type_checker::context::TypeDefinition;
@@ -76,6 +80,9 @@ pub const TYPE_ARGUMENT_HELP: &str = "instantiate the class at a type the compil
 pub enum ExceededLimit {
     /// The instance nests this many type constructors deep.
     TypeDepth(usize),
+    /// The instance's type arguments are built from more than
+    /// [`MAX_INSTANCE_TYPE_SIZE`] types.
+    TypeSize,
     /// The instance's class needs more instantiations at value arguments than
     /// [`MAX_VALUE_INSTANCES_PER_CLASS`]; `parameter` is the one it takes a
     /// value for.
@@ -111,6 +118,9 @@ pub fn exceeded_limit(
     let depth = instance_type_depth(args);
     if depth > MAX_INSTANCE_TYPE_DEPTH {
         return Some(ExceededLimit::TypeDepth(depth));
+    }
+    if arguments_type_size(args) > MAX_INSTANCE_TYPE_SIZE {
+        return Some(ExceededLimit::TypeSize);
     }
     if value_instances > MAX_VALUE_INSTANCES_PER_CLASS && grows_by_value(class, args) {
         return Some(ExceededLimit::ValueInstances {
@@ -164,14 +174,22 @@ pub fn polymorphic_recursion(
     span: Span,
 ) -> LoweringError {
     let instance = spelled_instance(class, args, SPELLED_LEVELS);
+    let type_growth_help = if growth.through_trait {
+        DEPTH_THROUGH_TRAIT_HELP
+    } else {
+        DEPTH_HELP
+    };
     let (message, help) = match limit {
         ExceededLimit::TypeDepth(depth) => (
             format!("instantiating `{instance}` nests its type argument {depth} levels deep"),
-            if growth.through_trait {
-                DEPTH_THROUGH_TRAIT_HELP
-            } else {
-                DEPTH_HELP
-            },
+            type_growth_help,
+        ),
+        ExceededLimit::TypeSize => (
+            format!(
+                "instantiating `{instance}` builds its type argument from more types than one \
+                 instance may hold ({MAX_INSTANCE_TYPE_SIZE})"
+            ),
+            type_growth_help,
         ),
         ExceededLimit::ValueInstances { parameter } => (
             format!(
@@ -296,7 +314,7 @@ fn growth_note(
         |m| format!("each call to `{class}.{m}`"),
     );
     let larger = match limit {
-        ExceededLimit::TypeDepth(_) => "a larger type".to_string(),
+        ExceededLimit::TypeDepth(_) | ExceededLimit::TypeSize => "a larger type".to_string(),
         ExceededLimit::ValueInstances { parameter } => format!("a new value of `{parameter}`"),
     };
     Some(format!(

@@ -1432,12 +1432,11 @@ fn a_private_generic_method_of_another_module_is_refused() {
     );
 }
 
-/// Two generic methods of one name in one class: the later declaration
-/// replaces the earlier, so a call matching only the earlier's arity is
-/// refused at compile time rather than run against the wrong body. The
-/// same holds for two non-generic methods of one name.
+/// Two generic methods of one name in one class: the later declaration is
+/// refused where it is written, even when the only call matches the
+/// earlier's arity. The same holds for two non-generic methods of one name.
 #[test]
-fn a_second_generic_method_of_one_name_replaces_the_first() {
+fn a_second_generic_method_of_one_name_is_refused() {
     assert_compiler_error(
         concat!(
             "use system.io\n",
@@ -1452,6 +1451,38 @@ fn a_second_generic_method_of_one_name_replaces_the_first() {
             "    let d = D()\n",
             "    println(f\"{d.f(1)}\")\n",
         ),
-        "Missing argument for parameter 'y'",
+        "Method 'f' is already declared in this class",
+    );
+}
+
+/// A function handing its parameter on to a body that calls the generic
+/// method is refused at the call binding it to the trait, and the refusal
+/// says the function reaches the method rather than calls it.
+#[test]
+fn a_trait_type_bound_to_a_parameter_handed_on_to_a_generic_method_call_says_reaches() {
+    let source = format!(
+        "{PICKER}fn run<P implements Picker>(p P) String\n    \
+         return p.pick<String>(\"a\", \"b\")\n\n\
+         fn outer<Q implements Picker>(q Q) String\n    return run(q)\n\n\
+         fn main()\n    let x Picker = First()\n    println(outer(x))\n"
+    );
+    assert_compiler_error(&source, "MER_TYP_087");
+    assert_compiler_error(
+        &source,
+        "`outer` reaches the generic method `pick` through its type parameter `Q`",
+    );
+}
+
+/// A function calling the generic method itself is still said to call it.
+#[test]
+fn a_trait_type_bound_to_a_parameter_calling_a_generic_method_says_calls() {
+    let source = format!(
+        "{PICKER}fn run<P implements Picker>(p P) String\n    \
+         return p.pick<String>(\"a\", \"b\")\n\n\
+         fn main()\n    let x Picker = First()\n    println(run(x))\n"
+    );
+    assert_compiler_error(
+        &source,
+        "`run` calls the generic method `pick` through its type parameter `P`",
     );
 }

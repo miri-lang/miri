@@ -493,3 +493,27 @@ fn an_enum_drop_hook_declaring_type_parameters_is_refused() {
         "declare the type parameter on the enum",
     );
 }
+
+/// A trait's default drop hook declaring type parameters is refused the same
+/// way: releasing an instance of an implementing class binds none.
+#[test]
+fn a_trait_default_drop_hook_declaring_type_parameters_is_refused() {
+    let source = concat!(
+        "use system.io\n",
+        "\n",
+        "trait Closing\n",
+        "    fn drop<T>()\n",
+        "        println(\"d\")\n",
+        "\n",
+        "class D implements Closing\n",
+        "    var s String\n",
+        "    fn init()\n",
+        "        self.s = \"a\"\n",
+        "\n",
+        "fn main()\n",
+        "    let d = D()\n",
+        "    println(d.s)\n",
+    );
+    assert_compiler_error(source, "MER_TYP_088");
+    assert_compiler_error(source, "declare the type parameter on the trait");
+}

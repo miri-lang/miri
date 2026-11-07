@@ -362,3 +362,71 @@ fn main()
         "nests its type argument 33 levels deep",
     );
 }
+
+/// A generic function calling itself at a type twice the size of its own
+/// doubles its type on every level, so the depth bound alone would be reached
+/// only after building types of every size up to 2^32. The instantiation is
+/// refused once its type outgrows the size one instance may have, promptly.
+#[test]
+fn test_a_body_that_calls_itself_at_a_doubled_type_is_refused() {
+    let source = r#"
+use system.io
+
+fn grow<T>(x T, n int) int
+    if n == 0: return 0
+    return grow((x, x), n - 1)
+
+fn main()
+    println(f"{grow(1, 3)}")
+"#;
+    assert_build_error(source, "MER_MIR_016");
+    assert_build_error(
+        source,
+        "builds its type argument from more types than one instance may hold",
+    );
+}
+
+/// A generic method calling itself at a doubled type is refused the same way.
+#[test]
+fn test_a_method_that_calls_itself_at_a_doubled_type_is_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+class G
+    fn grow<T>(x T, n int) int
+        if n == 0: return 0
+        return self.grow((x, x), n - 1)
+
+fn main()
+    let g = G()
+    println(f"{g.grow(1, 3)}")
+"#,
+        "builds its type argument from more types than one instance may hold",
+    );
+}
+
+/// A class building its next instance at a doubled argument is refused the
+/// same way.
+#[test]
+fn test_a_class_built_at_a_doubled_argument_is_refused() {
+    assert_build_error(
+        r#"
+use system.io
+
+class Impl<T>
+    var v T
+    fn init(v T)
+        self.v = v
+    fn go(n int) int
+        if n == 0: return 0
+        let next = Impl<(T, T)>((self.v, self.v))
+        return next.go(n - 1)
+
+fn main()
+    let i = Impl<int>(1)
+    println(f"{i.go(3)}")
+"#,
+        "builds its type argument from more types than one instance may hold",
+    );
+}

@@ -48,6 +48,7 @@ use crate::type_checker::context::{
     trait_is_or_extends, Context, GenericDefinition, MethodInfo, SymbolInfo, TraitDefinition,
     TypeDefinition,
 };
+use crate::type_checker::statements::declarations::method_names::DeclaredMethods;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
 use std::collections::BTreeMap;
@@ -240,12 +241,17 @@ impl TypeChecker {
     ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(body.len());
+        let mut declared = DeclaredMethods::default();
 
         for stmt in body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
+                    if self.refuse_redeclared_method(&mut declared, decl, stmt.span, "trait") {
+                        continue;
+                    }
                     self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypTraitDefinition);
                     self.refuse_generic_device_method(decl, stmt.span);
+                    self.refuse_generic_construction_method(decl, stmt.span, "trait");
                     if let Some(generics) = &decl.generics {
                         self.refuse_type_parameters_hiding_owner_parameters(
                             generics,

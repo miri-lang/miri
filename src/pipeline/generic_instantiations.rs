@@ -126,9 +126,14 @@ enum GenericInstantiation {
 
 impl GenericInstantiation {
     fn symbol(&self) -> &Symbol {
+        self.called().symbol()
+    }
+
+    /// The instantiation as a lowered body records it.
+    fn called(&self) -> CalledInstantiation<'_> {
         match self {
-            GenericInstantiation::Function(call) => &call.symbol,
-            GenericInstantiation::Method(call) => &call.symbol,
+            GenericInstantiation::Function(call) => CalledInstantiation::Function(call),
+            GenericInstantiation::Method(call) => CalledInstantiation::Method(call),
         }
     }
 }
@@ -146,6 +151,14 @@ impl<'c> CalledInstantiation<'c> {
         match self {
             CalledInstantiation::Function(call) => &call.symbol,
             CalledInstantiation::Method(call) => &call.symbol,
+        }
+    }
+
+    /// Each type parameter the call binds, with the type it binds it to.
+    fn type_args(self) -> &'c [(String, Type)] {
+        match self {
+            CalledInstantiation::Function(call) => &call.type_args,
+            CalledInstantiation::Method(call) => &call.type_args,
         }
     }
 
@@ -195,23 +208,7 @@ pub(super) fn refuse_unnameable_generic_calls(
     else {
         return Ok(());
     };
-    let (name, type_args, declaration) = match call {
-        CalledInstantiation::Function(call) => (
-            &call.function.name,
-            &call.type_args,
-            reach
-                .generic_functions
-                .get(&call.function)
-                .and_then(|site| site.statement(result)),
-        ),
-        CalledInstantiation::Method(call) => (
-            &call.method,
-            &call.type_args,
-            generic_method_statement(result, reach, call),
-        ),
-    };
-    let span = declaration.map_or_else(Span::default, |stmt| stmt.span);
-    let args: Vec<Type> = type_args.iter().map(|(_, ty)| ty.clone()).collect();
+    let (name, args, span) = called_site(result, reach, call);
     let depth = limits::deepest_argument_depth(&args);
     if depth <= limits::MAX_INSTANCE_TYPE_DEPTH {
         let refusal = mir::symbol::ClaimRefusal::Unnameable(call.symbol().clone());
@@ -226,6 +223,55 @@ pub(super) fn refuse_unnameable_generic_calls(
     Err(CompilerError::Lowering(limits::polymorphic_recursion(
         name, &args, &limit, &growth, span,
     )))
+}
+
+/// Refuse `call` when its type arguments are built from more types than one
+/// instance may hold, before its body is lowered: a body calling itself at a
+/// type twice its own size would otherwise be lowered at every size up to
+/// the depth bound, each copy costing twice the last.
+fn refuse_oversized_instantiation(
+    result: &PipelineResult,
+    reach: &ReachTables,
+    call: CalledInstantiation<'_>,
+) -> Result<(), CompilerError> {
+    use mir::lowering::instantiation_limits as limits;
+    let size = limits::arguments_type_size(call.type_args().iter().map(|(_, ty)| ty));
+    if size <= limits::MAX_INSTANCE_TYPE_SIZE {
+        return Ok(());
+    }
+    let (name, args, span) = called_site(result, reach, call);
+    Err(CompilerError::Lowering(limits::polymorphic_recursion(
+        name,
+        &args,
+        &limits::ExceededLimit::TypeSize,
+        &limits::Growth::default(),
+        span,
+    )))
+}
+
+/// The name `call` instantiates, its type arguments, and the span of the
+/// declaration whose body it names; an empty span when no declaration does.
+fn called_site<'c>(
+    result: &PipelineResult,
+    reach: &ReachTables,
+    call: CalledInstantiation<'c>,
+) -> (&'c str, Vec<Type>, Span) {
+    let (name, declaration) = match call {
+        CalledInstantiation::Function(function_call) => (
+            function_call.function.name.as_str(),
+            reach
+                .generic_functions
+                .get(&function_call.function)
+                .and_then(|site| site.statement(result)),
+        ),
+        CalledInstantiation::Method(method_call) => (
+            method_call.method.as_str(),
+            generic_method_statement(result, reach, method_call),
+        ),
+    };
+    let span = declaration.map_or_else(Span::default, |stmt| stmt.span);
+    let args = call.type_args().iter().map(|(_, ty)| ty.clone()).collect();
+    (name, args, span)
 }
 
 impl Pipeline {
@@ -247,6 +293,7 @@ impl Pipeline {
             if call.symbol().has_an_unnameable_argument() {
                 continue;
             }
+            refuse_oversized_instantiation(result, reach, call.called())?;
             let first_new = bodies.len();
             let lowering = LoweringSink {
                 is_release,

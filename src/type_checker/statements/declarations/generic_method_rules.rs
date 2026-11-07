@@ -209,7 +209,7 @@ impl TypeChecker {
     }
 
     /// Refuse `decl`, a constructor or a drop hook of a type of `owner_kind`
-    /// (`class`, `enum`), when it declares type parameters of its own:
+    /// (`class`, `enum`, `trait`), when it declares type parameters of its own:
     /// building or releasing an instance runs it, and binds no type argument
     /// a copy could be compiled at.
     pub(crate) fn refuse_generic_construction_method(

@@ -50,6 +50,7 @@ use crate::type_checker::context::{
     FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
 use crate::type_checker::statements::declarations::generic_method_rules::spelled_signature;
+use crate::type_checker::statements::declarations::method_names::DeclaredMethods;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::statements::runtime_effects::RuntimeDeclaration;
 use crate::type_checker::utils::permits_accelerable;
@@ -733,6 +734,7 @@ impl TypeChecker {
         let mut fields: Vec<(String, FieldInfo)> = Vec::with_capacity(body.len());
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         let mut method_statements: Vec<&'a Statement> = Vec::with_capacity(body.len());
+        let mut declared = DeclaredMethods::default();
 
         for stmt in body {
             match &stmt.node {
@@ -740,6 +742,9 @@ impl TypeChecker {
                     self.collect_class_fields(decls, vis, &mut fields, stmt.span, context);
                 }
                 StatementKind::FunctionDeclaration(decl) => {
+                    if self.refuse_redeclared_method(&mut declared, decl, stmt.span, "class") {
+                        continue;
+                    }
                     self.collect_class_method(
                         decl,
                         &mut methods,
@@ -859,29 +864,6 @@ impl TypeChecker {
                 "class",
                 class_generics,
             );
-        }
-
-        // Check for duplicate method names (instance + static)
-        if let Some(existing) = methods.get(&decl.name) {
-            if existing.is_static != decl.properties.is_static {
-                // Point at the method's own name. Programmatically built
-                // declarations carry no name span, so they fall back to the
-                // statement.
-                let error_span = if decl.name_span.end > decl.name_span.start {
-                    decl.name_span
-                } else {
-                    stmt.span
-                };
-                self.report_error(
-                    DiagnosticCode::TypStaticMethodRestriction,
-                    format!(
-                        "Method '{}' cannot be both instance and static method",
-                        decl.name
-                    ),
-                    error_span,
-                );
-                return;
-            }
         }
 
         // Validate static method constraints

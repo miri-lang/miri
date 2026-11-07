@@ -4,7 +4,7 @@ A method may declare type parameters of its own, `fn speak<T>(x T) String`, and 
 
 For the same reason a class gives each generic method a body, including one a trait it implements requires without a default: no subclass could supply one. Only a trait declares a generic method without a body, and a class implementing that trait supplies it, reached through the class itself or through a type parameter bounded by the trait.
 
-A constructor (`init`) or a drop hook (`drop`) of a class or an enum declares no type parameters of its own: building or releasing an instance runs it, and neither binds a type argument a copy could be compiled at. A type the hook needs belongs on the class or the enum.
+A constructor (`init`) or a drop hook (`drop`) of a class or an enum, or a trait's default drop hook, declares no type parameters of its own: building or releasing an instance runs it, and neither binds a type argument a copy could be compiled at. A type the hook needs belongs on the class, the enum or the trait.
 
 ## Messages
 

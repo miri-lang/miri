@@ -103,8 +103,14 @@ pub(crate) enum Obligation {
     /// own, on a value of `parameter`, a trait-bounded type parameter. The
     /// call is compiled for the type the parameter is bound to, so that type
     /// has to be a class or an enum: a trait has no body for every type
-    /// argument the call binds.
-    GenericMethodCall { parameter: String, method: String },
+    /// argument the call binds. `handed_on` is set when the body does not
+    /// write the call itself but hands the parameter to a body that reaches
+    /// it.
+    GenericMethodCall {
+        parameter: String,
+        method: String,
+        handed_on: bool,
+    },
     /// A default of `trait_name` hands its `self` on as a value — an
     /// argument, an initializer, a returned value — rather than calling a
     /// method on it. The value is then an instance of whichever class the
@@ -286,10 +292,13 @@ impl Obligation {
                 }),
                 Some(Pin::Concrete(_)) | None => None,
             },
-            Obligation::GenericMethodCall { parameter, method } => match pins.get(parameter) {
+            Obligation::GenericMethodCall {
+                parameter, method, ..
+            } => match pins.get(parameter) {
                 Some(Pin::CallerParameter(own)) => Some(Obligation::GenericMethodCall {
                     parameter: own.clone(),
                     method: method.clone(),
+                    handed_on: true,
                 }),
                 Some(Pin::Concrete(_)) | None => None,
             },
@@ -765,6 +774,7 @@ impl TypeChecker {
             Obligation::GenericMethodCall {
                 parameter: parameter.to_string(),
                 method: method.to_string(),
+                handed_on: false,
             },
         );
     }
@@ -1134,9 +1144,11 @@ impl TypeChecker {
                 Obligation::Unary(written) => self.answer_unary(written, site),
                 Obligation::Cast(written) => self.answer_cast(written, site),
                 Obligation::Hash { value } => self.answer_hash(value, site),
-                Obligation::GenericMethodCall { parameter, method } => {
-                    self.answer_generic_method_call(parameter, method, site)
-                }
+                Obligation::GenericMethodCall {
+                    parameter,
+                    method,
+                    handed_on,
+                } => self.answer_generic_method_call(parameter, method, *handed_on, site),
                 Obligation::ParameterMethod { .. } | Obligation::SelfConversion { .. } => {}
             }
         }
@@ -1463,10 +1475,17 @@ impl TypeChecker {
     }
 
     /// Report `site` when it binds `parameter`, through which its body calls
-    /// the generic method `method`, to a trait type: the call would be
+    /// the generic method `method` — or, when `handed_on`, hands the
+    /// parameter to a body that does — to a trait type: the call would be
     /// compiled for the trait, and a value of a trait type is reached through
     /// a vtable, whose one slot has no body for every type argument.
-    fn answer_generic_method_call(&mut self, parameter: &str, method: &str, site: &PinningSite) {
+    fn answer_generic_method_call(
+        &mut self,
+        parameter: &str,
+        method: &str,
+        handed_on: bool,
+        site: &PinningSite,
+    ) {
         let Some(Pin::Concrete(pinned)) = site.pins.get(parameter) else {
             return;
         };
@@ -1481,10 +1500,11 @@ impl TypeChecker {
         }
         let shown = crate::type_checker::diagnostics::shown_type_name(trait_name);
         let callee = &site.callee.1;
+        let verb = if handed_on { "reaches" } else { "calls" };
         self.report_at_site(
             DiagnosticCode::TypGenericMethodThroughTraitValue,
             format!(
-                "`{callee}` calls the generic method `{method}` through its type parameter \
+                "`{callee}` {verb} the generic method `{method}` through its type parameter \
                  `{parameter}`, which this call binds to the trait `{shown}`; a value of a trait \
                  type has no body for every type argument"
             ),

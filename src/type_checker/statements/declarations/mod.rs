@@ -8,6 +8,7 @@ pub mod func;
 pub mod generic_method_rules;
 pub mod generics;
 pub mod inherited_traits;
+pub mod method_names;
 pub mod struct_def;
 pub mod trait_def;
 

@@ -1088,6 +1088,10 @@ Captures are copies: assigning to a captured variable inside the body changes th
 
 A capture of a class instance is a copy of the reference, so a closure capturing an object and stored in one of that object's fields would hold the object alive forever. That store is refused; see [Reference Cycles](#reference-cycles).
 
+### One Method per Name
+
+A class, enum or trait declares each method name once: there is no overloading by parameter count or type, and a static and an instance method do not share a name. A second declaration of a name is refused where it is written, pointing at the first (`MER_TYP_070`; `MER_TYP_055` for a static beside an instance method). A subclass overriding a base method and a class implementing a trait's method are not redeclarations.
+
 ### Methods Are Not Values
 
 A method is called, never read as a value: `k.a` without a call is refused (`MER_TYP_078`), on a class instance, a trait-typed receiver and an enum alike. To hand a method on, wrap the call in a lambda, which names the parameters and shows that the receiver is captured:

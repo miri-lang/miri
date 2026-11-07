@@ -10,6 +10,7 @@ For the same reason a call is refused where it binds such a type parameter to th
 
 - `` the generic method `{method}` is called through a value of the trait `{trait}`, which has no body for every type argument ``
 - `` `{function}` calls the generic method `{method}` through its type parameter `{parameter}`, which this call binds to the trait `{trait}`; a value of a trait type has no body for every type argument ``
+- `` `{function}` reaches the generic method `{method}` through its type parameter `{parameter}`, which this call binds to the trait `{trait}`; a value of a trait type has no body for every type argument ``
 
 ## Help
 

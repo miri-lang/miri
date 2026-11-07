@@ -28,6 +28,39 @@ pub const MAX_INSTANCE_TYPE_DEPTH: usize = 32;
 
 const _: () = assert!(MAX_INSTANCE_TYPE_DEPTH < MAX_TOKEN_DEPTH);
 
+/// How many types the arguments of one instance may be built from, all told,
+/// each counted once per place it is written: `(int, (int, String))` is five.
+///
+/// The depth bound alone admits a type that doubles on every level, `(T, T)`
+/// inside a body at `T`, until it holds 2^[`MAX_INSTANCE_TYPE_DEPTH`] types;
+/// every instance on the way is lowered, spelled and hashed at its full size,
+/// so such a program would be refused only after exponential work. This bound
+/// is far above any type a program writes, and well below the size at which
+/// lowering one instance becomes slow.
+pub const MAX_INSTANCE_TYPE_SIZE: usize = 1024;
+
+/// How many types `args` are built from, each counted once per place it is
+/// written, stopping one past [`MAX_INSTANCE_TYPE_SIZE`].
+pub fn arguments_type_size<'t>(args: impl IntoIterator<Item = &'t Type>) -> usize {
+    let mut remaining = MAX_INSTANCE_TYPE_SIZE + 1;
+    for arg in args {
+        count_types(arg, &mut remaining);
+    }
+    MAX_INSTANCE_TYPE_SIZE + 1 - remaining
+}
+
+/// Count `ty` and every type it is built from against `remaining`, stopping
+/// once it runs out.
+fn count_types(ty: &Type, remaining: &mut usize) {
+    let Some(rest) = remaining.checked_sub(1) else {
+        return;
+    };
+    *remaining = rest;
+    for part in constructor_parts(ty).1 {
+        count_types(&part, remaining);
+    }
+}
+
 /// How many type constructors deep an instance at `args` nests, counting its
 /// class: one more than its deepest argument. Past
 /// [`MAX_INSTANCE_TYPE_DEPTH`] the count stops one level beyond it, which is

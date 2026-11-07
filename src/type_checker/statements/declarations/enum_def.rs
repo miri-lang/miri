@@ -11,6 +11,7 @@ use crate::type_checker::attributes;
 use crate::type_checker::context::{
     Context, EnumDefinition, GenericDefinition, MethodInfo, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::statements::declarations::method_names::DeclaredMethods;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
 use std::collections::BTreeMap;
@@ -219,8 +220,12 @@ impl TypeChecker {
     ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut method_map: BTreeMap<String, MethodInfo> = BTreeMap::new();
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(methods.len());
+        let mut declared = DeclaredMethods::default();
         for method_stmt in methods {
             if let StatementKind::FunctionDeclaration(decl) = &method_stmt.node {
+                if self.refuse_redeclared_method(&mut declared, decl, method_stmt.span, "enum") {
+                    continue;
+                }
                 self.refuse_generic_device_method(decl, method_stmt.span);
                 self.refuse_generic_construction_method(decl, method_stmt.span, "enum");
                 if let Some(generics) = &decl.generics {
