@@ -518,12 +518,12 @@ pub(crate) fn lower_member_expr(
         return Ok(result);
     }
 
-    // 2. Handle General Struct Member Access
-    let obj_ty = if let Some(ty) = ctx.type_checker.get_type(obj.id) {
-        ty
-    } else {
-        return Err(LoweringError::type_not_found(obj.id, expr.span));
-    };
+    // Read through the instantiation substitution: inside a body compiled for
+    // `walk<Dog>`, a receiver the checker recorded as the bounded parameter `T`
+    // is a `Dog`, and only the concrete class names the field's slot.
+    let obj_ty = ctx
+        .recorded_type(obj.id)
+        .ok_or_else(|| LoweringError::type_not_found(obj.id, expr.span))?;
 
     // Handle Tuple Member Access
     if let TypeKind::Tuple(_) = &obj_ty.kind {
