@@ -357,7 +357,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.classify(e, false, flow);
             }
             ExpressionKind::Range(start, end, _) => {
-                self.classify_range(start, end, aliases_return, flow);
+                self.classify_range(start, end, flow);
             }
             ExpressionKind::FormattedString(parts, _) => {
                 self.classify_formatted_string(parts, flow);
@@ -529,18 +529,19 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         self.classify(r, false, flow);
     }
 
-    /// A range's bounds are fields of the `Range` it builds, so they are part
-    /// of the returned value exactly as a tuple's members are.
+    /// A range's bounds are the fields of the `Range` struct it builds, so a
+    /// range follows the rule a struct constructor's arguments do: building
+    /// it neither consumes a bound nor makes the bound part of the returned
+    /// value, and `xs..xs` agrees with `Range(start: xs, end: xs, ...)`.
     fn classify_range(
         &self,
         start: &Expression,
         end: &Option<Box<Expression>>,
-        aliases_return: bool,
         flow: &mut ReturnFlow,
     ) {
-        self.classify(start, aliases_return, flow);
+        self.classify(start, false, flow);
         if let Some(e) = end {
-            self.classify(e, aliases_return, flow);
+            self.classify(e, false, flow);
         }
     }
 
@@ -1888,14 +1889,9 @@ fn find_hop_in_return_expr(
                 None
             }
         }
-        ExpressionKind::Range(start, end, _) => {
-            let mut bounds = std::iter::once(start.as_ref()).chain(end.as_deref());
-            if bounds.any(|e| expr_contains_param(e, param_name)) {
-                Some(EscapeNextHop::ReturnAggregate)
-            } else {
-                None
-            }
-        }
+        // A range is a struct literal: like a struct constructor call, it is
+        // no hop of its own (see `classify_range`).
+        ExpressionKind::Range(..) => None,
         ExpressionKind::Call(callee, args) => {
             find_hop_in_call_expr(param_name, callee, args, summaries, types)
         }

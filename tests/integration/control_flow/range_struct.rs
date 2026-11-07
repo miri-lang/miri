@@ -157,22 +157,58 @@ fn main()
 }
 
 /// A range returned from a parameter holds the parameter's value as a field,
-/// so the call takes the argument the way a returned tuple holding it does.
+/// the way a struct built from it does, so the call leaves the caller's
+/// argument usable: the range literal, the `Range` constructor and a user
+/// struct all follow one rule.
 #[test]
-fn a_range_built_from_a_parameter_and_returned_consumes_the_argument() {
-    assert_compiler_error(
-        r#"
+fn a_range_built_from_a_parameter_and_returned_leaves_the_argument_usable() {
+    let bodies = [
+        "return xs..xs",
+        "return xs..=xs",
+        "return Range(start: xs, end: xs, inclusive: false)",
+    ];
+    for body in bodies {
+        assert_runs_with_output(
+            &format!(
+                r#"
 use system.collections.list
 
 fn around(xs [int]) Range<[int]>
-    return xs..xs
+    {body}
 
 fn main()
     let items = List([1, 2, 3])
     let w = around(items)
-    println(f"{items.length()} {w.start.length()}")
+    items.push(4)
+    println(f"{{items.length()}} {{w.start.length()}} {{w.end.length()}}")
+"#
+            ),
+            "4 3 3",
+        );
+    }
+}
+
+/// The user struct the range rule matches.
+#[test]
+fn a_struct_built_from_a_parameter_and_returned_leaves_the_argument_usable() {
+    assert_runs_with_output(
+        r#"
+use system.collections.list
+
+struct Pair
+    a [int]
+    b [int]
+
+fn around(xs [int]) Pair
+    return Pair(a: xs, b: xs)
+
+fn main()
+    let items = List([1, 2, 3])
+    let w = around(items)
+    items.push(4)
+    println(f"{items.length()} {w.a.length()} {w.b.length()}")
 "#,
-        "MER_OWN_003",
+        "4 3 3",
     );
 }
 
