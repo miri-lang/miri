@@ -24,6 +24,8 @@ Miri's compiler is the harness: it exists to make a program that compiles a prog
 2. **If the program compiles, there are no memory surprises.** No use after free, no double free, no leak, no out-of-bounds read or write, on any target.
 3. **The standard library and the built-ins never cause a runtime error.** They do not panic or trap: an operation that can fail on some inputs says so in its type (`T?`, `Result<T, E>`), and the caller decides what failure means.
 
+**On the GPU the promises hold without exception.** A kernel fault is the hardest bug a user can meet: it is silent, reported late or not at all, and far from the line that caused it. A compiler that catches these before the kernel ever runs is the reason to write kernels in Miri rather than elsewhere, so device code gets the strictest reading of every rule here: nothing is clamped, wrapped or ignored on the device that the host would refuse or report, and a failure the compiler can see in a kernel is refused before the kernel is built.
+
 **How a decision follows from them (MUST):**
 - Between two designs, prefer the one that moves a failure from run time to compile time, or removes it. A silent wrong answer is the worst outcome, a runtime error the next worst, a compile error with a repair the best.
 - No implicit defaults that can be silently wrong: a behaviour that is right only sometimes (identity equality, an address hash, a guessed type) is not supplied by default; the program states it, or the compiler refuses with help that says what to write.
