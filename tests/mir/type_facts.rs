@@ -239,6 +239,7 @@ mod drop_hook_reach {
 
     fn drop_hook() -> MethodInfo {
         MethodInfo {
+            generics: Vec::new(),
             params: Vec::new(),
             is_out_flags: Vec::new(),
             return_type: ty(TypeKind::Void),

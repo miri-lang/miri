@@ -45,7 +45,8 @@ use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
-    trait_is_or_extends, Context, MethodInfo, SymbolInfo, TraitDefinition, TypeDefinition,
+    trait_is_or_extends, Context, GenericDefinition, MethodInfo, SymbolInfo, TraitDefinition,
+    TypeDefinition,
 };
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
@@ -111,7 +112,8 @@ impl TypeChecker {
         let parent_trait_names = self.resolve_parent_traits(parent_traits, context);
         self.refuse_circular_trait_inheritance(&name, &parent_trait_names, name_expr.span);
         let parent_trait_args = self.resolve_parent_trait_args(parent_traits, context);
-        let (methods, method_statements) = self.collect_trait_methods(body, context);
+        let (methods, method_statements) =
+            self.collect_trait_methods(body, generic_defs.as_deref().unwrap_or_default(), context);
 
         // Build and register trait definition
         let trait_def = TraitDefinition {
@@ -233,6 +235,7 @@ impl TypeChecker {
     fn collect_trait_methods<'a>(
         &mut self,
         body: &'a [Statement],
+        trait_parameters: &[GenericDefinition],
         context: &mut Context,
     ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
@@ -242,10 +245,13 @@ impl TypeChecker {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
                     self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypTraitDefinition);
-                    // A method without a body is never checked as a function,
-                    // so its own type parameters are checked here.
+                    self.refuse_generic_device_method(decl, stmt.span);
                     if let Some(generics) = &decl.generics {
-                        self.refuse_type_parameters_hiding_types(generics, context);
+                        self.refuse_type_parameters_hiding_owner_parameters(
+                            generics,
+                            "trait",
+                            trait_parameters,
+                        );
                     }
 
                     // Reject static methods in traits
@@ -257,22 +263,11 @@ impl TypeChecker {
                         );
                     }
 
-                    let return_ty = if let Some(rt_expr) = &decl.return_type {
-                        self.resolve_type_expression(rt_expr, context)
-                    } else {
-                        make_type(TypeKind::Void)
-                    };
-
-                    let param_types: Vec<(String, Type)> = decl
-                        .explicit_params()
-                        .iter()
-                        .map(|p| {
-                            (
-                                p.name.clone(),
-                                self.resolve_type_expression(&p.typ, context),
-                            )
-                        })
-                        .collect();
+                    let (method_generics, (param_types, return_ty)) = self.with_member_generics(
+                        decl.generics.as_deref(),
+                        context,
+                        |checker, context| checker.resolve_member_signature(decl, context),
+                    );
                     let is_out_flags: Vec<bool> =
                         decl.explicit_params().iter().map(|p| p.is_out).collect();
 
@@ -282,6 +277,7 @@ impl TypeChecker {
                     methods.insert(
                         decl.name.clone(),
                         MethodInfo {
+                            generics: method_generics,
                             params: param_types,
                             is_out_flags,
                             return_type: return_ty,

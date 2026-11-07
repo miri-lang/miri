@@ -1,6 +1,6 @@
 ## Rule
 
-A declaration reuses a name in a way shadowing does not allow. A `let` may shadow an earlier `let` in the same scope, but a `var` may not shadow anything in its scope, a `let` may not shadow a `var` in the same scope, and no declaration may shadow a constant or declare a constant over an existing name. The variables one `for` loop binds (`for k, v in m`) each need their own name. To change a variable's value, assign to it. A type parameter may not take the name of a type in scope either: inside its declaration the name would mean the parameter, so `fn big<T implements Comparable, Hashable>` declares a second parameter called `Hashable` rather than a second bound on `T`. Join several bounds with `and`: `T implements Comparable and Hashable`.
+A declaration reuses a name in a way shadowing does not allow. A `let` may shadow an earlier `let` in the same scope, but a `var` may not shadow anything in its scope, a `let` may not shadow a `var` in the same scope, and no declaration may shadow a constant or declare a constant over an existing name. The variables one `for` loop binds (`for k, v in m`) each need their own name. To change a variable's value, assign to it. A type parameter may not take the name of a type in scope either: inside its declaration the name would mean the parameter, so `fn big<T implements Comparable, Hashable>` declares a second parameter called `Hashable` rather than a second bound on `T`. Join several bounds with `and`: `T implements Comparable and Hashable`. A method's own type parameter may not take the name of one its class, trait or enum declares: in `class Box<T>`, `fn m<T>` would make `T` mean two types at once.
 
 ## Messages
 
@@ -10,6 +10,7 @@ A declaration reuses a name in a way shadowing does not allow. A `let` may shado
 - `Cannot shadow existing variable/constant '{name}' with a constant.`
 - ``Loop variable '{name}' is named twice; each variable a `for` loop binds needs its own name.``
 - `` type parameter `{name}` hides the {kind} `{name}` ``
+- `` type parameter `{name}` hides the {owner}'s type parameter `{name}` ``
 
 ## Before
 

@@ -35,6 +35,17 @@ impl ProgramReport {
         Self { lines, functions }
     }
 
+    /// Add a line for each vtable slot found pointing at a copy of a generic
+    /// method; a slot belongs to no function, so the count of functions the
+    /// report names is unchanged.
+    pub fn add_slot_violations(&mut self, found: Vec<super::SlotViolation>) {
+        self.lines.extend(
+            found
+                .into_iter()
+                .map(|violation| format!("  vtable: {violation}")),
+        );
+    }
+
     /// The report as one message, or `None` when nothing was found.
     pub fn message(&self) -> Option<String> {
         (!self.lines.is_empty()).then(|| {

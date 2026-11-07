@@ -99,6 +99,12 @@ pub(crate) enum Obligation {
     /// type parameter, or [`SELF_PIN`] for `self` in a trait default — which
     /// runs the method of whichever class the parameter is bound to.
     ParameterMethod { parameter: String, method: String },
+    /// The body calls `method`, a method declaring type parameters of its
+    /// own, on a value of `parameter`, a trait-bounded type parameter. The
+    /// call is compiled for the type the parameter is bound to, so that type
+    /// has to be a class or an enum: a trait has no body for every type
+    /// argument the call binds.
+    GenericMethodCall { parameter: String, method: String },
     /// A default of `trait_name` hands its `self` on as a value — an
     /// argument, an initializer, a returned value — rather than calling a
     /// method on it. The value is then an instance of whichever class the
@@ -280,6 +286,13 @@ impl Obligation {
                 }),
                 Some(Pin::Concrete(_)) | None => None,
             },
+            Obligation::GenericMethodCall { parameter, method } => match pins.get(parameter) {
+                Some(Pin::CallerParameter(own)) => Some(Obligation::GenericMethodCall {
+                    parameter: own.clone(),
+                    method: method.clone(),
+                }),
+                Some(Pin::Concrete(_)) | None => None,
+            },
             // `self` is pinned to the instance at every site that pins a
             // default, so the conversion is answered there, never handed on.
             Obligation::SelfConversion { .. } => None,
@@ -390,7 +403,12 @@ impl Obligation {
                 let hashed = generic_parameter_name(&held_value(value).kind)?;
                 (hashed == parameter).then_some(crate::ast::types::HASH_METHOD_NAME)
             }
-            Obligation::Unary(_) | Obligation::Cast(_) | Obligation::SelfConversion { .. } => None,
+            // The same call states a [`Obligation::ParameterMethod`] too,
+            // which is the one that names the method it runs.
+            Obligation::Unary(_)
+            | Obligation::Cast(_)
+            | Obligation::SelfConversion { .. }
+            | Obligation::GenericMethodCall { .. } => None,
         }
     }
 }
@@ -401,8 +419,9 @@ impl Obligation {
 /// A requirement can only be added, and the obligations that can be added form
 /// a finite set. An [`Obligation::Ordering`] names a generic parameter of the
 /// body it is recorded against, and the program declares finitely many; an
-/// [`Obligation::ParameterMethod`] names one of those and a method the program
-/// writes, and an [`Obligation::SelfConversion`] a trait it declares. The
+/// [`Obligation::ParameterMethod`] and an [`Obligation::GenericMethodCall`]
+/// name one of those and a method the program writes, and an
+/// [`Obligation::SelfConversion`] a trait it declares. The
 /// four that carry types — [`Obligation::Binary`], [`Obligation::Unary`],
 /// [`Obligation::Cast`] and [`Obligation::Hash`] — carry operands that could grow around a
 /// delegation cycle; every one of them hands an operand on through
@@ -650,6 +669,15 @@ impl TypeChecker {
         );
     }
 
+    /// Whether the receiver of a member of `trait_name` being read may be the
+    /// `self` of the body being checked, which is compiled once per concrete
+    /// class: the body belongs to `trait_name` or a type below it, and the
+    /// receiver is not one of its parameters.
+    pub(crate) fn receiver_may_be_own_self(&self, trait_name: &str, context: &Context) -> bool {
+        !self.member_receiver_is_parameter
+            && self.enclosing_default_of(trait_name, context).is_some()
+    }
+
     /// The body being checked, when it is compiled once per concrete class —
     /// a trait default, or a method an abstract class declares — and a value
     /// of `trait_name` may be its `self`: the body belongs to `trait_name` or
@@ -706,6 +734,35 @@ impl TypeChecker {
         state_obligation(
             self.instantiation_requirements.entry(body).or_default(),
             Obligation::ParameterMethod {
+                parameter: parameter.to_string(),
+                method: method.to_string(),
+            },
+        );
+    }
+
+    /// Record that the body being checked calls `method`, which declares type
+    /// parameters of its own, on a value of type `receiver`, when `receiver`
+    /// is one of the body's own trait-bounded parameters: each site binding
+    /// the parameter answers whether the type it binds has a copy of the
+    /// method to compile.
+    pub(crate) fn record_generic_method_call_requirement(
+        &mut self,
+        receiver: &Type,
+        method: &str,
+        context: &Context,
+    ) {
+        if !matches!(&receiver.kind, TypeKind::Generic(_, bounds) if !bounds.is_empty()) {
+            return;
+        }
+        let Some(parameter) = generic_parameter_in_scope(receiver, context) else {
+            return;
+        };
+        let Some(body) = self.current_body(context) else {
+            return;
+        };
+        state_obligation(
+            self.instantiation_requirements.entry(body).or_default(),
+            Obligation::GenericMethodCall {
                 parameter: parameter.to_string(),
                 method: method.to_string(),
             },
@@ -1077,6 +1134,9 @@ impl TypeChecker {
                 Obligation::Unary(written) => self.answer_unary(written, site),
                 Obligation::Cast(written) => self.answer_cast(written, site),
                 Obligation::Hash { value } => self.answer_hash(value, site),
+                Obligation::GenericMethodCall { parameter, method } => {
+                    self.answer_generic_method_call(parameter, method, site)
+                }
                 Obligation::ParameterMethod { .. } | Obligation::SelfConversion { .. } => {}
             }
         }
@@ -1398,6 +1458,40 @@ impl TypeChecker {
                 "'{}' orders its '{}' parameter, so the type it is instantiated with has to \
                  define 'compare'",
                 site.callee.1, parameter
+            ),
+        );
+    }
+
+    /// Report `site` when it binds `parameter`, through which its body calls
+    /// the generic method `method`, to a trait type: the call would be
+    /// compiled for the trait, and a value of a trait type is reached through
+    /// a vtable, whose one slot has no body for every type argument.
+    fn answer_generic_method_call(&mut self, parameter: &str, method: &str, site: &PinningSite) {
+        let Some(Pin::Concrete(pinned)) = site.pins.get(parameter) else {
+            return;
+        };
+        let TypeKind::Custom(trait_name, _) = &pinned.kind else {
+            return;
+        };
+        if !matches!(
+            self.type_table.global_type_definitions.get(trait_name),
+            Some(TypeDefinition::Trait(_))
+        ) {
+            return;
+        }
+        let shown = crate::type_checker::diagnostics::shown_type_name(trait_name);
+        let callee = &site.callee.1;
+        self.report_at_site(
+            DiagnosticCode::TypGenericMethodThroughTraitValue,
+            format!(
+                "`{callee}` calls the generic method `{method}` through its type parameter \
+                 `{parameter}`, which this call binds to the trait `{shown}`; a value of a trait \
+                 type has no body for every type argument"
+            ),
+            site,
+            format!(
+                "bind `{parameter}` to a class that implements `{shown}`: take the value as \
+                 `<G implements {shown}>` so each call is compiled for its type"
             ),
         );
     }

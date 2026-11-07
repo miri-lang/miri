@@ -25,6 +25,7 @@ pub mod element_equality;
 pub mod expression;
 pub mod forall_cpu;
 pub mod forall_gpu;
+mod generic_method_calls;
 pub mod gpu_frame;
 pub mod helpers;
 pub mod inherited_instantiation;
@@ -70,6 +71,7 @@ pub(crate) use crate::mir::instantiation::{
 pub use compilation_ids::{new_shared_compilation_ids, SharedCompilationIds};
 pub use context::LoweringContext;
 pub use expression::lower_expression;
+pub use generic_method_calls::lower_generic_method_copy;
 pub use helpers::{
     bind_pattern, literal_to_u128, lower_body_as_return, lower_to_local, resolve_argument_type,
     resolve_type,
@@ -861,6 +863,38 @@ fn lower_class_method_impl(
         .map_err(|error| in_declaring_file(error, ast_method, tc))
 }
 
+/// The internal error for lowering a method that declares type parameters
+/// of its own with one of them pinned to nothing: such a method has no body
+/// shared by every type argument, so only a copy its calls name, lowered at
+/// their arguments, is ever lowered.
+fn refuse_unpinned_method_parameters(
+    decl: &crate::ast::FunctionDeclarationData,
+    subs: &HashMap<String, Type>,
+    span: crate::error::syntax::Span,
+) -> Result<(), LoweringError> {
+    let unpinned = decl.generics.iter().flatten().find_map(|generic| {
+        let ExpressionKind::GenericType(name, _, _) = &generic.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(name, _) = &name.node else {
+            return None;
+        };
+        (!subs.contains_key(name)).then_some(name)
+    });
+    let Some(parameter) = unpinned else {
+        return Ok(());
+    };
+    Err(LoweringError::internal(
+        DiagnosticCode::MirInvalidInstantiationArgument,
+        format!(
+            "the method `{}` reached lowering as a body shared by every type argument, with \
+             its own type parameter `{parameter}` pinned to nothing",
+            decl.name
+        ),
+        span,
+    ))
+}
+
 fn lower_class_method_body(
     ast_method: &Statement,
     self_type: Type,
@@ -875,6 +909,7 @@ fn lower_class_method_body(
             ast_method.span,
         ));
     };
+    refuse_unpinned_method_parameters(decl, subs, ast_method.span)?;
     let params = decl.explicit_params();
     let ret_type_expr = &decl.return_type;
     let body_stmt = &decl.body;

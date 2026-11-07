@@ -1218,21 +1218,10 @@ impl TypeChecker {
             let StatementKind::FunctionDeclaration(decl) = &stmt.node else {
                 continue;
             };
-            let return_ty = if let Some(rt) = &decl.return_type {
-                self.resolve_type_expression(rt, context)
-            } else {
-                make_type(TypeKind::Void)
-            };
-            let params: Vec<(String, crate::ast::types::Type)> = decl
-                .explicit_params()
-                .iter()
-                .map(|p| {
-                    (
-                        p.name.clone(),
-                        self.resolve_type_expression(&p.typ, context),
-                    )
-                })
-                .collect();
+            let (generics, (params, return_ty)) =
+                self.with_member_generics(decl.generics.as_deref(), context, |checker, context| {
+                    checker.resolve_member_signature(decl, context)
+                });
             let is_out_flags: Vec<bool> = decl.explicit_params().iter().map(|p| p.is_out).collect();
             let is_abstract = decl.body.as_ref().is_none_or(|b| {
                 matches!(&b.node, StatementKind::Empty)
@@ -1241,6 +1230,7 @@ impl TypeChecker {
             methods.insert(
                 decl.name.clone(),
                 context::MethodInfo {
+                    generics,
                     params,
                     is_out_flags,
                     return_type: return_ty,

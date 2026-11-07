@@ -35,6 +35,7 @@ fn custom(name: &str) -> TypeKind {
 
 fn clone_method() -> MethodInfo {
     MethodInfo {
+        generics: Vec::new(),
         params: Vec::new(),
         is_out_flags: Vec::new(),
         return_type: ty(TypeKind::Void),

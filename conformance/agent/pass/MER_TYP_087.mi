@@ -1,0 +1,16 @@
+// summary: Accepted counterpart of MER_TYP_087: the value is taken at a type parameter bounded by the trait.
+// expect-stdout: 5
+use system.io
+
+trait Gen
+    fn pick<T>(x T) T
+
+class Impl implements Gen
+    public fn pick<T>(x T) T
+        return x
+
+fn through<G implements Gen>(g G) int
+    return g.pick(5)
+
+fn main()
+    println(f"{through(Impl())}")

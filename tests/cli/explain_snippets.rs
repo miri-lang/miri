@@ -145,6 +145,8 @@ const VERIFIED: &[&str] = &[
     "MER_TYP_084",
     "MER_TYP_085",
     "MER_TYP_086",
+    "MER_TYP_087",
+    "MER_TYP_088",
 ];
 
 /// Codes whose `Before` example is verified through `miri run`.

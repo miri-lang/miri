@@ -1,0 +1,17 @@
+// summary: Accepted counterpart of MER_TYP_088: the part that varies is a non-generic method the subclass overrides.
+// expect-stdout: dog
+use system.io
+
+class Animal
+    fn speak<T>(x T) String
+        return self.sound()
+    fn sound() String
+        return "animal"
+
+class Dog extends Animal
+    fn sound() String
+        return "dog"
+
+fn main()
+    let a Animal = Dog()
+    println(a.speak(1))

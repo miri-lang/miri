@@ -32,6 +32,7 @@ fn void_type() -> Type {
 
 fn method(is_abstract: bool, is_constructor: bool) -> MethodInfo {
     MethodInfo {
+        generics: Vec::new(),
         params: Vec::new(),
         is_out_flags: Vec::new(),
         return_type: void_type(),

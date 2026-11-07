@@ -49,6 +49,7 @@ use crate::type_checker::context::{
     class_ancestry, class_method_declaration, declared_class_has_body, ClassDefinition, Context,
     FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::statements::declarations::generic_method_rules::spelled_signature;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::statements::runtime_effects::RuntimeDeclaration;
 use crate::type_checker::utils::permits_accelerable;
@@ -400,7 +401,15 @@ impl TypeChecker {
         if !is_abstract {
             self.check_class_non_abstract_methods(name, methods, name_expr);
         }
+        self.refuse_bodiless_generic_methods(name, methods, method_statements, name_expr.span);
         if let Some(ref base_name) = base_class_name {
+            self.refuse_generic_method_overrides(
+                name,
+                base_name,
+                methods,
+                method_statements,
+                name_expr.span,
+            );
             self.check_class_method_overrides(
                 name,
                 base_name,
@@ -709,50 +718,6 @@ impl TypeChecker {
         (trait_names, trait_direct_args)
     }
 
-    /// Refuse a method type parameter named like one its class declares.
-    ///
-    /// Type parameters are told apart by name, so a method's own `T` would be
-    /// read as the class's: its body could return the class's `T` as the
-    /// method's, and a call binding the two differently would be judged
-    /// against the wrong one.
-    fn refuse_shadowed_class_parameters(
-        &mut self,
-        decl: &FunctionDeclarationData,
-        stmt: &Statement,
-        class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
-    ) {
-        let (Some(class_generics), Some(method_generics)) = (class_generics, &decl.generics) else {
-            return;
-        };
-        for generic in method_generics {
-            let ExpressionKind::GenericType(name_expr, _, _) = &generic.node else {
-                continue;
-            };
-            let Ok(name) = self.extract_type_name(name_expr) else {
-                continue;
-            };
-            if class_generics
-                .iter()
-                .any(|class_param| class_param.name == name)
-            {
-                let span = if generic.span.end > generic.span.start {
-                    generic.span
-                } else {
-                    stmt.span
-                };
-                self.report_error(
-                    DiagnosticCode::TypClassDefinition,
-                    format!(
-                        "Method '{}' declares a type parameter '{}' its class already declares; \
-                         give the method's parameter another name",
-                        decl.name, name
-                    ),
-                    span,
-                );
-            }
-        }
-    }
-
     /// Collect fields and method signatures from class body (pass 1)
     #[allow(clippy::type_complexity)]
     fn check_class_collect_members<'a>(
@@ -886,7 +851,15 @@ impl TypeChecker {
         class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
     ) {
         self.check_drop_hook_shape(decl, stmt, DiagnosticCode::TypClassDefinition);
-        self.refuse_shadowed_class_parameters(decl, stmt, class_generics);
+        self.refuse_generic_device_method(decl, stmt.span);
+        self.refuse_generic_construction_method(decl, stmt.span, "class");
+        if let (Some(method_generics), Some(class_generics)) = (&decl.generics, class_generics) {
+            self.refuse_type_parameters_hiding_owner_parameters(
+                method_generics,
+                "class",
+                class_generics,
+            );
+        }
 
         // Check for duplicate method names (instance + static)
         if let Some(existing) = methods.get(&decl.name) {
@@ -946,24 +919,10 @@ impl TypeChecker {
         }
 
         // Resolve all parameter and return types once, for both validation and MethodInfo building
-        let class_parameters = class_parameter_types(class_generics);
-        let param_types: Vec<(String, Type)> = decl
-            .explicit_params()
-            .iter()
-            .map(|p| {
-                let resolved = self.resolve_type_expression(&p.typ, context);
-                (
-                    p.name.clone(),
-                    self.with_class_parameters_inside_functions(resolved, &class_parameters),
-                )
-            })
-            .collect();
-        let return_ty = if let Some(rt_expr) = &decl.return_type {
-            let resolved = self.resolve_type_expression(rt_expr, context);
-            self.with_class_parameters_inside_functions(resolved, &class_parameters)
-        } else {
-            make_type(TypeKind::Void)
-        };
+        let (method_generics, (param_types, return_ty)) =
+            self.with_member_generics(decl.generics.as_deref(), context, |checker, context| {
+                checker.resolve_class_method_signature(decl, class_generics, context)
+            });
         let is_out_flags: Vec<bool> = decl.explicit_params().iter().map(|p| p.is_out).collect();
 
         // Check if static method references class generic parameters
@@ -1012,6 +971,7 @@ impl TypeChecker {
         methods.insert(
             decl.name.clone(),
             MethodInfo {
+                generics: method_generics,
                 params: param_types,
                 is_out_flags,
                 return_type: return_ty,
@@ -1024,6 +984,36 @@ impl TypeChecker {
         );
 
         method_statements.push(stmt);
+    }
+
+    /// The parameter and return types `decl` writes, a class parameter
+    /// named inside a function type kept as the class's.
+    fn resolve_class_method_signature(
+        &mut self,
+        decl: &FunctionDeclarationData,
+        class_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
+        context: &mut Context,
+    ) -> (Vec<(String, Type)>, Type) {
+        let class_parameters = class_parameter_types(class_generics);
+        let params = decl
+            .explicit_params()
+            .iter()
+            .map(|p| {
+                let resolved = self.resolve_type_expression(&p.typ, context);
+                (
+                    p.name.clone(),
+                    self.with_class_parameters_inside_functions(resolved, &class_parameters),
+                )
+            })
+            .collect();
+        let return_ty = match &decl.return_type {
+            Some(rt_expr) => {
+                let resolved = self.resolve_type_expression(rt_expr, context);
+                self.with_class_parameters_inside_functions(resolved, &class_parameters)
+            }
+            None => make_type(TypeKind::Void),
+        };
+        (params, return_ty)
     }
 
     /// Register a runtime function declaration in class scope
@@ -1149,7 +1139,12 @@ impl TypeChecker {
                 if method_name == "init" {
                     continue;
                 }
-                if let Some(parent_method) = base_methods.get(method_name) {
+                // A generic method on either side is refused as an override
+                // by `refuse_generic_method_overrides`, not compared here.
+                if let Some(parent_method) = base_methods
+                    .get(method_name)
+                    .filter(|parent| parent.generics.is_empty() && child_method.generics.is_empty())
+                {
                     self.check_class_method_signature_compat(
                         &lineage,
                         method_name,
@@ -1431,6 +1426,7 @@ impl TypeChecker {
 
         let mut missing_methods: Vec<(String, String)> = Vec::new();
         let mut mismatched_methods: Vec<(String, String, String)> = Vec::new();
+        let mut open_generic_methods: Vec<(String, String)> = Vec::new();
 
         for (method_name, (method_info, origin_trait)) in &all_trait_methods {
             let own = lineage.methods.get(method_name);
@@ -1441,6 +1437,8 @@ impl TypeChecker {
             let Some(class_method) = own.or(inherited.as_ref()) else {
                 if method_info.is_abstract && !leaves_bodies_open {
                     missing_methods.push((method_name.clone(), origin_trait.clone()));
+                } else if method_info.is_abstract && !method_info.generics.is_empty() {
+                    open_generic_methods.push((method_name.clone(), origin_trait.clone()));
                 }
                 continue;
             };
@@ -1457,6 +1455,8 @@ impl TypeChecker {
                 &mut mismatched_methods,
             );
         }
+
+        self.refuse_open_generic_trait_methods(name, &open_generic_methods, name_expr.span);
 
         for (method_name, origin_trait) in missing_methods {
             self.report_error(
@@ -1613,32 +1613,35 @@ impl TypeChecker {
                     class_name, ancestor, class_name, lineage.base_name,
                 ))
         };
-        let params_match = method_info.params.len() == class_method.params.len()
+        // The class's own type parameters are read as the trait's at the
+        // same position; a different count or bound matches nothing.
+        let renaming = self.trait_parameter_renaming(method_info, class_method, &substitute);
+        let rename = |ty: &Type| -> Type {
+            match &renaming {
+                Some(map) if !map.is_empty() => self.substitute_type(ty, map),
+                Some(_) | None => ty.clone(),
+            }
+        };
+        let params_match = renaming.is_some()
+            && method_info.params.len() == class_method.params.len()
             && method_info
                 .params
                 .iter()
                 .zip(class_method.params.iter())
-                .all(|((_, t1), (_, t2))| kinds_compatible(t1, t2) || accepts_self(t1, t2));
+                .all(|((_, t1), (_, t2))| {
+                    kinds_compatible(t1, &rename(t2)) || accepts_self(t1, t2)
+                });
         // `out` is an ABI-affecting modifier (scalar copy-in/copy-out via stack
         // slot). A mismatch between the trait signature and the implementing
         // class would cause a vtable caller and callee to disagree on whether
         // a parameter is a pointer-boxed scalar — silent memory corruption.
         let out_flags_match = (0..method_info.params.len())
             .all(|i| method_info.is_param_out(i) == class_method.is_param_out(i));
-        let return_match = kinds_compatible(&method_info.return_type, &class_method.return_type);
+        let return_match =
+            kinds_compatible(&method_info.return_type, &rename(&class_method.return_type));
 
         if !params_match || !out_flags_match || !return_match {
-            let expected = format!(
-                "fn {}({}) -> {}",
-                method_name,
-                method_info
-                    .params
-                    .iter()
-                    .map(|(n, t)| format!("{}: {}", n, substitute(t)))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                substitute(&method_info.return_type)
-            );
+            let expected = spelled_signature(method_name, method_info, &substitute);
             mismatched_methods.push((method_name.to_string(), origin_trait.to_string(), expected));
         }
     }

@@ -258,10 +258,12 @@ pub(crate) fn dispatched_method_names(
         .map(|(name, _)| name.as_str())
 }
 
-/// Whether a method takes a vtable slot: every one but the constructors and
-/// statics.
+/// Whether a method takes a vtable slot: every one but the constructors,
+/// statics and generic methods. A generic method is compiled once per type
+/// argument a call binds, and a slot holds one body, so every call to one is
+/// static.
 pub(crate) fn takes_vtable_slot(info: &MethodInfo) -> bool {
-    !info.is_constructor && !info.is_static
+    !info.is_constructor && !info.is_static && !info.declares_type_parameters()
 }
 
 /// One filled vtable slot: its number, the method it stands for and the
@@ -285,6 +287,12 @@ impl VtableFills {
     /// filled; none for a vtable no reached body builds.
     pub fn slots(&self, symbol: &str) -> &[FilledSlot] {
         self.slots.get(symbol).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every vtable's symbol with its filled slots, in the order they were
+    /// filled.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &[FilledSlot])> {
+        (self.slots.iter()).map(|(vtable, slots)| (vtable.as_str(), slots.as_slice()))
     }
 
     /// The symbol of every body some filled slot points at.

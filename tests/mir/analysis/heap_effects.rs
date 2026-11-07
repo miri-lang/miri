@@ -108,6 +108,7 @@ fn keyed_class() -> TypeDefinition {
     let mut definition = class("Keyed", "k", TypeKind::Int);
     if let TypeDefinition::Class(class) = &mut definition {
         let equals = MethodInfo {
+            generics: Vec::new(),
             params: Vec::new(),
             is_out_flags: Vec::new(),
             return_type: ty(TypeKind::Boolean),

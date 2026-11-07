@@ -63,6 +63,7 @@ use crate::type_checker::expressions::identifiers::declares_type_parameters;
 use crate::type_checker::generics::value_generic_marker_type;
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::member_hints::{self, MemberCandidate};
+use crate::type_checker::statements::declarations::generic_method_rules::DEVICE_GENERIC_METHOD_HELP;
 use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::{tuple_class_arguments, uniform_element_type};
 use crate::type_checker::TypeChecker;
@@ -993,6 +994,16 @@ impl TypeChecker {
             if let Some(result) = self.dispatch_type_definition_member(
                 name, prop_name, obj_type, &type_args, span, context, call_arity,
             ) {
+                if self.refuses_generic_method_through_trait_value(
+                    receiver, name, prop_name, &result, span, context,
+                ) || self
+                    .refuses_generic_method_in_device_code(prop_name, &result, span, context)
+                {
+                    return make_type(TypeKind::Error);
+                }
+                if is_generic_method(&result) {
+                    self.record_generic_method_call_requirement(obj_type, prop_name, context);
+                }
                 return self.read_at_bounded_receiver(result, obj_type, receiver);
             }
         }
@@ -1026,6 +1037,79 @@ impl TypeChecker {
                 make_type(TypeKind::Error)
             }
         }
+    }
+
+    /// Refuses `member`, the generic method `method` of the trait
+    /// `trait_name`, read off `receiver`, a value of the trait type; whether
+    /// it refused. Such a value is called through its vtable, and no vtable
+    /// slot holds a body for every type argument. A receiver of a type
+    /// parameter, or the `self` of a body compiled once per class, names the
+    /// type the call is compiled for, and is accepted.
+    fn refuses_generic_method_through_trait_value(
+        &mut self,
+        receiver: &Type,
+        trait_name: &str,
+        method: &str,
+        member: &Type,
+        span: Span,
+        context: &Context,
+    ) -> bool {
+        let TypeKind::Function(function) = &member.kind else {
+            return false;
+        };
+        let is_trait_value = matches!(receiver.kind, TypeKind::Custom(..))
+            && matches!(
+                self.type_table.global_type_definitions.get(trait_name),
+                Some(TypeDefinition::Trait(_))
+            );
+        if function.generics.is_none()
+            || !is_trait_value
+            || self.receiver_may_be_own_self(trait_name, context)
+        {
+            return false;
+        }
+        let shown = crate::type_checker::diagnostics::shown_type_name(trait_name);
+        self.report_error_with_help(
+            DiagnosticCode::TypGenericMethodThroughTraitValue,
+            format!(
+                "the generic method `{method}` is called through a value of the trait \
+                 `{shown}`, which has no body for every type argument"
+            ),
+            span,
+            format!(
+                "take the value as `<G implements {shown}>` so each call is compiled for its type"
+            ),
+        );
+        true
+    }
+
+    /// Refuses `member`, the method `method` read in device code, when it
+    /// declares type parameters of its own; whether it refused. A generic
+    /// method is compiled on the host, once per type argument its calls
+    /// bind.
+    fn refuses_generic_method_in_device_code(
+        &mut self,
+        method: &str,
+        member: &Type,
+        span: Span,
+        context: &Context,
+    ) -> bool {
+        let TypeKind::Function(function) = &member.kind else {
+            return false;
+        };
+        if !context.in_gpu_function || function.generics.is_none() {
+            return false;
+        }
+        self.report_error_with_help(
+            DiagnosticCode::TarGpuCodeRestriction,
+            format!(
+                "the generic method `{method}` is called in device code, which compiles no \
+                 copy per type argument"
+            ),
+            span,
+            DEVICE_GENERIC_METHOD_HELP.to_string(),
+        );
+        true
     }
 
     /// A member of the trait bounding `lookup`, read at `receiver`: the trait
@@ -1938,10 +2022,39 @@ impl TypeChecker {
         };
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
+            generics: self.method_generics(method_info, mapping),
             params,
             return_type: return_type_expr,
         })))
+    }
+
+    /// The type parameters `method` declares itself, spelled as a function
+    /// type declares them, with their bounds read at the receiver's
+    /// `mapping`; `None` for a method that declares none. A call binds them
+    /// as it binds a generic function's.
+    fn method_generics(
+        &self,
+        method: &crate::type_checker::context::MethodInfo,
+        mapping: &HashMap<String, Type>,
+    ) -> Option<Vec<Expression>> {
+        if method.generics.is_empty() {
+            return None;
+        }
+        let generics = method
+            .generics
+            .iter()
+            .map(|generic| {
+                self.generic_parameter_expression(
+                    &crate::type_checker::context::GenericDefinition {
+                        name: generic.name.clone(),
+                        bounds: generic
+                            .bounds
+                            .map_types(|bound| self.substitute_type(bound, mapping)),
+                    },
+                )
+            })
+            .collect();
+        Some(generics)
     }
 
     /// A class receiver's method a trait default it inherits supplies —
@@ -2053,7 +2166,7 @@ impl TypeChecker {
         };
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
+            generics: self.method_generics(method_info, receiver_mapping),
             params,
             return_type: return_type_expr,
         })))
@@ -2196,7 +2309,7 @@ impl TypeChecker {
         let return_type_expr = self.build_enum_method_return_type(method_info, &generic_mapping);
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
+            generics: self.method_generics(method_info, &generic_mapping),
             params,
             return_type: return_type_expr,
         })))
@@ -2397,13 +2510,18 @@ impl TypeChecker {
                         })
                         .collect();
 
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
+                    let member = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: self.method_generics(method_info, &HashMap::new()),
                         params,
                         return_type: Some(Box::new(
                             self.create_type_expression(method_info.return_type.clone()),
                         )),
                     })));
+                    if self.refuses_generic_method_in_device_code(prop_name, &member, span, context)
+                    {
+                        return make_type(TypeKind::Error);
+                    }
+                    return member;
                 }
             }
 
@@ -2464,13 +2582,18 @@ impl TypeChecker {
                         })
                         .collect();
 
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
+                    let member = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: self.method_generics(&method_info, &HashMap::new()),
                         params,
                         return_type: Some(Box::new(
                             self.create_type_expression(method_info.return_type.clone()),
                         )),
                     })));
+                    if self.refuses_generic_method_in_device_code(prop_name, &member, span, context)
+                    {
+                        return make_type(TypeKind::Error);
+                    }
+                    return member;
                 } else {
                     self.report_error(DiagnosticCode::TypNotCallable,
                         format!(
@@ -2715,5 +2838,14 @@ fn is_indexed_by_key(obj_type: &Type) -> bool {
         &obj_type.kind,
         TypeKind::Custom(name, _)
             if BuiltinCollectionKind::from_name(name.as_str()) == Some(BuiltinCollectionKind::Map)
+    )
+}
+
+/// Whether `member` is a method declaring type parameters of its own.
+fn is_generic_method(member: &Type) -> bool {
+    matches!(
+        &member.kind,
+        TypeKind::Function(function)
+            if function.generics.as_ref().is_some_and(|generics| !generics.is_empty())
     )
 }

@@ -15,6 +15,7 @@ pub mod enums;
 pub mod evaluation_order;
 pub mod forall_gpu;
 pub mod function;
+pub mod generic_method_copies;
 pub mod gpu;
 pub mod gpu_launch;
 pub mod helpers;

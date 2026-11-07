@@ -169,6 +169,7 @@ fn named(name: &str, args: Vec<Type>) -> Type {
 /// hook when `has_hook`, and generic over `T` when `is_generic`.
 fn class_def(name: &str, field: Type, has_hook: bool, is_generic: bool) -> TypeDefinition {
     let drop_hook = MethodInfo {
+        generics: Vec::new(),
         params: Vec::new(),
         is_out_flags: Vec::new(),
         return_type: void_ty(),

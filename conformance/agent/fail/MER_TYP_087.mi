@@ -1,0 +1,12 @@
+// expect: MER_TYP_087
+// summary: Triggers MER_TYP_087: a generic trait method is called through a value of the trait type.
+trait Gen
+    fn pick<T>(x T) T
+
+class Impl implements Gen
+    public fn pick<T>(x T) T
+        return x
+
+fn main()
+    let g Gen = Impl()
+    let n = g.pick(5)

@@ -42,9 +42,9 @@ pub(crate) struct GenericCall {
     /// The callee's name as the call writes it, for diagnostics; `None` for a
     /// callee written as an expression rather than a name.
     pub(crate) callee: Option<String>,
-    /// The body whose requirements the call answers, when the call is to a
-    /// free function; a method's requirements are answered through its
-    /// receiver.
+    /// The body whose requirements the call answers: a free function's, or a
+    /// generic method's for its own type parameters, whose owner's are
+    /// answered through the receiver.
     pub(crate) body: Option<GenericBodyId>,
     /// The callee's type parameters, in declaration order.
     pub(crate) parameters: Vec<String>,

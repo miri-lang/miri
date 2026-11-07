@@ -124,6 +124,7 @@ mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
 mod value_representation;
+mod vtable_slots;
 
 pub use abi_translation::verify_abi_translation;
 pub use bound_names::verify_bound_names;
@@ -139,6 +140,7 @@ pub use stable_collections::verify_stable_collections;
 pub use unshared_writes::verify_unshared_writes;
 pub use value_arguments::verify_value_arguments;
 pub use value_representation::{verify_value_call_classes, verify_value_representation};
+pub use vtable_slots::{verify_vtable_slots, SlotViolation};
 
 /// Largest delta the domain represents; past it a local is reported rather than
 /// followed, which keeps the lattice finite.

@@ -9,8 +9,12 @@
 //! bound on `T`, and the trait can no longer be named. Such a parameter is
 //! refused where it is declared, when the module declaring it sees the type:
 //! a type declared somewhere out of the module's reach hides nothing.
+//!
+//! A method's own type parameter named after one of its owner's parameters
+//! (`class Box<T>` declaring `fn m<T>`) hides that parameter the same way,
+//! and is refused where the method declares it.
 
-use super::context::{Context, TypeDefinition};
+use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{TypeDeclarationKind, LINEAR_TYPE_NAME, OPTION_TYPE_NAME};
 use crate::ast::{Expression, ExpressionKind};
@@ -36,6 +40,41 @@ impl TypeChecker {
             };
             let previous = position.checked_sub(1).and_then(|at| generics.get(at));
             self.refuse_type_parameter_hiding_a_type(name, previous, context);
+        }
+    }
+
+    /// Refuses each type parameter of a member's `generics` named after one
+    /// of its owner's parameters, `owner_parameters`, where it is declared:
+    /// inside the member the name would stand for two types at once.
+    /// `owner_kind` says what the owner is, as a reader calls it (`class`).
+    pub(crate) fn refuse_type_parameters_hiding_owner_parameters(
+        &mut self,
+        generics: &[Expression],
+        owner_kind: &str,
+        owner_parameters: &[GenericDefinition],
+    ) {
+        for name in generics.iter().filter_map(generic_name) {
+            let ExpressionKind::Identifier(name_text, _) = &name.node else {
+                continue;
+            };
+            if !owner_parameters
+                .iter()
+                .any(|parameter| &parameter.name == name_text)
+            {
+                continue;
+            }
+            self.report_error_with_help(
+                DiagnosticCode::TypShadowingNotAllowed,
+                format!(
+                    "type parameter `{name_text}` hides the {owner_kind}'s type parameter \
+                     `{name_text}`"
+                ),
+                name.span,
+                format!(
+                    "give the method's type parameter a name the {owner_kind}'s parameters \
+                     do not take"
+                ),
+            );
         }
     }
 

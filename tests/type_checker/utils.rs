@@ -378,6 +378,7 @@ fn trait_def() -> TypeDefinition {
 
 fn drop_method(is_abstract: bool) -> MethodInfo {
     MethodInfo {
+        generics: Vec::new(),
         params: vec![],
         is_out_flags: vec![],
         return_type: make_type(TypeKind::Void),

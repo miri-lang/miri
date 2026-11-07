@@ -318,6 +318,7 @@ mod tests {
 
     fn method() -> MethodInfo {
         MethodInfo {
+            generics: Vec::new(),
             params: Vec::new(),
             is_out_flags: Vec::new(),
             return_type: Type::new(TypeKind::Boolean, span()),

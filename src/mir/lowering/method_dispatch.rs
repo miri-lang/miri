@@ -22,6 +22,7 @@ use crate::type_checker::value_class::LayoutScope;
 use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::expression::unshare::{lent_parameter_write, TemporaryRoot};
+use super::generic_method_calls::{bound_by_position, GenericMethodSite};
 use super::written_receiver::{lower_pending_receiver, Receiver};
 use super::{apply_generic_sub, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
@@ -674,7 +675,7 @@ fn emit_resolved_method_call(
         ctx.record_class_instantiations(&receiver_class_type(m.obj_ty));
     }
     let return_ty = call_result_type(ctx, &m, &mono);
-    let arg_types = method_argument_types(ctx, &m);
+    let arg_types = method_argument_types(ctx, &m)?;
     let obj_watermark = ctx.body.local_decls.len();
     let (self_op, obj_temp_local) =
         prepare_method_self(ctx, m.obj, m.obj_ty, (m.class_name, m.method_name), *m.span)?;
@@ -725,9 +726,12 @@ fn emit_method_call(
             );
         }
     }
-    let symbol = match mono {
-        Some((mangled, _)) => mangled,
-        None => Symbol::method(m.defining_class, &[], m.method_name, &[]),
+    let symbol = if m.method_info.declares_type_parameters() {
+        resolved_generic_method_symbol(ctx, m)?
+    } else if let Some((mangled, _)) = mono {
+        mangled
+    } else {
+        Symbol::method(m.defining_class, &[], m.method_name, &[])
     };
     emit_static_method_call(
         ctx,
@@ -742,10 +746,37 @@ fn emit_method_call(
     )
 }
 
+/// The symbol of the copy of the generic method `m` calls, recorded on the
+/// body so the pipeline lowers it.
+fn resolved_generic_method_symbol(
+    ctx: &mut LoweringContext,
+    m: &ResolvedMethod,
+) -> Result<Symbol, LoweringError> {
+    let receiver = if matches!(m.obj.node, ExpressionKind::Super) {
+        super_instantiation(ctx)
+    } else {
+        receiver_instantiation(ctx, m.obj_ty)
+    };
+    let site = GenericMethodSite {
+        receiver,
+        class_name: m.class_name,
+        defining_class: m.defining_class,
+        method_name: m.method_name,
+        parameters: &m.method_info.generics,
+        is_static: m.method_info.is_static,
+        call_expr_id: m.call_expr_id,
+        span: *m.span,
+    };
+    super::generic_method_calls::generic_method_symbol(ctx, &site)
+}
+
 /// The type each parameter of the method `m` calls is passed at: its declared
 /// type with `Self` read as the receiver and the owner's parameters at the
 /// arguments the receiver reaches it at.
-fn method_argument_types(ctx: &LoweringContext, m: &ResolvedMethod) -> Vec<Type> {
+fn method_argument_types(
+    ctx: &LoweringContext,
+    m: &ResolvedMethod,
+) -> Result<Vec<Type>, LoweringError> {
     let defs = ctx.type_checker.type_definitions();
     let (owner, owner_subs) = receiver_instantiation(ctx, m.obj_ty)
         .and_then(|(name, resolved)| instantiated_callee(defs, &name, &resolved, m.method_name))
@@ -756,10 +787,18 @@ fn method_argument_types(ctx: &LoweringContext, m: &ResolvedMethod) -> Vec<Type>
         });
     // The body's own substitution: a trait default reads the trait's
     // parameters at what the class's clauses pin, not at a class parameter
-    // that happens to share a name.
-    let body_subs =
+    // that happens to share a name. A generic method's own parameters read
+    // at what the call binds.
+    let mut body_subs =
         instantiation_substitution(ctx.type_checker, &owner, m.method_name, &owner_subs);
-    m.method_info
+    if m.method_info.declares_type_parameters() {
+        if let Some(args) = ctx.instantiated_call_mapping(m.call_expr_id) {
+            let method_subs =
+                bound_by_position(m.method_name, &m.method_info.generics, args, *m.span)?;
+            body_subs.to_mut().extend(method_subs);
+        }
+    }
+    Ok(m.method_info
         .params
         .iter()
         .map(|(_, declared)| {
@@ -767,7 +806,7 @@ fn method_argument_types(ctx: &LoweringContext, m: &ResolvedMethod) -> Vec<Type>
             let instantiated = apply_generic_sub(&at_receiver, &body_subs);
             super::variable::canonical_declared_type(ctx.type_checker, &instantiated)
         })
-        .collect()
+        .collect())
 }
 
 /// The arguments a call through a trait-typed receiver binds the trait's own
@@ -1127,6 +1166,8 @@ pub(crate) struct InstantiatedCallee {
     /// The class compiling the body: the receiver's, or the ancestor it
     /// inherits the method from.
     pub(crate) owner: String,
+    /// The owner's type arguments, in declaration order.
+    pub(crate) owner_args: Vec<Type>,
     /// The owner's parameters at the arguments the receiver reaches it at.
     pub(crate) owner_subs: HashMap<String, Type>,
     /// The body's symbol, linked as `miri.{owner}${args}.{method}`.
@@ -1171,13 +1212,10 @@ pub(crate) fn instantiated_callee(
         return None;
     }
     let symbol = Symbol::method(&owner, &owner_args, method_name, &[]);
-    let owner_subs = owner_gens
-        .iter()
-        .zip(owner_args)
-        .map(|(g, t)| (g.name.clone(), t))
-        .collect();
+    let owner_subs = owner_substitution(defs, &owner, &owner_args);
     Some(InstantiatedCallee {
         owner,
+        owner_args,
         owner_subs,
         symbol,
     })
@@ -1203,13 +1241,27 @@ fn instantiated_enum_callee(
     }
     Some(InstantiatedCallee {
         owner: name.to_string(),
-        owner_subs: gens
-            .iter()
-            .zip(resolved)
-            .map(|(g, t)| (g.name.clone(), t.clone()))
-            .collect(),
+        owner_args: resolved.to_vec(),
+        owner_subs: owner_substitution(defs, name, resolved),
         symbol: Symbol::method(name, resolved, method_name, &[]),
     })
+}
+
+/// Each type parameter the class or enum `owner` declares, at the argument
+/// `owner_args` holds in its position: what a body compiled under `owner` at
+/// those arguments reads its parameters as.
+pub(crate) fn owner_substitution(
+    defs: &HashMap<String, TypeDefinition>,
+    owner: &str,
+    owner_args: &[Type],
+) -> HashMap<String, Type> {
+    defs.get(owner)
+        .and_then(TypeDefinition::generics)
+        .into_iter()
+        .flatten()
+        .zip(owner_args)
+        .map(|(generic, arg)| (generic.name.clone(), arg.clone()))
+        .collect()
 }
 
 /// Resolve a `super.method(...)` call inside a generic class to the body
@@ -1225,15 +1277,20 @@ fn resolve_super_monomorph(
     method_name: &str,
     method_info: &MethodInfo,
 ) -> Option<(Symbol, Type)> {
+    let (base, base_args) = super_instantiation(ctx)?;
+    monomorph_for_instantiation(ctx, &base, &base_args, method_name, method_info)
+}
+
+/// The base class `super` names inside the body being lowered, at the type
+/// arguments the enclosing class's `extends` clause gives it.
+fn super_instantiation(ctx: &LoweringContext) -> Option<(String, Vec<Type>)> {
     let self_type = ctx.self_type.as_ref()?;
     let (class_name, class_args) = receiver_instantiation(ctx, self_type)?;
-    let (base, base_args) =
-        crate::mir::lowering::inherited_instantiation::base_class_instantiation(
-            ctx.type_checker.type_definitions(),
-            &class_name,
-            &class_args,
-        )?;
-    monomorph_for_instantiation(ctx, &base, &base_args, method_name, method_info)
+    crate::mir::lowering::inherited_instantiation::base_class_instantiation(
+        ctx.type_checker.type_definitions(),
+        &class_name,
+        &class_args,
+    )
 }
 
 /// The class and concrete type arguments a receiver's type names, or `None`

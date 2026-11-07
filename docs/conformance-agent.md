@@ -7,7 +7,7 @@ Fixtures are executed by `tests/conformance/mod.rs` against the shipped binary. 
 Each fixture carries `// summary:` describing it, plus `// expect: <CODE>` (fail, warn) or `// expect-stdout: <text>` (pass). A live diagnostic code must have a fixture here or an entry in the harness exclusion table with a reason; a code covered by neither fails the completeness gate.
 
 
-## Error fixtures (`fail/`) — 110
+## Error fixtures (`fail/`) — 112
 
 Each program must be rejected with the named code. A fixture whose diagnostic is only raised while the program runs declares `// command: run`.
 
@@ -123,6 +123,8 @@ Each program must be rejected with the named code. A fixture whose diagnostic is
 | MER_TYP_084 | Triggers MER_TYP_084: 'main' declares a parameter. |
 | MER_TYP_085 | Triggers MER_TYP_085: an enum is declared inside a function body. |
 | MER_TYP_086 | Triggers MER_TYP_086: a for loop steps through a range of floats. |
+| MER_TYP_087 | Triggers MER_TYP_087: a generic trait method is called through a value of the trait type. |
+| MER_TYP_088 | Triggers MER_TYP_088: a subclass redeclares a generic method of the class it extends. |
 
 ## Warning fixtures (`warn/`) — 13
 
@@ -144,7 +146,7 @@ Each program must emit the named code at warning severity and still compile (`ok
 | MER_TYP_073 | Triggers MER_TYP_073: Unused Private Declaration. |
 | MER_TYP_074 | Triggers MER_TYP_074: Unreachable Statement. |
 
-## Accepted fixtures (`pass/`) — 119
+## Accepted fixtures (`pass/`) — 121
 
 Near-miss twins of the rejected programs, plus representative end-to-end programs. Each must compile, run, and exit zero.
 
@@ -265,6 +267,8 @@ Near-miss twins of the rejected programs, plus representative end-to-end program
 | MER_TYP_084 | Accepted counterpart of MER_TYP_084: 'main' reads its arguments through Args. |
 | MER_TYP_085 | Accepted counterpart of MER_TYP_085: the enum is declared at the top level of the file. |
 | MER_TYP_086 | Accepted counterpart of MER_TYP_086: the loop steps through integers and scales them. |
+| MER_TYP_087 | Accepted counterpart of MER_TYP_087: the value is taken at a type parameter bounded by the trait. |
+| MER_TYP_088 | Accepted counterpart of MER_TYP_088: the part that varies is a non-generic method the subclass overrides. |
 | e2e_enum | End-to-end enum match expression |
 | e2e_generic_identity | End-to-end identity function without generic |
 | e2e_hello | End-to-end hello world program |

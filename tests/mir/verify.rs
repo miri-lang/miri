@@ -22,6 +22,7 @@ mod stable_collections;
 mod unshared_writes;
 mod value_arguments;
 mod value_representation;
+mod vtable_slots;
 
 use crate::mir::utils::runtime_callee;
 use miri::ast::literal::{IntegerLiteral, Literal};

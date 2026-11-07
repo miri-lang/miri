@@ -575,6 +575,12 @@ impl Symbol {
         matches!(self.kind, SymbolKind::Method { .. })
     }
 
+    /// Whether this symbol names a copy of a generic method, compiled at type
+    /// arguments of the method's own.
+    pub fn is_generic_method_copy(&self) -> bool {
+        matches!(&self.kind, SymbolKind::Method { method_args, .. } if !method_args.is_empty())
+    }
+
     /// The name of the method this symbol names, when it names one compiled
     /// for no gpu-resident buffers a call passes; `None` for any other symbol.
     pub fn plain_method_name(&self) -> Option<&str> {

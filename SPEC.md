@@ -1182,6 +1182,27 @@ Function types are invariant in their parameters and their result: `fn(d Dog) St
 
 A class that extends or implements a generic type must write that type's arguments: `class B<X> extends A<X>`, never `class B<X> extends A` (`MER_TYP_036`). The supertype's members are typed by the position of its parameters, which a bare clause does not state.
 
+### Generic Methods
+
+A method of a class, trait or enum may declare type parameters of its own, beside its owner's: `fn map<U>(f fn(E) U) [U]` in `class Bag<E>`. A method's parameter may not reuse a name its owner's parameters take (`MER_TYP_064`). A call binds the method's parameters as a call to a generic function binds its own: from the arguments, from the location the result goes into, or from type arguments written on the call, `b.same<int>(5)`. A static method binds them the same way, `Box.make("s")`.
+
+```miri
+class Box
+    fn same<T>(x T) T
+        return x
+
+let b = Box()
+let n = b.same(5)             // T = int
+let s = b.same<String>("a")   // T = String
+```
+
+Each call is compiled for its types, so the body it runs must be known where the call is compiled. Two things follow:
+
+- **A generic method is not called through a value of a trait type** (`MER_TYP_087`). Such a value reaches its class at run time, through one slot per method, and no slot holds a body for every type argument. Take the value at a type parameter bounded by the trait instead, `fn use<G implements Gen>(g G)`: each call to `use` then names the class it passes. A trait's default may call a generic method on `self`, which names the implementing class the same way.
+- **A generic method is not overridden** (`MER_TYP_088`). A call names the body the receiver's declared type reaches, so a subclass's redeclaration would never run through a receiver typed as the base class. A subclass may not redeclare a generic method of a class it extends, a generic method may not redeclare an inherited one, and a class gives every generic method a body, including one a trait it implements requires without a default, since no subclass could supply one. Move the part that varies into a non-generic method the subclass overrides, or declare the type parameter on the class.
+
+A trait may declare a generic method without a body, and a class implementing the trait supplies it, matched by position: `fn pick<U>(x U) U` implements `fn pick<T>(x T) T`. The class declares as many type parameters as the trait, with the same bounds, and its parameter and return types must match once its parameters are read as the trait's. A class supplying its own body for a trait's generic default runs that body. Device code neither declares nor calls a generic method (`MER_TAR_002`); a free generic function serves it instead.
+
 ### Generic Structs
 
 ```miri

@@ -385,30 +385,27 @@ fn a_local_binding_shadows_a_module_alias() {
 }
 
 /// With type arguments written out, the shadowed call still never reaches
-/// the module: explicit type arguments on a method call are not supported
-/// yet, and the call is refused rather than sent to the alias.
+/// the module: it is a call to the local's generic method, which the written
+/// argument binds.
 #[test]
 fn a_local_binding_shadows_a_module_alias_under_explicit_type_arguments() {
-    assert_project_compiler_error(
-        &[
-            (
-                "main.mi",
-                concat!(
-                    "use local.boxes as B\n",
-                    "\n",
-                    "class Local\n",
-                    "    fn make<T>() String\n",
-                    "        return \"LOCAL-CALLED\"\n",
-                    "\n",
-                    "fn main()\n",
-                    "    let B = Local()\n",
-                    "    println(B.make<String>())\n",
-                ),
+    check_project(&[
+        (
+            "main.mi",
+            concat!(
+                "use local.boxes as B\n",
+                "\n",
+                "class Local\n",
+                "    fn make<T>() String\n",
+                "        return \"LOCAL-CALLED\"\n",
+                "\n",
+                "fn main()\n",
+                "    let B = Local()\n",
+                "    println(B.make<String>())\n",
             ),
-            SHADOWED_ALIAS_MODULE,
-        ],
-        "Expected generic function or type",
-    );
+        ),
+        SHADOWED_ALIAS_MODULE,
+    ]);
 }
 
 const SHADOWING_CFG: &str = r#"

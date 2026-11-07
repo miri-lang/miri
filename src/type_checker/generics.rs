@@ -19,7 +19,7 @@ use crate::ast::type_arguments::{rewritten, ArithOp, TypeArgKind, TypeArgument, 
 use crate::ast::types::{
     BuiltinCollectionKind, FunctionTypeData, Type, TypeDeclarationKind, TypeKind,
 };
-use crate::ast::{Expression, ExpressionKind};
+use crate::ast::{Expression, ExpressionKind, FunctionDeclarationData};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use std::collections::{HashMap, HashSet};
@@ -985,15 +985,72 @@ impl TypeChecker {
     ///
     /// A parameter named after a type in scope is refused here, where it is
     /// declared; a callee's parameters defined again to check a call are not.
-    pub(crate) fn define_generics(&mut self, generics: &[Expression], context: &mut Context) {
+    ///
+    /// Returns the definitions, in declaration order.
+    pub(crate) fn define_generics(
+        &mut self,
+        generics: &[Expression],
+        context: &mut Context,
+    ) -> Vec<GenericDefinition> {
         if !self.resolving_declared_signature {
             self.refuse_type_parameters_hiding_types(generics, context);
         }
-        for gen in generics {
-            if let Some(definition) = self.generic_definition(gen, context) {
-                context.define_type(definition.name.clone(), TypeDefinition::Generic(definition));
+        // Each parameter is defined before the next is resolved, so a later
+        // bound may name an earlier parameter.
+        let mut definitions = Vec::with_capacity(generics.len());
+        for generic in generics {
+            if let Some(definition) = self.generic_definition(generic, context) {
+                context.define_type(
+                    definition.name.clone(),
+                    TypeDefinition::Generic(definition.clone()),
+                );
+                definitions.push(definition);
             }
         }
+        definitions
+    }
+
+    /// Runs `read` in a scope of its own where the type parameters a member
+    /// declares (`fn m<T>`) are defined, so a member's signature can name
+    /// them beside its owner's. Returns their definitions, in declaration
+    /// order, with what `read` gives.
+    pub(crate) fn with_member_generics<R>(
+        &mut self,
+        generics: Option<&[Expression]>,
+        context: &mut Context,
+        read: impl FnOnce(&mut Self, &mut Context) -> R,
+    ) -> (Vec<GenericDefinition>, R) {
+        context.enter_scope();
+        let definitions = generics
+            .map(|generics| self.define_generics(generics, context))
+            .unwrap_or_default();
+        let result = read(self, context);
+        context.exit_scope();
+        (definitions, result)
+    }
+
+    /// The parameter types, receiver excluded, and the return type a member
+    /// declaration writes, resolved in `context`.
+    pub(crate) fn resolve_member_signature(
+        &mut self,
+        decl: &FunctionDeclarationData,
+        context: &Context,
+    ) -> (Vec<(String, Type)>, Type) {
+        let params = decl
+            .explicit_params()
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    self.resolve_type_expression(&p.typ, context),
+                )
+            })
+            .collect();
+        let return_type = match &decl.return_type {
+            Some(written) => self.resolve_type_expression(written, context),
+            None => make_type(TypeKind::Void),
+        };
+        (params, return_type)
     }
 
     /// The type parameter `generic` declares, its bounds resolved; `None`

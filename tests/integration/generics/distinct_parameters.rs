@@ -430,7 +430,7 @@ fn main()
     let b = Box<int>(3)
     println(b.swap("a" + "b"))
 "#,
-        "Method 'swap' declares a type parameter 'T' its class already declares",
+        "type parameter `T` hides the class's type parameter `T`",
     );
 }
 

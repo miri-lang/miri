@@ -5,6 +5,7 @@ pub mod class_def;
 pub mod drop_hook;
 pub mod enum_def;
 pub mod func;
+pub mod generic_method_rules;
 pub mod generics;
 pub mod inherited_traits;
 pub mod struct_def;

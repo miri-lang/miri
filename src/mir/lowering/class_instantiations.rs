@@ -361,9 +361,12 @@ fn static_growth(
     (chain, method)
 }
 
-/// Whether `lowered` calls the generic function instantiation `symbol`.
+/// Whether `lowered` calls the generic function or method instantiation
+/// `symbol`.
 fn calls(lowered: &LoweredBody, symbol: &Symbol) -> bool {
-    (lowered.requests.generic_function_calls.iter()).any(|call| call.symbol == *symbol)
+    let functions = (lowered.requests.generic_function_calls.iter()).map(|call| &call.symbol);
+    let methods = (lowered.requests.generic_method_calls.iter()).map(|call| &call.symbol);
+    functions.chain(methods).any(|called| called == symbol)
 }
 
 /// Whether `lowered` names `class` at `args` other than through the instance

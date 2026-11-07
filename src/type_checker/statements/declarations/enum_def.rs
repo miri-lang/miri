@@ -70,7 +70,7 @@ impl TypeChecker {
 
         let variant_map = self.collect_enum_variants(declaration.variants, context);
         let (method_map, method_statements) =
-            self.collect_enum_methods(declaration.methods, &variant_map, context);
+            self.collect_enum_methods(declaration.methods, &variant_map, &generic_defs, context);
 
         let enum_def = EnumDefinition {
             variants: variant_map,
@@ -214,26 +214,29 @@ impl TypeChecker {
         &mut self,
         methods: &'a [Statement],
         variants: &BTreeMap<String, Vec<Type>>,
+        enum_parameters: &[GenericDefinition],
         context: &mut Context,
     ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut method_map: BTreeMap<String, MethodInfo> = BTreeMap::new();
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(methods.len());
         for method_stmt in methods {
             if let StatementKind::FunctionDeclaration(decl) = &method_stmt.node {
-                let explicit_params = decl.explicit_params();
-                let mut params = Vec::with_capacity(explicit_params.len());
-                let mut is_out_flags = Vec::with_capacity(explicit_params.len());
-                for param in explicit_params {
-                    let param_ty = self.resolve_type_expression(&param.typ, context);
-                    params.push((param.name.clone(), param_ty));
-                    is_out_flags.push(param.is_out);
+                self.refuse_generic_device_method(decl, method_stmt.span);
+                self.refuse_generic_construction_method(decl, method_stmt.span, "enum");
+                if let Some(generics) = &decl.generics {
+                    self.refuse_type_parameters_hiding_owner_parameters(
+                        generics,
+                        "enum",
+                        enum_parameters,
+                    );
                 }
-
-                let return_type = if let Some(ret_expr) = &decl.return_type {
-                    self.resolve_type_expression(ret_expr, context)
-                } else {
-                    make_type(TypeKind::Void)
-                };
+                let (generics, (params, return_type)) = self.with_member_generics(
+                    decl.generics.as_deref(),
+                    context,
+                    |checker, context| checker.resolve_member_signature(decl, context),
+                );
+                let is_out_flags: Vec<bool> =
+                    decl.explicit_params().iter().map(|p| p.is_out).collect();
 
                 // Check for collision with variant names if this is a static method
                 if decl.properties.is_static && variants.contains_key(&decl.name) {
@@ -279,6 +282,7 @@ impl TypeChecker {
                 method_map.insert(
                     decl.name.clone(),
                     MethodInfo {
+                        generics,
                         params,
                         is_out_flags,
                         return_type,

@@ -61,6 +61,16 @@ pub const RECEIVER_PARAM_NAME: &str = "self";
 pub const DROP_HOOK_NAME: &str = "drop";
 
 impl FunctionDeclarationData {
+    /// Whether the declaration names type parameters of its own, as in
+    /// `fn m<T>(x T) T`. A method that does is compiled once per set of type
+    /// arguments its calls bind: it has no body shared by every type argument
+    /// and no vtable slot.
+    pub fn declares_type_parameters(&self) -> bool {
+        self.generics
+            .as_ref()
+            .is_some_and(|generics| !generics.is_empty())
+    }
+
     /// Whether the parameter list opens with the receiver, as in `fn size(self) int`.
     pub fn declares_receiver(&self) -> bool {
         self.params

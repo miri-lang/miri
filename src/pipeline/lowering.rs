@@ -7,6 +7,7 @@
 //! default methods, element equality and hash bodies, and residency
 //! specializations.
 
+use super::generic_instantiations::{refuse_unnameable_generic_calls, GenericMethodBodies};
 use super::*;
 
 /// One generic-class instantiation's substitution: the generic-name→concrete-type
@@ -18,7 +19,7 @@ type InstantiationSub = (std::collections::HashMap<String, Type>, Vec<(String, T
 ///
 /// A refusal of the program is reported as the diagnostic it is; anything
 /// else is a failure of the compiler's own, reported against the body.
-fn monomorphized_lowering_failure(
+pub(super) fn monomorphized_lowering_failure(
     symbol: &Symbol,
     error: crate::error::lowering::LoweringError,
 ) -> CompilerError {
@@ -178,6 +179,28 @@ fn declaring_module<'r>(
         })
 }
 
+/// The method declaration `stmt` holds, when it has a body shared by every
+/// call: one it gives a body, declaring no type parameters of its own. A
+/// generic method (`fn m<T>`) is given no shared body, which would lay out
+/// values of a placeholder no call settles; each call's copy is lowered by
+/// the generic instantiation worklist instead.
+fn shared_method_body(stmt: &Statement) -> Option<&FunctionDeclarationData> {
+    let StatementKind::FunctionDeclaration(decl) = &stmt.node else {
+        return None;
+    };
+    (decl.body.is_some() && !decl.declares_type_parameters()).then_some(decl)
+}
+
+/// Each of `methods` with a body shared by every call, with its declaration,
+/// in order: what every per-type lowering loop compiles under the type's name.
+fn shared_method_bodies<'s>(
+    methods: impl IntoIterator<Item = &'s Statement>,
+) -> impl Iterator<Item = (&'s Statement, &'s FunctionDeclarationData)> {
+    methods
+        .into_iter()
+        .filter_map(|stmt| shared_method_body(stmt).map(|decl| (stmt, decl)))
+}
+
 /// Every top-level function declaration `keep` selects, by the function it
 /// declares, with where its statement sits.
 ///
@@ -217,13 +240,13 @@ fn function_declarations(
 /// the statements outlives the registry updates between lowering rounds,
 /// which borrow the type checker mutably.
 #[derive(Clone, Copy)]
-enum StatementSite {
+pub(super) enum StatementSite {
     Program(usize),
     Imported(usize),
 }
 
 impl StatementSite {
-    fn statement(self, result: &PipelineResult) -> Option<&Statement> {
+    pub(super) fn statement(self, result: &PipelineResult) -> Option<&Statement> {
         match self {
             StatementSite::Program(index) => result.ast.body.get(index),
             StatementSite::Imported(index) => result.type_checker.imported_statements.get(index),
@@ -233,7 +256,7 @@ impl StatementSite {
 
 /// Every top-level statement with its site, the program's own before the
 /// imported ones.
-fn statements_with_sites(
+pub(super) fn statements_with_sites(
     result: &PipelineResult,
 ) -> impl Iterator<Item = (StatementSite, &Statement)> {
     let program = result.ast.body.iter().enumerate();
@@ -286,7 +309,7 @@ impl TraitDefaultBody {
 /// Every default body the program's traits and the imported ones declare,
 /// found by one scan. The first declaration of a trait's method wins, so a
 /// program trait shadows an imported trait of the same name.
-struct TraitDefaultBodies {
+pub(super) struct TraitDefaultBodies {
     bodies: Vec<TraitDefaultBody>,
     by_trait: std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
 }
@@ -337,7 +360,7 @@ impl TraitDefaultBodies {
     }
 
     /// The method statement of `trait_name`'s default `method_name`.
-    fn method<'r>(
+    pub(super) fn method<'r>(
         &self,
         result: &'r PipelineResult,
         trait_name: &str,
@@ -390,17 +413,15 @@ fn class_template_methods(result: &PipelineResult) -> Vec<ClassTemplateMethod> {
             continue;
         };
         for (member, method_stmt) in class_data.body.iter().enumerate() {
-            let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
+            let Some(decl) = shared_method_body(method_stmt) else {
                 continue;
             };
-            if decl.body.is_some() {
-                templates.push(ClassTemplateMethod {
-                    class_name: class_name.to_string(),
-                    symbol: Symbol::method(class_name, &[], &decl.name, &[]),
-                    class_site,
-                    member,
-                });
-            }
+            templates.push(ClassTemplateMethod {
+                class_name: class_name.to_string(),
+                symbol: Symbol::method(class_name, &[], &decl.name, &[]),
+                class_site,
+                member,
+            });
         }
     }
     templates
@@ -409,11 +430,13 @@ fn class_template_methods(result: &PipelineResult) -> Vec<ClassTemplateMethod> {
 /// What every lowering round reads and no round changes: the generic function
 /// declarations, the trait default bodies, and the symbols codegen names
 /// outside any call. Built once, before the first body is lowered.
-struct ReachTables {
+pub(super) struct ReachTables {
     /// Every generic function declaration, by the module that declares it
     /// and its name.
-    generic_functions: std::collections::HashMap<DeclaredFunction, StatementSite>,
-    trait_defaults: TraitDefaultBodies,
+    pub(super) generic_functions: std::collections::HashMap<DeclaredFunction, StatementSite>,
+    /// Every generic method body a class or enum declares.
+    pub(super) generic_methods: GenericMethodBodies,
+    pub(super) trait_defaults: TraitDefaultBodies,
     class_templates: Vec<ClassTemplateMethod>,
     synthesized: HashSet<Symbol>,
     /// The slot numbering the lowered virtual calls index by.
@@ -424,6 +447,7 @@ impl ReachTables {
     fn collect(result: &PipelineResult) -> Result<Self, CompilerError> {
         Ok(ReachTables {
             generic_functions: function_declarations(result, |decl| decl.generics.is_some())?,
+            generic_methods: GenericMethodBodies::collect(result),
             trait_defaults: TraitDefaultBodies::collect(result),
             class_templates: class_template_methods(result),
             synthesized: mir::lowering::dispatch_symbols::synthesized_references(
@@ -512,55 +536,6 @@ fn record_inferred_generic_instantiations(type_checker: &mut TypeChecker) {
     for (name, args) in discovered {
         type_checker.record_generic_class_instantiation(&name, args);
     }
-}
-
-/// Refuse the first generic function instantiation a lowered body calls at a
-/// type argument with no name, which the worklist leaves unlowered rather than
-/// share one body between every such call.
-///
-/// A body lowered for one instantiation reaches such a call when it calls its
-/// own function at an ever deeper type; the class instances it builds on the
-/// way are refused first, with the chain that grew them, by the bounds on
-/// instantiations. When none is, the call is refused here: as polymorphic
-/// recursion when its argument nests past the depth one instance may nest to,
-/// otherwise as an argument with no name.
-fn refuse_unnameable_generic_calls(
-    result: &PipelineResult,
-    generic_functions: &std::collections::HashMap<DeclaredFunction, StatementSite>,
-    bodies: &[LoweredBody],
-    symbols: &SymbolTable,
-) -> Result<(), CompilerError> {
-    use mir::lowering::instantiation_limits as limits;
-    let Some(call) = bodies
-        .iter()
-        .flat_map(|lowered| &lowered.requests.generic_function_calls)
-        .find(|call| !symbols.is_claimed(&call.symbol) && call.symbol.has_an_unnameable_argument())
-    else {
-        return Ok(());
-    };
-    let span = generic_functions
-        .get(&call.function)
-        .and_then(|site| site.statement(result))
-        .map_or_else(Span::default, |stmt| stmt.span);
-    let args: Vec<Type> = call.type_args.iter().map(|(_, ty)| ty.clone()).collect();
-    let depth = limits::deepest_argument_depth(&args);
-    if depth <= limits::MAX_INSTANCE_TYPE_DEPTH {
-        let refusal = mir::symbol::ClaimRefusal::Unnameable(call.symbol.clone());
-        return Err(CompilerError::Lowering(refusal.refusal(span)));
-    }
-    let growth = limits::Growth {
-        chain: Vec::new(),
-        method: None,
-        through_trait: false,
-    };
-    let limit = limits::ExceededLimit::TypeDepth(depth);
-    Err(CompilerError::Lowering(limits::polymorphic_recursion(
-        &call.function.name,
-        &args,
-        &limit,
-        &growth,
-        span,
-    )))
 }
 
 /// Add to the registry the instantiations lowered bodies recorded that it does
@@ -1086,7 +1061,7 @@ impl Pipeline {
             result,
             is_release,
             first_new,
-            &reach.generic_functions,
+            reach,
             bodies,
             symbols,
             compilation_ids,
@@ -1118,16 +1093,8 @@ impl Pipeline {
             }
             StatementKind::Enum(name_expr, Some(_), _, methods, _, _) => {
                 let enum_name = result.type_checker.type_identity_named_by(name_expr)?;
-                let methods = methods
-                    .iter()
-                    .filter_map(|method_stmt| {
-                        let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
-                            return None;
-                        };
-                        decl.body
-                            .is_some()
-                            .then_some((method_stmt, decl.name.as_str()))
-                    })
+                let methods = shared_method_bodies(methods)
+                    .map(|(method_stmt, decl)| (method_stmt, decl.name.as_str()))
                     .collect();
                 Some((enum_name, methods))
             }
@@ -1147,19 +1114,9 @@ impl Pipeline {
         let defaults = mir::lowering::dispatch_symbols::own_trait_defaults(definitions, class_name)
             .into_iter()
             .filter_map(|(method, owner)| trait_defaults.method(result, owner, method));
-        class_data
-            .body
-            .iter()
-            .chain(defaults)
-            .chain(Self::abstract_bodies_copied_into(result, class_name))
-            .filter_map(|method_stmt| {
-                let StatementKind::FunctionDeclaration(decl) = &method_stmt.node else {
-                    return None;
-                };
-                decl.body
-                    .is_some()
-                    .then_some((method_stmt, decl.name.as_str()))
-            })
+        let declared = class_data.body.iter().chain(defaults);
+        shared_method_bodies(declared.chain(Self::abstract_bodies_copied_into(result, class_name)))
+            .map(|(method_stmt, decl)| (method_stmt, decl.name.as_str()))
             .collect()
     }
 
@@ -1297,7 +1254,7 @@ impl Pipeline {
 
         self.lower_monomorphized_generics(
             result,
-            &reach.generic_functions,
+            &reach,
             is_release,
             &mut lowered,
             &mut symbols,
@@ -1436,7 +1393,7 @@ impl Pipeline {
                 result,
                 is_release,
                 first_default,
-                &reach.generic_functions,
+                reach,
                 bodies,
                 symbols,
                 compilation_ids,
@@ -1447,7 +1404,7 @@ impl Pipeline {
                 &result.ast,
             )?;
             if !registered && bodies.len() == first_default {
-                refuse_unnameable_generic_calls(result, &reach.generic_functions, bodies, symbols)?;
+                refuse_unnameable_generic_calls(result, reach, bodies, symbols)?;
                 return Self::settle_reached_instances(result, reach, &called, verdicts, symbols);
             }
         }
@@ -1720,52 +1677,45 @@ impl Pipeline {
                     let self_type =
                         Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
 
-                    for method_stmt in &class_data.body {
-                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            // Skip abstract methods — they have no body and must not be compiled.
-                            if method_decl.body.is_none() {
-                                continue;
-                            }
+                    for (method_stmt, method_decl) in shared_method_bodies(&class_data.body) {
+                        // Invariant: if the AST says there is a body, the type checker
+                        // must not have marked this method as abstract.
+                        debug_assert!(
+                            !result
+                                .type_checker
+                                .type_definitions()
+                                .get(class_name)
+                                .and_then(|td| {
+                                    if let TypeDefinition::Class(def) = td {
+                                        def.methods.get(method_decl.name.as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .map(|m| m.is_abstract)
+                                .unwrap_or(false),
+                            "abstract method '{}::{}' must not reach codegen",
+                            class_name,
+                            method_decl.name
+                        );
 
-                            // Invariant: if the AST says there is a body, the type checker
-                            // must not have marked this method as abstract.
-                            debug_assert!(
-                                !result
-                                    .type_checker
-                                    .type_definitions()
-                                    .get(class_name)
-                                    .and_then(|td| {
-                                        if let TypeDefinition::Class(def) = td {
-                                            def.methods.get(method_decl.name.as_str())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .map(|m| m.is_abstract)
-                                    .unwrap_or(false),
-                                "abstract method '{}::{}' must not reach codegen",
-                                class_name,
-                                method_decl.name
-                            );
-
-                            let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
-                            if !symbols
-                                .claim_at(&symbol, method_stmt.span)
-                                .map_err(CompilerError::Lowering)?
-                            {
-                                continue;
-                            }
-
-                            let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                                compilation_ids.clone(),
-                            )
-                            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
-                            Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
+                        let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
+                        if !symbols
+                            .claim_at(&symbol, method_stmt.span)
+                            .map_err(CompilerError::Lowering)?
+                        {
+                            continue;
                         }
+
+                        let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
+                            method_stmt,
+                            self_type.clone(),
+                            &result.type_checker,
+                            is_release,
+                            compilation_ids.clone(),
+                        )
+                        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                        Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
                     }
                 }
                 // A struct holds data only and declares no methods to lower.
@@ -1790,30 +1740,24 @@ impl Pipeline {
                         stmt.span,
                     );
 
-                    for method_stmt in methods {
-                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            if method_decl.body.is_none() {
-                                continue;
-                            }
-
-                            let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
-                            if !symbols
-                                .claim_at(&symbol, method_stmt.span)
-                                .map_err(CompilerError::Lowering)?
-                            {
-                                continue;
-                            }
-
-                            let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                                compilation_ids.clone(),
-                            )
-                            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
-                            Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
+                    for (method_stmt, method_decl) in shared_method_bodies(methods) {
+                        let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
+                        if !symbols
+                            .claim_at(&symbol, method_stmt.span)
+                            .map_err(CompilerError::Lowering)?
+                        {
+                            continue;
                         }
+
+                        let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
+                            method_stmt,
+                            self_type.clone(),
+                            &result.type_checker,
+                            is_release,
+                            compilation_ids.clone(),
+                        )
+                        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                        Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
                     }
                 }
                 _ => {}
@@ -1863,52 +1807,45 @@ impl Pipeline {
                         Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
 
                     // Compile each non-runtime method in the class body
-                    for method_stmt in &class_data.body {
-                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            // Skip abstract methods — they have no body and must not be compiled.
-                            if method_decl.body.is_none() {
-                                continue;
-                            }
+                    for (method_stmt, method_decl) in shared_method_bodies(&class_data.body) {
+                        // Invariant: if the AST says there is a body, the type checker
+                        // must not have marked this method as abstract.
+                        debug_assert!(
+                            !result
+                                .type_checker
+                                .type_definitions()
+                                .get(class_name)
+                                .and_then(|td| {
+                                    if let TypeDefinition::Class(def) = td {
+                                        def.methods.get(method_decl.name.as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .map(|m| m.is_abstract)
+                                .unwrap_or(false),
+                            "abstract method '{}::{}' must not reach codegen",
+                            class_name,
+                            method_decl.name
+                        );
 
-                            // Invariant: if the AST says there is a body, the type checker
-                            // must not have marked this method as abstract.
-                            debug_assert!(
-                                !result
-                                    .type_checker
-                                    .type_definitions()
-                                    .get(class_name)
-                                    .and_then(|td| {
-                                        if let TypeDefinition::Class(def) = td {
-                                            def.methods.get(method_decl.name.as_str())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .map(|m| m.is_abstract)
-                                    .unwrap_or(false),
-                                "abstract method '{}::{}' must not reach codegen",
-                                class_name,
-                                method_decl.name
-                            );
-
-                            let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
-                            if !symbols
-                                .claim_at(&symbol, method_stmt.span)
-                                .map_err(CompilerError::Lowering)?
-                            {
-                                continue;
-                            }
-
-                            let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                                compilation_ids.clone(),
-                            )
-                            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
-                            Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
+                        let symbol = Symbol::method(class_name, &[], &method_decl.name, &[]);
+                        if !symbols
+                            .claim_at(&symbol, method_stmt.span)
+                            .map_err(CompilerError::Lowering)?
+                        {
+                            continue;
                         }
+
+                        let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
+                            method_stmt,
+                            self_type.clone(),
+                            &result.type_checker,
+                            is_release,
+                            compilation_ids.clone(),
+                        )
+                        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                        Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
                     }
                 }
                 // A struct holds data only and declares no methods to lower.
@@ -1929,30 +1866,24 @@ impl Pipeline {
                     let self_type =
                         Type::new(TypeKind::Custom(enum_name.to_string(), None), stmt.span);
 
-                    for method_stmt in methods {
-                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            if method_decl.body.is_none() {
-                                continue;
-                            }
-
-                            let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
-                            if !symbols
-                                .claim_at(&symbol, method_stmt.span)
-                                .map_err(CompilerError::Lowering)?
-                            {
-                                continue;
-                            }
-
-                            let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
-                                method_stmt,
-                                self_type.clone(),
-                                &result.type_checker,
-                                is_release,
-                                compilation_ids.clone(),
-                            )
-                            .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
-                            Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
+                    for (method_stmt, method_decl) in shared_method_bodies(methods) {
+                        let symbol = Symbol::method(enum_name, &[], &method_decl.name, &[]);
+                        if !symbols
+                            .claim_at(&symbol, method_stmt.span)
+                            .map_err(CompilerError::Lowering)?
+                        {
+                            continue;
                         }
+
+                        let mir_body = mir::lowering::lower_class_method_with_compilation_ids(
+                            method_stmt,
+                            self_type.clone(),
+                            &result.type_checker,
+                            is_release,
+                            compilation_ids.clone(),
+                        )
+                        .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
+                        Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
                     }
                 }
                 _ => {}
@@ -2084,7 +2015,7 @@ impl Pipeline {
         for (base_name, _) in ancestors {
             let pinned = pins_of(&supertypes, base_name).unwrap_or(&unpinned);
             for method_stmt in abstract_methods.get(base_name).into_iter().flatten() {
-                let StatementKind::FunctionDeclaration(md) = &method_stmt.node else {
+                let Some(md) = shared_method_body(method_stmt) else {
                     continue;
                 };
                 if !Self::runs_inherited_body(result, class_name, &md.name, base_name) {
@@ -2267,6 +2198,9 @@ impl Pipeline {
             let Some(method_stmt) = trait_defaults.method(result, trait_name, method_name) else {
                 continue;
             };
+            if shared_method_body(method_stmt).is_none() {
+                continue;
+            }
             let symbol = Symbol::method(class_name, &[], method_name, &[]);
             if !symbols
                 .claim_at(&symbol, method_stmt.span)
@@ -2300,7 +2234,7 @@ impl Pipeline {
     fn lower_monomorphized_generics(
         &self,
         result: &PipelineResult,
-        generic_functions: &std::collections::HashMap<DeclaredFunction, StatementSite>,
+        reach: &ReachTables,
         is_release: bool,
         bodies: &mut Vec<LoweredBody>,
         symbols: &mut SymbolTable,
@@ -2316,7 +2250,7 @@ impl Pipeline {
             result,
             is_release,
             0,
-            generic_functions,
+            reach,
             bodies,
             symbols,
             compilation_ids,
@@ -2330,53 +2264,6 @@ impl Pipeline {
             symbols,
             compilation_ids,
         )
-    }
-
-    /// Lower every generic function instantiation the bodies from `first_new`
-    /// on call, and every one those instantiations call in turn.
-    #[allow(clippy::too_many_arguments)]
-    fn lower_generic_functions_reached_from(
-        result: &PipelineResult,
-        is_release: bool,
-        first_new: usize,
-        generic_functions: &std::collections::HashMap<DeclaredFunction, StatementSite>,
-        bodies: &mut Vec<LoweredBody>,
-        symbols: &mut SymbolTable,
-        compilation_ids: &mir::lowering::SharedCompilationIds,
-    ) -> Result<(), CompilerError> {
-        let mut pending = std::collections::VecDeque::new();
-        Self::queue_generic_instantiations(&bodies[first_new..], symbols, &mut pending);
-        while let Some(call) = pending.pop_front() {
-            if call.symbol.has_an_unnameable_argument() {
-                continue;
-            }
-            let Some(ast_stmt) = generic_functions
-                .get(&call.function)
-                .and_then(|site| site.statement(result))
-            else {
-                continue;
-            };
-            if !symbols
-                .claim_at(&call.symbol, ast_stmt.span)
-                .map_err(CompilerError::Lowering)?
-            {
-                continue;
-            }
-            let subs = call.type_args.into_iter().collect();
-            let body = mir::lowering::lower_generic_instantiation_with_compilation_ids(
-                ast_stmt,
-                &result.type_checker,
-                is_release,
-                true,
-                &subs,
-                compilation_ids.clone(),
-            )
-            .map_err(|e| monomorphized_lowering_failure(&call.symbol, e))?;
-            let first_new = bodies.len();
-            Self::push_lowered_body(bodies, symbols, call.symbol, body)?;
-            Self::queue_generic_instantiations(&bodies[first_new..], symbols, &mut pending);
-        }
-        Ok(())
     }
 
     /// Lower the top-level function `name`, declared by `stmt`, under the
@@ -2413,7 +2300,7 @@ impl Pipeline {
 
     /// Record a lowered body under `symbol`, which the caller has claimed,
     /// and each lambda lowered with it under the symbol it claims now.
-    fn push_lowered_body(
+    pub(super) fn push_lowered_body(
         bodies: &mut Vec<LoweredBody>,
         symbols: &mut SymbolTable,
         symbol: Symbol,
@@ -2456,28 +2343,6 @@ impl Pipeline {
         needed.sort_by_cached_key(|call| call.symbol.link_name());
         needed.dedup_by(|later, earlier| later.symbol == earlier.symbol);
         needed
-    }
-
-    /// Queue every generic function instantiation `bodies` call that has no
-    /// body yet, in call order.
-    ///
-    /// Each call carries its own type arguments, recorded when it was lowered
-    /// with the calling body's substitution applied, so a call inside an
-    /// instantiation names its callee at that instantiation's types.
-    fn queue_generic_instantiations(
-        bodies: &[LoweredBody],
-        symbols: &SymbolTable,
-        pending: &mut std::collections::VecDeque<mir::lowering::requests::GenericFunctionCall>,
-    ) {
-        let calls = bodies
-            .iter()
-            .flat_map(|lowered| lowered.requests.generic_function_calls.iter());
-        for call in calls {
-            let already_queued = pending.iter().any(|queued| queued.symbol == call.symbol);
-            if !symbols.is_claimed(&call.symbol) && !already_queued {
-                pending.push_back(call.clone());
-            }
-        }
     }
 
     /// Lower each needed residency specialization. The parameter that received

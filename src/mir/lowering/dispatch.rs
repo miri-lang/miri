@@ -45,6 +45,7 @@ pub(crate) use super::method_dispatch::resolve_inherited_method;
 pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
+use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 use super::runtime_writes::{self, RuntimeCallee};
 use super::sequencing::lower_operand;
@@ -63,6 +64,7 @@ pub fn lower_call(
     {
         return Ok(op);
     }
+    let func = written_member_callee(func);
 
     if let ExpressionKind::Member(obj, method) = &func.node {
         if let Some(op) =
@@ -150,6 +152,18 @@ fn written_function_callee<'e>(ctx: &LoweringContext, func: &'e Expression) -> &
         Some(TypeKind::Function(_))
     );
     if is_function {
+        callee
+    } else {
+        func
+    }
+}
+
+/// The member a method call writing its type arguments out — `b.m<int>(5)` —
+/// calls, else `func` as written. The type checker records what the written
+/// arguments bind against the call itself, which is where they are read.
+fn written_member_callee(func: &Expression) -> &Expression {
+    let callee = callee_name_expression(func);
+    if matches!(callee.node, ExpressionKind::Member(..)) {
         callee
     } else {
         func
@@ -282,10 +296,22 @@ fn lower_static_method_impl(
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
     let (destination, result_op) = call_destination(ctx, return_ty, dest.cloned(), *span);
 
-    let func_op = Operand::function(
-        Symbol::method(defining_type_name, &[], method_name, &[]),
-        *span,
-    );
+    let symbol = if !method_info.declares_type_parameters() {
+        Symbol::method(defining_type_name, &[], method_name, &[])
+    } else {
+        let site = GenericMethodSite {
+            receiver: None,
+            class_name: defining_type_name,
+            defining_class: defining_type_name,
+            method_name,
+            parameters: &method_info.generics,
+            is_static: method_info.is_static,
+            call_expr_id,
+            span: *span,
+        };
+        generic_method_symbol(ctx, &site)?
+    };
+    let func_op = Operand::function(symbol, *span);
 
     // Build arg_modes from method_info with no receiver offset (static methods have no self).
     let arg_modes = build_method_arg_modes_with_offset(method_info, args.len(), arg_ops.len(), 0);
@@ -1838,7 +1864,7 @@ fn uninstantiated_generic_call(func_name: &str, span: Span) -> LoweringError {
 /// substitution is recorded, left unlowered, and refused by the pipeline once
 /// the bounds on instantiations have had the chance to report the growth that
 /// reached it.
-fn refuse_unnameable_call_mapping(
+pub(super) fn refuse_unnameable_call_mapping(
     ctx: &LoweringContext,
     func_name: &str,
     type_args: &[(String, Type)],

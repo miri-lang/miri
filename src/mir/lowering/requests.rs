@@ -22,6 +22,10 @@ pub struct LoweringRequests {
     /// substitution already applied, so the pipeline can lower each callee
     /// without recovering its type arguments from the mangled symbol.
     pub generic_function_calls: Vec<GenericFunctionCall>,
+    /// Every generic method instantiation the body calls, in call order,
+    /// recorded as [`Self::generic_function_calls`] is: the method's own type
+    /// arguments with the body's substitution applied, beside the owner's.
+    pub generic_method_calls: Vec<GenericMethodCall>,
     /// Every call the body retargets to a residency-specialized body, in call
     /// order. Recorded when the call is lowered, so the pipeline lowers each
     /// specialization from the function it specializes without recovering that
@@ -80,6 +84,27 @@ pub struct GenericFunctionCall {
     /// The generic function the instantiation is lowered from.
     pub function: DeclaredFunction,
     /// Each of the callee's generic parameters, paired with the type it is
+    /// instantiated at.
+    pub type_args: Vec<(String, Type)>,
+}
+
+/// One call to a method declaring type parameters of its own (`fn m<T>`), at
+/// concrete type arguments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericMethodCall {
+    /// The instantiation the call targets, e.g. `Box.same` at `String`.
+    pub symbol: Symbol,
+    /// The class or enum the copy is compiled under, which `self` is typed
+    /// as: the one declaring the method, the ancestor a generic class
+    /// inherits it from, or the class a trait default or an abstract
+    /// ancestor's body is copied into.
+    pub owner: String,
+    /// The owner's type arguments, in declaration order; empty for an owner
+    /// that declares none.
+    pub owner_args: Vec<Type>,
+    /// The method's name.
+    pub method: String,
+    /// Each of the method's own type parameters, paired with the type it is
     /// instantiated at.
     pub type_args: Vec<(String, Type)>,
 }

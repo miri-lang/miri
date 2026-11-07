@@ -52,7 +52,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
 use crate::error::syntax::Span;
 use crate::type_checker::call_instantiation::{type_arguments_noun, GenericCall, ParameterBound};
-use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::context::{resolve_method_source, Context, MethodSource, TypeDefinition};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::instantiation_requirements::{free_function_owner, GenericBodyId};
 use crate::type_checker::type_mismatch::TypeSides;
@@ -302,6 +302,40 @@ impl TypeChecker {
         Some((free_function_owner(&declared.module), declared.name.clone()))
     }
 
+    /// The body a call through `func`, a method read off a receiver of a
+    /// class, enum or trait type, answers the requirements of: the type
+    /// declaring the body the receiver runs, paired with the method's name.
+    /// Only a generic call asks, so the requirements answered are those of the
+    /// method's own type parameters; its owner's are answered through the
+    /// receiver. `None` for any other callee, and for a receiver of a type
+    /// parameter.
+    fn method_body(&self, func: &Expression) -> Option<GenericBodyId> {
+        let ExpressionKind::Member(receiver, member) = &func.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method, _) = &member.node else {
+            return None;
+        };
+        let TypeKind::Custom(type_name, _) = &self.get_type(receiver.id)?.kind else {
+            return None;
+        };
+        let definitions = &self.type_table.global_type_definitions;
+        let declaring = match definitions.get(type_name)? {
+            TypeDefinition::Class(_) => {
+                match resolve_method_source(definitions, type_name, method)? {
+                    MethodSource::Declared { class, .. }
+                    | MethodSource::AbstractOnly { class, .. } => class,
+                    MethodSource::Default(default) => default.trait_name,
+                }
+            }
+            TypeDefinition::Enum(_) | TypeDefinition::Trait(_) => type_name.as_str(),
+            TypeDefinition::Struct(_) | TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {
+                return None
+            }
+        };
+        Some((declaring.to_string(), method.clone()))
+    }
+
     fn call_func_name(func: &Expression) -> Option<&str> {
         match &func.node {
             ExpressionKind::Identifier(name, _) => Some(name.as_str()),
@@ -386,11 +420,17 @@ impl TypeChecker {
         } else {
             return unwrapped;
         };
-        // A method call writing explicit type arguments — `obj.f<T>()` — wraps
-        // a member access, which is not unwrapped here, so its written
-        // arguments bind nothing and the call is inferred as if it wrote none.
+        // A method call writing explicit type arguments — `obj.f<T>()` — calls
+        // the member, and its written arguments bind the method's own
+        // parameters as a generic function's do.
         let Some(name) = self.function_name_written(base, context) else {
-            return unwrapped;
+            return match (&base.node, type_arguments) {
+                (ExpressionKind::Member(..), Some(_)) => CalledFunction {
+                    expression: base,
+                    type_arguments,
+                },
+                _ => unwrapped,
+            };
         };
         let names_a_function = self
             .type_table
@@ -531,7 +571,9 @@ impl TypeChecker {
             Some(parameters) => {
                 let call = GenericCall {
                     callee: Self::call_func_name(func).map(str::to_string),
-                    body: self.free_function_body(func),
+                    body: self
+                        .free_function_body(func)
+                        .or_else(|| self.method_body(func)),
                     parameters,
                     bounds,
                     declared_return,

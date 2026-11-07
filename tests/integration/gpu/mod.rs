@@ -37,6 +37,7 @@ pub mod forall_const_bounds;
 pub mod forall_param_call;
 pub mod forall_routing;
 pub mod game_of_life;
+pub mod generic_methods;
 pub mod gpu_fn_launch;
 pub mod gpu_for_capture_residency;
 pub mod gpu_frame;

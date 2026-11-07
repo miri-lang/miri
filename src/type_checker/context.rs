@@ -208,6 +208,10 @@ pub struct FieldInfo {
 /// Information about a method.
 #[derive(Debug, Clone)]
 pub struct MethodInfo {
+    /// The type parameters the method declares itself (`fn m<T>`), in
+    /// declaration order; empty for a method that declares none. Its owner's
+    /// parameters are not among them.
+    pub generics: Vec<GenericDefinition>,
     pub params: Vec<(String, Type)>,
     /// Parallel to `params`: `true` when the parameter was declared `out`.
     /// An empty `Vec` means "no out params" — read via [`MethodInfo::is_param_out`]
@@ -225,6 +229,16 @@ pub struct MethodInfo {
 }
 
 impl MethodInfo {
+    /// Whether the method declares type parameters of its own, and so is
+    /// compiled once per set of type arguments its calls bind, with no body
+    /// shared by every one and no vtable slot. `generics` is read from the
+    /// declaration, so this answers as
+    /// [`FunctionDeclarationData::declares_type_parameters`](crate::ast::FunctionDeclarationData::declares_type_parameters)
+    /// does for the statement the method was declared by.
+    pub fn declares_type_parameters(&self) -> bool {
+        !self.generics.is_empty()
+    }
+
     /// Whether parameter `idx` (0-indexed into `params`, receiver excluded)
     /// was declared `out`. False when `is_out_flags` is empty or shorter than
     /// `params` — the canonical read path for the `is_out_flags` convention.
