@@ -28,9 +28,9 @@ Miri's compiler is the harness: it exists to make a program that compiles a prog
 - Between two designs, prefer the one that moves a failure from run time to compile time, or removes it. A silent wrong answer is the worst outcome, a runtime error the next worst, a compile error with a repair the best.
 - No implicit defaults that can be silently wrong: a behaviour that is right only sometimes (identity equality, an address hash, a guessed type) is not supplied by default; the program states it, or the compiler refuses with help that says what to write.
 - Be pragmatic about how the strictness feels, not about whether it is there: a refusal carries help naming the fix, rules are the same on every target, and strictness that prevents no runtime issue is not added.
-- When an existing behaviour breaks a promise, it is a defect to fix, not a precedent to copy.
+- When an existing behaviour breaks a promise, it is a bug to fix, not a precedent to copy: whatever the compiler could have refused but lets through to run time is a bug.
 
-**Known gaps** (built-ins that still stop the program, each to be brought under promise 3 or justified): reading a missing map key with `m[k]`, indexing a list or array out of range, integer overflow and division by zero, and stepping a `String` that is not one character (`MER_RT_019`).
+**Known violations** — bugs, not accepted behaviour; each is fixed by moving the failure into the type or to compile time: reading a missing map key with `m[k]`, indexing a list or array out of range, integer overflow and division by zero, and stepping a `String` that is not one character (`MER_RT_019`).
 
 **Self-check:**
 - [ ] Could this failure be caught at compile time instead of run time? If so, it is.
