@@ -3,6 +3,7 @@
 
 pub mod analysis;
 pub mod attributes;
+pub mod bounds;
 pub mod captures;
 pub mod common;
 pub mod doc_comments;

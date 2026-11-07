@@ -9,7 +9,7 @@
 //! exact shape that makes a parameter owned or keeps it borrowed.
 
 use miri::ast::type_arguments::type_argument;
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind, VEC3_TYPE_NAME};
+use miri::ast::types::{Type, TypeKind, VEC3_TYPE_NAME};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
@@ -178,13 +178,7 @@ fn class_def(name: &str, field: Type, has_hook: bool, is_generic: bool) -> TypeD
         is_static: false,
         attributes: Vec::new(),
     };
-    let generics = is_generic.then(|| {
-        vec![GenericDefinition {
-            name: "T".to_string(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }]
-    });
+    let generics = is_generic.then(|| vec![GenericDefinition::unbounded("T".to_string())]);
     TypeDefinition::Class(ClassDefinition {
         name: name.to_string(),
         generics,

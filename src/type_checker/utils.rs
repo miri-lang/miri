@@ -68,8 +68,7 @@ pub(crate) fn tuple_class_arguments(element: TypeArgument, length: usize) -> [Ty
 fn unspecified_element_type() -> Type {
     make_type(TypeKind::Generic(
         "T".to_string(),
-        None,
-        TypeDeclarationKind::None,
+        crate::ast::bounds::Bounds::none(),
     ))
 }
 
@@ -173,8 +172,8 @@ pub fn runs_drop_hook(
         return has_drop_hook(name, type_definitions)
             || trait_declares_drop_hook(name, type_definitions);
     }
-    if let TypeKind::Generic(_, Some(constraint), _) = kind {
-        return runs_drop_hook(&constraint.kind, type_definitions);
+    if let TypeKind::Generic(_, bounds) = kind {
+        return bounds.entail(|bound| runs_drop_hook(&bound.ty.kind, type_definitions));
     }
     false
 }
@@ -235,11 +234,11 @@ fn is_resource_inner<'a>(
                 _ => false,
             }
         }
-        // A generic parameter is a resource iff its bound is a resource.
-        // No bound (or non-resource bound) → managed-typed unknown.
-        TypeKind::Generic(_, constraint, _) => constraint
-            .as_ref()
-            .is_some_and(|c| is_resource_inner(&c.kind, type_definitions, visited)),
+        // A generic parameter is a resource iff one of its bounds is a
+        // resource. No bound (or non-resource bounds) → managed-typed unknown.
+        TypeKind::Generic(_, bounds) => {
+            bounds.entail(|bound| is_resource_inner(&bound.ty.kind, type_definitions, visited))
+        }
         _ => false,
     }
 }
@@ -355,7 +354,7 @@ pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::RawPtr
         | TypeKind::Identifier
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _) => GpuScalarClass::Forbidden,
     }
@@ -383,7 +382,7 @@ pub fn gpu_scalar_class(kind: &TypeKind) -> GpuScalarClass {
 /// via the canonical constants in [`crate::ast::types`].
 pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
     match kind {
-        TypeKind::Generic(_, _, _) => true,
+        TypeKind::Generic(_, _) => true,
 
         TypeKind::Custom(name, type_args) => {
             if name == DIM3_TYPE_NAME
@@ -540,7 +539,7 @@ fn accelerable_inner(
     allow_generic: bool,
 ) -> bool {
     match kind {
-        TypeKind::Generic(_, _, _) => allow_generic,
+        TypeKind::Generic(_, _) => allow_generic,
 
         TypeKind::Tuple(elements) => elements
             .iter()
@@ -1073,7 +1072,7 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
         | TypeKind::RawPtr
         | TypeKind::Identifier
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Custom(_, None) => None,
     }
 }
@@ -1125,7 +1124,7 @@ pub fn is_residency_gated_buffer(kind: &TypeKind) -> bool {
         | TypeKind::RawPtr
         | TypeKind::Identifier
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_) => false,
     }
 }
@@ -1159,9 +1158,10 @@ pub fn type_mentions_f16(kind: &TypeKind) -> bool {
             type_mentions_f16(&inner.kind)
         }
         TypeKind::Custom(_, Some(args)) => args.iter().any(expr_mentions_f16),
-        TypeKind::Generic(_, Some(arg), _) => type_mentions_f16(&arg.kind),
+        TypeKind::Generic(_, bounds) => {
+            bounds.iter().any(|bound| type_mentions_f16(&bound.ty.kind))
+        }
         TypeKind::Custom(_, None)
-        | TypeKind::Generic(_, None, _)
         | TypeKind::Function(_)
         | TypeKind::Int
         | TypeKind::I8
@@ -1249,7 +1249,7 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::Future(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::List(_)
         | TypeKind::Array(_, _)
@@ -1791,8 +1791,7 @@ impl TypeChecker {
                     // Let's just return a generic 'T'.
                     return make_type(TypeKind::Generic(
                         "T".to_string(),
-                        None,
-                        TypeDeclarationKind::None,
+                        crate::ast::bounds::Bounds::none(),
                     ));
                 }
                 Self::error_type()
@@ -2734,11 +2733,7 @@ impl TypeChecker {
                         expr.span,
                     );
                 }
-                make_type(TypeKind::Generic(
-                    name.to_string(),
-                    gen_def.constraint.clone().map(Box::new),
-                    gen_def.kind,
-                ))
+                make_type(TypeKind::Generic(name.to_string(), gen_def.bounds.clone()))
             }
             TypeDefinition::Alias(alias_def) => {
                 self.resolve_type_alias(name, alias_def, resolved_args, expr, context)

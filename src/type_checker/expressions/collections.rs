@@ -1129,7 +1129,7 @@ pub(crate) fn fill_open_arguments_where(
     other: &Type,
     is_open: &dyn Fn(&str) -> bool,
 ) -> Type {
-    if let TypeKind::Generic(name, _, _) = &known.kind {
+    if let TypeKind::Generic(name, _) = &known.kind {
         return if matches!(other.kind, TypeKind::Generic(..)) || !is_open(name) {
             known.clone()
         } else {

@@ -58,6 +58,7 @@ pub mod body_writes;
 pub(crate) mod generics;
 mod gpu_buffer_init;
 mod gpu_integer_width;
+mod hidden_types;
 pub(crate) mod hygiene;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;

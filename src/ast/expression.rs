@@ -125,19 +125,19 @@ pub enum ExpressionKind {
     /// A type expression wrapper (e.g., when a type is used as an expression).
     Type(Box<Type>, bool),
 
-    /// A generic type reference (e.g., `List<T>`).
-    GenericType(
-        Box<Expression>,
-        Option<Box<Expression>>,
-        TypeDeclarationKind,
-    ),
+    /// A type parameter as declared: its name, the types its bounds name
+    /// (none, one, or several joined with `and`) and the keyword they are
+    /// written after (e.g., `T implements Comparable and Hashable`).
+    GenericType(Box<Expression>, Vec<Expression>, TypeDeclarationKind),
 
-    /// A type declaration expression (e.g., `T extends SomeClass`).
+    /// A type declaration expression (e.g., `T extends SomeClass`): its
+    /// name, its own type parameters, the keyword and the types it names
+    /// (several joined with `and` after `implements` or `includes`).
     TypeDeclaration(
         Box<Expression>,
         Option<Vec<Expression>>,
         TypeDeclarationKind,
-        Option<Box<Expression>>,
+        Vec<Expression>,
     ),
 
     /// An enum value reference (e.g., `Option::Some(5)`).

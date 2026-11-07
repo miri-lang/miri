@@ -297,7 +297,7 @@ fn register_word(kind: &TypeKind) -> TrampolineWord {
         | TypeKind::Future(_)
         | TypeKind::Function(_)
         | TypeKind::Custom(_, _)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
         | TypeKind::Error

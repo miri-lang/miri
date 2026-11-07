@@ -875,7 +875,7 @@ fn holds_fields_by_value(kind: &TypeKind, definitions: &HashMap<String, TypeDefi
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Void
         | TypeKind::Error

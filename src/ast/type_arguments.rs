@@ -362,7 +362,7 @@ pub fn unresolved_type_argument(kind: &TypeKind) -> Option<&TypeArgument> {
         | TypeKind::Identifier
         | TypeKind::RawPtr
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Custom(_, None)
         | TypeKind::Meta(_)
         | TypeKind::Void

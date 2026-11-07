@@ -438,7 +438,7 @@ impl TypeChecker {
             }
 
             // Unresolved generics and type sets cannot be formatted
-            TypeKind::Generic(_, _, _) | TypeKind::OneOf(_) => false,
+            TypeKind::Generic(_, _) | TypeKind::OneOf(_) => false,
 
             // Collections are not formattable
             TypeKind::List(_)

@@ -42,6 +42,7 @@
 //! - Enum variant construction: `Ok(value)`, `Err(error)`
 //! - Generic type instantiation
 
+use crate::ast::bounds::{Bound, Bounds};
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::type_arguments::{value_argument, TypeArgKind, TypeArgument};
@@ -502,31 +503,21 @@ impl TypeChecker {
                 self.resolve_type_argument_at(inner_type_expr, use_site, context)
             } else {
                 if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
-                    make_type(TypeKind::Generic(
-                        g.name.clone(),
-                        g.constraint.clone().map(Box::new),
-                        g.kind,
-                    ))
+                    make_type(TypeKind::Generic(g.name.clone(), g.bounds.clone()))
                 } else {
                     make_type(TypeKind::Generic(
                         "T".to_string(),
-                        None,
-                        TypeDeclarationKind::None,
+                        crate::ast::bounds::Bounds::none(),
                     ))
                 }
             }
         } else {
             if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
-                make_type(TypeKind::Generic(
-                    g.name.clone(),
-                    g.constraint.clone().map(Box::new),
-                    g.kind,
-                ))
+                make_type(TypeKind::Generic(g.name.clone(), g.bounds.clone()))
             } else {
                 make_type(TypeKind::Generic(
                     "T".to_string(),
-                    None,
-                    TypeDeclarationKind::None,
+                    crate::ast::bounds::Bounds::none(),
                 ))
             }
         };
@@ -579,16 +570,11 @@ impl TypeChecker {
             }
         }
         if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("V") {
-            make_type(TypeKind::Generic(
-                g.name.clone(),
-                g.constraint.clone().map(Box::new),
-                g.kind,
-            ))
+            make_type(TypeKind::Generic(g.name.clone(), g.bounds.clone()))
         } else {
             make_type(TypeKind::Generic(
                 "V".to_string(),
-                None,
-                TypeDeclarationKind::None,
+                crate::ast::bounds::Bounds::none(),
             ))
         }
     }
@@ -812,6 +798,71 @@ impl TypeChecker {
         }
     }
 
+    /// A receiver typed as a parameter with several bounds, read as a
+    /// parameter of the one bound that declares `member`, so the member is
+    /// looked up, typed and dispatched through that bound. `None` for every
+    /// other receiver, which is read as it is.
+    pub(crate) fn receiver_at_declaring_bound(
+        &self,
+        receiver: &Type,
+        member: &str,
+    ) -> Option<Type> {
+        let TypeKind::Generic(name, bounds) = &receiver.kind else {
+            return None;
+        };
+        if bounds.len() < 2 {
+            return None;
+        }
+        let declaring = self.bound_declaring(bounds, member)?;
+        Some(Type::new(
+            TypeKind::Generic(
+                name.clone(),
+                Bounds::one(declaring.kind, declaring.ty.clone()),
+            ),
+            receiver.span,
+        ))
+    }
+
+    /// The bound of `bounds` that declares `member`: the first that does, or
+    /// the first of all when none does, so the member is reported missing
+    /// from it. `None` only for a parameter with no bound.
+    pub(crate) fn bound_declaring<'b>(
+        &self,
+        bounds: &'b Bounds,
+        member: &str,
+    ) -> Option<&'b Bound> {
+        bounds
+            .declaring(|bound| self.declares_member(bound, member))
+            .or_else(|| bounds.iter().next())
+    }
+
+    /// Whether the type `ty` names declares `member`, as a method of its own,
+    /// of a trait it implements or extends, or as a field.
+    fn declares_member(&self, ty: &Type, member: &str) -> bool {
+        use crate::type_checker::context::collect_class_fields_all;
+        let TypeKind::Custom(name, _) = &ty.kind else {
+            return false;
+        };
+        let defs = &self.type_table.global_type_definitions;
+        let is_field = match defs.get(name) {
+            Some(TypeDefinition::Class(class_def)) => collect_class_fields_all(class_def, defs)
+                .iter()
+                .any(|(field, _)| *field == member),
+            Some(TypeDefinition::Struct(struct_def)) => struct_def
+                .fields
+                .iter()
+                .any(|(field, _, _)| field == member),
+            Some(
+                TypeDefinition::Trait(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Generic(_)
+                | TypeDefinition::Alias(_),
+            )
+            | None => false,
+        };
+        is_field || self.member_is_a_method(ty, member)
+    }
+
     /// Whether the trait `trait_name`, or a trait it extends, declares
     /// `method_name`.
     fn trait_declares(&self, trait_name: &str, method_name: &str) -> bool {
@@ -863,6 +914,8 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Type {
+        let narrowed = self.receiver_at_declaring_bound(obj_type, prop_name);
+        let obj_type = narrowed.as_ref().unwrap_or(obj_type);
         if prop_name == HASH_METHOD_NAME {
             if let Some(member) = self.derived_hash_member(obj_type, span, context) {
                 return member;
@@ -930,7 +983,10 @@ impl TypeChecker {
     /// parameter is that parameter, so `a.compare(b)` with `a T` takes a `T`
     /// and `a.concat(b)` gives one. Any other member is returned as it is.
     fn read_at_bounded_receiver(&self, member: Type, receiver: &Type) -> Type {
-        let TypeKind::Generic(_, Some(bound), _) = &receiver.kind else {
+        let TypeKind::Generic(_, bounds) = &receiver.kind else {
+            return member;
+        };
+        let Some(bound) = bounds.only().map(|bound| &bound.ty) else {
             return member;
         };
         // A bound naming a generic trait (`X implements Pick<int>`) is
@@ -994,7 +1050,9 @@ impl TypeChecker {
                 self.type_declares_method(name, HASH_METHOD_NAME)
                     || self.trait_declares(name, HASH_METHOD_NAME)
             }
-            TypeKind::Generic(_, Some(constraint), _) => self.declares_hash_member(constraint),
+            TypeKind::Generic(_, bounds) => {
+                bounds.entail(|bound| self.declares_hash_member(&bound.ty))
+            }
             TypeKind::String => self.type_declares_method(STRING_TYPE_NAME, HASH_METHOD_NAME),
             TypeKind::List(_) => {
                 self.type_declares_method(BuiltinCollectionKind::List.name(), HASH_METHOD_NAME)
@@ -1195,10 +1253,12 @@ impl TypeChecker {
                 Some(vec![*ok.clone(), *err.clone()]),
             ),
             TypeKind::Option(_) => (None, None),
-            TypeKind::Generic(_, Some(constraint), _) => {
-                self.extract_constrained_generic_member_type(constraint)
+            TypeKind::Generic(_, bounds) if !bounds.is_empty() => {
+                bounds.only().map_or((None, None), |bound| {
+                    self.extract_constrained_generic_member_type(&bound.ty)
+                })
             }
-            TypeKind::Generic(name, None, _) => {
+            TypeKind::Generic(name, _) => {
                 self.report_error(
                     DiagnosticCode::TypGenericTypeStructure,
                     format!(
@@ -2503,6 +2563,25 @@ impl TypeChecker {
             .collect()
     }
 
+    /// The declaration of the type parameter `generic`, written back as the
+    /// syntax that declares it, its bounds after their shared keyword.
+    fn generic_parameter_expression(
+        &self,
+        generic: &crate::type_checker::context::GenericDefinition,
+    ) -> Expression {
+        let kind = generic
+            .bounds
+            .iter()
+            .next()
+            .map_or(TypeDeclarationKind::None, |bound| bound.kind);
+        let written = generic
+            .bounds
+            .iter()
+            .map(|bound| self.create_type_expression(bound.ty.clone()))
+            .collect();
+        ast_factory::generic_type_expression(ast_factory::identifier(&generic.name), written, kind)
+    }
+
     fn build_variant_generics(
         &self,
         def: &crate::type_checker::context::EnumDefinition,
@@ -2512,21 +2591,14 @@ impl TypeChecker {
             if let Some(generics) = &def.generics {
                 let gen_exprs: Vec<Expression> = generics
                     .iter()
-                    .map(|g| {
-                        let constraint_expr = g
-                            .constraint
-                            .as_ref()
-                            .map(|c| Box::new(self.create_type_expression(c.clone())));
-                        ast_factory::generic_type_with_kind(&g.name, constraint_expr, g.kind)
-                    })
+                    .map(|g| self.generic_parameter_expression(g))
                     .collect();
                 let ret_args: Vec<TypeArgument> = generics
                     .iter()
                     .map(|g| {
                         self.create_type_argument(make_type(TypeKind::Generic(
                             g.name.clone(),
-                            g.constraint.clone().map(Box::new),
-                            g.kind,
+                            g.bounds.clone(),
                         )))
                     })
                     .collect();

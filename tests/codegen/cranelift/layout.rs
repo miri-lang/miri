@@ -868,11 +868,7 @@ fn test_generic_typedef_is_pointer_sized() {
 
     type_defs.insert(
         "T".to_string(),
-        TypeDefinition::Generic(GenericDefinition {
-            name: "T".to_string(),
-            constraint: None,
-            kind: miri::ast::types::TypeDeclarationKind::None,
-        }),
+        TypeDefinition::Generic(GenericDefinition::unbounded("T".to_string())),
     );
 
     let kind = TypeKind::Custom("T".to_string(), None);
@@ -1238,11 +1234,7 @@ fn test_generic_alias_field_layout_is_its_template_at_its_arguments() {
         "Id".to_string(),
         TypeDefinition::Alias(AliasDefinition {
             template: t(TypeKind::Custom("T".to_string(), None)),
-            generics: Some(vec![GenericDefinition {
-                name: "T".to_string(),
-                constraint: None,
-                kind: miri::ast::types::TypeDeclarationKind::None,
-            }]),
+            generics: Some(vec![GenericDefinition::unbounded("T".to_string())]),
         }),
     )]);
     let tuple = TypeKind::Tuple(vec![

@@ -385,7 +385,7 @@ impl<'a> Classifier<'a> {
         match kind {
             TypeKind::Tuple(elements) => self.classify_tuple(elements, names),
             TypeKind::Option(payload) => self.classify_option(Argument::plain(payload, names)),
-            TypeKind::Generic(name, _, _) => self.classify_parameter(names.parameter(name)),
+            TypeKind::Generic(name, _) => self.classify_parameter(names.parameter(name)),
             TypeKind::Custom(name, args) => self.classify_custom(kind, name, args, names),
             TypeKind::Void => Verdict::Class(ValueClass::Bitwise(ValueLayout::empty())),
             TypeKind::String
@@ -781,7 +781,7 @@ fn scalar_kind(kind: &TypeKind) -> Option<ScalarKind> {
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)

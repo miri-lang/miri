@@ -43,9 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory as ast_factory;
-use crate::ast::types::{
-    Type, TypeDeclarationKind, TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT,
-};
+use crate::ast::types::{Type, TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::diagnostics::RepairRequest;
@@ -180,8 +178,7 @@ impl TypeChecker {
     fn make_some_type(&self) -> Type {
         let t_param = ast_factory::make_type(TypeKind::Generic(
             "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ));
         let t_expr = ast_factory::type_expr_non_null(t_param.clone());
         let return_type = ast_factory::make_type(TypeKind::Option(Box::new(t_param)));
@@ -204,8 +201,7 @@ impl TypeChecker {
     fn make_ok_type(&self) -> Type {
         let t_param = ast_factory::make_type(TypeKind::Generic(
             "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ));
         let t_expr = ast_factory::type_expr_non_null(t_param.clone());
         let void_arg =
@@ -237,8 +233,7 @@ impl TypeChecker {
     fn make_err_type(&self) -> Type {
         let e_param = ast_factory::make_type(TypeKind::Generic(
             "E".to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ));
         let e_expr = ast_factory::type_expr_non_null(e_param.clone());
         let void_arg =

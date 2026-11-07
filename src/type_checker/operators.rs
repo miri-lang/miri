@@ -624,11 +624,8 @@ impl TypeChecker {
         match &ty.kind {
             TypeKind::Float | TypeKind::F16 | TypeKind::F32 | TypeKind::F64 => Err(NoStep::Float),
             TypeKind::Boolean => Err(NoStep::Boolean),
-            TypeKind::Generic(name, bound, _) => {
-                if bound
-                    .as_deref()
-                    .is_some_and(|bound| self.bound_steps(bound))
-                {
+            TypeKind::Generic(name, bounds) => {
+                if bounds.entail(|bound| self.bound_steps(&bound.ty)) {
                     Ok(ValueStepping::Deferred)
                 } else {
                     Err(NoStep::UnboundedParameter(name.clone()))
@@ -692,6 +689,8 @@ impl TypeChecker {
 
     /// Whether a parameter bounded by `bound` steps: the bound is
     /// `Steppable`, a trait extending it, or a class implementing it.
+    /// One bound of several is judged at a time; the parameter steps when
+    /// one of its bounds does.
     fn bound_steps(&self, bound: &Type) -> bool {
         let TypeKind::Custom(name, _) = &bound.kind else {
             return false;
@@ -1565,11 +1564,7 @@ fn main()
                 "{kind:?}"
             );
         }
-        let parameter = TypeKind::Generic(
-            "T".to_string(),
-            None,
-            crate::ast::types::TypeDeclarationKind::None,
-        );
+        let parameter = TypeKind::Generic("T".to_string(), crate::ast::bounds::Bounds::none());
         assert_eq!(
             checker.ordering_of(&ty(parameter)),
             Some(ValueOrdering::Deferred)
@@ -1683,8 +1678,12 @@ fn main()
         let parameter = |bound: Option<&str>| {
             TypeKind::Generic(
                 "T".to_string(),
-                bound.map(|name| Box::new(ty(TypeKind::Custom(name.to_string(), None)))),
-                crate::ast::types::TypeDeclarationKind::None,
+                bound.map_or_else(crate::ast::bounds::Bounds::none, |name| {
+                    crate::ast::bounds::Bounds::one(
+                        crate::ast::types::TypeDeclarationKind::Implements,
+                        ty(TypeKind::Custom(name.to_string(), None)),
+                    )
+                }),
             )
         };
         let unbounded = || Err(NoStep::UnboundedParameter("T".to_string()));

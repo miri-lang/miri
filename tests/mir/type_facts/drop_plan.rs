@@ -6,7 +6,7 @@
 
 use crate::type_checker::utils::type_checker_result;
 use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, VEC3_TYPE_NAME};
+use miri::ast::types::{Type, TypeKind, ATOMIC_TYPE_NAME, VEC3_TYPE_NAME};
 use miri::error::syntax::Span;
 use miri::mir::type_facts::{
     is_unresolved_element, ClassDefinition, DropPlan, DroppedMembers, EnumDefinition,
@@ -26,8 +26,7 @@ fn string() -> Type {
 fn parameter(name: &str) -> Type {
     ty(TypeKind::Generic(
         name.to_string(),
-        None,
-        TypeDeclarationKind::None,
+        miri::ast::bounds::Bounds::none(),
     ))
 }
 
@@ -50,11 +49,7 @@ fn custom_of(name: &str, component: TypeKind) -> TypeKind {
 }
 
 fn generic_param(name: &str) -> GenericDefinition {
-    GenericDefinition {
-        name: name.to_string(),
-        constraint: None,
-        kind: TypeDeclarationKind::None,
-    }
+    GenericDefinition::unbounded(name.to_string())
 }
 
 fn class(name: &str) -> ClassDefinition {
@@ -237,7 +232,7 @@ fn released_payloads(shape: EnumDefinition) -> Vec<(usize, Vec<(usize, TypeKind)
 
 #[test]
 fn test_bare_generic_element_is_unresolved() {
-    let elem = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    let elem = TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none());
     assert!(is_unresolved_element(&elem, &HashMap::new()));
 }
 
@@ -389,7 +384,7 @@ fn test_an_optional_of_an_unresolved_parameter_is_unresolved() {
     // `T = Node` the optional is the bare `Node` pointer, not a box, so a
     // thunk that cannot tell must skip it exactly as it skips a bare `T`.
     let table = defs([("Node", TypeDefinition::Class(class("Node")))]);
-    let parameter = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    let parameter = TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none());
     let optional = |kind: TypeKind| TypeKind::Option(Box::new(ty(kind)));
     for kind in [
         optional(parameter.clone()),

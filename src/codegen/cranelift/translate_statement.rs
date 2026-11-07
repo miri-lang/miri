@@ -2125,7 +2125,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Set(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Void

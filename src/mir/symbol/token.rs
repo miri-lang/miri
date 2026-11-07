@@ -146,7 +146,7 @@ fn type_kind_token<'a>(kind: &'a TypeKind, depth: usize) -> Cow<'a, str> {
         TypeKind::U64 => "u64",
         TypeKind::U128 => "u128",
         TypeKind::RawPtr => "RawPtr",
-        TypeKind::Generic(_, _, _) => OPEN_PARAMETER_TOKEN,
+        TypeKind::Generic(_, _) => OPEN_PARAMETER_TOKEN,
         TypeKind::Meta(_)
         | TypeKind::Linear(_)
         | TypeKind::Identifier
@@ -599,11 +599,7 @@ mod mangled_token_tests {
             (
                 "a declared type named like the unspellable token",
                 named(UNSPELLABLE_TYPE_TOKEN),
-                TypeKind::Generic(
-                    "T".to_string(),
-                    None,
-                    crate::ast::types::TypeDeclarationKind::None,
-                ),
+                TypeKind::Generic("T".to_string(), crate::ast::bounds::Bounds::none()),
             ),
             (
                 "a declared name holding an underscore",
@@ -682,11 +678,7 @@ mod mangled_token_tests {
     /// type.
     #[test]
     fn a_component_without_a_token_makes_the_whole_type_unspellable() {
-        let open = TypeKind::Generic(
-            "T".to_string(),
-            None,
-            crate::ast::types::TypeDeclarationKind::None,
-        );
+        let open = TypeKind::Generic("T".to_string(), crate::ast::bounds::Bounds::none());
         assert!(!kind_has_a_mangled_token(&open));
         assert!(!kind_has_a_mangled_token(&class_ref(
             "List",
@@ -732,11 +724,7 @@ mod mangled_token_tests {
     }
 
     fn open_parameter() -> TypeKind {
-        TypeKind::Generic(
-            "T".to_string(),
-            None,
-            crate::ast::types::TypeDeclarationKind::None,
-        )
+        TypeKind::Generic("T".to_string(), crate::ast::bounds::Bounds::none())
     }
 
     fn nested_past_the_depth_bound(leaf: TypeKind) -> TypeKind {

@@ -86,7 +86,7 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         TypeKind::Custom(_, _) => ptr_ty,
         // TODO: a `T` bound to `i128`/`u128` is truncated in the shared generic
         // body; only a monomorphized body should see a width-dependent `T`.
-        TypeKind::Generic(_, _, _) => ptr_ty,
+        TypeKind::Generic(_, _) => ptr_ty,
 
         // Meta types should be resolved before codegen; treat as pointer-sized
         // to avoid a panic. The type checker should prevent these from reaching codegen.

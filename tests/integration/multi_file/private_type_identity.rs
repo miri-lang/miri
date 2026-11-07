@@ -604,9 +604,11 @@ fn test_two_modules_each_keep_a_private_generic_class_of_one_name() {
     );
 }
 
-/// A type parameter shadows a private type of its module's of the same name.
+/// A type parameter named after a private type of its own module would hide
+/// that type for the whole declaration, so it is refused there, in a used
+/// module as in the program's.
 #[test]
-fn test_a_type_parameter_shadows_a_module_private_type_of_its_name() {
+fn test_a_type_parameter_named_after_a_module_private_type_is_refused() {
     let a = concat!(
         "private class Helper\n",
         "    var n int\n",
@@ -614,16 +616,10 @@ fn test_a_type_parameter_shadows_a_module_private_type_of_its_name() {
         "fn id<Helper>(x Helper) Helper\n",
         "    return x\n",
         "\n",
-        "private class Wrap<Helper>\n",
-        "    var item Helper\n",
-        "    fn get() Helper\n",
-        "        return self.item\n",
-        "\n",
-        "fn from_a() String\n",
-        "    let w = Wrap<String>(item: \"w\")\n",
-        "    return f\"{id(5)} {w.get()} {Helper(n: 1).n}\"\n",
+        "fn from_a() int\n",
+        "    return id(5)\n",
     );
-    assert_project_runs_with_output(
+    assert_project_compiler_error(
         &[
             (
                 "main.mi",
@@ -631,7 +627,7 @@ fn test_a_type_parameter_shadows_a_module_private_type_of_its_name() {
             ),
             ("k/a.mi", a),
         ],
-        "5 w 1",
+        "type parameter `Helper` hides the class `Helper`",
     );
 }
 

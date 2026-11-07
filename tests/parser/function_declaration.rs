@@ -5,9 +5,9 @@ use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::lhs_identifier;
 use miri::ast::factory::{
     assign, binary, block, boolean_literal, empty_statement, expression_statement, func,
-    generic_type, generic_type_with_kind, guard, identifier, int_literal_expression, out_parameter,
-    parameter, return_statement, type_bool, type_custom, type_expr_non_null, type_int, type_list,
-    type_string,
+    generic_type, generic_type_expression, generic_type_with_kind, guard, identifier,
+    int_literal_expression, out_parameter, parameter, return_statement, type_bool, type_custom,
+    type_expr_non_null, type_int, type_list, type_string,
 };
 use miri::ast::types::TypeDeclarationKind;
 use miri::ast::{opt_expr, AssignmentOp, BinaryOp, GuardOp};
@@ -775,6 +775,105 @@ fn pick<T, T>(a T) T
 ",
         &SyntaxErrorKind::DuplicateTypeParameter {
             name: "T".to_string(),
+        },
+    );
+}
+
+/// The type parameter `name` bounded by `kind` and each of `bounds`, as a
+/// list joined with `and` declares it.
+fn bounded(name: &str, kind: TypeDeclarationKind, bounds: &[&str]) -> miri::ast::Expression {
+    let bounds = bounds
+        .iter()
+        .map(|bound| type_expr_non_null(type_custom(bound, None)))
+        .collect();
+    generic_type_expression(identifier(name), bounds, kind)
+}
+
+#[test]
+fn test_a_type_parameter_joins_its_bounds_with_and() {
+    let source = "
+fn pick<T implements Comparable and Hashable, U>(a T, b U) T
+    return a
+";
+    parser_test(
+        source,
+        vec![func("pick")
+            .generics(vec![
+                bounded(
+                    "T",
+                    TypeDeclarationKind::Implements,
+                    &["Comparable", "Hashable"],
+                ),
+                generic_type("U", None),
+            ])
+            .params(vec![
+                parameter(
+                    "a".into(),
+                    type_expr_non_null(type_custom("T", None)),
+                    None,
+                    None,
+                ),
+                parameter(
+                    "b".into(),
+                    type_expr_non_null(type_custom("U", None)),
+                    None,
+                    None,
+                ),
+            ])
+            .return_type(type_expr_non_null(type_custom("T", None)))
+            .build(block(vec![return_statement(Some(Box::new(identifier(
+                "a",
+            ))))]))],
+    );
+}
+
+#[test]
+fn test_three_bounds_after_extends_and_includes() {
+    for keyword in ["extends", "includes"] {
+        let kind = match keyword {
+            "extends" => TypeDeclarationKind::Extends,
+            _ => TypeDeclarationKind::Includes,
+        };
+        let source = format!("\nfn f<T {keyword} A and B and C>()\n    // body\n");
+        parser_test(
+            &source,
+            vec![func("f")
+                .generics(vec![bounded("T", kind, &["A", "B", "C"])])
+                .params(vec![])
+                .build(empty_statement())],
+        );
+    }
+}
+
+#[test]
+fn test_error_a_bound_list_ending_in_and() {
+    parser_error_test(
+        "fn f<T implements A and>()",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "a type".to_string(),
+            found: ">".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_and_without_a_bound_keyword() {
+    parser_error_test(
+        "fn f<T and A>()",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: ">".to_string(),
+            found: "and".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_a_type_set_joined_with_and() {
+    parser_error_test(
+        "fn f<T is int and String>()",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "`or` between the members of a type set".to_string(),
+            found: "and".to_string(),
         },
     );
 }

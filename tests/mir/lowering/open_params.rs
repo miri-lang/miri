@@ -94,11 +94,7 @@ fn a_body_substituted_at_an_open_parameter_leaves_that_parameter_open() {
     // A shared body calling `pick` at its own parameter reaches `pick` at a
     // type that still names one: the callee is shared too.
     let open = Type::new(
-        TypeKind::Generic(
-            "U".to_string(),
-            None,
-            miri::ast::types::TypeDeclarationKind::None,
-        ),
+        TypeKind::Generic("U".to_string(), miri::ast::bounds::Bounds::none()),
         Span::default(),
     );
     let (body, _) = lower_pick(Some(HashMap::from([("T".to_string(), open)])));

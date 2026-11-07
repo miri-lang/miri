@@ -258,16 +258,16 @@ impl<'a> Contents<'a> {
                 self.expression(target);
                 self.expressions(arguments);
             }
-            ExpressionKind::GenericType(name, arguments, _) => {
+            ExpressionKind::GenericType(name, bounds, _) => {
                 self.expression(name);
-                self.optional(arguments.as_deref());
+                self.expressions(bounds);
             }
-            ExpressionKind::TypeDeclaration(name, generics, _, bound) => {
+            ExpressionKind::TypeDeclaration(name, generics, _, targets) => {
                 self.expression(name);
                 if let Some(generics) = generics {
                     self.expressions(generics);
                 }
-                self.optional(bound.as_deref());
+                self.expressions(targets);
             }
             ExpressionKind::Lambda(lambda) => self.lambda(lambda),
             ExpressionKind::List(items)

@@ -1129,6 +1129,19 @@ let n = identity(42)
 let s = identity("hello")
 ```
 
+#### Bounds
+
+A type parameter may be bounded: `T implements Named` takes only a type implementing the trait `Named`, `T extends Animal` only `Animal` or a class extending it, `T includes Printable` only a type including the mixin, and `T is Real` only a member of a [type set](#type-sets). Several bounds are joined with `and`; the keyword applies to each, and a type argument must meet every one:
+
+```miri
+fn sorted_unique<T implements Comparable and Hashable>(xs [T]) [T]
+class Cache<K implements Hashable and Steppable, V>
+```
+
+Inside the body the parameter has the methods and operators of every bound: `<` through `Comparable`, `hash()` and use as a `Set` element through `Hashable`. A member is read through the bound that declares it. A parameter of the caller is passed on to a bounded one when its own bounds entail each bound: with `trait Living extends Named, Aged`, a `T implements Living` meets `implements Named and Aged`, while a `T implements Named` does not. A type argument missing a bound is refused naming that bound (`MER_TYP_037`).
+
+A comma separates type parameters, never bounds: `fn big<T implements Comparable, Hashable>` would declare a second, unbounded parameter named `Hashable`, hiding the trait for the whole declaration. A type parameter named after a type in scope is therefore refused where it is declared (`MER_TYP_064`); when the hidden type is a trait written after a bounded parameter, the help spells the bound list: `T implements Comparable and Hashable`.
+
 #### Binding type parameters
 
 A call binds each of the callee's type parameters from, in order:

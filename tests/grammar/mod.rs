@@ -20,7 +20,7 @@ use self::parser::{PegExpr, PegGrammar, PegMatcher};
 const ACCEPT_CORPUS_SIZE: usize = 91;
 
 /// Number of fixtures the reject gate must exercise, pinned for the same reason.
-const REJECT_CORPUS_SIZE: usize = 22;
+const REJECT_CORPUS_SIZE: usize = 24;
 
 /// Files that are not accepted into the grammar corpus and why.
 fn exclusion_table() -> HashMap<String, String> {
@@ -481,5 +481,55 @@ mod tests {
             "reject gate found {} mismatches between real parser and PEG matcher",
             mismatch_count
         );
+    }
+
+    /// Whether the PEG grammar and the parser each accept `source`.
+    fn grammar_and_parser_accept(grammar: &PegGrammar, source: &str) -> (bool, bool) {
+        let parser_accepts = {
+            let mut lexer = Lexer::new(source);
+            let mut parser = Parser::new(&mut lexer, source);
+            parser.parse().is_ok()
+        };
+        let tokens: Vec<_> = Lexer::new(source)
+            .map(|result| result.map(|(token, _)| token))
+            .collect::<Result<_, _>>()
+            .expect("the snippet lexes");
+        let grammar_accepts = PegMatcher::new(grammar.clone())
+            .match_tokens(&tokens)
+            .is_ok();
+        (grammar_accepts, parser_accepts)
+    }
+
+    #[test]
+    fn test_bound_lists_agree_with_the_parser() {
+        let grammar_text =
+            fs::read_to_string("docs/grammar.peg").expect("should read docs/grammar.peg");
+        let grammar =
+            PegGrammar::parse(&grammar_text).expect("grammar.peg should parse successfully");
+        let accepted = [
+            "fn f<T implements A and B>()\n    return\n",
+            "fn f<T extends A and B and C, U includes M and N>()\n    return\n",
+            "type K implements A and B\n",
+            "type K includes A and B\n",
+        ];
+        for source in accepted {
+            assert_eq!(
+                grammar_and_parser_accept(&grammar, source),
+                (true, true),
+                "both should accept:\n{source}"
+            );
+        }
+        let refused = [
+            "fn f<T implements A and>()\n    return\n",
+            "fn f<T and A>()\n    return\n",
+            "type K extends A and B\n",
+        ];
+        for source in refused {
+            assert_eq!(
+                grammar_and_parser_accept(&grammar, source),
+                (false, false),
+                "both should refuse:\n{source}"
+            );
+        }
     }
 }

@@ -16,9 +16,9 @@
 //! identifier can take, so it is never read as a parameter the calling body
 //! declares under the same name, and nothing it reaches can complete at it.
 
+use crate::ast::bounds::Bounds;
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
-use crate::ast::TypeDeclarationKind;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -27,13 +27,12 @@ use crate::type_checker::instantiation_requirements::{spells_a_type, GenericBody
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 
-/// A bound a generic function declares on one of its type parameters —
-/// `T implements Named` — spelled in the callee's own parameters.
+/// The bounds a generic function declares on one of its type parameters —
+/// `T implements Named and Aged` — spelled in the callee's own parameters.
 #[derive(Debug, Clone)]
 pub(crate) struct ParameterBound {
     pub(crate) parameter: String,
-    pub(crate) constraint: Type,
-    pub(crate) kind: TypeDeclarationKind,
+    pub(crate) bounds: Bounds,
 }
 
 /// A call to a generic function, with what it has bound of the callee's type
@@ -172,7 +171,7 @@ impl GenericCall {
         self.bound.values().any(|ty| {
             spells_a_type(
                 &ty.kind,
-                &|kind| matches!(kind, TypeKind::Generic(name, _, _) if slots.contains(name)),
+                &|kind| matches!(kind, TypeKind::Generic(name, _) if slots.contains(name)),
             )
         })
     }
@@ -180,7 +179,7 @@ impl GenericCall {
     /// Whether the callee's return type mentions the parameter `name`.
     fn returns_parameter(&self, name: &str) -> bool {
         spells_a_type(&self.declared_return.kind, &|kind| {
-            matches!(kind, TypeKind::Generic(spelled, _, _) | TypeKind::Custom(spelled, None)
+            matches!(kind, TypeKind::Generic(spelled, _) | TypeKind::Custom(spelled, None)
                 if spelled == name)
         })
     }
@@ -201,7 +200,7 @@ pub(crate) fn is_inference_slot(name: &str) -> bool {
 pub(crate) fn holds_an_inference_slot(ty: &Type) -> bool {
     spells_a_type(
         &ty.kind,
-        &|kind| matches!(kind, TypeKind::Generic(name, _, _) if is_inference_slot(name)),
+        &|kind| matches!(kind, TypeKind::Generic(name, _) if is_inference_slot(name)),
     )
 }
 
@@ -241,8 +240,7 @@ impl TypeChecker {
             if !substitution.contains_key(name) {
                 let slot = TypeKind::Generic(
                     inference_slot_name(name, call_id),
-                    None,
-                    TypeDeclarationKind::None,
+                    crate::ast::bounds::Bounds::none(),
                 );
                 substitution.insert(name.clone(), make_type(slot));
             }
@@ -305,16 +303,18 @@ impl TypeChecker {
             let Some(argument) = call.bound.get(&bound.parameter) else {
                 continue;
             };
-            let constraint = self.substitute_type(&bound.constraint, &call.bound);
-            if self.argument_meets_bound(argument, &constraint, &bound.kind, context) {
+            let bounds = bound
+                .bounds
+                .map_types(|constraint| self.substitute_type(constraint, &call.bound));
+            let Some(missed) = self.missed_bound(argument, &bounds, context) else {
                 continue;
-            }
+            };
             hold = false;
-            if let TypeKind::OneOf(_) = &constraint.kind {
-                self.report_outside_type_set(&bound.parameter, argument, &constraint, call.span);
+            if let TypeKind::OneOf(_) = &missed.ty.kind {
+                self.report_outside_type_set(&bound.parameter, argument, &missed.ty, call.span);
                 continue;
             }
-            self.report_unmet_bound(argument, &bound.kind, &constraint, call.span);
+            self.report_unmet_bound(argument, &missed.kind, &missed.ty, call.span);
         }
         hold
     }
@@ -586,7 +586,7 @@ impl TypeChecker {
                 && !self.type_table.global_type_definitions.contains_key(name)
         };
         !spells_a_type(&ty.kind, &|kind| {
-            matches!(kind, TypeKind::Generic(name, _, _) if !is_parameter_in_scope(name))
+            matches!(kind, TypeKind::Generic(name, _) if !is_parameter_in_scope(name))
                 || matches!(kind, TypeKind::Custom(name, None) if names_no_type(name))
         })
     }

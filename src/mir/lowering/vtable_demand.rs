@@ -651,7 +651,7 @@ fn leaves_a_parameter_open(body: &Body, type_defs: &HashMap<String, TypeDefiniti
 /// generic function whose parameter appears only in its return type — and
 /// says nothing about the body itself.
 fn names_a_parameter(ty: &Type, body: &Body, type_defs: &HashMap<String, TypeDefinition>) -> bool {
-    if let TypeKind::Generic(name, _, _) = &ty.kind {
+    if let TypeKind::Generic(name, _) = &ty.kind {
         return body.generics.type_params.contains(name.as_str());
     }
     if let TypeKind::Custom(name, None) = &ty.kind {

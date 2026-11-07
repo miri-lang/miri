@@ -9,7 +9,7 @@
 //! whose payload it cannot lay out at all — one at the error type.
 
 use miri::ast::literal::{IntegerLiteral, Literal};
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use miri::ast::types::{Type, TypeKind};
 use miri::codegen::backend::Backend;
 use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions};
 use miri::error::syntax::Span;
@@ -33,7 +33,7 @@ fn node() -> TypeKind {
 }
 
 fn parameter() -> TypeKind {
-    TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None)
+    TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none())
 }
 
 /// A program defining one class, `Node`.

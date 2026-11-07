@@ -108,7 +108,7 @@ impl<'source> Parser<'source> {
             expression,
             Some(args),
             TypeDeclarationKind::None,
-            None,
+            Vec::new(),
             span,
         ))
     }

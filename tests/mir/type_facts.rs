@@ -6,7 +6,7 @@
 //! only the ones whose method bodies were lowered.
 
 use miri::ast::type_arguments::type_argument;
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::body::{Body, ExecutionModel, LocalDecl};
@@ -24,8 +24,7 @@ fn ty(kind: TypeKind) -> Type {
 fn parameter(name: &str) -> Type {
     ty(TypeKind::Generic(
         name.to_string(),
-        None,
-        TypeDeclarationKind::None,
+        miri::ast::bounds::Bounds::none(),
     ))
 }
 
@@ -40,11 +39,7 @@ fn instance(name: &str, args: Vec<Type>) -> Type {
 fn generic_class(name: &str, field: Type) -> TypeDefinition {
     TypeDefinition::Class(ClassDefinition {
         name: name.to_string(),
-        generics: Some(vec![GenericDefinition {
-            name: "T".to_string(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }]),
+        generics: Some(vec![GenericDefinition::unbounded("T".to_string())]),
         base_class: None,
         base_class_args: None,
         traits: Vec::new(),
@@ -203,11 +198,7 @@ fn duo() -> TypeDefinition {
     def.generics = Some(
         ["A", "B"]
             .iter()
-            .map(|name| GenericDefinition {
-                name: name.to_string(),
-                constraint: None,
-                kind: TypeDeclarationKind::None,
-            })
+            .map(|name| GenericDefinition::unbounded(name.to_string()))
             .collect(),
     );
     TypeDefinition::Class(def)

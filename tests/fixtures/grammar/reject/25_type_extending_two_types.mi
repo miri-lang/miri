@@ -1,0 +1,1 @@
+type K extends A and B

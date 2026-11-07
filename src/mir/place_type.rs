@@ -288,7 +288,7 @@ impl<'a> PlaceTypes<'a> {
     fn is_unbound_name(&self, kind: &TypeKind, spelling: Spelling) -> bool {
         let is_param =
             |name: &String| self.type_params.contains(name) || self.open_params.contains(name);
-        if let TypeKind::Generic(name, _, _) = kind {
+        if let TypeKind::Generic(name, _) = kind {
             return !is_param(name);
         }
         let TypeKind::Custom(name, None) = kind else {
@@ -541,7 +541,7 @@ fn collection_element(kind: &TypeKind) -> Option<&TypeArgument> {
         | TypeKind::Result(_, _)
         | TypeKind::Option(_)
         | TypeKind::Future(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Function(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_) => None,
@@ -573,17 +573,20 @@ fn answered(spells_unbound: bool) -> Visit {
 
 /// The name a bare type spells, parameter or type.
 fn bare_type_name(kind: &TypeKind) -> Option<&str> {
-    let (TypeKind::Custom(name, None) | TypeKind::Generic(name, None, _)) = kind else {
+    if let TypeKind::Custom(name, None) = kind {
+        return Some(name);
+    }
+    let TypeKind::Generic(name, bounds) = kind else {
         return None;
     };
-    Some(name)
+    bounds.is_empty().then_some(name)
 }
 
 /// Whether `kind` names one of the `open` type parameters; see
 /// [`PlaceTypes::names_open_parameter`].
 pub fn names_open_parameter(kind: &TypeKind, open: &std::collections::HashSet<String>) -> bool {
     crate::type_checker::instantiation_requirements::spells_a_type(kind, &|kind| {
-        matches!(kind, TypeKind::Generic(name, _, _) if open.contains(name))
+        matches!(kind, TypeKind::Generic(name, _) if open.contains(name))
             || matches!(kind, TypeKind::Custom(name, None) if open.contains(name))
     })
 }

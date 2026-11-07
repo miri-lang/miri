@@ -300,7 +300,7 @@ pub fn payload_is_nullable_pointer(kind: &TypeKind, scope: LayoutScope<'_>) -> b
         | TypeKind::RawPtr
         | TypeKind::Void
         | TypeKind::Error
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
         | TypeKind::Linear(_)

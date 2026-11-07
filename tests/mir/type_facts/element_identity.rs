@@ -5,7 +5,7 @@
 //! same one, and which element types answer a container's questions
 //! themselves.
 
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind, CLONEABLE_TRAIT_NAME};
+use miri::ast::types::{Type, TypeKind, CLONEABLE_TRAIT_NAME};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::type_facts::{
@@ -91,7 +91,7 @@ fn an_integer_element_is_matched_by_its_bytes() {
 
 #[test]
 fn an_open_type_parameter_registers_no_rule() {
-    let parameter = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    let parameter = TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none());
     let open = HashSet::from(["T".to_string()]);
     let identity = facts_of(HashMap::new()).element_identity(&parameter, &open);
     assert_eq!(identity, ElementIdentity::Unregistered);

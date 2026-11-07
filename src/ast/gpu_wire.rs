@@ -164,7 +164,7 @@ fn numeric_wire(kind: &TypeKind) -> Option<WireFormat> {
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)

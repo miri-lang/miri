@@ -140,7 +140,7 @@ impl MirType {
             TypeKind::Option(inner) => MirType::Option(Box::new(Self::from_type_kind(&inner.kind))),
             TypeKind::Future(inner) => MirType::Future(Box::new(Self::from_argument(inner))),
             // Generic type parameters — never concrete managed types.
-            TypeKind::Generic(_, _, _) => MirType::Generic,
+            TypeKind::Generic(_, _) => MirType::Generic,
             // Closures are heap-allocated and RC-managed.
             TypeKind::Function(_) => MirType::Function,
             TypeKind::Custom(name, args) => Self::from_custom(name, args.as_deref()),

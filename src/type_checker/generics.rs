@@ -12,6 +12,7 @@
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::diagnostics::spelled;
 use super::TypeChecker;
+use crate::ast::bounds::{Bound, Bounds};
 use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
 use crate::ast::type_arguments::{rewritten, ArithOp, TypeArgKind, TypeArgument, ValueArg};
@@ -100,7 +101,7 @@ pub(crate) fn is_generic_parameter_kind(
 /// The parameter name a bare generic-parameter type spelling refers to, or
 /// `None` for any concrete type.
 pub(crate) fn generic_parameter_name(kind: &TypeKind) -> Option<&str> {
-    if let TypeKind::Generic(name, _, _) = kind {
+    if let TypeKind::Generic(name, _) = kind {
         Some(name.as_str())
     } else if let TypeKind::Custom(name, None) = kind {
         Some(name.as_str())
@@ -483,7 +484,7 @@ impl TypeChecker {
     ) {
         match (&param_type.kind, &arg_type.kind) {
             // Direct generic match
-            (TypeKind::Generic(name, _, _), _) if !mapping.contains_key(name) => {
+            (TypeKind::Generic(name, _), _) if !mapping.contains_key(name) => {
                 mapping.insert(name.clone(), arg_type.clone());
             }
 
@@ -700,9 +701,7 @@ impl TypeChecker {
             return ty.clone();
         }
         let result = match &ty.kind {
-            TypeKind::Generic(name, _, _) => {
-                mapping.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
+            TypeKind::Generic(name, _) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
             TypeKind::Custom(name, args) => self.substitute_custom(name, args, mapping),
             TypeKind::List(elem_expr) => self.substitute_list(elem_expr, mapping),
             TypeKind::Map(k_expr, v_expr) => self.substitute_map(k_expr, v_expr, mapping),
@@ -950,15 +949,8 @@ impl TypeChecker {
                 let param_def = &params_vec[i];
                 let arg_type = self.resolve_type_argument(arg_expr, context);
 
-                if let Some(constraint) = &param_def.constraint {
-                    if !self.argument_meets_bound(&arg_type, constraint, &param_def.kind, context) {
-                        self.report_unmet_bound(
-                            &arg_type,
-                            &param_def.kind,
-                            constraint,
-                            arg_expr.span,
-                        );
-                    }
+                if let Some(missed) = self.missed_bound(&arg_type, &param_def.bounds, context) {
+                    self.report_unmet_bound(&arg_type, &missed.kind, &missed.ty, arg_expr.span);
                 }
             }
         }
@@ -990,29 +982,74 @@ impl TypeChecker {
     ///
     /// This is called when entering a generic function or type definition
     /// to make the generic parameters available for type resolution.
+    ///
+    /// A parameter named after a type in scope is refused here, where it is
+    /// declared; a callee's parameters defined again to check a call are not.
     pub(crate) fn define_generics(&mut self, generics: &[Expression], context: &mut Context) {
-        for gen in generics {
-            if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen.node {
-                let name = match &name_expr.node {
-                    ExpressionKind::Identifier(n, _) => n.clone(),
-                    _ => continue,
-                };
-
-                let constraint_type = constraint_expr
-                    .as_ref()
-                    .map(|c| self.resolve_bound_type(c, context));
-
-                context.define_type(
-                    name.clone(),
-                    TypeDefinition::Generic(GenericDefinition {
-                        name: name.clone(),
-                        constraint: constraint_type,
-                        kind: *kind,
-                    }),
-                );
+        for (position, gen) in generics.iter().enumerate() {
+            let Some(definition) = self.generic_definition(gen, context) else {
+                continue;
+            };
+            if !self.resolving_declared_signature {
+                if let Some(name_span) = generic_name_span(gen) {
+                    let previous = position.checked_sub(1).and_then(|at| generics.get(at));
+                    self.refuse_type_parameter_hiding_a_type(
+                        &definition.name,
+                        name_span,
+                        previous,
+                        context,
+                    );
+                }
             }
+            context.define_type(definition.name.clone(), TypeDefinition::Generic(definition));
         }
     }
+
+    /// The type parameter `generic` declares, its bounds resolved; `None`
+    /// for an expression that declares none.
+    pub(crate) fn generic_definition(
+        &mut self,
+        generic: &Expression,
+        context: &Context,
+    ) -> Option<GenericDefinition> {
+        let ExpressionKind::GenericType(name_expr, written, kind) = &generic.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(name, _) = &name_expr.node else {
+            return None;
+        };
+        Some(GenericDefinition {
+            name: name.clone(),
+            bounds: self.resolve_bounds(*kind, written, context),
+        })
+    }
+
+    /// The bounds a parameter or a `type` declaration writes after `kind`,
+    /// each resolved, in written order, keeping the first of any written
+    /// twice. This is the one place a written bound list becomes [`Bounds`].
+    pub(crate) fn resolve_bounds(
+        &mut self,
+        kind: TypeDeclarationKind,
+        written: &[Expression],
+        context: &Context,
+    ) -> Bounds {
+        let mut bounds: Vec<Bound> = Vec::with_capacity(written.len());
+        for bound in written {
+            let bound = self.resolve_bound_type(bound, context);
+            if !bounds.iter().any(|seen| seen.ty.kind == bound.kind) {
+                bounds.push(Bound::new(kind, bound));
+            }
+        }
+        Bounds::new(bounds)
+    }
+}
+
+/// Where the name a type parameter declares is written.
+fn generic_name_span(generic: &Expression) -> Option<Span> {
+    let ExpressionKind::GenericType(name, _, _) = &generic.node else {
+        return None;
+    };
+    Some(name.span)
 }
 
 // Stays inline rather than moving to `tests/type_checker/generics.rs`: both
@@ -1101,7 +1138,7 @@ impl TypeChecker {
         if matches!(target.kind, TypeKind::Error) || matches!(source.kind, TypeKind::Error) {
             return;
         }
-        if let TypeKind::Generic(name, _, _) = &target.kind {
+        if let TypeKind::Generic(name, _) = &target.kind {
             let is_declared = matches!(
                 context.resolve_type_definition(name),
                 Some(TypeDefinition::Generic(_))
@@ -1146,7 +1183,7 @@ impl TypeChecker {
             }
         };
         match &ty.kind {
-            TypeKind::Generic(name, _, _) => {
+            TypeKind::Generic(name, _) => {
                 let declared = matches!(
                     context.resolve_type_definition(name),
                     Some(TypeDefinition::Generic(_))

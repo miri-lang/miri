@@ -63,7 +63,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -110,7 +110,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -211,7 +211,7 @@ impl<'a> FunctionTranslator<'a> {
         kind: &'k TypeKind,
         definitions: &HashMap<String, TypeDefinition>,
     ) -> Option<&'k str> {
-        if let TypeKind::Generic(name, _, _) = kind {
+        if let TypeKind::Generic(name, _) = kind {
             return Some(name);
         }
         let TypeKind::Custom(name, None) = kind else {
@@ -251,7 +251,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void
@@ -301,7 +301,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -360,7 +360,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -436,7 +436,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -535,7 +535,7 @@ impl<'a> FunctionTranslator<'a> {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Void

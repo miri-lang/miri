@@ -1705,7 +1705,7 @@ impl TypeChecker {
 
     /// Find the first generic parameter name referenced in a resolved type
     fn find_generic_in_resolved_type(&self, ty: &Type, generic_names: &[&str]) -> Option<String> {
-        if let TypeKind::Generic(name, _, _) = &ty.kind {
+        if let TypeKind::Generic(name, _) = &ty.kind {
             if generic_names.contains(&name.as_str()) {
                 return Some(name.clone());
             }
@@ -1775,11 +1775,7 @@ fn class_parameter_types(
         .into_iter()
         .flatten()
         .map(|generic| {
-            let parameter = TypeKind::Generic(
-                generic.name.clone(),
-                generic.constraint.clone().map(Box::new),
-                generic.kind,
-            );
+            let parameter = TypeKind::Generic(generic.name.clone(), generic.bounds.clone());
             (generic.name.clone(), make_type(parameter))
         })
         .collect()
@@ -1853,7 +1849,7 @@ impl TypeChecker {
             | TypeKind::Identifier
             | TypeKind::RawPtr
             | TypeKind::Future(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::Meta(_)
             | TypeKind::Error
             | TypeKind::OneOf(_) => false,

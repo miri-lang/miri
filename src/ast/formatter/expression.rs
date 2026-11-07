@@ -154,16 +154,11 @@ fn kind(sink: &mut Sink, node: &ExpressionKind, span: Span, indent: usize) {
             type_expression(sink, declared, *is_nullable, span)
         }
         ExpressionKind::GenericType(name, arguments, declaration) => {
-            generic_type(sink, name, arguments.as_deref(), declaration, indent)
+            generic_type(sink, name, arguments, declaration, indent)
         }
-        ExpressionKind::TypeDeclaration(name, generics, declaration, bound) => type_declaration(
-            sink,
-            name,
-            generics.as_deref(),
-            declaration,
-            bound.as_deref(),
-            indent,
-        ),
+        ExpressionKind::TypeDeclaration(name, generics, declaration, bound) => {
+            type_declaration(sink, name, generics.as_deref(), declaration, bound, indent)
+        }
         ExpressionKind::EnumValue(path, payload) => enum_value(sink, path, payload, indent),
         ExpressionKind::StructMember(name, declared) => struct_member(sink, name, declared, indent),
         ExpressionKind::Lambda(data) => lambda(sink, data, indent),
@@ -240,18 +235,18 @@ fn call(sink: &mut Sink, callee: &Expression, arguments: &[Expression], indent: 
 fn generic_type(
     sink: &mut Sink,
     name: &Expression,
-    arguments: Option<&Expression>,
+    bounds: &[Expression],
     declaration: &crate::ast::types::TypeDeclarationKind,
     indent: usize,
 ) {
     render(sink, name, indent, precedence::PRIMARY);
-    let Some(arguments) = arguments else {
+    if bounds.is_empty() {
         return;
-    };
+    }
     match declaration {
         crate::ast::types::TypeDeclarationKind::None => {
             sink.emit("<");
-            expression(sink, arguments, indent);
+            bound_list(sink, bounds, indent);
             sink.emit(">");
         }
         crate::ast::types::TypeDeclarationKind::Is
@@ -261,8 +256,18 @@ fn generic_type(
             sink.emit(" ");
             sink.emit(&declaration.to_string());
             sink.emit(" ");
-            expression(sink, arguments, indent);
+            bound_list(sink, bounds, indent);
         }
+    }
+}
+
+/// `A and B and C`: the types a bound list names, as written.
+fn bound_list(sink: &mut Sink, bounds: &[Expression], indent: usize) {
+    for (index, bound) in bounds.iter().enumerate() {
+        if index > 0 {
+            sink.emit(" and ");
+        }
+        expression(sink, bound, indent);
     }
 }
 
@@ -450,14 +455,14 @@ fn type_declaration(
     name: &Expression,
     generics: Option<&[Expression]>,
     declaration: &crate::ast::types::TypeDeclarationKind,
-    bound: Option<&Expression>,
+    targets: &[Expression],
     indent: usize,
 ) {
     render(sink, name, indent, precedence::PRIMARY);
     generic_arguments(sink, generics);
-    let Some(bound) = bound else {
+    if targets.is_empty() {
         return;
-    };
+    }
     match declaration {
         crate::ast::types::TypeDeclarationKind::None => sink.emit(" "),
         crate::ast::types::TypeDeclarationKind::Is
@@ -469,7 +474,7 @@ fn type_declaration(
             sink.emit(" ");
         }
     }
-    render(sink, bound, indent, precedence::PRIMARY);
+    bound_list(sink, targets, indent);
 }
 
 /// An anonymous function or arrow lambda.

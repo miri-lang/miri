@@ -127,7 +127,7 @@ pub(crate) fn constructor_parts(ty: &Type) -> (Cow<'_, str>, Vec<Type>) {
             let args: Vec<&TypeArgument> = args.iter().flatten().collect();
             (Cow::Borrowed(name.as_str()), arguments(&args))
         }
-        TypeKind::Generic(name, _, _) => (Cow::Borrowed(name.as_str()), Vec::new()),
+        TypeKind::Generic(name, _) => (Cow::Borrowed(name.as_str()), Vec::new()),
         TypeKind::Option(inner) => (Cow::Borrowed("0option"), vec![(**inner).clone()]),
         TypeKind::Linear(inner) => (Cow::Borrowed("0linear"), vec![(**inner).clone()]),
         TypeKind::Meta(inner) => (Cow::Borrowed("0meta"), vec![(**inner).clone()]),
@@ -199,7 +199,7 @@ fn collect_open_parameter_names(
     }
     let open_name = if let TypeKind::Custom(name, None) = &ty.kind {
         matches!(type_defs.get(name), None | Some(TypeDefinition::Generic(_))).then_some(name)
-    } else if let TypeKind::Generic(name, _, _) = &ty.kind {
+    } else if let TypeKind::Generic(name, _) = &ty.kind {
         Some(name)
     } else {
         None
@@ -230,7 +230,7 @@ pub fn is_own_parameter_at(
     else {
         return false;
     };
-    let spelled = if let TypeKind::Generic(param, _, _) = &arg.kind {
+    let spelled = if let TypeKind::Generic(param, _) = &arg.kind {
         Some(param)
     } else if let TypeKind::Custom(param, None) = &arg.kind {
         Some(param)
@@ -260,11 +260,7 @@ pub fn with_unbound_arguments_normalized(
                 return arg.clone();
             }
             Type::new(
-                TypeKind::Generic(
-                    param.clone(),
-                    None,
-                    crate::ast::types::TypeDeclarationKind::None,
-                ),
+                TypeKind::Generic(param.clone(), crate::ast::bounds::Bounds::none()),
                 arg.span,
             )
         })

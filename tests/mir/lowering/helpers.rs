@@ -4,7 +4,7 @@
 //! When two spellings of a type are one value lowering may pass through
 //! untouched, and when they need a coercion between them.
 
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::lowering::helpers::spellings_of_one_value;
 
@@ -21,7 +21,7 @@ fn named(name: &str) -> TypeKind {
 }
 
 fn generic(name: &str) -> TypeKind {
-    TypeKind::Generic(name.to_string(), None, TypeDeclarationKind::None)
+    TypeKind::Generic(name.to_string(), miri::ast::bounds::Bounds::none())
 }
 
 fn list_of(kind: TypeKind) -> TypeKind {

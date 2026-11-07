@@ -21,6 +21,7 @@ pub mod invariance;
 pub mod lambdas;
 pub mod literal_arguments;
 pub mod loop_variables;
+pub mod multiple_bounds;
 pub mod operator_dispatch;
 pub mod requirements_through_aliases;
 pub mod return_type_parameters;

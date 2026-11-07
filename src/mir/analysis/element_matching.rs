@@ -97,7 +97,7 @@ pub fn matched_element(
         Some(args) => args.first().and_then(argument_type).cloned(),
         None => {
             let parameter = definitions.get(name)?.generics()?.first()?;
-            let kind = TypeKind::Generic(parameter.name.clone(), None, parameter.kind);
+            let kind = TypeKind::Generic(parameter.name.clone(), parameter.bounds.clone());
             Some(Type::new(kind, container.span))
         }
     }

@@ -195,7 +195,7 @@ fn instantiation_arguments(
 mod tests {
     use super::*;
     use crate::ast::type_arguments::{type_argument, TypeArgKind, ValueArg};
-    use crate::ast::types::TypeDeclarationKind;
+
     use crate::ast::types::TypeKind;
     use crate::ast::{IdNode, MemberVisibility};
     use crate::error::syntax::Span;
@@ -209,18 +209,11 @@ mod tests {
     fn class(name: &str, generic: bool) -> TypeDefinition {
         let parameter = ty(TypeKind::Generic(
             "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ));
         TypeDefinition::Class(ClassDefinition {
             name: name.to_string(),
-            generics: generic.then(|| {
-                vec![GenericDefinition {
-                    name: "T".to_string(),
-                    constraint: None,
-                    kind: TypeDeclarationKind::None,
-                }]
-            }),
+            generics: generic.then(|| vec![GenericDefinition::unbounded("T".to_string())]),
             base_class: None,
             base_class_args: None,
             traits: Vec::new(),
@@ -254,11 +247,7 @@ mod tests {
         def.generics = Some(
             ["A", "B"]
                 .iter()
-                .map(|name| GenericDefinition {
-                    name: name.to_string(),
-                    constraint: None,
-                    kind: TypeDeclarationKind::None,
-                })
+                .map(|name| GenericDefinition::unbounded(name.to_string()))
                 .collect(),
         );
         TypeDefinition::Class(def)
@@ -309,8 +298,7 @@ mod tests {
     fn generic(name: &str) -> Type {
         ty(TypeKind::Generic(
             name.to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ))
     }
 
@@ -404,8 +392,7 @@ mod tests {
     fn open_parameter() -> TypeArgument {
         type_arg(TypeKind::Generic(
             "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ))
     }
 
@@ -433,8 +420,7 @@ mod tests {
     fn an_instantiation_at_a_parameter_neither_the_body_nor_the_type_declares_is_refused() {
         let args = [type_arg(TypeKind::Generic(
             "U".to_string(),
-            None,
-            TypeDeclarationKind::None,
+            crate::ast::bounds::Bounds::none(),
         ))];
         let Err(DropThunkRefusal(message)) = choose(&facts(), "Box", Some(&args)) else {
             panic!("a parameter no enclosing code declares must be reported");

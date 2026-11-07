@@ -1005,7 +1005,7 @@ enum TypeHead<'k> {
 /// The head of `kind`.
 fn type_head(kind: &TypeKind) -> TypeHead<'_> {
     match kind {
-        TypeKind::Custom(name, _) | TypeKind::Generic(name, _, _) => TypeHead::Named(name),
+        TypeKind::Custom(name, _) | TypeKind::Generic(name, _) => TypeHead::Named(name),
         TypeKind::List(_)
         | TypeKind::Set(_)
         | TypeKind::Future(_)
@@ -1070,7 +1070,7 @@ fn type_parts(kind: &TypeKind) -> Vec<&TypeKind> {
             .chain(signature.return_type.as_deref().and_then(spelled_type))
             .collect(),
         TypeKind::Custom(_, None)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Int
         | TypeKind::I8

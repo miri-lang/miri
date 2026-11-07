@@ -369,7 +369,7 @@ impl<'source> Parser<'source> {
                             Box::new(name),
                             Some(generic_args),
                             crate::ast::types::TypeDeclarationKind::None,
-                            None,
+                            Vec::new(),
                         ),
                         span,
                     ))

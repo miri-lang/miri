@@ -72,6 +72,48 @@ impl<'source> Parser<'source> {
         )))
     }
 
+    /// The bounds of a bound list: one type, or several joined by `and`
+    /// (`Comparable and Hashable`), written after `extends`, `implements` or
+    /// `includes` in a type parameter or a `type` declaration. Empty when no
+    /// type follows the keyword.
+    pub(crate) fn bound_list_expressions(&mut self) -> Result<Vec<Expression>, SyntaxError> {
+        let Some(first) = self.type_expression()? else {
+            return Ok(Vec::new());
+        };
+        let mut bounds = vec![first];
+        while self.lookahead_is(&Token::And) {
+            self.eat_token(&Token::And)?;
+            match self.type_expression()? {
+                Some(bound) => bounds.push(bound),
+                None => {
+                    return Err(self.error_unexpected_token("a type", &self.lookahead_as_string()))
+                }
+            }
+        }
+        Ok(bounds)
+    }
+
+    fn lookahead_is(&self, token: &Token) -> bool {
+        self.lookahead
+            .as_ref()
+            .is_some_and(|(next, _)| next == token)
+    }
+
+    /// Refuses an `and` after a type set, whose members are alternatives
+    /// joined with `or`: a set is not combined with other bounds.
+    pub(crate) fn refuse_and_after_type_set(&self) -> Result<(), SyntaxError> {
+        self.refuse_and_after("`or` between the members of a type set")
+    }
+
+    /// Refuses an `and` where no list of bounds may continue; `expected`
+    /// says what belongs there.
+    pub(crate) fn refuse_and_after(&self, expected: &str) -> Result<(), SyntaxError> {
+        if !self.lookahead_is(&Token::And) {
+            return Ok(());
+        }
+        Err(self.error_unexpected_token(expected, &self.lookahead_as_string()))
+    }
+
     fn identifier_type(&mut self) -> Result<Expression, SyntaxError> {
         let (type_name, span) = self.identifier_to_type_name()?;
         let typ = self.type_name_to_type(type_name)?;

@@ -221,12 +221,12 @@ fn normalize_expr(expr: &mut Expression) {
             normalize_expr_list(args);
         }
         ExpressionKind::ImportPath(parts, _) => normalize_expr_list(parts),
-        ExpressionKind::GenericType(name, constraint, _) => {
+        ExpressionKind::GenericType(name, bounds, _) => {
             normalize_expr(name);
-            normalize_optional_expr(constraint.as_deref_mut());
+            normalize_expr_list(bounds);
         }
-        ExpressionKind::TypeDeclaration(name, generics, _, constraint) => {
-            normalize_type_declaration_expr(name, generics, constraint.as_deref_mut())
+        ExpressionKind::TypeDeclaration(name, generics, _, targets) => {
+            normalize_type_declaration_expr(name, generics, targets)
         }
         ExpressionKind::StructMember(name, ty) => normalize_expr_pair(name, ty),
         ExpressionKind::Lambda(lambda_data) => normalize_lambda(lambda_data),
@@ -270,11 +270,11 @@ fn normalize_conditional_expr(
 fn normalize_type_declaration_expr(
     name: &mut Expression,
     generics: &mut Option<Vec<Expression>>,
-    constraint: Option<&mut Expression>,
+    targets: &mut [Expression],
 ) {
     normalize_expr(name);
     normalize_optional_generics(generics);
-    normalize_optional_expr(constraint);
+    normalize_expr_list(targets);
 }
 
 fn normalize_map_entries(entries: &mut [(Expression, Expression)]) {
@@ -339,8 +339,13 @@ fn normalize_type_children(kind: &mut TypeKind) {
         }
         TypeKind::Future(inner) => normalize_arg(inner),
         TypeKind::Tuple(elems) | TypeKind::OneOf(elems) => elems.iter_mut().for_each(normalize_arg),
-        TypeKind::Generic(_, Some(c), _) => normalize_type(c),
-        TypeKind::Generic(_, None, _) => {}
+        TypeKind::Generic(_, bounds) => {
+            *bounds = bounds.map_types(|bound| {
+                let mut bound = bound.clone();
+                normalize_type(&mut bound);
+                bound
+            })
+        }
         TypeKind::Function(func_data) => {
             normalize_params(&mut func_data.params);
             normalize_optional_expr(func_data.return_type.as_deref_mut());
@@ -419,7 +424,7 @@ fn canonicalize_collection(kind: TypeKind) -> TypeKind {
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)
         | TypeKind::Option(_)

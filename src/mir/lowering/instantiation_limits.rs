@@ -331,7 +331,7 @@ fn push_type(out: &mut String, kind: &TypeKind, levels: usize) {
         return;
     }
     match kind {
-        TypeKind::Custom(name, None) | TypeKind::Generic(name, _, _) => out.push_str(name),
+        TypeKind::Custom(name, None) | TypeKind::Generic(name, _) => out.push_str(name),
         TypeKind::Custom(name, Some(args)) => push_applied(out, name, args.iter(), levels),
         TypeKind::List(element) => push_applied(
             out,

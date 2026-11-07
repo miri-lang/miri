@@ -14,7 +14,7 @@ use miri::type_checker::context::{
 };
 use std::collections::HashMap;
 
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::type_checker::context::{
@@ -155,11 +155,7 @@ fn resolve_vtable_method_names_the_class_copy_of_a_trait_default() {
 fn resolve_vtable_method_names_the_shared_default_for_a_generic_class() {
     let trait_with_default = trait_def("Greeter", &[], &[("greet", method(false, false))]);
     let mut impl_class = class("Impl", None, &["Greeter"], &[], false);
-    impl_class.generics = Some(vec![GenericDefinition {
-        name: "T".to_string(),
-        constraint: None,
-        kind: TypeDeclarationKind::None,
-    }]);
+    impl_class.generics = Some(vec![GenericDefinition::unbounded("T".to_string())]);
     let defs = make_defs([
         (
             "Greeter".to_string(),
@@ -415,11 +411,7 @@ fn vtable_layout_counts_an_abstract_receivers_inherited_trait_methods() {
 }
 
 fn generic(mut class_def: ClassDefinition, param: &str) -> ClassDefinition {
-    class_def.generics = Some(vec![GenericDefinition {
-        name: param.to_string(),
-        constraint: None,
-        kind: TypeDeclarationKind::None,
-    }]);
+    class_def.generics = Some(vec![GenericDefinition::unbounded(param.to_string())]);
     class_def
 }
 

@@ -155,7 +155,7 @@ fn is_never_counted(kind: &TypeKind) -> bool {
         | TypeKind::Set(_)
         | TypeKind::Tuple(_)
         | TypeKind::Option(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Function(_)
         | TypeKind::Meta(_) => false,
     }

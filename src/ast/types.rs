@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::ast::bounds::Bounds;
 use crate::ast::common::Parameter;
 use crate::ast::expression::Expression;
 pub use crate::ast::type_arguments::TypeArgument;
@@ -556,8 +557,9 @@ pub enum TypeKind {
     /// Function type (e.g., `fn<T>(x int) float`). Boxed to reduce enum size.
     Function(Box<FunctionTypeData>),
 
-    /// Generic type (e.g., `T extends SomeClass`).
-    Generic(String, Option<Box<Type>>, TypeDeclarationKind),
+    /// A type parameter, with the bounds it declares (e.g., `T implements
+    /// Comparable and Hashable`).
+    Generic(String, Bounds),
 
     /// Custom type (e.g., struct name).
     Custom(String, Option<Vec<TypeArgument>>),
@@ -629,7 +631,7 @@ impl TypeKind {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Custom(_, _)
             | TypeKind::Meta(_) => false,
@@ -676,7 +678,7 @@ impl TypeKind {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -727,7 +729,7 @@ impl TypeKind {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
             | TypeKind::Linear(_)
@@ -770,7 +772,7 @@ impl TypeKind {
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
             | TypeKind::Function(_)
-            | TypeKind::Generic(_, _, _)
+            | TypeKind::Generic(_, _)
             | TypeKind::OneOf(_)
             | TypeKind::Meta(_)
             | TypeKind::Option(_)
@@ -820,7 +822,7 @@ impl fmt::Display for TypeKind {
             TypeKind::Meta(inner) => write!(f, "meta({})", inner),
             TypeKind::Option(inner) => write!(f, "{}?", inner),
             TypeKind::Linear(inner) => write!(f, "linear({})", inner),
-            TypeKind::Generic(name, _, _) => f.write_str(name),
+            TypeKind::Generic(name, _) => f.write_str(name),
             TypeKind::Tuple(elements) => fmt_tuple(f, elements),
             TypeKind::OneOf(members) => fmt_one_of(f, members),
             TypeKind::Function(func) => fmt_function(f, func),

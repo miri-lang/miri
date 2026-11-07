@@ -204,11 +204,7 @@ fn a_map_entry_of_a_field_lent_unretained_to_a_loud_callee_is_reported() {
 /// runtime matches `x` against the elements through whatever rule the set's
 /// element type registered.
 fn shared_set_contains() -> Body {
-    let element = TypeKind::Generic(
-        "T".to_string(),
-        None,
-        miri::ast::types::TypeDeclarationKind::None,
-    );
+    let element = TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none());
     let mut body = body_of(
         &[TypeKind::Boolean, set_of(element.clone()), element],
         2,

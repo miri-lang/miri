@@ -208,11 +208,10 @@ fn own_parameters<'td>(
 }
 
 /// `param` as the open type it stands for inside its class, carrying the
-/// bound it is declared with.
+/// bounds it is declared with.
 fn open_parameter(param: &crate::type_checker::context::GenericDefinition) -> Type {
-    let bound = param.constraint.clone().map(Box::new);
     Type::new(
-        crate::ast::types::TypeKind::Generic(param.name.clone(), bound, param.kind),
+        crate::ast::types::TypeKind::Generic(param.name.clone(), param.bounds.clone()),
         crate::error::syntax::Span::new(0, 0),
     )
 }
@@ -291,7 +290,7 @@ fn class_substitution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::types::{TypeDeclarationKind, TypeKind};
+    use crate::ast::types::TypeKind;
     use crate::ast::MemberVisibility;
     use crate::error::syntax::Span;
     use crate::type_checker::context::{ClassDefinition, GenericDefinition, MethodInfo};
@@ -303,16 +302,12 @@ mod tests {
     }
 
     fn generic_param(name: &str) -> GenericDefinition {
-        GenericDefinition {
-            name: name.to_string(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }
+        GenericDefinition::unbounded(name.to_string())
     }
 
     fn generic_type(name: &str) -> Type {
         Type::new(
-            TypeKind::Generic(name.to_string(), None, TypeDeclarationKind::None),
+            TypeKind::Generic(name.to_string(), crate::ast::bounds::Bounds::none()),
             span(),
         )
     }

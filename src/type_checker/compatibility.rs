@@ -13,6 +13,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
+use crate::ast::bounds::{Bound, Bounds};
 use crate::ast::type_arguments::{TypeArgKind, ValueArg};
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind, STRING_TYPE_NAME,
@@ -720,12 +721,12 @@ impl TypeChecker {
 
     /// Checks generic type compatibility.
     fn check_generic_compatibility(&self, t1: &Type, t2: &Type, context: &Context) -> Option<bool> {
-        if let TypeKind::Generic(name1, constraint, kind) = &t1.kind {
-            return Some(self.check_generic_in_t1(name1, constraint, kind, t2, context));
+        if let TypeKind::Generic(name1, bounds) = &t1.kind {
+            return Some(self.check_generic_in_t1(name1, bounds, t2, context));
         }
 
-        if let TypeKind::Generic(name2, constraint2, kind) = &t2.kind {
-            return Some(self.check_generic_in_t2(name2, constraint2, kind, t1, context));
+        if let TypeKind::Generic(name2, bounds2) = &t2.kind {
+            return Some(self.check_generic_in_t2(name2, bounds2, t1, context));
         }
 
         None
@@ -740,13 +741,12 @@ impl TypeChecker {
     fn check_generic_in_t1(
         &self,
         name1: &str,
-        constraint: &Option<Box<Type>>,
-        kind: &TypeDeclarationKind,
+        bounds: &Bounds,
         t2: &Type,
         context: &Context,
     ) -> bool {
-        if let TypeKind::Generic(name2, constraint2, kind2) = &t2.kind {
-            if name1 == name2 || Self::bound_reaches(name1, constraint2, kind2) {
+        if let TypeKind::Generic(name2, bounds2) = &t2.kind {
+            if name1 == name2 || Self::bound_reaches(name1, bounds2) {
                 return true;
             }
             if Self::is_declared_parameter(name1, context)
@@ -754,7 +754,7 @@ impl TypeChecker {
             {
                 return false;
             }
-            if constraint.is_none() && !Self::is_declared_parameter(name2, context) {
+            if bounds.is_empty() && !Self::is_declared_parameter(name2, context) {
                 return true;
             }
         } else if Self::is_declared_parameter(name1, context) {
@@ -763,10 +763,7 @@ impl TypeChecker {
             // the parameter's bound.
             return false;
         }
-        if let Some(c) = constraint {
-            return self.satisfies_constraint(t2, c, kind, context);
-        }
-        true
+        bounds.met_by(|bound| self.satisfies_constraint(t2, &bound.ty, &bound.kind, context))
     }
 
     /// Whether a parameter bounded by `constraint` is, through its chain of
@@ -778,32 +775,26 @@ impl TypeChecker {
     /// declared, never by looking a name up again: while a call is checked the
     /// callee's parameters are in scope too, and a caller's `U` looked up by
     /// name would find the callee's `U` and its bound.
-    fn bound_reaches(
-        target: &str,
-        constraint: &Option<Box<Type>>,
-        kind: &TypeDeclarationKind,
-    ) -> bool {
-        std::iter::successors(Self::extends_bound(kind, constraint), |bound| {
-            let TypeKind::Generic(_, next, next_kind) = &bound.kind else {
+    fn bound_reaches(target: &str, bounds: &Bounds) -> bool {
+        std::iter::successors(Self::extends_bound(bounds), |bound| {
+            let TypeKind::Generic(_, next) = &bound.kind else {
                 return None;
             };
-            Self::extends_bound(next_kind, next)
+            Self::extends_bound(next)
         })
-        .any(|bound| matches!(&bound.kind, TypeKind::Generic(name, _, _) if name == target))
+        .any(|bound| matches!(&bound.kind, TypeKind::Generic(name, _) if name == target))
     }
 
-    /// The type an `extends` bound names, when the declaration has one.
-    fn extends_bound<'t>(
-        kind: &TypeDeclarationKind,
-        constraint: &'t Option<Box<Type>>,
-    ) -> Option<&'t Type> {
-        match kind {
-            TypeDeclarationKind::Extends => constraint.as_deref(),
-            TypeDeclarationKind::None
-            | TypeDeclarationKind::Is
-            | TypeDeclarationKind::Implements
-            | TypeDeclarationKind::Includes => None,
+    /// The type a parameter's `extends` bound names, when that is the one
+    /// bound it declares.
+    // TODO: a parameter with several bounds (`U extends T and Named`) is not
+    // followed here, so `U` is not read as a `T`; the walk should follow every
+    // `extends` bound of the list.
+    fn extends_bound(bounds: &Bounds) -> Option<&Type> {
+        if bounds.len() != 1 {
+            return None;
         }
+        bounds.extended().next()
     }
 
     /// The parameter a type written as a bare name stands for, when a
@@ -830,7 +821,7 @@ impl TypeChecker {
             return None;
         };
         Some(Type::new(
-            TypeKind::Generic(name.clone(), def.constraint.clone().map(Box::new), def.kind),
+            TypeKind::Generic(name.clone(), def.bounds.clone()),
             ty.span,
         ))
     }
@@ -848,16 +839,14 @@ impl TypeChecker {
     fn check_generic_in_t2(
         &self,
         name2: &str,
-        constraint2: &Option<Box<Type>>,
-        kind: &TypeDeclarationKind,
+        bounds2: &Bounds,
         t1: &Type,
         context: &Context,
     ) -> bool {
-        if let Some(c) = constraint2 {
-            if matches!(kind, TypeDeclarationKind::Extends) {
-                return self.are_compatible(t1, c, context);
-            }
-            return false;
+        if !bounds2.is_empty() {
+            return bounds2
+                .extended()
+                .any(|parent| self.are_compatible(t1, parent, context));
         }
         if !matches!(
             context.resolve_type_definition(name2),
@@ -907,8 +896,9 @@ impl TypeChecker {
     ///
     /// A type parameter of the enclosing body is judged by its own bound,
     /// since every caller binds it to some type meeting that bound; one with
-    /// no bound meets none. A type set meets a trait, class or mixin bound
-    /// when each of its members does, as a caller may bind any one of them.
+    /// no bound meets none, and one with several meets a bound when one of
+    /// its own does. A type set meets a trait, class or mixin bound when each
+    /// of its members does, as a caller may bind any one of them.
     pub(crate) fn argument_meets_bound(
         &self,
         argument: &Type,
@@ -916,9 +906,36 @@ impl TypeChecker {
         kind: &TypeDeclarationKind,
         context: &Context,
     ) -> bool {
-        let subject = bounded_subject(argument, context);
+        match parameter_bounds(argument, context) {
+            Some(own) if !own.is_empty() => {
+                own.entail(|own| self.subject_meets_bound(&own.ty, constraint, kind, context))
+            }
+            Some(_) | None => self.subject_meets_bound(argument, constraint, kind, context),
+        }
+    }
+
+    /// The first bound of `bounds` that `argument` misses.
+    pub(crate) fn missed_bound<'b>(
+        &self,
+        argument: &Type,
+        bounds: &'b Bounds,
+        context: &Context,
+    ) -> Option<&'b Bound> {
+        bounds
+            .missed_by(|bound| self.argument_meets_bound(argument, &bound.ty, &bound.kind, context))
+    }
+
+    /// Whether `subject` — a type, or a bound a parameter declares — meets
+    /// the bound `kind constraint`.
+    fn subject_meets_bound(
+        &self,
+        subject: &Type,
+        constraint: &Type,
+        kind: &TypeDeclarationKind,
+        context: &Context,
+    ) -> bool {
         let TypeKind::OneOf(members) = &subject.kind else {
-            return self.satisfies_constraint(&subject, constraint, kind, context);
+            return self.satisfies_constraint(subject, constraint, kind, context);
         };
         match kind {
             TypeDeclarationKind::Extends
@@ -929,7 +946,7 @@ impl TypeChecker {
                 })
             }),
             TypeDeclarationKind::Is | TypeDeclarationKind::None => {
-                self.satisfies_constraint(&subject, constraint, kind, context)
+                self.satisfies_constraint(subject, constraint, kind, context)
             }
         }
     }
@@ -1180,19 +1197,15 @@ fn value_argument(arg: &crate::ast::TypeArgument) -> Option<&crate::ast::TypeArg
     }
 }
 
-/// The type a bound is checked against for `argument`: a parameter of the
-/// enclosing body stands for whatever meets that parameter's own bound, so it
-/// is its bound that must meet the generic's. A parameter with no bound is
-/// its own subject, and meets no bound.
-fn bounded_subject(argument: &Type, context: &Context) -> Type {
-    let TypeKind::Generic(name, _, _) = &argument.kind else {
-        return argument.clone();
+/// The bounds a parameter of the enclosing body declares, when `argument`
+/// is one: every caller binds it to some type meeting them, so it is they
+/// that must meet a generic's bound. `None` for any other argument.
+fn parameter_bounds<'c>(argument: &Type, context: &'c Context) -> Option<&'c Bounds> {
+    let TypeKind::Generic(name, _) = &argument.kind else {
+        return None;
     };
     match context.resolve_type_definition(name) {
-        Some(TypeDefinition::Generic(definition)) => definition
-            .constraint
-            .clone()
-            .unwrap_or_else(|| argument.clone()),
+        Some(TypeDefinition::Generic(definition)) => Some(&definition.bounds),
         Some(
             TypeDefinition::Struct(_)
             | TypeDefinition::Enum(_)
@@ -1200,7 +1213,7 @@ fn bounded_subject(argument: &Type, context: &Context) -> Type {
             | TypeDefinition::Trait(_)
             | TypeDefinition::Alias(_),
         )
-        | None => argument.clone(),
+        | None => None,
     }
 }
 

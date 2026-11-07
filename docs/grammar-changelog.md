@@ -15,6 +15,20 @@ Records every change to `docs/grammar.peg`.
   downstream consumer. That is a human judgement; the hash only guarantees no
   grammar edit passes unnoticed.
 
+## Version 5
+
+**Content Hash**: `197365d0de774ae6a538e90e21e07b15`
+
+Adds bound lists. `bound_list` reads one type or several joined by `and`
+(`Comparable and Hashable`): a type parameter must meet every bound in it. It is
+written after `extends`, `implements` or `includes` in a type parameter
+(`<T implements Comparable and Hashable>`), and after `implements` or `includes`
+in a `type` declaration. A `type` declaration still names one type after
+`extends`, since a type has one parent. A comma keeps separating type parameters
+and the declarations of one `type` statement. A consumer holding version 4
+rejects programs the compiler accepts, so this is a breaking change for anything
+caching the rules.
+
 ## Version 4
 
 **Content Hash**: `cbd3907ea784158d76d656bc4e7757cb`

@@ -445,7 +445,7 @@ fn residency_gated_buffer_rejects_list_and_scalar() {
 #[test]
 fn unbounded_generic_is_not_resource() {
     let defs: HashMap<String, TypeDefinition> = HashMap::new();
-    let g = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    let g = TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none());
     assert!(!is_resource(&g, &defs));
 }
 
@@ -456,8 +456,7 @@ fn generic_bounded_by_managed_class_is_not_resource() {
     let bound = make_type(TypeKind::Custom("Greeter".to_string(), None));
     let g = TypeKind::Generic(
         "T".to_string(),
-        Some(Box::new(bound)),
-        TypeDeclarationKind::Extends,
+        miri::ast::bounds::Bounds::one(TypeDeclarationKind::Extends, bound),
     );
     assert!(!is_resource(&g, &defs));
 }
@@ -469,8 +468,7 @@ fn generic_bounded_by_resource_class_is_resource() {
     let bound = make_type(TypeKind::Custom("Conn".to_string(), None));
     let g = TypeKind::Generic(
         "T".to_string(),
-        Some(Box::new(bound)),
-        TypeDeclarationKind::Extends,
+        miri::ast::bounds::Bounds::one(TypeDeclarationKind::Extends, bound),
     );
     assert!(is_resource(&g, &defs));
 }
@@ -486,8 +484,7 @@ fn generic_bounded_by_trait_is_not_resource() {
     let bound = make_type(TypeKind::Custom("Drawable".to_string(), None));
     let g = TypeKind::Generic(
         "T".to_string(),
-        Some(Box::new(bound)),
-        TypeDeclarationKind::Implements,
+        miri::ast::bounds::Bounds::one(TypeDeclarationKind::Implements, bound),
     );
     assert!(!is_resource(&g, &defs));
 }
@@ -544,7 +541,7 @@ fn expected_scalar_class(kind: &TypeKind) -> GpuScalarClass {
         | TypeKind::RawPtr
         | TypeKind::Identifier
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _) => GpuScalarClass::Forbidden,
     }
@@ -592,7 +589,7 @@ fn one_of_every_type_kind() -> Vec<TypeKind> {
             params: vec![],
             return_type: None,
         })),
-        TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
+        TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none()),
         TypeKind::Custom("Foo".to_string(), None),
     ]
 }

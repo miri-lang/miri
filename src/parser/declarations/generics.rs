@@ -30,7 +30,8 @@ impl<'source> Parser<'source> {
         let identifier = self.identifier()?;
         if self.match_lookahead_type(|t| t == &Token::Is) {
             self.eat_token(&Token::Is)?;
-            let set = self.type_set_expression()?.map(Box::new);
+            let set = self.type_set_expression()?.into_iter().collect();
+            self.refuse_and_after_type_set()?;
             return Ok(ast::generic_type_expression(
                 identifier,
                 set,
@@ -40,7 +41,7 @@ impl<'source> Parser<'source> {
         if self.lookahead.is_none() || !self.lookahead_is_inheritance_modifier() {
             return Ok(ast::generic_type_expression(
                 identifier,
-                None,
+                Vec::new(),
                 TypeDeclarationKind::None,
             ));
         }
@@ -55,9 +56,9 @@ impl<'source> Parser<'source> {
             _ => TypeDeclarationKind::None,
         };
 
-        let typ = self.type_expression()?.map(Box::new);
+        let bounds = self.bound_list_expressions()?;
 
-        Ok(ast::generic_type_expression(identifier, typ, kind))
+        Ok(ast::generic_type_expression(identifier, bounds, kind))
     }
 }
 

@@ -96,7 +96,7 @@ pub fn emit_structural_hash(
         // A type parameter is left open only in a generic body's shared copy,
         // which reads it as one machine word, as `==` there compares it; each
         // instantiation's own copy hashes the type it is bound to.
-        TypeKind::Generic(_, _, _) => address_hash(ctx, span, value),
+        TypeKind::Generic(_, _) => address_hash(ctx, span, value),
         TypeKind::Void => Ok(int_constant(ctx, 0, span)),
         TypeKind::Result(_, _) => Err(LoweringError::unsupported_expression(
             "cannot hash a result type that was not resolved to its declaration".to_string(),

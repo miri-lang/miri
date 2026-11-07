@@ -1682,7 +1682,7 @@ impl TypeChecker {
             TypeKind::Void => false,
 
             // Generic parameters and GPU builtins are OK
-            TypeKind::Generic(_, _, _) => true,
+            TypeKind::Generic(_, _) => true,
             TypeKind::Custom(name, _) => {
                 // Only allow GPU builtin types, not Array/List/etc.
                 name == crate::ast::types::DIM3_TYPE_NAME
@@ -1847,6 +1847,9 @@ impl TypeChecker {
         let Some(recv_type) = self.type_table.types.get(&recv.id).cloned() else {
             return;
         };
+        let recv_type = self
+            .receiver_at_declaring_bound(&recv_type, method_name)
+            .unwrap_or(recv_type);
         let (type_name_opt, _type_args) =
             self.extract_member_type_and_args(&recv_type, span, context);
 
@@ -2291,7 +2294,7 @@ impl TypeChecker {
             .into_iter()
             .filter(|name| !generic_map.contains_key(name))
             .map(|name| {
-                let parameter = TypeKind::Generic(name.clone(), None, TypeDeclarationKind::None);
+                let parameter = TypeKind::Generic(name.clone(), crate::ast::bounds::Bounds::none());
                 (name, make_type(parameter))
             })
             .collect();
@@ -3793,7 +3796,7 @@ impl TypeChecker {
 /// checked in its own terms.
 fn type_arg_is_concrete(ty: &Type) -> bool {
     match &ty.kind {
-        TypeKind::Generic(_, _, _) => false,
+        TypeKind::Generic(_, _) => false,
         TypeKind::Custom(_, Some(args)) | TypeKind::Tuple(args) => {
             args.iter().all(|arg| match &arg.node {
                 TypeArgKind::Type(inner, _) => type_arg_is_concrete(inner),
@@ -3878,11 +3881,12 @@ fn declared_bounds(
             else {
                 return None;
             };
-            let constraint = definition.constraint.clone()?;
+            if definition.bounds.is_empty() {
+                return None;
+            }
             Some(ParameterBound {
                 parameter,
-                constraint,
-                kind: definition.kind,
+                bounds: definition.bounds.clone(),
             })
         })
         .collect()

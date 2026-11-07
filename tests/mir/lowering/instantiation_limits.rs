@@ -105,11 +105,7 @@ fn an_instance_is_spelled_in_the_language_s_own_syntax() {
 #[test]
 fn an_open_parameter_is_found_anywhere_inside_a_type() {
     let defs = HashMap::new();
-    let open = TypeKind::Generic(
-        "T".to_string(),
-        None,
-        miri::ast::types::TypeDeclarationKind::None,
-    );
+    let open = TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none());
     assert!(mentions_open_parameter(&ty(list_of(open)), &defs));
     assert!(mentions_open_parameter(
         &ty(TypeKind::Custom("U".to_string(), None)),

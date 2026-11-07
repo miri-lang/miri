@@ -447,16 +447,11 @@ fn define_holder(body: &mut Body, field: TypeKind) {
 fn tagged_definition() -> TypeDefinition {
     let param = ty(TypeKind::Generic(
         "T".to_string(),
-        None,
-        miri::ast::types::TypeDeclarationKind::None,
+        miri::ast::bounds::Bounds::none(),
     ));
     TypeDefinition::Class(ClassDefinition {
         name: "Tagged".to_string(),
-        generics: Some(vec![GenericDefinition {
-            name: "T".to_string(),
-            constraint: None,
-            kind: miri::ast::types::TypeDeclarationKind::None,
-        }]),
+        generics: Some(vec![GenericDefinition::unbounded("T".to_string())]),
         base_class: None,
         base_class_args: None,
         traits: Vec::new(),

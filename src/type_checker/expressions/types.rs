@@ -270,7 +270,7 @@ impl TypeChecker {
             let mut mapping = HashMap::new();
             for (val, var_type) in values.iter().zip(variant_types.iter()) {
                 let val_type = self.infer_expression(val, context);
-                if let TypeKind::Generic(name, _, _) = &var_type.kind {
+                if let TypeKind::Generic(name, _) = &var_type.kind {
                     mapping.insert(name.clone(), val_type);
                 }
             }
@@ -278,8 +278,7 @@ impl TypeChecker {
                 mapping.entry(g.name.clone()).or_insert_with(|| {
                     ast_factory::make_type(TypeKind::Generic(
                         g.name.clone(),
-                        None,
-                        crate::ast::types::TypeDeclarationKind::None,
+                        crate::ast::bounds::Bounds::none(),
                     ))
                 });
             }
@@ -332,11 +331,11 @@ impl TypeChecker {
         expr: &Expression,
         generics: &Option<Vec<Expression>>,
         kind: &TypeDeclarationKind,
-        target: &Option<Box<Expression>>,
+        targets: &[Expression],
         span: Span,
         context: &mut Context,
     ) -> Type {
-        if *kind == TypeDeclarationKind::None && target.is_none() {
+        if *kind == TypeDeclarationKind::None && targets.is_empty() {
             if let Some(args) = generics {
                 let expr_type = self.infer_expression(expr, context);
                 match expr_type.kind {

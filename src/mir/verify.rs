@@ -1618,7 +1618,7 @@ fn pinned_type(ty: &crate::ast::types::Type, body: &Body) -> Option<crate::ast::
     use crate::ast::types::TypeKind;
     match &ty.kind {
         TypeKind::Custom(name, None) if body.generics.type_params.contains(name.as_str()) => None,
-        TypeKind::Generic(_, _, _) => None,
+        TypeKind::Generic(_, _) => None,
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => None,
         _ => Some(ty.clone()),
     }

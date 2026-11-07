@@ -37,7 +37,7 @@ use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::type_arguments::TypeArgument;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::diagnostic::RelatedNote;
@@ -231,7 +231,7 @@ fn delegated_operand(ty: &Type, pins: &HashMap<String, Pin>) -> Option<Type> {
     if let Some(pin) = generic_parameter_name(&ty.kind).and_then(|name| pins.get(name)) {
         return Some(match pin {
             Pin::CallerParameter(own) => Type::new(
-                TypeKind::Generic(own.clone(), None, TypeDeclarationKind::None),
+                TypeKind::Generic(own.clone(), crate::ast::bounds::Bounds::none()),
                 ty.span,
             ),
             Pin::Concrete(pinned) => pinned.clone(),
@@ -548,14 +548,13 @@ pub(crate) fn spells_where(kind: &TypeKind, visit: &dyn Fn(&TypeKind) -> Visit) 
         TypeKind::Option(inner) | TypeKind::Meta(inner) | TypeKind::Linear(inner) => {
             spells(&inner.kind)
         }
-        TypeKind::Generic(_, Some(bound), _) => spells(&bound.kind),
+        TypeKind::Generic(_, bounds) => bounds.iter().any(|bound| spells(&bound.ty.kind)),
         TypeKind::Function(signature) => {
             let written_by = |expr: &Expression| matches!(&expr.node, ExpressionKind::Type(ty, _) if spells(&ty.kind));
             signature.params.iter().any(|param| written_by(&param.typ))
                 || signature.return_type.as_deref().is_some_and(written_by)
         }
         TypeKind::Custom(_, None)
-        | TypeKind::Generic(_, None, _)
         | TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -695,7 +694,7 @@ impl TypeChecker {
         method: &str,
         context: &Context,
     ) {
-        if !matches!(receiver.kind, TypeKind::Generic(_, Some(_), _)) {
+        if !matches!(&receiver.kind, TypeKind::Generic(_, bounds) if !bounds.is_empty()) {
             return;
         }
         let Some(parameter) = generic_parameter_in_scope(receiver, context) else {
@@ -917,7 +916,7 @@ impl TypeChecker {
         };
         let parameter = class_def.generics.as_ref()?.first()?;
         Some(Type::new(
-            TypeKind::Generic(parameter.name.clone(), None, TypeDeclarationKind::None),
+            TypeKind::Generic(parameter.name.clone(), crate::ast::bounds::Bounds::none()),
             span,
         ))
     }
@@ -1431,7 +1430,7 @@ impl TypeChecker {
         for (position, generic) in self.generics_of(declaring).iter().enumerate() {
             let argument = written.get(position).cloned().unwrap_or_else(|| {
                 Type::new(
-                    TypeKind::Generic(generic.name.clone(), None, TypeDeclarationKind::None),
+                    TypeKind::Generic(generic.name.clone(), crate::ast::bounds::Bounds::none()),
                     Span::new(0, 0),
                 )
             });
@@ -1737,11 +1736,7 @@ mod tests {
         let checker = checked("class Base<T>\n    fn get(a T) T\n        return a\n");
         let substitution = HashMap::from([("U".to_string(), named("Pt"))]);
         let written = [named("U")];
-        let writer = [GenericDefinition {
-            name: "U".into(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }];
+        let writer = [GenericDefinition::unbounded("U")];
         let rekeyed = checker.rekeyed_into("Base", &written, &writer, &substitution);
         assert_eq!(
             rekeyed.get("T").map(|t| t.kind.clone()),
@@ -1753,11 +1748,7 @@ mod tests {
     fn a_clause_argument_naming_an_unpinned_parameter_pins_nothing() {
         let checker = checked("class Base<T>\n    fn get(a T) T\n        return a\n");
         let written = [named("U")];
-        let writer = [GenericDefinition {
-            name: "U".into(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }];
+        let writer = [GenericDefinition::unbounded("U")];
         let rekeyed = checker.rekeyed_into("Base", &written, &writer, &HashMap::new());
         assert!(rekeyed.is_empty(), "{rekeyed:?}");
     }

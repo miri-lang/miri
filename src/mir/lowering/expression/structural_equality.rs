@@ -94,7 +94,7 @@ pub fn emit_structural_equality(
         | TypeKind::Array(_, _)
         | TypeKind::Function(_)
         | TypeKind::Future(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)

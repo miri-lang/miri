@@ -457,7 +457,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     fn resource_type_name(kind: &TypeKind) -> Option<&str> {
         match kind {
             TypeKind::Custom(name, _) => Some(name.as_str()),
-            TypeKind::Generic(name, _, _) => Some(name.as_str()),
+            TypeKind::Generic(name, _) => Some(name.as_str()),
             _ => None,
         }
     }

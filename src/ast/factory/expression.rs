@@ -131,12 +131,12 @@ pub fn type_expression_with_span(inner: Type, is_nullable: bool, span: Span) -> 
 /// Creates a generic type expression with a specific span.
 pub fn generic_type_expression_with_span(
     name_expression: Expression,
-    constraint: Option<Box<Expression>>,
+    bounds: Vec<Expression>,
     kind: TypeDeclarationKind,
     span: Span,
 ) -> Expression {
     expr_with_span(
-        ExpressionKind::GenericType(Box::new(name_expression), constraint, kind),
+        ExpressionKind::GenericType(Box::new(name_expression), bounds, kind),
         span,
     )
 }
@@ -144,10 +144,10 @@ pub fn generic_type_expression_with_span(
 /// Creates a generic type expression with a default span.
 pub fn generic_type_expression(
     name_expression: Expression,
-    constraint: Option<Box<Expression>>,
+    bounds: Vec<Expression>,
     kind: TypeDeclarationKind,
 ) -> Expression {
-    generic_type_expression_with_span(name_expression, constraint, kind, Span::new(0, 0))
+    generic_type_expression_with_span(name_expression, bounds, kind, Span::new(0, 0))
 }
 
 /// Creates a conditional expression with a specific span.
@@ -201,11 +201,11 @@ pub fn type_declaration_expression_with_span(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
     kind: TypeDeclarationKind,
-    type_expr: Option<Box<Expression>>,
+    targets: Vec<Expression>,
     span: Span,
 ) -> Expression {
     expr_with_span(
-        ExpressionKind::TypeDeclaration(Box::new(name), generic_types, kind, type_expr),
+        ExpressionKind::TypeDeclaration(Box::new(name), generic_types, kind, targets),
         span,
     )
 }

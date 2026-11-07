@@ -323,16 +323,13 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 
     match &ty.kind {
         // Direct generic: replace with concrete type if in map
-        TypeKind::Generic(name, bound, decl_kind) => {
+        TypeKind::Generic(name, bounds) => {
             if let Some(concrete) = subs.get(name) {
                 concrete.clone()
             } else {
-                // Bound itself might contain generics
-                let new_bound = bound.as_ref().map(|b| Box::new(apply_generic_sub(b, subs)));
-                Type::new(
-                    TypeKind::Generic(name.clone(), new_bound, *decl_kind),
-                    ty.span,
-                )
+                // The bounds themselves might name parameters
+                let bounds = bounds.map_types(|bound| apply_generic_sub(bound, subs));
+                Type::new(TypeKind::Generic(name.clone(), bounds), ty.span)
             }
         }
         // Custom type with no args: replace if it's a generic param name

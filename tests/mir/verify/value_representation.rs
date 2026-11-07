@@ -10,7 +10,7 @@
 
 use crate::mir::utils::runtime_callee_stating;
 use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
-use miri::ast::types::{FunctionTypeData, Type, TypeDeclarationKind, TypeKind};
+use miri::ast::types::{FunctionTypeData, Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::place::PlaceElem;
@@ -517,11 +517,7 @@ fn a_local_naming_an_unbound_parameter_is_flagged() {
 
 /// `enum Outcome<A, B>`, its two variants carrying one parameter each.
 fn outcome_definitions() -> HashMap<String, TypeDefinition> {
-    let generic = |name: &str| GenericDefinition {
-        name: name.to_string(),
-        constraint: None,
-        kind: TypeDeclarationKind::None,
-    };
+    let generic = |name: &str| GenericDefinition::unbounded(name.to_string());
     let outcome = TypeDefinition::Enum(EnumDefinition {
         variants: BTreeMap::from([
             ("Good".to_string(), vec![ty(custom("A"))]),

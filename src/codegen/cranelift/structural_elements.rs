@@ -103,7 +103,7 @@ fn collect(kind: &TypeKind, found: &mut Vec<(String, TypeKind)>) {
             collect(&inner.kind, found)
         }
         TypeKind::Custom(_, None)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Function(_)
         | TypeKind::Int

@@ -10,7 +10,7 @@
 //! thunk that would leak the managed field.
 
 use miri::ast::type_arguments::type_argument;
-use miri::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use miri::ast::types::{Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::codegen::backend::Backend;
 use miri::codegen::cranelift::{CraneliftBackend, CraneliftOptions};
@@ -32,18 +32,13 @@ fn ty(kind: TypeKind) -> Type {
 fn definitions() -> HashMap<String, TypeDefinition> {
     let parameter = ty(TypeKind::Generic(
         "T".to_string(),
-        None,
-        TypeDeclarationKind::None,
+        miri::ast::bounds::Bounds::none(),
     ));
     HashMap::from([(
         "Box".to_string(),
         TypeDefinition::Class(ClassDefinition {
             name: "Box".to_string(),
-            generics: Some(vec![GenericDefinition {
-                name: "T".to_string(),
-                constraint: None,
-                kind: TypeDeclarationKind::None,
-            }]),
+            generics: Some(vec![GenericDefinition::unbounded("T".to_string())]),
             base_class: None,
             base_class_args: None,
             traits: Vec::new(),

@@ -251,17 +251,13 @@ impl References {
     /// A declaration whose head is the name being introduced: the head is
     /// skipped and everything it is declared against is still a reference.
     fn declared_type_expression(&mut self, expression: &Expression) {
-        if let ExpressionKind::TypeDeclaration(_, generics, _, bound) = &expression.node {
+        if let ExpressionKind::TypeDeclaration(_, generics, _, targets) = &expression.node {
             self.expression_list(generics.as_deref());
-            if let Some(bound) = bound {
-                self.expression(bound);
-            }
+            self.expressions(targets);
             return;
         }
-        if let ExpressionKind::GenericType(_, arguments, _) = &expression.node {
-            if let Some(arguments) = arguments {
-                self.expression(arguments);
-            }
+        if let ExpressionKind::GenericType(_, bounds, _) = &expression.node {
+            self.expressions(bounds);
             return;
         }
         if matches!(expression.node, ExpressionKind::Identifier(_, _)) {
@@ -324,14 +320,14 @@ impl References {
             // the statement walker never descends into.
             ExpressionKind::ImportPath(_, _) => {}
             ExpressionKind::Type(typ, _) => self.typ(typ),
-            ExpressionKind::GenericType(name, arguments, _) => {
+            ExpressionKind::GenericType(name, bounds, _) => {
                 self.expression(name);
-                self.optional_expression(arguments.as_deref());
+                self.expressions(bounds);
             }
-            ExpressionKind::TypeDeclaration(name, generics, _, bound) => {
+            ExpressionKind::TypeDeclaration(name, generics, _, targets) => {
                 self.expression(name);
                 self.expression_list(generics.as_deref());
-                self.optional_expression(bound.as_deref());
+                self.expressions(targets);
             }
             ExpressionKind::EnumValue(path, payload) => {
                 self.expression(path);
@@ -482,11 +478,9 @@ impl References {
                     self.expression(return_type);
                 }
             }
-            TypeKind::Generic(name, bound, _) => {
+            TypeKind::Generic(name, bounds) => {
                 self.record(name);
-                if let Some(bound) = bound {
-                    self.typ(bound);
-                }
+                bounds.iter().for_each(|bound| self.typ(&bound.ty));
             }
             TypeKind::Custom(name, arguments) => {
                 self.record(name);

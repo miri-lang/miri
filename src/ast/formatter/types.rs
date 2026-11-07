@@ -146,7 +146,7 @@ pub fn type_kind(sink: &mut Sink, kind: &TypeKind) {
         TypeKind::Result(ok, err) => angled(sink, "Result", &[ok.as_ref(), err.as_ref()]),
         TypeKind::Future(inner) => angled(sink, "Future", &[inner.as_ref()]),
         TypeKind::Function(data) => function_type(sink, data),
-        TypeKind::Generic(name, bound, declaration) => generic(sink, name, bound, *declaration),
+        TypeKind::Generic(name, bounds) => generic(sink, name, bounds),
         TypeKind::Custom(name, arguments) => custom(sink, name, arguments.as_deref()),
         TypeKind::Option(inner) => {
             type_kind(sink, &inner.kind);
@@ -235,28 +235,18 @@ fn function_type(sink: &mut Sink, data: &FunctionTypeData) {
     }
 }
 
-/// `T`, `T extends Base`, `T is Base`
-fn generic(
-    sink: &mut Sink,
-    name: &str,
-    bound: &Option<Box<Type>>,
-    declaration: TypeDeclarationKind,
-) {
+/// `T`, `T extends Base`, `T implements A and B`
+fn generic(sink: &mut Sink, name: &str, bounds: &crate::ast::bounds::Bounds) {
     sink.emit(name);
-    let Some(bound) = bound else {
-        return;
-    };
-    match declaration {
-        TypeDeclarationKind::None => {}
-        TypeDeclarationKind::Is
-        | TypeDeclarationKind::Extends
-        | TypeDeclarationKind::Implements
-        | TypeDeclarationKind::Includes => {
+    let mut previous: Option<TypeDeclarationKind> = None;
+    for (index, bound) in bounds.iter().enumerate() {
+        sink.emit(if index == 0 { " " } else { " and " });
+        if previous != Some(bound.kind) {
+            sink.emit(&bound.kind.to_string());
             sink.emit(" ");
-            sink.emit(&declaration.to_string());
-            sink.emit(" ");
-            type_kind(sink, &bound.kind);
         }
+        type_kind(sink, &bound.ty.kind);
+        previous = Some(bound.kind);
     }
 }
 

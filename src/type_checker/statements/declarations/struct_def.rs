@@ -197,20 +197,10 @@ impl TypeChecker {
         let mut generic_defs = Vec::with_capacity(capacity);
         if let Some(gens) = generics {
             self.define_generics(gens, context);
-            for gen in gens {
-                if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen.node {
-                    if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-                        let constraint_type = constraint_expr
-                            .as_ref()
-                            .map(|c| self.resolve_bound_type(c, context));
-                        generic_defs.push(GenericDefinition {
-                            name: n.clone(),
-                            constraint: constraint_type,
-                            kind: *kind,
-                        });
-                    }
-                }
-            }
+            generic_defs.extend(
+                gens.iter()
+                    .filter_map(|gen| self.generic_definition(gen, context)),
+            );
         }
         generic_defs
     }

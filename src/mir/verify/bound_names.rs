@@ -128,10 +128,13 @@ fn bare_name(arg: &TypeArgument) -> Option<&str> {
     let TypeArgKind::Type(ty, _) = &arg.node else {
         return None;
     };
-    let (TypeKind::Custom(name, None) | TypeKind::Generic(name, None, _)) = &ty.kind else {
+    if let TypeKind::Custom(name, None) = &ty.kind {
+        return Some(name);
+    }
+    let TypeKind::Generic(name, bounds) = &ty.kind else {
         return None;
     };
-    Some(name)
+    bounds.is_empty().then_some(name)
 }
 
 /// The types `rvalue` spells itself: an aggregate's, a cast's target, a

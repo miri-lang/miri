@@ -230,7 +230,7 @@ pub fn is_unresolved_element(
     definitions: &HashMap<String, TypeDefinition>,
 ) -> bool {
     match kind {
-        TypeKind::Generic(_, _, _) => true,
+        TypeKind::Generic(_, _) => true,
         TypeKind::Option(payload) => is_unresolved_element(&payload.kind, definitions),
         TypeKind::Custom(name, _) => {
             if BuiltinCollectionKind::from_name(name).is_some() {

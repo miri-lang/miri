@@ -608,20 +608,9 @@ impl TypeChecker {
         if let Some(gens) = generics {
             context.enter_scope();
             for gen in gens {
-                if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node {
-                    if let ExpressionKind::Identifier(gen_name, _) = &name_expr.node {
-                        let constraint_ty = constraint
-                            .as_ref()
-                            .map(|c| self.resolve_bound_type(c, context));
-                        context.define_type(
-                            gen_name.clone(),
-                            TypeDefinition::Generic(GenericDefinition {
-                                name: gen_name.clone(),
-                                constraint: constraint_ty,
-                                kind: *kind,
-                            }),
-                        );
-                    }
+                if let Some(definition) = self.generic_definition(gen, context) {
+                    context
+                        .define_type(definition.name.clone(), TypeDefinition::Generic(definition));
                 }
             }
         }
@@ -652,7 +641,7 @@ impl TypeChecker {
                 &expr.node
             {
                 if let Ok(name) = self.extract_name(name_expr) {
-                    if *kind == TypeDeclarationKind::None && target_expr.is_none() {
+                    if *kind == TypeDeclarationKind::None && target_expr.is_empty() {
                         self.report_error(DiagnosticCode::TypClassDefinition,
                             format!(
                                 "Incomplete type declaration '{}'. Use 'is', 'extends', 'implements', or 'includes' to define the type.",
@@ -664,12 +653,12 @@ impl TypeChecker {
                     }
                     let name = name.to_string();
 
-                    if *kind == TypeDeclarationKind::Is {
-                        if let Some(target) = target_expr {
-                            self.check_type_alias(&name, generics, target, context);
+                    match (kind, target_expr.as_slice()) {
+                        (TypeDeclarationKind::Is, [target]) => {
+                            self.check_type_alias(&name, generics, target, context)
                         }
-                    } else if let Some(target) = target_expr {
-                        self.check_type_hierarchy(&name, kind, target, context, expr.span);
+                        (TypeDeclarationKind::Is, _) | (_, []) => {}
+                        (_, targets) => self.check_type_hierarchy(&name, kind, targets, expr.span),
                     }
                 }
             }
@@ -693,9 +682,11 @@ impl TypeChecker {
     /// [`check_type_statement`]: Self::check_type_statement
     pub(crate) fn collect_type_aliases(&mut self, exprs: &[Expression], context: &mut Context) {
         for expr in exprs {
-            let ExpressionKind::TypeDeclaration(name_expr, generics, kind, Some(target)) =
-                &expr.node
+            let ExpressionKind::TypeDeclaration(name_expr, generics, kind, targets) = &expr.node
             else {
+                continue;
+            };
+            let [target] = targets.as_slice() else {
                 continue;
             };
             if *kind != TypeDeclarationKind::Is {
@@ -759,25 +750,10 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Option<Vec<GenericDefinition>> {
         if let Some(gens) = generics {
-            let mut defs = Vec::with_capacity(gens.len());
-            for gen in gens {
-                if let ExpressionKind::GenericType(name_expr, constraint_expr, gen_kind) = &gen.node
-                {
-                    let gen_name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-                        n.clone()
-                    } else {
-                        continue;
-                    };
-                    let constraint_type = constraint_expr
-                        .as_ref()
-                        .map(|c| self.resolve_bound_type(c, context));
-                    defs.push(GenericDefinition {
-                        name: gen_name,
-                        constraint: constraint_type,
-                        kind: *gen_kind,
-                    });
-                }
-            }
+            let defs: Vec<GenericDefinition> = gens
+                .iter()
+                .filter_map(|gen| self.generic_definition(gen, context))
+                .collect();
             if defs.is_empty() {
                 None
             } else {
@@ -792,8 +768,7 @@ impl TypeChecker {
         &mut self,
         name: &str,
         kind: &TypeDeclarationKind,
-        target: &Expression,
-        _context: &mut Context,
+        targets: &[Expression],
         span: Span,
     ) {
         if self.is_type_visible(name) {
@@ -806,52 +781,82 @@ impl TypeChecker {
             );
             return;
         }
+        let Some(targets) = self.declared_type_targets(targets) else {
+            return;
+        };
+        self.register_type_definition(
+            name.to_string(),
+            TypeDefinition::Struct(StructDefinition {
+                fields: vec![],
+                generics: None,
+                module: self.modules.current_module.clone(),
+            }),
+        );
+        for (target_name, target_span) in targets {
+            self.relate_declared_type(name, kind, target_name, target_span);
+        }
+    }
 
-        if let Ok(target_name) = self.extract_type_name(target) {
-            if !self.is_type_visible(target_name) {
-                self.report_error(
-                    DiagnosticCode::TypTypeNotFound,
-                    format!("Unknown type '{}' in type declaration", target_name),
-                    target.span,
-                );
-                return;
-            }
-            let target_name = target_name.to_string();
-
-            self.register_type_definition(
-                name.to_string(),
-                TypeDefinition::Struct(StructDefinition {
-                    fields: vec![],
-                    generics: None,
-                    module: self.modules.current_module.clone(),
-                }),
+    /// The names a `type` declaration relates its type to, with where each
+    /// is written. `None`, with the first unknown name reported, when one
+    /// names no visible type.
+    fn declared_type_targets(&mut self, targets: &[Expression]) -> Option<Vec<(String, Span)>> {
+        let targets = targets
+            .iter()
+            .filter_map(|target| {
+                let target_name = self.extract_type_name(target).ok()?;
+                Some((target_name.to_string(), target.span))
+            })
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return None;
+        }
+        if let Some((unknown, at)) = targets
+            .iter()
+            .find(|(target_name, _)| !self.is_type_visible(target_name))
+        {
+            self.report_error(
+                DiagnosticCode::TypTypeNotFound,
+                format!("Unknown type '{}' in type declaration", unknown),
+                *at,
             );
+            return None;
+        }
+        Some(targets)
+    }
 
-            // `type Z implements Named` declares a struct with no fields, and a
-            // struct holds data only, so it implements no trait.
-            if *kind == TypeDeclarationKind::Implements {
-                self.report_error_with_help(
-                    DiagnosticCode::TypStructDefinition,
-                    format!(
-                        "'{name}' cannot implement trait '{target_name}': a type declared with \
-                         'type' is a struct, which holds data only"
-                    ),
-                    target.span,
-                    format!("declare '{name}' as a class to implement '{target_name}'"),
-                );
-            }
-
-            let entry = self
-                .type_table
-                .hierarchy
-                .entry(name.to_string())
-                .or_default();
-            match kind {
-                TypeDeclarationKind::Extends => entry.extends = Some(target_name),
-                TypeDeclarationKind::Implements => entry.implements.push(target_name),
-                TypeDeclarationKind::Includes => entry.includes.push(target_name),
-                _ => {}
-            }
+    /// Records that the type `name` declares stands in the relation `kind`
+    /// to `target_name`.
+    fn relate_declared_type(
+        &mut self,
+        name: &str,
+        kind: &TypeDeclarationKind,
+        target_name: String,
+        target_span: Span,
+    ) {
+        // `type Z implements Named` declares a struct with no fields, and a
+        // struct holds data only, so it implements no trait.
+        if *kind == TypeDeclarationKind::Implements {
+            self.report_error_with_help(
+                DiagnosticCode::TypStructDefinition,
+                format!(
+                    "'{name}' cannot implement trait '{target_name}': a type declared with \
+                     'type' is a struct, which holds data only"
+                ),
+                target_span,
+                format!("declare '{name}' as a class to implement '{target_name}'"),
+            );
+        }
+        let entry = self
+            .type_table
+            .hierarchy
+            .entry(name.to_string())
+            .or_default();
+        match kind {
+            TypeDeclarationKind::Extends => entry.extends = Some(target_name),
+            TypeDeclarationKind::Implements => entry.implements.push(target_name),
+            TypeDeclarationKind::Includes => entry.includes.push(target_name),
+            TypeDeclarationKind::Is | TypeDeclarationKind::None => {}
         }
     }
 }

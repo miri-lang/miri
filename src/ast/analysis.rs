@@ -143,8 +143,8 @@ fn expression_uses_regex(expression: &Expression) -> bool {
         ExpressionKind::Call(target, arguments) | ExpressionKind::EnumValue(target, arguments) => {
             expression_uses_regex(target) || arguments.iter().any(expression_uses_regex)
         }
-        ExpressionKind::GenericType(name, arguments, _) => {
-            expression_uses_regex(name) || optional_uses_regex(arguments.as_deref())
+        ExpressionKind::GenericType(name, bounds, _) => {
+            expression_uses_regex(name) || bounds.iter().any(expression_uses_regex)
         }
         ExpressionKind::TypeDeclaration(..) => false,
         ExpressionKind::Lambda(lambda) => {

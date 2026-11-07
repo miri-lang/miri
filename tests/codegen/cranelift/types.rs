@@ -280,8 +280,7 @@ fn test_translate_generic_type_variants() {
         translate_type(
             &t(TypeKind::Generic(
                 "T".to_string(),
-                None,
-                TypeDeclarationKind::None
+                miri::ast::bounds::Bounds::none()
             )),
             ptr_ty
         ),
@@ -293,11 +292,10 @@ fn test_translate_generic_type_variants() {
         translate_type(
             &t(TypeKind::Generic(
                 "T".to_string(),
-                Some(Box::new(t(TypeKind::Custom(
-                    "Comparable".to_string(),
-                    None
-                )))),
-                TypeDeclarationKind::Extends
+                miri::ast::bounds::Bounds::one(
+                    TypeDeclarationKind::Extends,
+                    t(TypeKind::Custom("Comparable".to_string(), None))
+                )
             )),
             ptr_ty
         ),

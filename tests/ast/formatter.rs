@@ -1146,3 +1146,18 @@ fn test_a_body_keeps_its_own_tail_comment_and_passes_on_the_outer_one() {
         "fn a() int\n    return 1\n    // tail of a\n\n// above b\nfn b() int\n    return 2\n",
     );
 }
+
+#[test]
+fn test_several_bounds_render_joined_with_and() {
+    let source = "public type Key implements Comparable and Hashable\n\nfn pick<T implements Comparable and Hashable and Named, U>(x T, y U) T\n    return x\n";
+    let rendered = assert_render_is_a_fixed_point(source);
+    assert!(
+        rendered.contains("public type Key implements Comparable and Hashable"),
+        "got: {rendered}"
+    );
+    assert!(
+        rendered.contains("fn pick<T implements Comparable and Hashable and Named, U>(x T, y U) T"),
+        "got: {rendered}"
+    );
+    assert_ast_survives(source);
+}

@@ -512,7 +512,7 @@ fn with_span_helpers_preserve_span() {
         match_expression_with_span(int(), Vec::<MatchBranch>::new(), span),
         f_string_with_span(vec![string_literal_expression("a")], Vec::new(), span),
         type_expression_with_span(type_int(), false, span),
-        generic_type_expression_with_span(id(), None, TypeDeclarationKind::None, span),
+        generic_type_expression_with_span(id(), Vec::new(), TypeDeclarationKind::None, span),
         conditional_with_span(
             int(),
             boolean_literal(true),
@@ -523,7 +523,13 @@ fn with_span_helpers_preserve_span() {
         range_with_span(int(), None, RangeExpressionType::Exclusive, span),
         guard_with_span(GuardOp::Not, int(), span),
         import_path_expression_with_span(vec![id()], ImportPathKind::Simple, span),
-        type_declaration_expression_with_span(id(), None, TypeDeclarationKind::None, None, span),
+        type_declaration_expression_with_span(
+            id(),
+            None,
+            TypeDeclarationKind::None,
+            Vec::new(),
+            span,
+        ),
         enum_value_expression_with_span(id(), vec![int()], span),
         struct_member_expression_with_span(id(), id(), span),
         named_argument_with_span("x".into(), int(), span),

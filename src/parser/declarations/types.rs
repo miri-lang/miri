@@ -77,7 +77,7 @@ impl<'source> Parser<'source> {
                     name,
                     generic_types,
                     TypeDeclarationKind::None,
-                    None,
+                    Vec::new(),
                 ));
             }
             _ => {
@@ -87,17 +87,28 @@ impl<'source> Parser<'source> {
                 ));
             }
         };
-        let type_expr = if kind == TypeDeclarationKind::Is {
-            self.type_set_expression()?
-        } else {
-            self.type_expression()?
-        }
-        .map(Box::new);
+        let targets = match kind {
+            TypeDeclarationKind::Is => {
+                let set = self.type_set_expression()?.into_iter().collect();
+                self.refuse_and_after_type_set()?;
+                set
+            }
+            TypeDeclarationKind::Implements | TypeDeclarationKind::Includes => {
+                self.bound_list_expressions()?
+            }
+            TypeDeclarationKind::Extends | TypeDeclarationKind::None => {
+                let parent = self.type_expression()?.into_iter().collect();
+                self.refuse_and_after(
+                    "the end of the declaration: a type extends one parent type",
+                )?;
+                parent
+            }
+        };
         Ok(ast::type_declaration_expression(
             name,
             generic_types,
             kind,
-            type_expr,
+            targets,
         ))
     }
 }

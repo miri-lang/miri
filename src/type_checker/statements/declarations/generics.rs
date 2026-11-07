@@ -87,8 +87,7 @@ impl TypeChecker {
         };
         Some(make_type(TypeKind::Generic(
             def.name.clone(),
-            def.constraint.clone().map(Box::new),
-            def.kind,
+            def.bounds.clone(),
         )))
     }
 
@@ -97,21 +96,9 @@ impl TypeChecker {
         generics: &[Expression],
         context: &mut Context,
     ) -> Vec<GenericDefinition> {
-        let mut result = Vec::with_capacity(generics.len());
-        for gen_expr in generics {
-            if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen_expr.node {
-                if let Ok(gen_name) = self.extract_type_name(name_expr) {
-                    let constraint = constraint_expr
-                        .as_ref()
-                        .map(|c| self.resolve_bound_type(c, context));
-                    result.push(GenericDefinition {
-                        name: gen_name.to_string(),
-                        constraint,
-                        kind: *kind,
-                    });
-                }
-            }
-        }
-        result
+        generics
+            .iter()
+            .filter_map(|gen| self.generic_definition(gen, context))
+            .collect()
     }
 }

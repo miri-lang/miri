@@ -133,7 +133,7 @@ fn plan_of_other(
         | TypeKind::Void
         | TypeKind::Error
         | TypeKind::Linear(_)
-        | TypeKind::Generic(_, _, _) => ReleasePlan::Block,
+        | TypeKind::Generic(_, _) => ReleasePlan::Block,
     };
     Ok(plan)
 }

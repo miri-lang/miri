@@ -7,8 +7,8 @@
 //! available in every Miri program without explicit imports.
 
 use crate::ast::types::{
-    FrameFieldKind, TypeDeclarationKind, TypeKind, DIM3_TYPE_NAME, FRAME_INPUT_FIELDS,
-    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
+    FrameFieldKind, TypeKind, DIM3_TYPE_NAME, FRAME_INPUT_FIELDS, FRAME_INPUT_TYPE_NAME,
+    GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME, WARP_CONTEXT_TYPE_NAME,
 };
 use crate::ast::MemberVisibility;
 use std::collections::HashMap;
@@ -173,11 +173,7 @@ fn register_async_types(types: &mut HashMap<String, TypeDefinition>) {
         "Future".to_string(),
         TypeDefinition::Struct(StructDefinition {
             fields: vec![], // Opaque type
-            generics: Some(vec![GenericDefinition {
-                name: "T".to_string(),
-                constraint: None,
-                kind: TypeDeclarationKind::None,
-            }]),
+            generics: Some(vec![GenericDefinition::unbounded("T")]),
             module: "std".to_string(),
         }),
     );

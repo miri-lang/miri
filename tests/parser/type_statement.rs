@@ -3,8 +3,8 @@
 
 use super::utils::{optional_argument, parser_error_test, parser_test, type_map_expr};
 use miri::ast::factory::{
-    generic_type, type_custom, type_declaration, type_expr_non_null, type_expr_option, type_int,
-    type_statement, type_string,
+    generic_type, identifier, type_custom, type_declaration, type_declaration_expression,
+    type_expr_non_null, type_expr_option, type_int, type_statement, type_string,
 };
 use miri::ast::type_arguments::type_argument;
 use miri::ast::types::TypeDeclarationKind;
@@ -168,5 +168,59 @@ fn test_generic_type_alias() {
             )],
             MemberVisibility::Public,
         )],
+    );
+}
+
+#[test]
+fn test_a_type_implements_several_traits_joined_with_and() {
+    let source = "
+type Key implements Comparable and Hashable, Mixed includes A and B
+";
+    let declared = |name: &str, kind: TypeDeclarationKind, targets: [&str; 2]| {
+        type_declaration_expression(
+            identifier(name),
+            None,
+            kind,
+            targets
+                .iter()
+                .map(|target| type_expr_non_null(type_custom(target, None)))
+                .collect(),
+        )
+    };
+    parser_test(
+        source,
+        vec![type_statement(
+            vec![
+                declared(
+                    "Key",
+                    TypeDeclarationKind::Implements,
+                    ["Comparable", "Hashable"],
+                ),
+                declared("Mixed", TypeDeclarationKind::Includes, ["A", "B"]),
+            ],
+            MemberVisibility::Public,
+        )],
+    );
+}
+
+#[test]
+fn test_error_a_type_extending_two_types() {
+    parser_error_test(
+        "type Key extends Base and Other",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "the end of the declaration: a type extends one parent type".to_string(),
+            found: "and".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_a_type_bound_list_ending_in_and() {
+    parser_error_test(
+        "type Key implements Comparable and",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "a type".to_string(),
+            found: "end of file".to_string(),
+        },
     );
 }

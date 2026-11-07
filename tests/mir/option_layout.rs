@@ -6,8 +6,8 @@
 
 use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
 use miri::ast::types::{
-    FunctionTypeData, Type, TypeDeclarationKind, TypeKind, ATOMIC_TYPE_NAME, VEC2_TYPE_NAME,
-    VEC3_TYPE_NAME, VEC4_TYPE_NAME,
+    FunctionTypeData, Type, TypeKind, ATOMIC_TYPE_NAME, VEC2_TYPE_NAME, VEC3_TYPE_NAME,
+    VEC4_TYPE_NAME,
 };
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
@@ -107,20 +107,12 @@ fn alias_to(kind: TypeKind) -> TypeDefinition {
 fn generic_alias_to(template: TypeKind) -> TypeDefinition {
     TypeDefinition::Alias(AliasDefinition {
         template: ty(template),
-        generics: Some(vec![GenericDefinition {
-            name: "T".to_string(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }]),
+        generics: Some(vec![GenericDefinition::unbounded("T".to_string())]),
     })
 }
 
 fn generic_definition(name: &str) -> TypeDefinition {
-    TypeDefinition::Generic(GenericDefinition {
-        name: name.to_string(),
-        constraint: None,
-        kind: TypeDeclarationKind::None,
-    })
+    TypeDefinition::Generic(GenericDefinition::unbounded(name.to_string()))
 }
 
 /// A table holding one definition of each kind, the collections as classes
@@ -221,7 +213,7 @@ fn value_payloads() -> Vec<(String, TypeKind)> {
         ("Vec4<f32>", custom_of(VEC4_TYPE_NAME, vec![TypeKind::F32])),
         (
             "generic parameter",
-            TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None),
+            TypeKind::Generic("T".to_string(), miri::ast::bounds::Bounds::none()),
         ),
         ("generic definition", custom("U")),
         ("placeholder naming no type", custom("T")),

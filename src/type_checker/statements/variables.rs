@@ -133,7 +133,7 @@ impl TypeChecker {
         let TypeArgKind::Type(ty, _) = &arg.node else {
             return None;
         };
-        let TypeKind::Generic(name, _, _) = &ty.kind else {
+        let TypeKind::Generic(name, _) = &ty.kind else {
             return None;
         };
         Some(name.as_str())

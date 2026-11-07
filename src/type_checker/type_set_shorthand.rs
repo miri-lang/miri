@@ -159,10 +159,13 @@ fn declared_type_sets(program: &Program, public_only: bool) -> Vec<String> {
             continue;
         }
         for declaration in declarations {
-            if let ExpressionKind::TypeDeclaration(name, _, TypeDeclarationKind::Is, Some(target)) =
+            if let ExpressionKind::TypeDeclaration(name, _, TypeDeclarationKind::Is, targets) =
                 &declaration.node
             {
-                if is_type_set_expression(target) {
+                if let [target] = targets.as_slice() {
+                    if !is_type_set_expression(target) {
+                        continue;
+                    }
                     if let ExpressionKind::Identifier(name, _) = &name.node {
                         sets.push(name.clone());
                     }
@@ -301,9 +304,9 @@ fn desugar_function(declaration: &mut Signature, sets: &HashSet<String>) {
     for set in used {
         generics.push(ast::generic_type_expression(
             ast::identifier(&parameter_name(&set)),
-            Some(Box::new(ast::type_expr_non_null(ast::make_type(
-                TypeKind::Custom(set, None),
-            )))),
+            vec![ast::type_expr_non_null(ast::make_type(TypeKind::Custom(
+                set, None,
+            )))],
             TypeDeclarationKind::Is,
         ));
     }
@@ -405,7 +408,7 @@ fn visit_kind_names(written: &mut Type, visit: &mut impl FnMut(&mut String)) {
         | TypeKind::Boolean
         | TypeKind::Identifier
         | TypeKind::RawPtr
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::Void
         | TypeKind::Error => {}
     }

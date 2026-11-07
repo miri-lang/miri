@@ -170,8 +170,18 @@ pub struct EnumDefinition {
 #[derive(Debug, Clone)]
 pub struct GenericDefinition {
     pub name: String,
-    pub constraint: Option<Type>,
-    pub kind: TypeDeclarationKind,
+    /// The bounds the parameter declares, in the order they are written.
+    pub bounds: crate::ast::bounds::Bounds,
+}
+
+impl GenericDefinition {
+    /// The parameter `name` with no bound.
+    pub fn unbounded(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            bounds: crate::ast::bounds::Bounds::none(),
+        }
+    }
 }
 
 /// Definition of a type alias (possibly generic).

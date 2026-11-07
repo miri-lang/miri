@@ -2497,7 +2497,7 @@ fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Custom(_, _)
         | TypeKind::Meta(_)

@@ -455,7 +455,7 @@ fn built_of(kind: &TypeKind, open: &HashSet<String>) -> Handed {
             .max()
             .unwrap_or(Handed::ByValue),
         TypeKind::Option(inner) => built_of(&inner.kind, open),
-        TypeKind::Generic(name, _, _) | TypeKind::Custom(name, None) if open.contains(name) => {
+        TypeKind::Generic(name, _) | TypeKind::Custom(name, None) if open.contains(name) => {
             Handed::Open
         }
         // A built-in collection spelled as its class: the first argument is

@@ -482,27 +482,32 @@ pub(super) fn resolve_receiver_override(
 /// A body still written at its open parameter — `x.close()` for
 /// `x T` where `T extends Closable` — knows only what the bound promises, so
 /// the call dispatches through the trait's vtable exactly as one through a
-/// binding of the trait's type would. A body instantiated at a concrete type
-/// has its parameter substituted and never reaches this.
-fn bounding_trait(ctx: &LoweringContext, obj_ty: &Type) -> Option<Type> {
-    let constraint = match &obj_ty.kind {
-        TypeKind::Generic(_, Some(constraint), _) => (**constraint).clone(),
-        TypeKind::Custom(name, None) => enclosing_parameter_bound(ctx, name)?,
+/// binding of the trait's type would. Of several bounds, the one declaring
+/// `method` is called through. A body instantiated at a concrete type has its
+/// parameter substituted and never reaches this.
+fn bounding_trait(ctx: &LoweringContext, obj_ty: &Type, method: &str) -> Option<Type> {
+    let bounds = match &obj_ty.kind {
+        TypeKind::Generic(_, bounds) => bounds.clone(),
+        TypeKind::Custom(name, None) => enclosing_parameter_bounds(ctx, name)?,
         _ => return None,
     };
-    let TypeKind::Custom(trait_name, _) = &constraint.kind else {
+    let declaring = ctx.type_checker.bound_declaring(&bounds, method)?;
+    let TypeKind::Custom(trait_name, _) = &declaring.ty.kind else {
         return None;
     };
     matches!(
         ctx.type_checker.type_definitions().get(trait_name.as_str()),
         Some(TypeDefinition::Trait(_))
     )
-    .then_some(constraint)
+    .then(|| declaring.ty.clone())
 }
 
-/// The bound the enclosing class declares for its type parameter `name`, or
-/// `None` when `name` is none of its parameters or carries no bound.
-fn enclosing_parameter_bound(ctx: &LoweringContext, name: &str) -> Option<Type> {
+/// The bounds the enclosing class declares for its type parameter `name`, or
+/// `None` when `name` is none of its parameters.
+fn enclosing_parameter_bounds(
+    ctx: &LoweringContext,
+    name: &str,
+) -> Option<crate::ast::bounds::Bounds> {
     let self_type = ctx.self_type.as_ref()?;
     let TypeKind::Custom(class_name, _) = &self_type.kind else {
         return None;
@@ -516,9 +521,8 @@ fn enclosing_parameter_bound(ctx: &LoweringContext, name: &str) -> Option<Type> 
         .generics
         .as_ref()?
         .iter()
-        .find(|generic| generic.name == name)?
-        .constraint
-        .clone()
+        .find(|generic| generic.name == name)
+        .map(|generic| generic.bounds.clone())
 }
 
 /// Extract the class name from a type, handling builtins and custom types.
@@ -632,12 +636,12 @@ fn resolve_method_receiver(
 ) -> Option<(Type, String, String)> {
     let raw_obj_ty = ctx.recorded_type(obj.id)?;
     let obj_ty = resolve_receiver_override(ctx, &raw_obj_ty, obj).unwrap_or(raw_obj_ty);
-    let obj_ty = bounding_trait(ctx, &obj_ty).unwrap_or(obj_ty);
-    let class_name = extract_class_name(&obj_ty)?;
     let method_name = match &method_expr.node {
         ExpressionKind::Identifier(name, _) => name.clone(),
         _ => return None,
     };
+    let obj_ty = bounding_trait(ctx, &obj_ty, &method_name).unwrap_or(obj_ty);
+    let class_name = extract_class_name(&obj_ty)?;
     Some((obj_ty, class_name, method_name))
 }
 

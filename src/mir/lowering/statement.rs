@@ -5,7 +5,7 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::declaration::{
@@ -386,13 +386,15 @@ fn lower_trait_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
 
 fn lower_type_alias(ctx: &mut LoweringContext, decls: &[Expression]) {
     for decl in decls {
-        let ExpressionKind::TypeDeclaration(name_expr, _, _, target_type) = &decl.node else {
+        let ExpressionKind::TypeDeclaration(name_expr, _, TypeDeclarationKind::Is, targets) =
+            &decl.node
+        else {
             continue;
         };
         let Some(name) = extract_identifier(name_expr) else {
             continue;
         };
-        let Some(target) = target_type else {
+        let [target] = targets.as_slice() else {
             continue;
         };
         let resolved_ty = resolve_type(ctx.type_checker, target);

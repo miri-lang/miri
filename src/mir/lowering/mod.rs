@@ -303,7 +303,7 @@ pub(crate) fn substitute_self_type(ty: &Type, self_type: &Type) -> Type {
         // names a type rather than holding a value, and `Custom(name, None)`
         // that is not `Self` is an ordinary named type. None of these can
         // contain a nested `Self` to rewrite.
-        TypeKind::Generic(_, _, _) | TypeKind::Meta(_) | TypeKind::Custom(_, None) => {
+        TypeKind::Generic(_, _) | TypeKind::Meta(_) | TypeKind::Custom(_, None) => {
             return ty.clone()
         }
 
@@ -1147,7 +1147,7 @@ fn collect_generic_names_from_type(
         collect_generic_names_from_type(inner, definitions, params);
     };
     match &ty.kind {
-        TypeKind::Generic(name, _, _) => {
+        TypeKind::Generic(name, _) => {
             params.insert(name.clone());
         }
         TypeKind::Option(inner) | TypeKind::Linear(inner) | TypeKind::Meta(inner) => {
@@ -1613,21 +1613,17 @@ fn finalize_body(
 #[cfg(test)]
 mod class_generic_substitution_tests {
     use super::*;
-    use crate::ast::types::TypeDeclarationKind;
+
     use crate::ast::IdNode;
     use crate::error::syntax::Span;
 
     fn generic(name: &str) -> GenericDefinition {
-        GenericDefinition {
-            name: name.to_string(),
-            constraint: None,
-            kind: TypeDeclarationKind::None,
-        }
+        GenericDefinition::unbounded(name.to_string())
     }
 
     fn generic_field(name: &str) -> Type {
         Type::new(
-            TypeKind::Generic(name.to_string(), None, TypeDeclarationKind::None),
+            TypeKind::Generic(name.to_string(), crate::ast::bounds::Bounds::none()),
             Span::new(0, 0),
         )
     }

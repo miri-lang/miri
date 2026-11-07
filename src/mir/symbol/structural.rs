@@ -83,7 +83,7 @@ pub fn structural_thunk_encoding(kind: &TypeKind) -> Option<String> {
         | TypeKind::Set(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
-        | TypeKind::Generic(_, _, _)
+        | TypeKind::Generic(_, _)
         | TypeKind::OneOf(_)
         | TypeKind::Meta(_)
         | TypeKind::Void
@@ -137,7 +137,7 @@ fn encode(kind: &TypeKind, out: &mut String) {
             out.push('z');
             encode(&inner.kind, out);
         }
-        TypeKind::Generic(name, _, _) => encode_leaf('p', name, out),
+        TypeKind::Generic(name, _) => encode_leaf('p', name, out),
         TypeKind::Int => encode_built_in("int", out),
         TypeKind::I8 => encode_built_in("i8", out),
         TypeKind::I16 => encode_built_in("i16", out),

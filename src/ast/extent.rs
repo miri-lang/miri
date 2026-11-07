@@ -240,14 +240,14 @@ fn visit_expression(expression: &Expression, furthest: &mut Reach) {
             visit_expressions(arguments, furthest);
         }
         ExpressionKind::ImportPath(segments, kind) => visit_import_path(segments, kind, furthest),
-        ExpressionKind::GenericType(base, argument, _) => {
+        ExpressionKind::GenericType(base, bounds, _) => {
             visit_expression(base, furthest);
-            visit_optional_expression(argument.as_deref(), furthest);
+            visit_expressions(bounds, furthest);
         }
-        ExpressionKind::TypeDeclaration(name, generics, _, bound) => {
+        ExpressionKind::TypeDeclaration(name, generics, _, targets) => {
             visit_expression(name, furthest);
             visit_expression_list(generics.as_deref(), furthest);
-            visit_optional_expression(bound.as_deref(), furthest);
+            visit_expressions(targets, furthest);
         }
         ExpressionKind::Lambda(data) => visit_lambda(data, furthest),
         ExpressionKind::List(items)

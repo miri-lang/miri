@@ -839,7 +839,7 @@ impl<'a> FunctionTranslator<'a> {
                 .get(name)
                 .map(|def| matches!(def, TypeDefinition::Enum(_)))
                 .unwrap_or(false),
-            TypeKind::Generic(_, _, _) => true,
+            TypeKind::Generic(_, _) => true,
             TypeKind::Int
             | TypeKind::I8
             | TypeKind::I16

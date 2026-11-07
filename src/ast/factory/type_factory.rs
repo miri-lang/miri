@@ -14,7 +14,16 @@ use crate::error::syntax::Span;
 
 /// Creates a generic type expression bound to a name.
 pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expression {
-    generic_type_expression(identifier(name), constraint, TypeDeclarationKind::None)
+    generic_type_expression(
+        identifier(name),
+        written_bounds(constraint),
+        TypeDeclarationKind::None,
+    )
+}
+
+/// The bound list a single optional bound writes: none, or that one.
+fn written_bounds(constraint: Option<Box<Expression>>) -> Vec<Expression> {
+    constraint.map(|bound| vec![*bound]).unwrap_or_default()
 }
 
 /// Creates a generic type with a specific declaration kind.
@@ -23,7 +32,7 @@ pub fn generic_type_with_kind(
     constraint: Option<Box<Expression>>,
     kind: TypeDeclarationKind,
 ) -> Expression {
-    generic_type_expression(identifier(name), constraint, kind)
+    generic_type_expression(identifier(name), written_bounds(constraint), kind)
 }
 
 /// Creates a type expression wrapping a Type.
@@ -209,13 +218,13 @@ pub fn type_declaration_expression(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
     kind: TypeDeclarationKind,
-    type_expr: Option<Box<Expression>>,
+    targets: Vec<Expression>,
 ) -> Expression {
     expr(ExpressionKind::TypeDeclaration(
         Box::new(name),
         generic_types,
         kind,
-        type_expr,
+        targets,
     ))
 }
 
@@ -226,5 +235,10 @@ pub fn type_declaration(
     kind: TypeDeclarationKind,
     type_expr: Option<Box<Expression>>,
 ) -> Expression {
-    type_declaration_expression(identifier(name), generic_types, kind, type_expr)
+    type_declaration_expression(
+        identifier(name),
+        generic_types,
+        kind,
+        written_bounds(type_expr),
+    )
 }

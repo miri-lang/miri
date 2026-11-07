@@ -1058,9 +1058,17 @@ fn type_parameters(
     };
     let names = generics
         .iter()
-        .map(|generic| match &generic.constraint {
-            Some(bound) => format!("{} is {}", generic.name, type_text(bound)),
-            None => generic.name.clone(),
+        .map(|generic| {
+            if generic.bounds.is_empty() {
+                return generic.name.clone();
+            }
+            let bounds = generic
+                .bounds
+                .iter()
+                .map(|bound| type_text(&bound.ty))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            format!("{} is {}", generic.name, bounds)
         })
         .collect::<Vec<_>>()
         .join(", ");
