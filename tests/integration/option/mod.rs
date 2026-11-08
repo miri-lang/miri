@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod basic;
 pub mod coalescing;
+pub mod comparison_in_loops;
 pub mod declared_optional_literals;
 pub mod edge_cases;
 pub mod held_bytes_round_trips;

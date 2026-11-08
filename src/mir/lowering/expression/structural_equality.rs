@@ -343,11 +343,6 @@ fn emit_option_payload_compare(
     let lhs_payload = materialize_field(ctx, &lhs_place, payload.clone(), inner_ty, span);
     let rhs_payload = materialize_field(ctx, &rhs_place, payload, inner_ty, span);
 
-    if ctx.is_counted(&inner_ty.kind) {
-        ctx.register_scope_temp(lhs_payload);
-        ctx.register_scope_temp(rhs_payload);
-    }
-
     let verdict = emit_structural_equality(
         ctx,
         span,
@@ -357,6 +352,11 @@ fn emit_option_payload_compare(
         true,
     )?;
 
+    // Each payload read holds a reference of its own. Released here, where the
+    // comparison ends; left to the enclosing scope, a comparison inside a loop
+    // would overwrite it on the next turn and leak one reference per turn.
+    ctx.emit_temp_drop(lhs_payload, watermark, span);
+    ctx.emit_temp_drop(rhs_payload, watermark, span);
     ctx.emit_temp_drop(lhs_base, watermark, span);
     ctx.emit_temp_drop(rhs_base, watermark, span);
 
