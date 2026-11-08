@@ -3,8 +3,8 @@
 
 use by_address::{
     miri_rt_map_contains_key, miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_key_at,
-    miri_rt_map_remove, miri_rt_map_set, miri_rt_map_slot_of, miri_rt_map_value_at,
-    miri_rt_map_value_in_slot,
+    miri_rt_map_key_in_slot, miri_rt_map_remove, miri_rt_map_set, miri_rt_map_slot_of,
+    miri_rt_map_value_at, miri_rt_map_value_in_slot,
 };
 use miri_runtime_core::map::ffi::*;
 
@@ -125,7 +125,21 @@ mod by_address {
         );
         value
     }
+
+    /// # Safety
+    /// `map` is a live map or null.
+    pub unsafe fn miri_rt_map_key_in_slot(map: *const MiriMap, slot: i64) -> usize {
+        let mut key = 0usize;
+        ffi::miri_rt_map_key_in_slot(
+            map,
+            slot,
+            &mut key as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        key
+    }
 }
+use miri_runtime_core::map::MiriMap;
 use miri_runtime_core::string::MiriString;
 
 #[test]
@@ -1158,5 +1172,109 @@ fn test_map_entry_points_refuse_a_null_key_or_value_address() {
         assert_eq!(miri_rt_map_len(map), 1);
 
         miri_rt_map_free(map);
+    }
+}
+
+/// Every entry of `map` as a key-value pair, in slot order, walked with
+/// `next_slot` and read with `key_in_slot` and `value_in_slot`.
+unsafe fn walk_entries_by_slot(map: *const MiriMap) -> Vec<(usize, usize)> {
+    let mut entries = Vec::new();
+    let mut slot = miri_rt_map_next_slot(map, 0);
+    while slot >= 0 {
+        entries.push((
+            miri_rt_map_key_in_slot(map, slot),
+            miri_rt_map_value_in_slot(map, slot),
+        ));
+        slot = miri_rt_map_next_slot(map, slot + 1);
+    }
+    entries
+}
+
+#[test]
+fn test_map_slot_walk_visits_every_entry_once() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        for key in 0..40usize {
+            miri_rt_map_set(map, key, key * 10);
+        }
+        miri_rt_map_remove(map, 7);
+
+        let mut walked = walk_entries_by_slot(map);
+        walked.sort_unstable();
+        let expected: Vec<(usize, usize)> = (0..40)
+            .filter(|&key| key != 7)
+            .map(|key| (key, key * 10))
+            .collect();
+        assert_eq!(walked, expected);
+
+        miri_rt_map_free(map);
+    }
+}
+
+#[test]
+fn test_map_next_slot_answers_minus_one_past_the_last_entry() {
+    unsafe {
+        let empty = miri_rt_map_new(8, 8, 0);
+        assert_eq!(miri_rt_map_next_slot(empty, 0), -1, "an empty map");
+        miri_rt_map_free(empty);
+
+        let map = miri_rt_map_new(8, 8, 0);
+        miri_rt_map_set(map, 5, 50);
+        let slot = miri_rt_map_next_slot(map, 0);
+        assert_eq!(slot, miri_rt_map_slot_of(map, 5));
+        assert_eq!(
+            miri_rt_map_next_slot(map, slot),
+            slot,
+            "`from` is inclusive"
+        );
+        assert_eq!(miri_rt_map_next_slot(map, slot + 1), -1);
+        assert_eq!(miri_rt_map_next_slot(map, i64::MAX), -1, "past the table");
+        assert_eq!(
+            miri_rt_map_next_slot(map, -3),
+            slot,
+            "a negative `from` starts at the first slot"
+        );
+        assert_eq!(miri_rt_map_next_slot(std::ptr::null(), 0), -1);
+        miri_rt_map_free(map);
+    }
+}
+
+#[test]
+fn test_map_key_in_a_slot_with_no_entry_reads_zero() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        miri_rt_map_set(map, 9, 90);
+        let slot = miri_rt_map_next_slot(map, 0);
+        assert_eq!(miri_rt_map_key_in_slot(map, slot), 9);
+        miri_rt_map_remove(map, 9);
+
+        assert_eq!(miri_rt_map_key_in_slot(map, slot), 0, "a removed entry");
+        assert_eq!(miri_rt_map_key_in_slot(map, -1), 0);
+        assert_eq!(miri_rt_map_key_in_slot(map, i64::MAX), 0);
+        assert_eq!(miri_rt_map_key_in_slot(std::ptr::null(), 0), 0);
+        miri_rt_map_free(map);
+    }
+}
+
+unsafe extern "C" fn keep_key(_key: *mut u8) {}
+
+#[test]
+fn test_map_key_in_slot_hands_a_managed_key_out_owned() {
+    unsafe {
+        let map = miri_rt_map_new(8, 8, 0);
+        miri_rt_map_set_key_drop_fn(map, keep_key as usize);
+        let text = "pear";
+        let key = miri_runtime_core::miri_rt_string_from_raw(text.as_ptr(), text.len()) as usize;
+        miri_rt_map_set(map, key, 1);
+        let count = (key as *mut u8).sub(miri_runtime_core::rc::RC_HEADER_SIZE) as *mut usize;
+        assert_eq!(*count, 1);
+
+        let slot = miri_rt_map_next_slot(map, 0);
+        assert_eq!(miri_rt_map_key_in_slot(map, slot), key);
+        assert_eq!(*count, 2, "the caller owns the key it receives");
+
+        *count = 1;
+        miri_rt_map_free(map);
+        miri_runtime_core::miri_rt_string_free(key as *mut MiriString);
     }
 }

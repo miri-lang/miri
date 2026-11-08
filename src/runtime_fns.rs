@@ -185,6 +185,8 @@ pub mod rt {
     pub const MAP_CONTAINS_KEY: &str = "miri_rt_map_contains_key";
     pub const MAP_SLOT_OF: &str = "miri_rt_map_slot_of";
     pub const MAP_VALUE_IN_SLOT: &str = "miri_rt_map_value_in_slot";
+    pub const MAP_NEXT_SLOT: &str = "miri_rt_map_next_slot";
+    pub const MAP_KEY_IN_SLOT: &str = "miri_rt_map_key_in_slot";
     pub const MAP_REMOVE: &str = "miri_rt_map_remove";
     pub const MAP_CLEAR: &str = "miri_rt_map_clear";
     pub const MAP_KEY_AT: &str = "miri_rt_map_key_at";
@@ -224,6 +226,8 @@ pub mod rt {
     pub const SET_CLEAR: &str = "miri_rt_set_clear";
     pub const SET_IS_EMPTY: &str = "miri_rt_set_is_empty";
     pub const SET_ELEMENT_AT: &str = "miri_rt_set_element_at";
+    pub const SET_NEXT_SLOT: &str = "miri_rt_set_next_slot";
+    pub const SET_ELEMENT_IN_SLOT: &str = "miri_rt_set_element_in_slot";
     pub const SET_CLONE: &str = "miri_rt_set_clone";
     /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
     pub const SET_COW: &str = "miri_rt_set_cow";
@@ -515,6 +519,8 @@ pub mod rt {
         MAP_CONTAINS_KEY,
         MAP_SLOT_OF,
         MAP_VALUE_IN_SLOT,
+        MAP_NEXT_SLOT,
+        MAP_KEY_IN_SLOT,
         MAP_REMOVE,
         MAP_CLEAR,
         MAP_KEY_AT,
@@ -539,6 +545,8 @@ pub mod rt {
         SET_CLEAR,
         SET_IS_EMPTY,
         SET_ELEMENT_AT,
+        SET_NEXT_SLOT,
+        SET_ELEMENT_IN_SLOT,
         SET_CLONE,
         SET_COW,
         SET_SET_ELEM_DROP_FN,

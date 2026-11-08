@@ -21,7 +21,7 @@ use system.collections.foldable
 /// for x in q
 ///     println(f"{x}")
 /// ```
-public class Queue<T> implements Queryable<T>, Iterable<T>, Foldable<T>
+public class Queue<T> implements Queryable<T>, Iterable<T>, Indexed<T>, Foldable<T>
     private var items List<T>
 
     /// Initializes an empty queue.

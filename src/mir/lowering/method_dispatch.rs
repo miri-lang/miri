@@ -13,9 +13,10 @@ use crate::mir::representation::{written_type_arguments, Representation};
 use crate::mir::symbol::Symbol;
 use crate::mir::{Local, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::type_checker::context::{
-    class_needs_vtable, inherited_trait_requirement, resolve_method_source, trait_lineage,
-    MethodInfo, MethodSource, TypeDefinition,
+    class_ancestry, class_needs_vtable, inherited_trait_requirement, resolve_method_source,
+    trait_lineage, GenericDefinition, MethodInfo, MethodSource, TypeDefinition,
 };
+use crate::type_checker::runtime_settled::hands_a_parameter_derived_value;
 use crate::type_checker::utils::tuple_class_arguments;
 use crate::type_checker::value_class::LayoutScope;
 
@@ -986,6 +987,7 @@ fn builtin_collection_needs_its_own_body(
         program: LayoutScope::new(defs, &arguments.values),
         substitution: &arguments.substitution,
         is_settled: is_settled_by_the_runtime(class_def, method_name),
+        definitions: defs,
     };
     let signature =
         crate::type_checker::context::resolve_method_source(defs, class_name, method_name)
@@ -1038,11 +1040,16 @@ impl ClassArguments {
 /// with the types written inside the argument. A body the runtime settles
 /// only hands values between the caller and the runtime, so reference
 /// counting is left out of the comparison for it.
+///
+/// A class or trait value is a pointer on both sides, but a caller reaches
+/// more through it: the values its own methods hand out. See
+/// [`hands_out_parameter_derived_values`].
 struct SharedBody<'a> {
     fallback: LayoutScope<'a>,
     program: LayoutScope<'a>,
     substitution: &'a HashMap<String, Type>,
     is_settled: bool,
+    definitions: &'a HashMap<String, TypeDefinition>,
 }
 
 impl SharedBody<'_> {
@@ -1080,11 +1087,17 @@ impl SharedBody<'_> {
     }
 
     /// Whether `open`, or a type written inside it, is represented
-    /// differently with the parameters bound. A type that names no parameter
-    /// reads alike on both sides and is not compared.
+    /// differently with the parameters bound, or hands a caller, through its
+    /// own methods, a value that is. A type that names no parameter reads
+    /// alike on both sides and is not compared.
     fn represents_type_differently(&self, open: &Type) -> bool {
         self.mentions_parameter(&open.kind)
             && (self.differ(&open.kind, &apply_generic_sub(open, self.substitution).kind)
+                || hands_out_parameter_derived_values(
+                    &open.kind,
+                    self.definitions,
+                    &mut HashSet::new(),
+                )
                 || written_type_arguments(&open.kind)
                     .any(|part| self.represents_type_differently(part)))
     }
@@ -1107,6 +1120,95 @@ impl SharedBody<'_> {
             shared != own
         }
     }
+}
+
+/// Whether a value of the class or trait type `kind` hands a caller, through
+/// one of its own methods, a value built from its type parameters — or a
+/// further such class or trait value, built at them.
+///
+/// A body shared by every instantiation builds such a value with the
+/// parameters open, and the methods it then answers with hold a value built
+/// from them as they are held open, while a caller knowing the arguments holds
+/// it as they make it (see [`hands_a_parameter_derived_value`]). A built-in
+/// collection hands out nothing this way: each call to one of its methods is
+/// judged by [`builtin_collection_needs_its_own_body`] at that call.
+/// `visited` holds the types already asked, so a method naming its own type
+/// ends the walk.
+fn hands_out_parameter_derived_values(
+    kind: &TypeKind,
+    definitions: &HashMap<String, TypeDefinition>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    let TypeKind::Custom(name, Some(_)) = kind else {
+        return false;
+    };
+    if BuiltinCollectionKind::from_name(name).is_some() || !visited.insert(name.clone()) {
+        return false;
+    }
+    for (method, generics) in methods_of_type(name, definitions) {
+        if hands_a_parameter_derived_value(method, generics, definitions) {
+            return true;
+        }
+        let built_at_parameters = method
+            .params
+            .iter()
+            .map(|(_, ty)| ty)
+            .chain(std::iter::once(&method.return_type))
+            .filter(|ty| mentions_any_parameter(&ty.kind, generics));
+        for ty in built_at_parameters {
+            if hands_out_parameter_derived_values(&ty.kind, definitions, visited) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Every method a value of the class or trait `name` answers, each with the
+/// type parameters of the class or trait declaring it: a class's own and its
+/// ancestors', and the methods of every trait they implement; a trait's own
+/// and those of the traits it extends. Any other type answers none.
+fn methods_of_type<'d>(
+    name: &str,
+    definitions: &'d HashMap<String, TypeDefinition>,
+) -> Vec<(&'d MethodInfo, Option<&'d Vec<GenericDefinition>>)> {
+    let trait_methods = |trait_name: &str| {
+        trait_lineage(definitions, trait_name)
+            .flat_map(|(_, trait_def)| {
+                trait_def
+                    .methods
+                    .values()
+                    .map(|method| (method, trait_def.generics.as_ref()))
+            })
+            .collect::<Vec<_>>()
+    };
+    match definitions.get(name) {
+        Some(TypeDefinition::Class(_)) => class_ancestry(name, definitions)
+            .flat_map(|(_, class)| {
+                let own = class
+                    .methods
+                    .values()
+                    .map(|method| (method, class.generics.as_ref()));
+                own.chain(class.traits.iter().flat_map(|t| trait_methods(t)))
+                    .collect::<Vec<_>>()
+            })
+            .collect(),
+        Some(TypeDefinition::Trait(_)) => trait_methods(name),
+        Some(
+            TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)
+            | TypeDefinition::Generic(_)
+            | TypeDefinition::Alias(_),
+        )
+        | None => Vec::new(),
+    }
+}
+
+/// Whether `kind` names one of `generics`, or is written with a type that does.
+fn mentions_any_parameter(kind: &TypeKind, generics: Option<&Vec<GenericDefinition>>) -> bool {
+    crate::type_checker::generics::generic_parameter_name(kind)
+        .is_some_and(|name| generics.is_some_and(|gens| gens.iter().any(|g| g.name == name)))
+        || written_type_arguments(kind).any(|part| mentions_any_parameter(&part.kind, generics))
 }
 
 /// The optional of `ty`.

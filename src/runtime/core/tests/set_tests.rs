@@ -2,9 +2,11 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use by_address::{
-    miri_rt_set_add, miri_rt_set_contains, miri_rt_set_element_at, miri_rt_set_remove,
+    miri_rt_set_add, miri_rt_set_contains, miri_rt_set_element_at, miri_rt_set_element_in_slot,
+    miri_rt_set_remove,
 };
 use miri_runtime_core::set::ffi::*;
+use miri_runtime_core::set::MiriSet;
 
 /// The set entry points that take or hand back an element, called the way
 /// compiled code calls them: by the address of the element's bytes.
@@ -52,6 +54,19 @@ mod by_address {
         ffi::miri_rt_set_element_at(
             set,
             index,
+            &mut elem as *mut usize as *mut u8,
+            std::mem::size_of::<usize>(),
+        );
+        elem
+    }
+
+    /// # Safety
+    /// `set` is a live set or null.
+    pub unsafe fn miri_rt_set_element_in_slot(set: *const MiriSet, slot: i64) -> usize {
+        let mut elem = 0usize;
+        ffi::miri_rt_set_element_in_slot(
+            set,
+            slot,
             &mut elem as *mut usize as *mut u8,
             std::mem::size_of::<usize>(),
         );
@@ -1088,5 +1103,106 @@ fn test_set_hands_an_element_held_inline_to_its_callbacks_by_address() {
         );
         assert_eq!(found, 1);
         miri_rt_set_free(set);
+    }
+}
+
+/// Every element of `set`, in slot order, walked with `next_slot` and read
+/// with `element_in_slot`.
+unsafe fn walk_by_slot(set: *const MiriSet) -> Vec<usize> {
+    let mut elements = Vec::new();
+    let mut slot = miri_rt_set_next_slot(set, 0);
+    while slot >= 0 {
+        elements.push(miri_rt_set_element_in_slot(set, slot));
+        slot = miri_rt_set_next_slot(set, slot + 1);
+    }
+    elements
+}
+
+#[test]
+fn test_set_slot_walk_visits_every_element_once() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        for element in 0..40usize {
+            miri_rt_set_add(set, element);
+        }
+        miri_rt_set_remove(set, 7);
+
+        let mut walked = walk_by_slot(set);
+        walked.sort_unstable();
+        let expected: Vec<usize> = (0..40).filter(|&element| element != 7).collect();
+        assert_eq!(walked, expected);
+
+        miri_rt_set_free(set);
+    }
+}
+
+#[test]
+fn test_set_next_slot_answers_minus_one_past_the_last_element() {
+    unsafe {
+        let empty = miri_rt_set_new(8);
+        assert_eq!(miri_rt_set_next_slot(empty, 0), -1, "an empty set");
+        miri_rt_set_free(empty);
+
+        let set = miri_rt_set_new(8);
+        miri_rt_set_add(set, 5);
+        let slot = miri_rt_set_next_slot(set, 0);
+        assert!(slot >= 0);
+        assert_eq!(
+            miri_rt_set_next_slot(set, slot),
+            slot,
+            "`from` is inclusive"
+        );
+        assert_eq!(miri_rt_set_next_slot(set, slot + 1), -1);
+        assert_eq!(miri_rt_set_next_slot(set, i64::MAX), -1, "past the table");
+        assert_eq!(
+            miri_rt_set_next_slot(set, -3),
+            slot,
+            "a negative `from` starts at the first slot"
+        );
+        assert_eq!(miri_rt_set_next_slot(std::ptr::null(), 0), -1);
+        miri_rt_set_free(set);
+    }
+}
+
+#[test]
+fn test_set_element_in_a_slot_with_no_element_reads_zero() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_add(set, 9);
+        let slot = miri_rt_set_next_slot(set, 0);
+        assert_eq!(miri_rt_set_element_in_slot(set, slot), 9);
+        miri_rt_set_remove(set, 9);
+
+        assert_eq!(
+            miri_rt_set_element_in_slot(set, slot),
+            0,
+            "a removed element"
+        );
+        assert_eq!(miri_rt_set_element_in_slot(set, -1), 0);
+        assert_eq!(miri_rt_set_element_in_slot(set, i64::MAX), 0);
+        assert_eq!(miri_rt_set_element_in_slot(std::ptr::null(), 0), 0);
+        miri_rt_set_free(set);
+    }
+}
+
+unsafe extern "C" fn keep_element(_elem: *mut u8) {}
+
+#[test]
+fn test_set_element_in_slot_hands_a_managed_element_out_owned() {
+    unsafe {
+        let set = miri_rt_set_new(8);
+        miri_rt_set_set_elem_drop_fn(set, keep_element as usize);
+        let text = owned_string("pear");
+        miri_rt_set_add(set, text);
+        let count = (text as *mut u8).sub(miri_runtime_core::rc::RC_HEADER_SIZE) as *mut usize;
+        assert_eq!(*count, 1);
+
+        let slot = miri_rt_set_next_slot(set, 0);
+        assert_eq!(miri_rt_set_element_in_slot(set, slot), text);
+        assert_eq!(*count, 2, "the caller owns the element it receives");
+
+        *count = 1;
+        miri_rt_set_free(set);
+        release_string(text);
     }
 }

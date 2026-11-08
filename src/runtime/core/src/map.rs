@@ -464,6 +464,23 @@ impl MiriMap {
             .then(|| self.values.add(slot * self.value_size).cast_const())
     }
 
+    /// The first slot at or after `from` that holds an entry, or `None` when
+    /// no slot from there on does. A negative `from` starts at the first slot.
+    unsafe fn next_occupied_slot(&self, from: i64) -> Option<usize> {
+        let start = usize::try_from(from.max(0)).ok()?;
+        let states = self.states;
+        (start..self.capacity).find(|&slot| is_occupied(*states.add(slot)))
+    }
+
+    /// The key in `slot`, or `None` unless the slot holds an entry.
+    unsafe fn key_in_slot(&self, slot: i64) -> Option<*const u8> {
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|&slot| slot < self.capacity)?;
+        is_occupied(*self.states.add(slot))
+            .then(|| self.keys.add(slot * self.key_size).cast_const())
+    }
+
     /// Removes a key-value pair. Returns true if the key was found and removed.
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn remove(&mut self, key: *const u8) -> bool {
@@ -745,6 +762,48 @@ pub mod ffi {
         };
         map.hand_out_value(value);
         read_slot(out, value, out_payload, map.value_size);
+    }
+
+    /// The first slot at or after `from` that holds an entry, or -1 when no
+    /// slot from there on does — past the last entry, past the end of the
+    /// table, or for a null map. A negative `from` starts at the first slot.
+    ///
+    /// With [`miri_rt_map_key_in_slot`] and [`miri_rt_map_value_in_slot`] it
+    /// walks a map in one pass: start at 0 and ask again from one past each
+    /// slot it answers.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_next_slot(ptr: *const MiriMap, from: i64) -> i64 {
+        guard::guard_check(ptr as *mut u8);
+        ptr.as_ref()
+            .and_then(|map| map.next_occupied_slot(from))
+            .and_then(|slot| i64::try_from(slot).ok())
+            .unwrap_or(-1)
+    }
+
+    /// Hands the key in `slot`, as [`miri_rt_map_next_slot`] found it, to the
+    /// caller's `payload`-byte storage at `out`, owned as
+    /// [`miri_rt_map_key_at`] hands it. A slot outside the table, or one that
+    /// holds no entry because the map changed since, writes a zero key.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_key_in_slot(
+        ptr: *const MiriMap,
+        slot: i64,
+        out: *mut u8,
+        payload: usize,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        let Some(map) = ptr.as_ref() else {
+            read_slot(out, ptr::null(), payload, 0);
+            return;
+        };
+        let Some(key) = map.key_in_slot(slot) else {
+            read_slot(out, ptr::null(), payload, 0);
+            return;
+        };
+        map.hand_out_key(key);
+        read_slot(out, key, payload, map.key_size);
     }
 
     /// Hands the value for a key, handed over as `miri_rt_map_set` takes it,

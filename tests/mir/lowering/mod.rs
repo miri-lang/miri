@@ -26,6 +26,7 @@ pub mod r#loop;
 pub mod match_expression;
 pub mod nested_function;
 pub mod open_params;
+pub mod shared_collection_bodies;
 pub mod shared_memory;
 pub mod unary;
 pub mod variable;

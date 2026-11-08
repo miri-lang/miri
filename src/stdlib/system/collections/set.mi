@@ -56,6 +56,12 @@ public class Set<T> implements Iterable<T>, Cloneable
     /// This enables for-loop iteration: `for x in set`.
     public fn element_at(index int) T: miri_rt_set_element_at(self, index)
 
+    /// Returns an iterator over the set's elements, in the set's unspecified
+    /// order. The iterator walks the set as it is now: a later write to this
+    /// set leaves the walk unchanged.
+    public fn iterator() SetIterator<T>
+        return SetIterator<T>(source: self)
+
     /// Adds an element to the set if not already present.
     public fn add(element T) bool: miri_rt_set_add(self, element)
 
@@ -107,3 +113,32 @@ public class Set<T> implements Iterable<T>, Cloneable
             acc = f(acc, self.element_at(i))
             i += 1
         return acc
+
+/// Hands out a set's elements one at a time, in the set's unspecified order.
+///
+/// The iterator holds the set it walks. A set is a value, so a write to the
+/// set the iterator came from, made during the walk, copies that set and
+/// leaves the walk on the elements it started with.
+public class SetIterator<T> implements Iterator<T>
+    private var source Set<T>
+    private var slot int
+
+    @reads("s")
+    runtime "core" fn miri_rt_set_next_slot(s Set<T>, start int) int
+    @reads("s")
+    @returns_element
+    runtime "core" fn miri_rt_set_element_in_slot(s Set<T>, slot int) T
+
+    /// Starts a walk over `source` at its first slot.
+    fn init(source Set<T>)
+        self.source = source
+        self.slot = 0
+
+    /// Returns the next element, or `None` once every element has been
+    /// returned.
+    public fn next() T?
+        let found = miri_rt_set_next_slot(self.source, self.slot)
+        if found < 0
+            return None
+        self.slot = found + 1
+        return Some(miri_rt_set_element_in_slot(self.source, found))

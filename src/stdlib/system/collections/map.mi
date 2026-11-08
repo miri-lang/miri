@@ -76,6 +76,12 @@ public class Map<K, V> implements Iterable<K>, Cloneable
     /// Used internally for `for k, v in map` iteration.
     public fn value_at(index int) V: miri_rt_map_value_at(self, index)
 
+    /// Returns an iterator over the map's keys, in the map's unspecified
+    /// order. The iterator walks the map as it is now: a later write to this
+    /// map leaves the walk unchanged.
+    public fn iterator() MapIterator<K, V>
+        return MapIterator<K, V>(source: self)
+
     /// Sets the value associated with the given key.
     public fn set(key K, value V)
         miri_rt_map_set(self, key, value)
@@ -144,3 +150,47 @@ public class Map<K, V> implements Iterable<K>, Cloneable
             acc = f(acc, k, v)
             i += 1
         return acc
+
+/// Hands out a map's keys one at a time, in the map's unspecified order.
+///
+/// `value` is the value of the key `next` last returned: `None` before the
+/// first `next`, and `None` once `next` has returned `None`.
+///
+/// The iterator holds the map it walks. A map is a value, so a write to the
+/// map the iterator came from, made during the walk, copies that map and
+/// leaves the walk on the entries it started with.
+public class MapIterator<K, V> implements Iterator<K>, Entries<V>
+    private var source Map<K, V>
+    private var slot int
+    private var current int
+
+    @reads("m")
+    runtime "core" fn miri_rt_map_next_slot(m Map<K, V>, start int) int
+    @reads("m")
+    @returns_element
+    runtime "core" fn miri_rt_map_key_in_slot(m Map<K, V>, slot int) K
+    @reads("m")
+    @returns_element
+    runtime "core" fn miri_rt_map_value_in_slot(m Map<K, V>, slot int) V
+
+    /// Starts a walk over `source` at its first slot.
+    fn init(source Map<K, V>)
+        self.source = source
+        self.slot = 0
+        self.current = -1
+
+    /// Returns the next key, or `None` once every key has been returned.
+    public fn next() K?
+        let found = miri_rt_map_next_slot(self.source, self.slot)
+        if found < 0
+            self.current = -1
+            return None
+        self.current = found
+        self.slot = found + 1
+        return Some(miri_rt_map_key_in_slot(self.source, found))
+
+    /// Returns the value of the key `next` last returned, or `None` when
+    /// `next` has not returned a key.
+    public fn value() V?
+        if self.current < 0: return None
+        return Some(miri_rt_map_value_in_slot(self.source, self.current))

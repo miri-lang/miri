@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod custom;
 pub mod hashing;
+pub mod index_iterator;
 pub mod iteration;
 pub mod strings;
 pub mod trait_defaults;

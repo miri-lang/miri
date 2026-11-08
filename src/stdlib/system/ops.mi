@@ -132,3 +132,87 @@ public trait Multiplicable
 public trait Iterable<T>
     public fn length() int
     public fn element_at(index int) T
+
+/// Hands out the elements of a sequence one at a time.
+///
+/// Each `next` returns the next element, or `None` once every element has
+/// been handed out; from then on it keeps returning `None`.
+///
+/// Example:
+///     let it = {1, 2, 3}.iterator()
+///     while true
+///         match it.next()
+///             Some(x): println(f"{x}")
+///             None: break
+public trait Iterator<T>
+    public fn next() T?
+
+/// The value that goes with the element an iterator's `next` most recently
+/// returned: a map's value for the key, a list's index for the element.
+///
+/// `value` is `None` before the first `next`, and `None` again once `next`
+/// has returned `None`, since no element was returned then.
+public trait Entries<V>
+    public fn value() V?
+
+/// A sequence read by position: `length` elements, the one at each index
+/// from 0 up to `length() - 1` read by `element_at`.
+///
+/// The default `iterator` walks the sequence by position with an
+/// `IndexIterator`.
+///
+/// Example:
+///     class Squares implements Indexed<int>
+///         var count int
+///         fn init(count int)
+///             self.count = count
+///         public fn length() int: self.count
+///         public fn element_at(index int) int: index * index
+public trait Indexed<T>
+    public fn length() int
+    public fn element_at(index int) T
+
+    /// Returns an iterator over the elements, from index 0 upward.
+    public fn iterator() Iterator<T>
+        return IndexIterator<T, Self>(source: self)
+
+/// Walks an `Indexed` source by position, from index 0 up to the last index.
+///
+/// The iterator holds the source it walks. A collection is a value, so a write
+/// to the collection the iterator was made from, made during the walk, copies
+/// that collection and leaves the walk on the elements it started with.
+///
+/// `value` is the index of the element `next` last returned: `None` before
+/// the first `next`, and `None` once `next` has returned `None`.
+///
+/// Example:
+///     let it = IndexIterator<String, List<String>>(source: List(["a", "b"]))
+///     while true
+///         match it.next()
+///             Some(x): println(f"{it.value() ?? -1} {x}")
+///             None: break
+public class IndexIterator<T, S implements Indexed<T>> implements Iterator<T>, Entries<int>
+    private var source S
+    private var next_index int
+    private var current int
+
+    /// Starts a walk over `source` at its first element.
+    fn init(source S)
+        self.source = source
+        self.next_index = 0
+        self.current = -1
+
+    /// Returns the element at the next index, or `None` past the last one.
+    public fn next() T?
+        if self.next_index >= self.source.length()
+            self.current = -1
+            return None
+        self.current = self.next_index
+        self.next_index += 1
+        return Some(self.source.element_at(self.current))
+
+    /// Returns the index of the element `next` last returned, or `None` when
+    /// `next` has not returned an element.
+    public fn value() int?
+        if self.current < 0: return None
+        return Some(self.current)

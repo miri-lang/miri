@@ -244,6 +244,23 @@ impl MiriSet {
         }
     }
 
+    /// The first slot at or after `from` that holds an element, or `None` when
+    /// no slot from there on does. A negative `from` starts at the first slot.
+    unsafe fn next_occupied_slot(&self, from: i64) -> Option<usize> {
+        let start = usize::try_from(from.max(0)).ok()?;
+        let states = self.states;
+        (start..self.capacity).find(|&slot| *states.add(slot) == SLOT_OCCUPIED)
+    }
+
+    /// The element in `slot`, or `None` unless the slot holds one.
+    unsafe fn element_in_slot(&self, slot: i64) -> Option<*const u8> {
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|&slot| slot < self.capacity)?;
+        (*self.states.add(slot) == SLOT_OCCUPIED)
+            .then(|| self.data.add(slot * self.elem_size).cast_const())
+    }
+
     /// Releases one reference to a managed element, whose reference is the word
     /// the element slot at `elem_slot` holds; does nothing for an element the
     /// set does not manage.
@@ -572,6 +589,48 @@ pub mod ffi {
             (*ptr).hand_out_element(slot);
         }
         read_slot(out, slot, payload, elem_size);
+    }
+
+    /// The first slot at or after `from` that holds an element, or -1 when no
+    /// slot from there on does — past the last element, past the end of the
+    /// table, or for a null set. A negative `from` starts at the first slot.
+    ///
+    /// With [`miri_rt_set_element_in_slot`] it walks a set in one pass:
+    /// start at 0 and ask again from one past each slot it answers.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_next_slot(ptr: *const MiriSet, from: i64) -> i64 {
+        guard::guard_check(ptr as *mut u8);
+        ptr.as_ref()
+            .and_then(|set| set.next_occupied_slot(from))
+            .and_then(|slot| i64::try_from(slot).ok())
+            .unwrap_or(-1)
+    }
+
+    /// Hands the element in `slot`, as [`miri_rt_set_next_slot`] found it, to
+    /// the caller's `payload`-byte storage at `out`, owned as
+    /// [`miri_rt_set_element_at`] hands it. A slot outside the table, or one
+    /// that holds no element because the set changed since, writes a zero
+    /// element.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_element_in_slot(
+        ptr: *const MiriSet,
+        slot: i64,
+        out: *mut u8,
+        payload: usize,
+    ) {
+        guard::guard_check(ptr as *mut u8);
+        let Some(set) = ptr.as_ref() else {
+            read_slot(out, ptr::null(), payload, 0);
+            return;
+        };
+        let Some(element) = set.element_in_slot(slot) else {
+            read_slot(out, ptr::null(), payload, 0);
+            return;
+        };
+        set.hand_out_element(element);
+        read_slot(out, element, payload, set.elem_size);
     }
 
     /// Frees a set and all its backing storage.

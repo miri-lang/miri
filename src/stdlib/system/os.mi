@@ -86,7 +86,7 @@ public class Env
 ///     let args = Args()
 ///     for arg in args
 ///         println(arg)
-public class Args implements Iterable<String>
+public class Args implements Iterable<String>, Indexed<String>
 
     runtime "core" fn miri_rt_args_count() int
     runtime "core" fn miri_rt_args_at(index int) String

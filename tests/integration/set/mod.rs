@@ -11,6 +11,7 @@ pub mod errors;
 pub mod functional;
 pub mod integration;
 pub mod iteration;
+pub mod iterator;
 pub mod managed_element_transforms;
 pub mod methods;
 pub mod optional_elements;

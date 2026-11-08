@@ -13,6 +13,7 @@ pub mod functional;
 pub mod index_read;
 pub mod index_write;
 pub mod iteration;
+pub mod iterator;
 pub mod length;
 pub mod managed_element_transforms;
 pub mod methods;
