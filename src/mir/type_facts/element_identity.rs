@@ -237,6 +237,14 @@ impl TypeFacts {
 /// The type whose own method answers `question` for an element of `kind`, if
 /// one could: a string or a class for ordering, a class, list or array for
 /// equality. `Atomic<scalar>` is stored as its scalar and answers nothing.
+///
+/// TODO: a set or map element of a set or map type is still matched by its
+/// reference, although `==` on two sets or maps compares their contents
+/// through the `equals` their classes declare, so two maps `==` calls equal
+/// are two elements of a set. Matching them by content needs this function,
+/// `Walk::visit_named` in `mir::analysis::element_matching` and the thunk
+/// filter in the Cranelift backend's element-method thunk emission to read
+/// the class's own `equals` instead of excluding sets and maps by kind.
 fn answering_type_name(question: ElementQuestion, kind: &TypeKind) -> Option<&str> {
     if *kind == TypeKind::String {
         return (question == ElementQuestion::Compare).then_some(STRING_TYPE_NAME);

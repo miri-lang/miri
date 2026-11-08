@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod class_keys;
 pub mod construction;
+pub mod content_equality;
 pub mod edge_cases;
 pub mod element_identity;
 pub mod element_read_widths;

@@ -103,3 +103,10 @@ fn an_optional_of_the_parameter_is_compared_layer_by_layer() {
         (false, false)
     );
 }
+
+#[test]
+fn a_void_argument_is_represented_apart_from_the_open_parameter() {
+    // A call answering with `void` returns nothing, so the shared body, which
+    // returns the parameter as a word, cannot answer it.
+    assert_eq!(agreement(&parameter(), &TypeKind::Void), (false, false));
+}

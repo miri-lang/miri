@@ -43,6 +43,9 @@ enum Held {
     Bytes(ValueLayout),
     /// An optional, layer by layer, outermost first.
     Optional(Vec<LayerRepr>),
+    /// No value at all: `void`. A call answering with one returns nothing,
+    /// so a body reading a parameter as a word cannot stand in for it.
+    Nothing,
 }
 
 impl Representation {
@@ -71,7 +74,7 @@ impl Representation {
                 is_float: false,
                 is_counted: false,
             },
-            other @ (Held::Optional(_) | Held::Bytes(_)) => other,
+            other @ (Held::Optional(_) | Held::Bytes(_) | Held::Nothing) => other,
         };
         Self {
             held,
@@ -82,6 +85,9 @@ impl Representation {
 
 /// How a value of `kind` is held at the top level.
 fn held(kind: &TypeKind, scope: LayoutScope<'_>) -> Held {
+    if *kind == TypeKind::Void {
+        return Held::Nothing;
+    }
     let layers = OptionalLayers::of(kind, scope);
     if layers.is_optional() {
         return Held::Optional(layers.reprs());

@@ -19,7 +19,7 @@ use system.memory
 ///     s.add(10)  // no effect; 10 already in set
 ///     println(f"{s.length()}")       // 2
 ///     println(f"{s.contains(10)}")   // true
-public class Set<T> implements Iterable<T>, Cloneable
+public class Set<T> implements Equatable, Hashable, Iterable<T>, Cloneable
 
     @allocates
     runtime "core" fn miri_rt_set_new(elem_size int) Self
@@ -51,6 +51,29 @@ public class Set<T> implements Iterable<T>, Cloneable
 
     /// Returns the number of unique elements in the set.
     public fn length() int: miri_rt_set_len(self)
+
+    /// Two sets are equal when they hold the same elements, whatever order
+    /// they went in. This is what `==` and `!=` compare.
+    public fn equals(other Self) bool
+        let len = self.length()
+        if len != other.length(): return false
+        var i = 0
+        while i < len
+            if not miri_rt_set_contains(other, self.element_at(i)): return false
+            i += 1
+        return true
+
+    /// A hash consistent with `equals`: sets holding equal elements hash alike
+    /// whatever order they went in, since each element's hash is folded in
+    /// with `^`, which ignores order.
+    public fn hash() int
+        let len = self.length()
+        var elements = 0
+        var i = 0
+        while i < len
+            elements = elements ^ hash_combine(0, self.element_at(i).hash())
+            i += 1
+        return hash_combine(len, elements)
 
     /// Returns the element at the given sequential index.
     /// This enables for-loop iteration: `for x in set`.

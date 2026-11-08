@@ -19,7 +19,7 @@ use system.memory
 ///     let score = m.get("alice") ?? 0
 ///     println(f"{score}")                 // 30
 ///     println(f"{m.length()}")            // 2
-public class Map<K, V> implements Iterable<K>, Cloneable
+public class Map<K, V> implements Equatable, Hashable, Iterable<K>, Cloneable
 
     @allocates
     runtime "core" fn miri_rt_map_new(key_size int, value_size int, key_kind int) Self
@@ -67,6 +67,32 @@ public class Map<K, V> implements Iterable<K>, Cloneable
 
     /// Returns the number of key-value pairs in the map.
     public fn length() int: miri_rt_map_len(self)
+
+    /// Two maps are equal when they hold the same keys, each with an equal
+    /// value, whatever order the entries went in. This is what `==` and `!=`
+    /// compare.
+    public fn equals(other Self) bool
+        let len = self.length()
+        if len != other.length(): return false
+        var i = 0
+        while i < len
+            let slot = miri_rt_map_slot_of(other, self.element_at(i))
+            if slot < 0: return false
+            if miri_rt_map_value_in_slot(other, slot) != self.value_at(i): return false
+            i += 1
+        return true
+
+    /// A hash consistent with `equals`: maps holding equal entries hash alike
+    /// whatever order the entries went in, since each entry's hash is folded
+    /// in with `^`, which ignores order.
+    public fn hash() int
+        let len = self.length()
+        var entries = 0
+        var i = 0
+        while i < len
+            entries = entries ^ hash_combine(self.element_at(i).hash(), self.value_at(i).hash())
+            i += 1
+        return hash_combine(len, entries)
 
     /// Returns the key at the given sequential index.
     /// This enables for-loop iteration: `for k in map` or `for k, v in map`.

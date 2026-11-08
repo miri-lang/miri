@@ -76,6 +76,20 @@ fn test_clone_is_independent()
     assert_eq(dup.length(), 1)
     assert(not dup.contains_key("b"))
 
+fn test_equals_compares_entries_in_any_order()
+    let a = {"x": 1, "y": 2}
+    let b = {"y": 2, "x": 1}
+    assert(a == b)
+    assert(a.equals(b))
+    assert(a != {"x": 1, "y": 3})
+    assert(a != {"x": 1})
+    assert(Map<String, int>() == Map<String, int>())
+
+fn test_hash_agrees_with_equals()
+    let a = {"x": 1, "y": 2}
+    let b = {"y": 2, "x": 1}
+    assert_eq(a.hash(), b.hash())
+
 fn main()
     test_empty_construction()
     test_literal_construction()
@@ -86,4 +100,6 @@ fn main()
     test_clear()
     test_iteration_visits_each_pair()
     test_clone_is_independent()
+    test_equals_compares_entries_in_any_order()
+    test_hash_agrees_with_equals()
     println("system.collections.map: OK")
