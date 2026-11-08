@@ -464,7 +464,7 @@ impl<'a> Classifier<'a> {
             return self.classify_argument(component);
         }
         if BuiltinCollectionKind::from_name(name).is_some() {
-            return collection_verdict(args.is_some());
+            return collection_verdict();
         }
         self.classify_definition(name, args.as_deref(), names)
     }
@@ -710,15 +710,13 @@ fn overlay_member(column: &mut Vec<FieldRepr>, repr: FieldRepr) -> usize {
     }
 }
 
-/// A built-in collection is its own allocation at its type arguments; named
-/// bare, it is the unresolved self-reference inside the collection's own
-/// body, which holds an element word.
-fn collection_verdict(has_arguments: bool) -> Verdict {
-    if has_arguments {
-        Verdict::Pointer
-    } else {
-        Verdict::Class(ValueClass::Word(WordRole::Parameter))
-    }
+/// A built-in collection is its own counted allocation, named with its type
+/// arguments or bare. The bare spelling is the receiver of the collection's
+/// shared generic body, which is still the collection: a body that hands
+/// `self` on (an iterator holding the set it walks) must retain it, so it is
+/// counted like the spelled-out instance.
+fn collection_verdict() -> Verdict {
+    Verdict::Pointer
 }
 
 /// The component of the compiler-known atomic element type, which is held as

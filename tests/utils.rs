@@ -100,6 +100,9 @@ fn exec_miri(command: &str, input: &str, program_args: &[&str]) -> CompilerResul
     for attempt in 1..=max_attempts {
         let mut cmd = miri_cmd();
         cmd.env("RUST_BACKTRACE", "1")
+            // TODO: also run under MIRI_HEAP_GUARD. The leak check counts the
+            // reference-count balance, so an allocation that is never retained
+            // and never released leaves it even and leaks unseen.
             .env("MIRI_LEAK_CHECK", "1")
             // Findings are fatal: every program the suite compiles is verifier
             // corpus, so an RC seam introduced anywhere fails the test that

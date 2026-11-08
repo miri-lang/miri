@@ -845,3 +845,18 @@ fn probe(holder Holder, tree Tree, ping Ping, pong Pong)
         );
     }
 }
+
+/// A built-in collection named without arguments, as the receiver of its own
+/// shared generic body is, is still the collection: a counted allocation.
+#[test]
+fn value_class_bare_collection_name_is_counted() {
+    let probe = probe();
+    for name in ["List", "Set", "Map", "Array"] {
+        let bare = TypeKind::Custom(name.to_string(), None);
+        assert_eq!(
+            value_class(&bare, LayoutScope::new(&probe.definitions, &HashSet::new())),
+            ValueClass::Managed,
+            "a bare `{name}`"
+        );
+    }
+}

@@ -6,6 +6,7 @@ pub mod borrowed_locals;
 pub mod classes;
 pub mod cloneable;
 pub mod closures;
+pub mod collection_receivers;
 pub mod collections;
 pub mod conditional_branches;
 pub mod drop_call;
