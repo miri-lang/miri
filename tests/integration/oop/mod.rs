@@ -30,6 +30,7 @@ pub mod method_values;
 pub mod static_members;
 pub mod super_calls;
 pub mod tensor;
+pub mod trait_default_on_generic_class;
 pub mod trait_self;
 pub mod traits;
 pub mod value_generics;

@@ -372,8 +372,9 @@ impl TraitDefaultBodies {
     }
 }
 
-/// One method a generic class declares, compiled under the class's own name:
-/// its open template, which leaves the class's parameters open.
+/// One method a generic class compiles under its own name — one it declares,
+/// or a trait default it inherits — as its open template, which leaves the
+/// class's parameters open.
 ///
 /// Every call at concrete arguments names the body compiled for its
 /// instantiation, so a template is compiled only where something still names
@@ -384,23 +385,46 @@ struct ClassTemplateMethod {
     class_name: String,
     symbol: Symbol,
     class_site: StatementSite,
-    member: usize,
+    body: TemplateBody,
+}
+
+/// Where the body of a generic class's open template is written.
+enum TemplateBody {
+    /// A method the class declares: its index in the class body.
+    Own(usize),
+    /// A trait default the class inherits: the trait supplying it, and the
+    /// method's name.
+    TraitDefault { trait_name: String, method: String },
 }
 
 impl ClassTemplateMethod {
-    /// The declaring class statement and the method statement within it.
-    fn statements<'r>(&self, result: &'r PipelineResult) -> Option<(&'r Statement, &'r Statement)> {
+    /// The declaring class statement and the method statement the template
+    /// compiles.
+    fn statements<'r>(
+        &self,
+        result: &'r PipelineResult,
+        trait_defaults: &TraitDefaultBodies,
+    ) -> Option<(&'r Statement, &'r Statement)> {
         let class_stmt = self.class_site.statement(result)?;
         let StatementKind::Class(class_data) = &class_stmt.node else {
             return None;
         };
-        Some((class_stmt, class_data.body.get(self.member)?))
+        let method_stmt = match &self.body {
+            TemplateBody::Own(member) => class_data.body.get(*member)?,
+            TemplateBody::TraitDefault { trait_name, method } => {
+                trait_defaults.method(result, trait_name, method)?
+            }
+        };
+        Some((class_stmt, method_stmt))
     }
 }
 
 /// The method bodies every generic class of the program and its imports
 /// declares, the program's own first.
-fn class_template_methods(result: &PipelineResult) -> Vec<ClassTemplateMethod> {
+fn class_template_methods(
+    result: &PipelineResult,
+    trait_defaults: &TraitDefaultBodies,
+) -> Vec<ClassTemplateMethod> {
     let mut templates = Vec::new();
     for (class_site, stmt) in statements_with_sites(result) {
         let StatementKind::Class(class_data) = &stmt.node else {
@@ -412,19 +436,89 @@ fn class_template_methods(result: &PipelineResult) -> Vec<ClassTemplateMethod> {
         let Some(class_name) = result.type_checker.type_identity_named_by(&class_data.name) else {
             continue;
         };
+        let template = |method: &str, body| ClassTemplateMethod {
+            class_name: class_name.to_string(),
+            symbol: Symbol::method(class_name, &[], method, &[]),
+            class_site,
+            body,
+        };
         for (member, method_stmt) in class_data.body.iter().enumerate() {
-            let Some(decl) = shared_method_body(method_stmt) else {
-                continue;
+            if let Some(decl) = shared_method_body(method_stmt) {
+                templates.push(template(&decl.name, TemplateBody::Own(member)));
+            }
+        }
+        for (method, trait_name) in inherited_default_templates(result, trait_defaults, class_name)
+        {
+            let body = TemplateBody::TraitDefault {
+                trait_name: trait_name.to_string(),
+                method: method.to_string(),
             };
-            templates.push(ClassTemplateMethod {
-                class_name: class_name.to_string(),
-                symbol: Symbol::method(class_name, &[], &decl.name, &[]),
-                class_site,
-                member,
-            });
+            templates.push(template(method, body));
         }
     }
     templates
+}
+
+/// Every trait default with a body that the concrete class `class_name`
+/// inherits, each with the trait supplying it. An abstract class runs none
+/// of them under its own name.
+fn inherited_default_templates<'r>(
+    result: &'r PipelineResult,
+    trait_defaults: &TraitDefaultBodies,
+    class_name: &str,
+) -> Vec<(&'r str, &'r str)> {
+    let definitions = result.type_checker.type_definitions();
+    let is_concrete = matches!(
+        definitions.get(class_name),
+        Some(TypeDefinition::Class(class_def)) if !class_def.is_abstract
+    );
+    if !is_concrete {
+        return Vec::new();
+    }
+    mir::lowering::dispatch_symbols::inherited_trait_defaults(definitions, class_name)
+        .into_iter()
+        .filter(|(method, owner)| {
+            trait_defaults
+                .method(result, owner, method)
+                .is_some_and(|stmt| shared_method_body(stmt).is_some())
+        })
+        .collect()
+}
+
+/// Lower `class_name`'s copy of the trait default `method_stmt` that
+/// `trait_name` supplies, typed at what the class's `extends` and
+/// `implements` clauses pin the trait's own parameters to. `self` is the
+/// class, declared at `class_span`.
+///
+/// A parameter only the class's own type arguments would pin is absent from
+/// the pins: the class's open copy leaves it generic, and each
+/// instantiation's copy reads it from that instantiation.
+fn lower_trait_default_copy(
+    result: &PipelineResult,
+    (class_name, class_span): (&str, Span),
+    trait_name: &str,
+    method_stmt: &Statement,
+    is_release: bool,
+    compilation_ids: &mir::lowering::SharedCompilationIds,
+) -> Result<mir::lowering::Lowered, crate::error::lowering::LoweringError> {
+    let self_type = Type::new(TypeKind::Custom(class_name.to_string(), None), class_span);
+    let supertypes = result.type_checker.declaring_types_above(
+        class_name,
+        &mir::lowering::inherited_instantiation::own_parameters_left_open(
+            result.type_checker.type_definitions(),
+            class_name,
+        ),
+    );
+    let unpinned = std::collections::HashMap::new();
+    let pinned = pins_of(&supertypes, trait_name).unwrap_or(&unpinned);
+    mir::lowering::lower_class_method_at_with_compilation_ids(
+        method_stmt,
+        self_type,
+        &result.type_checker,
+        is_release,
+        pinned,
+        compilation_ids.clone(),
+    )
 }
 
 /// What every lowering round reads and no round changes: the generic function
@@ -445,11 +539,12 @@ pub(super) struct ReachTables {
 
 impl ReachTables {
     fn collect(result: &PipelineResult) -> Result<Self, CompilerError> {
+        let trait_defaults = TraitDefaultBodies::collect(result);
         Ok(ReachTables {
             generic_functions: function_declarations(result, |decl| decl.generics.is_some())?,
             generic_methods: GenericMethodBodies::collect(result),
-            trait_defaults: TraitDefaultBodies::collect(result),
-            class_templates: class_template_methods(result),
+            class_templates: class_template_methods(result, &trait_defaults),
+            trait_defaults,
             synthesized: mir::lowering::dispatch_symbols::synthesized_references(
                 result.type_checker.type_definitions(),
             ),
@@ -1557,7 +1652,9 @@ impl Pipeline {
             if !is_named || symbols.is_claimed(symbol) {
                 continue;
             }
-            let Some((class_stmt, method_stmt)) = template.statements(result) else {
+            let Some((class_stmt, method_stmt)) =
+                template.statements(result, &reach.trait_defaults)
+            else {
                 continue;
             };
             if !symbols
@@ -1570,13 +1667,23 @@ impl Pipeline {
                 TypeKind::Custom(template.class_name.clone(), None),
                 class_stmt.span,
             );
-            let body = mir::lowering::lower_class_method_with_compilation_ids(
-                method_stmt,
-                self_type,
-                &result.type_checker,
-                is_release,
-                compilation_ids.clone(),
-            )
+            let body = match &template.body {
+                TemplateBody::Own(_) => mir::lowering::lower_class_method_with_compilation_ids(
+                    method_stmt,
+                    self_type,
+                    &result.type_checker,
+                    is_release,
+                    compilation_ids.clone(),
+                ),
+                TemplateBody::TraitDefault { trait_name, .. } => lower_trait_default_copy(
+                    result,
+                    (&template.class_name, class_stmt.span),
+                    trait_name,
+                    method_stmt,
+                    is_release,
+                    compilation_ids,
+                ),
+            }
             .map_err(|e| monomorphized_lowering_failure(symbol, e))?;
             Self::push_lowered_body(bodies, symbols, symbol.clone(), body)?;
         }
@@ -2106,7 +2213,10 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Every concrete class the program declares, by name.
+    /// Every concrete class the program declares that takes no type
+    /// parameters, by name. A generic class's copy of a default is its open
+    /// template, compiled only where something names it, by
+    /// `lower_called_class_templates`.
     fn classes_inheriting_defaults(result: &PipelineResult) -> Vec<String> {
         let definitions = result.type_checker.type_definitions();
         statements_with_sites(result)
@@ -2114,6 +2224,9 @@ impl Pipeline {
                 let StatementKind::Class(class_data) = &stmt.node else {
                     return None;
                 };
+                if class_data.generics.is_some() {
+                    return None;
+                }
                 let class_name = result
                     .type_checker
                     .type_identity_named_by(&class_data.name)?;
@@ -2125,10 +2238,9 @@ impl Pipeline {
             .collect()
     }
 
-    /// The trait defaults `class_name` inherits whose copy is compiled, each
-    /// with the trait supplying it: every one for a generic class, whose
-    /// copy leaves its own parameters open, and for any other class each one
-    /// whose obligations hold at what its clauses pin.
+    /// The trait defaults the class `class_name`, which takes no type
+    /// parameters, inherits whose copy is compiled, each with the trait
+    /// supplying it: each one whose obligations hold at what its clauses pin.
     fn judged_trait_default_copies(
         result: &mut PipelineResult,
         trait_defaults: &TraitDefaultBodies,
@@ -2136,10 +2248,6 @@ impl Pipeline {
         class_name: &str,
     ) -> Vec<(String, String)> {
         let definitions = result.type_checker.type_definitions();
-        let is_generic = matches!(
-            definitions.get(class_name),
-            Some(TypeDefinition::Class(class_def)) if class_def.generics.is_some()
-        );
         let inherited: Vec<(String, String, Span)> =
             mir::lowering::dispatch_symbols::inherited_trait_defaults(definitions, class_name)
                 .into_iter()
@@ -2151,25 +2259,14 @@ impl Pipeline {
         inherited
             .into_iter()
             .filter(|(method, _, span)| {
-                is_generic
-                    || verdicts.accepts_class_copy(
-                        &mut result.type_checker,
-                        class_name,
-                        method,
-                        *span,
-                    )
+                verdicts.accepts_class_copy(&mut result.type_checker, class_name, method, *span)
             })
             .map(|(method, owner, _)| (method, owner))
             .collect()
     }
 
-    /// Lower `class_name`'s copy of each trait default in `inherited`, typed
-    /// at what its `extends` and `implements` clauses pin the trait's own
-    /// parameters to.
-    ///
-    /// A parameter only the class's own type arguments would pin is absent
-    /// from the pins: the class's bare copy leaves it generic, and each
-    /// instantiation's copy reads it from that instantiation.
+    /// Lower `class_name`'s copy of each trait default in `inherited`, as
+    /// [`lower_trait_default_copy`] types it.
     #[allow(clippy::too_many_arguments)]
     fn lower_class_trait_defaults(
         result: &PipelineResult,
@@ -2181,19 +2278,7 @@ impl Pipeline {
         symbols: &mut SymbolTable,
         compilation_ids: &mir::lowering::SharedCompilationIds,
     ) -> Result<(), CompilerError> {
-        let definitions = result.type_checker.type_definitions();
-        let self_type = Type::new(
-            TypeKind::Custom(class_name.to_string(), None),
-            class_declaration_site(&result.ast, &result.type_checker, class_name),
-        );
-        let supertypes = result.type_checker.declaring_types_above(
-            class_name,
-            &mir::lowering::inherited_instantiation::own_parameters_left_open(
-                definitions,
-                class_name,
-            ),
-        );
-        let unpinned = std::collections::HashMap::new();
+        let class_span = class_declaration_site(&result.ast, &result.type_checker, class_name);
         for (method_name, trait_name) in inherited {
             let Some(method_stmt) = trait_defaults.method(result, trait_name, method_name) else {
                 continue;
@@ -2208,14 +2293,13 @@ impl Pipeline {
             {
                 continue;
             }
-            let pinned = pins_of(&supertypes, trait_name).unwrap_or(&unpinned);
-            let mir_body = mir::lowering::lower_class_method_at_with_compilation_ids(
+            let mir_body = lower_trait_default_copy(
+                result,
+                (class_name, class_span),
+                trait_name,
                 method_stmt,
-                self_type.clone(),
-                &result.type_checker,
                 is_release,
-                pinned,
-                compilation_ids.clone(),
+                compilation_ids,
             )
             .map_err(|e| monomorphized_lowering_failure(&symbol, e))?;
             Self::push_lowered_body(bodies, symbols, symbol, mir_body)?;
