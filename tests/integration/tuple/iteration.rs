@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_tuple_for_loop() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (1, 2, 3)
 for x in t
@@ -21,7 +20,6 @@ for x in t
 fn test_tuple_for_loop_sum() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 var sum = 0

@@ -68,6 +68,69 @@ fn main()
 }
 
 #[test]
+fn test_tuple_literal_methods_without_use() {
+    // A tuple literal reaches its methods without an import, the way the other
+    // collection literals do.
+    assert_heap_guard_output(
+        r#"
+fn main()
+    let t = (10, 20, 30)
+    println(f"{t.length()} {t.contains(20)} {t.element_at(2)} {t.is_empty()}")
+        "#,
+        "3 true 30 false",
+    );
+}
+
+#[test]
+fn test_tuple_literal_without_use_keeps_access_iteration_and_equality() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    let t = (1, 2, 3)
+    var sum = 0
+    for x in t
+        sum += x
+    println(f"{t.0} {t.2} {sum} {t == (1, 2, 3)} {t == (1, 2, 4)}")
+        "#,
+        "1 3 6 true false",
+    );
+}
+
+#[test]
+fn test_heterogeneous_tuple_has_no_methods_without_use() {
+    // The methods are the homogeneous tuple's; a tuple mixing element types is
+    // refused them whether or not the module is imported.
+    assert_compiler_error(
+        r#"
+fn main()
+    let t = (1, "hello")
+    println(f"{t.length()}")
+        "#,
+        "does not have members",
+    );
+}
+
+#[test]
+fn test_collection_import_beside_its_literal_is_redundant() {
+    // Importing the module behind a literal adds nothing the literal does not
+    // already reach, so the import is reported for every collection alike.
+    // Following the report must leave a program that prints what it printed
+    // with the import in place.
+    for (module, literal, length) in [
+        ("list", "[1, 2, 3]", "3"),
+        ("set", "{1, 2, 3}", "3"),
+        ("map", "{1: 2, 3: 4}", "2"),
+        ("tuple", "(1, 2, 3)", "3"),
+    ] {
+        let body = format!("fn main()\n    let c = {literal}\n    println(f\"{{c.length()}}\")\n");
+        let imported = format!("use system.collections.{module}\n\n{body}");
+        assert_compiler_warning(&imported, "MER_IMP_005");
+        assert_runs_with_output(&imported, length);
+        assert_runs_with_output(&body, length);
+    }
+}
+
+#[test]
 fn test_explicit_array_name_requires_use() {
     // Criterion 5: explicitly naming Array type requires use statement
     // Use a valid constructor call so only a visibility rejection fails it.
@@ -316,6 +379,20 @@ class List
         return 1
         "#,
         "Type 'List' is already defined",
+    );
+}
+
+#[test]
+fn test_tuple_backing_name_is_not_shadowable() {
+    // A tuple literal resolves its methods through the preloaded backing class,
+    // so its name is reserved like the other literals' backings.
+    assert_compiler_error(
+        r#"
+class Tuple
+    fn tag() int
+        return 1
+        "#,
+        "Type 'Tuple' is already defined",
     );
 }
 

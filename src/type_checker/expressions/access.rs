@@ -1172,6 +1172,29 @@ impl TypeChecker {
         }
     }
 
+    /// The definition a member of `type_name` is read through.
+    ///
+    /// Importing a type is what lets a file write its name; a value of it
+    /// the file was handed (`let f = make(); f.v`), or one a literal built, is
+    /// read through its own definition whether or not the name is imported
+    /// here, as in Rust, Swift and TypeScript. Visibility of each member is
+    /// still checked by the caller. `reads_a_value` is false when the type is
+    /// named itself (`Tuple.of(..)`), which needs the name to be visible.
+    pub(crate) fn member_definition<'a>(
+        &'a self,
+        type_name: &str,
+        reads_a_value: bool,
+        context: &'a Context,
+    ) -> Option<&'a TypeDefinition> {
+        self.resolve_visible_type(type_name, context).or_else(|| {
+            if reads_a_value || BuiltinCollectionKind::from_name(type_name).is_some() {
+                self.type_table.global_type_definitions.get(type_name)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Dispatches member access to the appropriate type definition handler with arity awareness.
     /// Returns Some with the result type, or None if no definition was found.
     #[allow(clippy::too_many_arguments)]
@@ -1188,20 +1211,9 @@ impl TypeChecker {
         context: &mut Context,
         call_arity: Option<usize>,
     ) -> Option<Type> {
-        // Importing a type is what lets a file write its name; a value of it
-        // the file was handed (`let f = make(); f.v`) is read through its own
-        // definition whether or not the name is imported here, as in Rust, Swift
-        // and TypeScript. Visibility of each member is still checked below.
         let reads_a_value = !matches!(obj_type.kind, TypeKind::Meta(_));
         let def_opt = self
-            .resolve_visible_type(type_name, context)
-            .or_else(|| {
-                if reads_a_value || BuiltinCollectionKind::from_name(type_name).is_some() {
-                    self.type_table.global_type_definitions.get(type_name)
-                } else {
-                    None
-                }
-            })
+            .member_definition(type_name, reads_a_value, context)
             .cloned();
 
         match def_opt {

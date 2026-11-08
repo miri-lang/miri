@@ -30,7 +30,7 @@ Four files under `system/` decide what a program gets without writing a `use`. E
 
 -   **`prelude.mi`**: re-exported by name and **reserved** — the rest of the stdlib is written against these types (`system.io`, `system.string`), and range syntax builds the `Range` that `system.range` declares, so a program cannot declare its own type of the same name.
 -   **`prelude_shadowable.mi`**: re-exported by name but **skipped** for any module whose types the program declares itself (`system.result`). A program that declares its own `Result` keeps it, and importing a module that needs the stdlib one is reported as a conflict at the import.
--   **`prelude_internal.mi`**: loaded for definitions only, so collection literals resolve their methods while naming `Array`/`List`/`Map`/`Set` still needs an explicit `use system.collections.*`.
+-   **`prelude_internal.mi`**: loaded for definitions only, so collection and tuple literals resolve their methods while naming `Array`/`List`/`Map`/`Set`/`Tuple` still needs an explicit `use system.collections.*`.
 -   **`prelude_regex.mi`**: loaded for definitions only, and only for a file that writes a regex literal (`re"..."`) or a regex match pattern. `system.text` declares the class that syntax is built through and tested with, found by its `@regex_literal` and `@regex_match` methods, so the compiler names no regex class. Naming `Regex` still needs `use system.text`. A program without regex syntax never loads it, so its own `Result` stays declarable; one that writes regex syntax and declares its own `Result` is told of the conflict.
 
 A module belongs in the shadowable tier only when nothing else in the stdlib depends on the types it declares.

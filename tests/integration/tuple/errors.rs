@@ -4,22 +4,10 @@
 use super::utils::*;
 
 #[test]
-fn test_tuple_requires_import_for_methods() {
-    assert_compiler_error(
-        r#"
-let t = (1, 2, 3)
-println(f"{t.length()}")
-"#,
-        "does not have members",
-    );
-}
-
-#[test]
 fn test_tuple_element_at_oob() {
     // OOB element_at triggers a runtime "Array index out of bounds" error.
     assert_runtime_crash(
         r#"
-use system.collections.tuple
 let t = (1, 2, 3)
 let x = t.element_at(5)
 "#,
@@ -43,7 +31,6 @@ fn test_heterogeneous_tuple_methods_error() {
     // A heterogeneous tuple (int, String) correctly does not support these methods.
     assert_compiler_error(
         r#"
-use system.collections.tuple
 let t = (1, "hello")
 println(f"{t.contains(1)}")
 "#,

@@ -24,7 +24,6 @@ fn body_names(source: &str) -> Vec<String> {
 
 const STRING_ENDS: &str = r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let t = ("hello", "world", "foo")
@@ -54,7 +53,6 @@ fn test_first_and_last_hand_back_class_elements() {
     assert_runs_with_output(
         r#"
 use system.io
-use system.collections.tuple
 
 class Node
     var value int

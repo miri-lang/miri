@@ -28,7 +28,6 @@ fn test_a_string_read_through_element_at_is_retained() {
     assert_heap_guard_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let x = ("a" + "b", "c" + "d")
@@ -44,7 +43,6 @@ fn test_a_for_loop_over_a_tuple_of_strings_retains_each() {
     assert_heap_guard_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let x = ("a" + "b", "c" + "d")
@@ -81,7 +79,6 @@ fn test_contains_on_a_tuple_of_strings_releases_nothing_twice() {
     assert_heap_guard_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let x = ("a" + "b", "c" + "d")

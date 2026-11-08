@@ -222,18 +222,14 @@ impl TypeChecker {
     /// the class's whole method table, and this is consulted per method call.
     fn attribute_param_positions(
         &self,
-        type_name: &str,
+        (type_name, reads_a_value): (&str, bool),
         method_name: &str,
         attribute: &str,
         context: &Context,
     ) -> Option<Vec<usize>> {
-        let definition = self.resolve_visible_type(type_name, context).or_else(|| {
-            if BuiltinCollectionKind::from_name(type_name).is_some() {
-                self.type_table.global_type_definitions.get(type_name)
-            } else {
-                None
-            }
-        })?;
+        // Read through the definition the call itself resolved the method
+        // in: a value's own, imported or not.
+        let definition = self.member_definition(type_name, reads_a_value, context)?;
         let TypeDefinition::Class(class_def) = definition else {
             return None;
         };
@@ -1901,18 +1897,25 @@ impl TypeChecker {
         };
 
         let size_val = Self::static_receiver_size(recv, &recv_type, context);
+        let reads_a_value = !matches!(recv_type.kind, TypeKind::Meta(_));
         let index_bounds = crate::ast::INDEX_BOUNDS_CHECK_ATTRIBUTE;
-        if let Some(positions) =
-            self.attribute_param_positions(&type_name, method_name, index_bounds, context)
-        {
+        if let Some(positions) = self.attribute_param_positions(
+            (&type_name, reads_a_value),
+            method_name,
+            index_bounds,
+            context,
+        ) {
             if let Some(index_arg) = positions.first().and_then(|&at| args.get(at)) {
                 self.validate_const_index_against_size(index_arg, size_val, context);
             }
         }
         let index_range = crate::ast::INDEX_RANGE_CHECK_ATTRIBUTE;
-        if let Some(positions) =
-            self.attribute_param_positions(&type_name, method_name, index_range, context)
-        {
+        if let Some(positions) = self.attribute_param_positions(
+            (&type_name, reads_a_value),
+            method_name,
+            index_range,
+            context,
+        ) {
             if let [start, end] = positions.as_slice() {
                 if let (Some(start), Some(end)) = (args.get(*start), args.get(*end)) {
                     self.validate_const_range_against_size(start, end, size_val, context);

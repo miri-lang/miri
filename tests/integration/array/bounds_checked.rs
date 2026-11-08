@@ -60,7 +60,6 @@ a.set(9, 0)
 fn test_tuple_method_element_at_out_of_bounds() {
     assert_compiler_error(
         r#"
-use system.collections.tuple
 
 let t = (1, 2, 3)
 let x = t.element_at(7)

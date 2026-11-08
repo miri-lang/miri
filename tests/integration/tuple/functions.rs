@@ -39,7 +39,6 @@ fn main()
 fn test_tuple_passed_to_function_with_methods() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 fn sum_tuple(t (int, int, int)) int
     var total = 0
@@ -59,7 +58,6 @@ fn main()
 fn test_tuple_returned_from_function_with_methods() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 fn make_triple() (int, int, int)
     return (5, 10, 15)

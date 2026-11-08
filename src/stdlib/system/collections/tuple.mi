@@ -13,13 +13,13 @@ use system.collections.queryable
 ///   let x = t.0
 ///
 /// This module provides methods for homogeneous tuples (all elements of one
-/// type) via `use system.collections.tuple`. Methods like `length()`,
-/// `element_at()`, and `contains()` become available after import. A tuple of
-/// `Size` elements of type `T` is a `Tuple<T, Size>`, and its methods read the
-/// tuple itself: no copy of it is made for a call.
+/// type). It backs the tuple literal, so `length()`, `element_at()`,
+/// `contains()` and the rest reach every homogeneous tuple without a `use`,
+/// as a list literal's methods do. A tuple of `Size` elements of type `T` is a
+/// `Tuple<T, Size>`, and its methods read the tuple itself: no copy of it is
+/// made for a call.
 ///
 /// Example:
-///     use system.collections.tuple
 ///     let t = (10, 20, 30)
 ///     println(f"{t.length()}")      // 3
 ///     println(f"{t.contains(20)}")  // true

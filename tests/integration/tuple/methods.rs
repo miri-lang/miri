@@ -7,7 +7,6 @@ use super::utils::*;
 fn test_tuple_length() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.length()}")
@@ -20,7 +19,6 @@ println(f"{t.length()}")
 fn test_tuple_length_single() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (42,)
 println(f"{t.length()}")
@@ -33,7 +31,6 @@ println(f"{t.length()}")
 fn test_tuple_length_pair() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (1, 2)
 println(f"{t.length()}")
@@ -46,7 +43,6 @@ println(f"{t.length()}")
 fn test_tuple_element_at() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.element_at(0)}")
@@ -61,7 +57,6 @@ println(f"{t.element_at(2)}")
 fn test_tuple_is_empty() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (1, 2, 3)
 println(f"{t.is_empty()}")
@@ -74,7 +69,6 @@ println(f"{t.is_empty()}")
 fn test_tuple_first() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.first() ?? -1}")
@@ -87,7 +81,6 @@ println(f"{t.first() ?? -1}")
 fn test_tuple_last() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.last() ?? -1}")
@@ -100,7 +93,6 @@ println(f"{t.last() ?? -1}")
 fn test_tuple_first_single() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (42,)
 println(f"{t.first() ?? -1}")
@@ -114,7 +106,6 @@ println(f"{t.last() ?? -1}")
 fn test_tuple_contains() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.contains(20)}")
@@ -130,7 +121,6 @@ println(f"{t.contains(99)}")
 fn test_tuple_of_128_bit_integers_contains_its_elements() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let one i128 = 1
 let two i128 = 2
@@ -147,7 +137,6 @@ println(f"{(high, two).contains(one)} {(one, high).contains(high)} {(wide, wide)
 fn test_tuple_index_of() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.index_of(20) ?? -1}")
@@ -165,7 +154,6 @@ match t.index_of(99)
 fn test_tuple_index_of_first_element() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.index_of(10) ?? -1}")
@@ -178,7 +166,6 @@ println(f"{t.index_of(10) ?? -1}")
 fn test_tuple_index_of_last_element() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = (10, 20, 30)
 println(f"{t.index_of(30) ?? -1}")
@@ -191,7 +178,6 @@ println(f"{t.index_of(30) ?? -1}")
 fn test_tuple_string_queryable_methods() {
     assert_runs_with_output(
         r#"
-use system.collections.tuple
 
 let t = ("hello", "world", "foo")
 let first = t.first() ?? "none"
@@ -225,7 +211,6 @@ fn test_tuples_of_one_element_type_and_two_lengths_answer_for_their_own() {
     assert_runs_with_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let pair = (1, 2)
@@ -244,7 +229,6 @@ fn test_tuple_methods_read_elements_of_every_width() {
     assert_runs_with_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let small = (1.5 as f32, 2.5 as f32, 3.5 as f32)
@@ -274,7 +258,6 @@ fn test_tuple_methods_on_a_tuple_of_tuples() {
     assert_runs_with_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn main()
     let t = ((1, 2), (3, 4))
@@ -295,7 +278,6 @@ fn test_every_tuple_method_on_a_string_tuple_releases_what_it_reads() {
     assert_heap_guard_output(
         r#"
 use system.io
-use system.collections.tuple
 
 fn describe(t (String, String, String)) String
     let has_b = t.contains("b")

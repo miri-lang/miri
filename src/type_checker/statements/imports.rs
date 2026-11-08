@@ -1131,10 +1131,11 @@ impl TypeChecker {
     ///   `println`, `String`) are available unqualified, mirroring Rust's
     ///   `std::prelude`.
     /// - `system/prelude_internal.mi` — loaded for definitions only: backing
-    ///   classes for collection literals (`Array`/`List`/`Map`/`Set`) are needed
-    ///   so a `[1, 2, 3]` literal can resolve methods and be gpu-resident, but the
-    ///   user has not named them, so writing `Array<…>(…)` must still require an
-    ///   explicit `use system.collections.array`. Their names are dropped from
+    ///   classes for collection and tuple literals (`Array`/`List`/`Map`/`Set`/
+    ///   `Tuple`) are needed so a `[1, 2, 3]` literal can resolve methods and be
+    ///   gpu-resident, but the user has not named them, so writing
+    ///   `Array<…>(…)` must still require an explicit
+    ///   `use system.collections.array`. Their names are dropped from
     ///   `visible_type_names` after loading; only the definitions remain.
     /// - `system/prelude_shadowable.mi` — re-exported by name like the first
     ///   tier, but skipped for any module whose types the program declares

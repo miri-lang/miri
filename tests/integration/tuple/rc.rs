@@ -43,7 +43,6 @@ fn test_tuple_nested_managed_rc() {
     assert_runs(
         r#"
 use system.collections.list
-use system.collections.tuple
 
 let t = (List([List([1])]), "outer")
 let inner = t.0.element_at(0)
@@ -147,7 +146,6 @@ fn test_a_tuple_method_on_a_class_field_allocates_nothing_per_call() {
     assert_allocation_count(
         r#"
 use system.io
-use system.collections.tuple
 
 class Holder
     t (int, int, int)
