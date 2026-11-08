@@ -41,21 +41,24 @@
 
 use crate::ast::factory::make_type;
 use crate::ast::type_arguments::{written_argument, TypeArgKind, ValueArg};
+use crate::ast::types::is_trait_self;
 use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME, STRING_TYPE_NAME};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
-    class_ancestry, class_method_declaration, declared_class_has_body, ClassDefinition, Context,
-    FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
+    class_ancestry, class_method_declaration, declared_class_has_body, inherited_trait_default,
+    ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::statements::declarations::generic_method_rules::spelled_signature;
 use crate::type_checker::statements::declarations::method_names::DeclaredMethods;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::statements::runtime_effects::RuntimeDeclaration;
+use crate::type_checker::trait_self::{mentions_self, pin_self};
 use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// The body a class method declares, or `None` for an abstract method, which
 /// declares none or an empty one.
@@ -1094,6 +1097,8 @@ impl TypeChecker {
             methods,
         };
         let mut current_base_owned: Option<String> = Some(base_name.to_string());
+        let mut ancestry: Vec<(String, HashMap<String, Type>)> = Vec::new();
+        let mut declared_above: HashSet<String> = HashSet::new();
         while let Some(class_name) = current_base_owned.take() {
             if !visited.insert(class_name.clone()) {
                 break;
@@ -1117,26 +1122,9 @@ impl TypeChecker {
                 _ => HashMap::new(),
             };
 
-            for (method_name, child_method) in methods {
-                if method_name == "init" {
-                    continue;
-                }
-                // A generic method on either side is refused as an override
-                // by `refuse_generic_method_overrides`, not compared here.
-                if let Some(parent_method) = base_methods
-                    .get(method_name)
-                    .filter(|parent| parent.generics.is_empty() && child_method.generics.is_empty())
-                {
-                    self.check_class_method_signature_compat(
-                        &lineage,
-                        method_name,
-                        (child_method, parent_method),
-                        &ancestor_subst,
-                        name_expr,
-                    );
-                }
-            }
-
+            self.check_overrides_of_ancestor(&lineage, &base_methods, &ancestor_subst, name_expr);
+            declared_above.extend(base_methods.into_keys());
+            ancestry.push((class_name, ancestor_subst.clone()));
             current_base_owned = base_next_base;
             current_args = base_next_args;
             current_subst = ancestor_subst;
@@ -1144,6 +1132,123 @@ impl TypeChecker {
                 break;
             }
         }
+        self.check_inherited_default_overrides(&lineage, &ancestry, &declared_above, name_expr);
+    }
+
+    /// Check each method the class declares against the one the ancestor
+    /// declaring `base_methods` declares under that name, with the ancestor's
+    /// parameters read through `ancestor_subst`.
+    fn check_overrides_of_ancestor(
+        &mut self,
+        lineage: &ClassLineage,
+        base_methods: &BTreeMap<String, MethodInfo>,
+        ancestor_subst: &HashMap<String, Type>,
+        name_expr: &Expression,
+    ) {
+        for (method_name, child_method) in lineage.methods {
+            if method_name == "init" {
+                continue;
+            }
+            // A generic method on either side is refused as an override
+            // by `refuse_generic_method_overrides`, not compared here.
+            if let Some(parent_method) = base_methods
+                .get(method_name)
+                .filter(|parent| parent.generics.is_empty() && child_method.generics.is_empty())
+            {
+                self.check_class_method_signature_compat(
+                    lineage,
+                    method_name,
+                    (child_method, parent_method),
+                    ancestor_subst,
+                    name_expr,
+                );
+            }
+        }
+    }
+
+    /// Check each method the class declares that no ancestor class declares
+    /// but a trait default an ancestor inherits supplies. The override takes
+    /// that default's place in the ancestor's vtable slot, so a call through
+    /// the ancestor's type may hand it anything the ancestor's copy accepts:
+    /// it is checked against that copy, with `Self` the ancestor, as a method
+    /// the ancestor declared itself would be. `ancestry` pairs each ancestor
+    /// with what the chain binds its parameters to.
+    fn check_inherited_default_overrides(
+        &mut self,
+        lineage: &ClassLineage,
+        ancestry: &[(String, HashMap<String, Type>)],
+        declared_above: &HashSet<String>,
+        name_expr: &Expression,
+    ) {
+        let Some(base_name) = lineage.base_name else {
+            return;
+        };
+        for (method_name, child_method) in lineage.methods {
+            if method_name == "init"
+                || declared_above.contains(method_name)
+                || !child_method.generics.is_empty()
+            {
+                continue;
+            }
+            let Some((class_level, parent)) = self.inherited_default_copy(base_name, method_name)
+            else {
+                continue;
+            };
+            let Some((_, ancestor_subst)) = ancestry
+                .iter()
+                .find(|(ancestor, _)| *ancestor == class_level)
+            else {
+                continue;
+            };
+            self.check_class_method_signature_compat(
+                lineage,
+                method_name,
+                (child_method, &parent),
+                ancestor_subst,
+                name_expr,
+            );
+        }
+    }
+
+    /// The class whose `implements` list supplies the default `method_name`
+    /// a `class_name` receiver inherits, with the default's signature read
+    /// at that class: the trait's parameters at what the class binds them to
+    /// and `Self` the class at its own parameters.
+    fn inherited_default_copy(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(String, MethodInfo)> {
+        let default = inherited_trait_default(
+            &self.type_table.global_type_definitions,
+            class_name,
+            method_name,
+        )?;
+        if !default.info.generics.is_empty() {
+            return None;
+        }
+        let (class_level, trait_name) = (default.class_level.to_string(), default.trait_name);
+        let mut copy = default.info.clone();
+        // The chain is read at the class's own parameters, each bound to
+        // itself: an empty substitution would leave a clause such as
+        // `implements Sink<U>` unpinned, and the copy would keep the trait's
+        // `T` where the class means its `U`.
+        let own_parameters: HashMap<String, Type> = (self.generics_of(&class_level).iter())
+            .map(|generic| {
+                let parameter = TypeKind::Generic(generic.name.clone(), generic.bounds.clone());
+                (generic.name.clone(), make_type(parameter))
+            })
+            .collect();
+        let supertypes = self.declaring_types_above(&class_level, &own_parameters);
+        let mut pins = pins_of(&supertypes, trait_name)
+            .cloned()
+            .unwrap_or_default();
+        pin_self(&mut pins, self.class_at_own_parameters(&class_level));
+        for (_, param) in &mut copy.params {
+            *param = self.substitute_type(param, &pins);
+        }
+        copy.return_type = self.substitute_type(&copy.return_type, &pins);
+        Some((class_level, copy))
     }
 
     /// Check signature compatibility for a single method override.
@@ -1424,7 +1529,7 @@ impl TypeChecker {
                 }
                 continue;
             };
-            if own.is_none() && self.return_names_trait_self(method_info, origin_trait) {
+            if own.is_none() && mentions_self(&method_info.return_type) {
                 continue;
             }
             self.check_class_trait_method_compat(
@@ -1549,47 +1654,23 @@ impl TypeChecker {
         mismatched_methods: &mut Vec<(String, String, String)>,
     ) {
         let class_name = lineage.name;
-        let class_type_kind = TypeKind::Custom(class_name.to_string(), None);
-        let trait_self_kind = TypeKind::Custom(origin_trait.to_string(), None);
-
-        let substitution: Option<HashMap<String, Type>> = trait_substitutions
+        // The trait's `Self` is this class at its own parameters, wherever the
+        // trait writes it; a bare trait name stays the trait.
+        let mut substitution: HashMap<String, Type> = trait_substitutions
             .get(origin_trait)
-            .filter(|m| !m.is_empty())
-            .cloned();
-
-        let substitute = |ty: &Type| -> Type {
-            match &substitution {
-                Some(map) => self.substitute_type(ty, map),
-                None => ty.clone(),
-            }
-        };
-
-        let types_match = |trait_ty: &TypeKind, class_ty: &TypeKind| -> bool {
-            if trait_ty == class_ty {
-                return true;
-            }
-            if *trait_ty == trait_self_kind {
-                return *class_ty == class_type_kind
-                    || (class_name == STRING_TYPE_NAME && *class_ty == TypeKind::String)
-                    || matches!(class_ty, TypeKind::Generic(..))
-                    || matches!(class_ty, TypeKind::Custom(cn, _) if cn == class_name);
-            }
-            false
-        };
-
+            .cloned()
+            .unwrap_or_default();
+        pin_self(&mut substitution, self.class_at_own_parameters(class_name));
+        let substitute = |ty: &Type| -> Type { self.substitute_type(ty, &substitution) };
         let kinds_compatible = |trait_ty: &Type, class_ty: &Type| -> bool {
-            let substituted = substitute(trait_ty);
-            if substituted.kind == class_ty.kind {
-                return true;
-            }
-            types_match(&substituted.kind, &class_ty.kind)
+            names_one_type(&substitute(trait_ty).kind, &class_ty.kind)
         };
 
         // A parameter the trait types `Self` may be declared as a class the
         // implementing class extends: that method accepts every value of the
         // implementing class, which is all the trait asks of it.
         let accepts_self = |trait_ty: &Type, class_ty: &Type| -> bool {
-            substitute(trait_ty).kind == trait_self_kind
+            is_trait_self(&trait_ty.kind)
                 && matches!(&class_ty.kind, TypeKind::Custom(ancestor, None)
                 if self.declared_class_is_or_extends(
                     class_name, ancestor, class_name, lineage.base_name,
@@ -1770,6 +1851,68 @@ struct ClassLineage<'a> {
     name: &'a str,
     base_name: Option<&'a str>,
     methods: &'a BTreeMap<String, MethodInfo>,
+}
+
+/// Whether a type a trait writes and the type a class implementing it writes
+/// in its place are one type. The string type's methods are declared on a
+/// class named after it, whose own name inside it spells the built-in type;
+/// and a class written with its own value parameter (`Array<T, Size>`) names
+/// that parameter as a value where `Self` names it as a parameter.
+fn names_one_type(trait_ty: &TypeKind, class_ty: &TypeKind) -> bool {
+    let names_string_class =
+        |kind: &TypeKind| matches!(kind, TypeKind::Custom(name, None) if name == STRING_TYPE_NAME);
+    trait_ty == class_ty
+        || (names_string_class(trait_ty) && *class_ty == TypeKind::String)
+        || (*trait_ty == TypeKind::String && names_string_class(class_ty))
+        || names_one_instantiation(trait_ty, class_ty)
+}
+
+/// Whether two named types are one definition at one list of arguments,
+/// reading a value parameter written by name as that parameter.
+fn names_one_instantiation(first: &TypeKind, second: &TypeKind) -> bool {
+    let (
+        TypeKind::Custom(first_name, Some(first_args)),
+        TypeKind::Custom(second_name, Some(second_args)),
+    ) = (first, second)
+    else {
+        return false;
+    };
+    first_name == second_name
+        && first_args.len() == second_args.len()
+        && first_args.iter().zip(second_args).all(|(left, right)| {
+            left == right
+                || names_value_parameter(left, right)
+                || names_value_parameter(right, left)
+        })
+}
+
+/// Whether `written` names, as a value, the parameter `parameter` stands for.
+fn names_value_parameter(written: &TypeArgument, parameter: &TypeArgument) -> bool {
+    let TypeArgKind::Value(ValueArg::Name(name)) = &written.node else {
+        return false;
+    };
+    matches!(&parameter.node, TypeArgKind::Type(ty, _)
+        if matches!(&ty.kind, TypeKind::Generic(parameter_name, _) if parameter_name == name))
+}
+
+impl TypeChecker {
+    /// The class `class_name` at its own type parameters, as its body spells
+    /// itself: what a trait's `Self` stands for in the class's signatures.
+    fn class_at_own_parameters(&self, class_name: &str) -> Type {
+        let Some(TypeDefinition::Class(class_def)) =
+            self.type_table.global_type_definitions.get(class_name)
+        else {
+            return make_type(TypeKind::Custom(class_name.to_string(), None));
+        };
+        let arguments: Vec<_> = (class_def.generics.iter().flatten())
+            .map(|generic| {
+                let parameter = TypeKind::Generic(generic.name.clone(), generic.bounds.clone());
+                self.create_type_argument(make_type(parameter))
+            })
+            .collect();
+        let arguments = (!arguments.is_empty()).then_some(arguments);
+        make_type(TypeKind::Custom(class_name.to_string(), arguments))
+    }
 }
 
 impl TypeChecker {

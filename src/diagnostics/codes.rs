@@ -500,7 +500,7 @@ diagnostics!(
     Severity::Warning,
     false,
     FixSafety::LocalEdit,
-    // TYP — Type checker (88 codes: 001-088)
+    // TYP — Type checker (89 codes: 001-089)
     "TYP",
     "001",
     TypUndefinedVariable,
@@ -1114,6 +1114,13 @@ diagnostics!(
     "088",
     TypGenericMethodOverridden,
     "Generic Method Overridden",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
+    "TYP",
+    "089",
+    TypSelfThroughTraitValue,
+    "Self Through A Trait Value",
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,

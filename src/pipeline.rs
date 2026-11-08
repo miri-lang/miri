@@ -1570,6 +1570,7 @@ impl Pipeline {
             .map(|(symbol, body)| (gpu_names.emitted_name(&symbol, &body), body))
             .collect();
         result.device_helpers = gpu_names.into_helpers();
+        Self::refuse_unresolved_self(&bodies)?;
 
         // Check RC invariants and optional and value layouts after Perceus,
         // and that every call passes an owned argument exactly where its
@@ -1585,6 +1586,20 @@ impl Pipeline {
         }
 
         Ok((bodies, facts))
+    }
+
+    /// Refuse a lowered body that still spells `Self`, on every build: it has
+    /// no layout codegen can agree on, and reference counting would read it as
+    /// an uncounted parameter, so compiling it would fail with no diagnostic.
+    fn refuse_unresolved_self(bodies: &[(String, mir::Body)]) -> Result<(), CompilerError> {
+        let found = bodies
+            .iter()
+            .flat_map(|(name, body)| {
+                let violations = mir::verify::verify_resolved_self(body);
+                violations.into_iter().map(move |v| (name.clone(), v))
+            })
+            .collect();
+        Self::fail_or_warn(&mir::verify::ProgramReport::of(found), "error")
     }
 
     /// How optional MIR verification runs: enabled by `--verify-mir` or by

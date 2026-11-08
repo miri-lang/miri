@@ -2212,7 +2212,9 @@ impl TypeChecker {
     /// resolved where they are written, so what their names resolve to is
     /// recorded against them, and the type keeps its written form with those
     /// names spelled as identities. A closure type declaring type parameters
-    /// of its own is kept as written.
+    /// of its own is kept as written. A `Self` it spells is read here, as the
+    /// type the enclosing class or trait gives it: the written form is read
+    /// again wherever the type is used, outside that class or trait.
     fn resolve_function_type(&mut self, function: &FunctionTypeData, context: &Context) -> Type {
         for param in &function.params {
             self.resolve_type_expression(&param.typ, context);
@@ -2220,9 +2222,17 @@ impl TypeChecker {
         if let Some(ret) = &function.return_type {
             self.resolve_type_expression(ret, context);
         }
-        make_type(TypeKind::Function(Box::new(
+        let qualified = make_type(TypeKind::Function(Box::new(
             self.qualified_function(function),
-        )))
+        )));
+        match &context.current_self_type {
+            Some(self_type) if crate::type_checker::trait_self::spells_written_self(&qualified) => {
+                let mut substitution = std::collections::HashMap::with_capacity(1);
+                crate::type_checker::trait_self::pin_self(&mut substitution, self_type.clone());
+                self.substitute_type(&qualified, &substitution)
+            }
+            Some(_) | None => qualified,
+        }
     }
 
     /// Resolves the optional `T?` or `Option<T>` written as `written`.
@@ -2298,10 +2308,9 @@ impl TypeChecker {
         expr: &Expression,
         context: &Context,
     ) -> Type {
-        // Resolve `Self` to the current class/trait type
-        if name == "Self" {
-            if let Some(class_type) = &context.current_class_type {
-                return class_type.clone();
+        if name == crate::ast::types::SELF_TYPE_NAME {
+            if let Some(self_type) = &context.current_self_type {
+                return self_type.clone();
             }
             self.report_error(
                 DiagnosticCode::TypTraitDefinition,

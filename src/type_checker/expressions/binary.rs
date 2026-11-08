@@ -344,6 +344,9 @@ impl TypeChecker {
             return self.infer_range_membership((&left_ty, &right_ty), &element, span, context);
         }
 
+        if self.refuses_operator_on_trait_value((&left_ty, op, &right_ty), span) {
+            return ast_factory::make_type(TypeKind::Error);
+        }
         if let Some(message) = self.missing_ordering(&left_ty, op, &right_ty, context) {
             let help = self.ordering_help(&left_ty, left, right, op);
             self.report_error_with_help(
@@ -536,6 +539,14 @@ impl TypeChecker {
         right: &Expression,
         op: &BinaryOp,
     ) -> String {
+        if let Some(trait_name) = self.trait_value_name(left_ty) {
+            let shown = crate::type_checker::diagnostics::shown_type_name(trait_name);
+            return format!(
+                "A value of the trait '{shown}' says nothing about how it sorts: take the values \
+                 at one type parameter whose bounds include Comparable, as in \
+                 `fn f<T implements {shown} and Comparable>(a T, b T)`."
+            );
+        }
         let implement = format!(
             "Implement Comparable on '{}' with `public fn compare(other Self) int` \
              (negative sorts self first, zero ties, positive sorts self last)",
@@ -794,6 +805,9 @@ impl TypeChecker {
         // reporting again here would name the error type in a second message.
         if matches!(lhs_type.kind, TypeKind::Error) || matches!(rhs_type.kind, TypeKind::Error) {
             return Some(rhs_type.clone());
+        }
+        if self.refuses_operator_on_trait_value((lhs_type, &binary_op, rhs_type), span) {
+            return None;
         }
         match self.check_binary_op_types(lhs_type, &binary_op, rhs_type, context) {
             Ok(result) => {

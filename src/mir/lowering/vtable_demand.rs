@@ -31,7 +31,7 @@ use super::instantiation_limits::{
     constructor_parts, exceeded_limit, has_value_argument, polymorphic_recursion, Growth,
 };
 use super::is_monomorphizable_type_argument;
-use crate::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
+use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::symbol::token::type_kind_to_mangle_str;
@@ -642,8 +642,7 @@ fn leaves_a_parameter_open(body: &Body, type_defs: &HashMap<String, TypeDefiniti
 
 /// Whether `ty` names a type parameter of `body`: a bare name the type table
 /// does not define, or a generic placeholder for one of the body's own
-/// parameters. `Self`, which a struct method spells its explicit `self` with,
-/// names the type the method belongs to, never a parameter.
+/// parameters.
 ///
 /// A closure lowered inside a shared body records no parameters of its own
 /// but spells its enclosing body's by bare name. A placeholder for a parameter
@@ -655,7 +654,7 @@ fn names_a_parameter(ty: &Type, body: &Body, type_defs: &HashMap<String, TypeDef
         return body.generics.type_params.contains(name.as_str());
     }
     if let TypeKind::Custom(name, None) = &ty.kind {
-        return name != SELF_TYPE_NAME && !type_defs.contains_key(name.as_str());
+        return !type_defs.contains_key(name.as_str());
     }
     constructor_parts(ty)
         .1

@@ -16,7 +16,7 @@
 use super::{TypeFacts, ValueLayout};
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
-    BuiltinCollectionKind, Type, TypeKind, ORDERING_TRAIT_NAME, SELF_TYPE_NAME, STRING_TYPE_NAME,
+    is_trait_self, BuiltinCollectionKind, Type, TypeKind, ORDERING_TRAIT_NAME, STRING_TYPE_NAME,
 };
 use crate::mir::dispatch::ELEMENT_METHOD_NAMES;
 use crate::mir::option_layout::LayoutScope;
@@ -281,7 +281,8 @@ fn float_width(kind: &TypeKind) -> Option<FloatWidth> {
 
 /// True when `method` is an `equals` a container can call on two elements of
 /// `type_name`: it has a body, takes one value of the class itself and answers
-/// with a boolean.
+/// with a boolean. A trait default declares that value as the trait's `Self`,
+/// which is the class the default is lowered for.
 ///
 /// The thunk hands the method two element pointers, so a method declared over
 /// some other parameter type would read an element as a value it is not.
@@ -291,8 +292,8 @@ fn is_element_equality(type_name: &str, method: &MethodInfo) -> bool {
     };
     let takes_own_type = matches!(
         &param_ty.kind,
-        TypeKind::Custom(name, _) if name == type_name || name == SELF_TYPE_NAME
-    );
+        TypeKind::Custom(name, _) if name == type_name
+    ) || is_trait_self(&param_ty.kind);
     !method.is_abstract
         && !method.is_static
         && takes_own_type

@@ -50,6 +50,7 @@ use crate::type_checker::context::{
 };
 use crate::type_checker::statements::declarations::method_names::DeclaredMethods;
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
+use crate::type_checker::trait_self::trait_self_type;
 use crate::type_checker::TypeChecker;
 use std::collections::BTreeMap;
 
@@ -109,6 +110,9 @@ impl TypeChecker {
         if let Some(gens) = generics {
             self.define_generics(gens, context);
         }
+        let trait_at_own_parameters =
+            self.type_at_own_parameters(&name, generics.as_deref(), context);
+        context.set_self_type(trait_self_type(trait_at_own_parameters));
 
         let parent_trait_names = self.resolve_parent_traits(parent_traits, context);
         self.refuse_circular_trait_inheritance(&name, &parent_trait_names, name_expr.span);

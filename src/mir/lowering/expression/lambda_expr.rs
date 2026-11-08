@@ -37,10 +37,10 @@ use crate::mir::{
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::identifier_expr::lower_self_reference_value;
-use crate::mir::lowering::helpers::{lower_body_as_return, resolve_type};
+use crate::mir::lowering::helpers::lower_body_as_return;
 use crate::mir::lowering::requests::LoweringRequests;
+use crate::mir::lowering::resolve_execution_model;
 use crate::mir::lowering::written_parameters::copy_written_parameters;
-use crate::mir::lowering::{apply_generic_sub, resolve_execution_model};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -119,7 +119,7 @@ pub(crate) fn lower_lambda_expr(
         return_type: lambda.return_type.as_deref(),
         body: &lambda.body,
         properties: &lambda.properties,
-        ty: apply_generic_sub(&resolve_type(ctx.type_checker, expr), &ctx.generic_subs),
+        ty: ctx.resolved_type(expr),
         span: expr.span,
     };
     lower_closure(ctx, &closure, dest)
@@ -247,6 +247,9 @@ fn closure_context<'a>(
     // instantiation: its types, and the symbols of closures nested in it, are
     // read at the enclosing body's type arguments.
     lambda_ctx.generic_subs = ctx.generic_subs.clone();
+    // Inside a trait default it reads `Self` as the class the default is
+    // lowered for, as the enclosing body does.
+    lambda_ctx.inherit_self_type(ctx);
     // It leaves open exactly what the enclosing body leaves open, and lays
     // out a value of an open parameter as that body does: the signature the
     // enclosing body declares the closure at, `fn() U?`, is read against the

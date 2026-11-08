@@ -6,7 +6,7 @@
 
 use crate::type_checker::utils::type_checker_result;
 use miri::ast::type_arguments::{TypeArgKind, TypeArgument};
-use miri::ast::types::{Type, TypeKind, SELF_TYPE_NAME};
+use miri::ast::types::{Type, TypeKind};
 use miri::diagnostics::DiagnosticCode;
 use miri::error::lowering::{LoweringError, LoweringErrorKind};
 use miri::error::syntax::Span;
@@ -93,7 +93,6 @@ struct BodySketch {
     calls: Vec<&'static str>,
     dispatch: Option<(TypeKind, usize)>,
     type_params: Vec<&'static str>,
-    has_self: bool,
 }
 
 impl BodySketch {
@@ -103,15 +102,7 @@ impl BodySketch {
             calls: Vec::new(),
             dispatch: None,
             type_params: Vec::new(),
-            has_self: false,
         }
-    }
-
-    /// Give the body a `self` local spelled `Self`, as a struct method's
-    /// explicit `self` parameter is.
-    fn receives_self(mut self) -> Self {
-        self.has_self = true;
-        self
     }
 
     fn constructs(mut self, kind: TypeKind) -> Self {
@@ -137,10 +128,6 @@ impl BodySketch {
     fn body(self) -> Body {
         let mut body = Body::new(0, span(), ExecutionModel::Cpu);
         body.generics.type_params = self.type_params.iter().map(|p| p.to_string()).collect();
-        if self.has_self {
-            let self_ty = TypeKind::Custom(SELF_TYPE_NAME.to_string(), None);
-            body.new_local(LocalDecl::new(ty(self_ty), span()));
-        }
         let mut block = BasicBlockData::new(None);
         for kind in self.constructed {
             let local = body.new_local(LocalDecl::new(ty(kind.clone()), span()));
@@ -540,30 +527,6 @@ fn the_value_bound_does_not_depend_on_the_order_values_are_reached() {
         .expect_err("the same set of values is refused in any order");
     let (message, _, _) = refusal_text(&error);
     assert!(message.contains("needs more than 256"), "{message}");
-}
-
-/// A struct method spells its explicit `self` as `Self`, which the type table
-/// does not define; that is not a type parameter left open, so a drop hook
-/// codegen calls from outside any MIR call still counts as reached and fills
-/// the slot it calls.
-#[test]
-fn a_body_spelling_self_is_not_left_open() {
-    let fixture = Fixture::new();
-    let keep = fixture.slot("keep");
-    let hook = BodySketch::new()
-        .receives_self()
-        .constructs(impl_at(TypeKind::Int))
-        .dispatches(op_at(TypeKind::Int), keep)
-        .body();
-    let mut demand = VtableDemand::default();
-    fixture.record(
-        &mut demand,
-        &[(Symbol::method("Pt", &[], "drop", &[]), hook)],
-    );
-    assert_eq!(
-        link_names(&demand.take_named_slot_symbols()),
-        vec!["miri.Impl$int.keep"]
-    );
 }
 
 /// The same instance built from a root, where nothing it grows past was

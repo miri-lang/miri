@@ -1,0 +1,17 @@
+// expect: MER_TYP_089
+// summary: Triggers MER_TYP_089: a method taking Self is called through a value of the trait type.
+trait Same
+    fn same(other Self) bool
+
+class A implements Same
+    var x int
+    fn init(x int)
+        self.x = x
+    public fn same(other A) bool
+        return self.x == other.x
+
+fn check(p Same, q Same) bool
+    return p.same(q)
+
+fn main()
+    let ok = check(A(1), A(1))

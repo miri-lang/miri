@@ -15,6 +15,7 @@ use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::bounds::{Bound, Bounds};
 use crate::ast::type_arguments::{TypeArgKind, ValueArg};
+use crate::ast::types::is_trait_self;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeDeclarationKind, TypeKind, STRING_TYPE_NAME,
 };
@@ -725,6 +726,9 @@ impl TypeChecker {
             return Some(self.check_generic_in_t1(name1, bounds, t2, context));
         }
 
+        if is_trait_self(&t2.kind) {
+            return Some(self.check_trait_self_in_t2(&t2.kind, t1, context));
+        }
         if let TypeKind::Generic(name2, bounds2) = &t2.kind {
             return Some(self.check_generic_in_t2(name2, bounds2, t1, context));
         }
@@ -822,6 +826,19 @@ impl TypeChecker {
         )
     }
 
+    /// Whether a value of `self_kind`, a trait's `Self`, may be used where
+    /// `t1` is expected. `Self` is always a class implementing the trait, so
+    /// it converts to a value of that trait, or of one the trait extends, the
+    /// way the class itself does.
+    fn check_trait_self_in_t2(&self, self_kind: &TypeKind, t1: &Type, context: &Context) -> bool {
+        let TypeKind::Generic(_, bounds) = self_kind else {
+            return false;
+        };
+        bounds
+            .iter()
+            .any(|bound| self.are_compatible(t1, &bound.ty, context))
+    }
+
     /// Checks compatibility when t2 is a generic type.
     fn check_generic_in_t2(
         &self,
@@ -897,7 +914,10 @@ impl TypeChecker {
             Some(own) if !own.is_empty() => {
                 own.entail(|own| self.subject_meets_bound(&own.ty, constraint, kind, context))
             }
-            Some(_) | None => self.subject_meets_bound(argument, constraint, kind, context),
+            Some(_) | None => {
+                !self.misses_bound_for_its_class(argument, constraint, kind)
+                    && self.subject_meets_bound(argument, constraint, kind, context)
+            }
         }
     }
 
@@ -1186,11 +1206,16 @@ fn value_argument(arg: &crate::ast::TypeArgument) -> Option<&crate::ast::TypeArg
 
 /// The bounds a parameter of the enclosing body declares, when `argument`
 /// is one: every caller binds it to some type meeting them, so it is they
-/// that must meet a generic's bound. `None` for any other argument.
-fn parameter_bounds<'c>(argument: &Type, context: &'c Context) -> Option<&'c Bounds> {
-    let TypeKind::Generic(name, _) = &argument.kind else {
+/// that must meet a generic's bound. A trait's `Self` is declared by no
+/// scope and carries its one bound, the trait. `None` for any other
+/// argument.
+fn parameter_bounds<'c>(argument: &'c Type, context: &'c Context) -> Option<&'c Bounds> {
+    let TypeKind::Generic(name, carried) = &argument.kind else {
         return None;
     };
+    if is_trait_self(&argument.kind) {
+        return Some(carried);
+    }
     match context.resolve_type_definition(name) {
         Some(TypeDefinition::Generic(definition)) => Some(&definition.bounds),
         Some(

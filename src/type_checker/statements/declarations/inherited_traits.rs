@@ -12,13 +12,13 @@
 //! method itself: with a body, or abstract to leave it to its own descendants.
 
 use crate::ast::expression::Expression;
-use crate::ast::types::{Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::type_checker::context::{
     class_ancestry, class_is_or_extends, class_method_declaration, MethodInfo, TypeDefinition,
 };
+use crate::type_checker::trait_self::mentions_self;
 use crate::type_checker::TypeChecker;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 impl TypeChecker {
     /// Refuse a subclass that would inherit a body for a trait method whose
@@ -35,9 +35,7 @@ impl TypeChecker {
         let mut reported: BTreeSet<String> = BTreeSet::new();
         for (trait_name, method_name, method) in self.trait_methods_reaching(base_name, trait_names)
         {
-            if methods.contains_key(&method_name)
-                || !self.return_names_trait_self(&method, &trait_name)
-            {
+            if methods.contains_key(&method_name) || !mentions_self(&method.return_type) {
                 continue;
             }
             let Some((declaring, _)) = class_method_declaration(
@@ -89,17 +87,6 @@ impl TypeChecker {
             pending.extend(trait_def.parent_traits.iter().rev().cloned());
         }
         found
-    }
-
-    /// True when `method`'s return type names `Self` of the trait that declares
-    /// it, at any depth (`Self`, `Self?`, `List<Self>`).
-    ///
-    /// Inside a trait `Self` resolves to the trait's own type, so replacing that
-    /// name and seeing the type change is what finds it.
-    pub(crate) fn return_names_trait_self(&self, method: &MethodInfo, trait_name: &str) -> bool {
-        let marker = Type::new(TypeKind::Error, method.return_type.span);
-        let mapping = HashMap::from([(trait_name.to_string(), marker)]);
-        self.substitute_type(&method.return_type, &mapping).kind != method.return_type.kind
     }
 
     /// True when class `candidate` is class `ancestor` or extends it, where

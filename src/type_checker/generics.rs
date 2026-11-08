@@ -16,6 +16,7 @@ use crate::ast::bounds::{Bound, Bounds};
 use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
 use crate::ast::type_arguments::{rewritten, ArithOp, TypeArgKind, TypeArgument, ValueArg};
+use crate::ast::types::is_trait_self;
 use crate::ast::types::{
     BuiltinCollectionKind, FunctionTypeData, Type, TypeDeclarationKind, TypeKind,
 };
@@ -966,6 +967,9 @@ impl TypeChecker {
         constraint: &Type,
         span: Span,
     ) {
+        if self.reports_bound_needing_the_class(argument, constraint, span) {
+            return;
+        }
         self.report_error(
             DiagnosticCode::TypGenericTypeStructure,
             format!(
@@ -1150,6 +1154,21 @@ fn argument_pairs<'t>(
     Vec::new()
 }
 
+/// Whether the parameter `kind` is one the enclosing body declares, so stands
+/// for the body's own argument rather than an inference slot. A trait's
+/// `Self` is declared by every trait without being written, and a default
+/// that reads it is compiled once per implementing class.
+fn declares_parameter(kind: &TypeKind, context: &Context) -> bool {
+    let TypeKind::Generic(name, _) = kind else {
+        return false;
+    };
+    is_trait_self(kind)
+        || matches!(
+            context.resolve_type_definition(name),
+            Some(TypeDefinition::Generic(_))
+        )
+}
+
 impl TypeChecker {
     /// The inference slots of `target` that `source` binds.
     ///
@@ -1202,10 +1221,7 @@ impl TypeChecker {
             return;
         }
         if let TypeKind::Generic(name, _) = &target.kind {
-            let is_declared = matches!(
-                context.resolve_type_definition(name),
-                Some(TypeDefinition::Generic(_))
-            );
+            let is_declared = declares_parameter(&target.kind, context);
             // A slot filled by another open parameter is still unbound.
             let source_is_open = matches!(source.kind, TypeKind::Generic(..));
             if !is_declared && !source_is_open && !bound.iter().any(|(slot, _)| slot == name) {
@@ -1247,11 +1263,7 @@ impl TypeChecker {
         };
         match &ty.kind {
             TypeKind::Generic(name, _) => {
-                let declared = matches!(
-                    context.resolve_type_definition(name),
-                    Some(TypeDefinition::Generic(_))
-                );
-                if !declared && !slots.contains(name) {
+                if !declares_parameter(&ty.kind, context) && !slots.contains(name) {
                     slots.push(name.clone());
                 }
             }

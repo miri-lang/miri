@@ -12,7 +12,7 @@
 
 use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::type_arguments::TypeArgument;
-use crate::ast::types::{TypeKind, SELF_TYPE_NAME};
+use crate::ast::types::TypeKind;
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::value_class::{
     held_value_layout, value_class, LayoutScope, ValueClass, ValueLayout, WordRole,
@@ -121,13 +121,13 @@ pub fn is_counted_in(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
 ///   is typed at its result, so a `Future` local is only ever an annotation.
 /// - A `Linear` wrapper is used exactly once by the type checker's rule, and
 ///   no release path counts it.
-/// - `Self`, unsubstituted, stands for the receiver's type the way a type
-///   parameter stands for its argument.
+///
+/// `Self` is never asked about: every body reads it as the class it is
+/// lowered for, and one that still spells it is refused before codegen.
 fn is_never_counted(kind: &TypeKind) -> bool {
     match kind {
         TypeKind::Void | TypeKind::Result(_, _) | TypeKind::Future(_) | TypeKind::Linear(_) => true,
-        TypeKind::Custom(name, None) => name == SELF_TYPE_NAME,
-        TypeKind::Custom(_, Some(_))
+        TypeKind::Custom(_, _)
         | TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16

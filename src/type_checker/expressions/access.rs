@@ -770,10 +770,16 @@ impl TypeChecker {
     }
 
     /// Whether `prop_name` read off a value of `obj_type` names a method — of
-    /// the class's chain or a trait it implements, of a trait, or of an enum —
-    /// rather than a field.
+    /// the class's chain or a trait it implements, of a trait, of an enum, or
+    /// of a bound of a type parameter, a trait's `Self` included — rather
+    /// than a field.
     fn member_is_a_method(&self, obj_type: &Type, prop_name: &str) -> bool {
         use crate::type_checker::context::{class_method_declaration, collect_class_fields_all};
+        if let TypeKind::Generic(_, bounds) = &obj_type.kind {
+            return bounds
+                .iter()
+                .any(|bound| self.member_is_a_method(&bound.ty, prop_name));
+        }
         let TypeKind::Custom(name, _) = &obj_type.kind else {
             return false;
         };
@@ -992,19 +998,23 @@ impl TypeChecker {
             }
 
             if let Some(result) = self.dispatch_type_definition_member(
-                name, prop_name, obj_type, &type_args, span, context, call_arity,
+                (name, prop_name),
+                (obj_type, receiver),
+                &type_args,
+                span,
+                context,
+                call_arity,
             ) {
-                if self.refuses_generic_method_through_trait_value(
-                    receiver, name, prop_name, &result, span, context,
-                ) || self
-                    .refuses_generic_method_in_device_code(prop_name, &result, span, context)
+                if self
+                    .refuses_generic_method_through_trait_value(receiver, prop_name, &result, span)
+                    || self.refuses_generic_method_in_device_code(prop_name, &result, span, context)
                 {
                     return make_type(TypeKind::Error);
                 }
                 if is_generic_method(&result) {
                     self.record_generic_method_call_requirement(obj_type, prop_name, context);
                 }
-                return self.read_at_bounded_receiver(result, obj_type, receiver);
+                return result;
             }
         }
 
@@ -1039,35 +1049,27 @@ impl TypeChecker {
         }
     }
 
-    /// Refuses `member`, the generic method `method` of the trait
-    /// `trait_name`, read off `receiver`, a value of the trait type; whether
-    /// it refused. Such a value is called through its vtable, and no vtable
-    /// slot holds a body for every type argument. A receiver of a type
-    /// parameter, or the `self` of a body compiled once per class, names the
-    /// type the call is compiled for, and is accepted.
+    /// Refuses `member`, the generic method `method` read off `receiver`, a
+    /// value of a trait type; whether it refused. Such a value is called
+    /// through its vtable, and no vtable slot holds a body for every type
+    /// argument. A receiver of a type parameter, `self` in a trait's default
+    /// included, names the type the call is compiled for, and is accepted.
     fn refuses_generic_method_through_trait_value(
         &mut self,
         receiver: &Type,
-        trait_name: &str,
         method: &str,
         member: &Type,
         span: Span,
-        context: &Context,
     ) -> bool {
         let TypeKind::Function(function) = &member.kind else {
             return false;
         };
-        let is_trait_value = matches!(receiver.kind, TypeKind::Custom(..))
-            && matches!(
-                self.type_table.global_type_definitions.get(trait_name),
-                Some(TypeDefinition::Trait(_))
-            );
-        if function.generics.is_none()
-            || !is_trait_value
-            || self.receiver_may_be_own_self(trait_name, context)
-        {
+        if function.generics.is_none() {
             return false;
         }
+        let Some(trait_name) = self.trait_value_name(receiver) else {
+            return false;
+        };
         let shown = crate::type_checker::diagnostics::shown_type_name(trait_name);
         self.report_error_with_help(
             DiagnosticCode::TypGenericMethodThroughTraitValue,
@@ -1110,39 +1112,6 @@ impl TypeChecker {
             DEVICE_GENERIC_METHOD_HELP.to_string(),
         );
         true
-    }
-
-    /// A member of the trait bounding `lookup`, read at `receiver`: the trait
-    /// wrote its own instances as `Self`, which for a value of a type
-    /// parameter is that parameter, so `a.compare(b)` with `a T` takes a `T`
-    /// and `a.concat(b)` gives one. Any other member is returned as it is.
-    ///
-    /// `lookup` is the receiver narrowed to the one bound that declares the
-    /// member, and is used only to find that bound; `Self` is the receiver
-    /// with every bound it has, so `x.twice().name()` on a `T implements
-    /// Doubler and Named` reads `name` on a `T` that is still `Named`.
-    fn read_at_bounded_receiver(&self, member: Type, lookup: &Type, receiver: &Type) -> Type {
-        let TypeKind::Generic(_, bounds) = &lookup.kind else {
-            return member;
-        };
-        let Some(bound) = bounds.only().map(|bound| &bound.ty) else {
-            return member;
-        };
-        // A bound naming a generic trait (`X implements Pick<int>`) is
-        // returned unread, so its `Self` stays the bare trait and `a.pick(b)`
-        // wants a `Pick`; `Self` inside a generic trait also resolves without
-        // the trait's parameters, which refuses the trait itself.
-        let TypeKind::Custom(trait_name, None) = &bound.kind else {
-            return member;
-        };
-        if !matches!(
-            self.type_definitions().get(trait_name),
-            Some(TypeDefinition::Trait(_))
-        ) {
-            return member;
-        }
-        let as_self = HashMap::from([(trait_name.clone(), receiver.clone())]);
-        self.substitute_type(&member, &as_self)
     }
 
     /// The `hash()` a value of `obj_type` answers without declaring one: the
@@ -1206,11 +1175,14 @@ impl TypeChecker {
     /// Dispatches member access to the appropriate type definition handler with arity awareness.
     /// Returns Some with the result type, or None if no definition was found.
     #[allow(clippy::too_many_arguments)]
+    ///
+    /// `obj_type` is the receiver read at the type declaring the member;
+    /// `receiver` is the receiver as written, which a trait's `Self` is read
+    /// at.
     fn dispatch_type_definition_member(
         &mut self,
-        type_name: &str,
-        prop_name: &str,
-        obj_type: &Type,
+        (type_name, prop_name): (&str, &str),
+        (obj_type, receiver): (&Type, &Type),
         type_args: &Option<Vec<TypeArgument>>,
         span: Span,
         context: &mut Context,
@@ -1237,11 +1209,20 @@ impl TypeChecker {
                 Some(self.infer_member_struct(&def, type_name, prop_name, type_args, span, context))
             }
             Some(TypeDefinition::Class(def)) => Some(self.infer_member_class(
-                &def, type_name, prop_name, type_args, span, context, call_arity,
+                &def,
+                (type_name, prop_name),
+                (type_args, receiver),
+                span,
+                context,
+                call_arity,
             )),
-            Some(TypeDefinition::Trait(trait_def)) => Some(
-                self.infer_member_trait(type_name, &trait_def, prop_name, type_args, span, context),
-            ),
+            Some(TypeDefinition::Trait(trait_def)) => Some(self.infer_member_trait(
+                (type_name, &trait_def),
+                prop_name,
+                (type_args, receiver),
+                span,
+                context,
+            )),
             Some(TypeDefinition::Enum(enum_def)) => Some(
                 self.infer_member_enum(&enum_def, type_name, prop_name, obj_type, span, context),
             ),
@@ -1613,9 +1594,8 @@ impl TypeChecker {
     fn infer_member_class(
         &mut self,
         def: &crate::type_checker::context::ClassDefinition,
-        name: &str,
-        prop_name: &str,
-        type_args: &Option<Vec<TypeArgument>>,
+        (name, prop_name): (&str, &str),
+        (type_args, self_type): (&Option<Vec<TypeArgument>>, &Type),
         span: Span,
         context: &mut Context,
         call_arity: Option<usize>,
@@ -1636,7 +1616,9 @@ impl TypeChecker {
             return ty;
         }
 
-        if let Some(ty) = self.infer_member_class_trait_fallback(name, prop_name, type_args) {
+        if let Some(ty) =
+            self.infer_member_class_trait_fallback((name, prop_name), type_args, self_type, span)
+        {
             return ty;
         }
 
@@ -2067,9 +2049,10 @@ impl TypeChecker {
     /// [`resolve_method_source`]: crate::type_checker::context::resolve_method_source
     fn infer_member_class_trait_fallback(
         &mut self,
-        name: &str,
-        prop_name: &str,
+        (name, prop_name): (&str, &str),
         type_args: &Option<Vec<TypeArgument>>,
+        self_type: &Type,
+        span: Span,
     ) -> Option<Type> {
         let definitions = &self.type_table.global_type_definitions;
         let default = inherited_trait_default(definitions, name, prop_name)
@@ -2080,6 +2063,10 @@ impl TypeChecker {
         let pins = pins_of(&supertypes, &trait_name)
             .cloned()
             .unwrap_or_default();
+        let Some(pins) = self.pins_at_receiver(pins, (prop_name, &method_info), self_type, span)
+        else {
+            return Some(make_type(TypeKind::Error));
+        };
         Some(self.build_method_type(&method_info, &pins))
     }
 
@@ -2174,17 +2161,15 @@ impl TypeChecker {
 
     fn infer_member_trait(
         &mut self,
-        name: &str,
-        trait_def: &crate::type_checker::context::TraitDefinition,
+        (name, trait_def): (&str, &crate::type_checker::context::TraitDefinition),
         prop_name: &str,
-        type_args: &Option<Vec<TypeArgument>>,
+        (type_args, self_type): (&Option<Vec<TypeArgument>>, &Type),
         span: Span,
         context: &mut Context,
     ) -> Type {
         let pinned = self.build_trait_method_mapping(trait_def, type_args);
         self.record_method_pinning_sites(name, prop_name, &pinned, span, context);
         self.record_trait_method_call(name, prop_name, type_args.as_deref(), span);
-        self.record_self_method_requirement(name, prop_name, context);
         let mut to_check: Vec<String> = vec![name.to_string()];
         let mut visited = std::collections::HashSet::new();
         while let Some(t_name) = to_check.pop() {
@@ -2206,6 +2191,11 @@ impl TypeChecker {
             };
             if let Some(method_info) = method_info {
                 let pins = self.trait_method_pins(name, &t_name, pinned);
+                let Some(pins) =
+                    self.pins_at_receiver(pins, (prop_name, &method_info), self_type, span)
+                else {
+                    return make_type(TypeKind::Error);
+                };
                 return self.build_method_type(&method_info, &pins);
             }
             to_check.extend(parent_traits);

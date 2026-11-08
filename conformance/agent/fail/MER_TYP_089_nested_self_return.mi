@@ -1,0 +1,19 @@
+// expect: MER_TYP_089
+// summary: Triggers MER_TYP_089: a method returning Self inside another type is called through a value of the trait type.
+use system.collections.list
+
+trait Copies
+    fn twins() List<Self>
+
+class A implements Copies
+    var x int
+    fn init(x int)
+        self.x = x
+    public fn twins() List<A>
+        return List([A(self.x), A(self.x)])
+
+fn pair(c Copies) int
+    return c.twins().length()
+
+fn main()
+    let n = pair(A(1))

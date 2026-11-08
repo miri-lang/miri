@@ -1,0 +1,19 @@
+// summary: Accepted counterpart of MER_TYP_089: both values are taken at one type parameter bounded by the trait.
+// expect-stdout: true
+use system.io
+
+trait Same
+    fn same(other Self) bool
+
+class A implements Same
+    var x int
+    fn init(x int)
+        self.x = x
+    public fn same(other A) bool
+        return self.x == other.x
+
+fn check<T implements Same>(p T, q T) bool
+    return p.same(q)
+
+fn main()
+    println(f"{check(A(1), A(1))}")

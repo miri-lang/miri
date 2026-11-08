@@ -113,6 +113,14 @@ pub struct LoweringContext<'a> {
     /// that still spells it resolves to no layout at all and reads fields at
     /// the wrong offsets; consult this before a declared type becomes a local.
     pub self_type: Option<Type>,
+    /// The substitution reading `Self` as the class `self_type` names, built
+    /// once per body by [`Self::set_self_type`]; empty outside a class body.
+    self_pin: HashMap<String, Type>,
+    /// Whether the body is a trait default lowered for the class `self_type`
+    /// names. Its types were checked with `Self` a parameter of the trait, so
+    /// a generic class it spells at `Self` is an instantiation the checker
+    /// never registered.
+    pub lowers_trait_default: bool,
 
     /// The gpu-resident parameters this body was specialized for, as argument
     /// position and device handle.
@@ -240,6 +248,8 @@ impl<'a> LoweringContext<'a> {
             source_path,
             generic_subs: HashMap::new(),
             self_type: None,
+            self_pin: HashMap::new(),
+            lowers_trait_default: false,
             residency_handles: Vec::new(),
             compilation_ids: new_shared_compilation_ids(),
             held_reads: super::sequencing::HeldReads::default(),
@@ -260,13 +270,13 @@ impl<'a> LoweringContext<'a> {
         let mut ctx = Self::new(kernel, parent.type_checker, parent.is_release);
         ctx.read_source_like(parent);
         ctx.generic_subs = parent.generic_subs.clone();
-        ctx.self_type = parent.self_type.clone();
+        ctx.inherit_self_type(parent);
         ctx.held_reads = parent.held_reads.for_kernel();
         ctx
     }
 
-    /// The type the type checker recorded for an expression, with the active
-    /// instantiation substitution applied.
+    /// The type the type checker recorded for an expression, with `Self` and
+    /// the active instantiation substitution applied.
     ///
     /// A body lowered for one instantiation of a generic class re-uses types the
     /// type checker recorded once, generically. Read raw, those types still name
@@ -276,7 +286,10 @@ impl<'a> LoweringContext<'a> {
     /// unchanged.
     pub fn recorded_type(&self, expr_id: usize) -> Option<Type> {
         let ty = self.type_checker.get_type(expr_id)?;
-        Some(super::apply_generic_sub(ty, &self.generic_subs))
+        Some(super::apply_generic_sub(
+            &self.resolve_self_in(ty),
+            &self.generic_subs,
+        ))
     }
 
     /// The type arguments the type checker inferred for a call to a generic
@@ -397,15 +410,34 @@ impl<'a> LoweringContext<'a> {
             .collect()
     }
 
-    /// Resolve the `Self` keyword in `ty` against the enclosing class.
+    /// Resolve `Self` in `ty` against the class this body is lowered for.
     ///
-    /// Returns `ty` unchanged outside a class body, where `Self` is not a
-    /// legal spelling and the type checker has already rejected it.
+    /// A trait default is checked once with `Self` a parameter of the trait,
+    /// and lowered once per implementing class, so every type its body records
+    /// reads `Self` as that class here. Returns `ty` unchanged outside a class
+    /// body, where `Self` is not a legal spelling and the type checker has
+    /// already rejected it.
     pub fn resolve_self_in(&self, ty: &Type) -> Type {
-        match &self.self_type {
-            Some(self_type) => super::substitute_self_type(ty, self_type),
-            None => ty.clone(),
+        if self.self_pin.is_empty() || !super::spells_self(ty) {
+            return ty.clone();
         }
+        super::apply_generic_sub(ty, &self.self_pin)
+    }
+
+    /// Lower this body for `self_type`, the class it belongs to, with `Self`
+    /// read as `reads_self_as`: the same class, at its own open parameters
+    /// when `self_type` names a generic class bare.
+    pub fn set_self_type(&mut self, self_type: Type, reads_self_as: &Type) {
+        self.self_pin = super::self_substitution(reads_self_as);
+        self.self_type = Some(self_type);
+    }
+
+    /// Read `Self` as `parent` does: a closure or a kernel written inside a
+    /// body is lowered for the class that body is.
+    pub fn inherit_self_type(&mut self, parent: &LoweringContext<'_>) {
+        self.self_type = parent.self_type.clone();
+        self.self_pin = parent.self_pin.clone();
+        self.lowers_trait_default = parent.lowers_trait_default;
     }
 
     /// Share `namer` with this context so kernel names are allocated from the
@@ -853,7 +885,8 @@ impl<'a> LoweringContext<'a> {
     /// own declaration contradicts. Outside a monomorphized body the
     /// substitution is empty and `ty` is kept as written.
     fn instantiated_local_decl(&self, ty: Type, span: Span) -> LocalDecl {
-        LocalDecl::new(super::apply_generic_sub(&ty, &self.generic_subs), span)
+        let ty = super::apply_generic_sub(&self.resolve_self_in(&ty), &self.generic_subs);
+        LocalDecl::new(ty, span)
     }
 
     /// Returns `true` if `kind` requires reference-count management, as the

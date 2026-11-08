@@ -474,7 +474,9 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 /// A named type is admitted only when the type table defines it. The same
 /// spelling carries a generic parameter still awaiting substitution (`T` reaches
 /// here as `Custom("T", None)`), and monomorphizing at a placeholder would name
-/// a body no call site can reach.
+/// a body no call site can reach. A generic type named bare is refused the
+/// same way: it is the shared body's spelling of the type at parameters still
+/// open, so it has no layout an instance could be built at.
 ///
 /// A type built out of others — an instantiated generic class, a nested
 /// collection, an optional, a tuple — is admitted on its spelling alone. Its
@@ -490,15 +492,15 @@ pub(crate) fn is_monomorphizable_type_argument(
     let TypeKind::Custom(name, None) = kind else {
         return true;
     };
-    matches!(
-        type_definitions.get(name),
+    match type_definitions.get(name) {
         Some(
-            TypeDefinition::Class(_)
-                | TypeDefinition::Struct(_)
-                | TypeDefinition::Enum(_)
-                | TypeDefinition::Trait(_)
-        )
-    )
+            definition @ (TypeDefinition::Class(_)
+            | TypeDefinition::Struct(_)
+            | TypeDefinition::Enum(_)),
+        ) => definition.generics().is_none_or(<[_]>::is_empty),
+        Some(TypeDefinition::Trait(_)) => true,
+        Some(TypeDefinition::Generic(_) | TypeDefinition::Alias(_)) | None => false,
+    }
 }
 
 /// Whether the symbol mangler has a spelling for `kind` at all.

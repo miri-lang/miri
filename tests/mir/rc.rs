@@ -147,15 +147,14 @@ fn rc_classifier_never_counts_scalars_or_open_parameters() {
     assert!(!counted("v", &["V"]));
 }
 
-/// `void`, and `Self` before substitution, hold no count of their own.
+/// `void` holds no count of its own.
 #[test]
-fn rc_classifier_never_counts_void_or_self() {
+fn rc_classifier_never_counts_void() {
     use miri::mir::rc::RcClassifier;
     use std::collections::HashSet;
     let classifier = RcClassifier::default();
     let open = HashSet::new();
     assert!(!classifier.is_counted(&TypeKind::Void, &open));
-    assert!(!classifier.is_counted(&TypeKind::Custom("Self".to_string(), None), &open));
 }
 
 /// Every kind a test asks the two classifier queries about, written in the

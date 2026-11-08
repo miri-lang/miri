@@ -375,13 +375,13 @@ fn test_cast_of_moved_parameter_increfs_the_parameter() {
 
 #[test]
 fn test_cast_of_moved_parameter_to_unmanaged_destination_gets_no_incref() {
-    // A cast to `Self` is how a stdlib method forwards its receiver to a
-    // `runtime "core" fn` whose parameter is declared `Self`.  `Self` is not a
-    // managed type, so the destination never reaches a DecRef; retaining the
-    // parameter here would strand the reference and leak the receiver.
-    let cast = Rvalue::Cast(Box::new(Operand::Move(place(1))), custom("Self"));
+    // A cast to a raw pointer hands a managed value on as its address. A raw
+    // pointer is not a managed type, so the destination never reaches a
+    // DecRef; retaining the parameter here would strand the reference and
+    // leak the value.
+    let cast = Rvalue::Cast(Box::new(Operand::Move(place(1))), ty(TypeKind::RawPtr));
     let mut body = body_with(
-        &[ty(TypeKind::Void), custom("Point"), custom("Self")],
+        &[ty(TypeKind::Void), custom("Point"), ty(TypeKind::RawPtr)],
         1,
         vec![assign(place(2), cast.clone())],
     );

@@ -28,6 +28,7 @@ use super::instantiation_requirements::{
     spells_a_type, written_type, GenericBodyId, InstantiationRequirements, Obligation, Pin,
     PinningSite, ReachedBecause, SELF_PIN,
 };
+use super::trait_self::self_trait_name;
 use super::TypeChecker;
 use crate::ast::expression::Expression;
 use crate::ast::implicit_methods::{
@@ -362,7 +363,8 @@ impl TypeChecker {
     ///
     /// Inside a default such a value may be the instance the default runs
     /// for, however it was produced — `self`, an alias of it, what a method
-    /// declared to return `Self` returned on it — and storing it as a trait
+    /// declared to return `Self` returned on it, each typed as the trait's
+    /// `Self` — and storing it as a trait
     /// hands that instance on, as [`Obligation::SelfConversion`] states. A
     /// value that is not the instance is pinned where it was converted, so
     /// counting it too can pin a method nothing reaches, never leave one
@@ -378,11 +380,15 @@ impl TypeChecker {
         ) {
             return;
         }
-        let TypeKind::Custom(actual_name, _) = &actual.kind else {
-            return;
-        };
-        if self.is_copied_per_class(actual_name) {
-            self.record_self_conversion_of(actual_name, context);
+        let copied_per_class = self_trait_name(actual).map(str::to_string).or_else(|| {
+            let TypeKind::Custom(actual_name, _) = &actual.kind else {
+                return None;
+            };
+            self.is_copied_per_class(actual_name)
+                .then(|| actual_name.clone())
+        });
+        if let Some(type_name) = copied_per_class {
+            self.record_self_conversion_of(&type_name, context);
         }
     }
 

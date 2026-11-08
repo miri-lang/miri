@@ -297,7 +297,6 @@ impl<'a> PlaceTypes<'a> {
         !self.definitions.contains_key(name)
             && !is_param(name)
             && BuiltinCollectionKind::from_name(name).is_none()
-            && name != crate::ast::types::SELF_TYPE_NAME
             && !(matches!(spelling, Spelling::InSignature) && self.names_private_type(name))
     }
 

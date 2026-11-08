@@ -11,10 +11,9 @@ use system.ops
 /// answer those becomes `is_empty` / `first` / `last` / `contains` / `index_of`
 /// for free.
 ///
-/// Default methods call `self.length()` and `self.element_at()`. Because the
-/// default body is compiled once with `Self = Queryable` and then re-lowered
-/// per concrete class, those self-calls go through the implementor's vtable
-/// at runtime in the abstract path and statically in the concrete path.
+/// Default methods call `self.length()` and `self.element_at()`. A default
+/// is compiled once for each class that runs it, with `Self` that class, so
+/// those calls reach the implementor's own methods directly.
 public trait Queryable<T> extends Iterable<T>
 
     /// Returns true if the collection contains no elements.

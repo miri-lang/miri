@@ -244,119 +244,82 @@ fn lower_function_body(
     finalize_body(&mut ctx, ast_func.span)
 }
 
-/// Replace the `Self` type keyword with the enclosing type throughout `ty`.
+/// The substitution that reads `Self` as `self_type`, the class a body is
+/// lowered for.
 ///
-/// `Self` is a keyword, not a declared type, so it is absent from
-/// `type_definitions`. Codegen resolves a field projection by looking the
-/// receiver's type name up in that map, and a miss falls back to pointer-sized
-/// fields at offset zero — which omits the vtable pointer that a
-/// trait-implementing class stores in its first slot. A `Self`-typed binding
-/// left unsubstituted therefore reads every field one slot early and returns
-/// wrong values with no diagnostic, so substitution happens here, before any
-/// type reaches layout.
-///
-/// Recurses through the wrappers a `Self` can nest inside (`Self?`,
-/// `List<Self>`, tuples, results, futures) so nested spellings resolve too.
-pub(crate) fn substitute_self_type(ty: &Type, self_type: &Type) -> Type {
-    let substituted_kind = match &ty.kind {
-        TypeKind::Custom(name, None) if name == SELF_TYPE_NAME => return self_type.clone(),
-        TypeKind::Custom(name, Some(args)) => TypeKind::Custom(
-            name.clone(),
-            Some(substitute_self_in_type_args(args, self_type)),
-        ),
-        TypeKind::Option(inner) => {
-            TypeKind::Option(Box::new(substitute_self_type(inner, self_type)))
-        }
-        TypeKind::Linear(inner) => {
-            TypeKind::Linear(Box::new(substitute_self_type(inner, self_type)))
-        }
-        TypeKind::Tuple(elements) => {
-            TypeKind::Tuple(substitute_self_in_type_args(elements, self_type))
-        }
-        TypeKind::OneOf(members) => {
-            TypeKind::OneOf(substitute_self_in_type_args(members, self_type))
-        }
-        TypeKind::Result(ok, err) => {
-            let mut both = substitute_self_in_type_args(&[*ok.clone(), *err.clone()], self_type);
-            let substituted_err = both.pop().unwrap_or_else(|| *err.clone());
-            let substituted_ok = both.pop().unwrap_or_else(|| *ok.clone());
-            TypeKind::Result(Box::new(substituted_ok), Box::new(substituted_err))
-        }
-        TypeKind::Future(inner) => TypeKind::Future(Box::new(
-            substitute_self_in_type_args(std::slice::from_ref(inner), self_type)
-                .pop()
-                .unwrap_or_else(|| *inner.clone()),
-        )),
-
-        // A `Self` spelled inside a function type would have to be rewritten
-        // through the parameter list, which this substitution does not walk. A
-        // function-typed binding is not a class instance, so it never reaches
-        // field layout, which is what makes an unsubstituted `Self` dangerous.
-        TypeKind::Function(_) => return ty.clone(),
-
-        // The parser-only collection spellings are normalized to `Custom` with
-        // type arguments before MIR lowering runs, so their element types are
-        // substituted through the `Custom` arm above.
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-            return ty.clone()
-        }
-
-        // A generic parameter is resolved by generic substitution, a metatype
-        // names a type rather than holding a value, and `Custom(name, None)`
-        // that is not `Self` is an ordinary named type. None of these can
-        // contain a nested `Self` to rewrite.
-        TypeKind::Generic(_, _) | TypeKind::Meta(_) | TypeKind::Custom(_, None) => {
-            return ty.clone()
-        }
-
-        // Scalars, strings, pointers and the empty types hold no nested type.
-        // Listed rather than matched with `_` so that adding a type-carrying
-        // variant fails to compile here instead of silently skipping
-        // substitution — an unsubstituted `Self` reads fields at the wrong
-        // offsets with no diagnostic.
-        TypeKind::Int
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
-        | TypeKind::U32
-        | TypeKind::U64
-        | TypeKind::U128
-        | TypeKind::Float
-        | TypeKind::F16
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::String
-        | TypeKind::Boolean
-        | TypeKind::Identifier
-        | TypeKind::RawPtr
-        | TypeKind::Void
-        | TypeKind::Error => return ty.clone(),
-    };
-    Type::new(substituted_kind, ty.span)
+/// `Self` names no declared type, so codegen would find no layout for it: a
+/// projection off a binding left at `Self` would read every field at the
+/// wrong offset, and reference counting would take the value for an
+/// uncounted parameter. Every type a class body declares is read through this
+/// map with [`apply_generic_sub`], which walks every type that can nest one.
+/// The pin stays out of a body's `generic_subs`, so it never changes the
+/// symbol a body is named by or whether it counts as an instantiation.
+pub(crate) fn self_substitution(self_type: &Type) -> HashMap<String, Type> {
+    HashMap::from([(SELF_TYPE_NAME.to_string(), self_type.clone())])
 }
 
-/// Substitute `Self` inside type-argument expressions, preserving each
-/// argument's expression id and span so the MIR type cache keeps resolving it.
-/// Arguments that do not wrap a type (a value generic's size literal) pass
-/// through untouched.
-fn substitute_self_in_type_args(args: &[TypeArgument], self_type: &Type) -> Vec<TypeArgument> {
-    args.iter()
-        .map(|arg| {
-            let TypeArgKind::Type(inner, is_nullable) = &arg.node else {
-                return arg.clone();
-            };
-            let mut substituted = arg.clone();
-            substituted.node = TypeArgKind::Type(
-                Box::new(substitute_self_type(inner, self_type)),
-                *is_nullable,
-            );
-            substituted
-        })
-        .collect()
+/// The type `Self` reads as in a body lowered for `self_type`.
+///
+/// The body a generic class shares among its instantiations is lowered for
+/// the class named bare, yet `Self` there is the class at its own open
+/// parameters (`G<U>`), as the checker types `self` in the class's own
+/// methods. Read as the bare name instead, a trait default's `Holder<Self>`
+/// would name `Holder<G>`: an instance with no type arguments that no copy
+/// can lay out, which the shared body would then ask to be built. Only a
+/// trait default's copy reads `Self` through this: a class's own methods were
+/// checked with `Self` already at the class's parameters.
+fn self_reading(tc: &TypeChecker, self_type: &Type) -> Type {
+    let TypeKind::Custom(class_name, None) = &self_type.kind else {
+        return self_type.clone();
+    };
+    let own =
+        inherited_instantiation::own_parameters_as_arguments(tc.type_definitions(), class_name);
+    if own.is_empty() {
+        return self_type.clone();
+    }
+    let args = own
+        .into_iter()
+        .map(|param| IdNode::new(0, TypeArgKind::Type(Box::new(param), false), self_type.span))
+        .collect();
+    Type::new(
+        TypeKind::Custom(class_name.clone(), Some(args)),
+        self_type.span,
+    )
+}
+
+/// Whether `method_name` lowered for `self_type` is the copy of a trait
+/// default the class inherits rather than a method a class declares.
+fn is_trait_default_copy(tc: &TypeChecker, self_type: &Type, method_name: &str) -> bool {
+    let TypeKind::Custom(class_name, _) = &self_type.kind else {
+        return false;
+    };
+    matches!(
+        crate::type_checker::context::resolve_method_source(
+            tc.type_definitions(),
+            class_name,
+            method_name
+        ),
+        Some(crate::type_checker::context::MethodSource::Default(_))
+    )
+}
+
+/// Whether `ty` spells `Self` anywhere: a trait's `Self` parameter, as the
+/// checker resolves it, or the bare keyword, as a signature writes it.
+pub(crate) fn spells_self(ty: &Type) -> bool {
+    let names_self = |kind: &TypeKind| {
+        matches!(kind, TypeKind::Generic(name, _) | TypeKind::Custom(name, None)
+            if name == SELF_TYPE_NAME)
+    };
+    crate::type_checker::instantiation_requirements::spells_a_type(&ty.kind, &names_self)
+}
+
+/// `ty` with `Self` read as `self_type`; a type naming no `Self` is
+/// returned as it is, without building a substitution.
+pub(crate) fn read_self_as(ty: &Type, self_type: &Type) -> Type {
+    if !spells_self(ty) {
+        return ty.clone();
+    }
+    apply_generic_sub(ty, &self_substitution(self_type))
 }
 
 /// Apply a generic substitution to each type argument of a call's recorded
@@ -914,13 +877,18 @@ fn lower_class_method_body(
     let ret_type_expr = &decl.return_type;
     let body_stmt = &decl.body;
     let props = &decl.properties;
+    let lowers_trait_default = is_trait_default_copy(tc, &self_type, &decl.name);
+    let reads_self_as = if lowers_trait_default {
+        self_reading(tc, &self_type)
+    } else {
+        self_type.clone()
+    };
+    let mut body_subs = subs.clone();
+    body_subs.insert(SELF_TYPE_NAME.to_string(), reads_self_as.clone());
 
     let ret_ty = ret_type_expr.as_deref().map_or_else(
         || Type::new(TypeKind::Void, ast_method.span),
-        |e| {
-            let declared = apply_generic_sub(&resolve_declared_annotation(tc, e), subs);
-            substitute_self_type(&declared, &self_type)
-        },
+        |e| apply_generic_sub(&resolve_declared_annotation(tc, e), &body_subs),
     );
 
     let execution_model = resolve_execution_model(props);
@@ -940,7 +908,8 @@ fn lower_class_method_body(
     // `Self` inside this body names the class being lowered. Recorded so that a
     // declared type spelling `Self` resolves to the class's real layout instead
     // of falling through codegen's unknown-type path.
-    ctx.self_type = Some(self_type.clone());
+    ctx.set_self_type(self_type.clone(), &reads_self_as);
+    ctx.lowers_trait_default = lowers_trait_default;
     // Carry the instantiation substitution so an intrinsic element read typed
     // `T` (e.g. `self.items.element_at(0)`) resolves to the concrete
     // instantiation type instead of the pointer-width fallback.
@@ -990,8 +959,7 @@ fn lower_class_method_body(
         out_params.push(false); // self is never `out`
     }
     for param in params.iter() {
-        let param_ty =
-            substitute_self_type(&resolve_declared_annotation(tc, &param.typ), &self_type);
+        let param_ty = read_self_as(&resolve_declared_annotation(tc, &param.typ), &reads_self_as);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
         out_params.push(param.is_out);
     }

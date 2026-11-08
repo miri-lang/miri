@@ -37,6 +37,7 @@ use super::TypeChecker;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::type_arguments::TypeArgKind;
 use crate::ast::type_arguments::TypeArgument;
+use crate::ast::types::is_trait_self;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diagnostics::DiagnosticCode;
@@ -629,28 +630,30 @@ impl TypeChecker {
         );
     }
 
-    /// Record that the trait default being checked calls `method` through a
-    /// receiver of the trait `trait_name` it belongs to, which in a default
-    /// is `self`: the default is compiled once per class, and the call runs
-    /// that class's own method.
+    /// Record that the body being checked, which the abstract class
+    /// `class_name` declares, calls `method` through a receiver of that class,
+    /// which may be its `self`: the body is compiled once per concrete class
+    /// below it, and the call runs that class's own method.
     ///
-    /// A call through another value of the same trait counts too — it can pin
-    /// a method the default never reaches, never leave one it reaches
-    /// unpinned — except one through a parameter the default declares. A
-    /// parameter holds what its caller passed: an instance converted to the
-    /// trait, whose conversion pins the method, or the caller's own `self`,
-    /// which [`Obligation::SelfConversion`] records where the caller writes
-    /// it.
+    /// A call through another value of the same class counts too — it can pin
+    /// a method the body never reaches, never leave one it reaches unpinned —
+    /// except one through a parameter the body declares. A parameter holds
+    /// what its caller passed: an instance converted to the class, whose
+    /// conversion pins the method, or the caller's own `self`, which
+    /// [`Obligation::SelfConversion`] records where the caller writes it.
+    ///
+    /// A trait's default types its `self` as the trait's `Self`, which
+    /// [`Self::record_parameter_method_requirement`] records instead.
     pub(crate) fn record_self_method_requirement(
         &mut self,
-        trait_name: &str,
+        class_name: &str,
         method: &str,
         context: &Context,
     ) {
         if self.member_receiver_is_parameter {
             return;
         }
-        let Some(body) = self.enclosing_default_of(trait_name, context) else {
+        let Some(body) = self.enclosing_default_of(class_name, context) else {
             return;
         };
         state_obligation(
@@ -676,15 +679,6 @@ impl TypeChecker {
             self.instantiation_requirements.entry(body).or_default(),
             Obligation::SelfConversion { trait_name: owner },
         );
-    }
-
-    /// Whether the receiver of a member of `trait_name` being read may be the
-    /// `self` of the body being checked, which is compiled once per concrete
-    /// class: the body belongs to `trait_name` or a type below it, and the
-    /// receiver is not one of its parameters.
-    pub(crate) fn receiver_may_be_own_self(&self, trait_name: &str, context: &Context) -> bool {
-        !self.member_receiver_is_parameter
-            && self.enclosing_default_of(trait_name, context).is_some()
     }
 
     /// The body being checked, when it is compiled once per concrete class —
@@ -725,6 +719,10 @@ impl TypeChecker {
     /// `receiver`, when `receiver` is one of the body's own trait-bounded
     /// parameters: the call runs the method of whichever class a site binds
     /// the parameter to, so each such site answers for that class's method.
+    ///
+    /// A trait's `Self` is such a parameter of every default the trait
+    /// declares, pinned as [`SELF_PIN`] to the class each copy is compiled
+    /// for: `self`, and any other value the default types `Self`.
     pub(crate) fn record_parameter_method_requirement(
         &mut self,
         receiver: &Type,
@@ -734,7 +732,12 @@ impl TypeChecker {
         if !matches!(&receiver.kind, TypeKind::Generic(_, bounds) if !bounds.is_empty()) {
             return;
         }
-        let Some(parameter) = generic_parameter_in_scope(receiver, context) else {
+        let parameter = if is_trait_self(&receiver.kind) {
+            Some(SELF_PIN)
+        } else {
+            generic_parameter_in_scope(receiver, context)
+        };
+        let Some(parameter) = parameter else {
             return;
         };
         let Some(body) = self.current_body(context) else {
@@ -1297,6 +1300,11 @@ impl TypeChecker {
         let left = self.substitute_type(&written.left, &pinned);
         let right = self.substitute_type(&written.right, &pinned);
         if self.is_unsettled(&left) || self.is_unsettled(&right) {
+            return;
+        }
+        if let Some((trait_name, method)) = self.operator_self_refusal((&left, &written.op, &right))
+        {
+            self.report_operator_through_trait_value((&trait_name, &written.op, method), site.span);
             return;
         }
         if self.ordering_answered_elsewhere(written, &left, &right) {

@@ -160,12 +160,19 @@ pub const CLONE_METHOD_NAME: &str = "clone";
 
 /// Canonical spelling of the `Self` type keyword.
 ///
-/// `Self` names the enclosing class or trait inside its own body. It is a
-/// language keyword rather than a declared type, so it never appears in
-/// `type_definitions`: any consumer that resolves type names by lookup must
-/// substitute the enclosing type first. Centralized so that substitution and
-/// the reserved-name checks share one spelling.
+/// Inside a class or an enum, `Self` is that type. Inside a trait it is the
+/// class implementing the trait: a type parameter every trait declares
+/// without writing it, bounded by the trait, resolved as
+/// `Generic("Self", implements <trait>)`. It is a keyword rather than a
+/// declared type, so it never appears in `type_definitions`. Centralized so
+/// that substitution and the reserved-name checks share one spelling.
 pub const SELF_TYPE_NAME: &str = "Self";
+
+/// Whether `kind` is a trait's `Self`, the type parameter standing for the
+/// class implementing the trait.
+pub fn is_trait_self(kind: &TypeKind) -> bool {
+    matches!(kind, TypeKind::Generic(name, _) if name == SELF_TYPE_NAME)
+}
 
 /// Whether the type expression `expr` is written `Self`.
 pub fn is_written_self(expr: &crate::ast::expression::Expression) -> bool {

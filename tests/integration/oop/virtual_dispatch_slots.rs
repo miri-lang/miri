@@ -294,8 +294,12 @@ fn main()
     );
 }
 
+/// `compare` takes a `Self`, so it is reached through a parameter bounded by
+/// `Comparable`, which names the class; `label` takes none and is reached
+/// through a value of `Labelled`, whose vtable the class fills beside the
+/// stdlib trait's.
 #[test]
-fn test_class_implementing_a_stdlib_trait_and_a_user_trait_dispatches_through_both() {
+fn test_class_implementing_a_stdlib_trait_and_a_user_trait_answers_through_both() {
     assert_runs_with_output(
         r#"
 use system.io
@@ -313,9 +317,11 @@ class Weight implements Comparable, Labelled
     fn label() int
         return 77
 
+fn difference<T implements Comparable>(a T, b T) int
+    return a.compare(b)
+
 fn main()
-    let c Comparable = Weight(50)
-    println(f"{c.compare(Weight(8))}")
+    println(f"{difference(Weight(50), Weight(8))}")
     let l Labelled = Weight(1)
     println(f"{l.label()}")
 "#,

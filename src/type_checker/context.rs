@@ -742,8 +742,15 @@ pub struct Context {
     pub current_function: Option<String>,
     /// Name of the base class of the current class (for super resolution).
     pub current_base_class: Option<String>,
-    /// The type of the current class (for self expression type inference).
+    /// The type the current class, trait or enum's own name stands for
+    /// inside its body: the definition at its own generic parameters.
     pub current_class_type: Option<Type>,
+    /// What `Self` and `self` name inside the current body: the class or
+    /// enum itself, or inside a trait the trait's own `Self` parameter, which
+    /// stands for each class implementing it. Kept apart from
+    /// `current_class_type` because inside a trait the trait's own name still
+    /// names a value of the trait type.
+    pub current_self_type: Option<Type>,
     /// Whether we are currently inside a static method (cannot use `self`).
     pub in_static_method: bool,
     /// Whether a field initializer is being checked. It runs before any
@@ -779,6 +786,7 @@ impl Context {
             current_function: None,
             current_base_class: None,
             current_class_type: None,
+            current_self_type: None,
             in_static_method: false,
             in_field_initializer: false,
             escape_summaries: HashMap::new(),
@@ -926,7 +934,15 @@ impl Context {
     ) {
         self.current_class = Some(class_name);
         self.current_base_class = base_class;
+        self.current_self_type = Some(class_type.clone());
         self.current_class_type = Some(class_type);
+    }
+
+    /// Reads `Self` and `self` inside the class context as `self_type`, which
+    /// inside a trait is the trait's own `Self` parameter rather than the
+    /// trait.
+    pub fn set_self_type(&mut self, self_type: Type) {
+        self.current_self_type = Some(self_type);
     }
 
     /// Exits the current class context.
@@ -934,6 +950,7 @@ impl Context {
         self.current_class = None;
         self.current_base_class = None;
         self.current_class_type = None;
+        self.current_self_type = None;
     }
 
     /// Returns true if we are currently inside a class context.

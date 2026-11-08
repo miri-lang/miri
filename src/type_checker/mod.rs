@@ -75,6 +75,7 @@ pub mod reference_sharing;
 pub(crate) mod runtime_settled;
 mod source_arithmetic;
 pub mod statements;
+pub(crate) mod trait_self;
 mod type_identities;
 pub(crate) mod type_mismatch;
 pub(crate) mod type_set_shorthand;

@@ -8,5 +8,6 @@
 //! [`crate::mir::instantiation::inherited`], shared with code generation.
 
 pub(crate) use crate::mir::instantiation::inherited::{
-    base_class_instantiation, declaring_class_instantiation, own_parameters_left_open,
+    base_class_instantiation, declaring_class_instantiation, own_parameters_as_arguments,
+    own_parameters_left_open,
 };

@@ -998,7 +998,9 @@ A class or enum may declare `fn drop(self)` (on a class, `fn drop()` means the s
 
 ### `Self` Type
 
-Use `Self` in trait method signatures to refer to the implementing class's own type.
+Inside a class or an enum, `Self` is that type. Inside a trait, `Self` is the class implementing the trait: a type parameter every trait declares without writing it, bounded by the trait itself. A trait's default is compiled once for each class that runs it, so in a default `self` and every value written `Self` are that class, and a method called on them is that class's own.
+
+A class implements a trait method by writing itself wherever the trait writes `Self` — as `Self`, or by its own name at its own type arguments — however deeply it is nested: a trait's `fn walker() Walk<T, Self>` is implemented by `fn walker() Walk<String, Words>` in `class Words implements Seq<String>`. A parameter the trait types `Self` may also be written as a class the implementing class extends, which accepts every value the trait asks for. A trait's own name written in its signatures is a value of the trait type, not `Self`: a class implementing `fn bigger(other Shape) bool` takes any `Shape`, and writing `other Circle` there is refused (`MER_TYP_057`), since a caller holding two `Shape` values may hand it a `Square`.
 
 ```miri
 trait SameAs
@@ -1009,6 +1011,28 @@ class Point implements SameAs
     var y int
     fn same(other Point) bool
         self.x == other.x
+```
+
+A method read off a value reads `Self` at that value. On a class it is the class, so `a.pick(b)` with `a Point` takes and returns a `Point`. On a type parameter bounded by the trait it is the parameter, so with `a T` and `T implements SameAs`, `a.same(b)` takes a `T`, and two values of one parameter are always one class.
+
+A value whose type is the trait holds some class implementing it, and does not say which. Through such a value (`MER_TYP_089`):
+
+- a method with a parameter that names `Self` anywhere is refused, since nothing checks that the argument is the receiver's class;
+- a method returning `Self` or `Self?` is called, and its result is a value of the trait type;
+- a method returning `Self` inside another type (`List<Self>`, `Walk<T, Self>`) is refused, since that type is different for every class;
+- an operator whose method takes `Self` is refused, so `==` on two `Equatable` values and `<` on two `Comparable` values are refused rather than compared by where the values live;
+- the value does not stand for a type parameter bounded by a trait that has such a method, or extends one that does: `check(a, b)` with `fn check<T implements SameAs>(p T, q T)` and `a`, `b` declared `SameAs` is refused, as is `Pair<SameAs>` for `class Pair<T implements SameAs>`, and searching a `List<Equatable>`, whose `contains` compares with `==`. A trait whose methods only return a bare `Self` or `Self?` is still met by its own values.
+
+`Self` written inside a function type in a signature (`fn apply(f fn(Self) int) int`) is read the same way. A class extending one that inherits a trait default may override the default only with the signature the base class's copy has, `Self` read as that base class, as for a method the base class declares itself.
+
+The repair is the one a bounded parameter gives: take the values at one type parameter bounded by the trait, and each call is compiled for the class they share.
+
+```miri
+fn check(p SameAs, q SameAs) bool
+    p.same(q)                      // MER_TYP_089: `p` and `q` may be different classes
+
+fn check_one<T implements SameAs>(p T, q T) bool
+    p.same(q)                      // one class, named at each call
 ```
 
 ### Standard Library Traits

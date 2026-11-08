@@ -30,7 +30,6 @@ use crate::ast::types::{
 use crate::ast::Parameter;
 use crate::type_checker::context::{Context, MethodInfo, TypeDefinition};
 use crate::type_checker::TypeChecker;
-use std::collections::HashMap;
 
 impl TypeChecker {
     /// Whether `ty` meets the trait `trait_name` without declaring it.
@@ -163,12 +162,11 @@ impl TypeChecker {
             return None;
         };
         let declared = trait_def.methods.get(method_name)?;
-        let as_self = HashMap::from([(trait_name.to_string(), ty.clone())]);
         let mut method = declared.clone();
         for (_, param) in &mut method.params {
-            *param = self.substitute_type(param, &as_self);
+            *param = self.read_self_at(param, ty);
         }
-        method.return_type = self.substitute_type(&declared.return_type, &as_self);
+        method.return_type = self.read_self_at(&declared.return_type, ty);
         Some(method)
     }
 

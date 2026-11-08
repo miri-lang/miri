@@ -5,7 +5,7 @@
 //!
 //! A body is lowered at its instantiation's arguments, so every type it
 //! declares a local at, builds an aggregate at, casts to or writes a constant
-//! at names a type the program defines, a built-in collection, `Self`, or a
+//! at names a type the program defines, a built-in collection, or a
 //! parameter the body leaves open — a shared generic body leaves its own
 //! parameters open, and is checked against them. A name that is none of these
 //! is a parameter of some other declaration that missed its substitution:

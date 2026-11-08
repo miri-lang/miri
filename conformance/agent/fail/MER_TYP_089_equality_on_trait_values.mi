@@ -1,0 +1,14 @@
+// expect: MER_TYP_089
+// summary: Triggers MER_TYP_089: `==` compares two values of the trait Equatable, whose equals takes Self.
+class A implements Equatable
+    var x int
+    fn init(x int)
+        self.x = x
+    public fn equals(other A) bool
+        return self.x == other.x
+
+fn same(p Equatable, q Equatable) bool
+    return p == q
+
+fn main()
+    let ok = same(A(1), A(1))

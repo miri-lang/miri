@@ -476,8 +476,8 @@ impl TypeChecker {
             return ast_factory::make_type(TypeKind::Error);
         }
 
-        if let Some(class_type) = &context.current_class_type {
-            class_type.clone()
+        if let Some(self_type) = &context.current_self_type {
+            self_type.clone()
         } else {
             self.report_error(
                 DiagnosticCode::TypClassDefinition,

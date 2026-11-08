@@ -18,6 +18,7 @@ mod lent_arguments;
 mod local_borrows;
 mod optional_representation;
 mod parameter_writes;
+mod resolved_self;
 mod stable_collections;
 mod unshared_writes;
 mod value_arguments;

@@ -394,7 +394,7 @@ fn holds_no_reference(param: &Parameter) -> bool {
 /// Whether `ty` is `Self` or a bare name no definition gives: a type
 /// parameter of the declaring class.
 fn is_open_type(ty: &Type, definitions: &HashMap<String, TypeDefinition>) -> bool {
-    matches!(&ty.kind, TypeKind::Custom(name, None) if name == "Self" || !definitions.contains_key(name))
+    matches!(&ty.kind, TypeKind::Custom(name, None) if name == crate::ast::types::SELF_TYPE_NAME || !definitions.contains_key(name))
 }
 
 /// Why the closure parameter `param`, declared as `function`, breaks the

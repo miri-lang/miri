@@ -574,7 +574,7 @@ impl LoweringContext<'_> {
     /// has no concrete spelling names no body a call could reach, so it is left
     /// out.
     pub fn record_class_instantiations(&mut self, ty: &Type) {
-        if self.generic_subs.is_empty() {
+        if !self.reads_types_at_a_substitution() {
             return;
         }
         let found = self.unregistered_class_instantiations(std::iter::once(ty));
@@ -587,12 +587,19 @@ impl LoweringContext<'_> {
     /// drop function of their own type, and a per-instantiation drop function
     /// exists only for a registered instantiation.
     pub fn record_local_class_instantiations(&mut self) {
-        if self.generic_subs.is_empty() {
+        if !self.reads_types_at_a_substitution() {
             return;
         }
         let found =
             self.unregistered_class_instantiations(self.body.local_decls.iter().map(|d| &d.ty));
         self.push_class_instantiations(found);
+    }
+
+    /// Whether the body reads the types the checker recorded through a
+    /// substitution: an instantiation's type arguments, or the class a trait
+    /// default is lowered for.
+    fn reads_types_at_a_substitution(&self) -> bool {
+        !self.generic_subs.is_empty() || self.lowers_trait_default
     }
 
     fn unregistered_class_instantiations<'t>(

@@ -378,7 +378,7 @@ pub(crate) fn emit_held_receiver_method_call(
     let arg_types: Vec<Type> = method
         .params
         .iter()
-        .map(|(_, declared)| super::substitute_self_type(declared, receiver_ty))
+        .map(|(_, declared)| super::read_self_as(declared, receiver_ty))
         .collect();
     let written_count = args.len().saturating_sub(1);
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
@@ -802,7 +802,7 @@ fn method_argument_types(
         .params
         .iter()
         .map(|(_, declared)| {
-            let at_receiver = super::substitute_self_type(declared, m.obj_ty);
+            let at_receiver = super::read_self_as(declared, m.obj_ty);
             let instantiated = apply_generic_sub(&at_receiver, &body_subs);
             super::variable::canonical_declared_type(ctx.type_checker, &instantiated)
         })
