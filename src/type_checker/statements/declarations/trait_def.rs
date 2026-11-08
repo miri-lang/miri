@@ -54,56 +54,55 @@ use crate::type_checker::trait_self::trait_self_type;
 use crate::type_checker::TypeChecker;
 use std::collections::BTreeMap;
 
+/// The syntax of one trait declaration.
+pub(crate) struct TraitDeclaration<'a> {
+    pub name: &'a Expression,
+    pub generics: &'a Option<Vec<Expression>>,
+    pub parent_traits: &'a [Expression],
+    pub body: &'a [Statement],
+    pub visibility: &'a MemberVisibility,
+    pub span: Span,
+}
+
+/// The default method bodies of a trait defined ahead of the body pass,
+/// which the body pass still checks.
+pub(crate) struct TraitBodies<'a> {
+    name: String,
+    generics: Option<&'a [Expression]>,
+    method_statements: Vec<&'a Statement>,
+}
+
 impl TypeChecker {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn check_trait(
-        &mut self,
-        name_expr: &Expression,
-        generics: &Option<Vec<Expression>>,
-        parent_traits: &[Expression],
-        body: &[Statement],
-        visibility: &MemberVisibility,
-        context: &mut Context,
-        span: Span,
-    ) {
-        // Extract and validate trait name
-        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
-            self.report_error(
-                DiagnosticCode::TypTraitDefinition,
-                "Invalid trait name".to_string(),
-                name_expr.span,
-            );
-            return;
-        };
-
-        // Check for duplicate type definitions
-        if let Some(existing) = self.type_table.global_type_definitions.get(&name) {
-            let is_placeholder = match existing {
-                TypeDefinition::Trait(def) => def.methods.is_empty(),
-                _ => false,
-            } || (matches!(existing, TypeDefinition::Trait(_))
-                && self.modules.pre_registered_types.contains(&name));
-
-            if !is_placeholder {
-                self.report_error(
-                    DiagnosticCode::TypTypeAlreadyDefined,
-                    format!(
-                        "Type '{}' is already defined",
-                        crate::type_checker::diagnostics::shown_type_name(&name)
-                    ),
-                    span,
-                );
-                return;
-            }
+    /// Defines a trait and checks its default method bodies in one go.
+    pub(crate) fn check_trait(&mut self, declaration: TraitDeclaration, context: &mut Context) {
+        if let Some(bodies) = self.define_trait(declaration, context) {
+            self.check_trait_bodies(&bodies, context);
         }
+    }
+
+    /// Registers a trait's parents and method signatures, leaving its
+    /// default method bodies to the body pass. `None` when the trait was
+    /// refused — an invalid name or a duplicate declaration.
+    pub(crate) fn define_trait<'a>(
+        &mut self,
+        declaration: TraitDeclaration<'a>,
+        context: &mut Context,
+    ) -> Option<TraitBodies<'a>> {
+        let TraitDeclaration {
+            name: name_expr,
+            generics,
+            parent_traits,
+            body,
+            visibility,
+            span,
+        } = declaration;
+        let name = self.trait_name(name_expr, visibility, span)?;
         self.modules.pre_registered_types.remove(&name);
 
-        // Enter trait scope and set up context
         context.enter_scope();
         let trait_type = make_type(TypeKind::Custom(name.clone(), None));
         context.enter_class(name.clone(), None, trait_type.clone());
 
-        // Resolve all trait dependencies and signatures
         let generic_defs = generics
             .as_ref()
             .map(|gens| self.extract_generic_definitions(gens, context));
@@ -113,14 +112,12 @@ impl TypeChecker {
         let trait_at_own_parameters =
             self.type_at_own_parameters(&name, generics.as_deref(), context);
         context.set_self_type(trait_self_type(trait_at_own_parameters));
-
         let parent_trait_names = self.resolve_parent_traits(parent_traits, context);
         self.refuse_circular_trait_inheritance(&name, &parent_trait_names, name_expr.span);
         let parent_trait_args = self.resolve_parent_trait_args(parent_traits, context);
         let (methods, method_statements) =
             self.collect_trait_methods(body, generic_defs.as_deref().unwrap_or_default(), context);
 
-        // Build and register trait definition
         let trait_def = TraitDefinition {
             name: name.clone(),
             generics: generic_defs,
@@ -130,11 +127,70 @@ impl TypeChecker {
             module: self.modules.current_module.clone(),
         };
         self.finalize_trait_definition(&name, &trait_type, trait_def, visibility, context);
-
-        // Type-check method bodies
-        self.check_trait_method_bodies(method_statements, context);
         context.exit_class();
         context.exit_scope();
+        Some(TraitBodies {
+            name,
+            generics: generics.as_deref(),
+            method_statements,
+        })
+    }
+
+    /// Checks the default method bodies of a trait
+    /// [`define_trait`](Self::define_trait) defined, in a scope where its
+    /// type parameters and `Self` are defined again.
+    pub(crate) fn check_trait_bodies(&mut self, bodies: &TraitBodies, context: &mut Context) {
+        context.enter_scope();
+        let trait_type = make_type(TypeKind::Custom(bodies.name.clone(), None));
+        context.enter_class(bodies.name.clone(), None, trait_type);
+        if let Some(gens) = bodies.generics {
+            // The definition already reported anything wrong with the bounds.
+            let prev = self.suppress_diagnostics;
+            self.suppress_diagnostics = true;
+            self.define_generics(gens, context);
+            self.suppress_diagnostics = prev;
+        }
+        let trait_at_own_parameters =
+            self.type_at_own_parameters(&bodies.name, bodies.generics, context);
+        context.set_self_type(trait_self_type(trait_at_own_parameters));
+        self.check_trait_method_bodies(&bodies.method_statements, context);
+        context.exit_class();
+        context.exit_scope();
+    }
+
+    /// The identity `name_expr` declares a trait under, refusing an invalid
+    /// name or a type already defined by another declaration.
+    fn trait_name(
+        &mut self,
+        name_expr: &Expression,
+        visibility: &MemberVisibility,
+        span: Span,
+    ) -> Option<String> {
+        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
+            self.report_error(
+                DiagnosticCode::TypTraitDefinition,
+                "Invalid trait name".to_string(),
+                name_expr.span,
+            );
+            return None;
+        };
+        let Some(existing) = self.type_table.global_type_definitions.get(&name) else {
+            return Some(name);
+        };
+        let is_placeholder = matches!(existing, TypeDefinition::Trait(def)
+            if def.methods.is_empty() || self.modules.pre_registered_types.contains(&name));
+        if is_placeholder {
+            return Some(name);
+        }
+        self.report_error(
+            DiagnosticCode::TypTypeAlreadyDefined,
+            format!(
+                "Type '{}' is already defined",
+                crate::type_checker::diagnostics::shown_type_name(&name)
+            ),
+            span,
+        );
+        None
     }
 
     fn finalize_trait_definition(
@@ -349,10 +405,10 @@ impl TypeChecker {
 
     fn check_trait_method_bodies(
         &mut self,
-        method_statements: Vec<&Statement>,
+        method_statements: &[&Statement],
         context: &mut Context,
     ) {
-        for stmt in method_statements {
+        for stmt in method_statements.iter().copied() {
             if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
                 if decl.body.is_none() {
                     continue;

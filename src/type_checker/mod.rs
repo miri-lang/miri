@@ -23,12 +23,13 @@
 //! - [`utils`] - Type predicates, visibility, and error reporting
 //! - [`value_class`] - Which values are scalars, bitwise values, words or managed
 
+use crate::ast::bounds::Bounds;
 use crate::ast::factory::make_type;
 use crate::ast::types::Type;
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
-use crate::type_checker::context::MethodInfo;
+use crate::type_checker::context::{GenericDefinition, MethodInfo};
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -120,6 +121,26 @@ fn top_level_statements(program: &Program) -> impl Iterator<Item = &Statement> +
             std::slice::from_ref(statement)
         }
     })
+}
+
+/// The type parameters `generics` declares, by name, with no bounds: what a
+/// type shell records before every type its bounds may name is registered.
+fn unbounded_parameters(generics: &[Expression]) -> Vec<GenericDefinition> {
+    generics
+        .iter()
+        .filter_map(|generic| {
+            let ExpressionKind::GenericType(name_expr, _, _) = &generic.node else {
+                return None;
+            };
+            let ExpressionKind::Identifier(name, _) = &name_expr.node else {
+                return None;
+            };
+            Some(GenericDefinition {
+                name: name.clone(),
+                bounds: Bounds::default(),
+            })
+        })
+        .collect()
 }
 
 /// Residency verdict for a function: whether it can safely accept gpu-resident args.
@@ -702,15 +723,7 @@ impl TypeChecker {
     }
 
     fn run_pass_collect_type_shells(&mut self, program: &Program) {
-        for statement in &program.body {
-            if let StatementKind::Block(stmts) = &statement.node {
-                for stmt in stmts {
-                    self.collect_type_shells(stmt);
-                }
-            } else {
-                self.collect_type_shells(statement);
-            }
-        }
+        self.collect_type_shells(top_level_statements(program));
     }
 
     fn run_pass_collect_type_aliases(&mut self, program: &Program, context: &mut Context) {
@@ -785,44 +798,69 @@ impl TypeChecker {
         self.diagnostics.extend_warnings(uam_warnings);
     }
 
-    /// Register class/trait/struct/enum names as empty shells. Runs before
-    /// `collect_declaration` so that method signatures in later declarations
-    /// can resolve forward references to types declared later in the same
-    /// module (or in a module that recursively imports us back).
-    pub(crate) fn collect_type_shells(&mut self, statement: &Statement) {
-        let mut context = Context::new();
-        let context = &mut context;
-        match &statement.node {
-            StatementKind::Class(class_data) => self.shell_class(class_data, context),
-            StatementKind::Trait(name_expr, generics_expr, _, _, visibility) => {
-                self.shell_trait(name_expr, generics_expr.as_ref(), visibility, context);
-            }
-            StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => {
-                self.shell_struct(name_expr, generics_expr.as_ref(), visibility, context);
-            }
-            StatementKind::Enum(name_expr, generics_expr, _, _, visibility, _) => {
-                self.shell_enum(name_expr, generics_expr.as_ref(), visibility, context);
-            }
-            _ => {}
+    /// Registers every class, trait, struct and enum among `statements` as
+    /// an empty shell, then resolves the bounds of each shell's type
+    /// parameters. Runs before `collect_declaration` so that signatures can
+    /// resolve forward references to types declared later in the same module
+    /// (or in a module that recursively imports us back); a bound is read
+    /// only once every shell is registered, so it may name a later type too.
+    pub(crate) fn collect_type_shells<'a>(
+        &mut self,
+        statements: impl Iterator<Item = &'a Statement>,
+    ) {
+        let shells: Vec<(String, &[Expression])> = statements
+            .filter_map(|statement| self.collect_type_shell(statement))
+            .collect();
+        for (name, generics) in shells {
+            self.resolve_shell_bounds(&name, generics);
         }
     }
 
-    fn shell_class(
+    /// Registers the type `statement` declares as a shell whose type
+    /// parameters carry no bounds yet, and returns the registered name with
+    /// the written parameter list when the shell declares parameters.
+    fn collect_type_shell<'a>(
         &mut self,
-        class_data: &crate::ast::statement::ClassData,
-        context: &mut Context,
-    ) {
-        let Some(name) = self.register_declared_identity(&class_data.name, &class_data.visibility)
-        else {
-            return;
-        };
-        if self.type_table.global_type_definitions.contains_key(&name) {
-            return;
+        statement: &'a Statement,
+    ) -> Option<(String, &'a [Expression])> {
+        match &statement.node {
+            StatementKind::Class(class_data) => self
+                .shell_class(class_data)
+                .zip(class_data.generics.as_deref()),
+            StatementKind::Trait(name_expr, generics_expr, _, _, visibility) => self
+                .shell_trait(name_expr, generics_expr.as_deref(), visibility)
+                .zip(generics_expr.as_deref()),
+            StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => self
+                .shell_struct(name_expr, generics_expr.as_deref(), visibility)
+                .zip(generics_expr.as_deref()),
+            StatementKind::Enum(name_expr, generics_expr, _, _, visibility, _) => self
+                .shell_enum(name_expr, generics_expr.as_deref(), visibility)
+                .zip(generics_expr.as_deref()),
+            _ => None,
         }
-        let generics = class_data
-            .generics
-            .as_ref()
-            .map(|gens| self.extract_generic_definitions(gens, context));
+    }
+
+    /// Gives the shell registered as `name` the type parameters `generics`
+    /// declares, each bound resolved.
+    fn resolve_shell_bounds(&mut self, name: &str, generics: &[Expression]) {
+        let mut context = Context::new();
+        let resolved = Some(self.extract_generic_definitions(generics, &mut context));
+        match self.type_table.global_type_definitions.get_mut(name) {
+            Some(TypeDefinition::Class(definition)) => definition.generics = resolved,
+            Some(TypeDefinition::Trait(definition)) => definition.generics = resolved,
+            Some(TypeDefinition::Struct(definition)) => definition.generics = resolved,
+            Some(TypeDefinition::Enum(definition)) => definition.generics = resolved,
+            Some(TypeDefinition::Generic(_) | TypeDefinition::Alias(_)) | None => {}
+        }
+        self.invalidate_shared_type_definitions();
+    }
+
+    fn shell_class(&mut self, class_data: &crate::ast::statement::ClassData) -> Option<String> {
+        let name = self.register_declared_identity(&class_data.name, &class_data.visibility)?;
+        if self.type_table.global_type_definitions.contains_key(&name) {
+            return None;
+        }
+        let generics = class_data.generics.as_deref().map(unbounded_parameters);
         let base_class_name: Option<String> = class_data
             .base_class
             .as_ref()
@@ -848,27 +886,25 @@ impl TypeChecker {
                 runtime_settled_methods: std::collections::BTreeSet::new(),
             }),
         );
-        self.modules.pre_registered_types.insert(name);
+        self.modules.pre_registered_types.insert(name.clone());
+        Some(name)
     }
 
     fn shell_trait(
         &mut self,
         name_expr: &Expression,
-        generics_expr: Option<&Vec<Expression>>,
+        generics_expr: Option<&[Expression]>,
         visibility: &MemberVisibility,
-        context: &mut Context,
-    ) {
-        let Some(name_str) = self.register_declared_identity(name_expr, visibility) else {
-            return;
-        };
+    ) -> Option<String> {
+        let name_str = self.register_declared_identity(name_expr, visibility)?;
         if self
             .type_table
             .global_type_definitions
             .contains_key(&name_str)
         {
-            return;
+            return None;
         }
-        let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
+        let generics = generics_expr.map(unbounded_parameters);
         self.register_type_definition(
             name_str.clone(),
             TypeDefinition::Trait(context::TraitDefinition {
@@ -880,23 +916,21 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
             }),
         );
-        self.modules.pre_registered_types.insert(name_str);
+        self.modules.pre_registered_types.insert(name_str.clone());
+        Some(name_str)
     }
 
     fn shell_struct(
         &mut self,
         name_expr: &Expression,
-        generics_expr: Option<&Vec<Expression>>,
+        generics_expr: Option<&[Expression]>,
         visibility: &MemberVisibility,
-        context: &mut Context,
-    ) {
-        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
-            return;
-        };
+    ) -> Option<String> {
+        let name = self.register_declared_identity(name_expr, visibility)?;
         if self.type_table.global_type_definitions.contains_key(&name) {
-            return;
+            return None;
         }
-        let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
+        let generics = generics_expr.map(unbounded_parameters);
         self.register_type_definition(
             name.clone(),
             TypeDefinition::Struct(context::StructDefinition {
@@ -905,23 +939,21 @@ impl TypeChecker {
                 module: self.modules.current_module.clone(),
             }),
         );
-        self.modules.pre_registered_types.insert(name);
+        self.modules.pre_registered_types.insert(name.clone());
+        Some(name)
     }
 
     fn shell_enum(
         &mut self,
         name_expr: &Expression,
-        generics_expr: Option<&Vec<Expression>>,
+        generics_expr: Option<&[Expression]>,
         visibility: &MemberVisibility,
-        context: &mut Context,
-    ) {
-        let Some(name) = self.register_declared_identity(name_expr, visibility) else {
-            return;
-        };
+    ) -> Option<String> {
+        let name = self.register_declared_identity(name_expr, visibility)?;
         if self.type_table.global_type_definitions.contains_key(&name) {
-            return;
+            return None;
         }
-        let generics = generics_expr.map(|gens| self.extract_generic_definitions(gens, context));
+        let generics = generics_expr.map(unbounded_parameters);
         self.register_type_definition(
             name.clone(),
             TypeDefinition::Enum(context::EnumDefinition {
@@ -933,7 +965,8 @@ impl TypeChecker {
                 non_exhaustive: false,
             }),
         );
-        self.modules.pre_registered_types.insert(name);
+        self.modules.pre_registered_types.insert(name.clone());
+        Some(name)
     }
 
     /// Preliminary pass to register declarations without checking their bodies.
@@ -959,14 +992,8 @@ impl TypeChecker {
                 );
             }
             StatementKind::Class(class_data) => self.collect_class_decl(class_data, context),
-            StatementKind::Struct(name_expr, generics_expr, _, _, visibility, _) => {
-                self.shell_struct(name_expr, generics_expr.as_ref(), visibility, context);
-            }
-            StatementKind::Enum(name_expr, generics_expr, _, _, visibility, _) => {
-                self.shell_enum(name_expr, generics_expr.as_ref(), visibility, context);
-            }
-            StatementKind::Trait(name_expr, generics_expr, _, _, visibility) => {
-                self.shell_trait(name_expr, generics_expr.as_ref(), visibility, context);
+            StatementKind::Struct(..) | StatementKind::Enum(..) | StatementKind::Trait(..) => {
+                self.collect_type_shells(std::iter::once(statement));
             }
             StatementKind::Use(path_expr, alias) => {
                 self.check_use(path_expr, alias, context);

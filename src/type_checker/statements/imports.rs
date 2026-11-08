@@ -652,19 +652,7 @@ impl TypeChecker {
     }
 
     fn module_collect_shells(&mut self, module_ast: &Program) {
-        for stmt in &module_ast.body {
-            match &stmt.node {
-                StatementKind::Use(..) => {}
-                StatementKind::Block(stmts) => {
-                    for s in stmts {
-                        if !matches!(s.node, StatementKind::Use(..)) {
-                            self.collect_type_shells(s);
-                        }
-                    }
-                }
-                _ => self.collect_type_shells(stmt),
-            }
-        }
+        self.collect_type_shells(crate::type_checker::top_level_statements(module_ast));
     }
 
     fn module_collect_type_aliases(&mut self, module_ast: &Program, context: &mut Context) {

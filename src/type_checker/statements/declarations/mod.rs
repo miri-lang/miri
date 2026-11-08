@@ -15,3 +15,4 @@ pub mod trait_def;
 pub(crate) use class_def::ClassBodies;
 pub(crate) use enum_def::{EnumBodies, EnumDeclaration};
 pub(crate) use func::FunctionDeclarationInfo;
+pub(crate) use trait_def::{TraitBodies, TraitDeclaration};

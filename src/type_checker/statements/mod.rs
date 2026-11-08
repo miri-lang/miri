@@ -49,7 +49,7 @@ use crate::type_checker::attributes::{DeprecatedKind, Deprecation};
 use crate::type_checker::context::{
     AliasDefinition, Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
-use crate::type_checker::statements::declarations::EnumDeclaration;
+use crate::type_checker::statements::declarations::{EnumDeclaration, TraitDeclaration};
 use crate::type_checker::TypeChecker;
 
 pub mod control_flow;
@@ -405,15 +405,18 @@ impl TypeChecker {
             StatementKind::Class(class_data) => {
                 self.check_class_statement(class_data, statement.span, context)
             }
-            StatementKind::Trait(name, generics, parent_traits, body, vis) => self.check_trait(
-                name,
-                generics,
-                parent_traits,
-                body,
-                vis,
-                context,
-                statement.span,
-            ),
+            StatementKind::Trait(name, generics, parent_traits, body, visibility) => self
+                .check_trait(
+                    TraitDeclaration {
+                        name,
+                        generics,
+                        parent_traits,
+                        body,
+                        visibility,
+                        span: statement.span,
+                    },
+                    context,
+                ),
             StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
             }

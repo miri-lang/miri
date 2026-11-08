@@ -9,6 +9,7 @@ pub mod basic;
 pub mod bounded_parameter_fields;
 pub mod bounded_parameter_methods;
 pub mod bounded_type_arguments;
+pub mod bounds_naming_later_types;
 pub mod bounds_naming_parameters;
 pub mod classes_inside_generic_functions;
 pub mod declaration_order;
