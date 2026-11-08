@@ -323,6 +323,17 @@ fn split_of(writes: &ReceiverWrites, class: &str) -> (Vec<String>, Vec<String>) 
     (writers, readers)
 }
 
+/// `iterator` is listed among the writers because its body hands `self` to
+/// the iterator's constructor, and handing the receiver to any function is
+/// taken to write it.
+///
+/// TODO: a hand-off to a Miri function writes the receiver only through an
+/// `out` parameter (a function that writes its parameter copies it on
+/// entry), the rule `parameters::writes_argument` already applies to
+/// parameters. Reading the callee's signature here would make `iterator` a
+/// reader, and an explicit `.iterator()` on a shared collection would stop
+/// copying the collection first; a `for` loop already calls it without the
+/// copy.
 #[test]
 fn the_standard_library_collections_write_only_through_their_writers() {
     let programs = standard_library();
@@ -334,6 +345,7 @@ fn the_standard_library_collections_write_only_through_their_writers() {
             vec![
                 "clear",
                 "insert",
+                "iterator",
                 "pop",
                 "push",
                 "remove",
@@ -345,9 +357,9 @@ fn the_standard_library_collections_write_only_through_their_writers() {
                 "sort",
             ],
         ),
-        ("Map", vec!["clear", "remove", "set"]),
-        ("Set", vec!["add", "clear", "remove"]),
-        ("Array", vec!["reverse", "set", "sort"]),
+        ("Map", vec!["clear", "iterator", "remove", "set"]),
+        ("Set", vec!["add", "clear", "iterator", "remove"]),
+        ("Array", vec!["iterator", "reverse", "set", "sort"]),
     ] {
         let (writers, readers) = split_of(&writes, class);
         assert_eq!(
