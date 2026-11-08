@@ -8,10 +8,10 @@
 //! its elements, or a map its keys, must apply the rule `==` applies to them:
 //! a string by its content, a float by the number it holds, a struct, tuple
 //! or enum through the equality synthesized from its `==`, an optional held
-//! as its bytes field by field, a class, list or array through its own
-//! `equals`. An [`ElementIdentity`] names that rule for one
-//! element type, read by the type the element is, so a backend registers it
-//! and decides nothing.
+//! as its bytes field by field, a class or a built-in collection through its
+//! own `equals`. An [`ElementIdentity`] names that rule for one element type,
+//! read by the type the element is, so a backend registers it and decides
+//! nothing.
 
 use super::{TypeFacts, ValueLayout};
 use crate::ast::type_arguments::TypeArgument;
@@ -127,10 +127,10 @@ impl TypeFacts {
     /// `kind`, or `None` when the element type does not answer it itself.
     ///
     /// A string, and a class, are ordered through their own `compare`; a
-    /// class, list or array matches through its own `equals`. A recorded
-    /// instantiation of a generic class is asked through the thunk of that
-    /// instantiation, so the body compiled for the element's concrete type
-    /// answers.
+    /// class or a built-in collection matches through its own `equals`. A
+    /// recorded instantiation of a generic class is asked through the thunk of
+    /// that instantiation, so the body compiled for the element's concrete
+    /// type answers.
     pub fn element_method_thunk(
         &self,
         question: ElementQuestion,
@@ -235,16 +235,11 @@ impl TypeFacts {
 }
 
 /// The type whose own method answers `question` for an element of `kind`, if
-/// one could: a string or a class for ordering, a class, list or array for
-/// equality. `Atomic<scalar>` is stored as its scalar and answers nothing.
-///
-/// TODO: a set or map element of a set or map type is still matched by its
-/// reference, although `==` on two sets or maps compares their contents
-/// through the `equals` their classes declare, so two maps `==` calls equal
-/// are two elements of a set. Matching them by content needs this function,
-/// `Walk::visit_named` in `mir::analysis::element_matching` and the thunk
-/// filter in the Cranelift backend's element-method thunk emission to read
-/// the class's own `equals` instead of excluding sets and maps by kind.
+/// one could: a string or a class for ordering, a class or a built-in
+/// collection for equality. Whether that type does answer is read from its
+/// declaration ([`TypeFacts::answers`]), so a collection whose class declares
+/// `equals` is matched through it, as `==` compares two of them.
+/// `Atomic<scalar>` is stored as its scalar and answers nothing.
 fn answering_type_name(question: ElementQuestion, kind: &TypeKind) -> Option<&str> {
     if *kind == TypeKind::String {
         return (question == ElementQuestion::Compare).then_some(STRING_TYPE_NAME);
@@ -258,11 +253,7 @@ fn answering_type_name(question: ElementQuestion, kind: &TypeKind) -> Option<&st
         }
     }
     let builtin = kind.as_builtin_collection()?;
-    let compared_element_wise = matches!(
-        builtin,
-        BuiltinCollectionKind::List | BuiltinCollectionKind::Array
-    );
-    (question == ElementQuestion::Equals && compared_element_wise).then_some(builtin.name())
+    (question == ElementQuestion::Equals).then_some(builtin.name())
 }
 
 /// The type arguments a custom element type is written with.

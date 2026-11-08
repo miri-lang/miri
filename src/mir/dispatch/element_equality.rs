@@ -60,8 +60,8 @@ pub fn synthesized_equality_symbol(
 ///
 /// Every type matched through a callback gets one, consistent with it: a
 /// struct, tuple or enum hashes the parts its synthesized equality compares,
-/// and a class, list or array calls the `hash` it declares beside its
-/// `equals`.
+/// and a class or a built-in collection calls the `hash` it declares beside
+/// its `equals`.
 pub fn element_hash_symbol(
     ty: &TypeKind,
     type_defs: &HashMap<String, TypeDefinition>,
@@ -76,6 +76,14 @@ pub fn element_hash_symbol(
         TypeKind::Array(element, size) => (
             BuiltinCollectionKind::Array.name(),
             Some(vec![element.as_ref().clone(), size.as_ref().clone()]),
+        ),
+        TypeKind::Set(element) => (
+            BuiltinCollectionKind::Set.name(),
+            Some(vec![element.as_ref().clone()]),
+        ),
+        TypeKind::Map(key, value) => (
+            BuiltinCollectionKind::Map.name(),
+            Some(vec![key.as_ref().clone(), value.as_ref().clone()]),
         ),
         _ => return None,
     };

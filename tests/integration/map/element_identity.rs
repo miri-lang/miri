@@ -399,3 +399,67 @@ fn main()
     assert_compiler_error(program, "MER_TYP_002");
     assert_compiler_error(program, "cannot be a Map key, which is matched by `==`");
 }
+
+/// A set key is matched through the set's own `equals`: a set holding the
+/// same elements finds the entry, and setting it again overwrites the value.
+#[test]
+fn map_with_set_keys_matches_by_their_elements() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+use system.collections.set
+
+fn main()
+    var m = Map<Set<String>, int>()
+    m.set({"a", "b"}, 1)
+    m.set({"b", "a"}, 2)
+    let found = m.get({"b", "a"}) ?? 0
+    let missing = m.get({"a"}) ?? 0
+    let has = m.contains_key({"a", "b"})
+    println(f"{m.length()} {found} {missing} {has}")
+"#,
+        "1 2 0 true",
+    );
+}
+
+#[test]
+fn map_with_map_keys_matches_by_their_entries() {
+    assert_runs_with_output(
+        r#"
+use system.collections.map
+
+fn main()
+    var m = Map<Map<String, int>, String>()
+    m.set({"x": 1, "y": 2}, "first")
+    m.set({"y": 2, "x": 1}, "second")
+    m.set({"x": 1}, "other")
+    let found = m.get({"y": 2, "x": 1}) ?? "none"
+    println(f"{m.length()} {found}")
+"#,
+        "2 second",
+    );
+}
+
+#[test]
+fn maps_keyed_by_maps_and_sets_release_what_they_hold() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.map
+use system.collections.set
+
+fn main()
+    var by_map = Map<Map<String, int>, String>()
+    var by_set = Map<Set<int>, int>()
+    var total = 0
+    for i in 0..20
+        by_map.set({f"k{i % 3}": i % 3}, f"v{i}")
+        by_set.set({i % 5, 100}, i)
+        total = total + (by_set.get({100, i % 5}) ?? 0)
+        let seen = by_map.get({f"k{i % 3}": i % 3}) ?? ""
+        if seen.length() == 0
+            total = total - 1000
+    println(f"{by_map.length()} {by_set.length()} {total}")
+"#,
+        "3 5 190",
+    );
+}

@@ -9,7 +9,9 @@
 //! literals share one pooled allocation, so a literal would match by address
 //! and hide a set that never looks past the pointer.
 
-use super::utils::{assert_compiler_error, assert_runs, assert_runs_with_output};
+use super::utils::{
+    assert_compiler_error, assert_heap_guard_output, assert_runs, assert_runs_with_output,
+};
 
 #[test]
 fn set_finds_a_string_built_at_run_time_by_its_content() {
@@ -517,5 +519,133 @@ struct Named
         return self.id == other.id
 "#,
         "Struct 'Named' cannot define method 'equals': a struct holds data only",
+    );
+}
+
+/// A map element is matched through the map's own `equals`: two maps holding
+/// the same entries, put in in a different order, are one element.
+#[test]
+fn set_of_maps_matches_elements_by_their_entries() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+use system.collections.map
+
+fn main()
+    var s = Set<Map<String, int>>()
+    s.add({"x": 1, "y": 2})
+    s.add({"y": 2, "x": 1})
+    let one = s.length()
+    let found = s.contains({"x": 1, "y": 2})
+    let missing = s.contains({"x": 1})
+    s.add({"x": 3})
+    println(f"{one} {found} {missing} {s.length()}")
+"#,
+        "1 true false 2",
+    );
+}
+
+#[test]
+fn set_of_sets_matches_elements_by_their_elements() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+
+fn main()
+    var s = Set<Set<int>>()
+    s.add({1, 2, 3})
+    s.add({3, 2, 1})
+    s.add({1, 2})
+    let found = s.contains({2, 1})
+    let missing = s.contains({4})
+    s.remove({1, 3, 2})
+    println(f"{s.length()} {found} {missing}")
+"#,
+        "1 true false",
+    );
+}
+
+#[test]
+fn set_of_maps_of_lists_matches_by_nested_content() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+use system.collections.map
+use system.collections.list
+
+fn main()
+    var s = Set<Map<String, [int]>>()
+    s.add({"a": List([1, 2]), "b": List([3])})
+    s.add({"b": List([3]), "a": List([1, 2])})
+    s.add({"a": List([1, 2]), "b": List([4])})
+    let found = s.contains({"b": List([3]), "a": List([1, 2])})
+    println(f"{s.length()} {found}")
+"#,
+        "2 true",
+    );
+}
+
+/// A map added to a set is a copy: changing the variable afterwards leaves
+/// the element the set holds as it was added.
+#[test]
+fn map_changed_after_it_is_added_to_a_set_leaves_the_element_alone() {
+    assert_runs_with_output(
+        r#"
+use system.collections.set
+use system.collections.map
+
+fn main()
+    var s = Set<Map<String, int>>()
+    var m = {"x": 1}
+    s.add(m)
+    m["y"] = 2
+    let changed = s.contains(m)
+    let original = s.contains({"x": 1})
+    println(f"{changed} {original} {s.length()} {m.length()}")
+"#,
+        "false true 1 2",
+    );
+}
+
+#[test]
+fn sets_of_maps_and_sets_release_what_they_hold() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.set
+use system.collections.map
+
+fn main()
+    var maps = Set<Map<String, int>>()
+    var sets = Set<Set<String>>()
+    var hits = 0
+    for i in 0..20
+        let key = f"k{i % 4}"
+        maps.add({key: i % 4, "fixed": 0})
+        sets.add({key, "fixed"})
+        if maps.contains({"fixed": 0, key: i % 4}) and sets.contains({"fixed", key})
+            hits = hits + 1
+    println(f"{maps.length()} {sets.length()} {hits}")
+"#,
+        "4 4 20",
+    );
+}
+
+/// A map is a set element only when `==` can compare its values, since that
+/// is what matches two of them.
+#[test]
+fn set_of_maps_whose_values_equality_cannot_compare_is_refused() {
+    assert_compiler_error(
+        r#"
+use system.collections.set
+use system.collections.map
+
+fn one() int
+    return 1
+
+fn main()
+    var s = Set<Map<String, fn() int>>()
+    s.add({"a": one})
+"#,
+        "cannot be a Set element, which is matched by `==`",
     );
 }

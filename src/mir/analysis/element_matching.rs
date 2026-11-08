@@ -145,10 +145,12 @@ impl Walk<'_, '_> {
                 }
             }
             TypeKind::Custom(name, _) => self.visit_named(kind, name),
-            // A list or an array is matched element by element through the
-            // `equals` its class declares.
+            // A built-in collection is matched element by element through
+            // the `equals` its class declares.
             TypeKind::List(_)
             | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
             | TypeKind::Generic(..)
             | TypeKind::Function(_)
             | TypeKind::Identifier
@@ -175,8 +177,6 @@ impl Walk<'_, '_> {
             | TypeKind::F64
             | TypeKind::String
             | TypeKind::Boolean
-            | TypeKind::Map(_, _)
-            | TypeKind::Set(_)
             | TypeKind::Meta(_)
             | TypeKind::Void
             | TypeKind::Error => {}
@@ -192,15 +192,6 @@ impl Walk<'_, '_> {
 
     /// The rule for the named type `kind`, called `name`.
     fn visit_named(&mut self, kind: &TypeKind, name: &str) {
-        match BuiltinCollectionKind::from_name(name) {
-            // A set or a map element is matched by its reference.
-            Some(BuiltinCollectionKind::Set | BuiltinCollectionKind::Map) => return,
-            Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array) => {
-                self.found.runs_unknown_code = true;
-                return;
-            }
-            None => {}
-        }
         match self.definitions.get(name) {
             Some(TypeDefinition::Struct(_) | TypeDefinition::Enum(_)) => self.visit_data(kind),
             Some(TypeDefinition::Class(_)) => {
