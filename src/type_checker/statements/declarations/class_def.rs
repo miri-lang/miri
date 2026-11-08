@@ -199,6 +199,9 @@ impl TypeChecker {
         );
 
         self.enter_class_scope(bodies, context);
+        let class_data = bodies.class_data;
+        let clauses = class_data.base_class.iter().map(Box::as_ref);
+        self.validate_supertype_clauses(clauses.chain(&class_data.traits), context);
         self.check_typed_field_initializers(bodies, context);
         self.check_class_method_bodies(&bodies.method_statements, MethodPhase::Rest, context);
         self.record_runtime_settled_methods(&bodies.name, &bodies.method_statements);
@@ -344,8 +347,7 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Option<Vec<Type>> {
         base_class.as_ref().and_then(|be| {
-            if let ExpressionKind::TypeDeclaration(base_name, Some(args), _, _) = &be.node {
-                self.validate_base_clause_bounds(base_name, args, context, be.span);
+            if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &be.node {
                 Some(
                     args.iter()
                         .map(|arg| self.resolve_type_expression(arg, context))
@@ -357,27 +359,53 @@ impl TypeChecker {
         })
     }
 
-    /// Check each argument an `extends` clause writes against the bound the
-    /// base class declares on that parameter, as a construction or an
-    /// annotation of the base is checked: `class B extends A<int>` for
-    /// `class A<X implements Named>` is refused.
-    fn validate_base_clause_bounds(
+    /// Checks the arguments of each `extends` or `implements` clause among
+    /// `clauses` against the bounds of the class or trait it names.
+    ///
+    /// Runs in the body pass, in the scope of the declaring type's own
+    /// parameters: whether an argument meets a bound depends on the traits
+    /// it implements, which are known for every type of the module only once
+    /// each one is defined, so a clause may name a type declared below it.
+    pub(crate) fn validate_supertype_clauses<'a>(
         &mut self,
-        base_name: &Expression,
+        clauses: impl Iterator<Item = &'a Expression>,
+        context: &Context,
+    ) {
+        for clause in clauses {
+            if let ExpressionKind::TypeDeclaration(name, Some(args), _, _) = &clause.node {
+                self.validate_clause_bounds(name, args, context, clause.span);
+            }
+        }
+    }
+
+    /// Check each argument an `extends` or `implements` clause writes against
+    /// the bound the class or trait it names declares on that parameter, as a
+    /// construction or an annotation of it is checked: `class B extends A<int>`
+    /// for `class A<X implements Named>` is refused, and so is
+    /// `class H implements Holder<int>` for `trait Holder<X implements Named>`,
+    /// whose defaults would otherwise be compiled at a type the bound excludes.
+    fn validate_clause_bounds(
+        &mut self,
+        supertype_name: &Expression,
         args: &[Expression],
         context: &Context,
         span: Span,
     ) {
-        let Ok(name) = self.extract_name(base_name) else {
+        let Ok(name) = self.extract_name(supertype_name) else {
             return;
         };
         let identity = self.written_type_identity(name);
-        let Some(TypeDefinition::Class(base)) =
-            self.type_table.global_type_definitions.get(identity)
-        else {
-            return;
+        let generics = match self.type_table.global_type_definitions.get(identity) {
+            Some(TypeDefinition::Class(class)) => class.generics.clone(),
+            Some(TypeDefinition::Trait(trait_def)) => trait_def.generics.clone(),
+            Some(
+                TypeDefinition::Struct(_)
+                | TypeDefinition::Enum(_)
+                | TypeDefinition::Alias(_)
+                | TypeDefinition::Generic(_),
+            )
+            | None => return,
         };
-        let generics = base.generics.clone();
         let Ok(arguments) = args
             .iter()
             .cloned()

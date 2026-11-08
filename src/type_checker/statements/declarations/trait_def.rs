@@ -69,6 +69,7 @@ pub(crate) struct TraitDeclaration<'a> {
 pub(crate) struct TraitBodies<'a> {
     name: String,
     generics: Option<&'a [Expression]>,
+    parent_traits: &'a [Expression],
     method_statements: Vec<&'a Statement>,
 }
 
@@ -132,6 +133,7 @@ impl TypeChecker {
         Some(TraitBodies {
             name,
             generics: generics.as_deref(),
+            parent_traits,
             method_statements,
         })
     }
@@ -153,6 +155,7 @@ impl TypeChecker {
         let trait_at_own_parameters =
             self.type_at_own_parameters(&bodies.name, bodies.generics, context);
         context.set_self_type(trait_self_type(trait_at_own_parameters));
+        self.validate_supertype_clauses(bodies.parent_traits.iter(), context);
         self.check_trait_method_bodies(&bodies.method_statements, context);
         context.exit_class();
         context.exit_scope();

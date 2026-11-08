@@ -466,6 +466,164 @@ fn main()
     );
 }
 
+const BOUNDED_TRAIT: &str = r#"
+use system.io
+
+trait Measured
+    fn size() int
+
+class Plain
+    var w int
+    fn init(w int)
+        self.w = w
+
+class Item implements Measured
+    var w int
+    fn init(w int)
+        self.w = w
+    public fn size() int: self.w
+
+trait Container<T implements Measured>
+    fn get() T
+    fn weight() int
+        return self.get().size()
+"#;
+
+/// A trait's parameter bound is checked where an `implements` clause pins
+/// it, as it is in an `extends` clause: the trait's defaults are never
+/// compiled at a type the bound excludes.
+#[test]
+fn an_implements_clause_argument_breaking_the_trait_bound_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{BOUNDED_TRAIT}{}",
+            r#"
+class Holder implements Container<Plain>
+    var it Plain
+    fn init(it Plain)
+        self.it = it
+    public fn get() Plain: self.it
+
+fn main()
+    println(f"{Holder(Plain(4)).weight()}")
+"#
+        ),
+        "Type Plain does not satisfy constraint implements Measured",
+    );
+}
+
+#[test]
+fn an_implements_clause_naming_an_unbounded_parameter_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{BOUNDED_TRAIT}{}",
+            r#"
+class Holder<U> implements Container<U>
+    var it U
+    fn init(it U)
+        self.it = it
+    public fn get() U: self.it
+
+fn main()
+    println(f"{Holder<Item>(Item(4)).weight()}")
+"#
+        ),
+        "Type U does not satisfy constraint implements Measured",
+    );
+}
+
+#[test]
+fn a_trait_extends_clause_argument_breaking_the_trait_bound_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{BOUNDED_TRAIT}{}",
+            r#"
+trait Box extends Container<Plain>
+    fn label() String
+
+fn main()
+    println("unreachable")
+"#
+        ),
+        "Type Plain does not satisfy constraint implements Measured",
+    );
+}
+
+#[test]
+fn clauses_meeting_the_trait_bound_run_the_default() {
+    assert_runs_with_output(
+        &format!(
+            "{BOUNDED_TRAIT}{}",
+            r#"
+class Holder<U implements Measured> implements Container<U>
+    var it U
+    fn init(it U)
+        self.it = it
+    public fn get() U: self.it
+
+trait Shelf extends Container<Item>
+    fn label() String
+
+class Board implements Shelf
+    public fn get() Item: Item(5)
+    public fn label() String: "board"
+
+fn main()
+    println(f"[{Holder<Item>(Item(4)).weight()} {Board().weight()}]")
+"#
+        ),
+        "[4 5]",
+    );
+}
+
+/// Whether a clause argument meets a bound depends on the traits it
+/// implements, so the check waits until every type of the module is defined:
+/// a clause may name a class declared below it.
+#[test]
+fn clauses_may_name_a_class_declared_below_them() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Measured
+    fn size() int
+
+class Base<T implements Measured>
+    var it T
+    fn init(it T)
+        self.it = it
+
+class Child extends Base<Late>
+    fn init(it Late)
+        super.init(it)
+
+trait Container<T implements Measured>
+    fn get() T
+    fn weight() int
+        return self.get().size()
+
+class Holder implements Container<Late>
+    var it Late
+    fn init(it Late)
+        self.it = it
+    public fn get() Late: self.it
+
+trait Shelf extends Container<Late>
+    fn label() String
+
+class Late implements Measured
+    var w int
+    fn init(w int)
+        self.w = w
+    public fn size() int: self.w
+
+fn main()
+    println(f"[{Child(Late(2)).it.size()} {Holder(Late(3)).weight()}]")
+"#,
+        "[2 3]",
+    );
+}
+
 #[test]
 fn a_construction_at_an_argument_meeting_the_class_bound_runs() {
     assert_runs_with_output(
