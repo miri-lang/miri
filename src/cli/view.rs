@@ -974,7 +974,7 @@ pub fn run(target: Option<&str>, shape: &Shape, format: Format, color_mode: Colo
 fn render_members(
     type_name: &str,
     definition: &crate::type_checker::context::TypeDefinition,
-    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+    checker: &crate::type_checker::TypeChecker,
     public_only: bool,
 ) -> String {
     let mut out = String::new();
@@ -985,7 +985,7 @@ fn render_members(
         type_name,
         type_name,
         definition,
-        definitions,
+        checker,
         public_only,
         &mut seen,
         &mut out,
@@ -1006,10 +1006,15 @@ fn member_header(
         TypeDefinition::Class(class) => {
             let mut header = format!("class {}{}", type_name, type_parameters(&class.generics));
             if let Some(base) = &class.base_class {
+                let base = clause_text(base, class.base_class_args.as_deref());
                 header.push_str(&format!(" extends {}", base));
             }
             if !class.traits.is_empty() {
-                header.push_str(&format!(" implements {}", class.traits.join(", ")));
+                let traits = (class.traits.iter())
+                    .map(|name| clause_text(name, class.trait_args.get(name).map(Vec::as_slice)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                header.push_str(&format!(" implements {}", traits));
             }
             header
         }
@@ -1034,15 +1039,30 @@ fn member_header(
                 type_parameters(&trait_definition.generics)
             );
             if !trait_definition.parent_traits.is_empty() {
-                header.push_str(&format!(
-                    " extends {}",
-                    trait_definition.parent_traits.join(", ")
-                ));
+                let parents = (trait_definition.parent_traits.iter())
+                    .map(|name| {
+                        let arguments = trait_definition.parent_trait_args.get(name);
+                        clause_text(name, arguments.map(Vec::as_slice))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                header.push_str(&format!(" extends {}", parents));
             }
             header
         }
         TypeDefinition::Generic(_) => format!("type parameter {}", type_name),
         TypeDefinition::Alias(_) => format!("type {}", type_name),
+    }
+}
+
+/// A supertype as its clause writes it, with the arguments the clause binds.
+fn clause_text(name: &str, arguments: Option<&[crate::ast::types::Type]>) -> String {
+    match arguments.filter(|arguments| !arguments.is_empty()) {
+        Some(arguments) => {
+            let arguments = arguments.iter().map(type_text).collect::<Vec<_>>();
+            format!("{}<{}>", name, arguments.join(", "))
+        }
+        None => name.to_string(),
     }
 }
 
@@ -1084,12 +1104,18 @@ fn collect_members(
     queried: &str,
     owner: &str,
     definition: &crate::type_checker::context::TypeDefinition,
-    definitions: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
+    checker: &crate::type_checker::TypeChecker,
     public_only: bool,
     seen: &mut std::collections::HashSet<String>,
     out: &mut String,
 ) {
     use crate::type_checker::context::TypeDefinition;
+    let definitions = &checker.type_table.global_type_definitions;
+    let reach = Reach {
+        queried,
+        owner,
+        checker,
+    };
     match definition {
         TypeDefinition::Class(class) => {
             for (name, field) in &class.fields {
@@ -1100,7 +1126,7 @@ fn collect_members(
                     out.push_str(&field_line(name, &field.ty, queried, owner));
                 }
             }
-            push_methods(&class.methods, queried, owner, public_only, seen, out);
+            push_methods(&class.methods, &reach, public_only, seen, out);
             // Inherited members come after the type's own, and a trait's
             // defaults after both: that is the order a call resolves in.
             for source in class
@@ -1110,7 +1136,7 @@ fn collect_members(
                 .chain(class.traits.iter().map(String::as_str))
             {
                 if let Some(next) = definitions.get(source) {
-                    collect_members(queried, source, next, definitions, public_only, seen, out);
+                    collect_members(queried, source, next, checker, public_only, seen, out);
                 }
             }
         }
@@ -1125,17 +1151,10 @@ fn collect_members(
             }
         }
         TypeDefinition::Trait(trait_definition) => {
-            push_methods(
-                &trait_definition.methods,
-                queried,
-                owner,
-                public_only,
-                seen,
-                out,
-            );
+            push_methods(&trait_definition.methods, &reach, public_only, seen, out);
             for parent in &trait_definition.parent_traits {
                 if let Some(next) = definitions.get(parent) {
-                    collect_members(queried, parent, next, definitions, public_only, seen, out);
+                    collect_members(queried, parent, next, checker, public_only, seen, out);
                 }
             }
         }
@@ -1145,17 +1164,29 @@ fn collect_members(
                     out.push_str(&variant_line(owner, variant, payload));
                 }
             }
-            push_methods(&enumeration.methods, queried, owner, public_only, seen, out);
+            push_methods(&enumeration.methods, &reach, public_only, seen, out);
         }
         TypeDefinition::Generic(_) | TypeDefinition::Alias(_) => {}
     }
 }
 
+/// Where a member list is being read: the type asked about, the type
+/// declaring the members at hand, and the checker that reads one at the other.
+struct Reach<'a> {
+    queried: &'a str,
+    owner: &'a str,
+    checker: &'a crate::type_checker::TypeChecker,
+}
+
 /// Append each method a caller may reach that no nearer declaration overrode.
+///
+/// An inherited method is written the way a value of the queried type reaches
+/// it, which is how the checker types a call to it: the declaring type's
+/// parameters at what the queried type's clauses bind them to, and a trait's
+/// `Self` the queried class.
 fn push_methods(
     methods: &std::collections::BTreeMap<String, crate::type_checker::context::MethodInfo>,
-    queried: &str,
-    owner: &str,
+    reach: &Reach<'_>,
     public_only: bool,
     seen: &mut std::collections::HashSet<String>,
     out: &mut String,
@@ -1164,9 +1195,17 @@ fn push_methods(
         if public_only && !matches!(method.visibility, MemberVisibility::Public) {
             continue;
         }
-        if seen.insert(name.clone()) {
-            out.push_str(&method_line(name, method, queried, owner));
+        if !seen.insert(name.clone()) {
+            continue;
         }
+        let line = if reach.queried == reach.owner {
+            method_line(name, method, reach.queried, reach.owner)
+        } else {
+            let reached =
+                (reach.checker).member_at_own_parameters(reach.queried, reach.owner, method);
+            method_line(name, &reached, reach.queried, reach.owner)
+        };
+        out.push_str(&line);
     }
 }
 
@@ -1276,9 +1315,10 @@ pub fn members(
         Err(error) => return failure(&shape, error.to_diagnostics(), source, source_path),
     };
 
-    let definitions = &result.type_checker.type_table.global_type_definitions;
+    let checker = &result.type_checker;
+    let definitions = &checker.type_table.global_type_definitions;
     let text = match definitions.get(type_name) {
-        Some(definition) => render_members(type_name, definition, definitions, public_only),
+        Some(definition) => render_members(type_name, definition, checker, public_only),
         None if type_name == crate::ast::types::OPTION_TYPE_NAME => option_members(),
         None => {
             return failure(

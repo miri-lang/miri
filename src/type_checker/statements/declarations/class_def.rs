@@ -1250,28 +1250,48 @@ impl TypeChecker {
         if !default.info.generics.is_empty() {
             return None;
         }
-        let (class_level, trait_name) = (default.class_level.to_string(), default.trait_name);
-        let mut copy = default.info.clone();
-        // The chain is read at the class's own parameters, each bound to
+        let copy =
+            self.member_at_own_parameters(default.class_level, default.trait_name, default.info);
+        Some((default.class_level.to_string(), copy))
+    }
+
+    /// `method`, which `declaring` declares, as a value of `type_name` at its
+    /// own parameters reaches it: `declaring`'s parameters at what the clauses
+    /// from `type_name` up to it bind them to and, on a class, a trait's
+    /// `Self` the class at its own parameters. A parameter the method declares
+    /// itself shadows a pin of the same name.
+    pub(crate) fn member_at_own_parameters(
+        &self,
+        type_name: &str,
+        declaring: &str,
+        method: &MethodInfo,
+    ) -> MethodInfo {
+        // The chain is read at the type's own parameters, each bound to
         // itself: an empty substitution would leave a clause such as
         // `implements Sink<U>` unpinned, and the copy would keep the trait's
         // `T` where the class means its `U`.
-        let own_parameters: HashMap<String, Type> = (self.generics_of(&class_level).iter())
+        let own_parameters: HashMap<String, Type> = (self.generics_of(type_name).iter())
             .map(|generic| {
                 let parameter = TypeKind::Generic(generic.name.clone(), generic.bounds.clone());
                 (generic.name.clone(), make_type(parameter))
             })
             .collect();
-        let supertypes = self.declaring_types_above(&class_level, &own_parameters);
-        let mut pins = pins_of(&supertypes, trait_name)
-            .cloned()
-            .unwrap_or_default();
-        pin_self(&mut pins, self.class_at_own_parameters(&class_level));
+        let supertypes = self.declaring_types_above(type_name, &own_parameters);
+        let mut pins = pins_of(&supertypes, declaring).cloned().unwrap_or_default();
+        for generic in &method.generics {
+            pins.remove(&generic.name);
+        }
+        if let Some(TypeDefinition::Class(_)) =
+            self.type_table.global_type_definitions.get(type_name)
+        {
+            pin_self(&mut pins, self.class_at_own_parameters(type_name));
+        }
+        let mut copy = method.clone();
         for (_, param) in &mut copy.params {
             *param = self.substitute_type(param, &pins);
         }
         copy.return_type = self.substitute_type(&copy.return_type, &pins);
-        Some((class_level, copy))
+        copy
     }
 
     /// Check signature compatibility for a single method override.

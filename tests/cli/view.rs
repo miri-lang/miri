@@ -997,6 +997,86 @@ fn test_type_lists_inherited_and_trait_members_and_says_where_they_came_from() {
 }
 
 #[test]
+fn test_type_reads_an_inherited_trait_member_at_the_class_that_implements_it() {
+    // `Indexed<T>` writes `iterator` in its own `T`. Listed on `String`, that `T`
+    // is what `String`'s clause binds it to, which is what a caller receives.
+    let (stdout, stderr, ok) = view(&["--type", "String", "--public"]);
+
+    assert!(ok, "String resolves from the prelude: {stderr}");
+    assert!(
+        stdout.contains("Indexed<String>"),
+        "the implements clause keeps its type arguments, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fn iterator() Iterator<String>    // from Indexed"),
+        "an inherited trait member is read at the class's arguments, got:\n{stdout}"
+    );
+}
+
+/// A generic class whose parameter is named apart from the trait's, and a
+/// trait default written with `Self`.
+const TRAIT_CLAUSES: &str = r#"trait Echo
+    fn me() Self
+        self
+
+class P implements Echo
+    var v int
+
+    fn init(v int)
+        self.v = v
+
+class Bag<U> implements Indexed<U>
+    var items [U]
+
+    fn init(items [U])
+        self.items = items
+
+    public fn length() int
+        self.items.length()
+
+    public fn element_at(index int) U
+        self.items[index]
+
+fn main()
+    let p = P(1)
+    println(f"{p.me().v}")
+"#;
+
+#[test]
+fn test_type_reads_trait_members_at_a_generic_class_own_parameters() {
+    with_source(TRAIT_CLAUSES, |path| {
+        let (stdout, stderr, ok) = view(&[&path.display().to_string(), "--type", "Bag"]);
+
+        assert!(ok, "the type should resolve: {stderr}");
+        assert!(
+            stdout.contains("class Bag<U> implements Indexed<U>"),
+            "the clause is written at the class's own parameter, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("fn iterator() Iterator<U>    // from Indexed"),
+            "the trait's parameter is read as the class's, got:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("Iterator<T>"),
+            "the trait's own parameter name must not leak, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
+fn test_type_reads_a_trait_self_as_the_class() {
+    with_source(TRAIT_CLAUSES, |path| {
+        let (stdout, stderr, ok) = view(&[&path.display().to_string(), "--type", "P"]);
+
+        assert!(ok, "the type should resolve: {stderr}");
+        assert!(
+            stdout.contains("fn me() P    // from Echo"),
+            "a trait member written with `Self` names the class, got:\n{stdout}"
+        );
+    });
+}
+
+#[test]
 fn test_type_public_hides_what_a_caller_cannot_reach() {
     with_source(HIERARCHY, |path| {
         let target = path.display().to_string();
