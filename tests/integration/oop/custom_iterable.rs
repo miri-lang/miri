@@ -13,7 +13,7 @@ fn test_for_loop_over_class_with_managed_element_type() {
         r#"
 use system.ops
 
-class Words implements Iterable<String>
+class Words implements Indexed<String>
     var count int
 
     fn length() int
@@ -38,7 +38,7 @@ fn test_for_loop_over_class_with_scalar_element_type() {
         r#"
 use system.ops
 
-class Counter implements Iterable<int>
+class Counter implements Indexed<int>
     var count int
 
     fn length() int
@@ -67,7 +67,7 @@ fn test_for_loop_over_class_yielding_fresh_allocations_stays_balanced() {
         r#"
 use system.ops
 
-class Fresh implements Iterable<String>
+class Fresh implements Indexed<String>
     fn length() int
         return 200
 
@@ -106,7 +106,7 @@ fn main()
 
 #[test]
 fn test_generic_class_implementing_iterable_int_substitution() {
-    // A generic class `Container<T> implements Iterable<T>` instantiated as
+    // A generic class `Container<T> implements Indexed<T>` instantiated as
     // `Container<int>` must have the loop variable typed as `int`, not `Generic("T")`.
     // The loop body does arithmetic (x + 1), which requires x to be int.
     // This proves the element type is correctly substituted at instantiation.
@@ -114,7 +114,7 @@ fn test_generic_class_implementing_iterable_int_substitution() {
         r#"
 use system.collections.list
 
-class Container<T> implements Iterable<T>
+class Container<T> implements Indexed<T>
     private var items List<T>
 
     fn init()
@@ -154,7 +154,7 @@ fn test_generic_class_implementing_iterable_string_high_count() {
         r#"
 use system.ops
 
-class Queue<T> implements Iterable<T>
+class Queue<T> implements Indexed<T>
     item T
 
     fn init(item T)
@@ -179,14 +179,14 @@ fn main()
 
 #[test]
 fn test_for_loop_over_class_implementing_a_trait_that_extends_iterable() {
-    // The class never names `Iterable`; it names a trait that extends it. The
+    // The class never names `Indexed`; it names a trait that extends it. The
     // element type is written at that trait's `extends` clause, so it has to be
     // carried down to the class for the loop variable to be typed at all.
     assert_runs_with_output(
         r#"
 use system.ops
 
-trait Sized extends Iterable<int>
+trait Sized extends Indexed<int>
     fn size_hint() int
 
 class Counter implements Sized
@@ -213,13 +213,13 @@ fn main()
 
 #[test]
 fn test_for_loop_over_subclass_of_an_iterable_class() {
-    // `Sub` names no trait of its own: it reaches `Iterable` through the class
+    // `Sub` names no trait of its own: it reaches `Indexed` through the class
     // it extends, and the loop calls the body that class compiles.
     assert_runs_with_output(
         r#"
 use system.ops
 
-class Counter implements Iterable<int>
+class Counter implements Indexed<int>
     var count int
 
     fn length() int
@@ -251,7 +251,7 @@ fn test_for_loop_over_generic_class_reaching_iterable_through_a_derived_trait() 
         r#"
 use system.ops
 
-trait Listable<E> extends Iterable<E>
+trait Listable<E> extends Indexed<E>
     fn is_empty() bool
 
 class Bag<T> implements Listable<T>
@@ -291,7 +291,7 @@ fn test_for_loop_over_subclass_of_a_generic_iterable_class_pins_the_element_type
         r#"
 use system.ops
 
-class Bag<T> implements Iterable<T>
+class Bag<T> implements Indexed<T>
     item T
 
     fn init(item T)
@@ -328,7 +328,7 @@ fn test_for_loop_over_a_subclass_calls_the_length_it_overrides() {
         r#"
 use system.ops
 
-class Base implements Iterable<int>
+class Base implements Indexed<int>
     fn length() int
         return 2
 
@@ -403,14 +403,14 @@ fn main()
 
 #[test]
 fn test_generic_class_with_non_first_trait_param() {
-    // A class `Pair<K, V> implements Iterable<V>` must correctly map the
+    // A class `Pair<K, V> implements Indexed<V>` must correctly map the
     // element type to the second generic parameter, not the first. This proves
     // the substitution uses the trait's parameter, not positional guessing.
     assert_runs_with_output(
         r#"
 use system.ops
 
-class Pair<K, V> implements Iterable<V>
+class Pair<K, V> implements Indexed<V>
     left V
     right V
 

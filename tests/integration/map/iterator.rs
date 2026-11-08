@@ -4,6 +4,9 @@
 //! A map's iterator: `iterator()` hands out a `MapIterator`, whose `next()`
 //! yields every key once and `None` from then on. A map's order is
 //! unspecified, so these tests assert sums, counts and sorted output.
+//!
+//! `iterator()` is declared to return `Iterator<K>`, so `value()` is reached
+//! through a `MapIterator` built directly.
 
 use super::utils::*;
 
@@ -136,7 +139,7 @@ fn main()
     m.set("pe" + "ar", "green")
     m.set("fig", "pur" + "ple")
     m.set("ap" + "ple", "red")
-    let it = m.iterator()
+    let it = MapIterator<String, String>(source: m)
     var lines = List<String>()
     var walking = true
     while walking
@@ -161,7 +164,7 @@ use system.collections.map
 
 fn main()
     let m = {"only": 5}
-    let it = m.iterator()
+    let it = MapIterator<String, int>(source: m)
     match it.value()
         Some(value): println(f"value {value}")
         None: println("none")
@@ -178,7 +181,7 @@ use system.collections.map
 
 fn main()
     let m = {"only": 5}
-    let it = m.iterator()
+    let it = MapIterator<String, int>(source: m)
     let first = it.next() ?? "none"
     let after_first = it.value() ?? -1
     let second = it.next() ?? "none"
@@ -197,7 +200,7 @@ use system.collections.map
 
 fn main()
     var m = {1: 10, 2: 20, 3: 30}
-    let it = m.iterator()
+    let it = MapIterator<int, int>(source: m)
     var sum = 0
     var walking = true
     while walking

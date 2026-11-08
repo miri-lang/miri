@@ -23,7 +23,7 @@ use system.collections.queryable
 ///     let t = (10, 20, 30)
 ///     println(f"{t.length()}")      // 3
 ///     println(f"{t.contains(20)}")  // true
-public class Tuple<T, Size> implements Queryable<T>, Iterable<T>, Indexed<T>
+public class Tuple<T, Size> implements Queryable<T>, Indexed<T>
 
     /// Returns the number of elements in the tuple.
     public fn length() int: Size

@@ -563,7 +563,7 @@ use system.collections.foldable
 struct Pt
     x int
 
-class Bag<T> implements Foldable<T>
+class Bag<T> implements Foldable<T>, Indexed<T>
     v T
     fn init(v T)
         self.v = v

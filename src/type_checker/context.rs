@@ -606,7 +606,7 @@ pub fn inherited_trait_requirement<'a>(
 /// The first of `traits`, in the order a class lists them, to supply a default
 /// `method_name` — itself or through a parent trait — paired with the trait
 /// that declares the default and its signature.
-fn trait_default_among<'a>(
+pub fn trait_default_among<'a>(
     type_defs: &'a HashMap<String, TypeDefinition>,
     traits: &'a [String],
     method_name: &str,

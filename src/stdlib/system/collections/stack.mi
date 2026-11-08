@@ -8,7 +8,7 @@ use system.collections.foldable
 
 /// A LIFO (Last-In-First-Out) stack that yields elements in reverse-insertion order.
 ///
-/// A Stack<T> implements Queryable<T>, Iterable<T>, and Foldable<T>.
+/// A Stack<T> implements Queryable<T>, Indexed<T>, and Foldable<T>.
 /// Iteration and all derived operations (first, last, contains, index_of, sum, min, max,
 /// reduce, count_where, any, all) yield elements in pop order (top to bottom).
 ///
@@ -26,7 +26,7 @@ use system.collections.foldable
 ///     println(f"{x}")
 /// // prints 3, 2, 1 (top to bottom)
 /// ```
-public class Stack<T> implements Queryable<T>, Iterable<T>, Indexed<T>, Foldable<T>
+public class Stack<T> implements Queryable<T>, Indexed<T>, Foldable<T>
     private var items List<T>
 
     /// Initializes an empty stack.

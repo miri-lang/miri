@@ -31,6 +31,7 @@ pub mod helpers;
 pub mod inherited_instantiation;
 pub mod instance_demand;
 pub mod instantiation_limits;
+mod iterator_loop;
 pub mod kernel_launch;
 pub mod loops;
 pub mod method_dispatch;

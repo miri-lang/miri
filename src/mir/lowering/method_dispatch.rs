@@ -357,9 +357,10 @@ pub(crate) struct HeldReceiverCall<'a> {
 }
 
 /// Emit `call` into `destination`, dispatched the way a written call on a
-/// value of its receiver type is: through the vtable when the class has one,
-/// so a subclass's override answers, and to the body a written call names
-/// otherwise. The arguments are borrowed, as a written call's are.
+/// value of its receiver type is: through the vtable when the receiver is a
+/// trait or a class that has one, so the instance's own body answers, and to
+/// the body a written call names otherwise. The arguments are borrowed, as a
+/// written call's are.
 pub(crate) fn emit_held_receiver_method_call(
     ctx: &mut LoweringContext,
     call: HeldReceiverCall,
@@ -375,6 +376,13 @@ pub(crate) fn emit_held_receiver_method_call(
     let class_name = crate::type_checker::named_class(&receiver_ty.kind).ok_or_else(unresolved)?;
     let (owner, method) =
         super::expression::binary_expr::operator_method_body(ctx, class_name, method_name)
+            .or_else(|| {
+                resolve_in_trait_hierarchy(
+                    ctx.type_checker.type_definitions(),
+                    class_name,
+                    method_name,
+                )
+            })
             .ok_or_else(unresolved)?;
     let arg_types: Vec<Type> = method
         .params

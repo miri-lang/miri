@@ -114,13 +114,13 @@ fn main()
 #[test]
 fn test_collection_module_import_exposes_transitive_trait() {
     // Importing a collection module must still expose the transitive traits it
-    // pulls in (here `queryable`'s parent `Iterable`), matching a fresh load.
+    // pulls in (here `queryable`'s parent `Indexed`), matching a fresh load.
     // The implicit preload marks these modules loaded, so this guards against the
     // guarded-reimport path dropping transitive visibility.
     assert_runs_with_output(
         r#"
 use system.collections.queryable
-class Box<T> implements Iterable<int>
+class Box<T> implements Indexed<int>
     fn length() int
         return 0
     fn element_at(index int) int

@@ -4,8 +4,9 @@
 // Tests for `system.ops`. Each trait is a protocol the operators dispatch to,
 // so the claim under test is that the operator reaches the user's method:
 // `==`/`!=` reach `equals`, `+` reaches `concat`, `*` reaches `repeat`, a
-// `for` loop drives `length`/`element_at` on an `Iterable`, and a `for` loop
-// over a range steps through a `Steppable`'s `successor`.
+// `for` loop drives `length`/`element_at` on an `Indexed` and
+// `iterator`/`next` on any other `Iterable`, and a `for` loop over a range
+// steps through a `Steppable`'s `successor`.
 
 use system.ops
 use system.testing
@@ -39,6 +40,26 @@ class Rung implements Steppable
 
     public fn successor() Rung
         return Rung(self.level + 2)
+
+class Countdown implements Iterable<int>
+    start int
+
+    fn init(start int)
+        self.start = start
+
+    public fn iterator() Iterator<int>
+        return CountdownIterator(self.start)
+
+class CountdownIterator implements Iterator<int>
+    left int
+
+    fn init(left int)
+        self.left = left
+
+    public fn next() int?
+        if self.left <= 0: return None
+        self.left -= 1
+        return Some(self.left + 1)
 
 class Pattern implements Multiplicable
     value int
@@ -88,6 +109,12 @@ fn test_iterable_string_yields_one_character_per_step()
     assert_eq(count, 3, "for visits every element_at index below length")
     assert_eq(joined, "hey", "iteration yields the characters in order")
 
+fn test_iterable_loop_walks_the_iterator_until_none()
+    var seen = ""
+    for n in Countdown(3)
+        seen = seen + f"{n}"
+    assert_eq(seen, "321", "the loop runs one pass per element next() returns")
+
 fn test_steppable_range_steps_through_successor()
     var levels = ""
     for rung in Rung(0)..Rung(7)
@@ -107,6 +134,7 @@ fn main()
     test_multiplicable_dispatches_star_to_repeat()
     test_multiplicable_by_zero_uses_the_user_method()
     test_iterable_string_yields_one_character_per_step()
+    test_iterable_loop_walks_the_iterator_until_none()
     test_steppable_range_steps_through_successor()
     test_steppable_integers_answer_without_declaring()
     println("system.ops: OK")

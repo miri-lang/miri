@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
+use crate::ast::types::{ELEMENT_AT_METHOD_NAME, LENGTH_METHOD_NAME};
 use crate::ast::{
     BinaryOp, BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
     VariableDeclaration, WhileStatementType,
@@ -22,7 +23,7 @@ use crate::mir::{
 use super::expression::range_expr::{range_fields, written_inclusivity, written_range_end_test};
 use super::stepped_range::{lower_for_over_stepped_range, lower_for_over_stepped_range_value};
 use super::{lower_expression, lower_statement, LoweringContext};
-use crate::type_checker::ValueStepping;
+use crate::type_checker::{IterationPlan, PositionalAccess, ValueStepping};
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     let (target, scope_depth) = match ctx.loop_stack.last() {
@@ -118,7 +119,7 @@ fn lower_branch_into_join(
 /// than to the header directly, so the header has a single latch — the shape
 /// a structured target (WGSL's `loop { ... continuing { ... } }`) requires.
 /// A `for` loop's increment block plays the same role.
-fn new_latch_block(
+pub(super) fn new_latch_block(
     ctx: &mut LoweringContext,
     header: crate::mir::BasicBlock,
     span: Span,
@@ -313,30 +314,31 @@ pub fn lower_while(
 }
 
 /// The variables a for-loop over an iterable binds.
-struct LoopBindings {
+pub(super) struct LoopBindings {
     /// The element each pass reads.
-    element: crate::mir::Local,
-    /// The map value or list index, when the loop names a second variable.
-    secondary: Option<crate::mir::Local>,
-    is_map: bool,
+    pub element: crate::mir::Local,
+    /// The index, or the iterator's `Entries` value, when the loop names a
+    /// second variable.
+    pub secondary: Option<crate::mir::Local>,
     /// Bindings holding a reference-counted value. Each pass reads a fresh
     /// reference into them, so each pass owns and releases them.
-    per_pass: Vec<crate::mir::Local>,
+    pub per_pass: Vec<crate::mir::Local>,
     /// Names of the `per_pass` bindings, which no scope unbinds on its own.
-    per_pass_names: Vec<String>,
+    pub per_pass_names: Vec<String>,
 }
 
-/// Bind the loop's element and, when declared, its second variable.
+/// Bind the loop's element and, when declared, its second variable of type
+/// `secondary_ty`.
 ///
 /// The second variable is bound first so an unmanaged one keeps the local it
 /// has always had.
-fn bind_loop_variables(
+pub(super) fn bind_loop_variables(
     ctx: &mut LoweringContext,
     span: &Span,
     decls: &[VariableDeclaration],
     iterable_ty: &Option<Type>,
+    secondary_ty: Option<Type>,
 ) -> LoopBindings {
-    let is_map = iterable_is_map(iterable_ty);
     let elem_ty = resolve_loop_elem_type(ctx, span, iterable_ty);
     let mut per_pass = Vec::new();
     let mut per_pass_names = Vec::new();
@@ -349,35 +351,16 @@ fn bind_loop_variables(
         }
         local
     };
-    let secondary = match decls.get(1) {
-        Some(decl) => {
-            let ty = resolve_secondary_type(ctx, span, is_map, iterable_ty);
-            Some(bind(ctx, decl, ty))
-        }
-        None => None,
-    };
+    let secondary = decls
+        .get(1)
+        .zip(secondary_ty)
+        .map(|(decl, ty)| bind(ctx, decl, ty));
     let element = bind(ctx, &decls[0], elem_ty);
     LoopBindings {
         element,
         secondary,
-        is_map,
         per_pass,
         per_pass_names,
-    }
-}
-
-/// True when the iterable is a `Map` (normalized to `Custom("Map", ..)`).
-fn iterable_is_map(iterable_ty: &Option<Type>) -> bool {
-    match iterable_ty.as_ref().map(|t| &t.kind) {
-        Some(TypeKind::Map(_, _)) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
-        Some(TypeKind::Custom(name, _))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
-        {
-            true
-        }
-        _ => false,
     }
 }
 
@@ -420,40 +403,6 @@ fn resolve_loop_elem_type(
     }
 }
 
-/// The type of the second loop variable: a map's value, else a list index.
-fn resolve_secondary_type(
-    ctx: &mut LoweringContext,
-    span: &Span,
-    is_map: bool,
-    iterable_ty: &Option<Type>,
-) -> Type {
-    if is_map {
-        resolve_map_value_type(ctx, span, iterable_ty)
-    } else {
-        Type::new(TypeKind::Int, *span)
-    }
-}
-
-/// Resolve a map's value type for the second loop variable, else default Int.
-fn resolve_map_value_type(
-    ctx: &mut LoweringContext,
-    span: &Span,
-    iterable_ty: &Option<Type>,
-) -> Type {
-    match iterable_ty.as_ref().map(|t| &t.kind) {
-        Some(TypeKind::Map(_, _)) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
-        Some(TypeKind::Custom(name, Some(args)))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
-                && args.len() == 2 =>
-        {
-            super::resolve_argument_type(ctx.type_checker, &args[1])
-        }
-        _ => Type::new(TypeKind::Int, *span),
-    }
-}
-
 /// Register loop variable for managed types, or use push_local for primitives.
 fn setup_loop_variable(
     ctx: &mut LoweringContext,
@@ -475,52 +424,14 @@ fn setup_loop_variable(
     }
 }
 
-/// The class a `for` loop iterates through `length` and `element_at` calls,
-/// or `None` when the iterable is indexed directly.
-///
-/// Iterability is decided by the type checker's own rule, so a loop the
-/// checker typed is never lowered as a bare indexed walk — which would read the
-/// object's own words as elements.
-fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<String> {
-    ctx.type_checker
-        .get_type(iterable_id)
-        .and_then(|ty| match &ty.kind {
-            TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
-            TypeKind::Map(_, _) | TypeKind::Set(_) => {
-                unreachable!("collection types are normalized to Custom before this point")
-            }
-            TypeKind::Custom(name, _)
-                if matches!(
-                    BuiltinCollectionKind::from_name(name),
-                    Some(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
-                ) =>
-            {
-                Some(name.clone())
-            }
-            TypeKind::Custom(name, _)
-                if !matches!(
-                    BuiltinCollectionKind::from_name(name),
-                    Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
-                ) && name != crate::ast::types::TUPLE_TYPE_NAME =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
-        })
-        .filter(|name| ctx.type_checker.class_is_iterable(name))
-}
-
-/// The bodies a `for` loop over a class calls to walk it.
+/// The bodies a `for` loop over a class walked by position calls.
 struct IterableMethods {
     length: Symbol,
     element_at: Symbol,
-    /// The body that reads a map's value at the same position, bound to a
-    /// loop's second variable.
-    value_at: Symbol,
 }
 
-/// The bodies a `for` loop over the value `iterable_id` calls, or `None` when
-/// the iterable is indexed directly.
+/// The bodies a `for` loop walking `access` calls, or `None` when the
+/// language indexes the iterable itself.
 ///
 /// Each is the body a written call to the method reaches: for an
 /// instantiation of a generic class, the one compiled at its type arguments.
@@ -529,13 +440,16 @@ struct IterableMethods {
 fn resolve_iterable_methods(
     ctx: &mut LoweringContext,
     iterable_id: usize,
+    access: &PositionalAccess,
 ) -> Option<IterableMethods> {
-    let class_name = resolve_iterable_class(ctx, iterable_id)?;
+    let class_name = match access {
+        PositionalAccess::Methods { class } => class,
+        PositionalAccess::Language => return None,
+    };
     let receiver_ty = ctx.recorded_type(iterable_id)?;
     Some(IterableMethods {
-        length: iterable_method_symbol(ctx, &receiver_ty, &class_name, "length"),
-        element_at: iterable_method_symbol(ctx, &receiver_ty, &class_name, "element_at"),
-        value_at: iterable_method_symbol(ctx, &receiver_ty, &class_name, "value_at"),
+        length: iterable_method_symbol(ctx, &receiver_ty, class_name, LENGTH_METHOD_NAME),
+        element_at: iterable_method_symbol(ctx, &receiver_ty, class_name, ELEMENT_AT_METHOD_NAME),
     })
 }
 
@@ -547,7 +461,7 @@ fn resolve_iterable_methods(
 /// the type arguments the `extends` chain gives it. A class that declares or
 /// overrides the method answers for itself, so each method is resolved
 /// separately — an override of one does not move another.
-fn iterable_method_symbol(
+pub(super) fn iterable_method_symbol(
     ctx: &mut LoweringContext,
     receiver_ty: &Type,
     class_name: &str,
@@ -690,52 +604,23 @@ fn emit_element_at_call(
     ctx.set_current_block(after_elem_bb);
 }
 
-/// Emit secondary loop variable assignment (map value or list index).
+/// Copy the pass's index into the loop's second variable.
 fn emit_secondary_loop_var(
     ctx: &mut LoweringContext,
     idx_local: crate::mir::Local,
-    list_local: crate::mir::Local,
     idx_var: crate::mir::Local,
-    value_at: Option<&Symbol>,
     span: &Span,
 ) {
-    if let Some(value_at_symbol) = value_at {
-        let func_op = Operand::function(value_at_symbol.clone(), *span);
-        let after_val_bb = ctx.new_basic_block();
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: {
-                    let mut args = vec![
-                        Operand::Copy(Place::new(list_local)),
-                        Operand::Copy(Place::new(idx_var)),
-                    ];
-                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                        args.push(Operand::Copy(Place::new(allocator)));
-                    }
-                    args
-                },
-                arg_modes: Vec::new(),
-                arg_handles: Vec::new(),
-                flags: crate::mir::CallFlags::default(),
-                destination: Place::new(idx_local),
-                target: Some(after_val_bb),
-            },
-            *span,
-        ));
-        ctx.set_current_block(after_val_bb);
-    } else {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(
-                Place::new(idx_local),
-                Rvalue::Use(Operand::Copy(Place::new(idx_var))),
-            ),
-            span: *span,
-        });
-    }
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(idx_local),
+            Rvalue::Use(Operand::Copy(Place::new(idx_var))),
+        ),
+        span: *span,
+    });
 }
 
-/// Load the pass's element, and its map value or list index when bound.
+/// Load the pass's element, and its index when bound.
 fn emit_loop_body_element_load(
     ctx: &mut LoweringContext,
     bindings: &LoopBindings,
@@ -769,10 +654,7 @@ fn emit_loop_body_element_load(
     }
 
     if let Some(secondary) = bindings.secondary {
-        let value_at = iterable
-            .filter(|_| bindings.is_map)
-            .map(|methods| &methods.value_at);
-        emit_secondary_loop_var(ctx, secondary, list_local, idx_var, value_at, span);
+        emit_secondary_loop_var(ctx, secondary, idx_var, span);
     }
 }
 
@@ -839,38 +721,68 @@ fn emit_loop_increment(
     ));
 }
 
-/// Helper to lower for-loops over iterable collections (lists, arrays).
-/// Unrolls the iteration by evaluating each element.
+/// Lower `for x in c` over a value the type checker's iteration plan walks
+/// by position or through its iterator.
+///
+/// The plan is the one the checker settled for the `for` statement; the
+/// types it names are written in a generic body's own parameters, so they are
+/// read at the active instantiation.
 fn lower_for_over_iterable(
+    ctx: &mut LoweringContext,
+    walked: (usize, &Expression),
+    decls: &[VariableDeclaration],
+    body: &Statement,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    let (statement, iterable) = walked;
+    let plan = ctx
+        .type_checker
+        .recorded_iteration_plan(statement)
+        .cloned()
+        .ok_or_else(|| {
+            LoweringError::internal(
+                crate::diagnostics::DiagnosticCode::CgInternalCodegenError,
+                "a `for` loop over a collection reached lowering with no iteration plan"
+                    .to_string(),
+                *span,
+            )
+        })?;
+    match plan {
+        IterationPlan::Protocol(walk) => {
+            let loop_parts = super::iterator_loop::IteratorLoop {
+                decls,
+                iterable,
+                walk,
+                body,
+            };
+            super::iterator_loop::lower_for_through_iterator(ctx, loop_parts, span)
+        }
+        IterationPlan::Indexed(access) => {
+            lower_for_by_position(ctx, span, decls, iterable, &access, body)
+        }
+    }
+}
+
+/// Lower `for x in c` over a sequence read by position: from index 0 while
+/// the index is below its length, reading each element in place or through
+/// the class's `element_at`.
+fn lower_for_by_position(
     ctx: &mut LoweringContext,
     span: &Span,
     decls: &[VariableDeclaration],
     iterable: &Expression,
+    access: &PositionalAccess,
     body: &Statement,
 ) -> Result<(), LoweringError> {
     ctx.push_scope();
 
-    // Read at the active instantiation: a generic body's iterable is recorded
-    // once at its parameter, which would bind a managed element as unmanaged and
-    // leave each pass's reference unreleased.
     let iterable_ty = ctx.recorded_type(iterable.id);
-    let bindings = bind_loop_variables(ctx, span, decls, &iterable_ty);
+    let index_ty = Type::new(TypeKind::Int, *span);
+    let bindings = bind_loop_variables(ctx, span, decls, &iterable_ty, Some(index_ty));
     let list_local = lower_loop_iterable(ctx, iterable, iterable_ty, span)?;
 
     let idx_ty = Type::new(TypeKind::Int, *span);
-    let idx_var = ctx.push_temp(idx_ty.clone(), *span);
-
-    let zero_lit = crate::ast::literal::IntegerLiteral::from_type_kind(&idx_ty.kind, 0)
-        .unwrap_or(crate::ast::literal::IntegerLiteral::I64(0));
-    let zero = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: idx_ty.clone(),
-        literal: crate::ast::literal::Literal::Integer(zero_lit),
-    }));
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(idx_var), Rvalue::Use(zero)),
-        span: *span,
-    });
+    let idx_var = start_index(ctx, &idx_ty, span);
 
     let header_bb = ctx.new_basic_block();
     let body_bb = ctx.new_basic_block();
@@ -882,7 +794,7 @@ fn lower_for_over_iterable(
         *span,
     ));
 
-    let iterable_methods = resolve_iterable_methods(ctx, iterable.id);
+    let iterable_methods = resolve_iterable_methods(ctx, iterable.id, access);
 
     ctx.set_current_block(header_bb);
     emit_loop_header(
@@ -921,10 +833,24 @@ fn lower_for_over_iterable(
     Ok(())
 }
 
+/// A new index temp of type `idx_ty`, set to 0.
+fn start_index(ctx: &mut LoweringContext, idx_ty: &Type, span: &Span) -> crate::mir::Local {
+    let idx_var = ctx.push_temp(idx_ty.clone(), *span);
+    let zero_lit = crate::ast::literal::IntegerLiteral::from_type_kind(&idx_ty.kind, 0)
+        .unwrap_or(crate::ast::literal::IntegerLiteral::I64(0));
+    let zero = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: idx_ty.clone(),
+        literal: crate::ast::literal::Literal::Integer(zero_lit),
+    }));
+    assign(ctx, idx_var, Rvalue::Use(zero), span);
+    idx_var
+}
+
 /// Evaluate the loop's iterable into a temp the loop's scope owns, so the
 /// reference is released when the loop ends — including by a `return` from
 /// inside it.
-fn lower_loop_iterable(
+pub(super) fn lower_loop_iterable(
     ctx: &mut LoweringContext,
     iterable: &Expression,
     iterable_ty: Option<Type>,
@@ -941,7 +867,7 @@ fn lower_loop_iterable(
 
 pub fn lower_for(
     ctx: &mut LoweringContext,
-    span: &Span,
+    (statement, span): (usize, &Span),
     decls: &[VariableDeclaration],
     iterable: &Expression,
     body: &Statement,
@@ -956,17 +882,17 @@ pub fn lower_for(
             return lower_for_over_range_value(ctx, span, decls, iterable_expr, element_ty, body);
         }
         // The iterable is in the start position, delegate to list/array handling
-        return lower_for_over_iterable(ctx, span, decls, iterable_expr, body);
+        return lower_for_over_iterable(ctx, (statement, iterable_expr), decls, body, span);
     }
 
     // Also handle direct List expressions
     if let ExpressionKind::List(_) = &iterable.node {
-        return lower_for_over_iterable(ctx, span, decls, iterable, body);
+        return lower_for_over_iterable(ctx, (statement, iterable), decls, body, span);
     }
 
     // Also handle direct Array expressions
     if let ExpressionKind::Array(_, _) = &iterable.node {
-        return lower_for_over_iterable(ctx, span, decls, iterable, body);
+        return lower_for_over_iterable(ctx, (statement, iterable), decls, body, span);
     }
 
     let ExpressionKind::Range(start, end_opt, range_type) = &iterable.node else {

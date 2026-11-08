@@ -140,6 +140,10 @@ impl TypeChecker {
 
     /// Refuses iterating over a value of type `ty`, which holds no elements.
     pub(crate) fn refuse_not_iterable(&mut self, ty: &Type, span: Span) {
+        // TODO: a value typed as the `Iterable` trait itself, or as a type
+        // parameter bounded by it, is refused here even though it has an
+        // `iterator()`. Walking one needs an iteration plan that calls
+        // `iterator()` and `next()` through the trait, which no plan offers yet.
         self.report_type_mismatch(
             DiagnosticCode::TypTypeMismatch,
             format!(
@@ -148,7 +152,9 @@ impl TypeChecker {
             ),
             span,
             TypeSides::wanting("a range or a collection", ty),
-            "iterate over a range such as `0..n`, or over a list, array, set or map".to_string(),
+            "iterate over a range such as `0..n`, a list, array, set or map, or a class that \
+             implements `Iterable` or `Indexed`"
+                .to_string(),
         );
     }
 

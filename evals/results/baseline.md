@@ -24,11 +24,11 @@ this file on every run. The harness prints it to stdout instead.
 | f | make a failing test pass | yes | 4 | 631 | 128 |
 | g | author a struct, a class and a match over an enum from an empty directory | yes | 3 | 588 | 1339 |
 | h | repair a cascade with one root cause | yes | 4 | 2449 | 232 |
-| i | look up an API and edit through view and patch only | yes | 4 | 1495 | 97 |
+| i | look up an API and edit through view and patch only | yes | 4 | 1485 | 97 |
 | j | recover from a runtime trap | yes | 5 | 1030 | 233 |
 | l | repair a file with four faults, three of which carry a repair | yes | 8 | 6507 | 1292 |
 | m | sort a list whose element type has no ordering | yes | 3 | 948 | 679 |
-| n | chain a list transform onto another transform's result | yes | 3 | 1466 | 433 |
+| n | chain a list transform onto another transform's result | yes | 3 | 1510 | 433 |
 | o | apply the edit a diagnostic already named in its help | yes | 6 | 3186 | 219 |
 | p | repair three syntax faults reported from one check | yes | 4 | 4251 | 362 |
 | k | read and repair the warnings a green test run left behind | yes | 4 | 3042 | 174 |

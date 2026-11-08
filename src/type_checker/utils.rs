@@ -1863,16 +1863,28 @@ impl TypeChecker {
     }
 
     /// The element type `class_name`, instantiated at `type_args`, yields.
-    ///
-    /// The walk climbs the `extends` chain, carrying each link's arguments into
-    /// the next through the clause that writes them, and stops at the first
-    /// class that names a trait reaching `Iterable`. Taking at most as many
-    /// steps as there are definitions keeps a circular `extends` from hanging
-    /// it: the cycle answers `None` rather than spinning.
     fn iterable_element_of_instantiation(
         &self,
         class_name: &str,
         type_args: &[Type],
+    ) -> Option<Type> {
+        self.trait_argument_of_instantiation(class_name, type_args, ITERABLE_TRAIT_NAME)
+    }
+
+    /// The first argument `class_name`, instantiated at `type_args`, reaches
+    /// the trait `target` at: the element type of `Iterable<T>`, the value
+    /// type of `Entries<V>`.
+    ///
+    /// The walk climbs the `extends` chain, carrying each link's arguments into
+    /// the next through the clause that writes them, and stops at the first
+    /// class that names a trait reaching `target`. Taking at most as many
+    /// steps as there are definitions keeps a circular `extends` from hanging
+    /// it: the cycle answers `None` rather than spinning.
+    pub(crate) fn trait_argument_of_instantiation(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+        target: &str,
     ) -> Option<Type> {
         let type_definitions = &self.type_table.global_type_definitions;
         let mut current = class_name.to_string();
@@ -1883,8 +1895,8 @@ impl TypeChecker {
                 return None;
             };
             let subs = generic_substitution(class_def.generics.as_deref(), &current_args);
-            if let Some(element_type) = self.iterable_element_named_by(class_def) {
-                return Some(self.substitute_type(&element_type, &subs));
+            if let Some(argument) = self.trait_argument_named_by(class_def, target) {
+                return Some(self.substitute_type(&argument, &subs));
             }
             let base = class_def.base_class.clone()?;
             current_args = class_def
@@ -1898,40 +1910,75 @@ impl TypeChecker {
         None
     }
 
-    /// The element type one of `class_def`'s own traits reaches `Iterable` at,
+    /// What `class_name`, instantiated at `type_args`, pins the parameters of
+    /// `ancestor` to: `class_name`'s own when it is the ancestor, else those the
+    /// `extends` clauses on the way up write. `None` when `ancestor` is not on
+    /// the chain.
+    pub(crate) fn ancestor_substitution(
+        &self,
+        class_name: &str,
+        type_args: &[Type],
+        ancestor: &str,
+    ) -> Option<std::collections::HashMap<String, Type>> {
+        let type_definitions = &self.type_table.global_type_definitions;
+        let mut current = class_name.to_string();
+        let mut current_args = type_args.to_vec();
+        for _ in 0..=type_definitions.len() {
+            let Some(TypeDefinition::Class(class_def)) = type_definitions.get(&current) else {
+                return None;
+            };
+            let subs = generic_substitution(class_def.generics.as_deref(), &current_args);
+            if current == ancestor {
+                return Some(subs);
+            }
+            let base = class_def.base_class.clone()?;
+            current_args = class_def
+                .base_class_args
+                .iter()
+                .flatten()
+                .map(|arg| self.substitute_type(arg, &subs))
+                .collect();
+            current = base;
+        }
+        None
+    }
+
+    /// The argument one of `class_def`'s own traits reaches `target` at,
     /// written in `class_def`'s generic parameters.
     ///
     /// Traits are visited in declaration order rather than through the
     /// `trait_args` map, so a class listing several of them resolves to the
-    /// same element type on every build.
-    fn iterable_element_named_by(&self, class_def: &ClassDefinition) -> Option<Type> {
+    /// same argument on every build.
+    fn trait_argument_named_by(&self, class_def: &ClassDefinition, target: &str) -> Option<Type> {
         class_def.traits.iter().find_map(|trait_name| {
             let trait_args = class_def
                 .trait_args
                 .get(trait_name)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            self.iterable_element_through_trait(
+            self.trait_argument_through_trait(
                 trait_name,
                 trait_args,
+                target,
                 &mut std::collections::HashSet::new(),
             )
         })
     }
 
-    /// The element type `trait_name`, instantiated at `trait_args`, reaches
-    /// `Iterable` at — as itself, or through the traits it extends.
+    /// The first argument `trait_name`, instantiated at `trait_args`, reaches
+    /// `target` at — as itself, or through the traits it extends.
     ///
     /// Each parent's arguments are written in the extending trait's parameters,
     /// so they are substituted on the way down. Each trait is visited once, so
     /// a circular `extends` cannot hang the walk.
-    fn iterable_element_through_trait(
+    fn trait_argument_through_trait(
         &self,
         trait_name: &str,
         trait_args: &[Type],
+        target: &str,
         visited: &mut std::collections::HashSet<String>,
     ) -> Option<Type> {
-        if trait_name == ITERABLE_TRAIT_NAME {
+        if trait_name == target {
             return Some(
                 trait_args
                     .first()
@@ -1956,7 +2003,7 @@ impl TypeChecker {
                 .flatten()
                 .map(|arg| self.substitute_type(arg, &subs))
                 .collect();
-            self.iterable_element_through_trait(parent_name, &parent_args, visited)
+            self.trait_argument_through_trait(parent_name, &parent_args, target, visited)
         })
     }
 

@@ -7,14 +7,14 @@ use system.ops
 ///
 /// `Queryable<T>` is the read-only "ask questions of a collection" interface.
 /// All concrete methods derive from the two abstract primitives inherited from
-/// `Iterable<T>` — `length()` and `element_at(index)` — so any type that can
+/// `Indexed<T>` — `length()` and `element_at(index)` — so any type that can
 /// answer those becomes `is_empty` / `first` / `last` / `contains` / `index_of`
 /// for free.
 ///
 /// Default methods call `self.length()` and `self.element_at()`. A default
 /// is compiled once for each class that runs it, with `Self` that class, so
 /// those calls reach the implementor's own methods directly.
-public trait Queryable<T> extends Iterable<T>
+public trait Queryable<T> extends Indexed<T>
 
     /// Returns true if the collection contains no elements.
     public fn is_empty() bool: self.length() == 0

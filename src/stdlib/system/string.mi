@@ -8,7 +8,7 @@ use system.memory
 ///
 /// Strings in Miri are immutable sequences of Unicode characters.
 /// All operations that modify a string return a new string instance.
-public class String implements Equatable, Hashable, Comparable, Steppable, Addable, Multiplicable, Iterable<String>, Indexed<String>, Cloneable
+public class String implements Equatable, Hashable, Comparable, Steppable, Addable, Multiplicable, Indexed<String>, Cloneable
 
     // Intrinsic function declarations
     // These map to miri_rt_* functions in the Rust runtime.
@@ -411,7 +411,7 @@ public class String implements Equatable, Hashable, Comparable, Steppable, Addab
 ///     let fields = "x=1;y=2".pieces(";")
 ///     println(fields.element_at(1))   // y=2
 ///     println(f"{fields.length()}")   // 2
-public class StringPieces implements Iterable<String>, Indexed<String>
+public class StringPieces implements Indexed<String>
     private var source String
     private var separator String
     /// The separator's byte length: how far the next piece starts past the

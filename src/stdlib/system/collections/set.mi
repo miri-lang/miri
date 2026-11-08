@@ -59,7 +59,7 @@ public class Set<T> implements Iterable<T>, Cloneable
     /// Returns an iterator over the set's elements, in the set's unspecified
     /// order. The iterator walks the set as it is now: a later write to this
     /// set leaves the walk unchanged.
-    public fn iterator() SetIterator<T>
+    public fn iterator() Iterator<T>
         return SetIterator<T>(source: self)
 
     /// Adds an element to the set if not already present.

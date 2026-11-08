@@ -97,6 +97,41 @@ pub const ACCELERABLE_TRAIT_NAME: &str = "Accelerable";
 /// (String, Range) and user-defined classes that implement the trait.
 pub const ITERABLE_TRAIT_NAME: &str = "Iterable";
 
+/// Canonical name of the stdlib `Indexed<T>` trait: a sequence read by
+/// position, which a `for` loop walks from index 0 while the index is below
+/// its `length()`, reading each element with `element_at`.
+pub const INDEXED_TRAIT_NAME: &str = "Indexed";
+
+/// Canonical name of the stdlib `Iterator<T>` trait: what an `Iterable`
+/// value's `iterator()` is declared to return, handing out one element per
+/// `next()`.
+pub const ITERATOR_TRAIT_NAME: &str = "Iterator";
+
+/// Canonical name of the stdlib `Entries<V>` trait: an iterator that has a
+/// value for the element its `next` last returned, which a `for` loop's
+/// second variable reads.
+pub const ENTRIES_TRAIT_NAME: &str = "Entries";
+
+/// The method an `Iterable` value hands out its iterator through.
+pub const ITERATOR_METHOD_NAME: &str = "iterator";
+
+/// The method an iterator hands out its next element through, `None` once
+/// every element has been handed out.
+pub const NEXT_METHOD_NAME: &str = "next";
+
+/// The method an `Entries` iterator hands out the value of the element its
+/// `next` last returned through.
+pub const ENTRY_VALUE_METHOD_NAME: &str = "value";
+
+/// The method an `Indexed` sequence reports how many elements it has through.
+pub const LENGTH_METHOD_NAME: &str = "length";
+
+/// The method an `Indexed` sequence reads the element at an index through.
+pub const ELEMENT_AT_METHOD_NAME: &str = "element_at";
+
+/// The methods an `Indexed` sequence is read by position through.
+pub const POSITIONAL_METHOD_NAMES: [&str; 2] = [LENGTH_METHOD_NAME, ELEMENT_AT_METHOD_NAME];
+
 /// Canonical class name for the built-in `Result<T, E>` sum type.
 ///
 /// `TypeKind::Result(ok, err)` is normalized to

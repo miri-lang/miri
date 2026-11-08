@@ -86,6 +86,26 @@ impl TypeChecker {
         }
     }
 
+    /// Checks the `iterator()` body of each class among `statements` before
+    /// any other body of the module, so the class each one returns is noted
+    /// before a `for` loop anywhere in the module reads it. The body pass then
+    /// skips those bodies.
+    pub(crate) fn check_iterator_bodies<'a>(
+        &mut self,
+        statements: impl Iterator<Item = &'a Statement>,
+        defined: &DefinedTypes,
+        context: &mut Context,
+    ) {
+        for statement in statements {
+            let Some(Some(TypeBodies::Class(bodies))) = defined.get(&statement.id) else {
+                continue;
+            };
+            let open_calls = self.open_generic_call_mark();
+            self.check_class_iterator_body(bodies, context);
+            self.refuse_open_generic_calls_since(open_calls);
+        }
+    }
+
     /// Defines one class under the attribute check and open-call refusal
     /// `check_statement` applies to every statement.
     fn define_class_statement<'a>(

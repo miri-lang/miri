@@ -5,7 +5,7 @@
 ///
 /// Provides access to environment variables through the `Env` capability class
 /// and to command-line arguments through `Args`, which implements
-/// `Iterable<String>` so it works directly in a `for` loop.
+/// `Indexed<String>` so it works directly in a `for` loop.
 ///
 /// This module holds two capability classes rather than one primary type: they
 /// share a single concern (the process's view of its environment) and splitting
@@ -80,13 +80,13 @@ public class Env
             default: Result.Err(EnvError.Other(miri_rt_env_error_message()))
 
 /// Command-line arguments passed to the program, excluding the program path.
-/// Implements `Iterable<String>`, so `for arg in args` iterates the arguments.
+/// Implements `Indexed<String>`, so `for arg in args` iterates the arguments.
 ///
 /// Example:
 ///     let args = Args()
 ///     for arg in args
 ///         println(arg)
-public class Args implements Iterable<String>, Indexed<String>
+public class Args implements Indexed<String>
 
     runtime "core" fn miri_rt_args_count() int
     runtime "core" fn miri_rt_args_at(index int) String

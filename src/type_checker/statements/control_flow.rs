@@ -43,7 +43,7 @@ use crate::ast::captures::collect_free_identifiers_excluding;
 use crate::ast::factory::make_type;
 use crate::ast::gpu_writes::{visit_buffer_writes, BufferWrite};
 use crate::ast::statement;
-use crate::ast::types::{is_range_type_name, is_unresolved, BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{is_range_type_name, is_unresolved, Type, TypeKind, ENTRIES_TRAIT_NAME};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
@@ -52,7 +52,7 @@ use crate::type_checker::operators::{
     unsteppable_range_help, unsteppable_range_message, ValueStepping,
 };
 use crate::type_checker::utils::is_residency_gated_buffer;
-use crate::type_checker::TypeChecker;
+use crate::type_checker::{IterationPlan, TypeChecker};
 
 impl TypeChecker {
     pub(crate) fn check_block(&mut self, stmts: &[Statement], context: &mut Context) {
@@ -192,6 +192,7 @@ impl TypeChecker {
 
     pub(crate) fn check_for(
         &mut self,
+        statement: usize,
         decls: &[VariableDeclaration],
         iterable: &Expression,
         body: &Statement,
@@ -200,12 +201,22 @@ impl TypeChecker {
         let iterable_type = self.infer_expression(iterable, context);
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
         self.check_range_steps(iterable, &iterable_type, &element_type, context);
+        let plan = self.iteration_plan(&iterable_type);
+        if let Some(plan) = &plan {
+            let walked = (&iterable_type, iterable.span);
+            self.record_iteration_plan(plan, statement, walked, decls.get(1));
+        }
+        if let Some(IterationPlan::Protocol(walk)) = &plan {
+            self.refuse_device_protocol_loop(&iterable_type, context, iterable.span);
+            self.record_iteration_method_sites(walk, &iterable_type, iterable.span, context);
+        }
 
         context.enter_scope();
         context.enter_loop();
 
         self.refuse_repeated_loop_variable(decls);
-        self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
+        let walked = (&iterable_type, plan.as_ref());
+        self.bind_loop_variables(decls, &element_type, walked, iterable.span, context);
 
         self.check_statement(body, context);
 
@@ -433,7 +444,9 @@ impl TypeChecker {
         context.enter_scope();
         context.enter_loop();
 
-        self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
+        let plan = self.iteration_plan(&iterable_type);
+        let walked = (&iterable_type, plan.as_ref());
+        self.bind_loop_variables(decls, &element_type, walked, iterable.span, context);
 
         self.check_statement(body, context);
 
@@ -857,7 +870,9 @@ impl TypeChecker {
 
         let iterable_type = self.infer_expression(iterable, context);
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
-        self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
+        let plan = self.iteration_plan(&iterable_type);
+        let walked = (&iterable_type, plan.as_ref());
+        self.bind_loop_variables(decls, &element_type, walked, iterable.span, context);
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
         self.check_concurrent_writes(decls, body, context);
@@ -1160,17 +1175,20 @@ impl TypeChecker {
         // No check for number of write buffers anymore; disjoint writes are legal.
     }
 
+    /// Binds a loop's variables to `element_type` and, for a second variable,
+    /// to what the loop's plan gives it; `walked` is the type of the value the
+    /// loop walks and that plan.
     pub(crate) fn bind_loop_variables(
         &mut self,
         decls: &[VariableDeclaration],
         element_type: &Type,
-        iterable_type: &Type,
+        walked: (&Type, Option<&IterationPlan>),
         span: Span,
         context: &mut Context,
     ) {
         match decls.len() {
             1 => self.bind_single_loop_variable(&decls[0], element_type, context),
-            2 => self.bind_pair_loop_variables(decls, element_type, iterable_type, span, context),
+            2 => self.bind_pair_loop_variables(decls, element_type, walked, span, context),
             _ => {
                 self.report_error(
                     DiagnosticCode::TypArgumentCountMismatch,
@@ -1229,18 +1247,25 @@ impl TypeChecker {
         &mut self,
         decls: &[VariableDeclaration],
         element_type: &Type,
-        iterable_type: &Type,
+        (iterable_type, plan): (&Type, Option<&IterationPlan>),
         span: Span,
         context: &mut Context,
     ) {
         if let TypeKind::Tuple(exprs) = &element_type.kind {
             self.bind_tuple_destructure(decls, exprs, span, context);
-        } else if matches!(&iterable_type.kind, TypeKind::Custom(_name, _) if iterable_type.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
-        {
-            self.bind_map_iteration(decls, element_type, iterable_type, context);
-        } else {
-            self.bind_sequence_with_index(decls, element_type, context);
+            return;
         }
+        let second = match plan {
+            Some(IterationPlan::Protocol(walk)) => match &walk.entries {
+                Some(value) => value.clone(),
+                None => {
+                    self.refuse_second_loop_variable(&decls[1], iterable_type, &walk.iterator);
+                    make_type(TypeKind::Error)
+                }
+            },
+            Some(IterationPlan::Indexed(_)) | None => make_type(TypeKind::Int),
+        };
+        self.bind_element_and_second(decls, element_type, second, context);
     }
 
     fn bind_tuple_destructure(
@@ -1292,83 +1317,53 @@ impl TypeChecker {
         );
     }
 
-    fn bind_map_iteration(
+    /// Binds a two-variable loop's element and its second variable: the index
+    /// of a sequence read by position, the iterator's `Entries` value of one
+    /// walked through its iterator.
+    fn bind_element_and_second(
         &mut self,
         decls: &[VariableDeclaration],
         element_type: &Type,
-        iterable_type: &Type,
+        second_type: Type,
         context: &mut Context,
     ) {
-        let val_type = match &iterable_type.kind {
-            TypeKind::Map(_, _) => {
-                unreachable!("collection types are normalized to Custom before this point")
-            }
-            TypeKind::Custom(name, Some(args))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
-                    && args.len() == 2 =>
-            {
-                self.extract_type_from_argument(&args[1])
-                    .unwrap_or_else(|_| make_type(TypeKind::Error))
-            }
-            _ => make_type(TypeKind::Error),
-        };
-
-        let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
-        let is_mutable_1 = matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
-
-        context.define(
-            decls[0].name.clone(),
-            SymbolInfo::new(
-                element_type.clone(),
-                is_mutable_0,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
-            ),
-        );
-        context.define(
-            decls[1].name.clone(),
-            SymbolInfo::new(
-                val_type,
-                is_mutable_1,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
-            ),
-        );
+        for (decl, ty) in decls.iter().zip([element_type.clone(), second_type]) {
+            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            context.define(
+                decl.name.clone(),
+                SymbolInfo::new(
+                    ty,
+                    is_mutable,
+                    false,
+                    MemberVisibility::Public,
+                    self.modules.current_module.clone(),
+                    None,
+                ),
+            );
+        }
     }
 
-    fn bind_sequence_with_index(
+    /// Refuses a second loop variable over a value walked through an iterator
+    /// that does not implement `Entries`: the iterator has no value to go with
+    /// each element.
+    pub(crate) fn refuse_second_loop_variable(
         &mut self,
-        decls: &[VariableDeclaration],
-        element_type: &Type,
-        context: &mut Context,
+        second: &VariableDeclaration,
+        iterable_type: &Type,
+        iterator: &Type,
     ) {
-        let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
-        let is_mutable_1 = matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
-
-        context.define(
-            decls[0].name.clone(),
-            SymbolInfo::new(
-                element_type.clone(),
-                is_mutable_0,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
+        self.report_error_with_help(
+            DiagnosticCode::TypArgumentCountMismatch,
+            format!(
+                "a loop over '{iterable_type}' walks its iterator '{iterator}', which has no \
+                 value to give a second loop variable '{}'",
+                second.name
             ),
-        );
-        context.define(
-            decls[1].name.clone(),
-            SymbolInfo::new(
-                make_type(TypeKind::Int),
-                is_mutable_1,
-                false,
-                MemberVisibility::Public,
-                self.modules.current_module.clone(),
-                None,
+            second.name_span,
+            format!(
+                "loop over the elements alone, `for x in ...`; a second variable reads the \
+                 `{ENTRIES_TRAIT_NAME}` value of an iterator that implements it, such as a \
+                 map's value for its key"
             ),
         );
     }
@@ -1439,6 +1434,7 @@ impl TypeChecker {
         } else {
             (make_type(TypeKind::Void), span)
         };
+        self.note_returned_value(&actual_return_type, context);
 
         // Check if we are inferring return types for the current function
         if let Some(Some(inferred_types)) = context.inferred_return_types.last_mut() {

@@ -320,7 +320,7 @@ for line in text.lines()
   line but splits into `["a", ""]`, `"a\r\nb"` gives `"a"` where `split` gives
   `"a\r"`, and `""` has no lines where `split` gives `[""]`. A `"\r"` not
   followed by `"\n"` stays in its line.
-- Both are `Iterable<String>`: `length()` counts the pieces once and remembers
+- Both are `Indexed<String>`: `length()` counts the pieces once and remembers
   the count, and `element_at(i)` builds piece `i` as a new string. Reading in
   order resumes from the previous piece, so a `for` loop walks the text once;
   reading an earlier piece walks again from the start. An index outside
@@ -538,6 +538,15 @@ All collections support `for..in` iteration:
 for item in items
     println(f"{item}")
 ```
+
+`for` walks a value whose type implements `Iterable<T>`, or steps a range. `Iterable<T>` requires one method, `iterator() Iterator<T>`, and an `Iterator<T>` hands out one element per `next() T?`, then `None`. How a loop walks the value depends on which trait it implements:
+
+- **By position.** A value implementing `Indexed<T>` — a list, an array, a homogeneous tuple, a string, a queue, a stack, or a class of the program — is walked from index 0 while the index is below its `length()`, reading each element with `element_at`. A second loop variable, `for x, i in xs`, is the index. `Indexed<T>` extends `Iterable<T>` and supplies its `iterator()`.
+- **Through its iterator.** Any other `Iterable` — a set, a map, or a class of the program — is asked for its `iterator()` once, before the first pass, and the loop runs a pass for each element `next()` returns. A second loop variable, `for k, v in c`, reads the iterator's `Entries.value()` after each `next()`: a map's value for its key. `iterator()` is called as a written `c.iterator()` is, so a subclass's override is the one that runs. A loop naming a second variable is refused (`MER_TYP_030`) unless the compiler can show the iterator implements `Entries`: every `iterator()` the loop can reach — the class's own and every subclass's override — must return instances of one class that implements it. A set's iterator does not, nor does an `iterator()` returning more than one class. Device code walks only by position: a loop through an iterator inside a `gpu fn` or a `gpu forall` body is refused (`MER_TAR_008`).
+
+A class reading its elements with `length` and `element_at` implements `Indexed<T>`; one that declares them under `Iterable<T>` is refused and told so (`MER_TYP_057`).
+
+A loop walks the collection as it was when the loop began: a collection is a value, so a write to it inside its own loop copies it, and the loop goes on over the elements it started with.
 
 ---
 
@@ -1047,7 +1056,8 @@ The `system.ops` module defines built-in traits used by the language:
 | `Steppable` | `for x in a..b` over a range of the type's values |
 | `Addable` | `+` operator |
 | `Multiplicable` | `*` operator (repetition) |
-| `Iterable` | `for x in collection` loops |
+| `Iterable` | `for x in collection` loops, through the value's `iterator()` |
+| `Indexed` | `for x in collection` loops by position, through `length()` and `element_at()` |
 
 `Hashable` requires one method, `hash() int`, returning the same value for any two values `equals` calls equal. Every value answers `hash()`: a type whose equality is derived derives its hash from the same parts — a number its value (a float its number, so `-0.0` and `0.0` hash alike), a string its content, an optional its payload or a constant for `None`, a struct its fields, an enum its variant and that variant's payloads, a class without `equals` its identity — and `List` and `Array` implement it over their elements. A type that writes its own `equals` decides alone which of its values are equal, so only a `hash` of its own can agree with it: until it implements `Hashable`, it is refused as a set element or map key and wherever its `hash()` is called (MER_TYP_079), including through a generic body that hashes a parameter it is bound to. `hash_combine(seed, value)` folds the hashes of the parts `equals` compares into one: `return hash_combine(self.x.hash(), self.y.hash())`.
 
@@ -1170,7 +1180,7 @@ Inside the body the parameter has the methods and operators of every bound: `<` 
 
 A bound list that no type could meet, or that says something twice, is refused where it is written (`MER_TYP_037`): a list names at most one class, since a class extends one parent; a bound is not repeated; a type set (`is Real`) stands alone and is not combined with other bounds; and two bounds may declare a member of the same name only with the same signature. A member that no bound declares is refused naming every bound (`MER_TYP_033`).
 
-A bound may name a type parameter declared before it in the same list, on a function, method, class, struct, enum, trait or `type` alike: `class Walker<T, S implements Iterable<T>>` holds a collection of any type `S` whose elements are `T`s, and is compiled for the concrete collection, so a call on `S` dispatches statically. A parameter declared after the bound is not yet in scope there, so `class Walker<S implements Iterable<T>, T>` is refused (`MER_TYP_043`).
+A bound may name a type parameter declared before it in the same list, on a function, method, class, struct, enum, trait or `type` alike: `class Walker<T, S implements Indexed<T>>` holds a collection of any type `S` whose elements are `T`s, and is compiled for the concrete collection, so a call on `S` dispatches statically. A parameter declared after the bound is not yet in scope there, so `class Walker<S implements Indexed<T>, T>` is refused (`MER_TYP_043`).
 
 A comma separates type parameters, never bounds: `fn big<T implements Comparable, Hashable>` would declare a second, unbounded parameter named `Hashable`, hiding the trait for the whole declaration. A type parameter named after a type in scope is therefore refused where it is declared (`MER_TYP_064`); when the hidden type is a trait written after a bounded parameter, the help spells the bound list: `T implements Comparable and Hashable`.
 

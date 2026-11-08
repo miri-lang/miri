@@ -59,7 +59,7 @@
     "task": "i",
     "success": true,
     "invocations": 4,
-    "bytes_read": 1495,
+    "bytes_read": 1485,
     "bytes_written": 97
   },
   {
@@ -87,7 +87,7 @@
     "task": "n",
     "success": true,
     "invocations": 3,
-    "bytes_read": 1466,
+    "bytes_read": 1510,
     "bytes_written": 433
   },
   {

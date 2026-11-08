@@ -42,13 +42,17 @@
 use crate::ast::factory::make_type;
 use crate::ast::type_arguments::{written_argument, TypeArgKind, ValueArg};
 use crate::ast::types::is_trait_self;
-use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME, STRING_TYPE_NAME};
+use crate::ast::types::{
+    Type, TypeKind, ACCELERABLE_TRAIT_NAME, INDEXED_TRAIT_NAME, ITERABLE_TRAIT_NAME,
+    ITERATOR_METHOD_NAME, POSITIONAL_METHOD_NAMES, STRING_TYPE_NAME,
+};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
     class_ancestry, class_method_declaration, declared_class_has_body, inherited_trait_default,
-    ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
+    trait_default_among, ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo,
+    TypeDefinition,
 };
 use crate::type_checker::instantiation_requirements::pins_of;
 use crate::type_checker::statements::declarations::generic_method_rules::spelled_signature;
@@ -194,6 +198,30 @@ impl TypeChecker {
             bodies.class_data.is_abstract,
         );
 
+        self.enter_class_scope(bodies, context);
+        self.check_typed_field_initializers(bodies, context);
+        self.check_class_method_bodies(&bodies.method_statements, MethodPhase::Rest, context);
+        self.record_runtime_settled_methods(&bodies.name, &bodies.method_statements);
+        context.exit_class();
+        context.exit_scope();
+    }
+
+    /// Checks the class's `iterator()` body, ahead of the module's other
+    /// bodies, in the class's own scope.
+    pub(crate) fn check_class_iterator_body(
+        &mut self,
+        bodies: &ClassBodies,
+        context: &mut Context,
+    ) {
+        self.enter_class_scope(bodies, context);
+        self.check_class_method_bodies(&bodies.method_statements, MethodPhase::Iterator, context);
+        context.exit_class();
+        context.exit_scope();
+    }
+
+    /// Enters the scope a class's bodies are checked in: its generic
+    /// parameters and the class itself as the receiver's.
+    fn enter_class_scope(&mut self, bodies: &ClassBodies, context: &mut Context) {
         let generics = bodies.class_data.generics.as_deref();
         context.enter_scope();
         if let Some(gens) = generics {
@@ -209,13 +237,6 @@ impl TypeChecker {
             bodies.base_class_name.clone(),
             class_type,
         );
-
-        self.check_typed_field_initializers(bodies, context);
-        self.check_class_method_bodies(&bodies.method_statements, context);
-        self.record_runtime_settled_methods(&bodies.name, &bodies.method_statements);
-
-        context.exit_class();
-        context.exit_scope();
     }
 
     /// Check the initializer of each field that also declares its type against
@@ -429,6 +450,7 @@ impl TypeChecker {
             name,
             base_name: base_class_name.as_deref(),
             methods,
+            traits: trait_names,
         };
         if !is_abstract {
             self.check_class_abstract_methods(&lineage, trait_names, name_expr);
@@ -1095,6 +1117,7 @@ impl TypeChecker {
             name,
             base_name: Some(base_name),
             methods,
+            traits: &[],
         };
         let mut current_base_owned: Option<String> = Some(base_name.to_string());
         let mut ancestry: Vec<(String, HashMap<String, Type>)> = Vec::new();
@@ -1522,7 +1545,13 @@ impl TypeChecker {
                 .then(|| self.inherited_method(lineage, method_name))
                 .flatten();
             let Some(class_method) = own.or(inherited.as_ref()) else {
-                if method_info.is_abstract && !leaves_bodies_open {
+                let defaulted = trait_default_among(
+                    &self.type_table.global_type_definitions,
+                    lineage.traits,
+                    method_name,
+                )
+                .is_some();
+                if method_info.is_abstract && !leaves_bodies_open && !defaulted {
                     missing_methods.push((method_name.clone(), origin_trait.clone()));
                 } else if method_info.is_abstract && !method_info.generics.is_empty() {
                     open_generic_methods.push((method_name.clone(), origin_trait.clone()));
@@ -1545,18 +1574,12 @@ impl TypeChecker {
 
         self.refuse_open_generic_trait_methods(name, &open_generic_methods, name_expr.span);
 
-        for (method_name, origin_trait) in missing_methods {
-            self.report_error(
-                DiagnosticCode::TypTraitDefinition,
-                format!(
-                    "Class '{}' must implement method '{}' from trait '{}'",
-                    crate::type_checker::diagnostics::shown_type_name(name),
-                    method_name,
-                    crate::type_checker::diagnostics::shown_type_name(&origin_trait)
-                ),
-                name_expr.span,
-            );
-        }
+        self.report_missing_trait_methods(
+            lineage,
+            missing_methods,
+            &trait_substitutions,
+            name_expr.span,
+        );
 
         for (method_name, origin_trait, expected_sig) in mismatched_methods {
             self.report_error(
@@ -1571,6 +1594,59 @@ impl TypeChecker {
                 name_expr.span,
             );
         }
+    }
+
+    /// Refuses a class for each trait method it owes and has no body for.
+    fn report_missing_trait_methods(
+        &mut self,
+        lineage: &ClassLineage,
+        missing: Vec<(String, String)>,
+        trait_substitutions: &HashMap<String, HashMap<String, Type>>,
+        span: Span,
+    ) {
+        for (method_name, origin_trait) in missing {
+            let message = format!(
+                "Class '{}' must implement method '{}' from trait '{}'",
+                crate::type_checker::diagnostics::shown_type_name(lineage.name),
+                method_name,
+                crate::type_checker::diagnostics::shown_type_name(&origin_trait)
+            );
+            match self.positional_iterable_repair(lineage, &origin_trait, trait_substitutions) {
+                Some(help) => self.report_error_with_help(
+                    DiagnosticCode::TypTraitDefinition,
+                    message,
+                    span,
+                    help,
+                ),
+                None => self.report_error(DiagnosticCode::TypTraitDefinition, message, span),
+            }
+        }
+    }
+
+    /// The repair for a class that owes `Iterable`'s `iterator` while it
+    /// reads its elements by position, through `length` and `element_at`: such
+    /// a class is an `Indexed` sequence, whose `iterator` is supplied.
+    fn positional_iterable_repair(
+        &self,
+        lineage: &ClassLineage,
+        origin_trait: &str,
+        trait_substitutions: &HashMap<String, HashMap<String, Type>>,
+    ) -> Option<String> {
+        let reads_by_position = POSITIONAL_METHOD_NAMES
+            .iter()
+            .all(|method| lineage.methods.contains_key(*method));
+        if origin_trait != ITERABLE_TRAIT_NAME || !reads_by_position {
+            return None;
+        }
+        let element = trait_substitutions
+            .get(ITERABLE_TRAIT_NAME)
+            .and_then(|substitution| substitution.values().next())
+            .map_or_else(|| "T".to_string(), ToString::to_string);
+        Some(format!(
+            "a class that reads its elements with `length` and `element_at` is read by \
+             position: implement `{INDEXED_TRAIT_NAME}<{element}>` in place of \
+             `{ITERABLE_TRAIT_NAME}<{element}>`, which supplies its `iterator`"
+        ))
     }
 
     /// Collect all trait methods including parent traits
@@ -1713,14 +1789,28 @@ impl TypeChecker {
     fn check_class_method_bodies(
         &mut self,
         method_statements: &[&Statement],
+        phase: MethodPhase,
         context: &mut Context,
     ) {
         for stmt in method_statements {
             if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                if method_body(decl).is_none() {
+                let is_iterator = decl.name == ITERATOR_METHOD_NAME;
+                if method_body(decl).is_none() || is_iterator != (phase == MethodPhase::Iterator) {
                     continue;
                 }
-
+                let returning =
+                    context
+                        .current_class
+                        .clone()
+                        .filter(|_| is_iterator)
+                        .map(
+                            |owner| crate::type_checker::iteration_plan::ReturningMethod {
+                                owner,
+                                method: decl.name.clone(),
+                                depth: context.return_types.len() + 1,
+                            },
+                        );
+                let enclosing = std::mem::replace(&mut self.returning_method, returning);
                 self.check_function_declaration(
                     FunctionDeclarationInfo {
                         name: &decl.name,
@@ -1734,6 +1824,7 @@ impl TypeChecker {
                     },
                     context,
                 );
+                self.returning_method = enclosing;
             }
         }
     }
@@ -1851,6 +1942,9 @@ struct ClassLineage<'a> {
     name: &'a str,
     base_name: Option<&'a str>,
     methods: &'a BTreeMap<String, MethodInfo>,
+    /// The traits the class lists itself, whose defaults supply a body for a
+    /// method another of them only requires.
+    traits: &'a [String],
 }
 
 /// Whether a type a trait writes and the type a class implementing it writes
@@ -2010,4 +2104,12 @@ impl TypeChecker {
             _ => false,
         }
     }
+}
+
+/// Which of a class's method bodies a pass over them checks: its
+/// `iterator()`, checked ahead of the module's other bodies, or the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MethodPhase {
+    Iterator,
+    Rest,
 }

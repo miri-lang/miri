@@ -367,7 +367,7 @@ impl TypeChecker {
             }
             StatementKind::While(cond, body, _) => self.check_while(cond, body, context),
             StatementKind::For(decls, iterable, body) => {
-                self.check_for(decls, iterable, body, context)
+                self.check_for(statement.id, decls, iterable, body, context)
             }
             StatementKind::Forall {
                 device,

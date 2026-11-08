@@ -24,12 +24,13 @@
 //! body's own checks; nothing here judges a type.
 
 use super::context::{resolve_method_source, Context, TypeDefinition};
+use super::expressions::calls::type_arg_is_concrete;
 use super::instantiation_requirements::{
     spells_a_type, written_type, GenericBodyId, InstantiationRequirements, Obligation, Pin,
     PinningSite, ReachedBecause, SELF_PIN,
 };
 use super::trait_self::self_trait_name;
-use super::TypeChecker;
+use super::{ProtocolWalk, TypeChecker};
 use crate::ast::expression::Expression;
 use crate::ast::implicit_methods::{
     operator_method_name, operator_receiver, CLONE_METHOD_NAME, CONSTRUCTION_METHOD_NAMES,
@@ -37,7 +38,8 @@ use crate::ast::implicit_methods::{
 };
 use crate::ast::type_arguments::TypeArgument;
 use crate::ast::types::{
-    BuiltinCollectionKind, Type, TypeKind, HASH_METHOD_NAME, STEPPING_METHOD_NAMES,
+    BuiltinCollectionKind, Type, TypeKind, ENTRY_VALUE_METHOD_NAME, HASH_METHOD_NAME,
+    ITERATOR_METHOD_NAME, ITERATOR_TRAIT_NAME, NEXT_METHOD_NAME, STEPPING_METHOD_NAMES,
 };
 use crate::ast::BinaryOp;
 use crate::diagnostics::DiagnosticCode;
@@ -189,6 +191,67 @@ impl TypeChecker {
                     context,
                 );
             }
+        }
+    }
+
+    /// Record the methods a `for` loop walking `walk` runs: the iterable's
+    /// `iterator()` once, then the iterator's `next()` before each pass and,
+    /// when it implements `Entries`, its `value()`. Each is the body the loop
+    /// calls directly when the iterator's class is known; a `next()` through
+    /// the `Iterator` trait reaches whichever class the iterator turns out to
+    /// be, as a written call through the trait does.
+    pub(crate) fn record_iteration_method_sites(
+        &mut self,
+        walk: &ProtocolWalk,
+        iterable: &Type,
+        span: Span,
+        context: &Context,
+    ) {
+        if let Some((class_name, substitution)) = self.class_instance(iterable) {
+            let method = ITERATOR_METHOD_NAME;
+            self.record_receiver_method_sites(
+                &class_name,
+                method,
+                &substitution,
+                iterable,
+                span,
+                context,
+            );
+        }
+        let instance = walk
+            .iterator_is_class
+            .then(|| self.class_instance(&walk.iterator))
+            .flatten();
+        let Some((class_name, substitution)) = instance else {
+            let TypeKind::Custom(_, arguments) = &walk.iterator.kind else {
+                return;
+            };
+            let arguments = arguments.as_deref();
+            self.record_trait_method_call(ITERATOR_TRAIT_NAME, NEXT_METHOD_NAME, arguments, span);
+            return;
+        };
+        self.record_iterator_instantiation(&class_name, &walk.iterator);
+        let methods = [NEXT_METHOD_NAME, ENTRY_VALUE_METHOD_NAME];
+        let called = if walk.entries.is_some() { 2 } else { 1 };
+        for method in &methods[..called] {
+            self.record_receiver_method_sites(
+                &class_name,
+                method,
+                &substitution,
+                &walk.iterator,
+                span,
+                context,
+            );
+        }
+    }
+
+    /// Record the instantiation of the iterator class a loop holds, which the
+    /// loop names without the program writing it, so its bodies are compiled
+    /// at its arguments.
+    fn record_iterator_instantiation(&mut self, class_name: &str, iterator: &Type) {
+        let arguments = self.argument_types(iterator);
+        if !arguments.is_empty() && arguments.iter().all(type_arg_is_concrete) {
+            self.record_generic_class_instantiation(class_name, arguments);
         }
     }
 

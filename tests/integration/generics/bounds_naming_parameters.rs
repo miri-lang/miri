@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 //! A type parameter's bound may name a parameter declared before it, on every
-//! declaration that takes type parameters: `S implements Iterable<T>` holds the
+//! declaration that takes type parameters: `S implements Indexed<T>` holds the
 //! collection type and its element type apart, so the body is compiled for the
 //! concrete collection with no trait value in between. A parameter declared
 //! after the bound is not yet in scope there.
@@ -15,7 +15,7 @@ fn a_function_bound_may_name_an_earlier_parameter() {
         r#"
 use system.collections.list
 
-fn first_of<T, S implements Iterable<T>>(s S) T?
+fn first_of<T, S implements Indexed<T>>(s S) T?
     if s.length() == 0
         return None
     s.element_at(0)
@@ -33,7 +33,7 @@ fn a_class_bound_may_name_an_earlier_parameter() {
         r#"
 use system.collections.list
 
-class Walker<T, S implements Iterable<T>>
+class Walker<T, S implements Indexed<T>>
     var source S
     var index int
     fn init(source S)
@@ -63,11 +63,11 @@ fn a_struct_bound_may_name_an_earlier_parameter() {
         r#"
 use system.collections.list
 
-struct Window<T, S implements Iterable<T>>
+struct Window<T, S implements Indexed<T>>
     source S
     start int
 
-fn head<T, S implements Iterable<T>>(w Window<T, S>) T?
+fn head<T, S implements Indexed<T>>(w Window<T, S>) T?
     if w.start >= w.source.length()
         return None
     w.source.element_at(w.start)
@@ -86,7 +86,7 @@ fn a_class_bound_may_not_name_a_later_parameter() {
         r#"
 use system.collections.list
 
-class Walker<S implements Iterable<T>, T>
+class Walker<S implements Indexed<T>, T>
     var source S
     fn init(source S)
         self.source = source
@@ -104,11 +104,11 @@ fn an_enum_bound_may_name_an_earlier_parameter() {
         r#"
 use system.collections.list
 
-enum Slot<T, S implements Iterable<T>>
+enum Slot<T, S implements Indexed<T>>
     Empty
     Filled(S)
 
-fn count<T, S implements Iterable<T>>(slot Slot<T, S>) int
+fn count<T, S implements Indexed<T>>(slot Slot<T, S>) int
     match slot
         Slot.Empty: 0
         Slot.Filled(s): s.length()
@@ -131,7 +131,7 @@ use system.collections.list
 class Counter
     fn init()
         return
-    public fn last_of<T, S implements Iterable<T>>(s S) T?
+    public fn last_of<T, S implements Indexed<T>>(s S) T?
         if s.length() == 0
             return None
         s.element_at(s.length() - 1)
@@ -150,7 +150,7 @@ fn a_trait_bound_may_name_an_earlier_parameter() {
         r#"
 use system.collections.list
 
-trait Source<T, S implements Iterable<T>>
+trait Source<T, S implements Indexed<T>>
     fn items() S
 
 class Names implements Source<String, [String]>
@@ -174,7 +174,7 @@ fn a_type_declaration_bound_may_name_an_earlier_parameter() {
         r#"
 use system.collections.list
 
-type Bag<T, S implements Iterable<T>> is S
+type Bag<T, S implements Indexed<T>> is S
 
 fn main()
     let b Bag<int, [int]> = List<int>([1, 2])

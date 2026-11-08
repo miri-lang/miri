@@ -9,6 +9,8 @@ pub mod edge_cases;
 pub mod forall_cpu;
 pub mod forever;
 pub mod if_else;
+pub mod iteration_protocol;
+pub mod iteration_protocol_edges;
 pub mod jump;
 pub mod loop_variables;
 pub mod match_assignment;

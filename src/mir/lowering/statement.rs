@@ -53,7 +53,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             lower_while(ctx, &stmt.span, cond, body, while_type)
         }
         StatementKind::For(decls, iterable, body) => {
-            lower_for(ctx, &stmt.span, decls, iterable, body)
+            lower_for(ctx, (stmt.id, &stmt.span), decls, iterable, body)
         }
         StatementKind::Forall {
             device,

@@ -122,16 +122,28 @@ public trait Multiplicable
 /// Enables for-loop iteration over a type.
 ///
 /// Types implementing this trait can be used in `for x in collection` loops.
-/// The iterator protocol uses index-based access via `element_at` and `length`.
-/// The element type `T` is the type yielded by each iteration step — `Iterable<int>`
-/// produces ints, `Iterable<String>` produces strings, etc.
+/// The loop asks the value for its `iterator()` once, before the first pass,
+/// and runs a pass for each element the iterator's `next` returns, until it
+/// returns `None`. The element type `T` is the type yielded by each iteration
+/// step — `Iterable<int>` produces ints, `Iterable<String>` produces strings.
+///
+/// A loop naming a second variable, `for k, v in c`, gives it the iterator's
+/// `Entries.value()` for each element: a map's value for its key. The loop
+/// ends when `value()` returns `None`. An iterator that does not implement
+/// `Entries` gives a second variable nothing, and such a loop is refused.
+///
+/// A sequence read by position implements `Indexed<T>` instead, which extends
+/// this trait and supplies its `iterator()`.
 ///
 /// Example:
-///     for ch in "hello"        // String implements Iterable<String>
-///         println(ch)          // each ch is a one-character String
+///     class Countdown implements Iterable<int>
+///         var start int
+///         fn init(start int)
+///             self.start = start
+///         public fn iterator() Iterator<int>
+///             return CountdownIterator(self.start)
 public trait Iterable<T>
-    public fn length() int
-    public fn element_at(index int) T
+    public fn iterator() Iterator<T>
 
 /// Hands out the elements of a sequence one at a time.
 ///
@@ -158,7 +170,9 @@ public trait Entries<V>
 /// A sequence read by position: `length` elements, the one at each index
 /// from 0 up to `length() - 1` read by `element_at`.
 ///
-/// The default `iterator` walks the sequence by position with an
+/// A `for` loop walks an `Indexed` value by position, from index 0 while the
+/// index is below `length()`, and a second loop variable is the index. The
+/// default `iterator` walks the sequence the same way, with an
 /// `IndexIterator`.
 ///
 /// Example:
@@ -168,7 +182,7 @@ public trait Entries<V>
 ///             self.count = count
 ///         public fn length() int: self.count
 ///         public fn element_at(index int) int: index * index
-public trait Indexed<T>
+public trait Indexed<T> extends Iterable<T>
     public fn length() int
     public fn element_at(index int) T
 

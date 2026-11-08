@@ -63,11 +63,13 @@ mod hidden_types;
 pub(crate) mod hygiene;
 pub(crate) mod instantiation_requirements;
 pub(crate) mod int_literals;
+pub(crate) mod iteration_plan;
 pub(crate) mod launch_rules;
 pub mod literal_hooks;
 pub(crate) mod member_hints;
 pub(crate) mod module_loader;
 mod operators;
+pub use iteration_plan::{IterationPlan, PositionalAccess, ProtocolWalk};
 pub(crate) use operators::{named_class, ValueOrdering, ValueStepping};
 pub(crate) mod pattern_coverage;
 mod reference_cycles;
@@ -148,6 +150,17 @@ pub struct TypeChecker {
     /// AST statements collected from imported modules.
     /// These need to be included in MIR lowering and codegen.
     pub imported_statements: Vec<Statement>,
+    /// The class each `iterator()` declared to return a trait hands back,
+    /// which a `for` loop's iteration plan reads; see [`iteration_plan`].
+    pub(crate) returned_classes: iteration_plan::ReturnedClasses,
+    /// The `iterator()` whose returned values are being noted, while its body
+    /// is checked.
+    pub(crate) returning_method: Option<iteration_plan::ReturningMethod>,
+    /// How each `for` statement walks its value, settled once every class is
+    /// known and read by lowering; see [`iteration_plan`].
+    pub(crate) iteration_plans: iteration_plan::IterationPlans,
+    /// The loops walking an iterator, held until their plans are settled.
+    pub(crate) protocol_loops: Vec<iteration_plan::ProtocolLoop>,
     /// The methods that write their receiver, so a call of one on a value
     /// another binding shares copies it first; see [`body_writes`].
     pub receiver_writes: body_writes::ReceiverWrites,
@@ -327,6 +340,10 @@ impl TypeChecker {
             modules: ModuleLoader::new(),
             fn_analysis: FunctionAnalysis::new(),
             imported_statements: Vec::new(),
+            returned_classes: HashMap::new(),
+            returning_method: None,
+            iteration_plans: HashMap::new(),
+            protocol_loops: Vec::new(),
             receiver_writes: body_writes::ReceiverWrites::default(),
             parameter_writes: body_writes::ParameterWrites::default(),
             held_operands: body_writes::HeldOperands::default(),
@@ -658,6 +675,7 @@ impl TypeChecker {
         self.run_pass_collect_declarations(program, &mut context);
         self.check_top_level_shape(program);
         self.run_pass_check_bodies(program, &mut context);
+        self.settle_iteration_plans();
         self.report_deferred_int_literal_ranges();
         self.report_deferred_gpu_int_literal_ranges();
         self.answer_pinning_sites(&context);
@@ -730,6 +748,7 @@ impl TypeChecker {
 
     fn run_pass_check_bodies(&mut self, program: &Program, context: &mut Context) {
         let defined = self.define_types(top_level_statements(program), context);
+        self.check_iterator_bodies(top_level_statements(program), &defined, context);
         for statement in top_level_statements(program) {
             self.check_statement_after_definitions(statement, &defined, context);
         }

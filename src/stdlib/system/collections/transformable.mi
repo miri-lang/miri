@@ -11,10 +11,10 @@ use system.collections.list
 /// operations such as `take`/`skip`/`sorted_by`, use `Sequenced<T>`.
 ///
 /// Implementors must provide `length()` and `element_at(index)` (typically via
-/// `Queryable<T>` or `Iterable<T>`). The default bodies derive everything else
+/// `Queryable<T>` or `Indexed<T>`). The default bodies derive everything else
 /// from those two primitives and are re-lowered per concrete class at compile
 /// time, so dispatch stays static and zero-cost.
-public trait Transformable<T>
+public trait Transformable<T> extends Iterable<T>
 
     abstract fn length() int
     abstract fn element_at(index int) T

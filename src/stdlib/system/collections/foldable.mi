@@ -19,7 +19,7 @@ use system.ops
 /// no dependency on `system.collections.list` — keeping the trait reusable by
 /// any indexed type, including ones that don't have a `List` materialization
 /// path.
-public trait Foldable<T>
+public trait Foldable<T> extends Iterable<T>
 
     abstract fn length() int
     abstract fn element_at(index int) T

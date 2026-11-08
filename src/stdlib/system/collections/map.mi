@@ -79,7 +79,7 @@ public class Map<K, V> implements Iterable<K>, Cloneable
     /// Returns an iterator over the map's keys, in the map's unspecified
     /// order. The iterator walks the map as it is now: a later write to this
     /// map leaves the walk unchanged.
-    public fn iterator() MapIterator<K, V>
+    public fn iterator() Iterator<K>
         return MapIterator<K, V>(source: self)
 
     /// Sets the value associated with the given key.

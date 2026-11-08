@@ -617,13 +617,13 @@ class Bad implements Child<String>
 
 #[test]
 fn test_implements_trait_with_nested_generic_arg_matches() {
-    // `implements Iterable<List<int>>` requires `element_at(i int) List<int>`;
+    // `implements Indexed<List<int>>` requires `element_at(i int) List<int>`;
     // the trait arg's inner type (`int`) must be preserved through resolution.
     assert_runs_with_output(
         r#"
 use system.collections.list
 
-class Box implements Iterable<List<int>>
+class Box implements Indexed<List<int>>
     fn length() int
         return 1
     fn element_at(index int) List<int>
@@ -646,7 +646,7 @@ fn test_implements_trait_with_nested_generic_arg_rejects_mismatch() {
         r#"
 use system.collections.list
 
-class Bad implements Iterable<List<int>>
+class Bad implements Indexed<List<int>>
     fn length() int
         return 1
     fn element_at(index int) List<String>
@@ -658,7 +658,7 @@ class Bad implements Iterable<List<int>>
 
 #[test]
 fn test_implements_trait_with_nested_class_generic_arg_resolves() {
-    // `class Box<T> implements Iterable<List<T>>`: the class's own generic
+    // `class Box<T> implements Indexed<List<T>>`: the class's own generic
     // parameter `T` appears inside a nested type in the trait arg. The class's
     // generics must be in scope when the implements clause is resolved, so
     // `T` resolves as a Generic rather than failing with "Unknown type: T".
@@ -666,7 +666,7 @@ fn test_implements_trait_with_nested_class_generic_arg_resolves() {
         r#"
 use system.collections.list
 
-class Box<T> implements Iterable<List<T>>
+class Box<T> implements Indexed<List<T>>
     fn length() int
         return 0
     fn element_at(index int) List<T>
@@ -687,7 +687,7 @@ fn test_generic_class_with_implements_emits_vtable() {
         r#"
 use system.collections.list
 
-class Box<T> implements Iterable<List<T>>
+class Box<T> implements Indexed<List<T>>
     fn length() int
         return 0
     fn element_at(index int) List<T>

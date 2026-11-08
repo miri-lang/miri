@@ -3836,7 +3836,7 @@ impl TypeChecker {
 /// Only a fully concrete tuple describes an instantiation the program actually
 /// asked for; one still carrying a parameter comes from a generic body being
 /// checked in its own terms.
-fn type_arg_is_concrete(ty: &Type) -> bool {
+pub(crate) fn type_arg_is_concrete(ty: &Type) -> bool {
     match &ty.kind {
         TypeKind::Generic(_, _) => false,
         TypeKind::Custom(_, Some(args)) | TypeKind::Tuple(args) => {
