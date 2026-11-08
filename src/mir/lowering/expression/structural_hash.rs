@@ -182,6 +182,12 @@ fn emit_option_hash(
 
     ctx.set_current_block(some_bb);
     let payload = materialize_field(ctx, &place, PlaceElem::Field(0), inner_ty, span);
+    // TODO: this payload read exists only on the Some branch, yet the
+    // enclosing scope releases it on every exit. Harmless while a derived
+    // hash is its own function body (no loop around it reuses the temp);
+    // if hashing is ever lowered inline, release it with `emit_temp_drop`
+    // where the branch converges, as structural equality does. The member
+    // reads further down share the same shape.
     if ctx.is_counted(&inner_ty.kind) {
         ctx.register_scope_temp(payload);
     }

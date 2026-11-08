@@ -1021,23 +1021,29 @@ fn emit_field_equality(
     field_ty: &Type,
     span: Span,
 ) -> Result<crate::mir::Local, LoweringError> {
+    let watermark = ctx.body.local_decls.len();
     let field = PlaceElem::Field(field_idx);
     let lhs_field = materialize_field(ctx, lhs_place, field.clone(), field_ty, span);
     let rhs_field = materialize_field(ctx, rhs_place, field, field_ty, span);
 
-    if ctx.is_counted(&field_ty.kind) {
-        ctx.register_scope_temp(lhs_field);
-        ctx.register_scope_temp(rhs_field);
-    }
-
-    emit_structural_equality(
+    let verdict = emit_structural_equality(
         ctx,
         span,
         &field_ty.kind,
         Operand::Copy(Place::new(lhs_field)),
         Operand::Copy(Place::new(rhs_field)),
         true,
-    )
+    )?;
+
+    // Each field read holds a reference of its own, and is made only on the
+    // path that reaches this field: an enclosing comparison that settles on
+    // identity or on a discriminant skips it. Released here, where the field's
+    // comparison has converged, the release runs on exactly the paths that
+    // made the read; left to the enclosing scope, it would also run on the
+    // paths that skipped it, releasing a previous loop pass's value again.
+    ctx.emit_temp_drop(lhs_field, watermark, span);
+    ctx.emit_temp_drop(rhs_field, watermark, span);
+    Ok(verdict)
 }
 
 /// Combine two boolean locals with `&`.
