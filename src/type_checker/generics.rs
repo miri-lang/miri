@@ -995,8 +995,21 @@ impl TypeChecker {
         if !self.resolving_declared_signature {
             self.refuse_type_parameters_hiding_types(generics, context);
         }
-        // Each parameter is defined before the next is resolved, so a later
-        // bound may name an earlier parameter.
+        self.define_in_order(generics, context)
+    }
+
+    /// Defines each of `generics` in the current scope before the next is
+    /// resolved, so a later bound may name an earlier parameter
+    /// (`S implements Iterable<T>`) and an earlier one may not name a later.
+    /// This is the one place a declaration's parameter list is read in order;
+    /// every declaration that takes type parameters reads it here.
+    ///
+    /// Returns the definitions, in declaration order.
+    pub(crate) fn define_in_order(
+        &mut self,
+        generics: &[Expression],
+        context: &mut Context,
+    ) -> Vec<GenericDefinition> {
         let mut definitions = Vec::with_capacity(generics.len());
         for generic in generics {
             if let Some(definition) = self.generic_definition(generic, context) {

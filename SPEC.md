@@ -1146,6 +1146,8 @@ Inside the body the parameter has the methods and operators of every bound: `<` 
 
 A bound list that no type could meet, or that says something twice, is refused where it is written (`MER_TYP_037`): a list names at most one class, since a class extends one parent; a bound is not repeated; a type set (`is Real`) stands alone and is not combined with other bounds; and two bounds may declare a member of the same name only with the same signature. A member that no bound declares is refused naming every bound (`MER_TYP_033`).
 
+A bound may name a type parameter declared before it in the same list, on a function, method, class, struct, enum, trait or `type` alike: `class Walker<T, S implements Iterable<T>>` holds a collection of any type `S` whose elements are `T`s, and is compiled for the concrete collection, so a call on `S` dispatches statically. A parameter declared after the bound is not yet in scope there, so `class Walker<S implements Iterable<T>, T>` is refused (`MER_TYP_043`).
+
 A comma separates type parameters, never bounds: `fn big<T implements Comparable, Hashable>` would declare a second, unbounded parameter named `Hashable`, hiding the trait for the whole declaration. A type parameter named after a type in scope is therefore refused where it is declared (`MER_TYP_064`); when the hidden type is a trait written after a bounded parameter, the help spells the bound list: `T implements Comparable and Hashable`.
 
 #### Binding type parameters

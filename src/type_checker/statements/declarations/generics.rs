@@ -91,14 +91,17 @@ impl TypeChecker {
         )))
     }
 
+    /// The definitions `generics` declare, read in order in a scope of their
+    /// own, so a declaration's signature can be recorded before its body is
+    /// checked without leaving its parameters defined around it.
     pub(crate) fn extract_generic_definitions(
         &mut self,
         generics: &[Expression],
         context: &mut Context,
     ) -> Vec<GenericDefinition> {
-        generics
-            .iter()
-            .filter_map(|gen| self.generic_definition(gen, context))
-            .collect()
+        context.enter_scope();
+        let definitions = self.define_in_order(generics, context);
+        context.exit_scope();
+        definitions
     }
 }

@@ -607,12 +607,7 @@ impl TypeChecker {
 
         if let Some(gens) = generics {
             context.enter_scope();
-            for gen in gens {
-                if let Some(definition) = self.generic_definition(gen, context) {
-                    context
-                        .define_type(definition.name.clone(), TypeDefinition::Generic(definition));
-                }
-            }
+            self.define_in_order(gens, context);
         }
 
         for param in params {
@@ -750,10 +745,7 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Option<Vec<GenericDefinition>> {
         if let Some(gens) = generics {
-            let defs: Vec<GenericDefinition> = gens
-                .iter()
-                .filter_map(|gen| self.generic_definition(gen, context))
-                .collect();
+            let defs = self.extract_generic_definitions(gens, context);
             if defs.is_empty() {
                 None
             } else {

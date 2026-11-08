@@ -170,11 +170,7 @@ impl TypeChecker {
     ) -> Vec<GenericDefinition> {
         let mut generic_defs = Vec::new();
         if let Some(gens) = generics {
-            self.define_generics(gens, context);
-            generic_defs.extend(
-                gens.iter()
-                    .filter_map(|gen| self.generic_definition(gen, context)),
-            );
+            generic_defs.extend(self.define_generics(gens, context));
         }
         generic_defs
     }

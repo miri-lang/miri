@@ -196,11 +196,7 @@ impl TypeChecker {
         let capacity = generics.as_ref().map(|g| g.len()).unwrap_or(0);
         let mut generic_defs = Vec::with_capacity(capacity);
         if let Some(gens) = generics {
-            self.define_generics(gens, context);
-            generic_defs.extend(
-                gens.iter()
-                    .filter_map(|gen| self.generic_definition(gen, context)),
-            );
+            generic_defs.extend(self.define_generics(gens, context));
         }
         generic_defs
     }
