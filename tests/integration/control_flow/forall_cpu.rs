@@ -136,3 +136,28 @@ fn main()
         "1 1 1",
     );
 }
+
+/// A one-axis `forall` takes a written bounded range, as two- and three-axis
+/// loops and `gpu forall` do; any other iterable is refused where it is
+/// written rather than reaching lowering.
+#[test]
+fn test_forall_cpu_over_a_collection_is_refused() {
+    for iterable in ["{1, 2, 3}", "[1, 2, 3]", "List([1, 2, 3])"] {
+        assert_compiler_error(
+            &format!("let c = {iterable}\nforall x in c\n    print(f\"{{x}}\")\n"),
+            "forall dimension 0: range must be a bounded numeric range like '0..n'",
+        );
+    }
+}
+
+#[test]
+fn test_forall_cpu_over_a_range_held_in_a_binding_is_refused() {
+    assert_compiler_error(
+        r#"
+let r = 0..3
+forall i in r
+    print(f"{i}")
+"#,
+        "forall dimension 0: range must be a bounded numeric range like '0..n'",
+    );
+}

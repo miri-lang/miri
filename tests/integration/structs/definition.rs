@@ -59,3 +59,21 @@ fn main()
         "Infinite recursive type",
     );
 }
+
+/// The refusal names a generic trait as it is written, arguments included.
+#[test]
+fn test_struct_naming_a_generic_trait_is_refused_with_the_trait_as_written() {
+    assert_compiler_error(
+        r#"
+trait Container<T>
+    fn get() T
+
+struct S implements Container<int>
+    p int
+
+fn main()
+    let s = S(p: 1)
+"#,
+        "make 'S' a class to implement 'Container<int>'",
+    );
+}

@@ -438,6 +438,17 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         let iterable_type = self.infer_expression(iterable, context);
+        // A `forall` splits a written bounded range into independent passes,
+        // on every axis count and target alike: a collection or a range held
+        // in a binding is walked with `for`.
+        if !matches!(iterable.node, ExpressionKind::Range(_, Some(_), _)) {
+            self.report_error(
+                DiagnosticCode::TarGpuParallelConstruct,
+                "forall dimension 0: range must be a bounded numeric range like '0..n'".to_string(),
+                iterable.span,
+            );
+            return;
+        }
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
         self.check_forall_range_steps(iterable, &iterable_type, &element_type, context);
 

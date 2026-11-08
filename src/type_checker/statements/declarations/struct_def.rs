@@ -100,11 +100,9 @@ impl TypeChecker {
     /// dispatch to, so a trait it named would only promise what it cannot do.
     fn reject_struct_traits(&mut self, struct_name: &str, traits: &[Expression]) {
         for trait_expr in traits {
-            let trait_name = match &trait_expr.node {
-                ExpressionKind::Identifier(name, _) => name.clone(),
-                ExpressionKind::Type(ty, _) => ty.to_string(),
-                _ => trait_expr.node.to_string(),
-            };
+            // The trait as the source writes it, arguments included
+            // (`Container<Plain>`).
+            let trait_name = crate::ast::formatter::expression_text(trait_expr);
             self.report_error_with_help(
                 DiagnosticCode::TypStructDefinition,
                 format!(
