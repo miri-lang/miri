@@ -1,0 +1,11 @@
+// summary: Accepted counterpart of MER_RT_020: the recursion stops at a base case inside the stack.
+// expect-stdout: 1000
+use system.io
+
+fn climb(n int) int
+    if n == 0
+        return 0
+    return climb(n - 1) + 1
+
+fn main()
+    println(f"{climb(1000)}")

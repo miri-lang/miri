@@ -471,6 +471,17 @@ pub unsafe extern "C" fn miri_rt_test_simulate_double_free() {
     free_with_rc(ptr, payload_size);
 }
 
+/// Reads through an address no program maps, away from every stack, so a test
+/// can prove a fault that is not the stack running out keeps its signal.
+///
+/// # Safety
+/// This function is for testing only: it faults by design.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_wild_read() {
+    let wild = std::ptr::dangling::<usize>();
+    std::hint::black_box(wild.read_volatile());
+}
+
 /// Releases a heap block, then hands it to the runtime's entry check, as an
 /// intrinsic receiving a released value would.
 ///

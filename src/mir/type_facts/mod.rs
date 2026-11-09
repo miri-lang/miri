@@ -150,16 +150,16 @@ impl TypeFacts {
         self.drop_plans.get(&symbol)
     }
 
-    /// The plan for releasing a `name` value at `args` in place, in code
-    /// leaving the parameters `open` unbound — a value no thunk is emitted
-    /// for at these arguments.
-    pub fn drop_plan_in(
+    /// The counted members to release of a `name` value at `args` in place,
+    /// in code leaving the parameters `open` unbound — a value no thunk is
+    /// emitted for at these arguments.
+    pub fn dropped_members_in(
         &self,
         name: &str,
         args: Option<&[Type]>,
         open: &HashSet<String>,
-    ) -> DropPlan {
-        drop_plan::drop_plan_in(&self.definitions, name, args, open)
+    ) -> DroppedMembers {
+        drop_plan::dropped_members_in(&self.definitions, name, args, open)
     }
 
     /// The type parameters the drop thunk of `name` at `args` reads its
@@ -307,12 +307,16 @@ fn drop_plans(
         .map(|(name, _)| (name.as_str(), None));
     let instantiated = (drop_instantiations.iter())
         .flat_map(|(name, tuples)| tuples.iter().map(move |args| (name.as_str(), Some(args))));
+    let reach = DropHookReach::new(definitions);
     shared
         .chain(instantiated)
         .map(|(name, args)| {
             let args = args.map(Vec::as_slice);
             let symbol = Symbol::type_thunk(ThunkKind::Drop, name, args.unwrap_or_default());
-            (symbol, drop_plan::drop_plan(definitions, name, args))
+            (
+                symbol,
+                drop_plan::drop_plan(definitions, &reach, name, args),
+            )
         })
         .collect()
 }

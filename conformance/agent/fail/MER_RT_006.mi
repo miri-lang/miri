@@ -1,9 +1,7 @@
 // expect: MER_RT_006
 // command: run
-// summary: Triggers MER_RT_006: a stack overflow from unbounded recursion causes a segmentation fault.
-fn deep(n int) int
-    return deep(n + 1)
+// summary: Triggers MER_RT_006: a read through an address nothing maps causes a segmentation fault.
+runtime "core" fn miri_rt_test_simulate_wild_read()
 
 fn main()
-    let x = deep(1)
-    println(f"{x}")
+    miri_rt_test_simulate_wild_read()

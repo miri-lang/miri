@@ -1,0 +1,10 @@
+// expect: MER_RT_020
+// command: run
+// summary: Triggers MER_RT_020: a function that always calls itself outgrows the stack.
+use system.io
+
+fn climb(n int) int
+    return climb(n + 1) + 1
+
+fn main()
+    println(f"{climb(0)}")

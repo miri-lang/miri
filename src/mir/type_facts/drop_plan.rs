@@ -16,6 +16,7 @@
 //! of every struct, class and enum, and the thunk of every instantiation in
 //! the drop set.
 
+use super::DropHookReach;
 use crate::ast::type_arguments::{type_argument, TypeArgument};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::instantiation::{field_types, member_type_at, shape::open_parameter_names};
@@ -89,6 +90,10 @@ pub struct DropPlan {
     pub hook: Option<Symbol>,
     /// The counted members the thunk releases after the hook.
     pub members: DroppedMembers,
+    /// Whether what the instance holds may lead back to it, so its release
+    /// can nest to a depth the data decides and the thunk must bound it.
+    /// Errs towards true; see [`DropHookReach`].
+    pub may_recurse: bool,
 }
 
 impl DropPlan {
@@ -109,22 +114,27 @@ impl DropPlan {
 /// instantiation's thunk, so such a field is skipped.
 pub(crate) fn drop_plan(
     definitions: &HashMap<String, TypeDefinition>,
+    reach: &DropHookReach<'_>,
     name: &str,
     args: Option<&[Type]>,
 ) -> DropPlan {
     let open = thunk_open_parameters(definitions, name, args);
-    drop_plan_in(definitions, name, args, &open)
+    DropPlan {
+        hook: crate::mir::lowering::dispatch_symbols::drop_hook_symbol(name, definitions),
+        members: dropped_members_in(definitions, name, args, &open),
+        may_recurse: reach.may_recurse(name, args),
+    }
 }
 
-/// The plan for releasing a `name` value at `args` in code that leaves the
-/// parameters `open` unbound: what a drop thunk does, read where the value is
-/// released rather than inside the thunk.
-pub(crate) fn drop_plan_in(
+/// The counted members to release of a `name` value at `args` in code that
+/// leaves the parameters `open` unbound: what a drop thunk releases, read
+/// where the value is released rather than inside the thunk.
+pub(crate) fn dropped_members_in(
     definitions: &HashMap<String, TypeDefinition>,
     name: &str,
     args: Option<&[Type]>,
     open: &HashSet<String>,
-) -> DropPlan {
+) -> DroppedMembers {
     let scope = LayoutScope::new(definitions, open);
     let is_generic = definitions
         .get(name)
@@ -140,7 +150,7 @@ pub(crate) fn drop_plan_in(
         let skipped = is_generic && is_unresolved_element(&ty.kind, definitions);
         (!skipped && is_slot_counted(&ty.kind, scope)).then_some(CountedSlot { index, ty })
     };
-    let members = match definitions.get(name) {
+    match definitions.get(name) {
         Some(TypeDefinition::Enum(def)) => {
             let type_args = args.map(|_| arg_exprs.as_slice());
             DroppedMembers::Variants(
@@ -167,10 +177,6 @@ pub(crate) fn drop_plan_in(
         ),
         Some(TypeDefinition::Trait(_) | TypeDefinition::Alias(_) | TypeDefinition::Generic(_))
         | None => DroppedMembers::Fields(Vec::new()),
-    };
-    DropPlan {
-        hook: crate::mir::lowering::dispatch_symbols::drop_hook_symbol(name, definitions),
-        members,
     }
 }
 

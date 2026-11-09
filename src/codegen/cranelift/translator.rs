@@ -1373,7 +1373,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Look up (or declare) a `miri_rt_*_decref_element(ptr)` runtime helper
     /// and return its function address as a ptr-sized integer.
-    fn decref_element_addr(
+    pub(crate) fn decref_element_addr(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         name: &'static str,

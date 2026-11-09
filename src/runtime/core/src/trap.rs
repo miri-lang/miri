@@ -53,6 +53,8 @@ pub(crate) mod code {
     /// bound whose `steppable()` is false, or a string that is not exactly
     /// one character, or is the last code point, asked for its successor.
     pub(crate) const NOT_STEPPABLE: &str = "MER_RT_019";
+    /// A program's calls nested deeper than its stack.
+    pub(crate) const STACK_OVERFLOW: &str = "MER_RT_020";
 }
 
 /// The sentences a trap reports for the faults the host and a GPU kernel
@@ -110,6 +112,44 @@ pub(crate) fn trap(code: &str, message: &str) -> ! {
     }
     let _ = std::io::stderr().flush();
     unsafe { libc::_exit(1) }
+}
+
+/// Report the stack running out and end the process.
+///
+/// A signal handler on the alternate stack runs this, where the interrupted
+/// frame may hold the allocator's lock: it only writes to file descriptors and
+/// allocates nothing, unlike [`trap`], so it leaves no profile record either.
+pub(crate) fn trap_stack_overflow() -> ! {
+    write_raw(
+        2,
+        b"Runtime error: stack overflow: the program's calls are nested deeper than its stack\n",
+    );
+    write_trap_report_raw(code::STACK_OVERFLOW);
+    unsafe { libc::_exit(1) }
+}
+
+/// Writes `bytes` to the descriptor `fd`, ignoring a failure: there is nothing
+/// a dying program can do about one.
+fn write_raw(fd: libc::c_int, bytes: &[u8]) {
+    // SAFETY: the buffer is valid for its length for the whole call.
+    let _ = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+}
+
+/// [`write_trap_report`], without allocating.
+fn write_trap_report_raw(code: &str) {
+    // SAFETY: the name is a valid C string; the value is a live C string or null.
+    let path = unsafe { libc::getenv(c"MIRI_TRAP_REPORT_PATH".as_ptr()) };
+    if path.is_null() {
+        return;
+    }
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
+    // SAFETY: `path` is the C string just checked, and the mode is the file's.
+    let fd = unsafe { libc::open(path, flags, 0o600 as libc::c_uint) };
+    if fd >= 0 {
+        write_raw(fd, code.as_bytes());
+        // SAFETY: `fd` was just opened and belongs to this call.
+        unsafe { libc::close(fd) };
+    }
 }
 
 /// Record the code of a trap where the compiler that spawned this program can

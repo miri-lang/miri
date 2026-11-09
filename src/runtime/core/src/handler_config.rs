@@ -126,6 +126,8 @@ pub fn ensure_leak_check_handler_registered() {
 /// # Safety
 /// Safe to call from any context; called only by the linker at library initialization.
 pub unsafe extern "C" fn init_handlers_at_load_time() {
+    #[cfg(unix)]
+    crate::stack_overflow::install();
     crate::guard::resolve_tracking_state();
     crate::rc_stats::ensure_handler_registered();
     if is_alloc_count_enabled() {

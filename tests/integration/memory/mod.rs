@@ -9,6 +9,7 @@ pub mod closures;
 pub mod collection_receivers;
 pub mod collections;
 pub mod conditional_branches;
+pub mod deep_release;
 pub mod drop_call;
 pub mod edge_cases;
 pub mod element_call_arguments;

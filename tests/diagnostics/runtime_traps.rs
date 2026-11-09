@@ -63,6 +63,10 @@ const TRAPS: &[Trap] = &[
         source: "fn main()\n    var lo = \"a\"\n    lo = lo + \"b\"\n    for c in lo..\"e\"\n        println(c)\n",
     },
     Trap {
+        code: "MER_RT_020",
+        source: "fn inf(n int) int\n    return inf(n + 1) + 1\n\nfn main()\n    println(f\"{inf(0)}\")\n",
+    },
+    Trap {
         code: "MER_RT_019",
         source: "fn main()\n    var s = \"a\"\n    s = s + \"b\"\n    println(s.successor())\n",
     },

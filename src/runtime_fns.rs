@@ -93,6 +93,21 @@ pub mod rt {
     /// codegen loads it and branches, so an unobserved allocation pays a load
     /// rather than a call it cannot inline.
     pub const TRACKING_STATE: &str = "miri_rt_tracking_state";
+    /// Compiler-internal: the nesting depth of the drop thunks now running.
+    /// A data symbol compiled code loads and stores around a release.
+    pub const RELEASE_DEPTH: &str = "miri_rt_release_depth";
+    /// Compiler-internal: how many releases wait on the worklist. A data
+    /// symbol compiled code reads before calling the drain.
+    pub const RELEASE_PENDING: &str = "miri_rt_release_pending";
+    /// Compiler-internal: queues an object to be dropped once the release in
+    /// progress has unwound.
+    pub const RELEASE_DEFER: &str = "miri_rt_release_defer";
+    /// Compiler-internal: drops everything the worklist holds.
+    pub const RELEASE_DRAIN: &str = "miri_rt_release_drain";
+    /// Compiler-internal: the deferred form of an inline closure release.
+    pub const RELEASE_CLOSURE: &str = "miri_rt_release_closure";
+    /// Test-only: faults away from every stack.
+    pub const SIMULATE_WILD_READ: &str = "miri_rt_test_simulate_wild_read";
     /// Compiler-internal: called once at the entry point of a release build,
     /// which carries none of the hooks above, not in stdlib. The runtime then
     /// keeps its own checks off to match and says so if one was asked for.
@@ -465,6 +480,12 @@ pub mod rt {
         RC_STATS_FREE,
         RC_STATS_COW_COPY,
         TRACKING_STATE,
+        RELEASE_DEPTH,
+        RELEASE_PENDING,
+        RELEASE_DEFER,
+        RELEASE_DRAIN,
+        RELEASE_CLOSURE,
+        SIMULATE_WILD_READ,
         CHECKS_COMPILED_OUT,
         PROFILE_INIT,
         RC_IS_SHARED,

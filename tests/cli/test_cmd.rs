@@ -1194,7 +1194,7 @@ fn test_a_named_file_resolves_its_sibling_imports() {
 fn test_signal_killed_test_carries_the_signal_diagnostic_code() {
     let dir = test_dir_with(
         "crash.mi",
-        "@test\nfn test_overflows()\n    let x = deep(1)\n    println(f\"{x}\")\n\nfn deep(n int) int\n    return deep(n + 1)\n",
+        "runtime \"core\" fn miri_rt_test_simulate_wild_read()\n\n@test\nfn test_faults()\n    miri_rt_test_simulate_wild_read()\n",
     );
 
     let output = miri_cmd()

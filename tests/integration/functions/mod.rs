@@ -15,3 +15,4 @@ pub mod named_arguments;
 pub mod nested;
 pub mod parameter_guards;
 pub mod recursive;
+pub mod stack_overflow;

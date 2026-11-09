@@ -480,3 +480,109 @@ fn test_managed_class_field_survives_as_managed_in_a_variant() {
         vec![(0, vec![(0, custom("Widget"))])],
     );
 }
+
+/// Whether the thunk of `name` is planned to bound its release depth.
+fn may_recurse(source: &str, name: &str) -> bool {
+    facts_of(source, HashMap::new())
+        .drop_plan(name, None)
+        .unwrap()
+        .may_recurse
+}
+
+const MAIN: &str = "\nfn main()\n    return\n";
+
+#[test]
+fn a_class_with_only_scalars_and_strings_cannot_recurse() {
+    let source = format!("class Flat\n    var v int\n    var s String\n{MAIN}");
+    assert!(!may_recurse(&source, "Flat"));
+}
+
+#[test]
+fn a_class_holding_itself_through_an_optional_may_recurse() {
+    let source = format!("class Node\n    var next Node?\n{MAIN}");
+    assert!(may_recurse(&source, "Node"));
+}
+
+#[test]
+fn a_flat_class_holding_a_recursive_one_cannot_itself_recurse() {
+    let source =
+        format!("class Node\n    var next Node?\n\nclass Holder\n    var head Node\n{MAIN}");
+    assert!(may_recurse(&source, "Node"));
+    assert!(!may_recurse(&source, "Holder"));
+}
+
+#[test]
+fn two_classes_holding_each_other_may_each_recurse() {
+    let source = format!("class A\n    var b B?\n\nclass B\n    var a A?\n{MAIN}");
+    assert!(may_recurse(&source, "A"));
+    assert!(may_recurse(&source, "B"));
+}
+
+#[test]
+fn a_cycle_through_a_list_a_map_or_a_set_element_may_recurse() {
+    for (imports, member) in [
+        ("use system.collections.list\n\n", "List<Node>"),
+        ("use system.collections.map\n\n", "Map<int, Node>"),
+        ("", "[Node]"),
+    ] {
+        let source = format!("{imports}class Node\n    var kids {member}\n{MAIN}");
+        assert!(may_recurse(&source, "Node"), "{member}");
+    }
+}
+
+#[test]
+fn a_cycle_through_an_enum_payload_may_recurse() {
+    let source = format!("enum Chain\n    End\n    Link(int, Chain)\n{MAIN}");
+    assert!(may_recurse(&source, "Chain"));
+}
+
+#[test]
+fn a_cycle_through_a_base_class_may_recurse() {
+    let source = format!(
+        "class Base\n    var next Base?\n\nclass Derived extends Base\n    var w int\n{MAIN}"
+    );
+    assert!(may_recurse(&source, "Base"));
+    assert!(may_recurse(&source, "Derived"));
+}
+
+#[test]
+fn a_trait_or_a_function_member_may_recurse() {
+    let traits = format!("trait T\n    fn f() int\n\nclass C\n    var t T\n{MAIN}");
+    assert!(may_recurse(&traits, "C"));
+    let function = format!("class C\n    var f fn() int\n{MAIN}");
+    assert!(may_recurse(&function, "C"));
+}
+
+#[test]
+fn a_box_recurses_at_a_recursive_argument_only_through_a_cycle_it_is_on() {
+    let source = format!(
+        "class Box<T>\n    var value T\n\nclass Node\n    var next Box<Node>?\n\nclass Leaf\n    var s String\n{MAIN}"
+    );
+    let node = ty(custom("Node"));
+    let leaf = ty(custom("Leaf"));
+    let registry = HashMap::from([(
+        "Box".to_string(),
+        vec![
+            vec![ty(TypeKind::Int)],
+            vec![leaf.clone()],
+            vec![node.clone()],
+        ],
+    )]);
+    let facts = facts_of(&source, registry);
+    let of = |arg: &Type| {
+        facts
+            .drop_plan("Box", Some(std::slice::from_ref(arg)))
+            .unwrap()
+            .may_recurse
+    };
+    assert!(!of(&ty(TypeKind::Int)), "a Box<int> holds a word");
+    assert!(!of(&leaf), "a Box<Leaf> holds a flat class");
+    assert!(of(&node), "a Box<Node> holds a Node holding a Box<Node>");
+    assert!(facts.drop_plan("Node", None).unwrap().may_recurse);
+}
+
+#[test]
+fn the_shared_thunk_of_a_generic_class_may_recurse() {
+    let source = format!("class Box<T>\n    var value T\n{MAIN}");
+    assert!(may_recurse(&source, "Box"));
+}

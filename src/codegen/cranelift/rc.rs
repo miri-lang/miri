@@ -40,6 +40,12 @@ use crate::mir::type_facts::{
     DroppedMembers, ElementIdentity, ElementQuestion, FloatWidth, ReleasePlan, UnresolvedArgument,
 };
 
+/// How deep a release nests native frames before the rest is queued on the
+/// runtime's worklist. Large enough that an ordinary object's members all
+/// release in source order; small enough to fit any stack that has room to run
+/// the release at all, whatever its frames cost.
+const RELEASE_DEPTH_LIMIT: i64 = 256;
+
 /// A runtime call recording one pointer-sized setting on a container.
 pub(crate) type ContainerSetter =
     fn(&mut FunctionBuilder, &mut ModuleCtx, Value, Value) -> Result<(), CodegenError>;
@@ -78,6 +84,14 @@ pub(crate) struct ElementOrderSetters {
     pub(crate) set_kind: ContainerSetter,
     /// Routes ordering through a generated `compare` thunk.
     pub(crate) set_compare_fn: ContainerSetter,
+}
+
+/// The instance a drop thunk releases: its type and its payload.
+#[derive(Clone, Copy)]
+struct PlannedDropTarget<'a> {
+    type_name: &'a str,
+    type_args: Option<&'a [Type]>,
+    ptr: Value,
 }
 
 /// The enum value one variant's drop guard releases fields out of.
@@ -995,16 +1009,8 @@ impl<'a> FunctionTranslator<'a> {
             return Self::call_drop_thunk(builder, ctx, &thunk, ptr, type_ctx.ptr_type);
         }
         if let Some(args) = type_args.and_then(crate::mir::instantiation::type_arguments) {
-            let plan = facts.drop_plan_in(name, Some(&args), type_ctx.open_params);
-            Self::emit_planned_members(
-                builder,
-                ctx,
-                name,
-                Some(&args),
-                &plan.members,
-                ptr,
-                type_ctx,
-            )?;
+            let members = facts.dropped_members_in(name, Some(&args), type_ctx.open_params);
+            Self::emit_planned_members(builder, ctx, name, Some(&args), &members, ptr, type_ctx)?;
         }
         Self::call_rt_block_free(builder, ctx, header_ptr)
     }
@@ -1033,6 +1039,25 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
+        Self::emit_bounded_release(
+            builder,
+            ctx,
+            ptr,
+            ptr_type,
+            |builder, ctx| Self::decref_element_addr(builder, ctx, rt::RELEASE_CLOSURE, ptr_type),
+            |builder, ctx| Self::emit_closure_release(builder, ctx, ptr, header_ptr, ptr_type),
+        )
+    }
+
+    /// Release a closure's captures through its `dtor_ptr` (when non-null),
+    /// decrement the closure-balance counter and free the closure struct.
+    fn emit_closure_release(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+        header_ptr: Value,
+        ptr_type: cl_types::Type,
+    ) -> Result<(), CodegenError> {
         let ptr_size = ptr_type.bytes() as i64;
         let dtor_ptr = builder
             .ins()
@@ -1298,6 +1323,126 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Address of the runtime data word `name`.
+    fn runtime_word_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        name: &'static str,
+        ptr_type: cl_types::Type,
+    ) -> Result<Value, CodegenError> {
+        let data_id = ctx
+            .module
+            .declare_data(name, Linkage::Import, true, false)
+            .map_err(|e| CodegenError::declare_function(name.to_string(), e.to_string()))?;
+        let global = ctx.module.declare_data_in_func(data_id, builder.func);
+        Ok(builder.ins().symbol_value(ptr_type, global))
+    }
+
+    /// Run `release` with the release depth raised, or, past
+    /// [`RELEASE_DEPTH_LIMIT`], queue `ptr` for the runtime's worklist under
+    /// the function `deferred` names and skip `release`.
+    ///
+    /// This is what bounds the stack a release takes. The outermost release
+    /// drains the worklist once it is done, so everything queued is dropped
+    /// before it returns.
+    fn emit_bounded_release(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+        ptr_type: cl_types::Type,
+        deferred: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<Value, CodegenError>,
+        release: impl FnOnce(&mut FunctionBuilder, &mut ModuleCtx) -> Result<(), CodegenError>,
+    ) -> Result<(), CodegenError> {
+        let depth_addr = Self::runtime_word_addr(builder, ctx, rt::RELEASE_DEPTH, ptr_type)?;
+        let depth = builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), depth_addr, 0);
+        let too_deep = builder.ins().icmp_imm_s(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+            depth,
+            RELEASE_DEPTH_LIMIT,
+        );
+        let defer_block = builder.create_block();
+        let release_block = builder.create_block();
+        let done_block = builder.create_block();
+        builder
+            .ins()
+            .brif(too_deep, defer_block, &[], release_block, &[]);
+
+        builder.switch_to_block(defer_block);
+        builder.seal_block(defer_block);
+        let deferred_fn = deferred(builder, ctx)?;
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::RELEASE_DEFER,
+                param_types: &[ptr_type, ptr_type],
+                return_types: &[],
+                args: &[ptr, deferred_fn],
+            },
+        )?;
+        builder.ins().jump(done_block, &[]);
+
+        builder.switch_to_block(release_block);
+        builder.seal_block(release_block);
+        let nested = builder.ins().iadd_imm_s(depth, 1);
+        builder
+            .ins()
+            .store(MemFlagsData::new(), nested, depth_addr, 0);
+        release(builder, ctx)?;
+        builder
+            .ins()
+            .store(MemFlagsData::new(), depth, depth_addr, 0);
+        Self::emit_drain_when_outermost(builder, ctx, depth, ptr_type, done_block)?;
+
+        builder.switch_to_block(done_block);
+        builder.seal_block(done_block);
+        Ok(())
+    }
+
+    /// Terminate the current block: on to `done_block`, by way of the
+    /// runtime's worklist when this was the outermost release (`depth` zero)
+    /// and something waits there.
+    fn emit_drain_when_outermost(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        depth: Value,
+        ptr_type: cl_types::Type,
+        done_block: cranelift_codegen::ir::Block,
+    ) -> Result<(), CodegenError> {
+        let check_block = builder.create_block();
+        builder.ins().brif(depth, done_block, &[], check_block, &[]);
+
+        builder.switch_to_block(check_block);
+        builder.seal_block(check_block);
+        let pending_addr = Self::runtime_word_addr(builder, ctx, rt::RELEASE_PENDING, ptr_type)?;
+        let pending = builder
+            .ins()
+            .load(ptr_type, MemFlagsData::new(), pending_addr, 0);
+        let drain_block = builder.create_block();
+        builder
+            .ins()
+            .brif(pending, drain_block, &[], done_block, &[]);
+
+        builder.switch_to_block(drain_block);
+        builder.seal_block(drain_block);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.cached_funcs,
+            CallSite {
+                name: rt::RELEASE_DRAIN,
+                param_types: &[],
+                return_types: &[],
+                args: &[],
+            },
+        )?;
+        builder.ins().jump(done_block, &[]);
+        Ok(())
+    }
+
     /// Emits a call to the type-specific drop thunk `thunk(ptr)`.
     ///
     /// This is the sole call site for dropping a Custom type once RC reaches zero.
@@ -1511,6 +1656,58 @@ impl<'a> FunctionTranslator<'a> {
             stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
 
+        let thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default());
+        let emit_body = |builder: &mut FunctionBuilder,
+                         module_ctx: &mut ModuleCtx|
+         -> Result<(), CodegenError> {
+            Self::emit_planned_drop(
+                builder,
+                module_ctx,
+                plan,
+                PlannedDropTarget {
+                    type_name,
+                    type_args,
+                    ptr,
+                },
+                &type_ctx,
+                call_conv,
+            )
+        };
+        if plan.may_recurse {
+            Self::emit_bounded_release(
+                &mut builder,
+                &mut module_ctx,
+                ptr,
+                ptr_type,
+                |builder, ctx| Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type),
+                emit_body,
+            )?;
+        } else {
+            emit_body(&mut builder, &mut module_ctx)?;
+        }
+
+        builder.ins().return_(&[]);
+        builder.seal_all_blocks();
+        builder.finalize(module.isa().frontend_config());
+        Ok(())
+    }
+
+    /// Emit what `plan` drops of the instance `target` names: its hook, its
+    /// counted members, and the free of its block.
+    fn emit_planned_drop(
+        builder: &mut FunctionBuilder,
+        module_ctx: &mut ModuleCtx,
+        plan: &DropPlan,
+        target: PlannedDropTarget<'_>,
+        type_ctx: &TypeCtx,
+        call_conv: cranelift_codegen::isa::CallConv,
+    ) -> Result<(), CodegenError> {
+        let PlannedDropTarget {
+            type_name,
+            type_args,
+            ptr,
+        } = target;
+        let ptr_type = type_ctx.ptr_type;
         if let Some(hook) = &plan.hook {
             // The instance's count is already zero. The hook borrows `self`,
             // but a body that reads it as a whole value (`match self`) retains
@@ -1524,8 +1721,8 @@ impl<'a> FunctionTranslator<'a> {
                 .ins()
                 .store(MemFlagsData::new(), immortal, header_ptr, 0);
             Self::call_user_drop_hook(
-                &mut builder,
-                &mut module_ctx,
+                builder,
+                module_ctx,
                 &hook.link_name(),
                 ptr,
                 ptr_type,
@@ -1534,22 +1731,17 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         Self::emit_planned_members(
-            &mut builder,
-            &mut module_ctx,
+            builder,
+            module_ctx,
             type_name,
             type_args,
             &plan.members,
             ptr,
-            &type_ctx,
+            type_ctx,
         )?;
 
         let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
-        Self::call_rt_block_free(&mut builder, &mut module_ctx, header_ptr)?;
-
-        builder.ins().return_(&[]);
-        builder.seal_all_blocks();
-        builder.finalize(module.isa().frontend_config());
-        Ok(())
+        Self::call_rt_block_free(builder, module_ctx, header_ptr)
     }
 
     /// Emit a call to the user-defined drop hook `hook_name(self, allocator)`
@@ -1966,3 +2158,6 @@ impl<'a> FunctionTranslator<'a> {
         Self::clone_method_symbol(type_name, None, facts).link_name()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -127,15 +127,13 @@ fn test_deliberate_nonzero_exit_no_noise() {
     );
 }
 
-/// A program that unbounded recursion drives into a stack overflow, which the
-/// operating system answers with SIGSEGV. The compiler cannot see this coming,
-/// so the only useful report is the one the driver makes after the child dies.
-const SIGSEGV_PROGRAM: &str = r#"fn deep(n int) int
-    return deep(n + 1)
+/// A program that reads through an address nothing maps, which the operating
+/// system answers with SIGSEGV. The compiler cannot see this coming, so the
+/// run itself has to report it.
+const SIGSEGV_PROGRAM: &str = r#"runtime "core" fn miri_rt_test_simulate_wild_read()
 
 fn main()
-    let x = deep(1)
-    println(f"{x}")
+    miri_rt_test_simulate_wild_read()
 "#;
 
 /// A signal death used to reach the caller as an empty envelope: no code, no
