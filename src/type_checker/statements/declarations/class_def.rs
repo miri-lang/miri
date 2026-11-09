@@ -1064,6 +1064,7 @@ impl TypeChecker {
             return_type: declaration.return_type.cloned().map(Box::new),
         })));
         let info = SymbolInfo::new_runtime(func_type, self.modules.current_module.clone());
+        self.note_diverging_declaration(rt_name, declaration.attributes);
 
         self.type_table
             .global_scope

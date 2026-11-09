@@ -13,7 +13,7 @@ use super::context::SymbolInfo;
 use super::module_loader::PROGRAM_MODULE;
 use super::FnResidency;
 use crate::ast::Statement;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// How a call to a name is compiled, as the declaration the name resolved to
@@ -126,6 +126,10 @@ pub(crate) struct FunctionAnalysis {
     /// declaration checking; used in GPU kernel launch to determine which
     /// buffers are writable.
     pub(crate) function_out_params: HashMap<DeclaredFunction, Vec<bool>>,
+    /// The functions declared `@diverges`, which never return to their caller.
+    pub(crate) diverging_functions: HashSet<DeclaredFunction>,
+    /// The callee identifiers that name a function in `diverging_functions`.
+    pub(crate) diverging_callees: HashSet<usize>,
     /// Computed residency verdict for each function (HostOnly or PolymorphicSafe).
     /// Populated during function declaration checking; used at call sites to
     /// determine if gpu-resident args are allowed.
@@ -154,6 +158,8 @@ impl FunctionAnalysis {
         Self {
             function_bodies: HashMap::new(),
             function_out_params: HashMap::new(),
+            diverging_functions: HashSet::new(),
+            diverging_callees: HashSet::new(),
             fn_residencies: HashMap::new(),
             callee_kinds: HashMap::new(),
             declared_callees: HashMap::new(),

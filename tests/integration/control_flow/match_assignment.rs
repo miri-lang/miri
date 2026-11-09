@@ -224,10 +224,21 @@ fn test_conditional_assignment_int_plus_void_runs() {
     let code = "
 fn main()
     var a = 0
-    let x = if true: (a = 1) else: println('x')
+    if true: (a = 1) else: println('x')
     println('done')
 ";
     assert_runs(code);
+}
+
+#[test]
+fn test_conditional_assignment_int_plus_void_read_as_value_errors() {
+    let code = "
+fn main()
+    var a = 0
+    let x = if true: (a = 1) else: println('x')
+    println('done')
+";
+    assert_compiler_error(code, "produces no value");
 }
 
 // Managed-type crossing matrix: highest-value coverage gap

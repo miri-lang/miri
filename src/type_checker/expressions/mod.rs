@@ -70,6 +70,7 @@ impl TypeChecker {
     pub(crate) fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
         let ty = self.infer_expression_kind(&expr.node, expr.span, expr.id, context);
         self.type_table.types.insert(expr.id, ty.clone());
+        self.demand_value_operands(expr);
         ty
     }
 

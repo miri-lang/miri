@@ -181,6 +181,9 @@ impl TypeChecker {
         if matches!(expr.node, ExpressionKind::Assignment(..)) {
             return make_type(TypeKind::Void);
         }
+        if !matches!(ty.kind, TypeKind::Void) {
+            self.demand_value(expr);
+        }
         ty
     }
 
@@ -228,7 +231,9 @@ impl TypeChecker {
             &self.width_tail_literals(expected, implicit_return_type, body, context);
 
         if !is_void_expected && is_void_implicit {
-            let ends_with_return = self.body_ends_with_return(body);
+            let ends_with_return = self.body_ends_with_return(body)
+                || self.check_returns(body)
+                    == crate::type_checker::statements::ReturnStatus::Explicit;
             if !ends_with_return {
                 self.refuse_return_type(expected, implicit_return_type, body.span);
             }

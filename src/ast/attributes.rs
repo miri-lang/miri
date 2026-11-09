@@ -86,7 +86,8 @@ pub const COPIES_ATTRIBUTE: &str = "copies";
 /// Marks a `runtime` declaration whose entry point builds an empty collection.
 pub const ALLOCATES_ATTRIBUTE: &str = "allocates";
 
-/// Marks a `runtime` declaration whose entry point never returns.
+/// Marks a function that never returns to its caller, or a `runtime`
+/// declaration whose entry point does not.
 pub const DIVERGES_ATTRIBUTE: &str = "diverges";
 
 /// Represents a declaration that can carry attributes.

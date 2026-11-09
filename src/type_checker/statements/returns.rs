@@ -53,20 +53,8 @@ pub(crate) enum ReturnStatus {
     Explicit,
 }
 
-/// Whether `expr` is a `match` every arm of which returns: it leaves the
-/// function, as an `if` whose both branches return does. That every value has
-/// an arm is the exhaustiveness check's to enforce.
-pub(crate) fn returns_from_every_arm(expr: &Expression) -> bool {
-    let ExpressionKind::Match(_, branches) = &expr.node else {
-        return false;
-    };
-    !branches.is_empty()
-        && branches
-            .iter()
-            .all(|branch| check_returns(&branch.body) == ReturnStatus::Explicit)
-}
-
-pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
+/// Whether a function falling off `stmt` is covered by returns already made.
+fn return_status(checker: &TypeChecker, stmt: &Statement) -> ReturnStatus {
     match &stmt.node {
         StatementKind::Return(_) => ReturnStatus::Explicit,
         StatementKind::While(_, _, WhileStatementType::Forever) => ReturnStatus::Explicit,
@@ -74,11 +62,13 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         | StatementKind::While(_, _, WhileStatementType::Until)
         | StatementKind::While(_, _, WhileStatementType::DoWhile)
         | StatementKind::While(_, _, WhileStatementType::DoUntil) => ReturnStatus::None,
-        StatementKind::Expression(expr) if returns_from_every_arm(expr) => ReturnStatus::Explicit,
+        StatementKind::Expression(expr) if checker.expression_never_ends(expr, false) => {
+            ReturnStatus::Explicit
+        }
         StatementKind::Expression(_) => ReturnStatus::Implicit,
         StatementKind::Block(stmts) => {
             for (i, s) in stmts.iter().enumerate() {
-                let status = check_returns(s);
+                let status = return_status(checker, s);
                 if status == ReturnStatus::Explicit {
                     return ReturnStatus::Explicit;
                 }
@@ -90,8 +80,8 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         }
         StatementKind::If(_, then_block, else_block, _) => {
             if let Some(else_stmt) = else_block {
-                let then_status = check_returns(then_block);
-                let else_status = check_returns(else_stmt);
+                let then_status = return_status(checker, then_block);
+                let else_status = return_status(checker, else_stmt);
 
                 match (then_status, else_status) {
                     (ReturnStatus::Explicit, ReturnStatus::Explicit) => ReturnStatus::Explicit,
@@ -126,6 +116,71 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
 }
 
 impl TypeChecker {
+    /// Whether a function falling off `stmt` is covered by returns already made.
+    pub(crate) fn check_returns(&self, stmt: &Statement) -> ReturnStatus {
+        return_status(self, stmt)
+    }
+
+    /// Whether control can never reach the end of `stmt`: it returns, leaves
+    /// its loop, or calls a function that never comes back on every path.
+    /// A loop is counted as finishing, since a `break` inside it would.
+    pub(crate) fn statement_never_finishes(&self, stmt: &Statement) -> bool {
+        match &stmt.node {
+            StatementKind::Return(_) | StatementKind::Break | StatementKind::Continue => true,
+            StatementKind::Block(stmts) => stmts.iter().any(|s| self.statement_never_finishes(s)),
+            StatementKind::If(_, then_block, Some(else_block), _) => {
+                self.statement_never_finishes(then_block)
+                    && self.statement_never_finishes(else_block)
+            }
+            StatementKind::Expression(expr) => self.expression_never_ends(expr, true),
+            StatementKind::If(_, _, None, _)
+            | StatementKind::While(_, _, _)
+            | StatementKind::Variable(_, _)
+            | StatementKind::For(_, _, _)
+            | StatementKind::Forall { .. }
+            | StatementKind::GpuFrame(_, _, _)
+            | StatementKind::GpuFrameBlock(_)
+            | StatementKind::FunctionDeclaration(_)
+            | StatementKind::Struct(_, _, _, _, _, _)
+            | StatementKind::Enum(_, _, _, _, _, _)
+            | StatementKind::Class(_)
+            | StatementKind::Trait(_, _, _, _, _)
+            | StatementKind::Type(_, _)
+            | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
+            | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _)
+            | StatementKind::Use(_, _)
+            | StatementKind::Empty => false,
+        }
+    }
+
+    /// Whether `expr` never yields control back: every path through it calls a
+    /// function that does not return, or, for a `match`, leaves through its
+    /// arms. `counts_jumps` also accepts `break` and `continue` as leaving,
+    /// which stay inside the function and so do not satisfy a return.
+    pub(crate) fn expression_never_ends(&self, expr: &Expression, counts_jumps: bool) -> bool {
+        let leaves = |stmt: &Statement| {
+            if counts_jumps {
+                self.statement_never_finishes(stmt)
+            } else {
+                self.check_returns(stmt) == ReturnStatus::Explicit
+            }
+        };
+        if let ExpressionKind::Match(_, branches) = &expr.node {
+            return !branches.is_empty() && branches.iter().all(|branch| leaves(&branch.body));
+        }
+        if let ExpressionKind::Call(callee, _) = &expr.node {
+            return self.callee_never_returns(callee);
+        }
+        if let ExpressionKind::Conditional(then_expr, _, Some(else_expr), _) = &expr.node {
+            return self.expression_never_ends(then_expr, counts_jumps)
+                && self.expression_never_ends(else_expr, counts_jumps);
+        }
+        if let ExpressionKind::Block(stmts, last) = &expr.node {
+            return stmts.iter().any(leaves) || self.expression_never_ends(last, counts_jumps);
+        }
+        false
+    }
+
     pub(crate) fn resolve_implicit_return_type(&self, stmt: &Statement) -> Option<Type> {
         match &stmt.node {
             StatementKind::Expression(expr) => self.get_type(expr.id).cloned(),

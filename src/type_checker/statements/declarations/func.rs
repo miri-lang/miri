@@ -52,7 +52,7 @@ use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::diagnostics::spelled;
 use crate::type_checker::statements::entry_point::EntryPointCandidate;
 use crate::type_checker::statements::returns::collect_tail_expression_spans;
-use crate::type_checker::statements::{check_returns, ReturnStatus};
+use crate::type_checker::statements::ReturnStatus;
 use crate::type_checker::type_mismatch::TypeSides;
 use crate::type_checker::utils::is_gpu_signature_type;
 use crate::type_checker::TypeChecker;
@@ -687,6 +687,9 @@ impl TypeChecker {
         let expr_type = if infer_main_return || matches!(return_type.kind, TypeKind::Void) {
             expr_type
         } else {
+            if !matches!(expr_type.kind, TypeKind::Void) {
+                self.demand_value(expr);
+            }
             self.narrow_float_literals(expr, return_type, &expr_type, context)
                 .or_else(|| self.widen_int_literals(expr, return_type, &expr_type, context))
                 .unwrap_or(expr_type)
@@ -694,6 +697,7 @@ impl TypeChecker {
 
         if !infer_main_return
             && !matches!(return_type.kind, TypeKind::Void)
+            && !self.expression_never_ends(expr, false)
             && !self.accepts_value_at(return_type, &expr_type, Some(expr), context)
         {
             self.refuse_return_type(return_type, &expr_type, expr.span);
@@ -731,7 +735,7 @@ impl TypeChecker {
         if matches!(return_type.kind, TypeKind::Void) {
             return;
         }
-        if check_returns(body) != ReturnStatus::None {
+        if self.check_returns(body) != ReturnStatus::None {
             return;
         }
         self.report_error(

@@ -1446,6 +1446,12 @@ impl TypeChecker {
             (make_type(TypeKind::Void), span)
         };
         self.note_returned_value(&actual_return_type, context);
+        if let Some(expr) = expr_opt
+            .as_deref()
+            .filter(|_| !matches!(actual_return_type.kind, TypeKind::Void))
+        {
+            self.demand_value(expr);
+        }
 
         // Check if we are inferring return types for the current function
         if let Some(Some(inferred_types)) = context.inferred_return_types.last_mut() {

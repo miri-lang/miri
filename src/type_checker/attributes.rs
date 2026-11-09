@@ -155,7 +155,12 @@ const ATTRIBUTE_REGISTRY: &[AttributeSpec] = &[
     runtime_effect(COPIES_ATTRIBUTE, true),
     runtime_effect(RETURNS_ELEMENT_ATTRIBUTE, false),
     runtime_effect(ALLOCATES_ATTRIBUTE, false),
-    runtime_effect(DIVERGES_ATTRIBUTE, false),
+    AttributeSpec {
+        name: DIVERGES_ATTRIBUTE,
+        valid_on: &[AttributeTarget::Function, AttributeTarget::RuntimeFunction],
+        takes_argument: false,
+        requires: &[],
+    },
 ];
 
 /// Returns every attribute a declaration of this kind accepts, for diagnostics.

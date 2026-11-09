@@ -36,7 +36,7 @@ fn foo()
 
 let x = foo() if true
 ";
-    type_checker_test(source);
+    type_checker_error_test(source, "produces no value");
 }
 
 #[test]

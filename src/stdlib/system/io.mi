@@ -64,5 +64,6 @@ public fn line_end() String
 ///
 /// Example:
 ///     panic("index out of range")
+@diverges
 public fn panic(message String)
     miri_rt_panic(message)

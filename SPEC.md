@@ -1108,6 +1108,20 @@ let double = fn(x int) int: x * 2
 println(f"{apply(double, 7)}")   // 14
 ```
 
+### Functions That Never Return
+
+A function marked `@diverges` never returns to its caller. The body must leave on every path through another `@diverges` function, and a `return` in it is refused. `panic` and `exit` carry the mark.
+
+A call to such a function takes the place of a value, so it may end an arm of a `match` or a branch of an `if` read as a value, and may end a function that declares a return type:
+
+```miri
+let port = match settings
+    Result.Ok(value): value
+    Result.Err(reason): panic(reason)
+```
+
+The other arms give the expression its type, and it is refused when no arm does: `let x = panic("a")` binds nothing and is a compile error. A `void` call that can return, and an arm that ends on a statement it can finish, are refused as values.
+
 ### Nested Functions
 
 A function declared inside another function's body is a closure bound to its name. It captures the enclosing locals it reads, can call any function in scope, and can call itself. It is visible from its declaration to the end of the enclosing block, and shadows a top-level function of the same name there.

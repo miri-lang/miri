@@ -5,6 +5,7 @@
 ///
 /// Provides functions to terminate the process with an exit code.
 
+@diverges
 runtime "core" fn miri_rt_exit(code int)
 
 /// Terminates the program with the given exit code.
@@ -21,5 +22,6 @@ runtime "core" fn miri_rt_exit(code int)
 ///     if args.length() == 0
 ///         println("usage: prog <args>")
 ///         exit(1)
+@diverges
 public fn exit(code int)
     miri_rt_exit(code)

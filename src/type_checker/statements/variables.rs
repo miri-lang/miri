@@ -657,6 +657,7 @@ impl TypeChecker {
             let outer_optional =
                 std::mem::replace(&mut context.declared_optional_element, declared_optional);
             let inferred = self.infer_expression(init, context);
+            self.demand_value(init);
             context.declared_optional_element = outer_optional;
             context.in_gpu_resident_initializer = outer_resident;
             // With no declared type, nothing is left to bind a call the

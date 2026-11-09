@@ -1309,7 +1309,7 @@ fn can_leave_the_loop(body: &Statement) -> bool {
 }
 
 /// Whether `statement` holds a `return`, which leaves every loop around it.
-fn contains_return(statement: &Statement) -> bool {
+pub(crate) fn contains_return(statement: &Statement) -> bool {
     match &statement.node {
         StatementKind::Return(_) => true,
         StatementKind::Block(statements) => statements.iter().any(contains_return),

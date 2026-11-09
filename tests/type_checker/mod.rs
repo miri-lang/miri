@@ -54,4 +54,5 @@ pub mod type_alias;
 pub mod user_defined_types;
 pub mod utils;
 pub mod value_class;
+pub mod value_demand;
 pub mod visibility;

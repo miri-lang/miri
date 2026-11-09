@@ -87,6 +87,7 @@ pub mod use_after_move;
 mod used_methods;
 pub mod utils;
 pub mod value_class;
+mod value_demand;
 
 use context::{Context, SymbolInfo, TypeDefinition};
 use diagnostics::DiagnosticCollector;
@@ -538,6 +539,9 @@ impl TypeChecker {
     /// Record the callee the identifier expression `expr_id`, written as
     /// `written`, names, having resolved to the declaration `info`.
     pub(crate) fn record_callee(&mut self, expr_id: usize, written: &str, info: &SymbolInfo) {
+        if self.is_declared_diverging(written, info) {
+            self.fn_analysis.diverging_callees.insert(expr_id);
+        }
         match CalleeKind::of(info) {
             CalleeKind::Program => {
                 if matches!(info.ty.kind, TypeKind::Function(_)) {
@@ -611,6 +615,35 @@ impl TypeChecker {
     pub fn callee_out_params(&self, callee: &Expression) -> Option<&Vec<bool>> {
         let declared = self.declaration_called_by(callee)?;
         self.fn_analysis.function_out_params.get(declared)
+    }
+
+    /// Whether `info`, the declaration `written` resolved to, is `@diverges`.
+    fn is_declared_diverging(&self, written: &str, info: &SymbolInfo) -> bool {
+        !self.fn_analysis.diverging_functions.is_empty()
+            && self
+                .fn_analysis
+                .diverging_functions
+                .contains(&DeclaredFunction::resolved(written, info))
+    }
+
+    /// Records the declaration `name` of the module being checked as one that
+    /// never returns, when its `attributes` say so.
+    pub(crate) fn note_diverging_declaration(&mut self, name: &str, attributes: &[Attribute]) {
+        if attributes::has_attribute(attributes, DIVERGES_ATTRIBUTE) {
+            let declared = self.declared_here(name);
+            self.fn_analysis.diverging_functions.insert(declared);
+        }
+    }
+
+    /// The one answer to whether a call through `callee` can come back: its
+    /// declaration says, and a name that shadows it is a different declaration.
+    pub(crate) fn callee_never_returns(&self, callee: &Expression) -> bool {
+        let named = if let ExpressionKind::Member(_, member) = &callee.node {
+            member.id
+        } else {
+            callee.id
+        };
+        self.fn_analysis.diverging_callees.contains(&named)
     }
 
     /// The function a declaration named `name` in the module being checked is.
@@ -1081,6 +1114,7 @@ impl TypeChecker {
             );
         }
 
+        self.note_diverging_declaration(&decl.name, &decl.attributes);
         context.define(
             decl.name.clone(),
             SymbolInfo::new(

@@ -67,7 +67,6 @@ pub mod type_definitions;
 pub mod variables;
 
 pub(crate) use declarations::FunctionDeclarationInfo;
-pub(crate) use returns::check_returns;
 pub(crate) use returns::ReturnStatus;
 
 impl TypeChecker {
@@ -299,6 +298,7 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         self.collect_deprecated_declaration(&decl.name, DeprecatedKind::Function, &decl.attributes);
+        self.note_diverging_declaration(&decl.name, &decl.attributes);
         self.check_function_declaration(
             FunctionDeclarationInfo {
                 name: &decl.name,
@@ -312,6 +312,34 @@ impl TypeChecker {
             },
             context,
         );
+        self.refuse_diverges_on_finishing_body(decl, span);
+    }
+
+    /// Refuses `@diverges` on a body that can return to its caller: a mark the
+    /// body contradicts would let a value be read that never existed.
+    fn refuse_diverges_on_finishing_body(&mut self, decl: &FunctionDeclarationData, span: Span) {
+        if !crate::type_checker::attributes::has_attribute(
+            &decl.attributes,
+            crate::ast::DIVERGES_ATTRIBUTE,
+        ) {
+            return;
+        }
+        let Some(body) = decl.body.as_deref() else {
+            return;
+        };
+        let never_finishes = self.check_returns(body) == ReturnStatus::Explicit;
+        if !never_finishes || crate::type_checker::use_after_move::contains_return(body) {
+            self.report_error_with_help(
+                DiagnosticCode::TypFunctionSignature,
+                format!(
+                    "'{}' is marked `@diverges`, so its body must not finish",
+                    decl.name
+                ),
+                span,
+                "end every path with a call to another `@diverges` function, or remove the mark"
+                    .to_string(),
+            );
+        }
     }
 
     /// Check a class declaration, noting a deprecation first.
@@ -504,8 +532,11 @@ impl TypeChecker {
             return;
         };
         // A match that returns from every arm yields no value of its own.
-        if matches!(return_type.kind, TypeKind::Void) || returns::returns_from_every_arm(expr) {
+        if matches!(return_type.kind, TypeKind::Void) || self.expression_never_ends(expr, false) {
             return;
+        }
+        if !matches!(expr_type.kind, TypeKind::Void) {
+            self.demand_value(expr);
         }
         // A number written as the tail value takes the return type, as it
         // does after an explicit `return`.
@@ -554,6 +585,7 @@ impl TypeChecker {
             return_type: declaration.return_type.cloned().map(Box::new),
         })));
         let info = SymbolInfo::new_runtime(func_type, self.modules.current_module.clone());
+        self.note_diverging_declaration(name, declaration.attributes);
 
         if context.scopes.len() == 1 {
             self.type_table
