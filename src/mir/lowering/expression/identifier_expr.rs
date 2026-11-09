@@ -51,8 +51,9 @@ pub(crate) fn lower_identifier_expr(
 /// Lower a nested function's own name, used as a value inside its body, into
 /// `dest` (a fresh temporary of the function's type when `None`).
 ///
-/// The local holds the function's closure pointer, borrowed from the
-/// environment. The value escapes as an owned closure, so it takes its own
+/// The local holds the function's closure pointer as an uncounted word,
+/// borrowed from the environment. Once written at the function's type it is a
+/// counted closure, and it escapes owned, so that value takes its own
 /// reference, released like any other closure value.
 pub(crate) fn lower_self_reference_value(
     ctx: &mut LoweringContext,
@@ -66,11 +67,11 @@ pub(crate) fn lower_self_reference_value(
         Place::new(ctx.push_temp(ty, span))
     });
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::IncRef(source.clone()),
+        kind: MirStatementKind::Assign(target.clone(), Rvalue::Use(Operand::Copy(source))),
         span,
     });
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(target.clone(), Rvalue::Use(Operand::Copy(source))),
+        kind: MirStatementKind::IncRef(target.clone()),
         span,
     });
     Operand::Copy(target)

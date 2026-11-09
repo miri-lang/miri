@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Checks that a bitwise value held as its bytes is treated as bytes.
+//! Checks that a bitwise value held as its bytes is treated as bytes, and that
+//! only a counted place has its count adjusted.
 //!
 //! A *value place* is one whose declared type the value-class authority calls
 //! bitwise and whose body's classifier does not count. Such a value lives in
@@ -19,6 +20,12 @@
 //! Which values are held as their bytes is the body's to say
 //! ([`Body::value_layout`]); an optional is not one, and is checked by the
 //! optional-representation rule instead.
+//!
+//! Beyond value places, no increment or decrement names any place the body's
+//! classifier ([`Body::is_counted`]) does not count: a scalar or an untracked
+//! word has no header to adjust. A type naming a parameter the body leaves
+//! open has no settled answer and is left alone, and so is a place whose type
+//! cannot be read.
 
 use super::optional_representation::Layouts;
 use super::{local_display_name, VerificationViolation};
@@ -34,7 +41,7 @@ use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::value_class::{value_class, LayoutScope, ValueClass, WordRole};
 use std::collections::HashMap;
 
-/// Every count adjustment of a value place in `body`, every escape of a value
+/// Every count adjustment of a place with no count in `body`, every escape of a value
 /// place's address into a slot that outlives the frame, and every place a
 /// value place meets a counted word.
 ///
@@ -231,9 +238,15 @@ impl<'a> Representations<'a> {
                 violations.extend(self.meeting_violations(dest, rvalue));
                 violations
             }
-            StatementKind::IncRef(place) => self.count_violation(place, "IncRef"),
-            StatementKind::DecRef(place) => self.count_violation(place, "DecRef"),
-            StatementKind::Dealloc(place) => self.count_violation(place, "Dealloc"),
+            StatementKind::IncRef(place) => {
+                self.count_violation(place, "IncRef", Self::lacks_count)
+            }
+            StatementKind::DecRef(place) => {
+                self.count_violation(place, "DecRef", Self::lacks_count)
+            }
+            StatementKind::Dealloc(place) => {
+                self.count_violation(place, "Dealloc", Self::holds_value)
+            }
             StatementKind::StorageLive(_)
             | StatementKind::StorageDead(_)
             | StatementKind::Nop
@@ -241,13 +254,24 @@ impl<'a> Representations<'a> {
         }
     }
 
-    /// The violation of the count adjustment `operation` on `place`, when it
-    /// is a value place.
-    fn count_violation(&self, place: &Place, operation: &str) -> Vec<VerificationViolation> {
+    /// Whether a value of `kind` has no count an increment or decrement could
+    /// adjust: it is held as bytes, or it is settled and not counted.
+    fn lacks_count(&self, kind: &TypeKind) -> bool {
+        self.holds_value(kind) || !(self.layouts.body.is_counted(kind) || self.is_open(kind))
+    }
+
+    /// The violation of the count adjustment `operation` on `place`, when
+    /// `has_no_count` says its type has no count to adjust.
+    fn count_violation(
+        &self,
+        place: &Place,
+        operation: &str,
+        has_no_count: impl Fn(&Self, &TypeKind) -> bool,
+    ) -> Vec<VerificationViolation> {
         let Some(ty) = self.layouts.place_type(place) else {
             return Vec::new();
         };
-        if !self.holds_value(&ty.kind) {
+        if !has_no_count(self, &ty.kind) {
             return Vec::new();
         }
         vec![self.violation(

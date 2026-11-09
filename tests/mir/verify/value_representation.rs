@@ -181,6 +181,88 @@ fn deallocation_of_a_value_is_flagged() {
     );
 }
 
+/// Locals: 0 the return slot, 1 an `int`, 2 a counted `(int, String)`, 3 a
+/// `String`, 4 an `int?`, 5 a `String?`.
+fn count_kinds() -> Vec<TypeKind> {
+    vec![
+        TypeKind::Void,
+        TypeKind::Int,
+        tuple(vec![TypeKind::Int, TypeKind::String]),
+        TypeKind::String,
+        TypeKind::Option(Box::new(ty(TypeKind::Int))),
+        TypeKind::Option(Box::new(ty(TypeKind::String))),
+    ]
+}
+
+fn count_findings(statements: Vec<Statement>) -> Vec<VerificationViolation> {
+    let body = body_of(&count_kinds(), 0, vec![ret_block(statements)]);
+    verify_value_representation(&body, &definitions())
+}
+
+/// Exactly one finding on `statement`, carrying every fragment.
+fn assert_count_flagged(statement: StatementKind, fragments: &[&str]) {
+    let violations = count_findings(vec![stmt(statement)]);
+    let text = messages(&violations);
+    assert_eq!(violations.len(), 1, "expected one finding, got: {text}");
+    for fragment in fragments {
+        assert!(text.contains(fragment), "`{fragment}` missing from: {text}");
+    }
+}
+
+#[test]
+fn increment_of_a_scalar_local_is_flagged() {
+    assert_count_flagged(
+        StatementKind::IncRef(place(1)),
+        &["IncRef(`_1`)", "int", "a scalar", "no count"],
+    );
+}
+
+#[test]
+fn decrement_of_a_scalar_field_is_flagged() {
+    assert_count_flagged(
+        StatementKind::DecRef(field(2, 0)),
+        &["DecRef(`_2.0`)", "int", "a scalar", "no count"],
+    );
+}
+
+#[test]
+fn adjusting_a_counted_place_is_clean() {
+    let violations = count_findings(vec![
+        stmt(StatementKind::IncRef(place(3))),
+        stmt(StatementKind::DecRef(place(3))),
+        stmt(StatementKind::IncRef(field(2, 1))),
+        stmt(StatementKind::DecRef(place(2))),
+        stmt(StatementKind::IncRef(place(5))),
+    ]);
+    assert!(violations.is_empty(), "{}", messages(&violations));
+}
+
+#[test]
+fn a_counted_optional_of_a_scalar_answers_as_its_classifier_says() {
+    let body = body_of(&count_kinds(), 0, Vec::new());
+    let is_counted = body.is_counted(&count_kinds()[4]);
+    let violations = count_findings(vec![stmt(StatementKind::IncRef(place(4)))]);
+    assert_eq!(
+        violations.is_empty(),
+        is_counted,
+        "{}",
+        messages(&violations)
+    );
+}
+
+#[test]
+fn adjusting_a_place_of_an_open_parameter_is_left_alone() {
+    let open = TypeKind::Custom("T".into(), None);
+    let locals = vec![TypeKind::Void, open];
+    let mut body = body_of(
+        &locals,
+        0,
+        vec![ret_block(vec![stmt(StatementKind::IncRef(place(1)))])],
+    );
+    body.generics.type_params.insert("T".to_string());
+    assert_clean(&body);
+}
+
 #[test]
 fn address_of_a_value_stored_into_a_counted_field_is_flagged() {
     assert_flagged(
