@@ -430,12 +430,17 @@ impl Perceus {
             return false;
         }
 
-        // Fallback for complex projections where the destination is definitely managed.
+        // Fallback for a field read whose own type does not settle it, stored
+        // somewhere that keeps a reference. What keeps it is the slot written:
+        // an element or field of a counted holder is a scalar when its type
+        // says so, however counted the holder is. A slot whose type cannot be
+        // read is taken to keep one.
         source
             .projection
             .iter()
             .any(|e| matches!(e, PlaceElem::Field(_)))
             && managed_locals.contains(&dest.local)
+            && place_declared_type(dest, ctx).is_none_or(|slot| ctx.is_counted(&slot.kind))
     }
 
     /// Handles RC for operands inside an aggregate (like a List or Map).

@@ -10,6 +10,7 @@ pub mod edge_cases;
 pub mod equality;
 pub mod errors;
 pub mod float_assignment;
+pub mod index_assign_field_source;
 pub mod indexing;
 pub mod integration;
 pub mod membership;
