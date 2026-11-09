@@ -1,0 +1,64 @@
+{
+ "run_id": "20261109T133135Z",
+ "suspect": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0870432164124635,
+   "baseline": 1.1982791019846462,
+   "tonight": 1.3025811691812281
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1046608803630698,
+   "baseline": 1.187378986081043,
+   "tonight": 1.3116511160888942
+  },
+  {
+   "cell": "spectral-norm/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.101677526647001,
+   "baseline": 1.9470843958853332,
+   "tonight": 2.145059121431924
+  },
+  {
+   "cell": "spectral-norm/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0924059460256055,
+   "baseline": 1.9798549703394055,
+   "tonight": 2.162805341867115
+  }
+ ],
+ "regressed": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.0870432164124635,
+   "baseline": 1.1982791019846462,
+   "tonight": 1.3025811691812281
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1046608803630698,
+   "baseline": 1.187378986081043,
+   "tonight": 1.3116511160888942
+  },
+  {
+   "cell": "spectral-norm/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.101677526647001,
+   "baseline": 1.9470843958853332,
+   "tonight": 2.145059121431924
+  },
+  {
+   "cell": "spectral-norm/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.0924059460256055,
+   "baseline": 1.9798549703394055,
+   "tonight": 2.162805341867115
+  }
+ ],
+ "recovered": []
+}
