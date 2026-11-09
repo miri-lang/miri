@@ -23,9 +23,9 @@ use crate::mir::backend::BackendMetadata;
 use crate::mir::gpu_names::spelled_name;
 use crate::mir::symbol::Symbol;
 use crate::mir::{
-    BasicBlock, BinOp, Body, Constant, Dimension, ExecutionModel, GpuIndexNarrowing, GpuIntrinsic,
-    Local, LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue, StatementKind,
-    StorageClass, TerminatorKind, UnOp, I32_INDEX_MAX,
+    BasicBlock, BinOp, Body, Bounds, Constant, Dimension, ExecutionModel, GpuIndexNarrowing,
+    GpuIntrinsic, Local, LocalDecl, MathIntrinsic, Operand, Place, PlaceElem, Rvalue,
+    StatementKind, StorageClass, TerminatorKind, UnOp,
 };
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -1629,9 +1629,12 @@ impl<'a> BodyEmitter<'a> {
 
         // The implicit CPU/Perceus `allocator` argument has no GPU counterpart;
         // the helper signature drops the matching param, so drop the argument too.
-        let arg_strs: Result<Vec<_>, _> = args
+        let device_args: Vec<&Operand> = args
             .iter()
             .filter(|a| !self.is_allocator_operand(a))
+            .collect();
+        let arg_strs: Result<Vec<_>, _> = device_args
+            .into_iter()
             .map(|a| self.render_operand(a))
             .collect();
         let args_str = arg_strs?.join(", ");
@@ -1873,7 +1876,7 @@ impl<'a> BodyEmitter<'a> {
         None
     }
 
-    fn render_place(&self, place: &Place) -> Result<String, CodegenError> {
+    fn render_place(&mut self, place: &Place) -> Result<String, CodegenError> {
         let mut rendered = if let Some(field) = self.get_scalar_field(place.local) {
             let base = format!("_inputs.{}", field);
             // Wrap bool scalar field reads with bool(...) to coerce u32 → bool
@@ -1905,7 +1908,7 @@ impl<'a> BodyEmitter<'a> {
             .local_decls
             .get(place.local.0)
             .map(|decl| decl.ty.kind.clone());
-        for elem in &place.projection {
+        for (position, elem) in place.projection.iter().enumerate() {
             match elem {
                 PlaceElem::Field(idx) => {
                     match reached.as_ref().and_then(|kind| vector_swizzle(kind, *idx)) {
@@ -1914,33 +1917,15 @@ impl<'a> BodyEmitter<'a> {
                     }
                     reached = None;
                 }
-                PlaceElem::Index(local, _) => {
+                PlaceElem::Index(local, bounds) => {
+                    let collection = Indexed {
+                        rendered: &rendered,
+                        kind: reached.as_ref(),
+                        is_binding: position == 0 && self.binding_name(place.local).is_some(),
+                    };
+                    let index = self.render_index(*local, *bounds, &collection)?;
+                    write!(rendered, "[{}]", index).map_err(emit_err)?;
                     reached = reached.as_ref().and_then(collection_element_kind);
-                    // naga rejects indexing `array<T>` with an `i64` value — array indices
-                    // must be 32-bit. The narrowing policy (identity for `Int`, saturate for
-                    // `I64`, none otherwise) is backend-neutral and lives in `mir::backend`;
-                    // here we only render the chosen narrowing as WGSL. A saturated I64 index
-                    // stays out-of-range when out-of-range, and WGSL storage-array bounds
-                    // behavior handles it harmlessly.
-                    let name = local_name(*local);
-                    let narrowing = self
-                        .body
-                        .local_decls
-                        .get(local.0)
-                        .map(|decl| GpuIndexNarrowing::from_index_kind(&decl.ty.kind))
-                        .unwrap_or(GpuIndexNarrowing::None);
-                    match narrowing {
-                        GpuIndexNarrowing::SaturateToI32 => {
-                            write!(rendered, "[i32(clamp({}, 0, {}))]", name, I32_INDEX_MAX)
-                                .map_err(emit_err)?
-                        }
-                        GpuIndexNarrowing::Identity => {
-                            write!(rendered, "[i32({})]", name).map_err(emit_err)?
-                        }
-                        GpuIndexNarrowing::None => {
-                            write!(rendered, "[{}]", name).map_err(emit_err)?
-                        }
-                    }
                 }
                 PlaceElem::Deref => {
                     return Err(CodegenError::Internal(
@@ -1952,7 +1937,41 @@ impl<'a> BodyEmitter<'a> {
         Ok(rendered)
     }
 
-    fn render_operand(&self, op: &Operand) -> Result<String, CodegenError> {
+    /// The WGSL index expression for `index` into `collection`: narrowed to
+    /// the device's 32-bit index lane, and, unless `bounds` proves it in
+    /// range, passed through the check that records an index outside the
+    /// collection's length in the fault word.
+    fn render_index(
+        &mut self,
+        index: Local,
+        bounds: Bounds,
+        collection: &Indexed<'_>,
+    ) -> Result<String, CodegenError> {
+        let index_kind = self.body.local_decls.get(index.0).map(|decl| &decl.ty.kind);
+        let name = local_name(index);
+        let narrowed = match index_kind.map(GpuIndexNarrowing::from_index_kind) {
+            Some(GpuIndexNarrowing::Identity) => format!("i32({})", name),
+            Some(GpuIndexNarrowing::None) | None => name,
+        };
+        match bounds {
+            Bounds::Proven => Ok(narrowed),
+            Bounds::Checked => {
+                let lane = index_kind.and_then(IntLane::of).ok_or_else(|| {
+                    CodegenError::Internal(format!(
+                        "WGSL backend: the index {} of {} is not an integer",
+                        local_name(index),
+                        collection.rendered
+                    ))
+                })?;
+                let length = collection.length()?;
+                let helper = CheckedHelper::index(lane);
+                self.checked_helpers.insert(helper);
+                Ok(format!("{}({}, {})", helper.name(), narrowed, length))
+            }
+        }
+    }
+
+    fn render_operand(&mut self, op: &Operand) -> Result<String, CodegenError> {
         match op {
             Operand::Move(place) | Operand::Copy(place) => {
                 let rendered = self.render_place(place)?;
@@ -2001,7 +2020,7 @@ impl<'a> BodyEmitter<'a> {
         self.is_atomic_buffer_element(place)
     }
 
-    fn render_rvalue(&self, rvalue: &Rvalue) -> Result<String, CodegenError> {
+    fn render_rvalue(&mut self, rvalue: &Rvalue) -> Result<String, CodegenError> {
         match rvalue {
             Rvalue::Use(op) => self.render_operand(op),
             Rvalue::BinaryOp(op, lhs, rhs) => {
@@ -2062,7 +2081,7 @@ impl<'a> BodyEmitter<'a> {
     }
 
     fn render_aggregate(
-        &self,
+        &mut self,
         kind: &crate::mir::AggregateKind,
         operands: &[Operand],
     ) -> Result<String, CodegenError> {
@@ -2096,7 +2115,7 @@ impl<'a> BodyEmitter<'a> {
     }
 
     fn render_atomic_op(
-        &self,
+        &mut self,
         op: crate::mir::backend::gpu::GpuAtomicOp,
         buffer: &Operand,
         index: &Operand,
@@ -2108,6 +2127,9 @@ impl<'a> BodyEmitter<'a> {
         let value_str = self.render_operand(value)?;
 
         // Format: atomicAdd(&buf[i], v)
+        // TODO: an atomic operation's index is an operand with no bounds mark,
+        // and is not yet checked against the buffer's length the way an index
+        // projection is, so an atomic outside its buffer records no fault.
         let addr = format!("&{}[{}]", buffer_str, index_str);
 
         let op_name = match op {
@@ -2259,6 +2281,36 @@ fn fixed_array_extent(kind: &TypeKind) -> Result<i128, CodegenError> {
     })
 }
 
+/// The collection an index is applied to, as far as checking the index
+/// needs it.
+struct Indexed<'r> {
+    /// The WGSL expression naming the collection.
+    rendered: &'r str,
+    /// The collection's type, when the projection still knows it.
+    kind: Option<&'r TypeKind>,
+    /// Whether the collection is a storage buffer binding itself, whose
+    /// element count WGSL's `arrayLength` reads.
+    is_binding: bool,
+}
+
+impl Indexed<'_> {
+    /// The collection's length as a WGSL `u32` expression: the extent a
+    /// fixed-size array's type declares, else the element count of the
+    /// storage buffer a binding names.
+    fn length(&self) -> Result<String, CodegenError> {
+        if let Some(kind) = self.kind.filter(|kind| is_fixed_array(kind)) {
+            return Ok(format!("{}u", fixed_array_extent(kind)?));
+        }
+        if self.is_binding {
+            return Ok(format!("arrayLength(&{})", self.rendered));
+        }
+        Err(CodegenError::Internal(format!(
+            "WGSL backend: the length of {} cannot be read to check an index into it",
+            self.rendered
+        )))
+    }
+}
+
 /// True when `kind` is a fixed-size `Array<T, N>` (either the canonical
 /// [`TypeKind::Array`] or its post-resolution `Custom("Array", [elem, size])`
 /// form) rather than a scalar or vector. Fixed-size array locals are declared
@@ -2390,7 +2442,7 @@ fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
 }
 
 impl BodyEmitter<'_> {
-    fn render_gpu_intrinsic(&self, intrinsic: GpuIntrinsic) -> Result<String, CodegenError> {
+    fn render_gpu_intrinsic(&mut self, intrinsic: GpuIntrinsic) -> Result<String, CodegenError> {
         match intrinsic {
             GpuIntrinsic::ThreadIdx(dim) => Ok(format!("{}.{}", LOCAL_ID, dimension_field(dim))),
             GpuIntrinsic::BlockIdx(dim) => Ok(format!("{}.{}", WORKGROUP_ID, dimension_field(dim))),
@@ -2550,34 +2602,47 @@ mod tests {
     use crate::error::syntax::Span;
     use crate::mir::{LocalDecl, Terminator};
 
-    /// Test that an I64 index is rendered with clamp to saturate into i32 range.
+    /// A proven `I64` index is cast to the device's 32-bit index type and
+    /// never clamped: a negative one would otherwise silently name the first
+    /// element.
     #[test]
-    fn test_render_place_i64_index_clamps() {
-        // Minimal MIR body with an I64 index local.
-        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+    fn test_render_place_i64_index_is_cast_not_clamped() {
+        let rendered =
+            render_indexed_place(TypeKind::I64, Bounds::Proven).expect("render_place failed");
+        assert!(rendered.contains("[i32("), "{rendered}");
+        assert!(!rendered.contains("clamp("), "{rendered}");
+    }
 
-        // Create a local with type I64 for use as an index.
-        let i64_local = body.new_local(LocalDecl::new(
-            Type::new(TypeKind::I64, Span::default()),
+    /// A checked index into a value whose length cannot be read is refused
+    /// rather than emitted unchecked.
+    #[test]
+    fn test_render_place_checked_index_without_a_length_is_an_error() {
+        let rendered = render_indexed_place(TypeKind::Int, Bounds::Checked);
+        assert!(
+            matches!(&rendered, Err(CodegenError::Internal(message)) if message.contains("cannot be read")),
+            "{rendered:?}"
+        );
+    }
+
+    /// Renders `_target[_index]` in a kernel body, the index of `index_kind`
+    /// marked `bounds` and the target an `int` local.
+    fn render_indexed_place(index_kind: TypeKind, bounds: Bounds) -> Result<String, CodegenError> {
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+        let index = body.new_local(LocalDecl::new(
+            Type::new(index_kind, Span::default()),
             Span::default(),
         ));
-
-        // Create a target local (the array being indexed) with a simple type.
-        let target_local = body.new_local(LocalDecl::new(
+        let target = body.new_local(LocalDecl::new(
             Type::new(TypeKind::Int, Span::default()),
             Span::default(),
         ));
-
-        // Create a place with an I64 index projection.
         let place = Place {
-            local: target_local,
-            projection: vec![PlaceElem::index(i64_local)],
+            local: target,
+            projection: vec![PlaceElem::Index(index, bounds)],
         };
-
-        // Create a minimal BodyEmitter. Empty bindings and empty output buffer.
         let mut output = String::new();
         let mut source_map = Vec::new();
-        let emitter = BodyEmitter {
+        let mut emitter = BodyEmitter {
             body: &body,
             bindings: &[],
             workgroup_size: [256, 1, 1],
@@ -2594,150 +2659,25 @@ mod tests {
             device_helpers: None,
             checked_helpers: BTreeSet::new(),
         };
-
-        // Render the place.
-        let rendered = emitter.render_place(&place).expect("render_place failed");
-
-        // Assert that the rendered string contains the structured clamp: [i32(clamp(..., 0, 2147483647))].
-        // This pins the exact emission pattern so comments/TODOs can't accidentally pass.
-        assert!(
-            rendered.contains("[i32(clamp("),
-            "Expected [i32(clamp( in rendered I64 index, got: {}",
-            rendered
-        );
-        assert!(
-            rendered.contains(", 0, 2147483647))]"),
-            "Expected , 0, 2147483647))] in rendered I64 index, got: {}",
-            rendered
-        );
+        emitter.render_place(&place)
     }
 
-    /// Test that an Int (i32) index is rendered WITHOUT clamp (identity).
+    /// A proven `int` index is cast to the 32-bit index type, unchecked.
     #[test]
-    fn test_render_place_int_index_no_clamp() {
-        // Minimal MIR body with an Int index local.
-        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
-
-        // Create a local with type Int (i32) for use as an index.
-        let int_local = body.new_local(LocalDecl::new(
-            Type::new(TypeKind::Int, Span::default()),
-            Span::default(),
-        ));
-
-        // Create a target local (the array being indexed).
-        let target_local = body.new_local(LocalDecl::new(
-            Type::new(TypeKind::Int, Span::default()),
-            Span::default(),
-        ));
-
-        // Create a place with an Int index projection.
-        let place = Place {
-            local: target_local,
-            projection: vec![PlaceElem::index(int_local)],
-        };
-
-        // Create a minimal BodyEmitter.
-        let mut output = String::new();
-        let mut source_map = Vec::new();
-        let emitter = BodyEmitter {
-            body: &body,
-            bindings: &[],
-            workgroup_size: [256, 1, 1],
-            output: &mut output,
-            source_map: &mut source_map,
-            map_scan_pos: 0,
-            map_line: 1,
-            indent: 0,
-            loop_headers: HashSet::new(),
-            reachability: Vec::new(),
-            loop_info: HashMap::new(),
-            loop_stack: Vec::new(),
-            return_local: None,
-            device_helpers: None,
-            checked_helpers: BTreeSet::new(),
-        };
-
-        // Render the place.
-        let rendered = emitter.render_place(&place).expect("render_place failed");
-
-        // Assert that the output has i32() but NOT clamp().
-        assert!(
-            rendered.contains("i32("),
-            "Expected i32() in rendered Int index, got: {}",
-            rendered
-        );
-        assert!(
-            !rendered.contains("clamp("),
-            "Unexpected clamp() in Int (i32) index (should be identity), got: {}",
-            rendered
-        );
+    fn test_render_place_proven_int_index_is_cast_and_unchecked() {
+        let rendered =
+            render_indexed_place(TypeKind::Int, Bounds::Proven).expect("render_place failed");
+        assert!(rendered.contains("[i32("), "{rendered}");
+        assert!(!rendered.contains("_checked_index"), "{rendered}");
     }
 
-    /// Test that a non-Int/non-I64 index (e.g. F32) renders bare without i32() or clamp().
+    /// An index of any other scalar type is rendered bare.
     #[test]
     fn test_render_place_other_index_renders_bare() {
-        // Minimal MIR body with an F32 index local (a contrived case, but validates the fallback).
-        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
-
-        // Create a local with type F32 for use as an index.
-        let f32_local = body.new_local(LocalDecl::new(
-            Type::new(TypeKind::F32, Span::default()),
-            Span::default(),
-        ));
-
-        // Create a target local (the array being indexed).
-        let target_local = body.new_local(LocalDecl::new(
-            Type::new(TypeKind::Int, Span::default()),
-            Span::default(),
-        ));
-
-        // Create a place with an F32 index projection.
-        let place = Place {
-            local: target_local,
-            projection: vec![PlaceElem::index(f32_local)],
-        };
-
-        // Create a minimal BodyEmitter.
-        let mut output = String::new();
-        let mut source_map = Vec::new();
-        let emitter = BodyEmitter {
-            body: &body,
-            bindings: &[],
-            workgroup_size: [256, 1, 1],
-            output: &mut output,
-            source_map: &mut source_map,
-            map_scan_pos: 0,
-            map_line: 1,
-            indent: 0,
-            loop_headers: HashSet::new(),
-            reachability: Vec::new(),
-            loop_info: HashMap::new(),
-            loop_stack: Vec::new(),
-            return_local: None,
-            device_helpers: None,
-            checked_helpers: BTreeSet::new(),
-        };
-
-        // Render the place.
-        let rendered = emitter.render_place(&place).expect("render_place failed");
-
-        // Assert that the output is bare (no i32(), no clamp()).
-        assert!(
-            !rendered.contains("i32("),
-            "Unexpected i32() cast in F32 index (should be bare), got: {}",
-            rendered
-        );
-        assert!(
-            !rendered.contains("clamp("),
-            "Unexpected clamp() in F32 index (should be bare), got: {}",
-            rendered
-        );
-        // Ensure the index is present in brackets.
-        assert!(
-            rendered.contains("["),
-            "Expected [ in rendered place, got: {}",
-            rendered
-        );
+        let rendered =
+            render_indexed_place(TypeKind::F32, Bounds::Proven).expect("render_place failed");
+        assert!(!rendered.contains("i32("), "{rendered}");
+        assert!(rendered.contains("["), "{rendered}");
     }
 
     /// Build a block with a `Goto` terminator to `target`.

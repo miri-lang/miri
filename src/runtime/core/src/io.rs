@@ -82,7 +82,7 @@ pub use ffi::*;
 pub mod ffi {
     use super::*;
     use crate::string::MiriString;
-    use crate::trap::{code, trap};
+    use crate::trap::{code, message, trap, trap_gpu_faults};
 
     /// Prints a `MiriString` to stdout without a trailing newline.
     ///
@@ -465,7 +465,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_div_by_zero_panic() {
-        trap(code::DIVISION_BY_ZERO, "division by zero");
+        trap(code::DIVISION_BY_ZERO, message::DIVISION_BY_ZERO);
     }
 
     /// Reports an integer `+`, `-`, `*` or negation whose result does not fit
@@ -476,10 +476,7 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_integer_overflow_panic() {
-        trap(
-            code::INTEGER_OVERFLOW,
-            "integer overflow: the result does not fit its type",
-        );
+        trap(code::INTEGER_OVERFLOW, message::INTEGER_OVERFLOW);
     }
 
     /// Reports, as MER_RT_019, a bound of a range a `for` loop steps through
@@ -505,7 +502,20 @@ pub mod ffi {
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_rem_by_zero_panic() {
-        trap(code::REMAINDER_BY_ZERO, "remainder by zero");
+        trap(code::REMAINDER_BY_ZERO, message::REMAINDER_BY_ZERO);
+    }
+
+    /// Reports every kind of fault the GPU fault word `word` records, each
+    /// under the code the host's own trap for that kind reports, in one
+    /// error, and ends the process.
+    ///
+    /// Called by the GPU runtime when a look at the fault word finds it
+    /// non-zero, so a kernel's fault leaves through the same door as the
+    /// host's.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_gpu_fault_panic(word: u32) {
+        trap_gpu_faults(word);
     }
 
     /// Reports a refused GPU kernel launch as MER_RT_013 and ends the process.

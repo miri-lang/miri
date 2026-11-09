@@ -47,6 +47,7 @@ pub mod host_rc_balance;
 pub mod i32_range_validation;
 pub mod integer_overflow;
 pub mod kernel_callable_fns;
+pub mod kernel_faults;
 pub mod kernel_loop_continue;
 pub mod kernel_param_names;
 pub mod large_forall;

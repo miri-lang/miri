@@ -3,13 +3,16 @@
 
 //! The device fault word.
 //!
-//! A kernel whose integer arithmetic is checked declares a module-scope
-//! `miri_fault: atomic<u32>` at group 1, binding 0, and sets bit 0 of it when a
-//! result does not fit its type. The word lives on the device for the life of
-//! the context and is never cleared: an overflow stays reported until the host
-//! looks. The host looks at every point device data reaches it — a readback, a
-//! sync, a context reset, and the end of the program — and ends the program
-//! through the core runtime's integer-overflow trap when the bit is set.
+//! A kernel that can fault declares a module-scope `miri_fault: atomic<u32>`
+//! at group 1, binding 0, and sets one bit of it for each kind of fault it
+//! meets — an integer result that does not fit its type, a `/` or `%` by zero,
+//! an index outside its collection; the compiler's `abi::gpu_fault` names the
+//! bits. The word lives on the device for the life of the context and is never
+//! cleared: a fault stays reported until the host looks. The host looks at
+//! every point device data reaches it — a readback, a sync, a context reset,
+//! and the end of the program — and, when the word is not zero, hands it to
+//! the core runtime, which reports every kind it records and ends the
+//! program.
 //! Launches themselves do not look, so a `gpu`-resident launch still never
 //! fences.
 //!
@@ -33,9 +36,6 @@ const FAULT_DECLARATION: &str =
 
 /// The bind group index the fault word is bound at.
 pub(crate) const FAULT_GROUP: u32 = 1;
-
-/// Bit 0 of the fault word: an integer result did not fit its type.
-const INTEGER_OVERFLOW: u32 = 0x1;
 
 /// Size in bytes of the fault word.
 const FAULT_WORD_SIZE: u64 = 4;
@@ -146,7 +146,7 @@ impl FaultWord {
     }
 
     /// Waits for every submitted command, reading the word in the same wait,
-    /// and ends the program when an overflow is recorded in it.
+    /// and ends the program when a fault is recorded in it.
     ///
     /// # Errors
     /// Returns `Err` when the device cannot be waited on or the word cannot be
@@ -170,7 +170,7 @@ impl FaultWord {
 
     /// Records the word's copy on its own submission when a faulting kernel
     /// ran since the last look, waits up to `timeout` (unbounded when `None`)
-    /// for the device, and raises a recorded overflow.
+    /// for the device, and raises a recorded fault.
     fn wait_and_look(
         &self,
         device: &Device,
@@ -246,8 +246,8 @@ pub struct PendingFault<'a> {
 
 impl PendingFault<'_> {
     /// Reads the copied word, after the device has been polled, and ends the
-    /// program through the core runtime's integer-overflow trap when it
-    /// records an overflow.
+    /// program through the core runtime's GPU fault trap when it records a
+    /// fault.
     ///
     /// # Errors
     /// Returns `Err` when the copy was not mapped. The word is then still to
@@ -272,18 +272,18 @@ impl PendingFault<'_> {
                 .map_or(0, u32::from_le_bytes)
         };
         self.staging.unmap();
-        if word & INTEGER_OVERFLOW != 0 {
+        if word != 0 {
             drop(self.staging);
-            // SAFETY: the core runtime reports the overflow and ends the
-            // process; it takes no arguments and touches no GPU state.
-            unsafe { miri_rt_integer_overflow_panic() };
+            // SAFETY: the core runtime reports the faults `word` records and
+            // ends the process; it touches no GPU state.
+            unsafe { miri_rt_gpu_fault_panic(word) };
         }
         Ok(())
     }
 }
 
-/// Arranges the look at the fault word when the program ends, so an overflow
-/// in a launch nothing reads back is still reported. Called when a context is
+/// Arranges the look at the fault word when the program ends, so a fault in a
+/// launch nothing reads back is still reported. Called when a context is
 /// created, on the thread creating it.
 ///
 /// The look is made twice over. A thread-local guard makes it while that
@@ -352,24 +352,25 @@ extern "C" {
 
 #[cfg(not(feature = "panic-trap"))]
 extern "C" {
-    /// The core runtime's integer-overflow trap: reports MER_RT_003 and ends
-    /// the process. Every program that links the GPU runtime links the core
-    /// runtime after it.
-    fn miri_rt_integer_overflow_panic();
+    /// The core runtime's GPU fault trap: reports every kind of fault `word`
+    /// records, each under its runtime code, and ends the process. Every
+    /// program that links the GPU runtime links the core runtime after it.
+    fn miri_rt_gpu_fault_panic(word: u32);
 }
 
 /// This crate's own tests link no core runtime, so the trap is a test failure
 /// there.
 #[cfg(feature = "panic-trap")]
-unsafe fn miri_rt_integer_overflow_panic() {
-    panic!("integer overflow recorded in the device fault word");
+unsafe fn miri_rt_gpu_fault_panic(word: u32) {
+    panic!("fault {word:#x} recorded in the device fault word");
 }
 
 #[cfg(test)]
 impl FaultWord {
-    /// Records an overflow in the word the way a kernel would, for a test.
+    /// Records an integer overflow, bit 0 of the word, the way a kernel
+    /// would, for a test.
     pub(crate) fn record_overflow_for_test(&self, queue: &Queue) {
-        queue.write_buffer(&self.buffer, 0, &INTEGER_OVERFLOW.to_le_bytes());
+        queue.write_buffer(&self.buffer, 0, &1u32.to_le_bytes());
         self.record_dispatch();
     }
 
@@ -438,10 +439,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow recorded in the device fault word")]
+    #[should_panic(expected = "fault 0x1 recorded in the device fault word")]
     fn a_sync_reports_a_recorded_overflow() {
         let Some((device, queue)) = test_device() else {
-            panic!("integer overflow recorded in the device fault word (no GPU adapter)");
+            panic!("fault 0x1 recorded in the device fault word (no GPU adapter)");
         };
         let fault = FaultWord::new(&device);
         fault.record_overflow_for_test(&queue);
@@ -449,10 +450,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow recorded in the device fault word")]
+    #[should_panic(expected = "fault 0x1 recorded in the device fault word")]
     fn a_release_reports_a_recorded_overflow() {
         let Some((device, queue)) = test_device() else {
-            panic!("integer overflow recorded in the device fault word (no GPU adapter)");
+            panic!("fault 0x1 recorded in the device fault word (no GPU adapter)");
         };
         let fault = FaultWord::new(&device);
         fault.record_overflow_for_test(&queue);

@@ -54,7 +54,7 @@ pub mod visitor;
 
 pub use backend::{
     BackendMetadata, GpuAtomicOp, GpuBinding, GpuBodyMetadata, GpuCapability, GpuIndexNarrowing,
-    GpuKernelArg, GpuMemoryAccess, GpuMemoryScope, I32_INDEX_MAX,
+    GpuKernelArg, GpuMemoryAccess, GpuMemoryScope,
 };
 pub use block::{BasicBlock, BasicBlockData};
 pub use body::{

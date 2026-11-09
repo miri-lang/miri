@@ -21,6 +21,11 @@ const FAULT_DECLARATION: &str =
 
 const OVERFLOW: &str = "integer overflow: the result does not fit its type";
 
+/// The statement a checked helper runs on an overflow. A kernel indexing a
+/// buffer declares the fault word for its index check, so a kernel whose
+/// arithmetic is not checked is told by this statement's absence.
+const RAISE_OVERFLOW: &str = "atomicOr(&miri_fault, 1u);";
+
 /// A `forall` over a two-element `gpu` buffer of `element` seeded with
 /// `seed`, storing `kernel_expression` back into each element, then reading
 /// the buffer back and printing its second element.
@@ -74,8 +79,8 @@ fn test_wgsl_checked_helpers_are_sorted_by_name() {
 #[test]
 fn test_wgsl_wrapping_and_index_math_emit_plain_operators() {
     let wgsl = compile_to_wgsl(&kernel_program("int", "1", "wrapping_add(buf[i], 1)"));
-    assert!(!wgsl.contains("miri_fault"), "{wgsl}");
-    assert!(!wgsl.contains("_checked_"), "{wgsl}");
+    assert!(!wgsl.contains(RAISE_OVERFLOW), "{wgsl}");
+    assert!(!wgsl.contains("_checked_add"), "{wgsl}");
 }
 
 /// The thread index of a loop over a runtime range is arithmetic the
@@ -96,7 +101,7 @@ fn main()
         buf[i] = wrapping_add(i, 1)
 ",
     );
-    assert!(!wgsl.contains("miri_fault"), "{wgsl}");
+    assert!(!wgsl.contains(RAISE_OVERFLOW), "{wgsl}");
 }
 
 /// In a 2-D loop only the program's own `y * 2 + x` is checked: each helper
@@ -119,9 +124,9 @@ fn main()
 }
 
 #[test]
-fn test_wgsl_float_kernel_declares_no_fault_binding() {
+fn test_wgsl_float_kernel_checks_no_arithmetic() {
     let wgsl = compile_to_wgsl(&kernel_program("f32", "1.5", "buf[i] * 2.0 + 1.0"));
-    assert!(!wgsl.contains("miri_fault"), "{wgsl}");
+    assert!(!wgsl.contains(RAISE_OVERFLOW), "{wgsl}");
 }
 
 #[test]
@@ -138,13 +143,14 @@ fn main()
     println(f'{host_total}')
 ",
     );
-    assert!(!wgsl.contains("miri_fault"), "{wgsl}");
+    assert!(!wgsl.contains(RAISE_OVERFLOW), "{wgsl}");
 }
 
+/// An unsigned quotient always fits, so only its divisor is checked.
 #[test]
-fn test_wgsl_unsigned_division_is_not_checked() {
+fn test_wgsl_unsigned_division_is_not_checked_for_overflow() {
     let wgsl = compile_to_wgsl(&kernel_program("u32", "7", "buf[i] / 2 as u32"));
-    assert!(!wgsl.contains("miri_fault"), "{wgsl}");
+    assert!(!wgsl.contains(RAISE_OVERFLOW), "{wgsl}");
 }
 
 #[test]
@@ -158,15 +164,15 @@ fn test_wgsl_signed_division_and_remainder_are_checked() {
     assert!(wgsl.contains("_checked_rem__i32("), "{wgsl}");
 }
 
-/// A quotient or remainder by a constant other than `-1` always fits, so it
-/// keeps the plain operator, and a kernel with no other checked operation
-/// declares no fault word.
+/// A quotient or remainder by a constant other than `0` and `-1` always
+/// fits and never divides by zero, so it keeps the plain operator.
 #[test]
-fn test_wgsl_division_by_a_constant_declares_no_fault_word() {
+fn test_wgsl_division_by_a_constant_is_not_checked() {
     for expression in ["buf[i] / 2", "buf[i] % 3", "buf[i] / -2"] {
         let wgsl = compile_to_wgsl(&kernel_program("int", "7", expression));
-        assert!(!wgsl.contains("_checked_"), "{expression}: {wgsl}");
-        assert!(!wgsl.contains("miri_fault"), "{expression}: {wgsl}");
+        assert!(!wgsl.contains("_checked_div"), "{expression}: {wgsl}");
+        assert!(!wgsl.contains("_checked_rem"), "{expression}: {wgsl}");
+        assert!(!wgsl.contains(RAISE_OVERFLOW), "{expression}: {wgsl}");
     }
 }
 
@@ -183,7 +189,7 @@ fn test_wgsl_division_by_minus_one_is_checked() {
 #[test]
 fn test_wgsl_three_way_comparison_is_not_checked() {
     let wgsl = compile_to_wgsl(&kernel_program("int", "7", "buf[i].compare(3)"));
-    assert!(!wgsl.contains("miri_fault"), "{wgsl}");
+    assert!(!wgsl.contains(RAISE_OVERFLOW), "{wgsl}");
 }
 
 /// The text a runtime looks for to recognise a kernel that may fault, read
@@ -609,5 +615,5 @@ fn test_wgsl_signed_abs_is_checked_and_unsigned_abs_is_not() {
     let signed = compile_to_wgsl(&kernel_program("i32", "-5", "abs(buf[i])"));
     assert!(signed.contains("_checked_abs__i32(buf["), "{signed}");
     let unsigned = compile_to_wgsl(&kernel_program("u32", "5", "abs(buf[i])"));
-    assert!(!unsigned.contains(FAULT_DECLARATION), "{unsigned}");
+    assert!(!unsigned.contains("_checked_abs"), "{unsigned}");
 }

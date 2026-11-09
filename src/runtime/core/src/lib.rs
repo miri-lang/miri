@@ -21,6 +21,10 @@
 //! All public FFI functions use `#[no_mangle] extern "C"` for C-compatible FFI,
 //! allowing compiled Miri code to call them via the linker.
 
+/// The meaning of each bit of the GPU fault word, compiled into the compiler
+/// too.
+#[path = "../../../abi/gpu_fault.rs"]
+pub mod abi_gpu_fault;
 /// The layout facts compiled code relies on, compiled into the compiler too.
 #[path = "../../../abi/layout.rs"]
 pub mod abi_layout;

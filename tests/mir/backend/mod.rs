@@ -4,15 +4,16 @@
 pub mod config;
 
 use miri::ast::types::TypeKind;
-use miri::mir::backend::{GpuIndexNarrowing, I32_INDEX_MAX};
+use miri::mir::backend::GpuIndexNarrowing;
 
-/// A 64-bit index must saturate into the non-negative 32-bit range before the
-/// cast, so a value >= 2^31 cannot wrap into an aliasing in-bounds index.
+/// A 64-bit index is computed in the device's 32-bit lane, so it needs only a
+/// 32-bit cast; a negative one is left for the index check to report rather
+/// than clamped into the first element.
 #[test]
-fn i64_index_saturates_to_i32() {
+fn i64_index_is_identity() {
     assert_eq!(
         GpuIndexNarrowing::from_index_kind(&TypeKind::I64),
-        GpuIndexNarrowing::SaturateToI32
+        GpuIndexNarrowing::Identity
     );
 }
 
@@ -36,11 +37,4 @@ fn other_index_needs_no_narrowing() {
         GpuIndexNarrowing::from_index_kind(&TypeKind::U64),
         GpuIndexNarrowing::None
     );
-}
-
-/// The saturation upper bound is the largest signed 32-bit value, matching the
-/// `clamp(..., 0, 2147483647)` the WGSL emitter renders.
-#[test]
-fn i32_index_max_is_signed_max() {
-    assert_eq!(I32_INDEX_MAX, 2147483647);
 }

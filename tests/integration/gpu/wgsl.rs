@@ -1437,8 +1437,8 @@ fn main()
         // Find the dst assignment position (could be multiple; we want the one after
         // the inner if closes).
         let dst_assign = wgsl[if_end..]
-            .find("dst[i32")
-            .expect("should have dst[i32] assignment after inner if");
+            .find("dst[")
+            .expect("should have dst[...] assignment after inner if");
         let dst_assign = if_end + dst_assign;
 
         assert!(

@@ -24,6 +24,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// The label the web runtime gives the fault word's buffer, which a kernel
+/// with a checked index or checked arithmetic declares and the runtime reads
+/// back to learn whether it faulted.
+const FAULT_WORD_LABEL: &str = "miri-fault";
+
 /// Extract the WGSL source from a `const NAME = \`…\`;` backtick template in the
 /// runtime module. Panics if the marker or its closing backtick is missing.
 fn extract_backtick_const(js: &str, name: &str) -> String {
@@ -362,14 +367,65 @@ fn stub_device_binds_inputs_uniform_and_double_buffers() {
     );
 
     // The terminal paint target is never swapped into the view slot: it is the
-    // readback source every frame.
+    // readback source every frame. The fault word a kernel with a checked
+    // index declares is read back beside it.
     let readbacks = trace["readbacks"].as_array().unwrap();
     assert!(
         readbacks
             .iter()
-            .all(|r| r.as_str().unwrap() == format!("miri-{paint}")),
+            .map(|r| r.as_str().unwrap())
+            .filter(|label| *label != FAULT_WORD_LABEL)
+            .all(|label| label == format!("miri-{paint}")),
         "paint must always read back the fixed terminal buffer 'miri-{paint}', got {readbacks:?}"
     );
+}
+
+/// Prints what the runtime reports for every fault word of the four known
+/// bits, `null` for a clear one.
+const FAULT_REPORT_DRIVER: &str = r#"
+import { describeFaults } from "./miri-gpu.js";
+const out = [];
+for (let word = 0; word < 16; word++) out.push(describeFaults(word));
+console.log(JSON.stringify(out));
+"#;
+
+/// The browser runtime reports a fault word the way the host does: every kind
+/// that fired, lowest bit first, each with the host's sentence and code.
+#[test]
+fn fault_reports_match_the_hosts_for_every_word() {
+    let node = match resolve_runtime("MIRI_NODE", "node") {
+        Some(n) => n,
+        None => {
+            eprintln!("skipping: no Node runtime found (set MIRI_NODE or install node)");
+            return;
+        }
+    };
+    let bundle = build_bundle(FRAME_PINGPONG);
+    let driver = bundle.join("fault-report-driver.mjs");
+    fs::write(&driver, FAULT_REPORT_DRIVER).expect("write fault report driver");
+    let output = Command::new(&node)
+        .arg(&driver)
+        .output()
+        .expect("run node fault report driver");
+    assert!(
+        output.status.success(),
+        "fault report driver must run:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reported: serde_json::Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
+            .expect("fault report driver must print JSON");
+    let expected: Vec<serde_json::Value> = (0u32..16)
+        .map(|word| {
+            let mut summary = String::new();
+            match miri::abi::gpu_fault::write_summary(word, &mut summary) {
+                Ok(true) => serde_json::Value::String(summary),
+                Ok(false) | Err(_) => serde_json::Value::Null,
+            }
+        })
+        .collect();
+    assert_eq!(reported, serde_json::Value::Array(expected));
 }
 
 /// Prints, per manifest given on the command line, the cross-frame ping-pong
@@ -1026,12 +1082,13 @@ fn stats_readback_samples_the_named_buffer_below_frame_rate() {
 
     // `view_a`/`view_b` ping-pong, so the named buffer resolves to a different
     // physical buffer as the pair swaps; both are legitimate sources, and
-    // nothing else is.
+    // nothing else is but the fault word the monitor watches.
     let copies: Vec<&str> = trace["copies"]
         .as_array()
         .expect("copies")
         .iter()
         .filter_map(|c| c.as_str())
+        .filter(|label| *label != FAULT_WORD_LABEL)
         .collect();
     assert!(!copies.is_empty(), "a sample must issue a readback copy");
     for label in &copies {

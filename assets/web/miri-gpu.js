@@ -249,16 +249,26 @@ function writeInputUniform(device, uniform, state) {
     device.queue.writeBuffer(uniform.buffer, 0, data);
 }
 
-// A kernel whose integer arithmetic is checked declares a sticky fault word,
+// A kernel that can fault declares a sticky fault word,
 // `@group(1) @binding(0) var<storage, read_write> miri_fault: atomic<u32>;`,
-// and sets bit 0 of it when a result does not fit its type. The word is
-// recognised by its whole declaration line, binding group and slot included,
+// and sets one bit of it for each kind of fault it meets (`FAULT_KINDS`). The
+// word is recognised by its whole declaration line, binding group and slot included,
 // the same text the native runtime looks for, so neither a function merely
 // named `miri_fault` nor a word bound elsewhere is mistaken for it.
 const FAULT_DECLARATION = "@group(1) @binding(0) var<storage, read_write> miri_fault: atomic<u32>;";
 const FAULT_GROUP = 1;
-const INTEGER_OVERFLOW = 0x1;
-const INTEGER_OVERFLOW_MESSAGE = "integer overflow: the result does not fit its type";
+
+// Each kind of fault a kernel records in the fault word, lowest bit first, with
+// the code and sentence the native runtime reports for it. This is a copy of the
+// compiler's table, `src/abi/gpu_fault.rs`; a test holds the two equal.
+const FAULT_KINDS = [
+    { bit: 0x1, code: "MER_RT_003", sentence: "integer overflow: the result does not fit its type" },
+    { bit: 0x2, code: "MER_RT_001", sentence: "division by zero" },
+    { bit: 0x4, code: "MER_RT_002", sentence: "remainder by zero" },
+    { bit: 0x8, code: "MER_RT_011", sentence: "index out of bounds" },
+];
+const FAULT_SUMMARY_PREFIX = "a GPU kernel faulted: ";
+const FAULT_SUMMARY_SEPARATOR = "; ";
 
 function declaresFaultWord(kernel) {
     return typeof kernel.wgsl === "string" && kernel.wgsl.includes(FAULT_DECLARATION);
@@ -374,22 +384,32 @@ async function readBackInto(device, src, byteLength, ArrayType) {
     return view;
 }
 
-// Whether a fault word read back from the device records an integer overflow.
-function recordsOverflow(word) {
-    return (word & INTEGER_OVERFLOW) !== 0;
+/// The report of a fault word read back from the device: every kind it
+/// records, lowest bit first, each as `sentence (code)` —
+/// `a GPU kernel faulted: division by zero (MER_RT_001); index out of bounds
+/// (MER_RT_011)`, as the native runtime reports it. Null for a clear word; a
+/// word holding only bits no kind names is still a fault, reported by value.
+export function describeFaults(word) {
+    if (word === 0) return null;
+    const fired = FAULT_KINDS.filter((kind) => (word & kind.bit) !== 0);
+    if (fired.length === 0) {
+        return `a GPU kernel recorded a fault this runtime does not know: 0x${word.toString(16)}`;
+    }
+    const kinds = fired.map((kind) => `${kind.sentence} (${kind.code})`);
+    return FAULT_SUMMARY_PREFIX + kinds.join(FAULT_SUMMARY_SEPARATOR);
 }
 
-// Report an overflow the way the runtime reports a lost device: on the console,
+// Report a fault the way the runtime reports a lost device: on the console,
 // since a mounted demo runs inside a page that has no other error channel.
-function reportOverflow() {
-    console.error(`[miri-gpu] ${INTEGER_OVERFLOW_MESSAGE}`);
+function reportFault(report) {
+    console.error(`[miri-gpu] ${report}`);
 }
 
 // Watch a mounted demo's fault word without ever blocking a frame. `check()`
 // copies the word into a staging buffer and maps it asynchronously, unless a
-// check is already in flight; when a mapped word records an overflow,
-// `onOverflow` runs once. Null when the demo has no fault word.
-function createFaultMonitor(device, fault, onOverflow) {
+// check is already in flight; when a mapped word records a fault, `onFault`
+// runs once with its report. Null when the demo has no fault word.
+function createFaultMonitor(device, fault, onFault) {
     if (!fault) return null;
     const staging = device.createBuffer({
         label: "miri-fault-readback",
@@ -412,9 +432,10 @@ function createFaultMonitor(device, fault, onOverflow) {
                 .then(() => {
                     const word = new Uint32Array(staging.getMappedRange(0, 4).slice(0))[0];
                     staging.unmap();
-                    if (!done && recordsOverflow(word)) {
+                    const report = describeFaults(word);
+                    if (!done && report !== null) {
                         done = true;
-                        onOverflow();
+                        onFault(report);
                     }
                 })
                 .catch(() => {
@@ -809,10 +830,11 @@ export async function runHeadless(manifest, opts = {}) {
 
         await device.queue.onSubmittedWorkDone();
         // Every kernel has finished, so the fault word is final: a run that
-        // overflowed fails rather than hand back wrapped values.
+        // faulted fails rather than hand back the values it computed.
         if (fault) {
             const [word] = await readBackInto(device, fault.buffer, 4, Uint32Array);
-            if (recordsOverflow(word)) throw new MiriGpuError(INTEGER_OVERFLOW_MESSAGE);
+            const report = describeFaults(word);
+            if (report !== null) throw new MiriGpuError(report);
         }
         const ArrayType = typedArrayFor(paintBuffer.elemType);
         const view = await readBackInto(
@@ -918,7 +940,7 @@ export async function mount(canvas, manifest, opts = {}) {
     if (presenter.reduce) resources.push(presenter.reduce.rinfoBuf);
 
     // The demo's own fault word: a page shares one device between its demos,
-    // so an overflow in one stops that demo and leaves the others running.
+    // so a fault in one stops that demo and leaves the others running.
     const fault = createFaultWord(device, manifest);
     if (fault) resources.push(fault.buffer);
 
@@ -932,7 +954,7 @@ export async function mount(canvas, manifest, opts = {}) {
     // Static demo: run-once already done by seed; present a single frame.
     if (!framePasses) {
         presentFrame(device, presenter, bufferOf(manifest.paint).buffer);
-        const faults = createFaultMonitor(device, fault, reportOverflow);
+        const faults = createFaultMonitor(device, fault, reportFault);
         if (faults) {
             resources.push(faults.staging);
             faults.check();
@@ -977,18 +999,18 @@ export async function mount(canvas, manifest, opts = {}) {
 
     let running = true;
     let stopped = false;
-    let overflowed = false;
+    let faulted = false;
     let rafId = null;
 
-    // An overflow ends the demo the way it ends a native program: no further
+    // A fault ends the demo the way it ends a native program: no further
     // frame runs, not even after `resume()`, and the canvas keeps the last
     // frame presented.
-    const faults = createFaultMonitor(device, fault, () => {
-        overflowed = true;
+    const faults = createFaultMonitor(device, fault, (report) => {
+        faulted = true;
         running = false;
         if (rafId !== null) cancelAnimationFrame(rafId);
         rafId = null;
-        reportOverflow();
+        reportFault(report);
     });
     if (faults) resources.push(faults.staging);
 
@@ -1027,7 +1049,7 @@ export async function mount(canvas, manifest, opts = {}) {
         if (stats) stats.tick(state.dt);
         // Look at the fault word without waiting on it, so the frame loop never
         // blocks. While a check is in flight this frame starts none; the word
-        // is sticky, so the next check still sees an overflow this frame set.
+        // is sticky, so the next check still sees a fault this frame set.
         if (faults) faults.check();
         // Swap every ping-pong pair: next frame reads what this frame produced.
         swapState.swap();
@@ -1049,7 +1071,7 @@ export async function mount(canvas, manifest, opts = {}) {
             rafId = null;
         },
         resume() {
-            if (running || stopped || overflowed) return;
+            if (running || stopped || faulted) return;
             running = true;
             // Re-anchor the clock so the gap counts as no elapsed time.
             lastTime = null;

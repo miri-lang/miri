@@ -24,12 +24,6 @@ pub fn fixed_array_extent(size: &TypeArgument) -> Option<i128> {
     crate::type_checker::TypeChecker::try_eval_const_argument(size, None)
 }
 
-/// Largest non-negative value representable as a signed 32-bit GPU index.
-///
-/// A 64-bit index is saturated into `[0, I32_INDEX_MAX]` before being narrowed
-/// to the backend's native 32-bit index width.
-pub const I32_INDEX_MAX: i32 = i32::MAX;
-
 /// How a GPU array-index value must be narrowed to the backend's native
 /// 32-bit index width.
 ///
@@ -38,14 +32,17 @@ pub const I32_INDEX_MAX: i32 = i32::MAX;
 /// scalar type, so the decision is backend-neutral; each backend renders the
 /// chosen narrowing in its own syntax. Centralizing the policy here lets every
 /// GPU backend share one source of truth for index narrowing.
+///
+/// A device computes `int` and `i64` in a 32-bit lane, and stops the program
+/// on a result that does not fit it, so a cast to the 32-bit index type keeps
+/// the index's value. Whether that value lies inside the collection is the
+/// index check's question, not the narrowing's: an index nothing proved in
+/// range is checked, and one outside records a fault rather than being
+/// clamped into an element it does not name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuIndexNarrowing {
-    /// Index is already 32-bit (`Int`): emit an identity 32-bit cast.
+    /// Index is `Int` or `I64`: emit a 32-bit cast.
     Identity,
-    /// Index is 64-bit (`I64`): saturate into `[0, I32_INDEX_MAX]` before the
-    /// 32-bit cast, so a value `>= 2^31` cannot wrap into an aliasing in-bounds
-    /// index.
-    SaturateToI32,
     /// Index needs no narrowing: emit it unchanged.
     None,
 }
@@ -54,8 +51,7 @@ impl GpuIndexNarrowing {
     /// Classifies the narrowing a GPU array index of the given scalar type needs.
     pub fn from_index_kind(index_kind: &TypeKind) -> Self {
         match index_kind {
-            TypeKind::I64 => GpuIndexNarrowing::SaturateToI32,
-            TypeKind::Int => GpuIndexNarrowing::Identity,
+            TypeKind::I64 | TypeKind::Int => GpuIndexNarrowing::Identity,
             _ => GpuIndexNarrowing::None,
         }
     }

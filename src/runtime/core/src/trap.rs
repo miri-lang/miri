@@ -11,6 +11,8 @@
 //! `panic` used to do, dying with a sentence and no code, and leaving a tool
 //! reading a crash as a successful run.
 
+use crate::abi_gpu_fault::{recorded_faults, write_summary};
+
 /// The codes this runtime can raise.
 ///
 /// The runtime is its own crate and cannot reach the compiler's registry, so
@@ -53,6 +55,42 @@ pub(crate) mod code {
     pub(crate) const NOT_STEPPABLE: &str = "MER_RT_019";
 }
 
+/// The sentences a trap reports for the faults the host and a GPU kernel
+/// both stop the program for, read from the GPU fault table so the two say
+/// the same thing.
+pub(crate) mod message {
+    use crate::abi_gpu_fault::GpuFault;
+
+    /// An integer division whose divisor was zero.
+    pub(crate) const DIVISION_BY_ZERO: &str = GpuFault::DivisionByZero.sentence();
+    /// An integer remainder whose divisor was zero.
+    pub(crate) const REMAINDER_BY_ZERO: &str = GpuFault::RemainderByZero.sentence();
+    /// An integer result that does not fit its type.
+    pub(crate) const INTEGER_OVERFLOW: &str = GpuFault::IntegerOverflow.sentence();
+}
+
+/// The report of every kind of fault the GPU fault word `word` records, each
+/// with its code, and the code the trap leaves for a tool: that of the lowest
+/// kind recorded. `None` when `word` records no kind this runtime knows.
+fn gpu_fault_summary(word: u32) -> Option<(&'static str, String)> {
+    let first = recorded_faults(word).next()?;
+    let mut summary = String::new();
+    write_summary(word, &mut summary).ok()?;
+    Some((first.code(), summary))
+}
+
+/// Reports every kind of fault the GPU fault word `word` records, in one
+/// error, and ends the process.
+pub(crate) fn trap_gpu_faults(word: u32) -> ! {
+    match gpu_fault_summary(word) {
+        Some((first_code, summary)) => trap(first_code, &summary),
+        None => trap(
+            code::GPU_LAUNCH_FAILED,
+            &format!("a GPU kernel recorded a fault this runtime does not know: {word:#x}"),
+        ),
+    }
+}
+
 /// Report a runtime fault under `code` and end the process.
 ///
 /// `_exit` rather than `abort`: SIGABRT brings up `ReportCrash` on macOS and
@@ -83,5 +121,58 @@ pub(crate) fn trap(code: &str, message: &str) -> ! {
 fn write_trap_report(code: &str) {
     if let Ok(path) = std::env::var("MIRI_TRAP_REPORT_PATH") {
         let _ = std::fs::write(&path, code);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{code, gpu_fault_summary};
+    use crate::abi_gpu_fault::GpuFault;
+
+    #[test]
+    fn a_gpu_fault_word_reports_every_kind_it_records_under_the_lowest_code() {
+        let word = GpuFault::DivisionByZero.bit() | GpuFault::IndexOutOfBounds.bit();
+        assert_eq!(
+            gpu_fault_summary(word),
+            Some((
+                "MER_RT_001",
+                "a GPU kernel faulted: division by zero (MER_RT_001); \
+                 index out of bounds (MER_RT_011)"
+                    .to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_gpu_overflow_reports_the_hosts_overflow_sentence() {
+        let summary = gpu_fault_summary(GpuFault::IntegerOverflow.bit());
+        assert!(
+            summary
+                .as_ref()
+                .is_some_and(|(code, sentence)| *code == "MER_RT_003"
+                    && sentence.contains("integer overflow: the result does not fit its type")),
+            "{summary:?}"
+        );
+    }
+
+    /// The GPU fault table names each kind's code itself, so it is held to
+    /// the code the host's own trap raises.
+    #[test]
+    fn every_gpu_fault_carries_the_code_of_the_hosts_trap() {
+        for fault in GpuFault::ALL {
+            let host = match fault {
+                GpuFault::IntegerOverflow => code::INTEGER_OVERFLOW,
+                GpuFault::DivisionByZero => code::DIVISION_BY_ZERO,
+                GpuFault::RemainderByZero => code::REMAINDER_BY_ZERO,
+                GpuFault::IndexOutOfBounds => code::INDEX_OUT_OF_BOUNDS,
+            };
+            assert_eq!(fault.code(), host, "{fault:?}");
+        }
+    }
+
+    #[test]
+    fn a_gpu_fault_word_with_no_known_kind_has_no_summary() {
+        assert_eq!(gpu_fault_summary(0), None);
+        assert_eq!(gpu_fault_summary(1 << 31), None);
     }
 }
