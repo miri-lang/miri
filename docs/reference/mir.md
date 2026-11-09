@@ -1,6 +1,6 @@
 # MIR and Lowering
 
-MIR (Mid-level Intermediate Representation) is the compiler's internal representation of the program after type checking. The lowering pass converts the AST into MIR, desugars high-level constructs, and performs control-flow validation. The Perceus pass then optimizes reference counting before code generation.
+MIR (Mid-level Intermediate Representation) is the compiler's internal representation of the program after type checking. The lowering pass converts the AST into MIR, desugars high-level constructs, and performs control-flow validation. Later passes then write the reference counts onto it before code generation.
 
 ## What It Rejects
 
@@ -18,7 +18,9 @@ MIR (Mid-level Intermediate Representation) is the compiler's internal represent
 
 - **MIR instructions**: Primitive operations (assignment, function calls, arithmetic, memory access)
 - **Basic blocks**: Sequences of MIR instructions with control-flow terminators
-- **Perceus optimization**: Reference-count insertion and elision based on escape analysis
+- **Ownership on the IR**: Reference counts are written on the MIR, never decided by a backend. Whole-program inference decides which parameters a callee keeps (`owned_params`); a local read out of a place the body holds borrows it and takes no count (`local_borrows`); one pass inserts the retains and releases every counted value needs; later passes cancel the pairs with no net effect (`rc_elision`) and the uniqueness checks an earlier check answered (`unshare_elision`). No pass adds a retain, release or copy the source did not name
+- **Release placement**: A value whose release nothing can observe is released at its last use; a value whose release may run a `drop` hook, at the point it is consumed or at its owner's scope end in reverse declaration order
+- **Device bodies**: A GPU body carries no counts; the host owns every device buffer
 - **GPU kernels**: Kernel functions are lowered to WebGPU via WGSL emission
 
 ## Per-Code Detail

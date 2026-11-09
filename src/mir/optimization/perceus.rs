@@ -1,11 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Perceus: Precise Reference Counting and Reuse.
+//! Reference-count insertion: the retains and releases a body's counted values need.
 //!
-//! This pass inserts `IncRef` and `DecRef` operations for managed (heap-allocated)
-//! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
-//! It implements the "Functional But In-Place" (FBIP) strategy where possible.
+//! Miri manages memory with reference counting and inferred borrowing over
+//! copy-on-write values. A call lends its arguments; only an argument the callee
+//! keeps is counted again, and `out` is the only way a callee writes a caller's
+//! value. A value whose release nothing can observe is released at its last use;
+//! a value whose release may run a `drop` hook is released where it is consumed,
+//! else at its owner's scope end in reverse declaration order. No pass invents a
+//! retain, release or copy the source did not name; passes move, merge or delete
+//! the ones it named.
+//!
+//! This pass writes those operations on the MIR once per host body. It inserts an
+//! `IncRef` where a counted value gains a holder (an assignment that keeps it, a
+//! field or element store, a closure capture, an argument a callee keeps) and a
+//! `DecRef` where a holder goes away. Today every release of a local lands at
+//! that local's `StorageDead`, which is its scope end: placing a hook-free value's
+//! release at its last use instead needs a liveness-driven placement this pass
+//! does not perform yet, so a hook-free value may be held past its last use until
+//! that lands. The pass never reuses a released block for a new value.
+//!
+//! The pass does not decide ownership itself. It reads the answers of the passes
+//! that own each question: [`super::owned_params`] (which parameters a callee
+//! takes over from its callers, inferred over the whole program),
+//! [`super::local_borrows`] (which locals read out of a place the body holds and
+//! need no count of their own), and [`crate::mir::rc::RcClassifier`] (whether a
+//! value, slot or element is counted at all). [`super::rc_elision`] runs after it
+//! and cancels the pairs that have no net effect, and
+//! [`super::unshare_elision`] removes uniqueness checks an earlier one answered.
 
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;

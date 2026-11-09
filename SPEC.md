@@ -101,7 +101,7 @@ fn weekday(d String in {"mon", "tue", "wed", "thu", "fri"}) bool
 
 ### Evaluation Order
 
-Operands are evaluated left to right, each completely before the next begins, and each yields its value at the moment it is evaluated: a method call's receiver, then its arguments in the order written (named or positional); an operator's left side, then its right; the elements of a list, array, set, map or tuple literal; a constructor's arguments; an indexed value, then its index; a range's bounds. A later operand that changes what an earlier one read — through an `out` argument, an assignment, a method that changes its receiver, or a change to an object whose field was read — does not change the earlier value: with `var n = 1` and `bump` setting its `out` parameter to 99 and returning 0, `n + bump(n)` is `1`. `and`, `or` and `??` evaluate their right side only when needed, after the left. Two exceptions hold for now. An assignment's target indexes and, for `op=`, the target's current value are read after the value on the right is evaluated. A `gpu`-resident binding is read where the operation that uses it runs rather than where it is written, until a copy taken of it can carry its device buffer.
+Operands are evaluated left to right, each completely before the next begins, and each yields its value at the moment it is evaluated: a method call's receiver, then its arguments in the order written (named or positional); an operator's left side, then its right; the elements of a list, array, set, map or tuple literal; a constructor's arguments; an indexed value, then its index; a range's bounds. A later operand that changes what an earlier one read — through an `out` argument, an assignment, a method that changes its receiver, or a change to an object whose field was read — does not change the earlier value: with `var n = 1` and `bump` setting its `out` parameter to 99 and returning 0, `n + bump(out n)` is `1`. `and`, `or` and `??` evaluate their right side only when needed, after the left. Two exceptions hold for now. An assignment's target indexes and, for `op=`, the target's current value are read after the value on the right is evaluated. A `gpu`-resident binding is read where the operation that uses it runs rather than where it is written, until a copy taken of it can carry its device buffer.
 
 ```miri
 fn bump(n out int) int
@@ -110,7 +110,7 @@ fn bump(n out int) int
 
 fn main()
     var n = 1
-    println(f"{n + bump(n)}")   // 1
+    println(f"{n + bump(out n)}")   // 1
     println(f"{n}")             // 99
 ```
 
@@ -728,47 +728,101 @@ If module `a.mi` imports `b.mi` and `b.mi` imports `a.mi`, the compiler reports 
 
 ## Memory Model
 
-Miri uses a hybrid memory model with no annotations required from the programmer.
+Miri manages memory with reference counting and inferred borrowing over copy-on-write values. Structs, tuples, collections and class instances are values: a second binding shares the first one's block until either writes, and the write copies a block that is still shared, so a write through one name is never seen through another. A class or enum with a `drop` hook is a resource with one owner, moved on assignment and released exactly once. Nothing is a reference; what must be reached from many places and changed through any of them is a handle into storage one owner holds. A call lends its arguments, and `out`, declared on the parameter and spelled at the call, is the only way a callee writes a caller's value: a `var` or a field or element of one, named once per call; a method is the object's business and may be called on any binding, writing through to a caller's argument, which is taken for the call and restored after it; a loop binding is the element it iterates. The compiler infers which callees keep an argument, which methods write their receiver, which locals borrow out of values the body owns, and which writes are already unique; it releases a value at its last use when nothing can observe the release and at scope end when a `drop` hook could, never later and never by a collector. A program that compiles cannot build a reference cycle, because nothing in it is a reference, and no construct keeps a block alive past its last holder, so nothing leaks; data crosses a task boundary by lending from a scope that outlives the task, or as a sole owner, so no count is ever touched from two threads. Device code carries no counts: a `gpu` binding owns one buffer, assigning it to another device binding moves it, assigning across residencies copies, and the buffer is released at its binding's last use, after the launches that used it. Because every allocation is named and every release is fixed, the compiler can state before a program runs the heap a program can hold where every size is a fact, name each allocation whose size is not, and prove whether a named function allocates at all. A bug traps; the environment's refusal, out of memory, a lost device, an exhausted stack, becomes a value only inside `try`, and nowhere else.
 
-- **Auto-copy types**: Small, all-primitive structs and all primitive types are copied on assignment. No overhead.
-- **Managed types**: Collections (`Array`, `List`, `Map`, `Set`), strings, and structs containing managed fields use reference counting.
-- **Values**: Collections and structs are values. A second binding shares the first one's block until either writes, and the write copies a block that is still shared before changing it (copy on write), so a write through one name is never seen through another. Class instances are references: every binding to one is the same object.
-- **Drop specialization**: When a managed type's reference count reaches zero, a type-specific drop function recursively releases all managed fields.
+No annotation, lifetime or ownership mark exists beyond `out`. The rest of this section states each part of that paragraph as a rule.
+
+### Values, Resources and Handles
+
+Which of three kinds a value is follows from its type alone; nothing at a use site chooses it.
+
+- **A value** is every struct, tuple, collection, string and class instance without a `drop` hook. A second binding shares the first one's storage until either writes, and the writer copies storage that is still shared before changing it, so a write through one name is never seen through another. A copy happens exactly when two live values must differ after a write.
+- **A resource** is a class or enum whose release may run a `drop` hook, including a value that contains one: an optional, tuple, enum payload, collection or field holding a resource is a resource too. It has one owner, moves on assignment, and its hook runs exactly once, on every path.
+- **Nothing is a reference.** A thing reached from many places and changed through any of them lives in an arena one owner holds and is named by a handle into it: identity is a slot in storage, never an address.
 
 ```miri
 var a = [1, 2, 3]
-var b = a            // RC incremented, both point to same data
+var b = a            // a and b share one block
 b[0] = 9             // b was shared, so it is copied first: a is still [1, 2, 3]
-a = [4, 5, 6]       // old array's RC decremented, freed if zero
+a = [4, 5, 6]        // the old block loses its last holder and is released
 ```
 
-### Reference Cycles
+**Representation is the type's.** A value with only fixed-size, bitwise fields is plain bytes, copied on assignment. An aggregate (a struct, tuple or class instance) is stored inline wherever it lives (a local, a field, a list element), and its counted fields carry their own counts. Only what grows or is polymorphic is a separate counted block: a collection, a string, a trait-typed value, a recursive field (which the compiler boxes), and an aggregate larger than the inline size bound. A bitwise type has one layout, by rule: its fields in declared order, each at its natural alignment, little-endian. No attribute changes it, and reinterpreting bytes as such a type is a checked, zero-copy view that fails as a `Result` when the bytes do not fit the type, never as garbage.
 
-Reference counting never frees a cycle: an object that holds a reference to itself keeps its own count above zero and is never released. A store that puts an object back into one of its own fields is therefore refused (`MER_TYP_081`). The refused store writes into a place rooted at a binding that holds its object by reference — a class instance or a value held through a trait — whether a field (`x.f`), a field of a field (`x.f.g`) or an element of either (`x.items[i]`). The value it refuses is that binding itself, a closure that captures it, or a variant (`Some(x)`), constructor call or literal holding one of those, including through either branch of a conditional.
+### Calls Lend
+
+A call lends its arguments: the callee reads them and the caller keeps them. The compiler infers, over the whole program, which callees keep an argument (store it, return it, capture it); only a resource argument the callee keeps is consumed by the call, and every other argument is still the caller's afterwards. The rule is the same at the top level of a file as inside a function.
+
+A **method is the object's business**: it may be called on any binding, `let` included. A method that writes its receiver, called on a parameter the function was lent, writes the caller's value: the value is taken for the call and restored after it, so no write is ever lost.
+
+A **loop binding is the element it iterates**: `for e in es` binds `es[i]`. Calling a method on `e` needs nothing of `es`; assigning to `e` or a field of it needs `es` to be writable.
+
+`let` and `var` govern what this code assigns: rebinding, a field, an element. The compiler refuses, each with a repair that compiles:
+
+- an assignment through a `let`, through a parameter the function was lent, or through an alias of either;
+- a write nobody can read: a method that writes its receiver called on a temporary that is then discarded, a copy written and never read, and a method that adds or removes elements of the collection a loop is walking, called through the loop's binding;
+- a call that lends a value containing a place the same call writes (`world.entities[0].strike(world)`, where `strike` writes its receiver and reads `world`).
+
+### `out` Parameters
+
+`out` is the only way a callee assigns to a caller's value. It is declared on the parameter and spelled at the call:
 
 ```miri
-class Ticker
-    count int
-    on_tick fn() int
-    fn wire()
-        self.on_tick = fn() int: self.count + 1   // MER_TYP_081: the closure captures self
+fn bump(n out int) int
+    n = 99
+    return 0
+
+fn main()
+    var n = 1
+    let r = n + bump(out n)   // r is 1: the left operand was read before the call
+    println(f"{n}")           // 99
 ```
 
-To give an object a callback that works on it, make the object a parameter of the function type and pass it at the call: `on_tick fn(Ticker) int`, stored as `fn(t Ticker) int: t.count + 1` and called as `t.on_tick(t)`.
+- An `out` argument names a place rooted at a `var`: the variable itself, a field (`out p.x`), an element (`out grid[i]`), or the payload of an optional bound writable by `Some(var cur)`.
+- The place is taken for the call and restored on every exit from it, including an exit through `try`. While the call runs, the caller's place holds no value anyone can read.
+- A variable is written through at most one `out` path per call, and no other operand of the call may lend a value that contains that place. An operand naming a sibling field or an element that may be the same element reads the value from before the call.
 
-Collections and structs copy on write, so a store into one a closure also holds copies it first and closes no cycle: `fns[0] = fn() int: fns.length()` is accepted, and so is `b.on_tick = fn() int: b.count` on a struct `b`.
+### Release
 
-The check sees the direct form only, where the stored value names the same binding as the target. A cycle closed through another name (`let u = t` then `t.on_tick = fn() int: u.count`) or through another object (`a.other = Some(b)` then `b.other = Some(a)`) is not refused, and leaks.
+When a value is released is fixed by the program text:
 
-*Note: Element-level RC (managed types inside collections) and full string ownership are deferred to a future release.*
+- A hook-free value: immediately after its last use on every path (after the loop when the last use is in a loop). Its release is unobservable, and the placement is fixed so peak memory is predictable from source.
+- A resource (every value whose release may run a hook): where it is consumed, by `drop()`, a consuming call, a send or a reassignment; otherwise at the end of its owner's scope, in reverse order of declaration, after every statement of the scope. The owner is unique, so that release is the last one and the hook runs there, not later.
+- Elements of a container: a `List` releases in index order; `Map` and `Set` in an order that is the same on every run of the same program but unspecified, so a program may not depend on it.
+- A borrowed local: never; its owner's release covers it.
+- A device buffer: with the host storage of its binding, ordered after every launch that used it.
+- A field or element overwritten: the old value is released at the write (hook-free: there; hook-reaching: its hook runs there).
+- Resources are held to scope end on purpose: a guard's purpose is its lifetime, and `drop()` and the operations that take a resource out of a container are the early exits. The cost is that a hook deep inside an aggregate holds the aggregate's hook-free fields with it; bind the hook-reaching part separately when a large hook-free field should go first.
 
-*Note: closures with capture-by-reference (`out` closures) and full memory safety (Perceus+) are planned for later releases.*
+This is the whole of what a program may observe about release. No pass adds a retain, release or copy the program did not name; passes move, merge or delete the ones it named.
+
+### No Cycles, No Leaks
+
+Reference counting cannot free a cycle, and a Miri program cannot build one. A cycle would need a write that stores, into a block, a value that reaches that block. Evaluating that value makes the block shared, so the write copies the block first and lands in the copy, which reaches the old block, which does not reach the copy. Every value graph is therefore acyclic, and reference counting frees an acyclic graph completely: `fns[0] = fn() int: fns.length()` closes no cycle, for a class instance as for a list.
+
+A structure where one thing is reached from many places and changed through any of them (a graph, a doubly linked list, a scene with parent links, an entity table) keeps its nodes in an arena and links them by handle. A tree built bottom-up or grown by insertion is a value.
+
+A closure holds a copy of each value it captures, so a write to a captured value is refused (`MER_TYP_090`). To give a callback state it changes, pass the state as an `out` parameter of the function type, or make it a class whose method is called on a `var`.
+
+### Failure
+
+A bug traps on every target: an overflow, an out-of-range index or a stale handle stops the program and is never a value. The environment's refusal (out of memory, a lost device, an exhausted stack) becomes a `Result` inside a `try` region and stops the program at its site outside one. A recursion whose depth the compiler can prove exceeds the stack is refused when the program is compiled; a tail call never grows the stack.
+
+### Devices
+
+Where a value lives is named where it is bound: `gpu let` puts it on the device. Assigning across residencies copies, and that copy is the only synchronisation point; assigning one device binding to another moves the buffer. Device code carries no counts. A kernel's write needs an index the compiler proves one-to-one, or an `Atomic`. A failed device bounds check sets a fault word the next transfer to the host reports; it never clamps.
+
+### What the Model Does Not Provide
+
+- **Layout control beyond the one rule.** There is no attribute that reorders, packs or pads a type; the bitwise layout above is the only one, and a type that must match a different wire format is read and written field by field.
+- **Foreign functions with raw pointers.** A program reaches native code only through the runtime's declared intrinsics. When a program needs a C library the runtime does not wrap, the form it will take is a foreign signature carrying ownership the compiler checks (lent, owned, donated or `out` per argument, whether a pointer is retained after the call, and who owns returned memory), never a raw pointer in user code.
+- **Allocators and kernels written in the language.** The runtime that allocates and launches is written in Rust.
 
 ---
 
 ## Classes
 
-Classes are reference types with named fields, constructors, methods, and single-inheritance.
+Classes are named types with fields, constructors, methods and single inheritance. A class instance is a value, like a struct: a second binding shares it until either writes, and a write through one name is never seen through another (see [Memory Model](#memory-model)). A class with a `drop` hook is a resource with one owner.
 
 ### Declaration
 
@@ -1007,7 +1061,7 @@ class AppLogger implements Logger
 
 ### The `drop` Hook
 
-A class or enum may declare `fn drop(self)` (on a class, `fn drop()` means the same); a struct holds data only and may not. Releasing the last reference to an instance is meant to run it exactly once. Releasing an instance through a trait-typed or base-class binding runs the hook of the instance's own class and releases its managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own.
+A class or enum may declare `fn drop(self)` (on a class, `fn drop()` means the same); a struct holds data only and may not. A class or enum with a hook is a resource: the hook runs exactly once, where the instance is consumed or at the end of its owner's scope. Releasing an instance through a trait-typed or base-class binding runs the hook of the instance's own class and releases its managed fields. A `drop` taking arguments, or a static one, is refused: the name belongs to the hook. A class finds its hook in the order every method follows: the nearest class in its chain declaring `drop`, else a trait default `drop`. So a subclass runs its base's hook, not a default `drop` a trait it implements supplies, and a subclass declaring its own `drop` runs only its own.
 
 ### `Self` Type
 
@@ -1136,9 +1190,7 @@ fn main()
     println(f"{shifted_sum(3)}")   // 16
 ```
 
-A closure holds a copy of each value it captures, and every call starts over from that copy, so a write to a captured value would be lost when the call ends. Such a write is refused (`MER_TYP_090`), inside a closure or a nested function, for a capture reached through a nested closure too: assigning or compound-assigning a captured binding, writing an element or field of a captured value (`xs[0] = 1`, `p.x = 1` on a struct), calling a method that writes its receiver on a captured value (`xs.push(1)`) and passing a captured value as an `out` argument. A closure's own parameters and locals are its own to write, including one that shadows a captured name. A write through a captured class instance or trait-typed value (`obj.count += 1`, `self.count += 1` in a method) persists, because the capture is a reference to the instance, so state that must outlive a call belongs in a class.
-
-A capture of a class instance is a copy of the reference, so a closure capturing an object and stored in one of that object's fields would hold the object alive forever. That store is refused; see [Reference Cycles](#reference-cycles).
+A closure holds a copy of each value it captures, and every call starts over from that copy, so a write to a captured value would be lost when the call ends. Such a write is refused (`MER_TYP_090`), inside a closure or a nested function, for a capture reached through a nested closure too: assigning or compound-assigning a captured binding, writing an element or field of a captured value (`xs[0] = 1`, `p.x = 1` on a struct), calling a method that writes its receiver on a captured value (`xs.push(1)`) and passing a captured value as an `out` argument. A closure's own parameters and locals are its own to write, including one that shadows a captured name. A class instance or trait-typed value is captured as a value too, so a write through it (`obj.count += 1`) is refused alike. State a callback changes is passed to it as an `out` parameter of its function type, or kept in a class whose method is called on a `var`.
 
 ### One Method per Name
 
