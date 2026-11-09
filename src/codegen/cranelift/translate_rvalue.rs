@@ -1573,11 +1573,14 @@ impl<'a> FunctionTranslator<'a> {
                 arg_values[0],
                 |b, v| b.ins().nearest(v),
             )),
-            MathIntrinsic::Min => {
-                Self::emit_math_min_max(builder, ctx, ty, is_f32, &arg_values, true)
-            }
-            MathIntrinsic::Max => {
-                Self::emit_math_min_max(builder, ctx, ty, is_f32, &arg_values, false)
+            MathIntrinsic::Min | MathIntrinsic::Max => {
+                let is_min = intrinsic == MathIntrinsic::Min;
+                if ty.is_float() {
+                    Self::emit_math_float_min_max(builder, ctx, ty, is_f32, &arg_values, is_min)
+                } else {
+                    let is_unsigned = Self::operand_is_unsigned(&args[0], type_ctx)?;
+                    Self::emit_math_int_min_max(builder, &arg_values, is_min, is_unsigned)
+                }
             }
             MathIntrinsic::Sin
             | MathIntrinsic::Cos
@@ -1670,10 +1673,9 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// `min(a, b)` / `max(a, b)`: float path goes through libm
-    /// (`fmin`/`fmax`/`fminf`/`fmaxf`); integers use Cranelift native
-    /// `smin`/`smax`. `is_min` selects which.
-    fn emit_math_min_max(
+    /// `min(a, b)` / `max(a, b)` of two floats, through libm
+    /// (`fmin`/`fmax`/`fminf`/`fmaxf`). `is_min` selects which.
+    fn emit_math_float_min_max(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ty: cl_types::Type,
@@ -1681,25 +1683,35 @@ impl<'a> FunctionTranslator<'a> {
         arg_values: &[Value],
         is_min: bool,
     ) -> Result<Value, CodegenError> {
-        if ty.is_float() {
-            let func_name = match (is_min, is_f32) {
-                (true, true) => "fminf",
-                (true, false) => "fmin",
-                (false, true) => "fmaxf",
-                (false, false) => "fmax",
-            };
-            return Self::emit_libm_call(builder, ctx, func_name, ty, arg_values);
-        }
-        if arg_values.len() != 2 {
+        let func_name = match (is_min, is_f32) {
+            (true, true) => "fminf",
+            (true, false) => "fmin",
+            (false, true) => "fmaxf",
+            (false, false) => "fmax",
+        };
+        Self::emit_libm_call(builder, ctx, func_name, ty, arg_values)
+    }
+
+    /// `min(a, b)` / `max(a, b)` of two integers, ordered as the operands'
+    /// signedness orders them: a register holds both readings of a value with
+    /// its top bit set, so the instruction has to name the one that applies.
+    fn emit_math_int_min_max(
+        builder: &mut FunctionBuilder,
+        arg_values: &[Value],
+        is_min: bool,
+        is_unsigned: bool,
+    ) -> Result<Value, CodegenError> {
+        let &[a, b] = arg_values else {
             return Err(CodegenError::Internal(format!(
                 "{} expects exactly two arguments",
                 if is_min { "min" } else { "max" }
             )));
-        }
-        Ok(if is_min {
-            builder.ins().smin(arg_values[0], arg_values[1])
-        } else {
-            builder.ins().smax(arg_values[0], arg_values[1])
+        };
+        Ok(match (is_min, is_unsigned) {
+            (true, true) => builder.ins().umin(a, b),
+            (true, false) => builder.ins().smin(a, b),
+            (false, true) => builder.ins().umax(a, b),
+            (false, false) => builder.ins().smax(a, b),
         })
     }
 
@@ -1798,20 +1810,20 @@ impl<'a> FunctionTranslator<'a> {
                 arg_values.len()
             )));
         }
-        if ty.is_float() {
-            let max_val = Self::emit_math_min_max(
-                builder,
-                ctx,
-                ty,
-                is_f32,
-                &[arg_values[0], arg_values[1]],
-                false,
-            )?;
-            Self::emit_math_min_max(builder, ctx, ty, is_f32, &[max_val, arg_values[2]], true)
-        } else {
-            let max_val = builder.ins().smax(arg_values[0], arg_values[1]);
-            Ok(builder.ins().smin(max_val, arg_values[2]))
+        if !ty.is_float() {
+            return Err(CodegenError::Internal(
+                "clamp expects float arguments".to_string(),
+            ));
         }
+        let max_val = Self::emit_math_float_min_max(
+            builder,
+            ctx,
+            ty,
+            is_f32,
+            &[arg_values[0], arg_values[1]],
+            false,
+        )?;
+        Self::emit_math_float_min_max(builder, ctx, ty, is_f32, &[max_val, arg_values[2]], true)
     }
 
     /// `mix(a, b, t)`: a*(1.0-t) + b*t.

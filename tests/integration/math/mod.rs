@@ -4,6 +4,7 @@
 pub mod argument_width;
 pub mod imported_intrinsics;
 pub mod integer_math;
+pub mod unsigned_min_max;
 
 use super::utils::*;
 
