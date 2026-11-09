@@ -219,7 +219,7 @@ match x
 Inline match:
 
 ```miri
-match x: 1: "One", 2: "Two"
+match x: 1: "One", 2: "Two", _: "Other"
 ```
 
 ### Enum Destructuring

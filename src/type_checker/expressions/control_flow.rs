@@ -172,6 +172,7 @@ impl TypeChecker {
             // that is the expression whose type the author has to cover.
             self.check_exhaustiveness_enum(&subject_type, branches, subject.span, context);
             self.check_exhaustiveness_option(&subject_type, branches, subject.span, context);
+            self.check_exhaustiveness_values(&subject_type, branches, subject.span, context);
         } else {
             self.report_unresolved_variant_patterns(&subject_type, &unresolved);
         }
@@ -427,6 +428,80 @@ impl TypeChecker {
             coverage.covers(&rows, &Constructor::None, 0),
             has_catch_all(&rows),
         )
+    }
+
+    /// Checks exhaustiveness for a subject that is neither an enum nor an
+    /// option. A value no arm takes has nothing to yield, so the match must
+    /// give it an arm.
+    fn check_exhaustiveness_values(
+        &mut self,
+        subject_type: &Type,
+        branches: &[MatchBranch],
+        span: Span,
+        context: &Context,
+    ) {
+        if self.is_checked_by_variants(subject_type, context) {
+            return;
+        }
+        let Some((missing, help)) = self.missing_match_values(subject_type, branches, context)
+        else {
+            return;
+        };
+        self.report_error_with_help(
+            DiagnosticCode::TypEnumVariant,
+            format!(
+                "Non-exhaustive match on {}. {missing}",
+                spelled(subject_type)
+            ),
+            span,
+            help,
+        );
+    }
+
+    /// Whether a subject of this type has its own variant check, or is
+    /// already reported, so the value check has nothing to add.
+    fn is_checked_by_variants(&self, subject_type: &Type, context: &Context) -> bool {
+        if let TypeKind::Custom(name, _) = &subject_type.kind {
+            return self.find_enum_definition(name, context).is_some();
+        }
+        matches!(subject_type.kind, TypeKind::Option(_) | TypeKind::Error)
+    }
+
+    /// What the unguarded arms leave out of `subject_type`, and how to supply
+    /// it; `None` when every value has an arm.
+    fn missing_match_values(
+        &self,
+        subject_type: &Type,
+        branches: &[MatchBranch],
+        context: &Context,
+    ) -> Option<(String, String)> {
+        let rows = coverage_rows(branches);
+        let lookup = |name: &str| self.listed_enum_variants(name, context);
+        let coverage = Coverage { variants: &lookup };
+        if coverage.is_exhaustive(&rows) {
+            return None;
+        }
+        if !matches!(subject_type.kind, TypeKind::Boolean) {
+            return Some((
+                "Missing a catch-all arm".to_string(),
+                "add a '_' arm for the values the other arms leave out; a guarded arm covers \
+                 nothing, because its guard can fail."
+                    .to_string(),
+            ));
+        }
+        let missing: Vec<&str> = [(true, "true"), (false, "false")]
+            .into_iter()
+            .filter(|(value, _)| !coverage.covers(&rows, &Constructor::Bool(*value), 0))
+            .map(|(_, spelling)| spelling)
+            .collect();
+        let missing = missing.join(", ");
+        Some((
+            format!("Missing values: {missing}"),
+            format!(
+                "add an arm for '{missing}'; a guarded arm covers nothing, because its guard \
+                 can fail."
+            ),
+        ))
     }
 
     /// Infers the result type from match branches, checking type compatibility.

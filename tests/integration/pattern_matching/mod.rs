@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod booleans;
+pub mod exhaustiveness;
 pub mod integration;
 pub mod jump_arms;
 pub mod literals;

@@ -62,7 +62,7 @@ impl Coverage<'_> {
 
     /// Whether every combination of values for the columns is matched by
     /// some row.
-    fn is_exhaustive(&self, rows: &[CoverageRow]) -> bool {
+    pub(crate) fn is_exhaustive(&self, rows: &[CoverageRow]) -> bool {
         let Some(first) = rows.first() else {
             return false;
         };

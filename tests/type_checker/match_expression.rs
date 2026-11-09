@@ -23,6 +23,7 @@ let x = 1
     let res = match x
         1: 'one'
         2: 2
+        _: 'other'
 ";
     type_checker_error_test(source, "Match branch types mismatch");
 }
@@ -45,6 +46,7 @@ let x = 1
 match x
     'one': 'one'
     2: 'two'
+    _: 'other'
 ";
     type_checker_error_test(source, "Pattern type mismatch");
 }

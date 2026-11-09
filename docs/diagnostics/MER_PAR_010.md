@@ -26,6 +26,7 @@ fn main()
     match 1
         1: println("one")
         2: println("two")
+        _: println("other")
 ```
 
 ## Reference

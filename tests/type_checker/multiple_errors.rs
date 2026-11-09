@@ -70,6 +70,7 @@ match x
     1: \"ok\"
     2: 123
     3: true
+    _: \"other\"
 ";
     type_checker_errors_test(
         source,

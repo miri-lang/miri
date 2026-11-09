@@ -147,6 +147,7 @@ fn main()
         (Some(t), Some(np))
             if t == np
                 println("first equals peek")
+        _: println("first and peek differ")
 "#,
         "first equals peek",
     );

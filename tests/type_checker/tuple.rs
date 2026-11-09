@@ -120,6 +120,7 @@ fn test_tuple_match_type_mismatch() {
         "
 match (1, \"a\")
     (i, 1): i // 1 is int, but second element is String
+    _: 0
 ",
         "Pattern type mismatch",
     );

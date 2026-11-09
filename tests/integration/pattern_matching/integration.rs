@@ -84,7 +84,7 @@ fn main()
 }
 
 #[test]
-fn test_match_without_default_hits_arm() {
+fn test_match_literal_arm_taken_before_catch_all() {
     assert_runs_with_output(
         r#"
 
@@ -92,6 +92,7 @@ let x = 1
 let result = match x
     1: 10
     2: 20
+    _: 30
 print(f"{result}")
 "#,
         "10",
