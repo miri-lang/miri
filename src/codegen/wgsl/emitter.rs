@@ -2068,11 +2068,10 @@ impl<'a> BodyEmitter<'a> {
             Rvalue::Aggregate(kind, operands) => self.render_aggregate(kind, operands),
             Rvalue::AtomicOp {
                 op,
-                buffer,
-                index,
+                element,
                 value,
                 compare_expected,
-            } => self.render_atomic_op(*op, buffer, index, value, compare_expected.as_deref()),
+            } => self.render_atomic_op(*op, element, value, compare_expected.as_deref()),
             Rvalue::Len(_) | Rvalue::Ref(_) => Err(CodegenError::Internal(format!(
                 "WGSL backend: rvalue {:?} not yet supported",
                 rvalue
@@ -2117,20 +2116,14 @@ impl<'a> BodyEmitter<'a> {
     fn render_atomic_op(
         &mut self,
         op: crate::mir::backend::gpu::GpuAtomicOp,
-        buffer: &Operand,
-        index: &Operand,
+        element: &Place,
         value: &Operand,
         compare_expected: Option<&Operand>,
     ) -> Result<String, CodegenError> {
-        let buffer_str = self.render_operand(buffer)?;
-        let index_str = self.render_operand(index)?;
+        // The element renders as any indexed place does, so an index not
+        // proven in range is checked against the buffer's length.
+        let addr = format!("&{}", self.render_place(element)?);
         let value_str = self.render_operand(value)?;
-
-        // Format: atomicAdd(&buf[i], v)
-        // TODO: an atomic operation's index is an operand with no bounds mark,
-        // and is not yet checked against the buffer's length the way an index
-        // projection is, so an atomic outside its buffer records no fault.
-        let addr = format!("&{}[{}]", buffer_str, index_str);
 
         let op_name = match op {
             crate::mir::backend::gpu::GpuAtomicOp::Add => "atomicAdd",
@@ -2627,6 +2620,51 @@ mod tests {
     /// Renders `_target[_index]` in a kernel body, the index of `index_kind`
     /// marked `bounds` and the target an `int` local.
     fn render_indexed_place(index_kind: TypeKind, bounds: Bounds) -> Result<String, CodegenError> {
+        render_in_kernel(index_kind, bounds, |emitter, place| {
+            emitter.render_place(&place)
+        })
+    }
+
+    /// Renders `atomicAdd(&_target[_index], 1)` in a kernel body, the index an
+    /// `int` marked `bounds`.
+    fn render_atomic_add(bounds: Bounds) -> Result<String, CodegenError> {
+        render_in_kernel(TypeKind::Int, bounds, |emitter, element| {
+            emitter.render_atomic_op(
+                crate::mir::backend::gpu::GpuAtomicOp::Add,
+                &element,
+                &Operand::Constant(Box::new(crate::mir::Constant {
+                    span: Span::default(),
+                    ty: Type::new(TypeKind::Int, Span::default()),
+                    literal: crate::ast::literal::Literal::Integer(
+                        crate::ast::literal::IntegerLiteral::I32(1),
+                    ),
+                })),
+                None,
+            )
+        })
+    }
+
+    /// An atomic on an element whose index is proven in range addresses the
+    /// element directly, without the index check.
+    #[test]
+    fn test_render_atomic_on_a_proven_index_is_unchecked() {
+        let rendered = render_atomic_add(Bounds::Proven);
+        assert!(
+            matches!(&rendered, Ok(text) if text.starts_with("atomicAdd(&_")
+                && text.contains("[i32(")
+                && !text.contains("_checked_index")),
+            "{rendered:?}"
+        );
+    }
+
+    /// Runs `render` on a kernel body's emitter with the place
+    /// `_target[_index]`, the index of `index_kind` marked `bounds` and the
+    /// target an `int` local.
+    fn render_in_kernel(
+        index_kind: TypeKind,
+        bounds: Bounds,
+        render: impl FnOnce(&mut BodyEmitter<'_>, Place) -> Result<String, CodegenError>,
+    ) -> Result<String, CodegenError> {
         let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
         let index = body.new_local(LocalDecl::new(
             Type::new(index_kind, Span::default()),
@@ -2659,7 +2697,7 @@ mod tests {
             device_helpers: None,
             checked_helpers: BTreeSet::new(),
         };
-        emitter.render_place(&place)
+        render(&mut emitter, place)
     }
 
     /// A proven `int` index is cast to the 32-bit index type, unchecked.

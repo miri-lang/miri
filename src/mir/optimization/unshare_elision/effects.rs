@@ -311,14 +311,15 @@ impl ProgramBuilder<'_> {
                 self.operand_reads(operands)
             }
             Rvalue::AtomicOp {
-                buffer,
-                index,
+                element,
                 value,
                 compare_expected,
                 op: _,
             } => {
-                let operands = [buffer, index, value].into_iter().chain(compare_expected);
-                self.operand_reads(operands.map(|operand| &**operand))
+                let operands = std::iter::once(value).chain(compare_expected);
+                let mut reads = self.operand_reads(operands.map(|operand| &**operand));
+                reads.extend(self.reached(element));
+                reads
             }
         }
     }

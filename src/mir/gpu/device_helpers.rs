@@ -120,14 +120,10 @@ fn narrow_rvalue_floats(rv: &mut Rvalue) {
         }
         Rvalue::Ref(_) | Rvalue::Len(_) | Rvalue::GpuIntrinsic(_) => {}
         Rvalue::AtomicOp {
-            buffer,
-            index,
             value,
             compare_expected,
             ..
         } => {
-            narrow_operand_floats(buffer);
-            narrow_operand_floats(index);
             narrow_operand_floats(value);
             if let Some(expected) = compare_expected {
                 narrow_operand_floats(expected);

@@ -10,8 +10,8 @@ use crate::error::lowering::LoweringError;
 use crate::mir::backend::gpu::GpuAtomicOp;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{
-    AggregateKind, Constant, Dimension, GpuIntrinsic, MathIntrinsic, Operand, Place, Rvalue,
-    StatementKind as MirStatementKind,
+    AggregateKind, Constant, Dimension, GpuIntrinsic, MathIntrinsic, Operand, Place, PlaceElem,
+    Rvalue, StatementKind as MirStatementKind,
 };
 use crate::type_checker::atomic_buffers::atomic_buffer_mismatch;
 
@@ -20,8 +20,11 @@ use std::rc::Rc;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::control_flow::lower_call;
 use crate::mir::lowering::dispatch;
+use crate::mir::lowering::expression::index_expr::ensure_index_local;
 use crate::mir::lowering::expression::testing_intrinsic;
-use crate::mir::lowering::helpers::{gpu_math_return_type, resolve_type};
+use crate::mir::lowering::helpers::{
+    ensure_place, gpu_math_return_type, index_at_int, resolve_type,
+};
 use crate::mir::lowering::sequencing::lower_operand;
 
 pub(crate) fn lower_call_expr(
@@ -432,8 +435,7 @@ fn try_lower_atomic_builtin(
         ));
     }
 
-    let buffer_op = lower_operand(ctx, &args[0])?;
-    let index_op = lower_operand(ctx, &args[1])?;
+    let element = lower_atomic_element(ctx, &args[0], &args[1])?;
     let value_op = lower_operand(ctx, &args[2])?;
     let compare_expected = if op == GpuAtomicOp::CompareExchange {
         Some(Box::new(lower_operand(ctx, &args[3])?))
@@ -455,8 +457,7 @@ fn try_lower_atomic_builtin(
             target,
             Rvalue::AtomicOp {
                 op,
-                buffer: Box::new(buffer_op),
-                index: Box::new(index_op),
+                element,
                 value: Box::new(value_op),
                 compare_expected,
             },
@@ -466,6 +467,25 @@ fn try_lower_atomic_builtin(
 
     mark_atomic_capability(ctx);
     Ok(Some(ret_op))
+}
+
+/// The element `buffer[index]` an atomic builtin operates on, lowered as an
+/// ordinary index expression lowers its element: the index converted to
+/// `int` and held in a local, its projection marked checked until the
+/// in-bounds pass proves otherwise.
+fn lower_atomic_element(
+    ctx: &mut LoweringContext,
+    buffer: &Expression,
+    index: &Expression,
+) -> Result<Place, LoweringError> {
+    let buffer_op = lower_operand(ctx, buffer)?;
+    let mut element = ensure_place(ctx, buffer_op, buffer.span);
+    let index_op = lower_operand(ctx, index)?;
+    let index_op = index_at_int(ctx, index_op, index);
+    element
+        .projection
+        .push(PlaceElem::index(ensure_index_local(ctx, index, index_op)));
+    Ok(element)
 }
 
 fn try_lower_vector_builtin(

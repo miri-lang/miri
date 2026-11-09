@@ -255,3 +255,56 @@ fn test_web_runtime_fault_table_matches_the_compilers() {
         SUMMARY_SEPARATOR
     );
 }
+
+/// A `forall` over two lanes, each adding 1 to the element of the two-element
+/// atomic buffer `hist` that `targets` names for it, then printing both
+/// elements.
+fn atomic_program(targets: &str) -> String {
+    format!(
+        "
+use system.gpu
+use system.gpu.atomic
+use system.collections.array
+
+fn main()
+    gpu var hist = Array<Atomic<u32>, 2>()
+    gpu var d = [{targets}]
+    gpu forall i in 0..2
+        atomic_add(hist, d[i], 1 as u32)
+    let host = hist
+    println(f\"{{host[0]}} {{host[1]}}\")
+"
+    )
+}
+
+/// An atomic's element index is checked against the buffer's length like any
+/// other index nothing proved in range.
+#[test]
+fn test_wgsl_atomic_on_an_unproven_index_records_index_out_of_bounds() {
+    let wgsl = compile_to_wgsl(&atomic_program("1, 0"));
+    assert!(wgsl.contains("atomicAdd(&hist[_checked_index__"), "{wgsl}");
+    assert!(wgsl.contains(RAISE_INDEX_OUT_OF_BOUNDS), "{wgsl}");
+}
+
+#[test]
+fn test_wgsl_checked_atomic_index_validates() {
+    assert_gpu_wgsl_valid(&atomic_program("1, 0"));
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_atomic_past_the_end_stops_the_program() {
+    assert_runtime_error(&atomic_program("0, 5"), INDEX_OUT_OF_BOUNDS);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn test_gpu_in_range_atomic_reports_no_fault() {
+    assert_runs_with_output(&atomic_program("1, 1"), "0 2");
+}

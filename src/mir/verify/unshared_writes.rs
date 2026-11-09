@@ -825,14 +825,16 @@ fn read_places(rvalue: &Rvalue) -> Vec<&Place> {
             operands.iter().collect()
         }
         Rvalue::AtomicOp {
-            buffer,
+            element,
             value,
             compare_expected,
             ..
-        } => [buffer.as_ref(), value.as_ref()]
-            .into_iter()
-            .chain(compare_expected.as_deref())
-            .collect(),
+        } => {
+            let operands = std::iter::once(value.as_ref()).chain(compare_expected.as_deref());
+            return std::iter::once(element)
+                .chain(operands.filter_map(Operand::place))
+                .collect();
+        }
         Rvalue::Ref(place) => return vec![place],
         Rvalue::Len(_) | Rvalue::BinaryOp(..) | Rvalue::UnaryOp(..) | Rvalue::GpuIntrinsic(_) => {
             Vec::new()

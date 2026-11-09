@@ -201,14 +201,12 @@ pub trait Visitor {
                 }
             }
             Rvalue::AtomicOp {
-                buffer,
-                index,
+                element,
                 value,
                 compare_expected,
                 ..
             } => {
-                self.visit_operand(buffer, location);
-                self.visit_operand(index, location);
+                self.visit_place(element, PlaceContext::NonMutatingUse, location);
                 self.visit_operand(value, location);
                 if let Some(expected) = compare_expected {
                     self.visit_operand(expected, location);
@@ -419,14 +417,12 @@ pub trait MutVisitor {
                 }
             }
             Rvalue::AtomicOp {
-                buffer,
-                index,
+                element,
                 value,
                 compare_expected,
                 ..
             } => {
-                self.visit_operand(buffer, location);
-                self.visit_operand(index, location);
+                self.visit_place(element, PlaceContext::NonMutatingUse, location);
                 self.visit_operand(value, location);
                 if let Some(expected) = compare_expected {
                     self.visit_operand(expected, location);

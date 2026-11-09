@@ -78,14 +78,14 @@ pub enum Rvalue {
     MathIntrinsic(MathIntrinsic, Vec<Operand>),
     /// Atomic operation on a GPU buffer (GPU-only).
     /// - `op`: the atomic operation (add, sub, max, min, and, or, xor, exchange, compare_exchange)
-    /// - `buffer`: the Array<Atomic<T>, N> operand to access
-    /// - `index`: the array index
+    /// - `element`: the element `buffer[index]` of the `Array<Atomic<T>, N>`
+    ///   it operates on, its index marked checked or proven in bounds as any
+    ///   other index projection is
     /// - `value`: the value to add/sub/compare/exchange (for compare_exchange, this is the new value)
     /// - `compare_expected`: for compare_exchange only, the expected old value; None for other ops
     AtomicOp {
         op: crate::mir::backend::gpu::GpuAtomicOp,
-        buffer: Box<Operand>,
-        index: Box<Operand>,
+        element: Place,
         value: Box<Operand>,
         compare_expected: Option<Box<Operand>>,
     },
@@ -194,12 +194,11 @@ impl fmt::Display for Rvalue {
             }
             Rvalue::AtomicOp {
                 op,
-                buffer,
-                index,
+                element,
                 value,
                 compare_expected,
             } => {
-                write!(f, "atomic_{}({}, {}, {}", op, buffer, index, value)?;
+                write!(f, "atomic_{}({}, {}", op, element, value)?;
                 if let Some(expected) = compare_expected {
                     write!(f, ", {}", expected)?;
                 }
