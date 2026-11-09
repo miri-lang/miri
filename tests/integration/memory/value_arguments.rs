@@ -82,11 +82,11 @@ fn main()
     );
 }
 
-/// A closure reassigns its own captured `v` while the callee holds the
+/// A closure reassigns its own copy of `v` while the callee holds the
 /// caller's `v` as a value argument; the argument still reads 1.0 after the
 /// closure ran, and the caller's `v` is unchanged.
 #[test]
-fn a_closure_reassigning_its_capture_leaves_the_value_argument_alone() {
+fn a_closure_reassigning_its_copy_of_a_capture_leaves_the_value_argument_alone() {
     assert_runs_with_output(
         r#"
 struct V
@@ -101,8 +101,9 @@ fn call_with(a V, f fn() float) float
 fn main()
     var v = V(x: 1.0, y: 2.0)
     let f = fn() float
-        v = V(x: 50.0, y: 60.0)
-        v.x
+        var mine = v
+        mine = V(x: 50.0, y: 60.0)
+        mine.x
     let r = call_with(v, f)
     println(f"{r} {v.x}")
 "#,
@@ -698,8 +699,9 @@ fn collect(a V, f fn() float) [V]
 fn main()
     var v = V(x: 1.0, y: 2.0)
     let f = fn() float
-        v = V(x: 50.0, y: 60.0)
-        v.x
+        var mine = v
+        mine = V(x: 50.0, y: 60.0)
+        mine.x
     let xs = collect(v, f)
     v = V(x: 7.0, y: 8.0)
     let first = xs[0]

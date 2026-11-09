@@ -189,14 +189,15 @@ fn main()
 }
 
 #[test]
-fn test_closure_reassigning_captured_value_releases_it_each_call() {
+fn test_closure_reassigning_its_copy_of_a_capture_releases_it_each_call() {
     assert_heap_guard_output(
         r#"
 fn main()
     var s = "OLD".to_lower()
     let f = fn()
-        s = "MID".to_lower()
-        println(s)
+        var mine = s
+        mine = "MID".to_lower()
+        println(mine)
     f()
     f()
     println(s)
@@ -206,17 +207,18 @@ fn main()
 }
 
 #[test]
-fn test_closure_returning_reassigned_capture_is_balanced() {
+fn test_closure_returning_its_reassigned_copy_of_a_capture_is_balanced() {
     assert_heap_guard_output(
         r#"
 fn main()
     var s = "OLD".to_lower()
     let f = fn(k int) String
+        var mine = s
         if k > 0
-            s = "EARLY".to_lower()
-            return s
-        s = "LATE".to_lower()
-        s
+            mine = "EARLY".to_lower()
+            return mine
+        mine = "LATE".to_lower()
+        mine
     println(f(1))
     println(f(0))
     println(s)

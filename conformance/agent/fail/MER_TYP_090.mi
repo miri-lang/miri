@@ -1,0 +1,13 @@
+// expect: MER_TYP_090
+// summary: Triggers MER_TYP_090: a closure writes to a binding it captured.
+use system.io
+
+fn make_counter() fn() int
+    var n = 0
+    return fn() int:
+        n += 1
+        return n
+
+fn main()
+    let counter = make_counter()
+    println(f"{counter()}")

@@ -287,8 +287,8 @@ fn main()
 }
 
 #[test]
-fn nested_function_assigning_a_captured_variable_leaves_the_outer_one_unchanged() {
-    assert_runs_with_output(
+fn nested_function_assigning_a_captured_variable_is_refused() {
+    assert_compiler_error(
         r#"
 use system.io
 
@@ -304,7 +304,7 @@ fn main()
     println(replace())
     println(text)
 "#,
-        "a3b3\na3b3\na3b3\na3",
+        "MER_TYP_090",
     );
 }
 
@@ -449,8 +449,8 @@ fn main()
 }
 
 #[test]
-fn nested_function_assigning_a_captured_variable_it_never_reads() {
-    assert_runs_with_output(
+fn nested_function_assigning_a_captured_variable_it_never_reads_is_refused() {
+    assert_compiler_error(
         r#"
 use system.io
 
@@ -464,13 +464,13 @@ fn main()
     println(f"{replace()}")
     println(text)
 "#,
-        "1\n1\na3",
+        "MER_TYP_090",
     );
 }
 
 #[test]
-fn lambda_assigning_a_managed_capture_on_one_branch() {
-    assert_runs_with_output(
+fn lambda_assigning_a_managed_capture_on_one_branch_is_refused() {
+    assert_compiler_error(
         r#"
 use system.io
 
@@ -486,7 +486,7 @@ fn main()
     println(pick(true))
     println(text)
 "#,
-        "b3\na3\nb3\na3",
+        "MER_TYP_090",
     );
 }
 

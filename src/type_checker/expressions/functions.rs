@@ -60,7 +60,7 @@ impl TypeChecker {
         _properties: &FunctionProperties,
         context: &mut Context,
     ) -> Type {
-        context.enter_scope();
+        context.enter_capturing_body();
 
         self.resolve_lambda_generics(generics, context);
         let expected_return_type = self.setup_return_type_context(return_type_expr, context);
@@ -90,7 +90,7 @@ impl TypeChecker {
         context.returns_written_self = outer_returns_self;
         context.loop_depth = old_loop_depth;
         context.gpu_for_depth = old_gpu_for_depth;
-        context.exit_scope();
+        context.exit_capturing_body();
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: generics.clone(),

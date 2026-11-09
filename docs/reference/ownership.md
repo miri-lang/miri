@@ -11,6 +11,7 @@ Miri uses reference counting (via the Perceus optimization) to manage object lif
 - A class or trait `drop` that takes arguments or is static (error): the name belongs to the drop hook
 - Discarding values that must be used (types marked `@must_use`)
 - A store that puts an object back into one of its own fields — the object itself, a closure capturing it, or a value holding it (error, `MER_TYP_081`): reference counting never frees a cycle
+- A write to a value a closure or nested function captured (error, `MER_TYP_090`): a closure holds its own copy, so the write would be lost when the call ends. A write through a captured class instance or trait-typed value persists and is allowed
 
 ## Key Concepts
 

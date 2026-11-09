@@ -85,6 +85,8 @@ impl TypeChecker {
             return ty;
         }
 
+        self.record_capture(name, expr_id, context);
+
         if name == GPU_CONTEXT_DEPRECATED_IDENT && context.in_gpu_function {
             self.report_gpu_context_deprecation(span);
         }
@@ -129,6 +131,16 @@ impl TypeChecker {
 
         self.report_undefined_identifier_error(name, span, context);
         ast_factory::make_type(TypeKind::Error)
+    }
+
+    /// Records the mention under `expr_id` as a capture when the body being
+    /// checked captures the binding `name`, with the source a diagnostic
+    /// about it is to carry.
+    fn record_capture(&mut self, name: &str, expr_id: usize, context: &Context) {
+        if let Some(binding) = context.captured_binding(name) {
+            let source = self.modules.current_source_override.as_ref();
+            self.captured_mentions.record(expr_id, binding, source);
+        }
     }
 
     fn report_gpu_context_deprecation(&mut self, span: Span) {

@@ -57,7 +57,7 @@ pub(crate) enum Scope {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Role<'b> {
     /// The target of an assignment, at any depth of fields and elements.
-    Assigned,
+    Assigned { target: &'b Expression },
     /// The receiver `object` of a call of the method `method`.
     Receiver {
         object: &'b Expression,
@@ -151,22 +151,26 @@ impl<'b> BodyWrites<'b> {
 }
 
 /// The parameters every function and closure `statements` declare writes,
-/// and the operands of every body lowering holds, at any depth: each
-/// statement of the program is walked once, and both read the one walk.
+/// the operands of every body lowering holds, and the writes of captured
+/// values that would be lost, at any depth: each statement of the program is
+/// walked once, and all three read the one walk.
 pub(crate) fn analyse<'s>(
     statements: impl Iterator<Item = &'s Statement>,
     checker: &crate::type_checker::TypeChecker,
-) -> (ParameterWrites, HeldOperands) {
+    context: &crate::type_checker::context::Context,
+) -> (ParameterWrites, HeldOperands, LostCaptureWrites) {
     let mut parameters = ParameterWrites::default();
     let mut held = HeldOperands::default();
+    let mut lost = LostCaptureWrites::default();
     for statement in statements {
         for_each_member(statement, &mut |member| {
             let writes = BodyWrites::of(member);
             parameters.record(&writes, checker);
             held.record(&writes, checker);
+            lost.record(&writes, checker, context);
         });
     }
-    (parameters, held)
+    (parameters, held, lost)
 }
 
 /// Calls `visit` on every statement of the program `statement` stands for:
@@ -395,7 +399,7 @@ impl<'b> Walk<'b> {
             ExpressionKind::Call(callee, arguments) => self.call(callee, arguments),
             ExpressionKind::Assignment(target, _, value) => {
                 let target = target.expression();
-                self.assign_role(path_root(target), Role::Assigned);
+                self.assign_role(path_root(target), Role::Assigned { target });
                 self.write_target(target);
                 self.expression(value);
             }
@@ -592,10 +596,12 @@ pub(crate) fn argument_value(argument: &Expression) -> (&Expression, bool) {
     (value, through_cast)
 }
 
+mod capture_writes;
 mod held_operands;
 mod parameters;
 mod receiver;
 
+pub use capture_writes::{CapturedMentions, LostCaptureWrites};
 pub use held_operands::{HeldOperand, HeldOperands};
 pub use parameters::ParameterWrites;
 pub use receiver::ReceiverWrites;

@@ -188,6 +188,9 @@ pub struct TypeChecker {
     /// The parameters each body writes, so lowering binds a copy of each on
     /// entry; see [`body_writes`].
     pub parameter_writes: body_writes::ParameterWrites,
+    /// Each mention of a binding a closure or nested function captures,
+    /// recorded as bindings are resolved; see [`body_writes`].
+    pub captured_mentions: body_writes::CapturedMentions,
     /// The operands lowering reads into a temporary as they are evaluated,
     /// because a later operand of the same sequence may write them; see
     /// [`body_writes`].
@@ -367,6 +370,7 @@ impl TypeChecker {
             protocol_loops: Vec::new(),
             receiver_writes: body_writes::ReceiverWrites::default(),
             parameter_writes: body_writes::ParameterWrites::default(),
+            captured_mentions: body_writes::CapturedMentions::default(),
             held_operands: body_writes::HeldOperands::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
@@ -708,10 +712,17 @@ impl TypeChecker {
             |name| self.type_identity_named_by(name).map(str::to_string),
             &self.runtime_effects,
         );
-        (self.parameter_writes, self.held_operands) = body_writes::analyse(
+        let lost_capture_writes;
+        (
+            self.parameter_writes,
+            self.held_operands,
+            lost_capture_writes,
+        ) = body_writes::analyse(
             top_level_statements(program).chain(&self.imported_statements),
             self,
+            &context,
         );
+        self.report_lost_capture_writes(lost_capture_writes);
         self.global_scope = Some(compiled_instances::GlobalScope(context));
 
         if self.diagnostics.is_empty() {

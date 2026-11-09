@@ -118,8 +118,8 @@ fn main()
     );
 }
 
-/// A local the body uses only as the index of a store is captured. The list is
-/// a copy, so the store stays inside the closure.
+/// A local the body uses only as the index of a store is captured. The list
+/// is the closure's own.
 #[test]
 fn test_capture_used_only_as_index_of_a_store() {
     assert_runs_with_output(
@@ -127,16 +127,15 @@ fn test_capture_used_only_as_index_of_a_store() {
 use system.collections.list
 
 fn main()
-    var xs = List([1, 2, 3])
     let i = 2
     let g = fn()
+        var xs = List([1, 2, 3])
         xs[i] = 42
         println(f"{xs[0]} {xs[2]}")
         return
     g()
-    println(f"{xs[0]} {xs[1]} {xs[2]}")
 "#,
-        "1 42\n1 2 3",
+        "1 42",
     );
 }
 

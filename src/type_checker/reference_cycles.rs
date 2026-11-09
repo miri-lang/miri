@@ -98,7 +98,7 @@ impl TypeChecker {
     /// holds copies it first, so the closure keeps the collection as it was.
     /// A struct is a value the same way (`unshare` in MIR lowering), so it is
     /// not counted either.
-    fn holds_by_reference(&self, expr: &Expression, context: &Context) -> bool {
+    pub(crate) fn holds_by_reference(&self, expr: &Expression, context: &Context) -> bool {
         let Some(TypeKind::Custom(name, _)) = self.get_type(expr.id).map(|t| &t.kind) else {
             return false;
         };

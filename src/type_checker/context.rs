@@ -698,6 +698,13 @@ pub fn find_trait_default_method<'a>(
     })
 }
 
+/// What a closure or nested function body captures under one mention.
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedBinding {
+    /// Whether the binding was declared `var`.
+    pub mutable: bool,
+}
+
 /// Context holds the current state of the type checking process, including
 /// variable scopes, return types for functions, and loop depth.
 pub struct Context {
@@ -705,6 +712,10 @@ pub struct Context {
     pub scopes: Vec<HashMap<String, SymbolInfo>>,
     /// Stack of scopes for type definitions (e.g. generics inside a function/struct).
     pub type_definitions: Vec<HashMap<String, TypeDefinition>>,
+    /// The index in `scopes` where each closure or nested function being
+    /// checked starts, innermost last. A named top-level function or method
+    /// opens none: it captures nothing.
+    pub capturing_body_scopes: Vec<usize>,
     /// Stack of expected return types for the current function(s).
     pub return_types: Vec<Type>,
     /// Stack of inferred return types (used for lambdas/functions without explicit return type).
@@ -772,6 +783,7 @@ impl Context {
         Self {
             scopes: vec![HashMap::new()],
             type_definitions: vec![HashMap::new()],
+            capturing_body_scopes: Vec::new(),
             return_types: Vec::new(),
             inferred_return_types: Vec::new(),
             returns_written_self: false,
@@ -804,6 +816,34 @@ impl Context {
     pub fn exit_scope(&mut self) {
         self.scopes.pop();
         self.type_definitions.pop();
+    }
+
+    /// Enters the scope of a closure or nested function body, which captures
+    /// the bindings of every scope outside it.
+    pub fn enter_capturing_body(&mut self) {
+        self.capturing_body_scopes.push(self.scopes.len());
+        self.enter_scope();
+    }
+
+    /// Exits the scope of a closure or nested function body.
+    pub fn exit_capturing_body(&mut self) {
+        self.exit_scope();
+        self.capturing_body_scopes.pop();
+    }
+
+    /// The binding `name` resolves to, when the body being checked captures
+    /// it: it is declared outside the innermost closure or nested function.
+    /// `self` is never in `scopes`; inside such a body it is always captured.
+    pub fn captured_binding(&self, name: &str) -> Option<CapturedBinding> {
+        let &body_scope = self.capturing_body_scopes.last()?;
+        if name == "self" {
+            return Some(CapturedBinding { mutable: true });
+        }
+        let (depth, info) = (self.scopes.iter().enumerate().rev())
+            .find_map(|(depth, scope)| scope.get(name).map(|info| (depth, info)))?;
+        (depth < body_scope).then_some(CapturedBinding {
+            mutable: info.mutable,
+        })
     }
 
     /// Increments loop depth when entering a loop.

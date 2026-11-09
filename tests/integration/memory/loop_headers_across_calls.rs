@@ -74,8 +74,9 @@ fn run(f fn(int) int, v int) int
 fn main()
     var a = List([1, 2, 3])
     let grow = fn(v int) int
-        a.clear()
-        a.length() + v
+        var mine = a
+        mine.clear()
+        mine.length() + v
     var i = 0
     var total = 0
     while i < a.length()
@@ -132,8 +133,9 @@ use system.collections.list
 fn main()
     var a = List([1, 2, 3])
     let add = fn(v int) int
-        a.push(v)
-        a.length()
+        var mine = a
+        mine.push(v)
+        mine.length()
     var i = 0
     var total = 0
     while i < a.length() and i < 5
@@ -364,8 +366,9 @@ class Hook
 fn main()
     var a = List([1, 2, 3])
     let wipe = fn(v int) int
-        a.clear()
-        a.length() + v
+        var mine = a
+        mine.clear()
+        mine.length() + v
     let hook = Hook(run: wipe)
     var i = 0
     var total = 0
@@ -559,7 +562,7 @@ fn test_a_callee_writing_the_loop_list_through_a_class_field_copies_it() {
 }
 
 #[test]
-fn test_a_closure_capturing_the_loop_list_passed_to_a_callee_clears_its_copy() {
+fn test_a_closure_clearing_its_copy_of_the_loop_list_passed_to_a_callee() {
     assert_heap_guard_output(THROUGH_A_PASSED_CLOSURE, "9 3");
 }
 
@@ -574,7 +577,7 @@ fn test_a_callee_pushing_through_another_binding_leaves_the_loop_list() {
 }
 
 #[test]
-fn test_a_closure_pushing_onto_its_captured_loop_list_leaves_the_loop_list() {
+fn test_a_closure_pushing_onto_its_copy_of_the_loop_list_leaves_the_loop_list() {
     assert_heap_guard_output(CLOSURE_PUSHING_ITS_CAPTURE, "18 3");
 }
 
@@ -632,7 +635,7 @@ fn test_a_method_clearing_a_field_sharing_the_loop_list_copies_it() {
 }
 
 #[test]
-fn test_a_closure_in_a_field_clearing_its_capture_leaves_the_loop_list() {
+fn test_a_closure_in_a_field_clearing_its_copy_leaves_the_loop_list() {
     assert_heap_guard_output(CLOSURE_IN_A_FIELD, "9 3");
 }
 

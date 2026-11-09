@@ -68,7 +68,7 @@ impl ParameterWrites {
 /// an `out` argument, or an argument a runtime entry point writes in place.
 pub(super) fn is_written(checker: &TypeChecker, mention: &Mention) -> bool {
     match mention.role {
-        Some(Role::Assigned) => true,
+        Some(Role::Assigned { .. }) => true,
         Some(Role::Receiver { object, method }) => writes_receiver(checker, object, method),
         Some(Role::Argument {
             callee,

@@ -1124,6 +1124,13 @@ diagnostics!(
     Severity::Error,
     false,
     FixSafety::RequiresHumanReview,
+    "TYP",
+    "090",
+    TypCapturedValueWritten,
+    "Captured Value Written",
+    Severity::Error,
+    false,
+    FixSafety::RequiresHumanReview,
     // OWN — Ownership and resource management (5 codes: 001-005)
     "OWN",
     "001",

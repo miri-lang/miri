@@ -1121,7 +1121,7 @@ fn main()
     println(f"{shifted_sum(3)}")   // 16
 ```
 
-Captures are copies: assigning to a captured variable inside the body changes the closure's copy, not the enclosing variable.
+A closure holds a copy of each value it captures, and every call starts over from that copy, so a write to a captured value would be lost when the call ends. Such a write is refused (`MER_TYP_090`), inside a closure or a nested function, for a capture reached through a nested closure too: assigning or compound-assigning a captured binding, writing an element or field of a captured value (`xs[0] = 1`, `p.x = 1` on a struct), calling a method that writes its receiver on a captured value (`xs.push(1)`) and passing a captured value as an `out` argument. A closure's own parameters and locals are its own to write, including one that shadows a captured name. A write through a captured class instance or trait-typed value (`obj.count += 1`, `self.count += 1` in a method) persists, because the capture is a reference to the instance, so state that must outlive a call belongs in a class.
 
 A capture of a class instance is a copy of the reference, so a closure capturing an object and stored in one of that object's fields would hold the object alive forever. That store is refused; see [Reference Cycles](#reference-cycles).
 

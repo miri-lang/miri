@@ -251,11 +251,11 @@ let f = fn()
 }
 
 #[test]
-fn test_lambda_capture_mutability() {
+fn test_lambda_writing_a_mutable_capture_is_refused() {
     let code = "
 var x = 1
 let f = fn()
     x = 2
     ";
-    type_checker_test(code);
+    type_checker_error_test(code, "would be lost when the call ends");
 }

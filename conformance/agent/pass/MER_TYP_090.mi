@@ -1,0 +1,16 @@
+// summary: Accepted counterpart of MER_TYP_090: the state lives in a class instance the closure captures.
+// expect-stdout: 1 2
+use system.io
+
+class Counter
+    var n int
+
+fn make_counter() fn() int
+    var counter = Counter(n: 0)
+    return fn() int:
+        counter.n += 1
+        return counter.n
+
+fn main()
+    let counter = make_counter()
+    println(f"{counter()} {counter()}")

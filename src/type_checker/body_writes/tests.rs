@@ -49,7 +49,7 @@ fn roles_of(source: &str, function: &str, binding: &str) -> Vec<&'static str> {
     let program = parse(source);
     let uses = BodyWrites::of(body_of(&program, function));
     let words = of_binding(&uses, binding).map(|mention| match mention.role {
-        Some(Role::Assigned) => "assigned",
+        Some(Role::Assigned { .. }) => "assigned",
         Some(Role::Receiver { .. }) => "receiver",
         Some(Role::Argument {
             through_cast: true, ..

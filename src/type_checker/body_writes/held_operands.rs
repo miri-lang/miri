@@ -191,7 +191,7 @@ impl<'b> WriteIndex<'b> {
 
     fn mention(&mut self, position: usize, mention: &Mention<'b>, checker: &TypeChecker) {
         self.positions.insert(address(mention.expression), position);
-        if matches!(mention.role, Some(Role::Assigned)) {
+        if matches!(mention.role, Some(Role::Assigned { .. })) {
             self.assigned
                 .entry(mention.owner)
                 .or_default()
@@ -210,7 +210,7 @@ impl<'b> WriteIndex<'b> {
             Some(Role::Argument {
                 arguments, index, ..
             }) => argument_value(&arguments[index]).0,
-            Some(Role::Assigned) | None => return,
+            Some(Role::Assigned { .. }) | None => return,
         };
         let mut step = top;
         while let ExpressionKind::Member(inner, _) | ExpressionKind::Index(inner, _) = &step.node {

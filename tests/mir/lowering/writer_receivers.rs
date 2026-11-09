@@ -168,14 +168,17 @@ fn main()
 }
 
 #[test]
-fn test_a_captured_collection_written_still_copies_a_shared_collection() {
+fn test_a_closures_copy_of_a_capture_written_still_copies_a_shared_collection() {
     let source = r#"
 use system.io
 use system.collections.list
 
 fn main()
     var l = List([1, 2])
-    let add = fn(x int): l.push(x)
+    let add = fn(x int)
+        var mine = l
+        mine.push(x)
+        return
     add(3)
     println(f"{l.length()}")
 "#;

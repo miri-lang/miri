@@ -369,7 +369,7 @@ impl<'b> BodyFacts<'b> {
             return;
         }
         match mention.role {
-            Some(Role::Assigned) => self.writes = true,
+            Some(Role::Assigned { .. }) => self.writes = true,
             Some(Role::Receiver { object, method }) if std::ptr::eq(object, mention.expression) => {
                 if let ExpressionKind::Identifier(method, _) = &method.node {
                     match word {

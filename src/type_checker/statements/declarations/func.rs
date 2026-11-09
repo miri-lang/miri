@@ -147,7 +147,12 @@ impl TypeChecker {
             },
             context,
         );
-        context.enter_scope();
+        let captures = context.in_function && !is_member;
+        if captures {
+            context.enter_capturing_body();
+        } else {
+            context.enter_scope();
+        }
 
         if let Some(gens) = generics {
             self.define_generics(gens, context);
@@ -251,7 +256,11 @@ impl TypeChecker {
         context.current_function = previous_function;
         context.loop_depth = old_loop_depth;
         context.gpu_for_depth = old_gpu_for_depth;
-        context.exit_scope();
+        if captures {
+            context.exit_capturing_body();
+        } else {
+            context.exit_scope();
+        }
         context.return_types.pop();
         context.inferred_return_types.pop();
         context.returns_written_self = outer_returns_self;
