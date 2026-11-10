@@ -113,6 +113,7 @@ pub(crate) fn lower_lambda_expr(
         unreachable!()
     };
     let closure = ClosureSource {
+        expr: Some(expr),
         symbol: ctx.closure_symbol(ClosureKind::Lambda, expr.id),
         self_name: None,
         params: &lambda.params,
@@ -128,6 +129,9 @@ pub(crate) fn lower_lambda_expr(
 /// Everything a closure is built from: a lambda expression, or a function
 /// declared inside another function's body.
 pub(crate) struct ClosureSource<'a> {
+    /// The lambda expression the closure is created by; `None` for a named
+    /// nested function.
+    pub expr: Option<&'a Expression>,
     /// The symbol the closure's body is emitted under; unique per compilation.
     pub symbol: Symbol,
     /// The name the body calls itself by, for a named nested function.
@@ -447,8 +451,32 @@ fn emit_closure_aggregate(
     for local in operand_locals {
         ctx.emit_temp_drop(local, watermark, closure.span);
     }
+    end_taken_captures(ctx, closure, captures);
 
     Ok(Operand::Copy(target))
+}
+
+/// End each binding a kept closure takes over, where the closure is created:
+/// the closure now holds its only reference, so its hook runs when the
+/// closure is released.
+fn end_taken_captures(
+    ctx: &mut LoweringContext,
+    closure: &ClosureSource,
+    captures: &[CapturedVar],
+) {
+    let Some(expr) = closure.expr else {
+        return;
+    };
+    let taken = ctx
+        .type_checker
+        .consumed_arguments
+        .captured_by(expr)
+        .to_vec();
+    for cap in captures {
+        if taken.iter().any(|name| **name == *cap.name) {
+            super::super::variable::end_consumed_binding(ctx, cap.outer_local, closure.span);
+        }
+    }
 }
 
 /// The value a closure captures from `outer_local`.

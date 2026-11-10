@@ -475,3 +475,133 @@ fn main()
         "copied\nkept 1\nclosed 1",
     );
 }
+
+/// A closure that is kept holds what it captures, so capturing a resource
+/// consumes it and a later use is refused.
+#[test]
+fn a_resource_captured_by_a_kept_closure_cannot_be_used_after() {
+    assert_compiler_error(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    let f = fn() int: h.id
+    println(f"{h.id}")
+"#,
+        ),
+        "consumed by",
+    );
+}
+
+/// A closure does not own what it captures, so its body cannot hand a
+/// captured resource to a callee that keeps it.
+#[test]
+fn a_closure_giving_away_a_captured_resource_is_refused() {
+    assert_compiler_error(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    let f = fn() Handle: close(h)
+"#,
+        ),
+        "the closure does not own",
+    );
+}
+
+/// Nor can its body return a captured resource.
+#[test]
+fn a_closure_returning_a_captured_resource_is_refused() {
+    assert_compiler_error(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    let f = fn() Handle
+        return h
+"#,
+        ),
+        "the closure does not own",
+    );
+}
+
+/// A closure passed straight to a call that does not keep it borrows its
+/// captures: the caller still owns the resource afterwards.
+#[test]
+fn a_resource_read_by_a_closure_passed_to_a_call_stays_usable() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn apply(f fn() int) int
+    return f()
+
+fn main()
+    let h = Handle(1)
+    println(f"{apply(fn() int: h.id)}")
+    println(f"still {h.id}")
+"#,
+        ),
+        "1\nstill 1\nclosed 1",
+    );
+}
+
+/// A kept closure releases the captured resource when the closure is released.
+#[test]
+fn a_resource_captured_by_a_kept_closure_is_released_with_it() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    if true
+        let h = Handle(1)
+        let f = fn() int: h.id
+        println(f"made {f()}")
+    println("done")
+"#,
+        ),
+        "made 1\nclosed 1\ndone",
+    );
+}
+
+/// The closure becomes the resource's owner where it is created, so the hook
+/// runs when the closure is released, not when the captured binding's scope
+/// ends.
+#[test]
+fn a_resource_captured_by_a_shorter_lived_closure_is_released_with_the_closure() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    if true
+        let f = fn() int: h.id
+        println(f"made {f()}")
+    println("after")
+"#,
+        ),
+        "made 1\nclosed 1\nafter",
+    );
+}
+
+/// Captured on one path only, the resource is released with the closure there
+/// and at its own scope end on the other.
+#[test]
+fn a_resource_captured_on_one_path_is_released_once_on_each() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn run(c bool, id int)
+    let h = Handle(id)
+    if c
+        let f = fn() int: h.id
+        println(f"made {f()}")
+    println(f"end {id}")
+
+fn main()
+    run(true, 1)
+    run(false, 2)
+"#,
+        ),
+        "made 1\nclosed 1\nend 1\nend 2\nclosed 2",
+    );
+}

@@ -27,6 +27,7 @@ use std::collections::{HashMap, HashSet};
 use super::context::{class_implements_trait, TypeDefinition};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
 use super::utils::{is_resource, runs_drop_hook, trait_declares_drop_hook};
+use crate::ast::captures::collect_lambda_captures;
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
 pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value this scope owns";
@@ -78,6 +79,8 @@ impl std::fmt::Display for Sink {
 #[derive(Debug, Default)]
 pub struct ConsumedArguments {
     expressions: HashSet<usize>,
+    /// The bindings each kept closure takes over, by the closure's expression.
+    captures: HashMap<usize, Vec<String>>,
 }
 
 impl ConsumedArguments {
@@ -86,9 +89,16 @@ impl ConsumedArguments {
         self.expressions.contains(&argument.id)
     }
 
+    /// The bindings the closure `lambda` creates takes over from the scope
+    /// creating it: the resources it captures, when it is kept.
+    pub fn captured_by(&self, lambda: &Expression) -> &[String] {
+        self.captures.get(&lambda.id).map_or(&[], Vec::as_slice)
+    }
+
     /// Add every argument `other` records.
     pub fn extend(&mut self, other: ConsumedArguments) {
         self.expressions.extend(other.expressions);
+        self.captures.extend(other.captures);
     }
 }
 
@@ -271,6 +281,31 @@ pub struct UseAfterMoveChecker<'a> {
     /// loop's first pass reached it, so re-checking them again would cost
     /// a walk for every combination of passes of the loops around it.
     rechecking: bool,
+    /// The closures whose bodies enclose the point analysed, innermost last:
+    /// what each captures, and the resources among them it was seen to read.
+    closures: Vec<ClosureCaptures>,
+    /// The resources a closure passed straight to a call captured, by the
+    /// closure's expression: the call consumes them only if it keeps the
+    /// closure, and lends them otherwise.
+    lent_closures: HashMap<usize, Vec<Capture>>,
+}
+
+/// A resource a closure captures.
+struct Capture {
+    name: String,
+    /// Where the closure's body first reads it.
+    span: Span,
+    /// Whether taking it over hands its reference on (see
+    /// `hands_on_its_reference`).
+    hands_on: bool,
+}
+
+/// What one closure captures from the scope that creates it.
+struct ClosureCaptures {
+    /// Every enclosing-scope name its body references.
+    names: HashSet<String>,
+    /// The captured resources.
+    resources: Vec<Capture>,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
@@ -293,6 +328,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             consumed_arguments: ConsumedArguments::default(),
             loop_exits: Vec::new(),
             rechecking: false,
+            closures: Vec::new(),
+            lent_closures: HashMap::new(),
         }
     }
 
@@ -368,12 +405,14 @@ impl<'a> UseAfterMoveChecker<'a> {
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
         let prev_owned = std::mem::take(&mut self.owned_locals);
+        let prev_closures = std::mem::take(&mut self.closures);
         for p in &decl.params {
             self.fn_bindings.insert(p.name.clone());
         }
         let prev_loops = std::mem::take(&mut self.loop_exits);
         let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_stmt(body, &mut fn_consumed);
+        self.closures = prev_closures;
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
@@ -384,7 +423,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// then on, so the scope it was declared in ends without it — as it does
     /// for one assigned to another binding.
     fn consume_returned_resource(
-        &self,
+        &mut self,
         returned: &Expression,
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
@@ -395,7 +434,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             .types
             .get(&returned.id)
             .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions));
-        if is_resource {
+        if is_resource && !self.gives_away_a_capture(name, returned.span) {
             consumed.insert(
                 name.clone(),
                 ConsumedInfo {
@@ -437,6 +476,9 @@ impl<'a> UseAfterMoveChecker<'a> {
         };
         let gpu_move = decl.residency == BindingResidency::Gpu && self.gpu_bindings.contains(src);
         if !gpu_move && !self.is_resource_expr(init) {
+            return;
+        }
+        if !gpu_move && self.gives_away_a_capture(src, init.span) {
             return;
         }
         let by_fn = if gpu_move {
@@ -738,7 +780,8 @@ impl<'a> UseAfterMoveChecker<'a> {
     fn check_expr(&mut self, expr: &Expression, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &expr.node {
             ExpressionKind::Identifier(name, _) => {
-                self.report_use_after_consume(name, expr, consumed)
+                self.note_capture(name, expr);
+                self.report_use_after_consume(name, expr.span, consumed)
             }
             ExpressionKind::Call(callee, args) => self.check_call_expr(callee, args, consumed),
             ExpressionKind::Member(obj, _) => self.check_expr(obj, consumed),
@@ -783,7 +826,10 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_each(values, consumed);
             }
             ExpressionKind::NamedArgument(_, val) => self.check_expr(val, consumed),
-            ExpressionKind::Lambda(lambda) => self.check_lambda_expr(lambda),
+            ExpressionKind::Lambda(lambda) => {
+                let captured = self.check_lambda_expr(lambda);
+                self.consume_captures(expr.id, &captured, consumed);
+            }
             ExpressionKind::Block(stmts, final_expr) => {
                 for s in stmts {
                     self.check_stmt(s, consumed);
@@ -847,7 +893,13 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    fn check_lambda_expr(&mut self, lambda: &crate::ast::expression::LambdaData) {
+    /// Checks a closure's body, which does not own what it captures, and
+    /// returns the resources it captures.
+    fn check_lambda_expr(&mut self, lambda: &crate::ast::expression::LambdaData) -> Vec<Capture> {
+        self.closures.push(ClosureCaptures {
+            names: collect_lambda_captures(lambda),
+            resources: Vec::new(),
+        });
         let prev_bindings = self.fn_bindings.clone();
         let prev_owned = std::mem::take(&mut self.owned_locals);
         for p in &lambda.params {
@@ -859,12 +911,75 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
+        self.closures
+            .pop()
+            .map_or_else(Vec::new, |closure| closure.resources)
+    }
+
+    /// Records `name` as a resource the innermost closure captures, when the
+    /// closure's body reads it from the scope that creates the closure.
+    fn note_capture(&mut self, name: &str, expr: &Expression) {
+        let is_resource = self.is_resource_expr(expr);
+        let hands_on = self.hands_on_its_reference(expr);
+        let Some(closure) = self.closures.last_mut() else {
+            return;
+        };
+        let first_read = !closure.resources.iter().any(|seen| seen.name == name);
+        if is_resource && first_read && closure.names.contains(name) {
+            closure.resources.push(Capture {
+                name: name.to_string(),
+                span: expr.span,
+                hands_on,
+            });
+        }
+    }
+
+    /// A kept closure holds what it captures, so creating it consumes each
+    /// captured resource; capturing one already consumed is a use of it.
+    /// Records each one the closure `lambda` takes over for lowering, which
+    /// ends the binding where the closure is created.
+    fn consume_captures(&mut self, lambda: usize, captured: &[Capture], consumed: &mut Consumed) {
+        for capture in captured {
+            if self.gives_away_a_capture(&capture.name, capture.span) {
+                continue;
+            }
+            if consumed.contains_key(&capture.name) {
+                self.report_use_after_consume(&capture.name, capture.span, consumed);
+                continue;
+            }
+            if capture.hands_on {
+                let taken = self.consumed_arguments.captures.entry(lambda).or_default();
+                taken.push(capture.name.clone());
+            }
+            consumed.insert(
+                capture.name.clone(),
+                ConsumedInfo {
+                    by_fn: "a closure that captures it".to_string(),
+                    at_span: capture.span,
+                    chain: vec![],
+                },
+            );
+        }
+    }
+
+    /// Refuses handing on `name` when it is a capture of the closure whose
+    /// body is analysed: the closure does not own what it captures, so it
+    /// cannot keep, move, return or capture it into a closure it keeps.
+    fn gives_away_a_capture(&mut self, name: &str, span: Span) -> bool {
+        let captured = self
+            .closures
+            .last()
+            .is_some_and(|closure| closure.names.contains(name));
+        if captured {
+            self.errors.push(given_away_capture_error(name, span));
+        }
+        captured
     }
 
     fn report_use_after_consume(
         &mut self,
         name: &str,
-        expr: &Expression,
+        span: Span,
         consumed: &HashMap<String, ConsumedInfo>,
     ) {
         if let Some(info) = consumed.get(name) {
@@ -884,7 +999,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                     expected: None,
                     actual: None,
                 },
-                span: expr.span,
+                span,
                 source_override: None,
                 repair: None,
                 related: Vec::new(),
@@ -973,7 +1088,7 @@ impl<'a> UseAfterMoveChecker<'a> {
 
         self.check_expr(callee, consumed);
         for arg in args {
-            self.check_expr(arg, consumed);
+            self.check_argument(arg, consumed);
         }
 
         // A GPU atomic built-in writes through the buffer it is handed and
@@ -998,6 +1113,21 @@ impl<'a> UseAfterMoveChecker<'a> {
             &consumed_before,
             consumed,
         );
+    }
+
+    /// Checks one argument. A closure passed straight to the call lends what it
+    /// captures until the call is seen to keep it.
+    fn check_argument(&mut self, arg: &Expression, consumed: &mut Consumed) {
+        let value = argument_value(arg);
+        if let ExpressionKind::Lambda(lambda) = &value.node {
+            let captured = self.check_lambda_expr(lambda);
+            for capture in &captured {
+                self.report_use_after_consume(&capture.name, capture.span, consumed);
+            }
+            self.lent_closures.insert(value.id, captured);
+        } else {
+            self.check_expr(arg, consumed);
+        }
     }
 
     /// Consumes every resource argument the callee keeps, as its escape
@@ -1238,6 +1368,11 @@ impl<'a> UseAfterMoveChecker<'a> {
         callee_param_idx: usize,
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
+        let value = argument_value(arg);
+        if let Some(captured) = self.lent_closures.remove(&value.id) {
+            self.consume_captures(value.id, &captured, consumed);
+            return;
+        }
         let (name, ident_expr) = match &arg.node {
             ExpressionKind::Identifier(n, _) => (n.clone(), arg),
             ExpressionKind::NamedArgument(_, val) => match &val.node {
@@ -1250,6 +1385,9 @@ impl<'a> UseAfterMoveChecker<'a> {
             return;
         }
         if !self.is_resource_expr(ident_expr) {
+            return;
+        }
+        if self.gives_away_a_capture(&name, ident_expr.span) {
             return;
         }
         if self.hands_on_its_reference(ident_expr) {
@@ -1654,6 +1792,27 @@ fn passed_again_error(name: &str, fn_name: &str, span: Span) -> TypeError {
                 "'{name}' is passed to '{fn_name}' more than once, and '{fn_name}' keeps it: a resource has one owner\n  fix: pass '{name}' once, and read what the other argument needs from it before the call"
             ),
             help: None,
+            expected: None,
+            actual: None,
+        },
+        span,
+        source_override: None,
+        repair: None,
+        related: Vec::new(),
+    }
+}
+
+/// The refusal of a closure body handing on a resource it captures.
+fn given_away_capture_error(name: &str, span: Span) -> TypeError {
+    TypeError {
+        kind: TypeErrorKind::Coded {
+            code: DiagnosticCode::OwnDropOfBorrowedValue,
+            message: format!(
+                "'{name}' is captured by the closure, and the closure does not own it: it cannot be kept, moved, returned or dropped here"
+            ),
+            help: Some(format!(
+                "pass '{name}' to the closure as a parameter, or hand it on outside the closure"
+            )),
             expected: None,
             actual: None,
         },
