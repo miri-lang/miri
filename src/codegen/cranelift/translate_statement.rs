@@ -1769,9 +1769,10 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
         let closure_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx, None)?;
+        let function_word = header_offset(abi::CLOSURE_FUNCTION, ptr_type.bytes() as i32);
         let fn_ptr = builder
             .ins()
-            .load(ptr_type, MemFlagsData::new(), closure_ptr, 0);
+            .load(ptr_type, MemFlagsData::new(), closure_ptr, function_word);
 
         let call_conv = builder.func.signature.call_conv;
         let full_sig = call.signature(&[Passing::Word(ptr_type)], call_conv, ptr_type);
@@ -2059,20 +2060,19 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The kind of field `idx` of a value of kind `container`.
     ///
-    /// A declared type and a closure answer from their fields (a closure's
-    /// captures are held in the per-closure table rather than in any
-    /// declaration), and a tuple from the element type it spells. A following
-    /// projection is laid out by this answer: read as the tuple instead, a
-    /// struct field of a tuple element (`p.0.n`) would load at the tuple's own
-    /// field offset. An optional's one field is its payload, so a release or a
-    /// following projection through it sees the payload's own type — the
-    /// difference between opening a box and reading a nullable pointer as
-    /// itself. The rest — a result's payload — have no declared field to read,
-    /// and resolve to `Error`: their reader loads at the width of the binding
-    /// it fills.
+    /// A declared type answers from its fields, and a tuple from the element
+    /// type it spells. A following projection is laid out by this answer:
+    /// read as the tuple instead, a struct field of a tuple element (`p.0.n`)
+    /// would load at the tuple's own field offset. An optional's one field is
+    /// its payload, so a release or a following projection through it sees
+    /// the payload's own type — the difference between opening a box and
+    /// reading a nullable pointer as itself. The rest — a result's payload —
+    /// have no declared field to read, and resolve to `Error`: their reader
+    /// loads at the width of the binding it fills.
     ///
-    /// A closure local missing from the capture table, or a capture index past
-    /// the ones recorded, is a lowering invariant broken and is reported.
+    /// A closure's captures are read only where its body opens its
+    /// environment, so a field projection on a closure is a lowering
+    /// invariant broken and is reported.
     fn projected_field_kind(
         container: &TypeKind,
         idx: usize,
@@ -2083,17 +2083,10 @@ impl<'a> FunctionTranslator<'a> {
             TypeKind::Custom(name, type_args) => {
                 Self::declared_field_kind(name, type_args.as_deref(), idx, type_ctx)
             }
-            TypeKind::Function(_) => type_ctx
-                .closure_capture_ast_types
-                .get(&place.local)
-                .and_then(|caps| caps.get(idx))
-                .map(|ty| ty.kind.clone())
-                .ok_or_else(|| {
-                    CodegenError::Internal(format!(
-                        "closure local {:?} records no captured value at field {idx}",
-                        place.local
-                    ))
-                }),
+            TypeKind::Function(_) => Err(CodegenError::Internal(format!(
+                "`{place}` reads capture {idx} of a closure through a field projection; a \
+                 closure's environment is read only where its body opens it"
+            ))),
             TypeKind::Tuple(elements) => Ok(elements
                 .get(idx)
                 .and_then(argument_type)

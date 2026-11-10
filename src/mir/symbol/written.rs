@@ -70,9 +70,6 @@ fn write_written_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Res
             write!(f, "the {} function of ", thunk_role(*kind))?;
             write_written_subject(f, subject)
         }
-        SymbolKind::ClosureDestructor(closure) => {
-            write!(f, "the capture destructor of `{closure}`")
-        }
         SymbolKind::ClosureTrampoline(shape) => {
             f.write_str("the closure trampoline `")?;
             shape.write_written(f)?;
@@ -124,6 +121,9 @@ fn write_written_subject(f: &mut fmt::Formatter<'_>, subject: &ThunkSubject) -> 
             f.write_str("`")
         }
         ThunkSubject::Structural(encoding) => write!(f, "the structural type `{encoding}`"),
+        ThunkSubject::Environment(closure) => {
+            write!(f, "the environment of {}", closure.written())
+        }
     }
 }
 

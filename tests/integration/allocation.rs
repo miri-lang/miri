@@ -124,13 +124,26 @@ fn main()
     );
 }
 
+/// The leak is a cycle of two nodes, each holding a list: reference counting
+/// cannot free the cycle, so the lists' counted blocks stay live and the leak
+/// check's balance is non-zero at exit.
 #[test]
 fn test_trap_2_both_count_and_leak_reported() {
     let code = r#"
-use system.testing
+use system.collections.list
+
+class Node
+    public var items [int]
+    public var peer Node?
+    public fn init()
+        self.items = List([1, 2, 3])
+        self.peer = None
 
 fn main():
-    simulate_closure_leak()
+    var a = Node()
+    var b = Node()
+    a.peer = Some(b)
+    b.peer = Some(a)
     println("leaked")
 "#;
     let result =

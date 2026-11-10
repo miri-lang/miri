@@ -21,6 +21,7 @@
 //! type gives it, the signature the closure is compiled under.
 
 use crate::ast::types::{FunctionTypeData, TypeKind};
+use crate::codegen::cranelift::collection_header::header_offset;
 use crate::codegen::cranelift::value_abi::{
     function_type_signature, miri_signature, Passing, Returning,
 };
@@ -239,9 +240,16 @@ fn emit_trampoline_body(
             "a closure trampoline was declared without its closure and result".to_string(),
         ));
     };
-    let code = builder
-        .ins()
-        .load(target.ptr_type, MemFlagsData::trusted(), closure, 0);
+    let function_word = header_offset(
+        crate::abi::layout::CLOSURE_FUNCTION,
+        target.ptr_type.bytes() as i32,
+    );
+    let code = builder.ins().load(
+        target.ptr_type,
+        MemFlagsData::trusted(),
+        closure,
+        function_word,
+    );
     let mut call_args = vec![closure];
     for (argument, &slot) in shape.arguments.iter().zip(rest) {
         call_args.push(match argument {

@@ -704,12 +704,17 @@ fn register_base_class_instantiations(type_checker: &mut TypeChecker) -> Result<
 /// The type facts the CPU backend reads, settled over `bodies`.
 ///
 /// Drop thunks run on the host only, so a kernel body — which holds no value
-/// a host thunk releases — contributes no instantiation to them.
+/// a host thunk releases and opens no closure environment — contributes
+/// nothing to them.
 #[cfg(feature = "cranelift")]
 pub(super) fn settled_type_facts(
     pipeline_result: &PipelineResult,
     bodies: &[(String, mir::Body)],
 ) -> Result<mir::type_facts::TypeFacts, CompilerError> {
+    let host_bodies: Vec<&mir::Body> = (bodies.iter())
+        .map(|(_, body)| body)
+        .filter(|body| !body.is_gpu())
+        .collect();
     mir::type_facts::TypeFacts::new(
         pipeline_result.type_checker.type_definitions().clone(),
         pipeline_result
@@ -717,12 +722,13 @@ pub(super) fn settled_type_facts(
             .generic_class_instantiations
             .clone(),
         pipeline_result.vtable_fills.clone(),
-        bodies
-            .iter()
-            .map(|(_, body)| body)
-            .filter(|body| !body.is_gpu()),
+        host_bodies.iter().copied(),
     )
-    .map(|facts| facts.withholding(pipeline_result.withheld_methods.clone()))
+    .and_then(|facts| {
+        facts
+            .withholding(pipeline_result.withheld_methods.clone())
+            .with_closure_envs(host_bodies.iter().copied())
+    })
     .map_err(|refusal| {
         drop_instantiation_refusal(refusal, &pipeline_result.ast, &pipeline_result.type_checker)
     })
@@ -751,6 +757,11 @@ fn drop_instantiation_refusal(
             CompilerError::Codegen(format!(
                 "two instantiations of `{name}` at types with no name would share {symbol}, \
                  laid out for only one of them"
+            ))
+        }
+        mir::type_facts::DropInstantiationRefusal::ClosureEnvironment(reason) => {
+            CompilerError::Codegen(format!(
+                "a closure's environment cannot be laid out: {reason}"
             ))
         }
     }

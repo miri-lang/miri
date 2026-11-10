@@ -157,14 +157,6 @@ fn lower_function_reference(
         ),
         span: expr.span,
     });
-    // The allocator is an unmanaged scalar, so this closure owns no captured
-    // values. A stale capture-type entry left by an earlier assignment to the
-    // same local would make RC insertion drop fields the new payload does not have.
-    ctx.body
-        .captures
-        .closure_capture_types
-        .remove(&target.local);
-
     Ok(Operand::Copy(target))
 }
 
@@ -262,6 +254,7 @@ fn build_forwarding_thunk(
         thunk_ctx.emit_temp_drop(copy, watermark, span);
     }
     thunk_ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+    thunk_ctx.body.captures.closure = Some(thunk_symbol.clone());
 
     Ok(LambdaInfo {
         symbol: thunk_symbol,

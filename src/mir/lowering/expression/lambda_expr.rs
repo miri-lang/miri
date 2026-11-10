@@ -156,7 +156,8 @@ pub(crate) fn lower_closure(
     closure: &ClosureSource,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let (body, requests, captures) = lower_closure_body(ctx, closure)?;
+    let (mut body, requests, captures) = lower_closure_body(ctx, closure)?;
+    body.captures.closure = Some(closure.symbol.clone());
     ctx.lambda_bodies.push(LambdaInfo {
         symbol: closure.symbol.clone(),
         body,
@@ -401,13 +402,6 @@ fn emit_closure_aggregate(
         capture_operands.push(operand);
     }
 
-    // Record capture types in the outer body for RcInsertion / codegen.
-    // Stored as AST Type so both RC insertion (via MirType::from_type_kind) and
-    // codegen (via TypeKind) can use the same source of truth.
-    let capture_ast_types: Vec<Type> = captures
-        .iter()
-        .map(|cap| capture_type(ctx, cap.outer_local))
-        .collect();
     let operand_locals: Vec<Local> = capture_operands
         .iter()
         .filter_map(|op| match op {
@@ -429,24 +423,6 @@ fn emit_closure_aggregate(
         ),
         span: closure.span,
     });
-
-    // Register the capture types against the closure local so RC insertion and
-    // codegen can emit / translate DecRef(closure.field(i)) correctly.
-    // Always update (insert or remove) so that re-assigning a `var` closure
-    // to a capture-free closure clears any stale entry from the previous
-    // assignment — a stale entry would cause a spurious DecRef of the new
-    // closure's payload at StorageDead.
-    if capture_ast_types.is_empty() {
-        ctx.body
-            .captures
-            .closure_capture_types
-            .remove(&target.local);
-    } else {
-        ctx.body
-            .captures
-            .closure_capture_types
-            .insert(target.local, capture_ast_types);
-    }
 
     for local in operand_locals {
         ctx.emit_temp_drop(local, watermark, closure.span);

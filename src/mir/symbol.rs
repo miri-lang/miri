@@ -23,12 +23,14 @@
 //!              | item ".$vtable"                       a vtable
 //!              | item ".$" thunk                       a type's drop, decref, clone, compare or equals
 //!              | "$" thunk "." encoding                the same for a structural type
-//!              | "$lambda" id args                     a lambda
-//!              | "$fnref" id args "." target           the thunk of a function reference
-//!              | "$nested" id args "." identifier      a nested function
-//!              | "$dtor." closure                      a closure's capture destructor
+//!              | closure                               a closure's body
+//!              | closure ".$" thunk                    the same for a closure's environment,
+//!                                                       under the closure's own residency
 //!              | "$trampoline" ( "$" passing )* "." result
 //!                                                      a closure trampoline
+//! closure     := "$lambda" id args                     a lambda
+//!              | "$fnref" id args "." target           the thunk of a function reference
+//!              | "$nested" id args "." identifier      a nested function
 //! item        := identifier args
 //! args        := ( "$" token )*
 //! passing     := word | "addr"
@@ -160,9 +162,6 @@ const FUNCTION_REFERENCE_MARKER: &str = "fnref";
 
 /// Marks a function declared inside another body.
 const NESTED_FUNCTION_MARKER: &str = "nested";
-
-/// Marks the destructor releasing a closure's captures.
-const DESTRUCTOR_MARKER: &str = "dtor";
 
 /// Marks the trampoline a runtime function calls a closure through.
 const TRAMPOLINE_MARKER: &str = "trampoline";
@@ -303,7 +302,6 @@ enum SymbolKind {
         kind: ThunkKind,
         subject: ThunkSubject,
     },
-    ClosureDestructor(String),
     ClosureTrampoline(TrampolineShape),
     KernelDatum {
         kernel: String,
@@ -343,6 +341,9 @@ enum ThunkSubject {
     /// A tuple, option or function value, which has no declaration to name and
     /// is identified by the encoding of its structure codegen gives it.
     Structural(String),
+    /// The environment of the closure this symbol names: the captures a value
+    /// of it holds.
+    Environment(Box<Symbol>),
 }
 
 impl Symbol {
@@ -455,10 +456,16 @@ impl Symbol {
         })
     }
 
-    /// The destructor releasing the captures of a closure value whose body is
-    /// linked as `closure`.
-    pub fn closure_destructor(closure: &str) -> Self {
-        Self::of(SymbolKind::ClosureDestructor(closure.to_string()))
+    /// The `kind` function emitted for the environment of the closure
+    /// `closure`: the captures a value of it holds. It carries the closure's
+    /// residency segment, so the environments of two specializations of one
+    /// closure are two functions.
+    pub fn environment_thunk(kind: ThunkKind, closure: &Symbol) -> Self {
+        Self::of(SymbolKind::TypeThunk {
+            kind,
+            subject: ThunkSubject::Environment(Box::new(closure.clone())),
+        })
+        .with_residency(&closure.residency)
     }
 
     /// The trampoline a runtime function calls a closure of the shape
@@ -480,7 +487,6 @@ impl Symbol {
             | SymbolKind::Runtime(_)
             | SymbolKind::Entry
             | SymbolKind::TypeThunk { .. }
-            | SymbolKind::ClosureDestructor(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => None,
         }
@@ -548,13 +554,16 @@ impl Symbol {
             } => unnameable(owner_args) || unnameable(method_args),
             SymbolKind::Closure { context_args, .. } => unnameable(context_args),
             SymbolKind::TypeThunk {
+                subject: ThunkSubject::Environment(closure),
+                ..
+            } => closure.has_an_unnameable_argument(),
+            SymbolKind::TypeThunk {
                 subject: ThunkSubject::Structural(_),
                 ..
             }
             | SymbolKind::GpuKernel { .. }
             | SymbolKind::Runtime(_)
             | SymbolKind::Entry
-            | SymbolKind::ClosureDestructor(_)
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => false,
@@ -594,7 +603,6 @@ impl Symbol {
             | SymbolKind::Runtime(_)
             | SymbolKind::Entry
             | SymbolKind::TypeThunk { .. }
-            | SymbolKind::ClosureDestructor(_)
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => None,
@@ -618,7 +626,6 @@ impl Symbol {
             | SymbolKind::GpuKernel { .. }
             | SymbolKind::Entry
             | SymbolKind::TypeThunk { .. }
-            | SymbolKind::ClosureDestructor(_)
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => None,
@@ -667,10 +674,9 @@ impl Symbol {
             | SymbolKind::Runtime(_)
             | SymbolKind::Entry
             | SymbolKind::TypeThunk {
-                subject: ThunkSubject::Structural(_),
+                subject: ThunkSubject::Structural(_) | ThunkSubject::Environment(_),
                 ..
             }
-            | SymbolKind::ClosureDestructor(_)
             | SymbolKind::ClosureTrampoline(_)
             | SymbolKind::KernelDatum { .. }
             | SymbolKind::StringLiteral { .. } => (&[], None),
@@ -702,7 +708,6 @@ impl fmt::Display for Symbol {
             | SymbolKind::Vtable { .. }
             | SymbolKind::Closure { .. }
             | SymbolKind::TypeThunk { .. }
-            | SymbolKind::ClosureDestructor(_)
             | SymbolKind::ClosureTrampoline(_) => {
                 write_root(f, self.module())?;
                 write_residency(f, &self.residency)?;
@@ -749,9 +754,6 @@ fn write_definition(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::Resul
             context_args,
         } => write_closure(f, kind, *id, context_args),
         SymbolKind::TypeThunk { kind, subject } => write_thunk(f, *kind, subject),
-        SymbolKind::ClosureDestructor(closure) => {
-            write!(f, "{MARKER}{DESTRUCTOR_MARKER}{SEGMENT_SEPARATOR}{closure}")
-        }
         SymbolKind::ClosureTrampoline(shape) => {
             write!(f, "{MARKER}{TRAMPOLINE_MARKER}")?;
             shape.write_tokens(f, "$", ".")
@@ -813,6 +815,10 @@ fn write_thunk(f: &mut fmt::Formatter<'_>, kind: ThunkKind, subject: &ThunkSubje
             "{MARKER}{}{SEGMENT_SEPARATOR}{encoding}",
             thunk_marker(kind)
         ),
+        ThunkSubject::Environment(closure) => {
+            write_definition(f, &closure.kind)?;
+            write_marker_segment(f, thunk_marker(kind))
+        }
     }
 }
 
@@ -846,8 +852,8 @@ fn write_arguments<S: AsRef<str>>(
 ///
 /// It precedes the definition rather than following it because some
 /// definitions end in a name the symbol only carries — the target of a
-/// function reference, the closure a destructor releases — and a suffix after
-/// one of those could be read as part of it.
+/// function reference, the function a nested closure is declared as — and a
+/// suffix after one of those could be read as part of it.
 fn write_residency(
     f: &mut fmt::Formatter<'_>,
     residency: &[(usize, DeviceHandleId)],

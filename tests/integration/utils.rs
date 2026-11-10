@@ -238,7 +238,9 @@ pub fn assert_runtime_error(code: &str, expected_error: &str) {
 /// MIRI_LEAK_CHECK leak message in stderr containing `expected_fragment`.
 ///
 /// Use this to verify that the leak detector fires for specific leak scenarios
-/// (e.g. calling `system.testing.simulate_closure_leak()`).
+/// (e.g. a reference cycle that keeps a list alive). It counts only blocks
+/// allocated with a reference-count header; a leaked class block or closure
+/// environment is seen by the heap guard instead (`assert_heap_guard_detects`).
 pub fn assert_leak_detected(code: &str, expected_fragment: &str) {
     let result = miri_run(code);
 

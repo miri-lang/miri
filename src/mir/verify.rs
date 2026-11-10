@@ -128,6 +128,7 @@ mod abi_translation;
 mod borrow_reach;
 mod bound_names;
 mod callee_effects;
+mod closure_captures;
 mod drop_flags;
 mod in_bounds;
 mod lent_arguments;
@@ -147,6 +148,7 @@ mod vtable_slots;
 pub use abi_translation::verify_abi_translation;
 pub use bound_names::verify_bound_names;
 pub use callee_effects::HarmlessCallees;
+pub use closure_captures::{verify_closure_captures, verify_function_projections};
 pub use in_bounds::verify_in_bounds;
 pub use lent_arguments::verify_lent_arguments;
 pub use local_borrows::verify_local_borrows;
@@ -638,10 +640,11 @@ fn callee_violation(body: &Body, kind: &TerminatorKind) -> Option<VerificationVi
 
 /// Locals whose ownership this function is responsible for: managed, not the
 /// return slot, not a borrowed parameter, not an environment capture — a
-/// closure's captures are released by its destructor, not by the body that
-/// reads them — and not a local borrowing from a place the body owns, which
-/// holds no reference of its own. A parameter the body takes over is tracked
-/// like a local of its own, holding the one reference its caller funded.
+/// closure's captures are released by its environment's drop thunk, not by
+/// the body that reads them — and not a local borrowing from a place the body
+/// owns, which holds no reference of its own. A parameter the body takes over
+/// is tracked like a local of its own, holding the one reference its caller
+/// funded.
 fn collect_tracked_locals(
     body: &Body,
     ownership: &OwnershipFacts,

@@ -180,10 +180,6 @@ fn handle_managed_place_assign(
     dest: Option<Place>,
     rhs_watermark: &usize,
 ) -> Result<Operand, LoweringError> {
-    if matches!(lhs_ty.kind, TypeKind::Function(_)) {
-        sync_closure_captures(ctx, local, &rhs_place);
-    }
-
     // A whole array assigned into a gpu-resident binding is uploaded into the
     // binding's device buffer: a host value, and equally another gpu binding's
     // value (`b = a`), which the readback pass reads back before the upload
@@ -226,30 +222,6 @@ fn handle_managed_place_assign(
         Ok(Operand::Copy(d))
     } else {
         Ok(Operand::Copy(Place::new(local)))
-    }
-}
-
-/// Moves the capture types recorded for `rhs_place` onto `local`, so the closure
-/// `local` now holds is described by its own captures.
-///
-/// The closure `local` held before is released by the reassignment itself, and
-/// its destructor releases that closure's captures, so none are released here.
-fn sync_closure_captures(ctx: &mut LoweringContext, local: crate::mir::Local, rhs_place: &Place) {
-    match ctx
-        .body
-        .captures
-        .closure_capture_types
-        .remove(&rhs_place.local)
-    {
-        Some(new_caps) => {
-            ctx.body
-                .captures
-                .closure_capture_types
-                .insert(local, new_caps);
-        }
-        None => {
-            ctx.body.captures.closure_capture_types.remove(&local);
-        }
     }
 }
 

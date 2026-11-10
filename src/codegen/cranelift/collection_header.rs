@@ -7,7 +7,9 @@
 //! capacity, elem_size, .. }` keep the data pointer in their first word and the
 //! element count in their second; the slot size follows at a different word in
 //! each. Every word of a header that code generation reads goes through here,
-//! so an index, a length and the slot-size check agree on where it lives.
+//! so an index, a length and the slot-size check agree on where it lives. A
+//! closure's header, and the capture slots after it, are reached through here
+//! the same way.
 //!
 //! None of these loads is marked read-only or movable. A push writes the
 //! length through the same pointer, and a load allowed to move could be
@@ -16,7 +18,9 @@
 use crate::abi::layout as abi;
 use crate::ast::types::{BuiltinCollectionKind, Type};
 use crate::codegen::cranelift::translator::FunctionTranslator;
+use crate::codegen::cranelift::value_locals::scalar_type;
 use crate::error::CodegenError;
+use crate::mir::type_facts::CaptureHeld;
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::types as cl_types;
@@ -36,6 +40,37 @@ const INLINE_STRIDE_TRAP_CODE: TrapCode = TrapCode::unwrap_user(3);
 /// reads or writes is reached through here.
 pub(crate) fn header_offset(index: usize, word: i32) -> i32 {
     index as i32 * word
+}
+
+/// The Cranelift type a capture held as `held` is stored and loaded at: a
+/// scalar at its own width and class, a word at the pointer size, and a value
+/// held as its bytes as the address they are copied from or to.
+pub(crate) fn capture_slot_type(held: &CaptureHeld, ptr_type: cl_types::Type) -> cl_types::Type {
+    match held {
+        CaptureHeld::Scalar(scalar) => scalar_type(*scalar),
+        CaptureHeld::Word | CaptureHeld::Bytes(_) => ptr_type,
+    }
+}
+
+/// The byte offset, at a pointer size of `word` bytes, of the byte of a
+/// closure's payload that lies `past_header` bytes after its
+/// [`ClosureHeader`] ends: where a capture slot of an [`EnvLayout`] starts,
+/// and, for the bytes the layout's captures span, the payload's size. Every
+/// capture code generation stores, loads or releases is reached through
+/// here, so the header's size is added in one place.
+///
+/// [`ClosureHeader`]: crate::abi::layout::ClosureHeader
+/// [`EnvLayout`]: crate::mir::type_facts::EnvLayout
+pub(crate) fn closure_payload_offset(past_header: u32, word: i32) -> Result<i32, CodegenError> {
+    i32::try_from(past_header)
+        .ok()
+        .and_then(|past| header_offset(abi::CLOSURE_CAPTURES, word).checked_add(past))
+        .ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "a closure's capture lies {past_header} bytes past its header, beyond the \
+                 reach of a load"
+            ))
+        })
 }
 
 /// Loads the header word `index` names of the value at `base`, which the

@@ -6,14 +6,17 @@
 //! only the ones whose method bodies were lowered.
 
 use miri::ast::type_arguments::type_argument;
-use miri::ast::types::{Type, TypeKind};
+use miri::ast::types::{FunctionTypeData, Type, TypeKind};
 use miri::ast::MemberVisibility;
 use miri::error::syntax::Span;
 use miri::mir::body::{Body, ExecutionModel, LocalDecl};
+use miri::mir::symbol::{ClosureKind, Symbol};
 use miri::mir::type_facts::{
     ClassDefinition, DropInstantiationRefusal, GenericDefinition, TypeDefinition, TypeFacts,
 };
-use miri::mir::{AggregateKind, BasicBlockData, Local, Place, Rvalue, Statement, StatementKind};
+use miri::mir::{
+    AggregateKind, BasicBlockData, Local, Operand, Place, Rvalue, Statement, StatementKind,
+};
 use miri::type_checker::context::FieldInfo;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -132,12 +135,31 @@ fn a_registered_instantiation_keeps_its_thunk() {
     assert!(!facts.is_drop_instantiation("Box", &[ty(TypeKind::Int)]));
 }
 
+/// A closure captures the operand it is built from, so the instantiation it
+/// captures is held by the creating body's own local.
 #[test]
 fn an_instantiation_only_a_closure_captures_gets_a_drop_thunk() {
-    let mut body = Body::new(0, Span::default(), ExecutionModel::Cpu);
-    body.captures
-        .closure_capture_types
-        .insert(Local(0), vec![instance("Box", vec![string()])]);
+    let function = ty(TypeKind::Function(Box::new(FunctionTypeData {
+        generics: None,
+        params: Vec::new(),
+        return_type: None,
+    })));
+    let mut body = body_holding(vec![function.clone(), instance("Box", vec![string()])]);
+    let mut block = BasicBlockData::new(None);
+    block.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(0)),
+            Rvalue::Aggregate(
+                AggregateKind::Closure(
+                    Symbol::closure(ClosureKind::Lambda, 1, std::iter::empty::<&Type>()),
+                    function,
+                ),
+                vec![Operand::Copy(Place::new(Local(1)))],
+            ),
+        ),
+        span: Span::default(),
+    });
+    body.basic_blocks.push(block);
     let facts = TypeFacts::new(definitions(), HashMap::new(), Default::default(), [&body]).unwrap();
 
     assert!(facts.is_drop_instantiation("Box", &[string()]));
@@ -216,6 +238,7 @@ fn an_unbound_argument_spelled_as_a_bare_name_names_the_same_drop_function() {
     assert!(facts.is_drop_instantiation("Duo", &[string(), parameter("B")]));
 }
 
+mod closure_env;
 mod drop_plan;
 mod element_identity;
 mod release_plan;

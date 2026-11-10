@@ -6,7 +6,6 @@
 //! This module provides the Cranelift-based code generator for CPU targets.
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
-pub(crate) mod closure;
 mod closure_trampolines;
 mod code_map;
 pub mod collection_header;
@@ -435,9 +434,10 @@ impl Backend for CraneliftBackend {
 
     /// Compile the provided MIR bodies into an artifact.
     ///
-    /// Pipeline: resolve ISA → create object module → declare runtime imports →
-    /// generate drop thunks / closure dtors → predeclare user fns → compile each
-    /// body → generate vtables → emit string literals → finalize object.
+    /// Pipeline: resolve ISA → create object module → declare runtime imports
+    /// → generate drop thunks, closure environments' included → predeclare
+    /// user fns → compile each body → generate vtables → emit string literals
+    /// → finalize object.
     fn compile(
         &self,
         bodies: &[(&str, &Body)],
@@ -450,7 +450,7 @@ impl Backend for CraneliftBackend {
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)?;
         self.generate_structural_element_decref_functions(&mut module, &mut ctx, &isa, bodies)?;
         self.generate_element_method_thunks(&mut module, &mut ctx, &isa)?;
-        self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
+        self.generate_environment_drop_functions(&mut module, &mut ctx, &isa)?;
         let kernel_registry = crate::codegen::cranelift::gpu_launch::build_kernel_registry(
             &mut module,
             bodies,
@@ -639,35 +639,29 @@ impl CraneliftBackend {
         Ok((ObjectModule::new(object_builder), Context::new()))
     }
 
-    /// Generate `miri.$dtor.{lambda_name}` destructors for closure bodies that
-    /// capture managed values. Must run before user fns so call sites can
-    /// reference them via `Linkage::Import`.
-    fn generate_lambda_destructors(
+    /// Generate the drop thunk of every closure environment whose plan
+    /// releases anything, in symbol order. Must run before user fns so the
+    /// sites building those closures can reference them via `Linkage::Import`.
+    fn generate_environment_drop_functions(
         &self,
         module: &mut ObjectModule,
         ctx: &mut Context,
         isa: &Arc<dyn TargetIsa>,
-        bodies: &[(&str, &Body)],
     ) -> Result<(), CodegenError> {
-        for (name, body) in bodies.iter() {
-            if body.captures.env_capture_locals.is_empty() {
-                continue;
-            }
-            let capture_kinds = (body.captures.env_capture_locals.iter())
-                .map(|cap_local| &body.local_decls[cap_local.0].ty.kind);
-            let has_managed =
-                !crate::mir::type_facts::released_captures(capture_kinds, body.layout_scope())
-                    .is_empty();
-            if has_managed {
-                FunctionTranslator::generate_closure_destructor(
-                    module,
-                    ctx,
-                    isa,
-                    name,
-                    body,
-                    &self.facts,
-                )?;
-            }
+        let mut envs: Vec<_> = (self.facts.closure_envs())
+            .filter(|(_, env)| env.plan.releases_anything())
+            .map(|(closure, env)| (closure.link_name(), closure, env))
+            .collect();
+        envs.sort_unstable_by(|(left, ..), (right, ..)| left.cmp(right));
+        for (_, closure, env) in envs {
+            FunctionTranslator::generate_environment_drop_function(
+                module,
+                ctx,
+                isa,
+                closure,
+                env,
+                &self.facts,
+            )?;
         }
         Ok(())
     }
@@ -937,6 +931,7 @@ impl CraneliftBackend {
                 env.string_literals,
                 env.kernel_registry,
                 emission,
+                (self.facts.closure_of_body(body)).map(|closure_env| &closure_env.layout),
             )
             .map_err(|e| CodegenError::translation(name, e.to_string()))?;
         let sig = translator.signature().clone();

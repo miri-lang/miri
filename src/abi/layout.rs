@@ -65,11 +65,25 @@ pub struct StringHeader {
     pub capacity: Word,
 }
 
+/// The words a closure's payload begins with, in order: the function a call
+/// of the closure enters, and the drop thunk of its environment, or null when
+/// releasing the environment releases nothing. The captures follow them.
+///
+/// The drop word is a drop thunk under the contract every drop thunk keeps:
+/// called once the closure's count reaches zero, it releases the captures and
+/// frees the block.
+#[repr(C)]
+pub struct ClosureHeader {
+    pub function: Word,
+    pub drop: Word,
+}
+
 const _: () = assert!(size_of::<ListHeader>() == 4 * size_of::<Word>());
 const _: () = assert!(size_of::<ArrayHeader>() == 3 * size_of::<Word>());
 const _: () = assert!(size_of::<MapHeader>() == 4 * size_of::<Word>());
 const _: () = assert!(size_of::<SetHeader>() == 2 * size_of::<Word>());
 const _: () = assert!(size_of::<StringHeader>() == 3 * size_of::<Word>());
+const _: () = assert!(size_of::<ClosureHeader>() == 2 * size_of::<Word>());
 
 /// The word of a list's header holding the address of its first element.
 pub const LIST_DATA: usize = word_index(offset_of!(ListHeader, data));
@@ -93,6 +107,13 @@ pub const ELEMENTS_DATA: usize = LIST_DATA;
 /// The word of an array's or a list's header holding its element count.
 pub const ELEMENTS_LEN: usize = LIST_LEN;
 const _: () = assert!(LIST_DATA == ARRAY_DATA && LIST_LEN == ARRAY_LEN);
+
+/// The word of a closure's payload holding the function a call enters.
+pub const CLOSURE_FUNCTION: usize = word_index(offset_of!(ClosureHeader, function));
+/// The word of a closure's payload holding its environment's drop thunk.
+pub const CLOSURE_DROP: usize = word_index(offset_of!(ClosureHeader, drop));
+/// The word of a closure's payload its first capture starts at.
+pub const CLOSURE_CAPTURES: usize = size_of::<ClosureHeader>() / size_of::<Word>();
 
 /// The word of a map's header holding its entry count.
 pub const MAP_LEN: usize = word_index(offset_of!(MapHeader, len));

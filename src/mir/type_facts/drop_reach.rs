@@ -16,7 +16,8 @@
 //!
 //! The same walk answers whether a type's drop thunk can run again inside
 //! itself: whether what the instance holds can lead back to the instance. Only
-//! a thunk on such a cycle has to bound the stack its release takes.
+//! a thunk on such a cycle has to bound the stack its release takes. A
+//! closure's environment is on one when what it captures may hold a closure.
 
 use crate::ast::type_arguments::{type_arguments, TypeArgument};
 use crate::ast::types::{Type, TypeKind};
@@ -63,6 +64,18 @@ impl<'d> DropHookReach<'d> {
         .reaches(ty, 0)
     }
 
+    /// Whether releasing a `ty` value may release a closure, on anything it
+    /// holds: the only way releasing a closure's environment can run the
+    /// release of another environment from inside itself.
+    pub(super) fn may_reach_closure(&self, ty: &Type) -> bool {
+        Walk {
+            reach: self,
+            visited: HashSet::new(),
+            sought: Sought::Closure,
+        }
+        .reaches(ty, 0)
+    }
+
     /// Whether releasing the instance of `name` at `args` may release another
     /// value of that same instance from inside itself, directly or through
     /// other types: the only way a release's depth can follow data.
@@ -91,6 +104,10 @@ enum Sought {
     DropHook,
     /// The instance whose thunk is named by this symbol.
     Instance(Symbol),
+    /// A closure, which every function-typed value may be. No named type is
+    /// one, so the walk finds it only where a function type, or a type that
+    /// may stand for one, is held.
+    Closure,
 }
 
 /// One question to [`DropHookReach`], with the instances already followed so a
@@ -163,6 +180,7 @@ impl Walk<'_, '_> {
                 crate::type_checker::utils::has_drop_hook(name, self.reach.definitions)
             }
             Sought::Instance(sought) => sought == instance,
+            Sought::Closure => false,
         }
     }
 

@@ -143,7 +143,6 @@ pub(super) fn write_kind(f: &mut fmt::Formatter<'_>, kind: &SymbolKind) -> fmt::
             f.write_str(thunk_prefix(*kind))?;
             write_thunk_subject(f, subject)
         }
-        SymbolKind::ClosureDestructor(closure) => write!(f, "__dtor_{closure}"),
         SymbolKind::ClosureTrampoline(shape) => {
             f.write_str(MODULE_PREFIX)?;
             f.write_str(TRAMPOLINE_MARK)?;
@@ -218,6 +217,7 @@ fn write_thunk_subject(f: &mut fmt::Formatter<'_>, subject: &ThunkSubject) -> fm
             write_arguments(f, args)
         }
         ThunkSubject::Structural(encoding) => f.write_str(encoding),
+        ThunkSubject::Environment(closure) => write!(f, "{}", Wgsl(closure)),
     }
 }
 

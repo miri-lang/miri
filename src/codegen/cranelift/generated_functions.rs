@@ -2,9 +2,9 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 //! The functions the backend generates itself, beside the bodies it is
-//! handed: the drop, release and clone thunks of each type, closure
-//! destructors and trampolines, and the structural equality and hash of a
-//! tuple. None has a source line of its own.
+//! handed: the drop, release and clone thunks of each type, the drop thunk of
+//! each closure's environment, closure trampolines, and the structural
+//! equality and hash of a tuple. None has a source line of its own.
 //!
 //! A profile build lists each after the user functions, in its function
 //! table and in its line map, as a function with no runs, so a profiler

@@ -93,27 +93,3 @@ pub unsafe extern "C" fn miri_rt_release_drain() {
     }
     miri_rt_release_depth.store(0, Ordering::Relaxed);
 }
-
-/// Drops the closure at `payload`: releases its captures through its `dtor`,
-/// then frees its block. The deferred form of the sequence compiled code emits
-/// inline when a closure's count reaches zero, and bound to its layout:
-/// `payload[0]` the function, `payload[1]` the capture destructor, or null.
-///
-/// # Safety
-/// `payload` must be a closure whose count reached zero.
-#[no_mangle]
-pub unsafe extern "C" fn miri_rt_release_closure(payload: *mut u8) {
-    let word = std::mem::size_of::<usize>();
-    // SAFETY: a closure holds its `dtor` in its second payload word, and the
-    // block's allocation base lies one size word before its count header.
-    unsafe {
-        let dtor = payload.add(word).cast::<Option<DropThunk>>().read();
-        if let Some(dtor) = dtor {
-            dtor(payload);
-        }
-        crate::rc::miri_rt_closure_free_track();
-        let base = payload.sub(crate::rc::RC_HEADER_SIZE + word);
-        crate::rc::miri_rt_class_free_track(base);
-        crate::block_cache::ffi::miri_rt_block_free(base);
-    }
-}

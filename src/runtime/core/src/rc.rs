@@ -25,13 +25,6 @@ pub const RC_HEADER_SIZE: usize = crate::abi_layout::COUNT_WORDS * std::mem::siz
 /// Incremented on alloc, decremented on free. Non-zero at exit → leak or double-free.
 static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
-/// Global counter for closure heap allocations.
-///
-/// Closures are allocated by compiled code (not `alloc_with_rc`) because their
-/// layout has an extra size header word. This separate counter lets the leak-check
-/// atexit handler catch closure-only leaks that `RC_ALLOC_BALANCE` would miss.
-pub static CLOSURE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
-
 /// Nothing to do where the runtime registers its exit handlers from a
 /// load-time initialiser (see `alloc_count`): they are in place before compiled
 /// code first allocates, so allocation pays nothing for them.
@@ -41,7 +34,7 @@ fn ensure_exit_handler_registered() {}
 
 /// Registers an `atexit` handler for exit reporting on first allocation, on a
 /// platform with no load-time initialiser to do it.
-/// Called once on first RC allocation, closure allocation, or inline allocation.
+/// Called once on first RC allocation or inline allocation.
 /// Ensures both alloc-count and leak-check handlers are registered as needed.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn ensure_exit_handler_registered() {
@@ -81,18 +74,9 @@ pub(crate) fn report_leak_check_at_exit() {
 
     // Then check for leaks
     let rc_balance = RC_ALLOC_BALANCE.load(Ordering::Relaxed);
-    let cl_balance = CLOSURE_ALLOC_BALANCE.load(Ordering::Relaxed);
-    if rc_balance != 0 || cl_balance != 0 {
+    if rc_balance != 0 {
         // Use a raw write to stderr to avoid Rust's buffered I/O flushing issues.
-        let msg = if rc_balance != 0 && cl_balance != 0 {
-            format!(
-                "MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s) and {cl_balance} closure allocation(s)\n"
-            )
-        } else if rc_balance != 0 {
-            format!("MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s)\n")
-        } else {
-            format!("MIRI_LEAK_CHECK: leaked {cl_balance} closure allocation(s)\n")
-        };
+        let msg = format!("MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s)\n");
         // `_exit` below skips the profiler's atexit handler too; a leak
         // leaves the heap sound enough to write its record.
         crate::profile::finish();
@@ -303,49 +287,27 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     crate::block_cache::release_block(base, total_size);
 }
 
-/// Records that a closure heap allocation has been made.
+/// Leaks one block of the kind compiled code allocates itself — a class
+/// instance, a closure environment — for testing the heap guard's leak report.
 ///
-/// Called by compiled Miri code immediately after `miri_rt_block_alloc`
-/// allocates a closure struct. Registers the `atexit` leak-check handler on the first call.
-///
-/// # Safety
-/// Must be matched by exactly one call to `miri_rt_closure_free_track` when the
-/// closure is freed.
-#[no_mangle]
-pub unsafe extern "C" fn miri_rt_closure_alloc_track() {
-    ensure_exit_handler_registered();
-    if is_counted() {
-        CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-/// Records that a closure heap allocation has been freed.
-///
-/// Called by compiled Miri code immediately before `libc::free` releases a
-/// closure struct whose RC has reached zero.
+/// The block is reported to the guard as a class block and never released, so
+/// under `MIRI_HEAP_GUARD=1` the exit handler reports it as leaked. It once
+/// unbalanced a closure-only counter that no longer exists; the name is kept
+/// because a runtime function's name, once declared to the stdlib, is never
+/// changed.
 ///
 /// # Safety
-/// Must be called exactly once per matching `miri_rt_closure_alloc_track` call.
-#[no_mangle]
-pub unsafe extern "C" fn miri_rt_closure_free_track() {
-    if is_counted() {
-        CLOSURE_ALLOC_BALANCE.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// Simulates a closure memory leak for testing the MIRI_LEAK_CHECK detector.
-///
-/// Increments `CLOSURE_ALLOC_BALANCE` by one without allocating a closure,
-/// causing the atexit leak-check handler to report a spurious leak. Use this
-/// from `system.testing` to write E2E tests that verify the detector fires.
-///
-/// # Safety
-/// This function is for testing only. It intentionally unbalances the leak
-/// counter; calling it in production code will produce a false leak report.
+/// This function is for testing only. It leaks memory by design; calling it
+/// in production code produces a leak report.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
-    ensure_exit_handler_registered();
-    CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::Relaxed);
+    let base = crate::block_cache::ffi::miri_rt_block_alloc(crate::guard::INLINE_PAYLOAD_OFFSET);
+    if base.is_null() {
+        return;
+    }
+    let payload = base.add(crate::guard::INLINE_PAYLOAD_OFFSET);
+    payload.sub(RC_HEADER_SIZE).cast::<usize>().write(1);
+    miri_rt_class_alloc_track(base);
 }
 
 /// Records a block compiled code allocated itself with the heap guard.
@@ -353,8 +315,7 @@ pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
 /// Class instances, tuples, `Option`s, enum payloads and closure environments
 /// are allocated inline by codegen rather than through [`alloc_with_rc`], so
 /// they never reach the guard's shadow table on their own. Codegen emits a call
-/// to this right after `miri_rt_block_alloc`, mirroring the existing
-/// `miri_rt_closure_alloc_track` pattern.
+/// to this right after `miri_rt_block_alloc`.
 ///
 /// `ptr` is the allocation base, which is also what `miri_rt_block_free` later
 /// receives — keeping both sides of the pair keyed identically.
@@ -404,8 +365,8 @@ pub extern "C" fn miri_rt_release_check(ptr: *mut u8) {
 /// Frees a closure outright, as a spurious extra release would, so a test can
 /// prove the heap guard reports the release compiled code makes afterwards.
 ///
-/// The closure's own capture destructor is not run: this stands in for the
-/// defect, not for a correct drop.
+/// The drop thunk of the closure's environment is not run: this stands in for
+/// the defect, not for a correct drop.
 ///
 /// # Safety
 /// For testing only. `closure` must be a live closure payload compiled code
@@ -423,7 +384,6 @@ pub unsafe extern "C" fn miri_rt_test_simulate_closure_over_release(
     if closure.is_null() {
         return;
     }
-    miri_rt_closure_free_track();
     miri_rt_test_simulate_inline_over_release(closure);
 }
 

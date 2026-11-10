@@ -5,6 +5,10 @@
 // A lambda that captures a managed value must IncRef it on creation and
 // DecRef it when the lambda itself is dropped.
 //
+// Every test runs under the heap guard, which tracks a closure's block like a
+// class instance's and reports one left behind at exit or read after it was
+// freed: a clean run proves no leak and no double free, not only the output.
+//
 // Covered cases:
 //   - Primitive captures (int, float, bool) — copy semantics, no RC needed
 //   - String captures — pointer capture with correct RC
@@ -21,7 +25,7 @@ use super::super::utils::*;
 /// This extends the basic capture test with an explicit memory-leak assertion.
 #[test]
 fn test_lambda_captures_string_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 
 fn main()
@@ -38,7 +42,7 @@ fn main()
 /// The class pointer must be IncRef'd on lambda creation and DecRef'd on drop.
 #[test]
 fn test_lambda_captures_class_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 
 class Counter
@@ -56,7 +60,7 @@ fn main()
 /// Lambda captures two Strings; both must be freed when the lambda drops.
 #[test]
 fn test_lambda_captures_two_strings_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 
 fn main()
@@ -73,7 +77,7 @@ fn main()
 /// Lambda called multiple times with a captured String; no double-free.
 #[test]
 fn test_lambda_captures_string_called_multiple_times_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 
 fn main()
@@ -94,7 +98,7 @@ fn main()
 /// and must be freed exactly once after both the lambda and outer binding drop.
 #[test]
 fn test_lambda_captures_list_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -110,7 +114,7 @@ fn main()
 /// Lambda called multiple times; the captured List must not be double-freed.
 #[test]
 fn test_lambda_called_multiple_times_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -128,7 +132,7 @@ fn main()
 /// Lambda captures two managed Lists; both must be freed when the lambda drops.
 #[test]
 fn test_lambda_captures_two_lists_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -145,7 +149,7 @@ fn main()
 /// Lambda created fresh inside a loop, capturing the same outer List each time.
 #[test]
 fn test_lambda_created_in_loop_no_accumulation() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -165,7 +169,7 @@ fn main()
 /// Lambda passed as argument to a higher-order function, captures a List.
 #[test]
 fn test_lambda_passed_as_arg_captures_list_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -184,7 +188,7 @@ fn main()
 /// Lambda captures a class with a managed List field.
 #[test]
 fn test_lambda_captures_class_with_list_field_no_leak() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -202,11 +206,11 @@ fn main()
 }
 
 /// Mutable closure var reassigned from a capturing closure to a non-capturing one.
-/// The stale `closure_capture_types` entry for the original local must not cause
-/// a spurious DecRef on the new closure's payload (which has no captures).
+/// Releasing the closure the variable held must release that closure's
+/// captures, and nothing on the new closure's payload (which has none).
 #[test]
 fn test_closure_var_reassigned_capturing_to_non_capturing() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -224,7 +228,7 @@ fn main()
 /// Ensures the new captures are correctly tracked and freed on drop.
 #[test]
 fn test_closure_var_reassigned_non_capturing_to_capturing() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -241,16 +245,12 @@ fn main()
 // ────────────────────────────────────────────────────────────────────────────
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Verifies that closure allocations are counted in CLOSURE_ALLOC_BALANCE and
-/// properly balanced by closure frees: a simple closure that is created and
-/// dropped must leave the counter at zero, or the MIRI_LEAK_CHECK atexit handler
-/// would fire and this test would fail with "Memory leak detected".
-///
-/// Tests that allocation tracking is in place and does not produce false
-/// positives on correct code.
+/// A closure that is created and dropped leaves no block behind: its
+/// environment is reported to the heap guard as a class block on allocation
+/// and on release, so a correct program exits without a leak report.
 #[test]
-fn test_closure_alloc_tracked_no_false_positive() {
-    assert_runs_with_output(
+fn a_dropped_closure_leaves_no_block() {
+    assert_heap_guard_output(
         r#"
 
 fn main()
@@ -261,29 +261,77 @@ fn main()
     );
 }
 
-/// E2E: a simulated closure leak (via `system.testing.simulate_closure_leak`)
-/// must cause the MIRI_LEAK_CHECK atexit handler to fire and exit non-zero with
-/// the "leaked N closure allocation(s)" message.
+/// A closure environment that is never released is reported by the heap
+/// guard as a leaked class block, the same report any inline block gets.
 ///
-/// Tests that the allocation tracking correctly detects and reports an imbalanced
-/// closure counter at process exit.
+/// The leak is a cycle: the closure captures the holder, and the holder keeps
+/// the closure, so neither count reaches zero and exactly those two blocks
+/// are reported. `a_closure_kept_by_an_object_it_does_not_capture_is_released`
+/// is the same program without the cycle, and exits clean.
 #[test]
-fn test_closure_leak_detector_fires() {
-    assert_leak_detected(
+fn test_leaked_closure_environment_is_reported_as_a_class_block() {
+    assert_heap_guard_detects(
         r#"
-use system.testing
+class Holder
+    public var value int
+    public var callback (fn() int)?
+    public fn init(value int)
+        self.value = value
+        self.callback = None
 
 fn main()
-    simulate_closure_leak()
+    var holder = Holder(7)
+    let read = fn() int: holder.value
+    holder.callback = Some(read)
+    println("built")
 "#,
-        "leaked 1 closure allocation(s)",
+        &["leaked 2 allocations", "(class) x2"],
     );
 }
 
-/// Two simulated leaks must report a count of 2.
+/// An object keeping a closure that captures a different object is released
+/// with the closure and its capture: without a cycle nothing is left behind.
 #[test]
-fn test_closure_leak_detector_reports_count() {
-    assert_leak_detected(
+fn a_closure_kept_by_an_object_it_does_not_capture_is_released() {
+    assert_heap_guard_output(
+        r#"
+class Holder
+    public var value int
+    public var callback (fn() int)?
+    public fn init(value int)
+        self.value = value
+        self.callback = None
+
+fn main()
+    var holder = Holder(7)
+    let other = Holder(8)
+    let read = fn() int: other.value
+    holder.callback = Some(read)
+    println("built")
+"#,
+        "built",
+    );
+}
+
+/// `system.testing.simulate_closure_leak` leaks one class block, which the
+/// heap guard reports at exit.
+#[test]
+fn test_simulated_closure_leak_is_reported_as_a_class_block() {
+    assert_heap_guard_detects(
+        r#"
+use system.testing
+
+fn main()
+    simulate_closure_leak()
+"#,
+        &["leaked 1 allocations", "(class)"],
+    );
+}
+
+/// Two simulated leaks are reported together.
+#[test]
+fn test_simulated_closure_leak_reports_count() {
+    assert_heap_guard_detects(
         r#"
 use system.testing
 
@@ -291,15 +339,15 @@ fn main()
     simulate_closure_leak()
     simulate_closure_leak()
 "#,
-        "leaked 2 closure allocation(s)",
+        &["leaked 2 allocations", "(class)"],
     );
 }
 
 /// Same with a capturing closure to verify that both the closure struct and its
 /// captured managed value remain balanced across the full alloc → use → drop cycle.
 #[test]
-fn test_capturing_closure_alloc_tracked_no_false_positive() {
-    assert_runs_with_output(
+fn a_dropped_capturing_closure_leaves_no_block() {
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -320,7 +368,7 @@ fn main()
 /// and be freed exactly once when the returned closure is dropped by the caller.
 #[test]
 fn test_closure_returned_from_function() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -338,7 +386,7 @@ fn main()
 /// Return a closure that captures a locally-created List (not a parameter).
 #[test]
 fn test_closure_returned_captures_local_list() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -358,7 +406,7 @@ fn main()
 /// Return a non-capturing closure from a function.
 #[test]
 fn test_closure_returned_no_capture() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 
 fn make_fn() fn() int
@@ -376,7 +424,7 @@ fn main()
 /// Return a closure that captures a primitive parameter.
 #[test]
 fn test_closure_returned_captures_int_param() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 
 fn make_adder(n int) fn() int
@@ -394,7 +442,7 @@ fn main()
 /// Debug: check list length inside make_counter vs after.
 #[test]
 fn test_debug_list_param_capture_length() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -416,7 +464,7 @@ fn main()
 /// must be freed via the drop thunk — not just via a bare libc::free.
 #[test]
 fn test_closure_captures_class_with_list_field() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -439,7 +487,7 @@ fn main()
 /// must not double-free the List.
 #[test]
 fn test_two_lambdas_capture_same_list_no_double_free() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -454,7 +502,7 @@ fn main()
 }
 
 /// Reassigning a variable that holds a capturing closure releases that closure,
-/// and the closure's own destructor releases its captures: the capture is not
+/// and the drop thunk of its environment releases its captures: the capture is not
 /// released a second time on top of that, whether the new closure captures or
 /// not.
 #[test]
@@ -493,9 +541,8 @@ fn main()
     );
 }
 
-/// A closure's environment holds each capture in one pointer word, so a
-/// captured vector is held as the pointer to its own allocation and the
-/// closure's destructor must release it.
+/// A closure capturing a vector holds it in its environment the way the
+/// vector is held anywhere, and dropping the closure leaves nothing behind.
 #[test]
 fn test_lambda_captures_vector_no_leak() {
     assert_heap_guard_output(
@@ -527,5 +574,249 @@ fn main()
     println(f"{f()}")
 "#,
         "hello1\n2.0",
+    );
+}
+
+const CLOSING_HANDLE: &str = r#"
+class Handle
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+"#;
+
+fn with_closing_handle(program: &str) -> String {
+    format!("{CLOSING_HANDLE}\n{program}")
+}
+
+/// A resource captured by a kept closure that is copied into a list and
+/// returned is released once, when the list's copy, the last one, goes.
+#[test]
+fn a_resource_captured_by_a_closure_copied_into_a_returned_list_is_released_once() {
+    assert_heap_guard_output(
+        &with_closing_handle(
+            r#"
+use system.collections.list
+
+fn make() [fn() int]
+    let h = Handle(1)
+    let f = fn() int: h.id
+    var fs = List<fn() int>()
+    fs.push(f)
+    println(f"made {f()}")
+    return fs
+
+fn main()
+    if true
+        let fs = make()
+        println(f"held {fs.length()}")
+    println("done")
+"#,
+        ),
+        "made 1\nheld 1\nclosed 1\ndone",
+    );
+}
+
+/// Releasing a long chain of closures, each capturing the one before it,
+/// does not take a native frame per link, and the resource at the bottom of
+/// the chain is released once.
+#[test]
+fn a_deep_chain_of_capturing_closures_is_released_without_overflow() {
+    assert_heap_guard_output(
+        &with_closing_handle(
+            r#"
+fn main()
+    if true
+        let h = Handle(7)
+        var f = fn() int: h.id
+        var i = 0
+        while i < 200000
+            let g = f
+            f = fn() int: g() + 1
+            i = i + 1
+        println("built")
+    println("done")
+"#,
+        ),
+        "built\nclosed 7\ndone",
+    );
+}
+
+/// A closure capturing two resources releases them in the order it captured
+/// them: an environment's captures are released forward, in capture order,
+/// like an aggregate's fields.
+#[test]
+fn a_closure_capturing_two_resources_releases_them_in_capture_order() {
+    assert_heap_guard_output(
+        &with_closing_handle(
+            r#"
+fn main()
+    if true
+        let a = Handle(1)
+        let b = Handle(2)
+        let f = fn() int: a.id + b.id
+        println(f"sum {f()}")
+    println("done")
+"#,
+        ),
+        "sum 3\nclosed 1\nclosed 2\ndone",
+    );
+}
+
+/// A function specialized for a gpu-resident argument lowers its lambda a
+/// second time, under the specialization's residency, so the two closures
+/// each get a drop thunk of their own rather than one name defined twice.
+#[test]
+fn a_lambda_in_a_residency_specialized_function_has_its_own_drop_thunk() {
+    assert_builds(
+        r#"
+use system.collections.array
+
+fn scale(a out Array<int,8>)
+    let tag = "scaled"
+    let say = fn() String: tag
+    let _said = say()
+    forall i in 0..a.length()
+        a[i] = a[i] * 2
+
+fn main()
+    gpu var data = [1, 2, 3, 4, 5, 6, 7, 8]
+    scale(data)
+    var host = [1, 2, 3, 4, 5, 6, 7, 8]
+    scale(host)
+    println(f"{host[1]}")
+"#,
+    );
+}
+
+/// A closure releases a resource held at every capture position, not only
+/// the first: each slot of its environment is loaded and released once.
+#[test]
+fn a_closure_releases_a_resource_at_every_capture_position() {
+    assert_heap_guard_output(
+        &with_closing_handle(
+            r#"
+fn main()
+    if true
+        let a = Handle(1)
+        let b = Handle(2)
+        let c = Handle(3)
+        let f = fn() int: a.id + b.id + c.id
+        println(f"sum {f()}")
+    println("done")
+"#,
+        ),
+        "sum 6\nclosed 1\nclosed 2\nclosed 3\ndone",
+    );
+}
+
+/// A 128-bit capture takes two words of the environment, and the counted
+/// capture after it is stored, loaded and released from the slot past them.
+#[test]
+fn a_wide_scalar_capture_before_a_counted_one_keeps_both_intact() {
+    assert_heap_guard_output(
+        r#"
+fn main()
+    let wide i128 = 170141183460469231731687303715884105727
+    let half = 2.5
+    let tag = f"tag{1}"
+    let f = fn() String: f"{wide == 170141183460469231731687303715884105727} {half} {tag}"
+    println(f())
+"#,
+        "true 2.5 tag1",
+    );
+}
+
+/// A bitwise struct is held in the environment as its bytes, and a counted
+/// capture after it is laid out past all of them.
+#[test]
+fn a_struct_held_as_bytes_before_a_counted_capture_keeps_both_intact() {
+    assert_heap_guard_output(
+        r#"
+struct Span3
+    a int
+    b int
+    c int
+
+fn main()
+    let s = Span3(1, 2, 3)
+    let tag = f"tag{4}"
+    let f = fn() String: f"{s.a + s.b + s.c} {tag}"
+    println(f())
+"#,
+        "6 tag4",
+    );
+}
+
+/// One generic lambda instantiated at a scalar and at a resource gets an
+/// environment for each: the resource's hook runs once, and the scalar
+/// instance releases nothing.
+#[test]
+fn a_generic_lambda_at_a_scalar_and_at_a_resource_releases_each_correctly() {
+    assert_heap_guard_output(
+        &with_closing_handle(
+            r#"
+fn touch<T>(value T) int
+    return 1
+
+fn keep<T>(value T) fn() int
+    return fn() int: touch(value)
+
+fn main()
+    if true
+        let at_int = keep(5)
+        let at_handle = keep(Handle(9))
+        println(f"calls {at_int() + at_handle()}")
+    println("done")
+"#,
+        ),
+        "calls 2\nclosed 9\ndone",
+    );
+}
+
+/// A closure kept in a class field is released with the object holding it,
+/// and its captured resource with it.
+#[test]
+fn a_closure_kept_in_a_class_field_is_released_with_its_holder() {
+    assert_heap_guard_output(
+        &with_closing_handle(
+            r#"
+class Keeper
+    public var callback (fn() int)?
+    public fn init()
+        self.callback = None
+
+fn main()
+    if true
+        let h = Handle(4)
+        var keeper = Keeper()
+        keeper.callback = Some(fn() int: h.id)
+        match keeper.callback
+            Some(f): println(f"called {f()}")
+            None: println("none")
+    println("done")
+"#,
+        ),
+        "called 4\nclosed 4\ndone",
+    );
+}
+
+/// A closure returned inside a tuple is released with the tuple, and its
+/// captured string with it.
+#[test]
+fn a_closure_returned_in_a_tuple_is_released_with_it() {
+    assert_heap_guard_output(
+        r#"
+fn make() (int, fn() String)
+    let tag = f"tag{2}"
+    return (7, fn() String: tag)
+
+fn main()
+    let pair = make()
+    let f = pair.1
+    println(f"{pair.0} {f()}")
+"#,
+        "7 tag2",
     );
 }

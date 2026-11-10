@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::abi::layout as abi;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::type_arguments::TypeArguments;
 use crate::ast::types::TypeKind;
-use crate::codegen::cranelift::closure::CaptureLayout;
-use crate::codegen::cranelift::collection_header::header_offset;
+use crate::codegen::cranelift::collection_header::{
+    capture_slot_type, closure_payload_offset, header_offset,
+};
 use crate::codegen::cranelift::layout::{
     aggregate_layout, class_payload_layout, enum_payload_layout, EnumLayout, Member, PayloadLayout,
 };
@@ -18,8 +20,10 @@ use crate::codegen::cranelift::value_abi::{
 use crate::codegen::cranelift::value_locals::copy_value;
 use crate::error::CodegenError;
 use crate::mir::dispatch::VtableInstance;
-use crate::mir::symbol::{StringLiteralPart, Symbol};
-use crate::mir::type_facts::{FieldRepr, LayoutShape, TypeDefinition, ValueLayout};
+use crate::mir::symbol::{StringLiteralPart, Symbol, ThunkKind};
+use crate::mir::type_facts::{
+    CaptureHeld, CaptureSlot, ClosureEnv, FieldRepr, LayoutShape, TypeDefinition, ValueLayout,
+};
 use crate::mir::{
     AggregateKind, BinOp, Constant, FunctionConstant, Local, MathIntrinsic, Operand, Place, Rvalue,
     UnOp,
@@ -403,7 +407,7 @@ impl<'a> FunctionTranslator<'a> {
             return Self::translate_closure_aggregate(
                 builder,
                 ctx,
-                &lambda_name.link_name(),
+                lambda_name,
                 fn_type,
                 operands,
                 locals,
@@ -2224,86 +2228,138 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Translate a closure aggregate into a heap-allocated closure struct.
     ///
-    /// Layout: [size][RC=1][fn_ptr][dtor_ptr], then the
-    /// captures where [`CaptureLayout`] places them.
-    /// The returned value is `payload_ptr` = `raw_ptr + 2*ptr_size`.
+    /// Layout: [size][RC=1], then the [`ClosureHeader`] — the function and
+    /// the environment's drop thunk — and each capture in the slot the
+    /// closure's [`EnvLayout`] gives it. The returned value is the payload
+    /// pointer.
+    ///
+    /// [`ClosureHeader`]: crate::abi::layout::ClosureHeader
+    /// [`EnvLayout`]: crate::mir::type_facts::EnvLayout
     fn translate_closure_aggregate(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        lambda_name: &str,
+        closure: &Symbol,
         fn_type: &crate::ast::types::Type,
         capture_ops: &[Operand],
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i64;
-
+        let word = ptr_type.bytes() as i32;
+        let env = Self::built_closure_env(closure, capture_ops.len(), type_ctx)?;
         let capture_vals: Vec<Value> = capture_ops
             .iter()
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx, None))
             .collect::<Result<_, _>>()?;
-        let held = capture_ops
-            .iter()
-            .map(|op| Self::operand_held_layout(op, type_ctx))
-            .collect::<Result<Vec<_>, _>>()?;
 
-        let layout = CaptureLayout::new(
-            capture_vals
-                .iter()
-                .zip(&held)
-                .map(|(val, held)| match held {
-                    Some(value) => value.size,
-                    None => builder.func.dfg.value_type(*val).bytes(),
-                }),
-            ptr_type,
-        );
+        let payload_bytes = closure_payload_offset(env.layout.captures_bytes, word)?;
         let payload_ptr =
-            Self::alloc_closure_payload(builder, ctx, layout.payload_bytes, ptr_type, ptr_size)?;
-
-        // Store fn_ptr at payload[0].
-        let fn_ptr = Self::declare_closure_fn_ptr(builder, ctx, lambda_name, fn_type, type_ctx)?;
-        builder
-            .ins()
-            .store(MemFlagsData::new(), fn_ptr, payload_ptr, 0);
-
-        // Store destructor_ptr at payload[1].
-        let dtor_val =
-            Self::closure_dtor_ptr(builder, ctx, lambda_name, capture_ops, type_ctx, ptr_type)?;
-        builder
-            .ins()
-            .store(MemFlagsData::new(), dtor_val, payload_ptr, ptr_size as i32);
-
-        // Each capture is stored at its own type, where the body loads it; a
-        // value held as its bytes is copied in whole.
-        for ((val, offset), held) in capture_vals.into_iter().zip(layout.offsets).zip(&held) {
-            match held {
-                Some(value) => {
-                    let dest = builder.ins().iadd_imm_s(payload_ptr, i64::from(offset));
-                    copy_value(builder, val, dest, value);
-                }
-                None => {
-                    builder
-                        .ins()
-                        .store(MemFlagsData::new(), val, payload_ptr, offset);
-                }
-            }
+            Self::alloc_closure_payload(builder, ctx, i64::from(payload_bytes), ptr_type)?;
+        let fn_ptr =
+            Self::declare_closure_fn_ptr(builder, ctx, &closure.link_name(), fn_type, type_ctx)?;
+        let drop_fn = Self::environment_drop_word(builder, ctx, closure, env, ptr_type)?;
+        for (value, index) in [
+            (fn_ptr, abi::CLOSURE_FUNCTION),
+            (drop_fn, abi::CLOSURE_DROP),
+        ] {
+            builder.ins().store(
+                MemFlagsData::new(),
+                value,
+                payload_ptr,
+                header_offset(index, word),
+            );
         }
-
+        for (index, (value, slot)) in capture_vals.into_iter().zip(&env.layout.slots).enumerate() {
+            let found = builder.func.dfg.value_type(value);
+            if found != capture_slot_type(&slot.held, ptr_type) {
+                return Err(CodegenError::Internal(format!(
+                    "capture {index} of {} is built from a {found} value, but its slot holds {:?}",
+                    closure.written(),
+                    slot.held
+                )));
+            }
+            Self::store_capture(builder, payload_ptr, value, slot, word)?;
+        }
         Ok(payload_ptr)
     }
 
-    /// Heap-allocate `[size][RC]` followed by a `payload_bytes` payload
-    /// (`fn_ptr`, `dtor_ptr`, then the captures). Initializes RC = 1; the
-    /// runtime wrote the size word its release reads back. Records the alloc with `miri_rt_closure_alloc_track` so the
-    /// leak detector sees it. Returns `payload_ptr = raw_ptr + 2*ptr_size`.
+    /// Store `value` into the capture slot `slot` of the closure payload at
+    /// `payload_ptr`, as the slot holds it: a word or scalar in place, a value
+    /// held as its bytes copied in whole from the address `value` holds.
+    fn store_capture(
+        builder: &mut FunctionBuilder,
+        payload_ptr: Value,
+        value: Value,
+        slot: &CaptureSlot,
+        word: i32,
+    ) -> Result<(), CodegenError> {
+        let offset = closure_payload_offset(slot.offset, word)?;
+        match &slot.held {
+            CaptureHeld::Bytes(layout) => {
+                let dest = builder.ins().iadd_imm_s(payload_ptr, i64::from(offset));
+                copy_value(builder, value, dest, layout);
+            }
+            CaptureHeld::Scalar(_) | CaptureHeld::Word => {
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), value, payload_ptr, offset);
+            }
+        }
+        Ok(())
+    }
+
+    /// The environment of the closure `closure` a value is built of from
+    /// `captures` operands, as the type facts settled it.
+    fn built_closure_env<'f>(
+        closure: &Symbol,
+        captures: usize,
+        type_ctx: &TypeCtx<'f>,
+    ) -> Result<&'f ClosureEnv, CodegenError> {
+        let env = type_ctx.facts.closure_env(closure).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "a value of {} is built, but the type facts hold no environment for it",
+                closure.written()
+            ))
+        })?;
+        if env.layout.slots.len() != captures {
+            return Err(CodegenError::Internal(format!(
+                "a value of {} is built from {captures} captures, but its environment holds {}",
+                closure.written(),
+                env.layout.slots.len()
+            )));
+        }
+        Ok(env)
+    }
+
+    /// The word a closure's header holds for its environment's drop thunk:
+    /// the thunk's address, or null when releasing the environment releases
+    /// nothing and the closure is freed in place.
+    fn environment_drop_word(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        closure: &Symbol,
+        env: &ClosureEnv,
+        ptr_type: cl_types::Type,
+    ) -> Result<Value, CodegenError> {
+        if !env.plan.releases_anything() {
+            return Ok(builder.ins().iconst(ptr_type, 0));
+        }
+        let thunk = Symbol::environment_thunk(ThunkKind::Drop, closure);
+        Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type)
+    }
+
+    /// Heap-allocate `[size][RC]` followed by a `payload_bytes` payload (the
+    /// closure header, then the captures). Initializes RC = 1; the runtime
+    /// wrote the size word its release reads back, and reported the block to
+    /// the heap guard as a class block. Returns the payload pointer, past both
+    /// words.
     fn alloc_closure_payload(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         payload_bytes: i64,
         ptr_type: cl_types::Type,
-        ptr_size: i64,
     ) -> Result<Value, CodegenError> {
+        let ptr_size = ptr_type.bytes() as i64;
         let total_size = 2 * ptr_size + payload_bytes;
         let size_val = builder.ins().iconst(ptr_type, total_size);
         let raw_ptr = Self::call_rt_block_alloc(builder, ctx, size_val)?;
@@ -2311,8 +2367,6 @@ impl<'a> FunctionTranslator<'a> {
         let null = builder.ins().iconst(ptr_type, 0);
         let is_null = builder.ins().icmp(IntCC::Equal, raw_ptr, null);
         builder.ins().trapnz(is_null, OOM_TRAP_CODE);
-
-        Self::call_rt_closure_alloc_track(builder, ctx)?;
 
         let one = builder.ins().iconst(ptr_type, 1);
         builder
@@ -2340,43 +2394,6 @@ impl<'a> FunctionTranslator<'a> {
             miri_signature(call_conv, ptr_type, &env, Returning::Nothing)
         };
         Self::declared_function_address(builder, ctx, lambda_name, &sig, ptr_type)
-    }
-
-    /// Resolve the closure's destructor pointer. When any capture is managed,
-    /// declare `miri.$dtor.{lambda_name}` and take its address; otherwise return a
-    /// null pointer (no RC work needed on drop). The destructor DecRefs all
-    /// managed captures when the closure's own RC reaches zero.
-    fn closure_dtor_ptr(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        lambda_name: &str,
-        capture_ops: &[Operand],
-        type_ctx: &TypeCtx,
-        ptr_type: cl_types::Type,
-    ) -> Result<Value, CodegenError> {
-        use cranelift_module::Module;
-        // A constant or function capture holds no counted reference.
-        let captured_locals = capture_ops.iter().filter_map(|op| match op {
-            Operand::Copy(p) | Operand::Move(p) => Some(&type_ctx.local_types[p.local.0].kind),
-            Operand::Constant(_) | Operand::Function(_) => None,
-        });
-        let has_managed =
-            !crate::mir::type_facts::released_captures(captured_locals, type_ctx.layout_scope())
-                .is_empty();
-        if !has_managed {
-            return Ok(builder.ins().iconst(ptr_type, 0));
-        }
-        let dtor_name = Symbol::closure_destructor(lambda_name).link_name();
-        let mut dtor_sig = cranelift_codegen::ir::Signature::new(builder.func.signature.call_conv);
-        dtor_sig
-            .params
-            .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
-        let dtor_id = ctx
-            .module
-            .declare_function(&dtor_name, cranelift_module::Linkage::Import, &dtor_sig)
-            .map_err(|e| CodegenError::declare_function(dtor_name.clone(), e.to_string()))?;
-        let dtor_ref = ctx.module.declare_func_in_func(dtor_id, builder.func);
-        Ok(builder.ins().func_addr(ptr_type, dtor_ref))
     }
 
     /// Translate a binary operation.

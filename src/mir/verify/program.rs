@@ -157,9 +157,10 @@ pub fn verify_program(
 ///
 /// These checks hold of a body whatever spelling the element and closure ABI
 /// gave its runtime calls, so they run after it: the accesses emitted without
-/// a bounds check, the readback fences, the names a pattern binds and the
-/// collections a loop leaves unchanged. Every other verifier reads the body as
-/// lowered, in [`verify_program`]. `lowered` is each body before the ABI
+/// a bounds check, the readback fences, the names a pattern binds, the
+/// collections a loop leaves unchanged, and the operands each closure is
+/// built from against the captures its body reads. Every other verifier reads
+/// the body as lowered, in [`verify_program`]. `lowered` is each body before the ABI
 /// passes ran, in the same order, when they did: each body is then checked to
 /// differ from it only by the ABI's own expansions.
 pub fn verify_backend_bodies(
@@ -169,7 +170,7 @@ pub fn verify_backend_bodies(
     lowered: Option<&[(String, crate::mir::Body)]>,
 ) -> Result<ProgramReport, StaleFact> {
     let harmless_calls = harmless_calls_after_rc(definitions, bodies);
-    let mut found = Vec::new();
+    let mut found = super::verify_closure_captures(bodies);
     for (index, (((name, body), harmless), facts)) in bodies
         .iter()
         .zip(&harmless_calls)
@@ -180,6 +181,7 @@ pub fn verify_backend_bodies(
         let mut violations = super::verify_in_bounds(body);
         violations.extend(super::verify_cross_residency_readback(body));
         violations.extend(super::verify_bound_names(body));
+        violations.extend(super::verify_function_projections(body));
         violations.extend(super::verify_stable_collections(
             body,
             ownership,

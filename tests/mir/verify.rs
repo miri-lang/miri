@@ -13,6 +13,7 @@
 //! verifier reports nothing at all.
 
 mod abi_translation;
+mod closure_captures;
 mod drop_flags;
 mod in_bounds;
 mod lent_arguments;

@@ -36,12 +36,10 @@ pub const RUNTIME_SYMBOL_PREFIX: &str = "miri_rt_";
 
 /// Constants for all `miri_rt_*` runtime symbols.
 pub mod rt {
-    // Closure
-    /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure allocation, not in stdlib.
-    pub const CLOSURE_ALLOC_TRACK: &str = "miri_rt_closure_alloc_track";
-    /// Compiler-internal: decrements CLOSURE_ALLOC_BALANCE on closure free, not in stdlib.
-    pub const CLOSURE_FREE_TRACK: &str = "miri_rt_closure_free_track";
-    /// Test-only: simulates a closure leak to verify the MIRI_LEAK_CHECK detector.
+    // Test-only simulations
+    /// Test-only: leaks one class block to verify the heap guard's leak report.
+    /// It now leaks a class block rather than unbalancing a closure counter;
+    /// the name is kept because runtime function names are write-once.
     pub const CLOSURE_SIMULATE_LEAK: &str = "miri_rt_test_simulate_closure_leak";
     /// Test-only: frees one allocation twice to verify the heap guard's
     /// double-free trap.
@@ -104,8 +102,6 @@ pub mod rt {
     pub const RELEASE_DEFER: &str = "miri_rt_release_defer";
     /// Compiler-internal: drops everything the worklist holds.
     pub const RELEASE_DRAIN: &str = "miri_rt_release_drain";
-    /// Compiler-internal: the deferred form of an inline closure release.
-    pub const RELEASE_CLOSURE: &str = "miri_rt_release_closure";
     /// Test-only: faults away from every stack.
     pub const SIMULATE_WILD_READ: &str = "miri_rt_test_simulate_wild_read";
     /// Compiler-internal: called once at the entry point of a release build,
@@ -462,9 +458,7 @@ pub mod rt {
     //   (a) every `runtime "core" fn` in a stdlib `.mi` file has an entry, and
     //   (b) every entry is exported from the compiled runtime library.
     pub const ALL: &[&str] = &[
-        // Closure (compiler-internal + test-only)
-        CLOSURE_ALLOC_TRACK,
-        CLOSURE_FREE_TRACK,
+        // Test-only simulations
         CLOSURE_SIMULATE_LEAK,
         SIMULATE_DOUBLE_FREE,
         SIMULATE_SHARED_RECEIVER,
@@ -484,7 +478,6 @@ pub mod rt {
         RELEASE_PENDING,
         RELEASE_DEFER,
         RELEASE_DRAIN,
-        RELEASE_CLOSURE,
         SIMULATE_WILD_READ,
         CHECKS_COMPILED_OUT,
         PROFILE_INIT,

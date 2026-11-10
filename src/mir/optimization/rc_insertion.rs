@@ -56,11 +56,6 @@ pub(super) struct RcContext<'a> {
     type_params: &'a std::collections::HashSet<String>,
     /// The parameters the body leaves open; see [`crate::mir::Generics::open_params`].
     open_params: &'a std::collections::HashSet<String>,
-    /// Maps each closure local to the ordered AST types of its captured variables.
-    /// Used by `place_is_counted` to resolve `closure.Field(i)` projections so that
-    /// `handle_aggregate` can IncRef managed captures when building a closure aggregate.
-    closure_capture_types:
-        &'a std::collections::HashMap<crate::mir::Local, Vec<crate::ast::types::Type>>,
     borrowed: &'a BorrowedLocals,
 }
 
@@ -73,7 +68,6 @@ impl<'a> RcContext<'a> {
             instance: body.generics.instance.as_ref(),
             type_params: &body.generics.type_params,
             open_params: &body.generics.open_params,
-            closure_capture_types: &body.captures.closure_capture_types,
             borrowed,
         }
     }
@@ -93,7 +87,7 @@ impl<'a> RcContext<'a> {
 
 /// The locals a body reads but does not own, so never releases: its borrowed
 /// parameters, which the caller owns, and the closure captures it only reads,
-/// which the closure's environment owns and its destructor releases.
+/// which the closure's environment owns and its drop thunk releases.
 ///
 /// A parameter the body takes over (`OwnershipFacts::owned_params`) is not borrowed: its
 /// binding moves the caller's reference out into a local the body releases.
@@ -174,10 +168,10 @@ impl RcInsertion {
         // the parameter's RC to remain at 1 while the closure holds a dangling ref.
         //
         // Per-capture DecRef at StorageDead is intentionally OMITTED: captured
-        // managed values are released by the runtime destructor (`miri.$dtor.{lambda}`)
-        // stored in the closure struct.  This works for both local and cross-function
+        // managed values are released by the environment's drop thunk the
+        // closure's header names. This works for both local and cross-function
         // closures and eliminates the double-free that would occur if both the
-        // destructor and RC insertion decremented the same capture on drop.
+        // thunk and RC insertion decremented the same capture on drop.
         let mut borrowed = BorrowedLocals::of(body, ownership);
         let mut managed_locals = self.identify_managed_locals(body, ownership, &borrowed);
         let borrows = super::local_borrows::infer_local_borrows(
@@ -202,7 +196,6 @@ impl RcInsertion {
             ref local_decls,
             ref rc_classifier,
             ref generics,
-            ref captures,
             ..
         } = *body;
 
@@ -212,7 +205,6 @@ impl RcInsertion {
             instance: generics.instance.as_ref(),
             type_params: &generics.type_params,
             open_params: &generics.open_params,
-            closure_capture_types: &captures.closure_capture_types,
             borrowed: &borrowed,
         };
 
@@ -387,9 +379,9 @@ impl RcInsertion {
 
     /// Handles a storage end-of-life by decrementing the RC of managed locals.
     ///
-    /// Managed captures inside closure locals are now DecRef'd by the runtime
-    /// destructor (`miri.$dtor.{lambda_name}`) when the closure RC reaches zero, so
-    /// RC insertion no longer needs to emit per-field DecRefs for closure locals.
+    /// Managed captures inside closure locals are released by the drop thunk
+    /// of the closure's environment when the closure RC reaches zero, so RC
+    /// insertion emits no per-field DecRefs for closure locals.
     fn handle_storage_dead(
         &self,
         _ctx: &RcContext,
@@ -657,8 +649,6 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// - Custom struct/class types — `Field(i)` is the field's type at the type
 ///   arguments of the instance it is projected from (see
 ///   [`crate::mir::instantiation::field_type`])
-/// - Closure locals — `Field(i)` yields the type of captured variable `i`,
-///   looked up from `closure_capture_types` using the root local index
 ///
 /// Enum `Field(i)` projections cannot be resolved here (the field type depends on
 /// which variant is active), so the RC insertion main loop falls back to checking
@@ -678,7 +668,6 @@ pub(super) fn place_declared_type(place: &Place, ctx: &RcContext) -> Option<Type
     PlaceTypes {
         local_decls: ctx.local_decls,
         instance: ctx.instance,
-        closure_capture_types: ctx.closure_capture_types,
         definitions: ctx.rc_classifier.definitions(),
         type_params: ctx.type_params,
         open_params: ctx.open_params,

@@ -43,11 +43,13 @@ public intrinsic fn assert_panics(f fn(), expected String = "")
 
 runtime "core" fn miri_rt_test_simulate_closure_leak()
 
-/// Simulates a closure memory leak.
+/// Leaks one class block, the kind of block a closure environment is.
 ///
-/// Increments the internal closure-allocation counter without allocating a
-/// closure, so the MIRI_LEAK_CHECK atexit handler will report a spurious leak
-/// when the process exits. Use in tests that verify the detector fires.
+/// Under MIRI_HEAP_GUARD the exit handler reports the block as a leaked class
+/// allocation and the process exits with a failure. Closures have no leak
+/// counter of their own: a leaked closure environment is reported by the heap
+/// guard exactly as a leaked class instance is.
+@deprecated("run the program under MIRI_HEAP_GUARD=1, which reports a leaked closure environment as a leaked class block")
 public fn simulate_closure_leak()
     miri_rt_test_simulate_closure_leak()
 

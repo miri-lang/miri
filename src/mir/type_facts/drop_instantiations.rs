@@ -202,12 +202,12 @@ impl Closure<'_> {
     }
 }
 
-/// Every type `body` holds a value of: its locals, the variables its closures
-/// capture, and the structs and classes it constructs. An enum construction
-/// carries no type arguments of its own; the local it is assigned to does.
+/// Every type `body` holds a value of: its locals, which include every
+/// operand a closure it builds captures, and the structs and classes it
+/// constructs. An enum construction carries no type arguments of its own;
+/// the local it is assigned to does.
 fn held_types(body: &Body) -> impl Iterator<Item = &Type> {
     let locals = body.local_decls.iter().map(|decl| &decl.ty);
-    let captures = body.captures.closure_capture_types.values().flatten();
     let constructed = body
         .basic_blocks
         .iter()
@@ -224,7 +224,7 @@ fn held_types(body: &Body) -> impl Iterator<Item = &Type> {
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_) => None,
         });
-    locals.chain(captures).chain(constructed)
+    locals.chain(constructed)
 }
 
 /// The struct or class type `rvalue` constructs, if it constructs one.

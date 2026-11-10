@@ -9,10 +9,11 @@ use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::place::{Local, Place};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::Statement;
+use crate::mir::symbol::Symbol;
 use crate::mir::terminator::Terminator;
 use crate::mir::types::MirType;
 use crate::type_checker::value_class::{LayoutScope, ValueLayout};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 
@@ -119,22 +120,20 @@ pub struct Generics {
     pub bound_params: HashSet<String>,
 }
 
-/// What a closure body captures: the locals its captured values load into
-/// and, for each closure local it creates, the types of that closure's
-/// captures. Empty for a body that is no closure and creates none.
+/// Which closure a body is the body of, and the locals its captured values
+/// load into. Empty for a body that is no closure.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Captures {
+    /// The closure this body is the body of, recorded where lowering creates
+    /// it; `None` for any other body. A closure's environment is keyed by it,
+    /// so the body finds its environment whether or not any body still builds
+    /// a value of it.
+    pub closure: Option<Symbol>,
     /// For closure/lambda bodies: the list of locals that hold captured values.
-    /// Entry `i` is loaded at function entry from where codegen's capture
-    /// layout places it, after the function and destructor pointers.
+    /// Entry `i` is loaded at function entry from where the closure's
+    /// environment layout (`type_facts::EnvLayout`) places it.
     /// Empty for non-closure functions.
     pub env_capture_locals: Vec<Local>,
-    /// Maps each closure local to the ordered AST types of its captured variables.
-    /// Populated by `lower_lambda_expr` after capture pruning.
-    /// Used by RC insertion to emit per-capture DecRef at StorageDead, and by codegen
-    /// to resolve `Field(i)` projections on closure locals.
-    /// Only present when the closure has at least one capture.
-    pub closure_capture_types: HashMap<Local, Vec<Type>>,
 }
 
 impl Body {

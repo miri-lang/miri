@@ -5,15 +5,16 @@
 //! emits code: the definition of every named type, the instantiations whose
 //! method bodies were lowered, the instantiations a value is released at, the
 //! slots each vtable is filled with, the value class a type's values are
-//! represented by, and the answers the dispatch rules give for a type — its
-//! drop hook, its `clone`, the traits it implements and the methods a
-//! container asks of its elements.
+//! represented by, the environment of every closure, and the answers the
+//! dispatch rules give for a type — its drop hook, its `clone`, the traits it
+//! implements and the methods a container asks of its elements.
 //!
 //! The pipeline builds one [`TypeFacts`] after type checking and lowering have
 //! settled every instantiation, and hands it to the backend read-only. A
 //! backend asks it rather than reaching into the type checker or MIR lowering,
 //! so each rule those layers own is answered by its one implementation.
 
+mod closure_env;
 mod drop_instantiations;
 mod drop_plan;
 mod drop_reach;
@@ -37,17 +38,18 @@ pub use crate::type_checker::value_class::{
     held_value_layout, value_class, FieldRepr, LayoutShape, ScalarKind, ValueClass, ValueField,
     ValueLayout,
 };
+pub use closure_env::{CaptureHeld, CaptureSlot, ClosureEnv, EnvLayout};
 pub use drop_plan::{is_unresolved_element, CountedSlot, DropPlan, DroppedMembers, Release};
 pub use drop_reach::DropHookReach;
 pub use drop_thunk::{DropThunk, DropThunkRefusal};
 pub use element_identity::{
     field_wise_layout, ElementIdentity, ElementQuestion, EqualityThunks, FloatWidth,
 };
-pub use release_plan::{
-    release_plan, released_captures, releases_slot, ReleasePlan, UnresolvedArgument,
-};
+pub use release_plan::{release_plan, releases_slot, ReleasePlan, UnresolvedArgument};
 
-/// Why the instantiations a drop thunk is emitted for could not be closed.
+/// Why the drop thunks a program needs could not be settled: the
+/// instantiations they are emitted for could not be closed, or a closure's
+/// environment could not be laid out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DropInstantiationRefusal {
     /// `name` at `args` nests its type arguments `depth` constructors deep,
@@ -61,6 +63,10 @@ pub enum DropInstantiationRefusal {
     /// Two instantiations of `name` at types with no name would share the
     /// drop thunk `symbol`, laid out for only one of them.
     Unnameable { name: String, symbol: String },
+    /// A closure body's environment, which its drop thunk releases, could not
+    /// be laid out, for the reason given. Lowering records every closure
+    /// body's symbol and declares every capture, so this is a compiler defect.
+    ClosureEnvironment(String),
 }
 
 /// Read-only view of the program's types, as settled before code generation.
@@ -72,6 +78,7 @@ pub struct TypeFacts {
     drop_plans: HashMap<Symbol, DropPlan>,
     vtable_fills: VtableFills,
     withheld_methods: HashSet<Symbol>,
+    closure_envs: HashMap<Symbol, ClosureEnv>,
 }
 
 impl TypeFacts {
@@ -103,6 +110,7 @@ impl TypeFacts {
             drop_plans,
             vtable_fills,
             withheld_methods: HashSet::new(),
+            closure_envs: HashMap::new(),
         })
     }
 
@@ -111,6 +119,35 @@ impl TypeFacts {
     pub fn withholding(mut self, withheld_methods: HashSet<Symbol>) -> Self {
         self.withheld_methods = withheld_methods;
         self
+    }
+
+    /// The same facts, with the environment of every closure one of `bodies`
+    /// is the body of.
+    pub fn with_closure_envs<'b>(
+        mut self,
+        bodies: impl IntoIterator<Item = &'b Body>,
+    ) -> Result<Self, DropInstantiationRefusal> {
+        let reach = DropHookReach::new(&self.definitions);
+        self.closure_envs = closure_env::closure_envs(bodies, &reach)?;
+        Ok(self)
+    }
+
+    /// The environment of the closure `closure`: where each capture lives and
+    /// what its drop thunk releases. `None` for a closure whose body was not
+    /// among the bodies the facts were settled over.
+    pub fn closure_env(&self, closure: &Symbol) -> Option<&ClosureEnv> {
+        self.closure_envs.get(closure)
+    }
+
+    /// The environment `body` opens: that of the closure it records it is the
+    /// body of. `None` for a body that is no closure.
+    pub fn closure_of_body(&self, body: &Body) -> Option<&ClosureEnv> {
+        self.closure_env(body.captures.closure.as_ref()?)
+    }
+
+    /// Every closure environment, with the closure it belongs to.
+    pub fn closure_envs(&self) -> impl Iterator<Item = (&Symbol, &ClosureEnv)> {
+        self.closure_envs.iter()
     }
 
     /// The definition of every named type, keyed by name.

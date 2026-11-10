@@ -9,7 +9,7 @@ use crate::abi::layout as abi;
 use crate::ast::type_arguments::{type_arguments, TypeArguments};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::collection_header::{
-    count_offset, emit_count_is_immortal, immortal_count,
+    closure_payload_offset, count_offset, emit_count_is_immortal, header_offset, immortal_count,
 };
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::structural_elements::StructuralElement;
@@ -36,8 +36,9 @@ use std::sync::Arc;
 
 pub(crate) use crate::mir::type_facts::Release;
 use crate::mir::type_facts::{
-    release_plan, releases_slot, CountedSlot, DropPlan, DropThunk, DropThunkRefusal,
-    DroppedMembers, ElementIdentity, ElementQuestion, FloatWidth, ReleasePlan, UnresolvedArgument,
+    release_plan, releases_slot, CaptureHeld, ClosureEnv, CountedSlot, DropPlan, DropThunk,
+    DropThunkRefusal, DroppedMembers, ElementIdentity, ElementQuestion, EnvLayout, FloatWidth,
+    ReleasePlan, UnresolvedArgument,
 };
 
 /// How deep a release nests native frames before the rest is queued on the
@@ -86,12 +87,33 @@ pub(crate) struct ElementOrderSetters {
     pub(crate) set_compare_fn: ContainerSetter,
 }
 
-/// The instance a drop thunk releases: its type and its payload.
+/// What a drop thunk releases the members of: a declared type at its
+/// arguments, whose members sit where its field layout places them, or a
+/// closure's environment, whose captures sit where its layout places them.
+#[derive(Clone, Copy)]
+enum DropSubject<'a> {
+    Named {
+        type_name: &'a str,
+        type_args: Option<&'a [Type]>,
+    },
+    Environment(&'a EnvLayout),
+}
+
+/// The instance a drop thunk releases: what it is and its payload.
 #[derive(Clone, Copy)]
 struct PlannedDropTarget<'a> {
-    type_name: &'a str,
-    type_args: Option<&'a [Type]>,
+    subject: DropSubject<'a>,
     ptr: Value,
+}
+
+/// One drop thunk to emit: its symbol, its plan, what it releases, and the
+/// type parameters its members are read at.
+struct DropThunkSpec<'a> {
+    thunk: Symbol,
+    plan: &'a DropPlan,
+    subject: DropSubject<'a>,
+    open_params: &'a HashSet<String>,
+    bound_params: &'a HashSet<String>,
 }
 
 /// The enum value one variant's drop guard releases fields out of.
@@ -1027,10 +1049,10 @@ impl<'a> FunctionTranslator<'a> {
             .map_err(|DropThunkRefusal(message)| CodegenError::Internal(message))
     }
 
-    /// Drop a closure: invoke its `dtor_ptr` (when non-null) to DecRef captures,
-    /// then decrement the closure-balance counter and free the closure struct.
-    /// Layout: `payload[0]=fn_ptr, payload[1]=dtor_ptr`, then the captures
-    /// (see `CaptureLayout`).
+    /// Drop a closure whose count reached zero: call the drop thunk its
+    /// header's drop word names, which releases its captures and frees it,
+    /// or, when that word is null, free it in place. The thunk bounds its own
+    /// release when its plan may recurse.
     fn emit_drop_closure(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -1039,53 +1061,33 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        Self::emit_bounded_release(
-            builder,
-            ctx,
-            ptr,
-            ptr_type,
-            |builder, ctx| Self::decref_element_addr(builder, ctx, rt::RELEASE_CLOSURE, ptr_type),
-            |builder, ctx| Self::emit_closure_release(builder, ctx, ptr, header_ptr, ptr_type),
-        )
-    }
-
-    /// Release a closure's captures through its `dtor_ptr` (when non-null),
-    /// decrement the closure-balance counter and free the closure struct.
-    fn emit_closure_release(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        ptr: Value,
-        header_ptr: Value,
-        ptr_type: cl_types::Type,
-    ) -> Result<(), CodegenError> {
-        let ptr_size = ptr_type.bytes() as i64;
-        let dtor_ptr = builder
+        let drop_word = header_offset(abi::CLOSURE_DROP, ptr_type.bytes() as i32);
+        let drop_fn = builder
             .ins()
-            .load(ptr_type, MemFlagsData::new(), ptr, ptr_size as i32);
-        let null = builder.ins().iconst(ptr_type, 0);
-        let is_null = builder.ins().icmp(
-            cranelift_codegen::ir::condcodes::IntCC::Equal,
-            dtor_ptr,
-            null,
-        );
-        let dtor_block = builder.create_block();
-        let after_dtor = builder.create_block();
+            .load(ptr_type, MemFlagsData::new(), ptr, drop_word);
+        let thunk_block = builder.create_block();
+        let free_block = builder.create_block();
+        let done_block = builder.create_block();
         builder
             .ins()
-            .brif(is_null, after_dtor, &[], dtor_block, &[]);
-        builder.switch_to_block(dtor_block);
-        builder.seal_block(dtor_block);
-        let mut dtor_sig = cranelift_codegen::ir::Signature::new(builder.func.signature.call_conv);
-        dtor_sig
-            .params
-            .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
-        let dtor_sig_ref = builder.import_signature(dtor_sig);
-        builder.ins().call_indirect(dtor_sig_ref, dtor_ptr, &[ptr]);
-        builder.ins().jump(after_dtor, &[]);
-        builder.switch_to_block(after_dtor);
-        builder.seal_block(after_dtor);
-        Self::call_rt_closure_free_track(builder, ctx)?;
-        Self::call_rt_block_free(builder, ctx, header_ptr)
+            .brif(drop_fn, thunk_block, &[], free_block, &[]);
+
+        builder.switch_to_block(thunk_block);
+        builder.seal_block(thunk_block);
+        let mut signature = Signature::new(builder.func.signature.call_conv);
+        signature.params.push(AbiParam::new(ptr_type));
+        let signature_ref = builder.import_signature(signature);
+        builder.ins().call_indirect(signature_ref, drop_fn, &[ptr]);
+        builder.ins().jump(done_block, &[]);
+
+        builder.switch_to_block(free_block);
+        builder.seal_block(free_block);
+        Self::call_rt_block_free(builder, ctx, header_ptr)?;
+        builder.ins().jump(done_block, &[]);
+
+        builder.switch_to_block(done_block);
+        builder.seal_block(done_block);
+        Ok(())
     }
 
     /// Release the counted members a drop plan names, out of the `name`
@@ -1566,37 +1568,26 @@ impl<'a> FunctionTranslator<'a> {
         type_args: Option<&[Type]>,
         facts: &TypeFacts,
     ) -> Result<(), CodegenError> {
-        let ptr_type = isa.pointer_type();
-        let call_conv = isa.default_call_conv();
-
-        let func_name =
-            Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default())
-                .link_name();
-        let mut sig = Signature::new(call_conv);
-        sig.params.push(AbiParam::new(ptr_type));
-        let func_id = module
-            .declare_function(&func_name, Linkage::Export, &sig)
-            .map_err(|e| CodegenError::declare_function(func_name.clone(), e.to_string()))?;
-
-        ctx.func = cranelift_codegen::ir::Function::with_name_signature(
-            cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32()),
-            sig,
-        );
-        let mut builder_ctx = FunctionBuilderContext::new();
-        Self::emit_drop_body(
-            module,
-            ctx,
-            &mut builder_ctx,
-            type_name,
-            type_args,
-            facts,
-            ptr_type,
-            call_conv,
-        )?;
-
-        crate::codegen::cranelift::define_function(module, func_id, ctx)
-            .map_err(|e| CodegenError::define_function(func_name, e.to_string()))?;
-        ctx.clear();
+        let thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default());
+        let plan = facts.drop_plan(type_name, type_args).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "a drop thunk is emitted for {}, which has no drop plan",
+                thunk.written()
+            ))
+        })?;
+        let open_params = facts.thunk_open_parameters(type_name, type_args);
+        let no_bound_params = HashSet::new();
+        let spec = DropThunkSpec {
+            thunk,
+            plan,
+            subject: DropSubject::Named {
+                type_name,
+                type_args,
+            },
+            open_params: &open_params,
+            bound_params: &no_bound_params,
+        };
+        Self::define_drop_thunk(module, ctx, isa, &spec, facts)?;
 
         if type_args.is_some() {
             // The per-instantiation `miri.Box$String.$decref` wrapper is emitted by
@@ -1608,21 +1599,72 @@ impl<'a> FunctionTranslator<'a> {
         Self::generate_decref_function(module, ctx, isa, type_name, &[], facts.release(type_name))
     }
 
-    /// Emit the body of `miri.TypeName.$drop(ptr)` from its plan:
+    /// Generates the drop thunk of the environment of `closure`, which its
+    /// values name in their header's drop word: it releases the counted
+    /// captures `env` plans and frees the block.
+    pub(crate) fn generate_environment_drop_function(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        isa: &Arc<dyn TargetIsa>,
+        closure: &Symbol,
+        env: &ClosureEnv,
+        facts: &TypeFacts,
+    ) -> Result<(), CodegenError> {
+        let spec = DropThunkSpec {
+            thunk: Symbol::environment_thunk(ThunkKind::Drop, closure),
+            plan: &env.plan,
+            subject: DropSubject::Environment(&env.layout),
+            open_params: &env.open_params,
+            bound_params: &env.bound_params,
+        };
+        Self::define_drop_thunk(module, ctx, isa, &spec, facts)
+    }
+
+    /// Declare and define the drop thunk `spec` describes, exported under its
+    /// symbol.
+    fn define_drop_thunk(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        isa: &Arc<dyn TargetIsa>,
+        spec: &DropThunkSpec<'_>,
+        facts: &TypeFacts,
+    ) -> Result<(), CodegenError> {
+        let func_name = spec.thunk.link_name();
+        let mut sig = Signature::new(isa.default_call_conv());
+        sig.params.push(AbiParam::new(isa.pointer_type()));
+        let func_id = module
+            .declare_function(&func_name, Linkage::Export, &sig)
+            .map_err(|e| CodegenError::declare_function(func_name.clone(), e.to_string()))?;
+
+        ctx.func = cranelift_codegen::ir::Function::with_name_signature(
+            cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32()),
+            sig,
+        );
+        let mut builder_ctx = FunctionBuilderContext::new();
+        Self::emit_drop_body(module, ctx, &mut builder_ctx, spec, facts)?;
+
+        crate::codegen::cranelift::define_function(module, func_id, ctx)
+            .map_err(|e| CodegenError::define_function(func_name, e.to_string()))?;
+        ctx.clear();
+        Ok(())
+    }
+
+    /// Emit the body of a drop thunk from its plan:
     ///   1. run the `fn drop(self)` hook the plan names,
     ///   2. release every counted member the plan names,
     ///   3. free the RC allocation.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// A plan that may recurse bounds the stack its release takes, deferring
+    /// past the depth limit to the thunk itself.
     fn emit_drop_body(
         module: &mut ObjectModule,
         ctx: &mut cranelift_codegen::Context,
         builder_ctx: &mut FunctionBuilderContext,
-        type_name: &str,
-        type_args: Option<&[Type]>,
+        spec: &DropThunkSpec<'_>,
         facts: &TypeFacts,
-        ptr_type: cl_types::Type,
-        call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
+        let ptr_type = module.isa().pointer_type();
+        let call_conv = module.isa().default_call_conv();
         let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
@@ -1633,53 +1675,36 @@ impl<'a> FunctionTranslator<'a> {
         let mut string_literals = BTreeMap::new();
         let empty_kernel_registry = HashMap::new();
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
-        let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
-        let plan = facts.drop_plan(type_name, type_args).ok_or_else(|| {
-            CodegenError::Internal(format!(
-                "a drop thunk is emitted for {}, which has no drop plan",
-                Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default())
-                    .written()
-            ))
-        })?;
-        let open_params = facts.thunk_open_parameters(type_name, type_args);
-        let no_bound_params = HashSet::new();
         let type_ctx = TypeCtx {
             local_types: &[],
             facts,
             ptr_type,
-            closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
-            open_params: &open_params,
-            bound_params: &no_bound_params,
+            open_params: spec.open_params,
+            bound_params: spec.bound_params,
             values: &ValueLocals::none(),
             stable_headers: &crate::codegen::cranelift::stable_headers::StableHeaders::none(),
         };
 
-        let thunk = Symbol::type_thunk(ThunkKind::Drop, type_name, type_args.unwrap_or_default());
+        let target = PlannedDropTarget {
+            subject: spec.subject,
+            ptr,
+        };
         let emit_body = |builder: &mut FunctionBuilder,
                          module_ctx: &mut ModuleCtx|
          -> Result<(), CodegenError> {
-            Self::emit_planned_drop(
-                builder,
-                module_ctx,
-                plan,
-                PlannedDropTarget {
-                    type_name,
-                    type_args,
-                    ptr,
-                },
-                &type_ctx,
-                call_conv,
-            )
+            Self::emit_planned_drop(builder, module_ctx, spec.plan, target, &type_ctx, call_conv)
         };
-        if plan.may_recurse {
+        if spec.plan.may_recurse {
             Self::emit_bounded_release(
                 &mut builder,
                 &mut module_ctx,
                 ptr,
                 ptr_type,
-                |builder, ctx| Self::get_custom_decref_thunk_addr(builder, ctx, &thunk, ptr_type),
+                |builder, ctx| {
+                    Self::get_custom_decref_thunk_addr(builder, ctx, &spec.thunk, ptr_type)
+                },
                 emit_body,
             )?;
         } else {
@@ -1702,11 +1727,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
         call_conv: cranelift_codegen::isa::CallConv,
     ) -> Result<(), CodegenError> {
-        let PlannedDropTarget {
-            type_name,
-            type_args,
-            ptr,
-        } = target;
+        let PlannedDropTarget { subject, ptr } = target;
         let ptr_type = type_ctx.ptr_type;
         if let Some(hook) = &plan.hook {
             // The instance's count is already zero. The hook borrows `self`,
@@ -1730,18 +1751,77 @@ impl<'a> FunctionTranslator<'a> {
             )?;
         }
 
-        Self::emit_planned_members(
-            builder,
-            module_ctx,
-            type_name,
-            type_args,
-            &plan.members,
-            ptr,
-            type_ctx,
-        )?;
+        match subject {
+            DropSubject::Named {
+                type_name,
+                type_args,
+            } => Self::emit_planned_members(
+                builder,
+                module_ctx,
+                type_name,
+                type_args,
+                &plan.members,
+                ptr,
+                type_ctx,
+            )?,
+            DropSubject::Environment(layout) => {
+                Self::emit_environment_members(
+                    builder,
+                    module_ctx,
+                    layout,
+                    &plan.members,
+                    ptr,
+                    type_ctx,
+                )?;
+            }
+        }
 
         let header_ptr = builder.ins().iadd_imm_s(ptr, count_offset(ptr_type));
         Self::call_rt_block_free(builder, module_ctx, header_ptr)
+    }
+
+    /// Release the counted captures `members` names out of the closure
+    /// payload at `payload_ptr`, each from where `layout` places it.
+    fn emit_environment_members(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        layout: &EnvLayout,
+        members: &DroppedMembers,
+        payload_ptr: Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let captures = match members {
+            DroppedMembers::Fields(captures) => captures,
+            DroppedMembers::Variants(_) => {
+                return Err(CodegenError::Internal(
+                    "a closure's environment is planned to release enum payloads".to_string(),
+                ))
+            }
+        };
+        let word = type_ctx.ptr_type.bytes() as i32;
+        for capture in captures {
+            let slot = layout.slots.get(capture.index).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "capture {} of a closure is released, but its environment holds no such \
+                     capture",
+                    capture.index
+                ))
+            })?;
+            if slot.held != CaptureHeld::Word {
+                return Err(CodegenError::Internal(format!(
+                    "capture {} of a closure is released, but its slot holds {:?}, not a \
+                     counted word",
+                    capture.index, slot.held
+                )));
+            }
+            let offset = closure_payload_offset(slot.offset, word)?;
+            let value =
+                builder
+                    .ins()
+                    .load(type_ctx.ptr_type, MemFlagsData::new(), payload_ptr, offset);
+            Self::emit_decref_value(builder, ctx, &capture.ty.kind, value, type_ctx)?;
+        }
+        Ok(())
     }
 
     /// Emit a call to the user-defined drop hook `hook_name(self, allocator)`
@@ -1891,13 +1971,11 @@ impl<'a> FunctionTranslator<'a> {
         let mut string_literals = BTreeMap::new();
         let empty_kernel_registry = HashMap::new();
         let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
-        let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
         let type_ctx = TypeCtx {
             local_types: &[],
             facts,
             ptr_type,
-            closure_capture_ast_types: &empty_captures,
             out_param_ptr_vars: &empty_out_ptr_vars,
             open_params: &element.open_params,
             bound_params: &element.bound_params,

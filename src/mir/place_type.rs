@@ -24,7 +24,7 @@ use crate::mir::rvalue::AggregateKind;
 use crate::mir::symbol::Symbol;
 use crate::mir::terminator::TerminatorKind;
 use crate::mir::types::MirType;
-use crate::mir::{Body, Local, LocalDecl, Operand, Place, PlaceElem};
+use crate::mir::{Body, LocalDecl, Operand, Place, PlaceElem};
 use crate::runtime_effects::{ElementRole, RuntimeEffect};
 use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::instantiation_requirements::{spells_where, Visit};
@@ -40,7 +40,6 @@ pub struct AggregateSlots<'k, 'a> {
     types: &'k PlaceTypes<'a>,
     kind: &'k AggregateKind,
     target: Option<Type>,
-    dest: Local,
 }
 
 impl AggregateSlots<'_, '_> {
@@ -48,13 +47,13 @@ impl AggregateSlots<'_, '_> {
     ///
     /// A struct or class member is its field at the instance's type
     /// arguments; an enum's slot 0 is its discriminant and each further one a
-    /// payload field of the variant, at the enum's arguments; a closure's are
-    /// its captures; a collection literal's are its elements, a map's keys
-    /// and values alternating.
+    /// payload field of the variant, at the enum's arguments; a closure's
+    /// declare nothing, each capture being its operand's own type; a
+    /// collection literal's are its elements, a map's keys and values
+    /// alternating.
     pub fn slot(&self, slot: usize) -> Option<Type> {
         let target = self.target.as_ref()?;
-        self.types
-            .aggregate_slot(self.kind, self.dest, target, slot)
+        self.types.aggregate_slot(self.kind, target, slot)
     }
 
     /// The type the aggregate's destination declares.
@@ -68,7 +67,6 @@ pub struct PlaceTypes<'a> {
     pub local_decls: &'a [LocalDecl],
     /// The instance the body was lowered for; see [`crate::mir::Generics::instance`].
     pub instance: Option<&'a Type>,
-    pub closure_capture_types: &'a HashMap<Local, Vec<Type>>,
     /// The program's type table, which says what an enum's variants and a
     /// struct's or class's fields hold where the body records no entry.
     pub definitions: &'a HashMap<String, TypeDefinition>,
@@ -87,7 +85,6 @@ impl<'a> PlaceTypes<'a> {
         Self {
             local_decls: &body.local_decls,
             instance: body.generics.instance.as_ref(),
-            closure_capture_types: &body.captures.closure_capture_types,
             definitions: body.rc_classifier.definitions(),
             type_params: &body.generics.type_params,
             open_params: &body.generics.open_params,
@@ -119,20 +116,13 @@ impl<'a> PlaceTypes<'a> {
             types: self,
             kind,
             target: self.declared(dest),
-            dest: dest.local,
         }
     }
 
     /// The type member `slot` of an aggregate of `kind` declares, read
-    /// against `target`, the type its destination `dest` declares; see
+    /// against `target`, the type its destination declares; see
     /// [`AggregateSlots::slot`].
-    fn aggregate_slot(
-        &self,
-        kind: &AggregateKind,
-        dest: Local,
-        target: &Type,
-        slot: usize,
-    ) -> Option<Type> {
+    fn aggregate_slot(&self, kind: &AggregateKind, target: &Type, slot: usize) -> Option<Type> {
         match kind {
             AggregateKind::Option(built) => optional_payload(built)
                 .or_else(|| (slot == 0).then(|| optional_payload(target)).flatten()),
@@ -157,9 +147,11 @@ impl<'a> PlaceTypes<'a> {
                 }
                 self.variant_field(enum_name, variant, target, slot - 1)
             }
-            AggregateKind::Closure(_, _) => {
-                self.closure_capture_types.get(&dest)?.get(slot).cloned()
-            }
+            // A closure holds each capture at the type of the operand it is
+            // built from, so its slots declare nothing an operand could
+            // disagree with; that the operands match what the closure's
+            // body reads is checked across bodies.
+            AggregateKind::Closure(_, _) => None,
             AggregateKind::Array | AggregateKind::List | AggregateKind::Set => {
                 indexed_element_type(target)
             }
@@ -350,7 +342,7 @@ impl<'a> PlaceTypes<'a> {
             let (next, next_declared) = match elem {
                 PlaceElem::Deref => None,
                 PlaceElem::Index(_, _) => project_index(&current, &declared),
-                PlaceElem::Field(i) => self.project_field(place, &current, &declared, *i),
+                PlaceElem::Field(i) => self.project_field(&current, &declared, *i),
             }?;
             current = next;
             declared = next_declared;
@@ -378,7 +370,6 @@ impl<'a> PlaceTypes<'a> {
     /// cannot be resolved.
     fn project_field(
         &self,
-        place: &Place,
         current: &MirType,
         declared: &Type,
         index: usize,
@@ -410,17 +401,10 @@ impl<'a> PlaceTypes<'a> {
                 };
                 Some((MirType::from_type_kind(&field_ty.kind), field_ty))
             }
-            // Closure.Field(i) → the type of captured variable i.
-            // Capture types are indexed by the root local because a closure
-            // is always a single-level projection (never nested).
-            MirType::Function => {
-                let capture_ty = self.closure_capture_types.get(&place.local)?.get(index)?;
-                Some((
-                    MirType::from_type_kind(&capture_ty.kind),
-                    capture_ty.clone(),
-                ))
-            }
-            MirType::Option(_)
+            // A closure's captures are read only where its body opens its
+            // environment; no projection reaches them.
+            MirType::Function
+            | MirType::Option(_)
             | MirType::Int
             | MirType::I8
             | MirType::I16

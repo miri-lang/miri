@@ -434,11 +434,22 @@ fn a_structural_thunk_ends_in_the_encoding_of_its_structure() {
 }
 
 #[test]
-fn a_closure_destructor_names_the_closure_body() {
+fn an_environment_thunk_follows_the_closure_it_belongs_to() {
+    let closure = Symbol::closure(ClosureKind::Lambda, 7, std::iter::empty::<&Type>());
     assert_eq!(
-        Symbol::closure_destructor("miri.$lambda7").link_name(),
-        "miri.$dtor.miri.$lambda7"
+        Symbol::environment_thunk(ThunkKind::Drop, &closure).link_name(),
+        "miri.$lambda7.$drop"
     );
+}
+
+#[test]
+fn closures_differing_only_in_residency_have_distinct_environment_thunks() {
+    let host = Symbol::closure(ClosureKind::Lambda, 7, std::iter::empty::<&Type>());
+    let device = host.clone().with_residency(&[(0, DeviceHandleId(1))]);
+    let host_drop = Symbol::environment_thunk(ThunkKind::Drop, &host).link_name();
+    let device_drop = Symbol::environment_thunk(ThunkKind::Drop, &device).link_name();
+    assert_eq!(device_drop, "miri.$gpu$p0h1.$lambda7.$drop");
+    assert_ne!(host_drop, device_drop);
 }
 
 #[test]
@@ -791,11 +802,13 @@ fn symbols_named_from(names: &[String], argument_lists: &[Vec<Type>]) -> Vec<Sym
     }
     for id in [1, 11, 111] {
         for args in argument_lists {
-            symbols.extend(with_and_without_residency([Symbol::closure(
-                ClosureKind::Lambda,
-                id,
-                args,
-            )]));
+            let lambdas =
+                with_and_without_residency([Symbol::closure(ClosureKind::Lambda, id, args)]);
+            let environments: Vec<Symbol> = (lambdas.iter())
+                .map(|closure| Symbol::environment_thunk(ThunkKind::Drop, closure))
+                .collect();
+            symbols.extend(lambdas);
+            symbols.extend(environments);
         }
     }
     let owners = names.iter().filter(|name| name.len() <= 3);

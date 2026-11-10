@@ -553,10 +553,10 @@ pub mod ffi {
 
     /// Invokes the zero-argument closure `closure_ptr` and verifies it panics.
     ///
-    /// The closure layout is `[fn_ptr][dtor_ptr][captures...]`; `closure_ptr`
-    /// points to the start of the closure payload, which is also the
-    /// environment pointer passed to the closure as its implicit first
-    /// argument.
+    /// The closure layout is the `ClosureHeader` of `abi_layout`, then the
+    /// captures; `closure_ptr` points to the start of the closure payload,
+    /// which is also the environment pointer passed to the closure as its
+    /// implicit first argument.
     ///
     /// Writes the structured sidecar report when `MIRI_ASSERT_REPORT_PATH`
     /// names a file.
@@ -617,8 +617,10 @@ pub mod ffi {
         if jump_val == 0 {
             // First-time entry: invoke the closure. The closure's first
             // argument is `env_ptr`, which equals `closure_ptr` (the payload
-            // pointer); the function pointer lives at `payload[0]`.
-            let fn_ptr_addr = *(closure_ptr as *const usize);
+            // pointer); the function pointer lives in its header's function
+            // word.
+            let fn_ptr_addr =
+                *(closure_ptr as *const usize).add(crate::abi_layout::CLOSURE_FUNCTION);
             let f: extern "C" fn(*mut u8) = std::mem::transmute(fn_ptr_addr);
             f(closure_ptr);
 

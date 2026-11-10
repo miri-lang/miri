@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! What freeing a value of any type does once its count reaches zero, and
-//! which captures a closure's environment releases.
+//! What freeing a value of any type does once its count reaches zero.
 //!
 //! A value is freed by the runtime helper of its shape, after the counted
 //! references it holds are released: a list's or array's elements, a map's
@@ -49,7 +48,9 @@ pub enum ReleasePlan {
         name: String,
         args: Option<Vec<TypeArgument>>,
     },
-    /// A closure: its destructor releases its captures, then it is freed.
+    /// A closure: released through the environment drop thunk its header
+    /// names (see [`super::ClosureEnv`]), or freed in place when the header
+    /// names none.
     Closure,
     /// Anything else: the block is freed.
     Block,
@@ -161,19 +162,6 @@ fn counted_slots(
 /// replacing or discarding the slot's value releases.
 pub fn releases_slot(kind: &TypeKind, scope: LayoutScope<'_>) -> bool {
     is_slot_counted(kind, scope)
-}
-
-/// The positions, among a closure's captures of `capture_types` in
-/// environment order, whose values the closure's destructor releases. A
-/// closure none of whose captures is counted has no destructor.
-pub fn released_captures<'t>(
-    capture_types: impl IntoIterator<Item = &'t TypeKind>,
-    scope: LayoutScope<'_>,
-) -> Vec<usize> {
-    (capture_types.into_iter().enumerate())
-        .filter(|(_, kind)| is_slot_counted(kind, scope))
-        .map(|(position, _)| position)
-        .collect()
 }
 
 /// The type argument at `position` of the built-in collection `kind`.

@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! What freeing a value does once its count reaches zero, and which captures
-//! a closure's destructor releases.
+//! What freeing a value does once its count reaches zero.
 
 use miri::ast::type_arguments::{type_argument, TypeArgument};
 use miri::ast::types::{Type, TypeKind};
 use miri::error::syntax::Span;
 use miri::mir::option_layout::LayoutScope;
 use miri::mir::type_facts::{
-    release_plan, released_captures, CountedSlot, ReleasePlan, TypeDefinition, UnresolvedArgument,
+    release_plan, CountedSlot, ReleasePlan, TypeDefinition, UnresolvedArgument,
 };
 use miri::type_checker::context::AliasDefinition;
 use std::collections::{HashMap, HashSet};
@@ -125,21 +124,5 @@ fn an_alias_is_released_as_the_type_it_stands_for() {
         Ok(ReleasePlan::List {
             counted_element: Some(ty(TypeKind::String))
         })
-    );
-}
-
-#[test]
-fn a_closure_destructor_releases_only_its_counted_captures() {
-    let definitions = HashMap::new();
-    let open = HashSet::new();
-    let captures = [
-        TypeKind::Int,
-        TypeKind::String,
-        TypeKind::Float,
-        TypeKind::List(arg(TypeKind::Int)),
-    ];
-    assert_eq!(
-        released_captures(captures.iter(), LayoutScope::new(&definitions, &open)),
-        vec![1, 3]
     );
 }

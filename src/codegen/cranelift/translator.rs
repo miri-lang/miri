@@ -8,8 +8,9 @@
 
 use super::translate_statement::ProjectedKind;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
-use crate::codegen::cranelift::closure::CaptureLayout;
-use crate::codegen::cranelift::collection_header::{CollectionBase, ElementHeader};
+use crate::codegen::cranelift::collection_header::{
+    capture_slot_type, closure_payload_offset, CollectionBase, ElementHeader,
+};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::pass_through::forward_pass_through_parameters;
 use crate::codegen::cranelift::source_points::{SourcePoint, SourcePoints};
@@ -21,7 +22,7 @@ use crate::error::syntax::Span;
 use crate::error::{CodegenError, SourceId};
 use crate::mir::element_abi::element_layout;
 use crate::mir::symbol::Symbol;
-use crate::mir::type_facts::{TypeDefinition, TypeFacts};
+use crate::mir::type_facts::{CaptureHeld, EnvLayout, TypeDefinition, TypeFacts};
 use crate::mir::value_arguments::written_value_params;
 use crate::mir::{BasicBlock, Body, Bounds, Local, Place, PlaceElem};
 use crate::runtime_fns::rt;
@@ -95,13 +96,9 @@ pub struct TypeCtx<'a> {
     /// resolve a generic class's bare-generic field to the concrete type of
     /// its instantiation when deciding the field's drop semantics. Every
     /// translation site — function bodies, drop thunks, structural decref
-    /// thunks and closure destructors — reads the same facts.
+    /// thunks and closure environments' drop thunks — reads the same facts.
     pub facts: &'a TypeFacts,
     pub ptr_type: cl_types::Type,
-    /// Maps each closure local to the ordered AST types of its captured variables.
-    /// Used by `read_place` and `resolve_projected_type_kind` to translate
-    /// `Field(i)` projections on closure locals into the correct capture type.
-    pub closure_capture_ast_types: &'a HashMap<crate::mir::Local, Vec<Type>>,
     /// For scalar `out` parameters: maps each param Local to the Cranelift Variable
     /// that holds the incoming pointer. Used by the Return terminator to write back.
     pub out_param_ptr_vars: &'a HashMap<Local, Variable>,
@@ -167,6 +164,17 @@ pub(crate) enum RuntimeChecks {
     /// point instead tells the runtime once, at startup, that the checks are
     /// absent, and the runtime keeps its own hooks off to match.
     CompiledOut,
+}
+
+/// The Cranelift frame a body is translated into: its variables, its blocks,
+/// the pointers its scalar `out` parameters arrive through, and, for a
+/// closure body, where its environment holds each capture.
+#[derive(Clone, Copy)]
+struct BodyLocals<'a> {
+    locals: &'a HashMap<Local, Variable>,
+    blocks: &'a HashMap<BasicBlock, Block>,
+    out_param_ptr_vars: &'a HashMap<Local, Variable>,
+    env_layout: Option<&'a EnvLayout>,
 }
 
 /// How a user function's code is emitted beyond its MIR: whether it keeps the
@@ -274,6 +282,7 @@ impl<'a> FunctionTranslator<'a> {
         string_literals: &mut BTreeMap<String, usize>,
         kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
         emission: Emission,
+        env_layout: Option<&EnvLayout>,
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;
         let values = ValueLocals::of(body)?;
@@ -303,7 +312,6 @@ impl<'a> FunctionTranslator<'a> {
             local_types: &self.local_types,
             facts: self.facts,
             ptr_type: self.ptr_type,
-            closure_capture_ast_types: &body.captures.closure_capture_types,
             out_param_ptr_vars: &out_param_ptr_vars,
             open_params: &body.generics.open_params,
             bound_params: &body.generics.bound_params,
@@ -315,9 +323,12 @@ impl<'a> FunctionTranslator<'a> {
             &mut builder,
             &mut module_ctx,
             body,
-            &locals,
-            &blocks,
-            &out_param_ptr_vars,
+            BodyLocals {
+                locals: &locals,
+                blocks: &blocks,
+                out_param_ptr_vars: &out_param_ptr_vars,
+                env_layout,
+            },
             &type_ctx,
             self.source_points.as_mut(),
         )?;
@@ -453,18 +464,21 @@ impl<'a> FunctionTranslator<'a> {
     /// Lower MIR statements + terminator for every basic block. Block 0 also
     /// runs the deferred scalar-out-param load and closure-capture extraction
     /// (must happen after `switch_to_block` per Cranelift's block-state rules).
-    #[allow(clippy::too_many_arguments)]
     fn translate_blocks(
         builder: &mut FunctionBuilder,
         module_ctx: &mut ModuleCtx,
         body: &Body,
-        locals: &HashMap<Local, Variable>,
-        blocks: &HashMap<BasicBlock, Block>,
-        out_param_ptr_vars: &HashMap<Local, Variable>,
+        frame: BodyLocals<'_>,
         type_ctx: &TypeCtx,
         mut source_points: Option<&mut SourcePoints>,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
+        let BodyLocals {
+            locals,
+            blocks,
+            out_param_ptr_vars,
+            env_layout,
+        } = frame;
         for (idx, block_data) in body.basic_blocks.iter().enumerate() {
             let block = blocks[&BasicBlock(idx)];
             builder.switch_to_block(block);
@@ -474,7 +488,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::copy_written_value_params(builder, body, locals, type_ctx.values, ptr_type)?;
                 Self::load_scalar_out_params(builder, body, locals, out_param_ptr_vars, ptr_type);
                 if !body.captures.env_capture_locals.is_empty() {
-                    Self::load_closure_captures(builder, body, locals, ptr_type);
+                    Self::load_closure_captures(builder, body, env_layout, locals, ptr_type)?;
                 }
             }
 
@@ -576,36 +590,63 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Closure bodies: load captured values from `env_ptr` (Local 1) at the
-    /// top of the entry block, each at its own type from where
-    /// [`CaptureLayout`] places it.
+    /// top of the entry block, each from the slot the closure's [`EnvLayout`]
+    /// gives it and held as that slot holds it.
     fn load_closure_captures(
         builder: &mut FunctionBuilder,
         body: &Body,
+        env_layout: Option<&EnvLayout>,
         locals: &HashMap<Local, Variable>,
         ptr_type: cl_types::Type,
-    ) {
-        let env_ptr_var = locals[&Local(1)];
+    ) -> Result<(), CodegenError> {
+        let layout = env_layout.ok_or_else(|| {
+            CodegenError::Internal(
+                "a body loads captures, but the type facts hold no environment for it".to_string(),
+            )
+        })?;
+        if layout.slots.len() != body.captures.env_capture_locals.len() {
+            return Err(CodegenError::Internal(format!(
+                "a body loads {} captures, but its environment holds {}",
+                body.captures.env_capture_locals.len(),
+                layout.slots.len()
+            )));
+        }
+        let env_ptr_var = locals.get(&Local(1)).copied().ok_or_else(|| {
+            CodegenError::Internal("a closure body declares no environment pointer".to_string())
+        })?;
         let env_ptr_val = builder.use_var(env_ptr_var);
-        let layout = CaptureLayout::of_body(body, ptr_type);
-        for (&cap_local, &offset) in body.captures.env_capture_locals.iter().zip(&layout.offsets) {
+        let word = ptr_type.bytes() as i32;
+        for (&cap_local, slot) in body.captures.env_capture_locals.iter().zip(&layout.slots) {
             let Some(&cap_var) = locals.get(&cap_local) else {
                 continue;
             };
-            let cap_ty = &body.local_decls[cap_local.0].ty;
-            // A value held as its bytes is copied out of the environment
-            // into the capture's own slot.
-            if let Some(value) = body.value_layout(&cap_ty.kind) {
-                let source = builder.ins().iadd_imm_s(env_ptr_val, i64::from(offset));
-                let slot = builder.use_var(cap_var);
-                copy_value(builder, source, slot, &value);
-                continue;
+            let offset = closure_payload_offset(slot.offset, word)?;
+            match &slot.held {
+                // A value held as its bytes is copied out of the environment
+                // into the capture's own slot.
+                CaptureHeld::Bytes(value) => {
+                    let source = builder.ins().iadd_imm_s(env_ptr_val, i64::from(offset));
+                    let dest = builder.use_var(cap_var);
+                    copy_value(builder, source, dest, value);
+                }
+                CaptureHeld::Scalar(_) | CaptureHeld::Word => {
+                    let loaded = builder.ins().load(
+                        capture_slot_type(&slot.held, ptr_type),
+                        MemFlagsData::new(),
+                        env_ptr_val,
+                        offset,
+                    );
+                    builder.try_def_var(cap_var, loaded).map_err(|error| {
+                        CodegenError::Internal(format!(
+                            "capture `{cap_local}` is held as {:?}, which its local cannot \
+                             take: {error}",
+                            slot.held
+                        ))
+                    })?;
+                }
             }
-            let cap_cl_type = translate_type(cap_ty, ptr_type);
-            let cap_val = builder
-                .ins()
-                .load(cap_cl_type, MemFlagsData::new(), env_ptr_val, offset);
-            builder.def_var(cap_var, cap_val);
         }
+        Ok(())
     }
     /// Get the function signature.
     pub fn signature(&self) -> &Signature {
@@ -793,14 +834,6 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        if matches!(owner_type.kind, TypeKind::Function(_)) {
-            // Closure env field: capture `idx` lives at
-            // payload_ptr + (idx+2)*ptr_size (slot 0=fn_ptr, slot 1=dtor_ptr).
-            let offset = (idx as i64 + 2) * ptr_type.bytes() as i64;
-            return Ok(builder
-                .ins()
-                .load(ptr_type, MemFlagsData::new(), value, offset as i32));
-        }
         let (offset, member) =
             layout::field_layout(&owner_type.kind, idx, type_ctx.layout_scope(), ptr_type)?;
         let mut field_ty = match member {
@@ -1960,46 +1993,6 @@ impl<'a> FunctionTranslator<'a> {
                 param_types: &[pt],
                 return_types: &[],
                 args: &[ptr],
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Calls `miri_rt_closure_alloc_track()` to record a closure allocation in
-    /// `CLOSURE_ALLOC_BALANCE`. Must be matched by `call_rt_closure_free_track`.
-    pub(crate) fn call_rt_closure_alloc_track(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-    ) -> Result<(), CodegenError> {
-        Self::call_cached_func(
-            builder,
-            ctx.module,
-            &mut ctx.cached_funcs,
-            CallSite {
-                name: rt::CLOSURE_ALLOC_TRACK,
-                param_types: &[],
-                return_types: &[],
-                args: &[],
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Calls `miri_rt_closure_free_track()` to record a closure free in
-    /// `CLOSURE_ALLOC_BALANCE`. Must follow a matching `call_rt_closure_alloc_track`.
-    pub(crate) fn call_rt_closure_free_track(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-    ) -> Result<(), CodegenError> {
-        Self::call_cached_func(
-            builder,
-            ctx.module,
-            &mut ctx.cached_funcs,
-            CallSite {
-                name: rt::CLOSURE_FREE_TRACK,
-                param_types: &[],
-                return_types: &[],
-                args: &[],
             },
         )?;
         Ok(())
