@@ -242,7 +242,7 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
-                    // Perceus now handles Field(0) projections on Option types via
+                    // RC insertion now handles Field(0) projections on Option types via
                     // place_is_counted, so no explicit IncRef needed here.
                 }
                 return Ok(());
@@ -279,7 +279,7 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
-                    // Perceus handles enum field projections via the managed_locals fallback
+                    // RC insertion handles enum field projections via the managed_locals fallback
                     // in its main loop, so no explicit IncRef needed here.
                 }
             }
@@ -386,7 +386,7 @@ fn enum_instantiation_args(kind: &TypeKind) -> Option<Vec<TypeArgument>> {
 /// Substitution recovers a payload's *storage width*, which only differs from
 /// the pointer-sized default for scalars, and its *ownership*: a payload named
 /// concretely as a reference-counted type makes the bound local managed, so
-/// Perceus retains it at the bind. That retain is what balances the release the
+/// RC insertion retains it at the bind. That retain is what balances the release the
 /// enum's drop path emits for the same field once it resolves the instantiation
 /// (the enum's [`crate::mir::type_facts::DropPlan`]). Both sides
 /// read the same instantiation arguments through the one rule,
@@ -596,7 +596,7 @@ fn primitive_spelling(kind: &TypeKind) -> TypeKind {
 /// consumer would read the inner payload as the address of an optional.
 ///
 /// The wrap is also what hands the value a second holder: building an aggregate
-/// makes Perceus retain every managed place it reads, and a value a callee has
+/// makes RC insertion retain every managed place it reads, and a value a callee has
 /// just donated lives in a temp no scope releases, so that retain has to be
 /// answered — which is what [`release_coerced_source`] asks this for.
 pub fn coercion_wraps_in_some(op_ty: &Type, target_ty: &Type) -> bool {

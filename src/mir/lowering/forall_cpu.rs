@@ -280,10 +280,10 @@ fn extract_range(
 /// The loop variable's lifetime is scoped via `push_scope`/`pop_scope` at the caller:
 /// - `push_scope()` before calling this function opens the loop's scope.
 /// - The loop var is pushed and used through all loop blocks.
-/// - `pop_scope()` after `exit_bb` is reached closes the scope and triggers DecRef (Perceus).
+/// - `pop_scope()` after `exit_bb` is reached closes the scope and triggers DecRef (RC insertion).
 ///
 /// For nested loops (2D/3D), each dimension has its own `push_scope` / `pop_scope` pair,
-/// with the innermost dimension's scope destroyed first. This ensures correct Perceus cleanup
+/// with the innermost dimension's scope destroyed first. This ensures correct RC insertion cleanup
 /// order even though the loop var itself is immutable.
 pub struct LoopBlocks {
     pub header_bb: crate::mir::BasicBlock,

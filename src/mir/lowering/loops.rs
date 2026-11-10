@@ -31,7 +31,7 @@ pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), Lowerin
         None => return Err(LoweringError::break_outside_loop(*span)),
     };
     // Emit StorageDead for all named locals introduced inside the loop body
-    // (scopes opened after enter_loop was called). Perceus converts these into
+    // (scopes opened after enter_loop was called). RC insertion converts these into
     // DecRef operations, ensuring managed locals (e.g. Strings from match branches)
     // are properly released when break exits the scope early.
     ctx.emit_break_cleanup(scope_depth, *span);

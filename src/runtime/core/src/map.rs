@@ -386,7 +386,7 @@ impl MiriMap {
             }
         }
         // If the key already exists and keys are managed, DecRef the old key pointer
-        // before the new one is written into the slot (the new key is IncRef'd by Perceus).
+        // before the new one is written into the slot (the new key is IncRef'd by RC insertion).
         if found && self.key_drop_fn != 0 && self.key_size > 0 {
             let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.key_drop_fn);
             let old_key_addr = self.keys.add(idx * self.key_size) as *const usize;
@@ -1211,7 +1211,7 @@ pub mod ffi {
     ///
     /// Used as `elem_drop_fn` / `val_drop_fn` by outer collections (Array, List, Set,
     /// Map) when they remove or overwrite a Map-typed element at runtime (e.g. clear,
-    /// remove, or element overwrite). Unlike the Perceus scope-exit path — which
+    /// remove, or element overwrite). Unlike the RC insertion scope-exit path — which
     /// emits an inline codegen loop to DecRef managed values before calling
     /// `miri_rt_map_free` — this runtime callback has no such loop. We therefore
     /// call `val_drop_fn` on every occupied slot here, before delegating to
@@ -1230,7 +1230,7 @@ pub mod ffi {
         }
         *rc_ptr -= 1;
         if *rc_ptr == 0 {
-            // DecRef managed values before freeing.  The Perceus inline codegen
+            // DecRef managed values before freeing.  The RC insertion inline codegen
             // loop handles this for scope-exit drops; here we must do it ourselves.
             let map = ptr as *mut MiriMap;
             if (*map).val_drop_fn != 0

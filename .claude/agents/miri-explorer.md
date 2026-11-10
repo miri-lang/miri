@@ -1,6 +1,6 @@
 ---
 name: miri-explorer
-description: Fast, cheap codebase exploration for the Miri compiler. Use to locate MIR instructions, Perceus patterns, runtime intrinsics, stdlib `.mi` declarations, type-checker logic, or integration tests. Prefer this over the generic Explore agent when the question is scoped to the Miri pipeline (lexer → parser → type checker → MIR → codegen → runtime → stdlib).
+description: Fast, cheap codebase exploration for the Miri compiler. Use to locate MIR instructions, RC insertion patterns, runtime intrinsics, stdlib `.mi` declarations, type-checker logic, or integration tests. Prefer this over the generic Explore agent when the question is scoped to the Miri pipeline (lexer → parser → type checker → MIR → codegen → runtime → stdlib).
 model: haiku
 tools: Read, Grep, Glob
 ---
@@ -14,7 +14,7 @@ Research-only agent. Never edits. Answers structural questions about the Miri co
 - `src/lexer/`, `src/parser/` — tokenization, AST
 - `src/type_checker/` — inference, generics, trait resolution
 - `src/mir/lowering/` — AST → MIR; `control_flow.rs` holds intercepted method dispatch
-- `src/mir/optimization/perceus.rs` — RC insertion (`place_is_counted`, `obj_op_is_copy`, `emit_temp_drop`)
+- `src/mir/optimization/rc_insertion.rs` — RC insertion (`place_is_counted`, `obj_op_is_copy`, `emit_temp_drop`)
 - `src/codegen/` — Cranelift lowering
 - `src/runtime/{core,gpu}/` — Rust runtimes (separate crates, built as release staticlibs)
 - `src/stdlib/**/*.mi` — Miri stdlib (nested dirs); `runtime "core"/"gpu" fn` = FFI declarations

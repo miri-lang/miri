@@ -39,7 +39,7 @@ pub(crate) fn lower_index_expr(
     }
 
     // Watermark so we can release any managed temp created for `obj` (e.g. an
-    // array literal). Only drop on Copy — Perceus IncRef's the source temp.
+    // array literal). Only drop on Copy — RC insertion IncRef's the source temp.
     let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_operand(ctx, obj)?;
 

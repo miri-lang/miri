@@ -680,7 +680,7 @@ impl TypeKind {
             // Option: inherits from inner type
             TypeKind::Option(inner) => inner.kind.is_copy(),
             // Without resolved element types we cannot prove Copy for a tuple,
-            // so default to Move. Perceus then inserts the IncRef/DecRef pair;
+            // so default to Move. RC insertion then inserts the IncRef/DecRef pair;
             // callers with resolved element types can override per-element.
             TypeKind::Tuple(_) => false,
         }

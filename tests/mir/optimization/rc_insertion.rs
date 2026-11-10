@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Tests for the Perceus reference-counting insertion pass.
+//! Tests for the reference-count insertion pass.
 //!
 //! These assert the *exact placement* of `IncRef` / `DecRef` relative to the
 //! statement that made them necessary. Placement — not merely presence — is
@@ -108,7 +108,7 @@ fn storage_dead(target: Place) -> Statement {
 /// A single-block body whose local `i` has type `local_tys[i]`.
 ///
 /// Local 0 is the return slot and locals `1..=arg_count` are parameters, matching
-/// the layout Perceus assumes when it decides which locals it owns.
+/// the layout RC insertion assumes when it decides which locals it owns.
 fn body_with(local_tys: &[Type], arg_count: usize, statements: Vec<Statement>) -> Body {
     let mut body = Body::new(arg_count, span(), ExecutionModel::Cpu);
     for local_ty in local_tys {
@@ -125,7 +125,7 @@ fn body_with(local_tys: &[Type], arg_count: usize, statements: Vec<Statement>) -
     body
 }
 
-/// Run Perceus and return the entry block's statement kinds in order.
+/// Run RC insertion and return the entry block's statement kinds in order.
 fn rc_statements(body: &mut Body) -> Vec<StatementKind> {
     insert_rc(body, &mut OwnershipFacts::default());
     body.basic_blocks[0]
@@ -775,12 +775,12 @@ fn test_body_without_managed_locals_is_left_unchanged() {
     assert_eq!(rc_statements(&mut body), expected);
 }
 
-/// Lower `source` and run Perceus on the function named `name`.
+/// Lower `source` and run RC insertion on the function named `name`.
 fn lowered_with_rc(source: &str, name: &str) -> Body {
     lowered_with_rc_and_ownership(source, name).0
 }
 
-/// [`lowered_with_rc`], with the ownership Perceus recorded about the body.
+/// [`lowered_with_rc`], with the ownership RC insertion recorded about the body.
 fn lowered_with_rc_and_ownership(source: &str, name: &str) -> (Body, OwnershipFacts) {
     let pipeline = Pipeline::new();
     let result = pipeline.frontend(source).expect("Frontend should succeed");
@@ -839,7 +839,7 @@ fn count_rc(body: &Body) -> (usize, usize) {
     (increfs, decrefs)
 }
 
-/// True when every `DecRef(p)` Perceus emitted sits immediately before the
+/// True when every `DecRef(p)` RC insertion emitted sits immediately before the
 /// statement that consumes `p`: the `StorageDead(p)` ending its scope, or the
 /// `Reassign(p, _)` overwriting it.
 fn every_decref_guards_its_consumer(body: &Body) -> bool {
@@ -1065,7 +1065,7 @@ fn use_conn(conn Conn) int:
         let violations = verify_body(&body, &ownership);
         assert!(
             violations.is_empty(),
-            "RC violations in '{}' after Perceus: {:?}",
+            "RC violations in '{}' after RC insertion: {:?}",
             name,
             violations
         );

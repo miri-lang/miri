@@ -131,7 +131,7 @@ pub struct Captures {
     pub env_capture_locals: Vec<Local>,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Populated by `lower_lambda_expr` after capture pruning.
-    /// Used by Perceus to emit per-capture DecRef at StorageDead, and by codegen
+    /// Used by RC insertion to emit per-capture DecRef at StorageDead, and by codegen
     /// to resolve `Field(i)` projections on closure locals.
     /// Only present when the closure has at least one capture.
     pub closure_capture_types: HashMap<Local, Vec<Type>>,
@@ -544,7 +544,7 @@ pub struct LocalDecl {
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
-    /// Used by analysis passes (e.g. Perceus) to traverse collection element
+    /// Used by analysis passes (e.g. RC insertion) to traverse collection element
     /// types without pattern-matching on [`ExpressionKind`] nodes.
     ///
     /// [`ExpressionKind`]: crate::ast::expression::ExpressionKind

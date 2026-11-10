@@ -63,7 +63,7 @@ fn main()
 
 #[test]
 fn test_generic_element_name_with_string_no_leak() {
-    // String is a managed type — Perceus must IncRef/DecRef it correctly even
+    // String is a managed type — RC insertion must IncRef/DecRef it correctly even
     // though the generic param is named "Element" (not in the old hardcoded list).
     assert_runs_with_output(
         r#"

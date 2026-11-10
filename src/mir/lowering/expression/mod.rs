@@ -137,7 +137,7 @@ pub(super) fn emit_to_string(
     match type_kind {
         TypeKind::String => {
             // Already a string — assign to a temp Local.
-            // Convert Move to Copy so that Perceus emits IncRef for the source.
+            // Convert Move to Copy so that RC insertion emits IncRef for the source.
             // Both the source local and this temp are managed and will each get
             // DecRef'd at StorageDead; without an IncRef here the RC would be
             // decremented one extra time, causing a use-after-free.

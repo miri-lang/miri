@@ -4,7 +4,7 @@
 //! Shared reference-counting helpers for MIR.
 //!
 //! [`RcClassifier`] is the single authority on whether a value of a type is
-//! reference counted: the lowering context, Perceus, the passes that move or
+//! reference counted: the lowering context, RC insertion, the passes that move or
 //! elide references and the verifier all ask it, through [`Body::is_counted`].
 //! It answers from the value-class authority over the declared type.
 //!

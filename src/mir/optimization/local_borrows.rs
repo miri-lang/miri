@@ -10,7 +10,7 @@
 //! and class fields, reads a value `r` holds. While `r` and everything on the
 //! way stays as it was, `r`'s reference keeps that value alive, so `l` can
 //! borrow it the way a body borrows a parameter: no retain when it is read, no
-//! release when its storage ends. Perceus funds every way a borrowed value
+//! release when its storage ends. RC insertion funds every way a borrowed value
 //! escapes: a copy into a store, a return, an aggregate or a capture is
 //! retained, a move out of it is retained, and an owned argument is funded. So
 //! what has to be proved is only that the owner outlives the borrow.
@@ -18,7 +18,7 @@
 //! `l` borrows when all of these hold:
 //!
 //! - **It reads.** `l` is a managed local the body owns, every definition of it
-//!   is a copy Perceus would retain, it runs no drop hook and holds no device
+//!   is a copy RC insertion would retain, it runs no drop hook and holds no device
 //!   buffer, and it is never rebound, released by hand, handed to a runtime
 //!   entry point that keeps it, written through, or passed `out`.
 //! - **It is never asked whether it is shared**, unless its type is a reference
@@ -72,7 +72,7 @@
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::mir::analysis::heap_effects::{borrowed_entries, BodyNoise, Phase};
 use crate::mir::facts::OwnershipFacts;
-use crate::mir::optimization::perceus::{place_declared_type, Perceus, PerceusContext};
+use crate::mir::optimization::rc_insertion::{place_declared_type, RcContext, RcInsertion};
 use crate::mir::place::PlaceContext;
 use crate::mir::terminator::{arg_mode, ArgMode, Terminator, TerminatorKind};
 use crate::mir::type_facts::unsharing::is_copied_on_write;
@@ -97,7 +97,7 @@ type Reads = HashMap<Local, Vec<(Site, Place)>>;
 pub(super) fn infer_local_borrows(
     body: &Body,
     ownership: &OwnershipFacts,
-    ctx: &PerceusContext,
+    ctx: &RcContext,
     managed_locals: &HashSet<Local>,
 ) -> HashMap<Local, Vec<Local>> {
     let mut reads = borrowing_reads(body, ctx, managed_locals);
@@ -132,7 +132,7 @@ pub(super) fn infer_local_borrows(
 /// reach: through a class field, or out of a parameter.
 fn retain_rooted_reads(
     body: &Body,
-    ctx: &PerceusContext,
+    ctx: &RcContext,
     managed_locals: &HashSet<Local>,
     reads: &mut Reads,
 ) -> HashSet<Site> {
@@ -276,13 +276,13 @@ impl Settled<'_> {
     }
 }
 
-fn definitions<'a>(ctx: &PerceusContext<'a>) -> &'a HashMap<String, TypeDefinition> {
+fn definitions<'a>(ctx: &RcContext<'a>) -> &'a HashMap<String, TypeDefinition> {
     ctx.rc_classifier.definitions()
 }
 
-/// Each managed local's copies of a projected place that Perceus would
+/// Each managed local's copies of a projected place that RC insertion would
 /// retain, by the local they define.
-fn borrowing_reads(body: &Body, ctx: &PerceusContext, managed_locals: &HashSet<Local>) -> Reads {
+fn borrowing_reads(body: &Body, ctx: &RcContext, managed_locals: &HashSet<Local>) -> Reads {
     let mut reads = Reads::new();
     for (block, data) in body.basic_blocks.iter().enumerate() {
         for (index, statement) in data.statements.iter().enumerate() {
@@ -293,7 +293,7 @@ fn borrowing_reads(body: &Body, ctx: &PerceusContext, managed_locals: &HashSet<L
             let is_read = dest.projection.is_empty()
                 && managed_locals.contains(&dest.local)
                 && !source.projection.is_empty()
-                && Perceus.should_incref_source(ctx, source, dest, managed_locals);
+                && RcInsertion.should_incref_source(ctx, source, dest, managed_locals);
             if is_read {
                 reads
                     .entry(dest.local)
@@ -354,7 +354,7 @@ fn ends_lent_parameter(body: &Body, ownership: &OwnershipFacts, statement: &Stat
 /// through it, a runtime entry point keeping or checking it, an `out`
 /// argument, a kernel launch, or — for a value that is not a reference by
 /// design — a hand-off to a callee that may write it in place.
-fn refused_locals(body: &Body, ctx: &PerceusContext, reads: &Reads) -> HashSet<Local> {
+fn refused_locals(body: &Body, ctx: &RcContext, reads: &Reads) -> HashSet<Local> {
     let reads_at: HashSet<(Local, Site)> = reads
         .iter()
         .flat_map(|(&local, sources)| sources.iter().map(move |(site, _)| (local, *site)))

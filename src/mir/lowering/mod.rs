@@ -388,8 +388,8 @@ pub(crate) fn substitute_class_generics(
 /// name pinned to a concrete type by `subs`.
 ///
 /// The names left behind are the still-opaque generics — an unsubstituted
-/// value-generic size or a nested generic — that Perceus must keep treating as
-/// unresolved. A substituted scalar `T` is removed so Perceus sees it as the
+/// value-generic size or a nested generic — that RC insertion must keep treating as
+/// unresolved. A substituted scalar `T` is removed so RC insertion sees it as the
 /// concrete scalar the instantiation monomorphized to rather than an opaque
 /// (managed) placeholder.
 #[allow(dead_code)]
@@ -671,7 +671,7 @@ fn stamp_residency_param_handles(
 /// on the receiver's type definition. `collect_type_params` only catches
 /// `TypeKind::Generic`, missing names that resolve to `Custom("T", None)` for
 /// enum/class methods; reading them from the type definition closes that gap so
-/// Perceus does not treat unresolved placeholders as concrete heap-managed types.
+/// RC insertion does not treat unresolved placeholders as concrete heap-managed types.
 fn class_level_generic_names(self_type: &Type, tc: &TypeChecker) -> Vec<String> {
     let TypeKind::Custom(class_name, _) = &self_type.kind else {
         return Vec::new();
@@ -916,7 +916,7 @@ fn lower_class_method_body(
     // instantiation type instead of the pointer-width fallback.
     ctx.generic_subs = subs.clone();
 
-    // A field declared `value T` is stored at the instance's argument. Perceus
+    // A field declared `value T` is stored at the instance's argument. RC insertion
     // decides by that type whether assigning into the field claims the value,
     // so a bare spelling of the class in this body must read at the instance
     // being lowered, or an instantiation at a managed type would store what it
@@ -927,7 +927,7 @@ fn lower_class_method_body(
 
     // Method-own generics plus class-level generics that appear in param/return
     // types (e.g. T in List<T>), minus any name pinned to a concrete type by
-    // `subs`. Dropping substituted names lets Perceus treat a monomorphized
+    // `subs`. Dropping substituted names lets RC insertion treat a monomorphized
     // scalar `T` as concrete rather than an opaque managed placeholder. For the
     // non-monomorphized path `subs` is empty, so nothing is dropped.
     let mut type_params = collect_type_params(decl, tc);

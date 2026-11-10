@@ -9,6 +9,10 @@ its identifiers — a task or milestone id, a design or feature code, a
 benchmark round or claim number — reads as a reference nobody outside can
 follow. Each such mention is replaced by a sentence saying what it means.
 
+A retired name is refused the same way: a name the project once used for a
+design it does not implement, which would point a reader at the wrong
+literature and an agent at the wrong target.
+
 Every tracked text file is read. A pattern that also has a real meaning in a
 few places (a variable called `r1`, a job's own fault table) is allowed there
 by name, with the reason, so a new mention anywhere else fails.
@@ -36,6 +40,9 @@ PATTERNS = [
     ("feature id", re.compile(r"\bF(?!16\b|32\b|64\b|128\b)[0-9]{1,3}\b")),
     ("benchmark round", re.compile(r"\br[0-9]+b?\b")),
     ("claim id", re.compile(r"\bC[1-9]\b")),
+    # The reference-count pass is not the published algorithm of that name: it
+    # has no constructor reuse and no owned-by-default parameters.
+    ("retired name", re.compile(r"perceus", re.IGNORECASE)),
 ]
 
 # (path glob, pattern name, why the mention is not a planning reference).

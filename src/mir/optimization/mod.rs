@@ -3,11 +3,11 @@
 
 //! MIR-to-MIR passes over lowered bodies.
 //!
-//! Perceus RC insertion runs exactly once per body via [`insert_rc`]; every
+//! RC insertion runs exactly once per body via [`insert_rc`]; every
 //! other pass here reads or rewrites the reference-counted body it leaves.
 //!
 //! [`owned_params::decide_owned_parameters`] runs over the whole program before
-//! Perceus and decides which parameters each function takes over from its
+//! RC insertion and decides which parameters each function takes over from its
 //! callers; [`elide_rc`] later cancels the retain funding such an argument
 //! against the caller's release of it. [`elide_unshare_checks`] runs after
 //! it, on every host body at every optimization level, and removes a
@@ -29,16 +29,16 @@ pub mod local_borrows;
 pub mod loop_unsharing;
 pub mod loop_versioning;
 pub mod owned_params;
-pub mod perceus;
 pub mod rc_elision;
+pub mod rc_insertion;
 pub mod stable_collections;
 pub mod unshare_elision;
 
 use crate::mir::facts::OwnershipFacts;
 use crate::mir::{Body, ExecutionModel};
-use perceus::Perceus;
 use rc_elision::RcElision;
 pub use rc_elision::{count_all_rc_ops, count_rc_ops};
+use rc_insertion::RcInsertion;
 use unshare_elision::UnshareElision;
 
 /// Defines an optimization pass for MIR transformations.
@@ -83,7 +83,7 @@ pub trait OptimizationPass {
     fn name(&self) -> &'static str;
 }
 
-/// Insert Perceus reference-counting operations into the MIR body.
+/// Insert the reference-counting operations into the MIR body.
 ///
 /// This must be called exactly once per body: a second run would insert
 /// duplicate IncRef/DecRef.
@@ -103,7 +103,7 @@ pub fn insert_rc(body: &mut Body, ownership: &mut OwnershipFacts) {
     if runs_on_a_gpu(body) {
         return;
     }
-    Perceus.insert(body, ownership);
+    RcInsertion.insert(body, ownership);
 }
 
 /// Whether `body` executes on a GPU rather than on the host.

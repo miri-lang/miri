@@ -903,7 +903,7 @@ fn names_a_settled_type(ctx: &LoweringContext, ty: &Type) -> bool {
 /// The type to give the local that receives a method call's result.
 ///
 /// A generic method declares its result in the class's own parameters — `V?`
-/// for `Map<String, Node>.get` — and a local typed that way tells Perceus
+/// for `Map<String, Node>.get` — and a local typed that way tells RC insertion
 /// nothing about what it holds, so the result is never released. The type
 /// checker already inferred the concrete type at this call site; the declared
 /// return type is the fallback for a call it did not record.
@@ -1507,7 +1507,7 @@ fn call_writes_receiver(
 
 /// Lower the receiver, apply a CoW check when the call writes a collection
 /// receiver, and return the self operand plus the receiver temp local (for
-/// Perceus drops).
+/// RC insertion drops).
 ///
 /// Whether `method_name` of `class_name` writes its receiver is read off the
 /// method's body by the type checker ([`ReceiverWrites`]), so no method is
@@ -1620,8 +1620,8 @@ fn cow_checked_local(
 /// clone (RC > 1 → clone + decrement old RC). The result is stored back into the receiver local
 /// so the subsequent mutation operates on an exclusively-owned collection.
 ///
-/// `Assign` (not `Reassign`) is used for the write-back so Perceus does not DecRef the old
-/// value; `Move` is used for the cow_result so Perceus does not IncRef it. No `StorageDead` is
+/// `Assign` (not `Reassign`) is used for the write-back so RC insertion does not DecRef the old
+/// value; `Move` is used for the cow_result so RC insertion does not IncRef it. No `StorageDead` is
 /// emitted for the cow_result temp — its ownership is transferred to self_local.
 ///
 /// The body's own receiver is checked instead of copied ([`emit_receiver_unique_check`]).

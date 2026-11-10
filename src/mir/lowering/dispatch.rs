@@ -949,7 +949,7 @@ pub(super) fn spill_operand_to_address(
 
 /// Donate a reference to a value a container is about to take ownership of.
 ///
-/// Reading the operand by copy makes Perceus retain it into the temp, and the
+/// Reading the operand by copy makes RC insertion retain it into the temp, and the
 /// temp is what the container stores. A temporary that only existed to produce
 /// the value is then released, so the net effect is one reference handed over:
 /// the caller keeps releasing whatever it already owned, and the container
@@ -2115,7 +2115,7 @@ pub(super) fn coerce_arg_to_declared(
         return op;
     }
     let temp = ctx.push_temp(target_ty.clone(), arg.span);
-    // Wrapping in `Some` builds a new value whose payload Perceus retains
+    // Wrapping in `Some` builds a new value whose payload RC insertion retains
     // itself wherever the source is read again; only a coercion that re-spells
     // the value hands its reference on.
     if !super::helpers::coercion_wraps_in_some(&op_ty, target_ty) {

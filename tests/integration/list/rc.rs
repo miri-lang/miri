@@ -367,7 +367,7 @@ fn main()
 #[test]
 fn test_list_index_write_managed_no_leak() {
     // l[i] = new_val (direct index write syntax) must use Copy semantics so that
-    // Perceus IncRefs the source before storing.  Same fix as Array case.
+    // RC insertion IncRefs the source before storing.  Same fix as Array case.
     assert_runs_with_output(
         r#"
 use system.collections.list

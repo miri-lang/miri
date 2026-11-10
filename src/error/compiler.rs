@@ -150,7 +150,7 @@ impl CompilerError {
                 DiagnosticCode::MirValidationFailed,
                 msg.clone(),
                 Some(
-                    "This indicates a bug in MIR lowering or Perceus RC insertion. \
+                    "This indicates a bug in MIR lowering or RC insertion. \
                      Please report it."
                         .to_string(),
                 ),

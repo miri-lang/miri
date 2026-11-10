@@ -20,7 +20,7 @@ Both must be validated with real examples and facts from the tree, and compared 
 
 - `/miri-hilo` → the whole project (`src/`, `tests/`, the runtimes, the stdlib, the tooling under `tools/` and `.github/`).
 - `/miri-hilo <path>` (e.g. `/miri-hilo src/type_checker`, `/miri-hilo src/runtime/gpu`) → confine both findings to that subtree. Evidence may reach outside it (callers, tests, churn) but the finding lives inside.
-- `/miri-hilo <topic>` (e.g. `/miri-hilo generics`, `/miri-hilo diagnostics`, `/miri-hilo perceus`) → resolve the topic to the files and passes that implement it via the code graph (`semantic_search_nodes`, `query_graph`), print that file list back, then confine both findings to it.
+- `/miri-hilo <topic>` (e.g. `/miri-hilo generics`, `/miri-hilo diagnostics`, `/miri-hilo rc_insertion`) → resolve the topic to the files and passes that implement it via the code graph (`semantic_search_nodes`, `query_graph`), print that file list back, then confine both findings to it.
 
 State the resolved scope in one line before measuring.
 

@@ -45,11 +45,11 @@ use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 /// For each assignment whose source is a managed place, an `IncRef` is inserted
 /// before the assignment. For each `StorageDead` of a managed place, a `DecRef`
 /// is inserted before the storage is released.
-pub struct Perceus;
-/// Metadata context for the Perceus optimization pass.
+pub struct RcInsertion;
+/// Metadata context for the RC insertion optimization pass.
 /// Holds immutable references to necessary fields of `Body` to satisfy the borrow checker
 /// while iterating over `basic_blocks` mutably.
-pub(super) struct PerceusContext<'a> {
+pub(super) struct RcContext<'a> {
     pub(super) local_decls: &'a [crate::mir::LocalDecl],
     pub(super) rc_classifier: &'a RcClassifier,
     instance: Option<&'a crate::ast::types::Type>,
@@ -64,10 +64,10 @@ pub(super) struct PerceusContext<'a> {
     borrowed: &'a BorrowedLocals,
 }
 
-impl<'a> PerceusContext<'a> {
+impl<'a> RcContext<'a> {
     /// The context of `body`, reading `borrowed` for what it does not own.
     fn of(body: &'a Body, borrowed: &'a BorrowedLocals) -> Self {
-        PerceusContext {
+        RcContext {
             local_decls: &body.local_decls,
             rc_classifier: &body.rc_classifier,
             instance: body.generics.instance.as_ref(),
@@ -101,7 +101,7 @@ impl<'a> PerceusContext<'a> {
 /// A capture the body writes — assigns, makes a call's destination, or hands
 /// to an `out` parameter — is not borrowed. Its value is replaced by one the
 /// body owns, so it takes its own reference on entry and is then released like
-/// any other local — see [`Perceus::retain_written_captures`].
+/// any other local — see [`RcInsertion::retain_written_captures`].
 ///
 /// A local that reads a value out of a place the body owns, while nothing
 /// changes that place, borrows it from that place the way a parameter borrows
@@ -148,7 +148,7 @@ impl BorrowedLocals {
     }
 }
 
-impl Perceus {
+impl RcInsertion {
     /// Inserts every retain and release into `body`, reading which parameters
     /// it takes over from `ownership` and recording there the locals it
     /// borrows. Returns true if any operation was inserted.
@@ -172,13 +172,13 @@ impl Perceus {
         // managed values are released by the runtime destructor (`miri.$dtor.{lambda}`)
         // stored in the closure struct.  This works for both local and cross-function
         // closures and eliminates the double-free that would occur if both the
-        // destructor and Perceus decremented the same capture on drop.
+        // destructor and RC insertion decremented the same capture on drop.
         let mut borrowed = BorrowedLocals::of(body, ownership);
         let mut managed_locals = self.identify_managed_locals(body, ownership, &borrowed);
         let borrows = super::local_borrows::infer_local_borrows(
             body,
             ownership,
-            &PerceusContext::of(body, &borrowed),
+            &RcContext::of(body, &borrowed),
             &managed_locals,
         );
         for local in borrows.keys() {
@@ -201,7 +201,7 @@ impl Perceus {
             ..
         } = *body;
 
-        let ctx = PerceusContext {
+        let ctx = RcContext {
             local_decls,
             rc_classifier,
             instance: generics.instance.as_ref(),
@@ -274,7 +274,7 @@ impl Perceus {
     /// Returns true if any new statements were inserted.
     fn process_block(
         &self,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         block: &mut BasicBlockData,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
     ) -> bool {
@@ -299,7 +299,7 @@ impl Perceus {
     /// Dispatches a statement to the appropriate RC handler.
     fn process_statement(
         &self,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         stmt: &Statement,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
         new_stmts: &mut Vec<Statement>,
@@ -318,7 +318,7 @@ impl Perceus {
     /// Handles an assignment by adding IncRef for sources and DecRef for overwritten destinations.
     fn handle_assignment(
         &self,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         stmt: &Statement,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
         new_stmts: &mut Vec<Statement>,
@@ -384,10 +384,10 @@ impl Perceus {
     ///
     /// Managed captures inside closure locals are now DecRef'd by the runtime
     /// destructor (`miri.$dtor.{lambda_name}`) when the closure RC reaches zero, so
-    /// Perceus no longer needs to emit per-field DecRefs for closure locals.
+    /// RC insertion no longer needs to emit per-field DecRefs for closure locals.
     fn handle_storage_dead(
         &self,
-        _ctx: &PerceusContext,
+        _ctx: &RcContext,
         stmt: &Statement,
         place: &Place,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
@@ -406,7 +406,7 @@ impl Perceus {
     /// The parameter that a move-from-parameter assignment must retain, if any.
     ///
     /// A caller does not IncRef before a call (borrow semantics), so moving a
-    /// parameter into a local that Perceus later DecRefs at its `StorageDead`
+    /// parameter into a local that RC insertion later DecRefs at its `StorageDead`
     /// must IncRef first, or that DecRef frees the caller's allocation while the
     /// caller still holds it.
     ///
@@ -417,7 +417,7 @@ impl Perceus {
     /// into one of those strands the reference and leaks the parameter's value.
     fn move_from_param_to_retain(
         &self,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         rvalue: &Rvalue,
         lhs: &Place,
     ) -> Option<Place> {
@@ -429,7 +429,7 @@ impl Perceus {
     /// Determines if a source value being copied needs an IncRef.
     pub(super) fn should_incref_source(
         &self,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         source: &Place,
         dest: &Place,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
@@ -471,7 +471,7 @@ impl Perceus {
         &self,
         operands: &[Operand],
         span: Span,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
         let mut changed = false;
@@ -499,7 +499,7 @@ impl Perceus {
         operand: &Operand,
         target_ty: &crate::ast::types::Type,
         span: Span,
-        ctx: &PerceusContext,
+        ctx: &RcContext,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
         if let Operand::Copy(place) = operand {
@@ -526,7 +526,7 @@ impl Perceus {
     /// reached *through* a projection of it — `self.value` inside a method — is
     /// owned by the object the local points at, and overwriting it releases the
     /// value it replaces like any other store.
-    fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
+    fn should_decref_reassign(&self, ctx: &RcContext, lhs: &Place) -> bool {
         let overwrites_borrowed_value = lhs.projection.is_empty()
             && ctx.borrowed.contains(lhs.local)
             && !ctx.borrowed.written_back.contains(&lhs.local);
@@ -587,7 +587,7 @@ fn get_copy_source_place(rvalue: &Rvalue) -> Option<Place> {
 /// Extract the source place from a Move whose source is a borrowed local.
 ///
 /// When a callee moves from a parameter (e.g. `_4 = move _1 as String`),
-/// it creates a new managed local that Perceus will DecRef at StorageDead.
+/// it creates a new managed local that RC insertion will DecRef at StorageDead.
 /// Since callers use borrow semantics (no IncRef before the call), the
 /// move must IncRef to prevent the StorageDead DecRef from prematurely
 /// freeing the caller's allocation. A closure capture is borrowed from the
@@ -620,7 +620,7 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 ///   looked up from `closure_capture_types` using the root local index
 ///
 /// Enum `Field(i)` projections cannot be resolved here (the field type depends on
-/// which variant is active), so the Perceus main loop falls back to checking
+/// which variant is active), so the RC insertion main loop falls back to checking
 /// `managed_locals.contains(&lhs.local)` for those cases.
 ///
 /// The walk decides which projection applies over [`MirType`], which stores
@@ -628,12 +628,12 @@ fn get_move_from_borrowed_place(rvalue: &Rvalue, borrowed: &BorrowedLocals) -> O
 /// carried through every projection, because `MirType::Custom` names a class
 /// without its type arguments; whether the place is counted is asked of that
 /// declared type.
-fn place_is_counted(place: &Place, ctx: &PerceusContext) -> bool {
+fn place_is_counted(place: &Place, ctx: &RcContext) -> bool {
     place_declared_type(place, ctx).is_some_and(|declared| ctx.is_counted(&declared.kind))
 }
 
 /// The declared type of what `place` reaches; see [`PlaceTypes::declared`].
-pub(super) fn place_declared_type(place: &Place, ctx: &PerceusContext) -> Option<Type> {
+pub(super) fn place_declared_type(place: &Place, ctx: &RcContext) -> Option<Type> {
     PlaceTypes {
         local_decls: ctx.local_decls,
         instance: ctx.instance,

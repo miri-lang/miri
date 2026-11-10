@@ -159,7 +159,7 @@ fn lower_function_reference(
     });
     // The allocator is an unmanaged scalar, so this closure owns no captured
     // values. A stale capture-type entry left by an earlier assignment to the
-    // same local would make Perceus drop fields the new payload does not have.
+    // same local would make RC insertion drop fields the new payload does not have.
     ctx.body
         .captures
         .closure_capture_types

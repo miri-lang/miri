@@ -159,7 +159,7 @@ fn one_element_array(element: Type, span: Span) -> Type {
 /// End block `from` with a call to runtime entry `intrinsic` whose result is
 /// discarded, returning the block that continues after it.
 ///
-/// Terminator operands are not retained by Perceus, so a managed argument is
+/// Terminator operands are not retained by RC insertion, so a managed argument is
 /// borrowed and survives the call.
 fn append_void_call(
     body: &mut Body,

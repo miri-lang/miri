@@ -1572,7 +1572,7 @@ impl Pipeline {
         result.device_helpers = gpu_names.into_helpers();
         Self::refuse_unresolved_self(&bodies)?;
 
-        // Check RC invariants and optional and value layouts after Perceus,
+        // Check RC invariants and optional and value layouts after RC insertion,
         // and that every call passes an owned argument exactly where its
         // callee takes one over. These read an element or a closure argument
         // as the value it is, so they run before the ABI spells it; the checks
@@ -1680,7 +1680,7 @@ impl Pipeline {
         })
     }
 
-    /// Get MIR bodies after Perceus RC insertion and RC elision, for test inspection.
+    /// Get MIR bodies after RC insertion and RC elision, for test inspection.
     ///
     /// Returns the lowered and optimised bodies (including RC operations) so that
     /// tests can verify the RC elision pass removed expected IncRef/DecRef pairs.

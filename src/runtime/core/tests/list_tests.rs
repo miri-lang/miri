@@ -522,7 +522,7 @@ fn test_list_clone_managed_elements_increfs_rc() {
     // RC=1 references — preventing a double-free on destruction.
     //
     // miri_rt_list_free is a raw dealloc that does NOT invoke elem_drop_fn
-    // (that's Perceus's job at scope exit, or miri_rt_list_decref_element
+    // (that's RC insertion's job at scope exit, or miri_rt_list_decref_element
     // when the list is itself an element of another collection). So we use
     // miri_rt_list_decref_element here to simulate the real drop path.
     unsafe {
@@ -546,7 +546,7 @@ fn test_list_clone_managed_elements_increfs_rc() {
         assert_eq!(*rc_ptr0, 2, "elem0 RC should be 2 after clone");
         assert_eq!(*rc_ptr1, 2, "elem1 RC should be 2 after clone");
 
-        // Drop clone via decref_element (mirrors the Perceus outer-collection path).
+        // Drop clone via decref_element (mirrors the RC insertion outer-collection path).
         // clone RC: 1→0 → calls elem_drop_fn on each element → elem0/1 RC: 2→1.
         miri_rt_list_decref_element(cloned as *mut u8);
         assert_eq!(*rc_ptr0, 1, "elem0 RC should be 1 after dropping clone");
@@ -687,7 +687,7 @@ fn test_list_rc_header() {
 fn test_list_elem_drop_fn_called_on_decref_element() {
     // miri_rt_list_decref_element is the runtime callback used as elem_drop_fn
     // by outer collections.  When RC -> 0 it must call elem_drop_fn on every
-    // live element before freeing, mirroring what the Perceus inline codegen
+    // live element before freeing, mirroring what the RC insertion inline codegen
     // loop does during scope-exit drops.
     use std::sync::atomic::{AtomicUsize, Ordering};
     static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);

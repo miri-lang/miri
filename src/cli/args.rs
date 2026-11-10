@@ -73,7 +73,7 @@ Recommended loop: `miri check FILE --format json` -> edit (`miri fix FILE --appl
 diagnostic carries a repair) -> `miri test`. `miri view --type NAME --public` lists what a type \
 offers. The full guide is the miri-lang skill pack (`miri skill install`).\n\n\
 Global options:\n\n\
---verify-mir: Run the MIR verification pass after Perceus RC insertion, checking RC invariants \
+--verify-mir: Run the MIR verification pass after RC insertion, checking RC invariants \
 (StorageLive/Dead balance, no RC ops on parameters) and that every copy of a gpu-resident \
 binding to the host is fenced by a readback. Disabled by default. Also enabled by \
 setting MIRI_VERIFY_MIR to any non-empty value in the environment.\n\n\
@@ -92,7 +92,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Verify RC invariants after Perceus",
+        help = "Verify RC invariants after RC insertion",
         help_heading = "Global options"
     )]
     pub verify_mir: bool,

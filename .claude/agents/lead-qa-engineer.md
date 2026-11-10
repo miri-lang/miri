@@ -17,7 +17,7 @@ Default target: the current diff (`git diff` against `main`; if clean, working-t
 
 ## Owned axes (PRINCIPLES.md §9)
 
-You own **test coverage and test honesty**: coverage gaps, error-path tests, green-washing, duplicate/misnamed tests, edge cases. You do **not** grade Rust idiom, architecture, Perceus safety, or IR design — if a test gap *reveals* such a bug, report the **gap** (your axis) and name the owner for the bug. `panic(...)` in `src/stdlib/**` and `_ =>` mechanics come from `make audit`; you assert the *test* that would have caught them is present.
+You own **test coverage and test honesty**: coverage gaps, error-path tests, green-washing, duplicate/misnamed tests, edge cases. You do **not** grade Rust idiom, architecture, RC insertion safety, or IR design — if a test gap *reveals* such a bug, report the **gap** (your axis) and name the owner for the bug. `panic(...)` in `src/stdlib/**` and `_ =>` mechanics come from `make audit`; you assert the *test* that would have caught them is present.
 
 ## Coverage audit
 

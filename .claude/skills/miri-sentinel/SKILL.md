@@ -1,6 +1,6 @@
 ---
 name: miri-sentinel
-description: Sentinel 🛡️ — a security-focused single pass that finds and fixes ONE security issue (or lands ONE hardening enhancement) in the Miri compiler/runtime. Threat model is a compiler eating untrusted .mi source and a runtime handling untrusted data — hunts compiler-DoS (reachable unwrap/panic/index on hostile input), memory-safety holes (Perceus UAF/double-free, unsafe/FFI/ABI mismatch, buffer/bounds/GPU overruns), integer overflow, and path traversal in module/import resolution. Reproduces the issue, fixes it failing-securely, and runs the full gate (make format/lint/build/test). Reads and appends critical learnings to .jules/sentinel.md. Use for "security check", "harden this", "find a vulnerability", or /miri-sentinel [path]. Prioritizes ruthlessly — critical first. If nothing qualifies, lands one enhancement or stops.
+description: Sentinel 🛡️ — a security-focused single pass that finds and fixes ONE security issue (or lands ONE hardening enhancement) in the Miri compiler/runtime. Threat model is a compiler eating untrusted .mi source and a runtime handling untrusted data — hunts compiler-DoS (reachable unwrap/panic/index on hostile input), memory-safety holes (reference-count UAF/double-free, unsafe/FFI/ABI mismatch, buffer/bounds/GPU overruns), integer overflow, and path traversal in module/import resolution. Reproduces the issue, fixes it failing-securely, and runs the full gate (make format/lint/build/test). Reads and appends critical learnings to .jules/sentinel.md. Use for "security check", "harden this", "find a vulnerability", or /miri-sentinel [path]. Prioritizes ruthlessly — critical first. If nothing qualifies, lands one enhancement or stops.
 metadata:
   internal: true
 ---
@@ -17,7 +17,7 @@ Miri is a **compiler and runtime**, not a web app. There is no SQL, no browser D
 
 - **Untrusted `.mi` source → the compiler.** A crafted or malformed program must never crash the compiler process. Any reachable `unwrap()` / `expect()` / `panic!` / raw index / slice out of range on hostile input is a **compiler-DoS** (the top class in `.jules/sentinel.md` — EOF at a token boundary, unbalanced indentation depleting the indent stack, malformed generics).
 - **Untrusted data → the runtime.** Buffer/bounds overruns in `src/runtime/{core,gpu}`, index validated *after* the buffer is touched, size/offset arithmetic that can wrap.
-- **Memory safety (Perceus).** Missed IncRef → use-after-free; spurious DecRef on a field-projected copy → double-free; `unwrap()` inside a `Drop` → double-panic abort.
+- **Memory safety (RC insertion).** Missed IncRef → use-after-free; spurious DecRef on a field-projected copy → double-free; `unwrap()` inside a `Drop` → double-panic abort.
 - **FFI / ABI trust boundary.** A Rust intrinsic signature that doesn't match the Cranelift ABI for the declared param widths/pointers = silent memory corruption.
 - **GPU upload/readback.** Byte counts vs buffer size, `GpuLaunchDesc` field widths, dispatch grid vs the bounds guard.
 - **Integer overflow** in size/length/offset math (`checked_*` / `saturating_*` missing).
@@ -88,7 +88,7 @@ Scan by descending severity (see PRIORITIZE). Concrete hunts for this repo:
 - `grep` reachable `unwrap()` / `expect()` / `panic!` / `[i]` indexing / `.last().unwrap()` in lexer, parser, and any lookahead/stack handling — can a truncated or malformed `.mi` reach it?
 - Runtime (`src/runtime/{core,gpu}`): index/offset used before a bounds check; `from_raw_parts`/pointer math without a length guard; `unwrap()` in `Drop`; alloc `Layout` from an unchecked size.
 - FFI intrinsics: does the Rust signature's param widths/pointers match the Cranelift ABI declared in the `.mi`? A mismatch is corruption.
-- Perceus (`perceus.rs`): a new managed temp or field-projected `Copy` — IncRef present? DecRef guarded on `projection.is_empty()`?
+- RC insertion (`rc_insertion.rs`): a new managed temp or field-projected `Copy` — IncRef present? DecRef guarded on `projection.is_empty()`?
 - Integer math on sizes/lengths/offsets: replace `+`/`*`/`- 1` with `checked_*`/`saturating_*` where a hostile value could wrap.
 - GPU: upload/readback byte count vs buffer size; `GpuLaunchDesc` widths in lockstep; dispatch grid vs the `SwitchInt` bounds guard.
 - Path handling in module/import resolution: is a path derived from source text canonicalized / confined?

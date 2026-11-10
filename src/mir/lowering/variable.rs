@@ -93,7 +93,7 @@ fn handle_operand(handle: DeviceHandleId, span: Span) -> Operand {
 }
 
 /// Emits a borrowing call to a runtime entry, splitting the current block.
-/// Borrowing because terminator-operand copies are not IncRef'd by Perceus,
+/// Borrowing because terminator-operand copies are not IncRef'd by RC insertion,
 /// so any managed argument survives the call. The destination is a `void`
 /// temp, so any status the entry returns is intentionally discarded —
 /// failures surface through the runtime's own log, not the program.

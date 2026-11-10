@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 //
-// Tests for field-projection memory safety — the known Perceus pitfall where
-// `Copy(obj.field)` does NOT receive an IncRef from the Perceus pass, yet the
+// Tests for field-projection memory safety — the known RC insertion pitfall where
+// `Copy(obj.field)` does NOT receive an IncRef from the RC insertion pass, yet the
 // temp still gets a DecRef at StorageDead.  These tests exercise paths where
 // collection/class fields are read, passed, iterated, and returned.
 

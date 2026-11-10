@@ -3,7 +3,7 @@
 
 //! RC elision pass: removes redundant IncRef/DecRef pairs.
 //!
-//! After the Perceus pass inserts RC operations, this pass removes pairs of
+//! After the RC insertion pass inserts RC operations, this pass removes pairs of
 //! `IncRef(src)` + `DecRef(dest)` that are provably redundant. A pair is
 //! redundant when `dest = Copy(src)` and neither the IncRef nor the DecRef
 //! has any net effect on the program's memory safety:
@@ -26,7 +26,7 @@
 //!
 //! # Example
 //!
-//! Before elision (after Perceus):
+//! Before elision (after RC insertion):
 //! ```text
 //! IncRef(_1)           // _1 is a List param
 //! _3 = Copy(_1)
@@ -56,7 +56,7 @@
 //!
 //! A call passing an argument [`ArgMode::Owned`] is preceded by the retain that
 //! funds it. When the local passed dies right after the call — its first
-//! mention in the continuation is the release Perceus emitted for it, followed
+//! mention in the continuation is the release RC insertion emitted for it, followed
 //! by the end of its storage or a rebinding — the two cancel: the callee takes
 //! over the caller's own reference instead of a second one, and a callee that
 //! writes the value finds it unshared. See [`cancel_owned_transfers`].
@@ -494,7 +494,7 @@ fn passes_an_owned_argument(body: &Body) -> bool {
         })
 }
 
-/// Whether `local` is one the body owns and Perceus releases, whose last
+/// Whether `local` is one the body owns and RC insertion releases, whose last
 /// release runs no drop hook. A borrowed local is never released.
 fn is_released_by_body(body: &Body, ownership: &OwnershipFacts, local: Local) -> bool {
     let decl = &body.local_decls[local.0];

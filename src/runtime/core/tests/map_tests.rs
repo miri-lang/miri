@@ -627,7 +627,7 @@ fn test_map_growth_stress() {
 fn test_map_val_drop_fn_called_on_decref_element() {
     // miri_rt_map_decref_element is the runtime callback used as elem_drop_fn
     // or val_drop_fn by outer collections.  When RC → 0 it must call val_drop_fn
-    // on every occupied slot before freeing, mirroring what the Perceus inline
+    // on every occupied slot before freeing, mirroring what the RC insertion inline
     // codegen loop does during scope-exit drops.
     use std::sync::atomic::{AtomicUsize, Ordering};
     static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -704,7 +704,7 @@ fn test_map_val_drop_fn_called_on_overwrite() {
         miri_rt_map_set(map, 1, 0xBBBB_0000);
         assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
 
-        // miri_rt_map_free does NOT call val_drop_fn — the Perceus inline
+        // miri_rt_map_free does NOT call val_drop_fn — the RC insertion inline
         // codegen loop handles values at scope exit.  Only the mutation
         // operations (set overwrite, remove, clear, decref_element) call it.
         miri_rt_map_free(map);

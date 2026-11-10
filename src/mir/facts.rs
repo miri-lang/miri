@@ -53,7 +53,7 @@ pub struct OwnershipFacts {
     /// definitions read from and, for a borrow read out of another borrowed
     /// local, that local's owners in turn. A borrowed local holds no reference
     /// of its own, so it is neither retained when it reads nor released when
-    /// its storage ends. Decided by Perceus
+    /// its storage ends. Decided by RC insertion
     /// (`crate::mir::optimization::local_borrows`); the verifier checks each
     /// entry again against the body.
     pub borrowed_locals: HashMap<Local, Vec<Local>>,

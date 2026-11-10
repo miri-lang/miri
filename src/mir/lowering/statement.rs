@@ -169,7 +169,7 @@ fn lower_return(
             release_coerced_source(ctx, &ret_val, &val_ty, &ret_ty, watermark, span);
         }
     }
-    // Emit StorageDead for all live named locals before returning so Perceus
+    // Emit StorageDead for all live named locals before returning so RC insertion
     // can insert DecRef for any managed values still in scope (early-return).
     ctx.emit_return_cleanup(span);
     ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));

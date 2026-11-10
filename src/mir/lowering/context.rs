@@ -707,7 +707,7 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Emit `StorageDead` for a temp whose type Perceus reference-counts.
+    /// Emit `StorageDead` for a temp whose type RC insertion reference-counts.
     ///
     /// An unmanaged temp needs no release, and marking one dead only adds a
     /// statement no pass reads.
@@ -730,7 +730,7 @@ impl<'a> LoweringContext<'a> {
     /// to outermost, without modifying the scope stack or `variable_map`.
     ///
     /// Used before a `return` terminator so that managed locals live in
-    /// enclosing scopes receive `StorageDead` (and thus a Perceus `DecRef`) on
+    /// enclosing scopes receive `StorageDead` (and thus an RC insertion `DecRef`) on
     /// early-return paths.  The scope stack is intentionally left intact so
     /// that the AST lowering loop for the enclosing block can continue
     /// resolving variables (the current basic block will be dead after Return,
@@ -745,7 +745,7 @@ impl<'a> LoweringContext<'a> {
     ///
     /// Called before `break` and `continue` terminators to ensure managed
     /// locals created inside a loop body (e.g. in match branches) receive a
-    /// `DecRef` via Perceus even when control exits the scope early without
+    /// `DecRef` via RC insertion even when control exits the scope early without
     /// the normal `pop_scope` path running.
     pub fn emit_break_cleanup(&mut self, loop_scope_depth: usize, span: Span) {
         self.emit_scope_exit_drops(loop_scope_depth, span);
@@ -896,7 +896,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Emits `StorageDead` for `local` if it was created at or after `watermark`
-    /// and its type is Perceus-managed.
+    /// and its type is reference-counted.
     ///
     /// A temp an enclosing scope has taken responsibility for is left alone — the
     /// copy made for a by-value struct argument or an array element is one, and
@@ -904,7 +904,7 @@ impl<'a> LoweringContext<'a> {
     ///
     /// Used to release temporary locals that were created during expression
     /// lowering and are no longer needed after a call or aggregate assignment.
-    /// The Perceus pass will later insert `DecRef` before this statement.
+    /// The RC insertion pass will later insert `DecRef` before this statement.
     pub fn emit_temp_drop(
         &mut self,
         local: crate::mir::Local,

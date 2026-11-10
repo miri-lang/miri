@@ -14,7 +14,7 @@ metadata:
 ## Inputs / scope
 
 - *No argument* → target the **current diff** (`git diff` against `main`; if clean, the working-tree changes; if still empty, ask or sample `src/`).
-- *Path or glob* (`/miri-audit src/mir/`), *branch range* (`/miri-audit feat..main`), *module* (`/miri-audit perceus`) → resolve and target that.
+- *Path or glob* (`/miri-audit src/mir/`), *branch range* (`/miri-audit feat..main`), *module* (`/miri-audit rc_insertion`) → resolve and target that.
 - *`--report-only`* → run the panel and produce the verdict, but **do not fix** (no Lead Miri Engineer dispatch).
 - *`--with-minors`* → also fix minor findings, not just critical/major.
 
@@ -27,7 +27,7 @@ Resolve scope, print the file list back, and state the target before fanning out
 1. **Read `PRINCIPLES.md`** (§8 tiers, §9 ownership matrix, §10 severity rubric) and capture the diff/target so every specialist reviews the same thing. Run `make audit` once now — it owns the mechanical sweeps (unwrap/expect, stdlib-name leaks, `_ =>` over Miri enums, oversized functions, banners, comment rot). Its output is the mechanical-findings list; specialists do **not** re-grep these.
 2. **Fan out the specialist panel in parallel** (single message, multiple `Agent` calls — read-only, independent). Each owns a disjoint axis set per §9; tell each to check **only its owned axes**, trust `make audit` for mechanical findings, and return a ranked list citing §10 severities:
    - `lead-software-architect` — layer boundaries, SOLID *judgment*, DRY, God-objects, altitude. (Not the mechanical sweeps — those are `make audit`'s.)
-   - `lead-security-engineer` — Perceus UAF/double-free, FFI/ABI corruption, bounds/overflow, `unsafe` soundness, user-input panics, GPU overruns.
+   - `lead-security-engineer` — reference-count UAF/double-free, FFI/ABI corruption, bounds/overflow, `unsafe` soundness, user-input panics, GPU overruns.
    - `lead-qa-engineer` — coverage gaps, green-washed/duplicate/misnamed tests, missing error paths and edge cases, adversarial repros.
    - `lead-rust-engineer` — ownership/borrow ergonomics, clone/alloc hygiene, iterator-vs-loop, perf, error-handling *shape*.
    - `lead-compiler-architect` — design soundness, IR/`Place`/terminator shape, monomorphization, residency/effect model, visitor-contract completeness, lowering-seam placement.

@@ -75,7 +75,7 @@ Hunt for real bugs, favoring untrusted-input boundaries and pipeline seams:
 - **Missed edge cases**: empty collection, single element, nested generics, boundary index, multiple moves, mixed residency, deep nesting.
 - **Missing error paths**: an invalid program that is silently accepted (should be `assert_compiler_error`) or a runtime misuse that corrupts instead of failing cleanly (`assert_runtime_error`).
 - **Exhaustiveness / visitor gaps**: a MIR/`Place`/terminator variant a visitor or codegen arm forgot to handle, hidden behind `_ =>`.
-- **Memory-safety (Perceus)**: a managed temp missing an IncRef (UAF) or a field-projected copy getting a spurious DecRef (double-free) — guard `emit_temp_drop` on `projection.is_empty()`.
+- **Memory-safety (RC insertion)**: a managed temp missing an IncRef (UAF) or a field-projected copy getting a spurious DecRef (double-free) — guard `emit_temp_drop` on `projection.is_empty()`.
 - **Promise violations** (`PRINCIPLES.md` §0.1 — these are bugs, not design debt):
   - a built-in or stdlib operation that traps or panics on some input (`MER_RT_*`, `panic`) instead of saying so in its type (`T?`, `Result`) or being refused at compile time;
   - a failure the compiler had the information to catch but defers to run time (a constant out-of-range index, a literal that cannot be stepped, a statically missing key, a bound only checked at instantiation);
@@ -87,7 +87,7 @@ Hunt for real bugs, favoring untrusted-input boundaries and pipeline seams:
 Write the **smallest** `.mi` snippet (or unit test) that fails with the **exact** reported/observed symptom, in `tests/integration/` (helpers: `assert_runs`, `assert_runs_with_output`, `assert_compiler_error`, `assert_runtime_error`, `assert_runtime_crash`). Run `cargo test --test mod "name"`. Confirm it fails **for the right reason**. If it passes immediately, you don't understand the bug yet — keep hunting. This test *is* your RED phase.
 
 ### 3. 🧭 ROOT-CAUSE — trace before hypothesizing
-Follow the failure across **every** stage it flows through (lexer → parser → `ast/factory.rs` → type checker → MIR lowering → `perceus.rs` → codegen → runtime → stdlib) using the graph (`get_affected_flows`, `query_graph` callers/callees). Identify the exact stage and `file:line` where observed behavior first diverges from intended. **Do not stop at the first stage that looks wrong.** If more than one cause is plausible, rank them and disprove the losers. Then state, in one sentence: `the bug is X at file:line, proven by Y`.
+Follow the failure across **every** stage it flows through (lexer → parser → `ast/factory.rs` → type checker → MIR lowering → `rc_insertion.rs` → codegen → runtime → stdlib) using the graph (`get_affected_flows`, `query_graph` callers/callees). Identify the exact stage and `file:line` where observed behavior first diverges from intended. **Do not stop at the first stage that looks wrong.** If more than one cause is plausible, rank them and disprove the losers. Then state, in one sentence: `the bug is X at file:line, proven by Y`.
 
 ### 4. 🔧 FIX — at the correct layer (GREEN + REFACTOR)
 - Minimum change that fixes the traced cause at the right layer. No speculative generality, no drive-by refactor.

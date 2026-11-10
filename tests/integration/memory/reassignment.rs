@@ -198,7 +198,7 @@ fn main()
 
 #[test]
 fn test_array_reassign_old_freed_no_leak() {
-    // Perceus StatementKind::Reassign emits DecRef for the old value.
+    // RC insertion StatementKind::Reassign emits DecRef for the old value.
     // var x = [1,2,3]; x = [4,5,6] — old array must be freed, new value printed.
     assert_runs_with_output(
         r#"

@@ -223,7 +223,7 @@ fn main()
 #[test]
 fn test_array_index_write_managed_no_leak() {
     // a[i] = new_val (direct index write syntax) must use Copy semantics so that
-    // Perceus IncRefs the source before storing.  Without this the statement-level
+    // RC insertion IncRefs the source before storing.  Without this the statement-level
     // result-temp DecRef would free the just-stored allocation, leaving a dangling
     // pointer in the slot.
     assert_runs_with_output(
@@ -335,7 +335,7 @@ fn main()
 
 #[test]
 fn test_array_of_lists_set_preserves_aliased_element() {
-    // Read slot 0 into a local (Perceus IncRefs it to RC=2), then overwrite the
+    // Read slot 0 into a local (RC insertion IncRefs it to RC=2), then overwrite the
     // slot via set() (elem_drop_fn decrements to RC=1).  The local must still be
     // readable — a double-decref would free it and crash here.
     assert_runs_with_output(
@@ -398,7 +398,7 @@ fn main()
 #[test]
 fn test_zero_arg_sized_array_expr_stmt_no_leak() {
     // Array<int, 3>() as a bare expression statement (not bound to a variable)
-    // must still have its RC header properly freed. This ensures the Perceus
+    // must still have its RC header properly freed. This ensures the RC insertion
     // temp-drop path works for unreferenced constructor results.
     assert_runs_with_output(
         r#"

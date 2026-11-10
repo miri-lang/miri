@@ -28,4 +28,4 @@ The code generation phase maps MIR constructs directly into target-specific inst
 
 1.  **Zero-Cost Abstractions**: The codegen aims to translate MIR directly to optimized machine code, keeping overhead minimal.
 2.  **Safety via Runtime**: Safe constructs like strings and arrays are backed by a lean runtime library, dynamically linked or statically compiled.
-3.  **Explicit Memory Management**: Generates all necessary drops/deallocations injected during MIR optimizations (Perceus RC).
+3.  **Explicit Memory Management**: Generates all necessary drops/deallocations injected during MIR optimizations (reference counting).

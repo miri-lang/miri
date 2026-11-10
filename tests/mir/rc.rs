@@ -224,7 +224,7 @@ fn every_kind() -> Vec<TypeKind> {
     kinds
 }
 
-/// What Perceus counts (`is_counted_in`) and what a drop releases out of a
+/// What RC insertion counts (`is_counted_in`) and what a drop releases out of a
 /// slot (`is_slot_counted`, which every drop thunk asks of each field and
 /// element) agree on every kind, with no type parameter open and with one
 /// open: a disagreement is a retain no release balances, or a release of a

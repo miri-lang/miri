@@ -43,7 +43,7 @@ Navigating a compiler is complex. Use this map to locate modules:
 - **`tests/`**: Mirror of `src/` hierarchy for unit and integration tests.
 
 ### Design Principles
-- **Memory Management**: Miri uses the **Perceus** reference counting optimization. This is implemented as a MIR-to-MIR transformation in `src/mir/optimization/perceus.rs`.
+- **Memory Management**: Miri manages memory with **reference counting** and inferred borrowing over copy-on-write values. Retains and releases are inserted by a MIR-to-MIR transformation in `src/mir/optimization/rc_insertion.rs`.
 - **Sources of Truth**: Always refer to `SPEC.md` for language syntax and `README.md` for project status.
   **The plan is not in this repository** (see §0.1). There is no roadmap, plan or TODO file here; do not create one.
 
@@ -97,7 +97,7 @@ When writing tests or standard library code, remember Miri's syntax:
 **Enforced**: `make audit` runs `tools/check_planning_vocabulary.py` over every tracked file and fails on a task, milestone, design, feature, benchmark-round or claim id. A real domain name that matches a pattern (a short variable name in a test program, a job's own fault table) goes on that script's allow-list with its reason.
 
 ## 3.6 Principles Harness (BINDING)
-`PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (Perceus, runtime/stdlib alignment, exhaustive visitors).
+`PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (RC insertion, runtime/stdlib alignment, exhaustive visitors).
 
 - Before writing code: read `PRINCIPLES.md` for the binding standards on architecture, SOLID, and TDD.
 - After writing code: run `make audit` (mechanical sweep) to verify layer rules, stdlib independence, function size, naming, comments, and exhaustive matching. It is a gate, not advice: it fails on a cross-layer import outside the allow-list in `tools/check_layering.py`, on planning vocabulary, and when a count in `tools/audit_baseline.json` grows (`unwrap`/`expect` in library code, `_ =>` arms in the compiler's own stages, functions past 80 lines). Fix the new hits; never raise the baseline. CI runs it on every push.

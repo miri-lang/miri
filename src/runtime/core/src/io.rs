@@ -570,7 +570,7 @@ pub mod ffi {
     ///   diagnostic if it doesn't. Otherwise returns normally.
     ///
     /// Note: any heap allocations made inside the closure between entry and
-    /// panic are leaked, because Perceus drop glue is skipped on the unwind
+    /// panic are leaked, because RC insertion drop glue is skipped on the unwind
     /// path. This is acceptable for test-only code; the process is expected
     /// to terminate soon after.
     ///

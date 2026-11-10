@@ -55,7 +55,7 @@ pub enum StatementKind {
     Assign(Place, Rvalue),
     /// Reassign an Rvalue to an already-initialised managed Place.
     ///
-    /// Semantically identical to `Assign` in codegen, but signals to the Perceus
+    /// Semantically identical to `Assign` in codegen, but signals to the RC insertion
     /// RC pass that the destination already holds a live reference that must be
     /// DecRef'd before the new value is written.  Lowering emits this variant
     /// whenever it knows the target local is being *overwritten* (i.e. it was

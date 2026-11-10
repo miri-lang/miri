@@ -89,13 +89,13 @@ fn emit_conditional_switch(
 }
 
 /// Lower a conditional branch value into `result_local`, dropping any fresh
-/// managed temp created (e.g. an inline `List([..])`) to balance Perceus's
+/// managed temp created (e.g. an inline `List([..])`) to balance RC insertion's
 /// IncRef on the Copy. Does not emit the branch's terminator.
 ///
 /// The branch value is always copied, never moved. A managed local read on one
 /// branch only would otherwise hand its reference to the result on that path
 /// alone, while its scope exit still releases it on every path — a double free
-/// on the branch that moved it. Copying lets Perceus fund the result with a
+/// on the branch that moved it. Copying lets RC insertion fund the result with a
 /// retain on each branch, so both paths reach the join owning the same counts.
 pub(super) fn emit_conditional_branch_value(
     ctx: &mut LoweringContext,

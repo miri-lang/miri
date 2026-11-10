@@ -886,7 +886,7 @@ pub mod ffi {
     ///
     /// Used as `elem_drop_fn` by outer collections (Array, List, Set, Map) when
     /// they remove or overwrite a List-typed element at runtime (e.g. clear,
-    /// remove, or element overwrite).  Unlike the Perceus scope-exit path — which
+    /// remove, or element overwrite).  Unlike the RC insertion scope-exit path — which
     /// emits an inline codegen loop to DecRef managed elements before calling
     /// `miri_rt_list_free` — this runtime callback has no such loop.  We therefore
     /// call `elem_drop_fn` on every live element here, before delegating to
@@ -905,7 +905,7 @@ pub mod ffi {
         }
         *rc_ptr -= 1;
         if *rc_ptr == 0 {
-            // DecRef managed elements before freeing.  The Perceus inline codegen
+            // DecRef managed elements before freeing.  The RC insertion inline codegen
             // loop handles this for scope-exit drops; here we must do it ourselves.
             let list = ptr as *mut MiriList;
             if (*list).elem_drop_fn != 0 && (*list).elem_size > 0 && !(*list).data.is_null() {

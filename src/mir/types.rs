@@ -7,7 +7,7 @@
 //!
 //! The main difference from [`crate::ast::types::TypeKind`] is that collection
 //! element types are stored as `Box<MirType>` rather than `Box<Expression>`.
-//! This eliminates the layering violation where the Perceus pass had to
+//! This eliminates the layering violation where the RC insertion pass had to
 //! pattern-match on AST [`ExpressionKind`] nodes to determine element types.
 //!
 //! [`MirType`] is constructed from [`TypeKind`] when a [`LocalDecl`] is created

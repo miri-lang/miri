@@ -332,7 +332,7 @@ fn capture_type(ctx: &LoweringContext, outer_local: Local) -> Type {
 /// An unreferenced capture's local stays allocated but is left out of
 /// `env_capture_locals` and of the closure aggregate's operands. When the body
 /// never writes it either, its storage markers are removed too: the local is
-/// never initialized, and a `StorageDead` would have Perceus release whatever
+/// never initialized, and a `StorageDead` would have RC insertion release whatever
 /// the uninitialized slot holds.
 fn keep_referenced_captures(
     body: &mut Body,
@@ -397,8 +397,8 @@ fn emit_closure_aggregate(
         capture_operands.push(operand);
     }
 
-    // Record capture types in the outer body for Perceus / codegen.
-    // Stored as AST Type so both Perceus (via MirType::from_type_kind) and
+    // Record capture types in the outer body for RcInsertion / codegen.
+    // Stored as AST Type so both RC insertion (via MirType::from_type_kind) and
     // codegen (via TypeKind) can use the same source of truth.
     let capture_ast_types: Vec<Type> = captures
         .iter()
@@ -426,7 +426,7 @@ fn emit_closure_aggregate(
         span: closure.span,
     });
 
-    // Register the capture types against the closure local so Perceus and
+    // Register the capture types against the closure local so RC insertion and
     // codegen can emit / translate DecRef(closure.field(i)) correctly.
     // Always update (insert or remove) so that re-assigning a `var` closure
     // to a capture-free closure clears any stale entry from the previous

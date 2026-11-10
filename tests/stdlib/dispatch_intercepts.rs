@@ -9,7 +9,7 @@
 //!
 //! | Method | Class(es) | Reason intercept exists |
 //! |--------|-----------|-------------------------|
-//! | `element_at` | List, Array | Perceus needs concrete element type at call site |
+//! | `element_at` | List, Array | RC insertion needs concrete element type at call site |
 //! | `get`         | List, Array | Same as element_at |
 //! | `push`        | List        | Avoids generic monomorphization conflict |
 //! | `insert`      | List        | Same as push |
@@ -57,7 +57,7 @@ fn has_public_method(source: &str, name: &str) -> bool {
 
 /// `element_at` must exist on both List and Array — the dispatch intercept
 /// emits a direct index read instead of calling through to the compiled method,
-/// so Perceus can see the concrete element type for RC insertion.
+/// so RC insertion can see the concrete element type for RC insertion.
 #[test]
 fn element_at_exists_on_list_and_array() {
     let list_src = read_mi("system/collections/list.mi");

@@ -3,7 +3,7 @@
 
 //! Path-sensitive reference-counting verifier for MIR.
 //!
-//! Runs after Perceus insertion and RC elision. For every managed local the pass
+//! Runs after RC insertion and RC elision. For every managed local the pass
 //! tracks an *ownership delta* — how many references this function owns for that
 //! local — at each program point, along each control-flow path. A reference
 //! counting bug shows up as a delta that disagrees with itself: driven below zero
@@ -263,7 +263,7 @@ fn join_states(into: &mut PathState, from: &PathState) {
     }
 }
 
-/// Verify the invariants a MIR body must hold after Perceus insertion and RC
+/// Verify the invariants a MIR body must hold after RC insertion and RC
 /// elision: that its reference counts balance, and that every element it hands a
 /// collection fills the slot it goes into.
 ///

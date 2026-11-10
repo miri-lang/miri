@@ -50,7 +50,7 @@ Miri's architecture is a *pipeline of pure transformations* with an inner core (
   │ outer  ─►  text ↔ Lexer ↔ Parser         │
   │         ─►  AST                          │
   │   inner ►   Type Checker ◄─ stdlib (.mi) │
-  │         ─►  MIR + optimization (Perceus) │
+  │         ─►  MIR + optimization (RC insertion) │
   │         ─►  Codegen (Cranelift / LLVM)   │
   │ outer  ─►  Runtime FFI ↔ OS              │
   └──────────────────────────────────────────┘
@@ -77,7 +77,7 @@ Miri's architecture is a *pipeline of pure transformations* with an inner core (
 - [ ] No `use crate::codegen::*` inside `src/type_checker/` or `src/mir/`.
 - [ ] No stdlib type name appears as a string literal in compiler control flow (search: `"List"`, `"Set"`, `"Option"`, `"Map"`, `"String"` inside `src/` excluding `src/stdlib/`).
 - [ ] No `panic!` / `unwrap` / `expect` in library code (`src/` excluding tests and `main.rs` argument parsing).
-- [ ] Every new MIR variant is updated in **every** visitor (`perceus.rs`, codegen, analysis passes) — no wildcard arm swallows it.
+- [ ] Every new MIR variant is updated in **every** visitor (`rc_insertion.rs`, codegen, analysis passes) — no wildcard arm swallows it.
 - [ ] No new field on `Body` keyed by block or statement index (§1.4).
 - [ ] No new function answering a question another function already answers: is-counted, intrinsic effects, header layout, element identity, drop plan (§1.4).
 - [ ] No `crate::ast::expression` import under `src/codegen/`; no `mir::optimization` import under `src/mir/verify/`; no `runtime_fns` import under `src/type_checker/` (`tools/check_layering.py` enforces these; its allow-list names the known debt and the reason each entry still exists).
@@ -179,7 +179,7 @@ High-level modules (`pipeline.rs`, `Compiler`) depend on **abstractions** (trait
 ### 3.3 Comments (MUST)
 
 - Default: **no comment**. Code should explain itself.
-- Allowed: a comment explaining a *non-obvious* invariant, a workaround for an upstream bug, a Cranelift quirk, or a Perceus subtlety.
+- Allowed: a comment explaining a *non-obvious* invariant, a workaround for an upstream bug, a Cranelift quirk, or an RC insertion subtlety.
 - **NEVER** write a comment that:
   - Restates what the code does (`// increment x`).
   - References a planning document or internal tracking label.
@@ -248,7 +248,7 @@ The `miri-task` skill gates this cycle. A task is **not done** until each accept
 ### 4.4 Test pyramid for Miri
 
 - **Base**: small `.mi` snippets exercising one feature, asserted via the helpers.
-- **Middle**: cross-feature interaction tests (generics + collections, Perceus + nested moves).
+- **Middle**: cross-feature interaction tests (generics + collections, RC insertion + nested moves).
 - **Top**: end-to-end programs in `tests/integration/programs/` that compile + run and assert stdout.
 
 Skewed pyramids (mostly E2E, no unit) make regressions hard to localize.
@@ -266,9 +266,9 @@ Skewed pyramids (mostly E2E, no unit) make regressions hard to localize.
 
 These are repeat offenders. They are *not optional* even when the rest of the change is clean.
 
-### 5.1 Perceus reference counting
+### 5.1 Reference counting
 
-- A `Copy` of a managed `Place` gets an `IncRef`, whether the projection is empty or not — `place_is_counted` (perceus.rs) walks `Field`/`Index` projections to resolve the projected type (Option, Tuple, custom struct/class fields, closure captures). Enum-variant fields cannot be resolved statically; for those Perceus falls back to checking whether the *destination* local is managed. The IncRef is balanced by the destination temp's `StorageDead` DecRef. Lowering-emitted temp drops in method intercepts must still guard `emit_temp_drop` with `projection.is_empty()` so an unmanaged field lift never gets a spurious DecRef.
+- A `Copy` of a managed `Place` gets an `IncRef`, whether the projection is empty or not — `place_is_counted` (rc_insertion.rs) walks `Field`/`Index` projections to resolve the projected type (Option, Tuple, custom struct/class fields, closure captures). Enum-variant fields cannot be resolved statically; for those RC insertion falls back to checking whether the *destination* local is managed. The IncRef is balanced by the destination temp's `StorageDead` DecRef. Lowering-emitted temp drops in method intercepts must still guard `emit_temp_drop` with `projection.is_empty()` so an unmanaged field lift never gets a spurious DecRef.
 - A new temporary holding a managed value gets a `StorageDead` that translates to `DecRef`.
 - Method-dispatch intercepts in `src/mir/lowering/control_flow.rs` MUST follow the established pattern (`length`, `element_at`, `push`, `set`, `insert`).
 - Use-after-move checking is layered: resource types are consumed at *every* scope; managed (non-resource) types are consumed only at the top level. Do not collapse this distinction.
@@ -292,7 +292,7 @@ Adding a `MirInstruction` variant changes the contract of every visitor. Use `gr
 
 ### 5.5 Self-check
 
-- [ ] All Perceus-touching changes pass the projection-guard pattern.
+- [ ] All RC insertion-touching changes pass the projection-guard pattern.
 - [ ] Runtime rebuilt after any `src/runtime/core/` change.
 - [ ] `grep -rn '"List"\|"Set"\|"Option"\|"Map"\|"String"' src/ | grep -v 'src/stdlib'` returns no dispatch-logic hits.
 - [ ] No `_ =>` arms over `MirInstruction`, `TypeKind`, or `PlaceElem`.
@@ -313,7 +313,7 @@ Auto-flag in audit if seen:
 | `"List".to_string()` in compiler code | Stdlib coupling. | Reach the type via the type table. |
 | `// per §X.Y` / `// task N` | Comment rot. | Delete; trust the PR description. |
 | `// ── topic ──` banner | File too big / SRP violation. | Split file. |
-| `let x = …; let y = x.clone();` for a managed type, with no Perceus consideration | UAF or double-free risk. | Audit IncRef/DecRef paths. |
+| `let x = …; let y = x.clone();` for a managed type, with no RC insertion consideration | UAF or double-free risk. | Audit IncRef/DecRef paths. |
 | A test that only calls `assert_runs(...)` with no output assertion | Confirms compilation, not behavior. | Add output / state assertion. |
 | Public function with no test | Untested contract. | Add test before merge. |
 | `_var` rename to silence unused warnings | Hides dead code. | Delete the binding (or the parameter, if safe). |
@@ -334,7 +334,7 @@ Score each dimension **A / B / C / F**:
 2. **SOLID**: SRP, OCP, LSP, ISP, DIP.
 3. **Clean Code**: function size, naming, comments, error handling, exhaustiveness.
 4. **TDD**: test-first, coverage of new branches, error-path tests.
-5. **Miri invariants**: Perceus, runtime/stdlib alignment, exhaustive visitors.
+5. **Miri invariants**: RC insertion, runtime/stdlib alignment, exhaustive visitors.
 6. **Smells**: count and severity.
 
 An overall grade lower than **B** in any dimension requires a fix list before the change ships.
@@ -350,7 +350,7 @@ Not every change earns the full specialist panel. The `miri-task` and `miri-audi
 - A new or changed `MirInstruction` / `Place` / `PlaceElem` / terminator variant (touches every visitor and codegen path).
 - A new or changed runtime intrinsic / FFI signature / Cranelift ABI.
 - Any `unsafe` block, `transmute`, raw-pointer arithmetic, manual `Layout`/`alloc`.
-- Any Perceus / reference-counting path (`perceus.rs`, `emit_temp_drop`, managed-temp lifetime).
+- Any RC insertion / reference-counting path (`rc_insertion.rs`, `emit_temp_drop`, managed-temp lifetime).
 - Any GPU surface (WGSL emitter, `src/runtime/gpu/`, residency, `gpu for|fn|let|var`).
 - A cross-layer dependency change, a new public trait/contract, or a change to `src/pipeline.rs` orchestration.
 
@@ -358,9 +358,9 @@ Not every change earns the full specialist panel. The `miri-task` and `miri-audi
 
 | Tier | What it is | Review it earns |
 |------|------------|-----------------|
-| **Trivial** | Typo, comment, rename, doc, format-only; ≤ 2 files; **no logic change**; and **no file under `src/mir/`, `perceus.rs`, `src/codegen/`, or `src/runtime/`** (those paths carry MIR snapshot call-order / Perceus / ABI invariants that a "behavior-preserving" edit can silently break — they are **Standard** minimum). | `make audit` + `miri-test-runner`. No reviewer agent, no panel. |
+| **Trivial** | Typo, comment, rename, doc, format-only; ≤ 2 files; **no logic change**; and **no file under `src/mir/`, `rc_insertion.rs`, `src/codegen/`, or `src/runtime/`** (those paths carry MIR snapshot call-order / RC insertion / ABI invariants that a "behavior-preserving" edit can silently break — they are **Standard** minimum). | `make audit` + `miri-test-runner`. No reviewer agent, no panel. |
 | **Standard** | Single-stage feature or fix; **no Major trigger** fires. | `lead-miri-engineer` TDD → **`miri-reviewer` alone** + `miri-test-runner`. |
-| **Major** | Any change affecting MIR, runtime, Perceus, unsafe code, or GPU surface. | Full specialist panel (architecture, compiler, security, Rust, QA, GPU, CTO), consolidation, fix loop. |
+| **Major** | Any change affecting MIR, runtime, RC insertion, unsafe code, or GPU surface. | Full specialist panel (architecture, compiler, security, Rust, QA, GPU, CTO), consolidation, fix loop. |
 
 When unsure between two tiers, pick the higher one. Record the chosen tier and the trigger that set it.
 
@@ -375,7 +375,7 @@ Redundant review is the main source of conflicting findings and adjudication ove
 | `unwrap()`/`expect()`/`panic!` in `src/`, stdlib-name string leaks, `_ =>` over Miri enums, function > 80 lines, `// ── banner ──`, comment rot, cross-layer imports (`tools/check_layering.py`), the ratchet counts (`tools/check_audit_ratchet.py`), the list of `Placement exception:` comments | **`make audit`** (mechanical sweep — agents trust its output, do not re-grep) |
 | Layer boundaries, SOLID *judgment*, DRY (including the same question answered in two stages), God-objects, altitude | **Lead Software Architect** |
 | IR/`Place`/terminator design, visitor-contract completeness, monomorphization, residency/effect model, lowering-seam placement, **optimization placement** (§1.4: facts in the IR, one authority per question, codegen executes plans, verifier independence, pass order as data) and the verdict on every `Placement exception:` | **Lead Compiler Architect** |
-| Perceus RC correctness (UAF/double-free), runtime/FFI ABI match, bounds/overflow, `unsafe` soundness, user-input panics | **Lead Security Engineer** |
+| reference-count correctness (UAF/double-free), runtime/FFI ABI match, bounds/overflow, `unsafe` soundness, user-input panics | **Lead Security Engineer** |
 | Ownership/borrow ergonomics, clone/alloc hygiene, iterator-vs-loop, perf, error-handling *shape* | **Lead Rust Engineer** |
 | Test coverage, error-path tests, green-washing, duplicate/misnamed tests, edge cases | **Lead QA Engineer** |
 | WGSL correctness, GPU memory hierarchy, coalescing, occupancy, scalar-width portability, upload/readback bounds | **Lead GPU Engineer** |
@@ -391,7 +391,7 @@ All reviewers and the CTO use this single scale. Do not invent local definitions
 
 | Severity | Definition | Examples |
 |----------|------------|----------|
-| **critical** | Unsound, unsafe, or data-corrupting. Ships a wrong compiler. | Perceus UAF/double-free; FFI/ABI memory corruption; OOB read/write; stdlib-independence violation; cross-layer dependency leak; user-input-reachable panic; broken visitor contract; GPU buffer overrun; compiler wrongly accepts/rejects a program. |
+| **critical** | Unsound, unsafe, or data-corrupting. Ships a wrong compiler. | reference-count UAF/double-free; FFI/ABI memory corruption; OOB read/write; stdlib-independence violation; cross-layer dependency leak; user-input-reachable panic; broken visitor contract; GPU buffer overrun; compiler wrongly accepts/rejects a program. |
 | **major** | Real defect or debt that must be fixed before ship, but not unsound. | `unwrap()`/`expect()` in `src/`; function > 80 lines; OCP violation in dispatcher; real DRY duplication; missing error-path test; green-washed `assert_runs`; untested new public fn; unchecked size arithmetic; missed coalescing/redundant upload in a hot path; design that blocks the next backend. |
 | **minor** | Style, idiom, or defense-in-depth. Defer freely with a follow-up. | naming nit; avoidable temp/clone (non-hot); comment rot; banner; long arg list; occupancy tuning; theoretical (no-trigger) hardening. |
 

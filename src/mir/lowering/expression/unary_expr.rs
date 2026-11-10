@@ -170,7 +170,7 @@ pub(crate) fn lower_unary_expr(
     // Use the type-checker's resolved type for the unary expression, read
     // through the active instantiation. Reading the base local's type would
     // lose projections (e.g. `-self.field` would yield the class type rather
-    // than the field's scalar type), causing Perceus to mis-type the result
+    // than the field's scalar type), causing RC insertion to mis-type the result
     // temp.
     let result_ty = instantiated_type(ctx, expr);
 

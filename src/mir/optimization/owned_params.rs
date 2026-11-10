@@ -16,14 +16,14 @@
 //! expression statement leaves of a store — is no use. The binding moves the
 //! parameter instead of copying it, and every call to the function passes the
 //! argument
-//! [`ArgMode::Owned`]: Perceus retains the argument before the call, and the
+//! [`ArgMode::Owned`]: RC insertion retains the argument before the call, and the
 //! callee releases that reference through the local it moved it into. Where the
 //! argument dies at the call, RC elision cancels the retain against the release
 //! the caller makes after it, so the callee holds the only reference and writes
 //! in place.
 //!
 //! A parameter's mode is a contract between a body and every call to it, so the
-//! pass runs once over the whole program, before Perceus, and only for a
+//! pass runs once over the whole program, before RC insertion, and only for a
 //! function every mention of which is a direct call from host code it can
 //! stamp: a top-level host function or a statically dispatched method that no
 //! GPU body, function value, vtable slot or compiler-synthesized caller

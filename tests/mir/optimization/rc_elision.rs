@@ -22,7 +22,7 @@ use miri::pipeline::Pipeline;
 use miri::type_checker::ModuleId;
 use std::collections::HashMap;
 
-/// Lower `source` to MIR, run Perceus, run RC elision, and return all bodies.
+/// Lower `source` to MIR, run RC insertion, run RC elision, and return all bodies.
 fn get_elided_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
     let pipeline = Pipeline::new();
     pipeline
@@ -30,7 +30,7 @@ fn get_elided_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
         .expect("Pipeline should succeed")
 }
 
-/// Lower `source` to MIR, run Perceus only (no elision), return all bodies.
+/// Lower `source` to MIR, run RC insertion only (no elision), return all bodies.
 fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
     use miri::ast::statement::StatementKind as AstStatementKind;
     use miri::mir::lowering::lower_function;
@@ -64,7 +64,7 @@ fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
 /// operations for the list parameter after elision.
 ///
 /// Before elision, `element_at` creates a temporary `obj_local = Copy(items)` which
-/// causes Perceus to emit `IncRef(items)` and `DecRef(obj_local)`. After elision both
+/// causes RC insertion to emit `IncRef(items)` and `DecRef(obj_local)`. After elision both
 /// are removed because `items` is not used after the copy.
 #[test]
 fn test_linear_element_access_has_zero_rc_ops() {

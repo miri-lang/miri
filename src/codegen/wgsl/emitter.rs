@@ -290,7 +290,7 @@ impl<'o> Emitter<'o> {
 
         // Parameters are locals 1..=arg_count, named to match how the body
         // references them (`_1`, `_2`, ...). The body's allocator belongs to
-        // the CPU/Perceus ABI and has no GPU counterpart, so it is skipped —
+        // the CPU reference-counting ABI and has no GPU counterpart, so it is skipped —
         // GPU call sites never pass it.
         let mut emitted = 0;
         for i in 1..=body.arg_count {
@@ -1627,7 +1627,7 @@ impl<'a> BodyEmitter<'a> {
         self.write_indent()?;
         let dest_str = self.render_place(destination)?;
 
-        // The implicit CPU/Perceus `allocator` argument has no GPU counterpart;
+        // The implicit CPU reference-counting `allocator` argument has no GPU counterpart;
         // the helper signature drops the matching param, so drop the argument too.
         let device_args: Vec<&Operand> = args
             .iter()

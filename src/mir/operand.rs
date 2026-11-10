@@ -135,7 +135,7 @@ impl Operand {
 
 /// Resolves the MIR type of a place through its projections.
 ///
-/// Mirrors the logic in `src/mir/optimization/perceus.rs::place_is_counted` to resolve
+/// Mirrors the logic in `src/mir/optimization/rc_insertion.rs::place_is_counted` to resolve
 /// types through `Field` and `Index` projections. Exhaustively handles all
 /// `PlaceElem` variants.
 ///

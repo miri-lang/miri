@@ -403,7 +403,7 @@ fn test_self_field_read_modify_write_scalar() {
     // Regression: read-modify-write on a scalar field inside a non-constructor
     // method body used to crash because the BinaryOp temp inherited the base
     // local's (class) type instead of the projected scalar type, causing
-    // Perceus to DecRef an integer value as if it were a managed pointer.
+    // RC insertion to DecRef an integer value as if it were a managed pointer.
     assert_runs_with_output(
         r#"
 
@@ -430,7 +430,7 @@ fn main()
 fn test_self_field_unary_negate_scalar() {
     // Regression: the UnaryOp result temp inherited the base local's (class)
     // type instead of the projected scalar type when negating `self.field`,
-    // causing Perceus to mis-type the result and the program to crash.
+    // causing RC insertion to mis-type the result and the program to crash.
     assert_runs_with_output(
         r#"
 

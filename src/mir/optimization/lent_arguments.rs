@@ -9,9 +9,9 @@
 //! reached through a dereference, the callee can reach it another way and
 //! replace or empty it while it still reads the argument. Unless the call is
 //! one [`crate::mir::analysis::heap_effects`] found quiet, each such argument
-//! is read into a temporary before the call, which Perceus retains like any
+//! is read into a temporary before the call, which RC insertion retains like any
 //! copy of a counted field, and the temporary's storage ends after the call,
-//! where Perceus releases it.
+//! where RC insertion releases it.
 //!
 //! An entry a runtime getter hands back as a borrow of a collection reached
 //! that way (`m[k]` on a map a field holds) is held the same way.

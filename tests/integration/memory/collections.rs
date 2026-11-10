@@ -271,7 +271,7 @@ fn main()
 #[test]
 fn test_array_of_lists_set_preserves_alias() {
     // Verifies RC accounting: reading slot 0 into a local before calling set()
-    // should IncRef it (Perceus).  The set() call via elem_drop_fn decrements
+    // should IncRef it (RC insertion).  The set() call via elem_drop_fn decrements
     // once — net result RC=1 on the alias, which must remain readable.
     assert_runs_with_output(
         r#"

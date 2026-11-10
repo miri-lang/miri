@@ -1111,7 +1111,7 @@ impl CraneliftBackend {
     ///
     /// A type is "managed" if it is a non-generic struct, class, or enum that has
     /// at least one field of a managed (heap-allocated) type. These drop functions
-    /// form the foundation of the Perceus RC destructor pipeline:
+    /// form the foundation of the reference-count destructor pipeline:
     ///
     ///   RC reaches 0 → call `miri.TypeName.$drop(ptr)`
     ///     → (1) user-defined `fn drop(self)` hook (if the type defines one)

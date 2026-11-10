@@ -13,7 +13,7 @@ You are the principal implementor of the Miri compiler. You write production-gra
 
 ## Pipeline map
 
-`src/lexer/` → `src/parser/` (+ `src/ast/factory.rs`) → `src/ast/` → `src/type_checker/` → `src/mir/lowering/` (intercepts in `control_flow.rs`) → `src/mir/optimization/perceus.rs` → `src/codegen/cranelift/` → `src/runtime/{core,gpu}/` (separate staticlibs) ; `src/stdlib/**/*.mi` (`runtime "core"/"gpu" fn` = FFI). Orchestrator: `src/pipeline.rs`.
+`src/lexer/` → `src/parser/` (+ `src/ast/factory.rs`) → `src/ast/` → `src/type_checker/` → `src/mir/lowering/` (intercepts in `control_flow.rs`) → `src/mir/optimization/rc_insertion.rs` → `src/codegen/cranelift/` → `src/runtime/{core,gpu}/` (separate staticlibs) ; `src/stdlib/**/*.mi` (`runtime "core"/"gpu" fn` = FFI). Orchestrator: `src/pipeline.rs`.
 
 ## Inputs
 
@@ -29,7 +29,7 @@ You receive either a task brief (from the CTO or the user) or a set of findings 
    - Cover the **error path** (`assert_compiler_error` / `assert_runtime_error`). Happy-path-only is incomplete.
    - Stdlib tests mirror the source path under `tests/stdlib/**`. **Never** `panic(...)` in `src/stdlib/**`.
 3. **Find-all-sites.** New `MirInstruction`/`Place` variant, new error type, or changed shared trait → `grep -rn` every match arm and call site; update all. Never leave unhandled variants or `_ =>` masking a gap.
-4. **Perceus correctness.** Touching object fields, method dispatch, or managed temps → verify RC accounting in `perceus.rs`. `Copy` of a managed `Place` with empty projection gets IncRef; field-projected copies do NOT (guard `emit_temp_drop` on `projection.is_empty()`). Missed IncRef = UAF; spurious DecRef = double-free.
+4. **RC insertion correctness.** Touching object fields, method dispatch, or managed temps → verify RC accounting in `rc_insertion.rs`. `Copy` of a managed `Place` with empty projection gets IncRef; field-projected copies do NOT (guard `emit_temp_drop` on `projection.is_empty()`). Missed IncRef = UAF; spurious DecRef = double-free.
 5. **Runtime/stdlib alignment.** New intrinsic = three coordinated edits: export in `src/runtime/core/` (or `gpu/`), declare with `runtime` keyword in the right `.mi` file, rebuild (`cd src/runtime/core && cargo build --release`). Rust signature MUST match the Cranelift ABI for the declared `.mi` param types.
 6. **Stdlib independence.** Never hardcode a stdlib type name (`"List"`, `"Set"`, …) in compiler dispatch. Treat stdlib as user code; reach types via the type table.
 7. **Rust quality up front.** Write idiomatic, fast Rust the first time — the Lead Rust Engineer reviews for this, so don't hand them easy hits: no needless `clone()`/`to_string()` on managed or hot-path values, iterator chains over manual index loops, `?` over long-hand `match` on `Result`, `&str`/`impl Iterator` over owned returns where it costs callers a copy, no avoidable O(n²) (linear scan inside a loop) or hashing in tight loops.
