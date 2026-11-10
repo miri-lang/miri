@@ -11,7 +11,6 @@ use crate::mir::{
 };
 
 use crate::mir::lowering::context::LoweringContext;
-use crate::mir::lowering::dispatch::move_to_copy;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
 
@@ -92,18 +91,17 @@ fn emit_conditional_switch(
 /// managed temp created (e.g. an inline `List([..])`) to balance RC insertion's
 /// IncRef on the Copy. Does not emit the branch's terminator.
 ///
-/// The branch value is always copied, never moved. A managed local read on one
-/// branch only would otherwise hand its reference to the result on that path
-/// alone, while its scope exit still releases it on every path — a double free
-/// on the branch that moved it. Copying lets RC insertion fund the result with a
-/// retain on each branch, so both paths reach the join owning the same counts.
+/// A named local a branch reads is read by copy, so RC insertion funds the
+/// result with a retain on each branch and both paths reach the join owning
+/// the same counts; a temp the branch built is released once the result holds
+/// its own reference.
 pub(super) fn emit_conditional_branch_value(
     ctx: &mut LoweringContext,
     branch_expr: &Expression,
     result_local: crate::mir::Local,
 ) -> Result<(), LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let op = move_to_copy(lower_expression(ctx, branch_expr, None)?);
+    let op = lower_expression(ctx, branch_expr, None)?;
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(op.clone())),
         span: branch_expr.span,

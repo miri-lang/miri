@@ -151,8 +151,13 @@ impl BorrowedLocals {
 impl RcInsertion {
     /// Inserts every retain and release into `body`, reading which parameters
     /// it takes over from `ownership` and recording there the locals it
-    /// borrows. Returns true if any operation was inserted.
-    pub(super) fn insert(&self, body: &mut Body, ownership: &mut OwnershipFacts) -> bool {
+    /// borrows. Returns true if any operation was inserted, and refuses a
+    /// body donating an element whose type it cannot resolve.
+    pub(super) fn insert(
+        &self,
+        body: &mut Body,
+        ownership: &mut OwnershipFacts,
+    ) -> Result<bool, String> {
         // Step 0: a lent argument held only through a class field gets a local
         // of its own across a call that may release it, retained below like
         // any other copy of a counted field.
@@ -212,12 +217,12 @@ impl RcInsertion {
         };
 
         for block_data in basic_blocks.iter_mut() {
-            if self.process_block(&ctx, block_data, &managed_locals) {
+            if self.process_block(&ctx, block_data, &managed_locals)? {
                 changed = true;
             }
         }
 
-        changed
+        Ok(changed)
     }
 
     /// Identifies all locals that are managed (heap-allocated) and owned by this function.
@@ -277,7 +282,7 @@ impl RcInsertion {
         ctx: &RcContext,
         block: &mut BasicBlockData,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
-    ) -> bool {
+    ) -> Result<bool, String> {
         let old_stmts = std::mem::take(&mut block.statements);
         let mut new_stmts = Vec::with_capacity(old_stmts.len());
         let mut changed = false;
@@ -288,12 +293,12 @@ impl RcInsertion {
             }
             new_stmts.push(stmt);
         }
-        if fund_owned_arguments(block, &mut new_stmts) {
+        if fund_handed_over_arguments(ctx, block, &mut new_stmts)? {
             changed = true;
         }
 
         block.statements = new_stmts;
-        changed
+        Ok(changed)
     }
 
     /// Dispatches a statement to the appropriate RC handler.
@@ -308,7 +313,7 @@ impl RcInsertion {
             StatementKind::Assign(..) | StatementKind::Reassign(..) => {
                 self.handle_assignment(ctx, stmt, managed_locals, new_stmts)
             }
-            StatementKind::StorageDead(place) => {
+            StatementKind::StorageDead(place, _) => {
                 self.handle_storage_dead(ctx, stmt, place, managed_locals, new_stmts)
             }
             _ => false,
@@ -534,9 +539,13 @@ impl RcInsertion {
     }
 }
 
-/// Retain, at the end of the block, each argument its terminating call passes
-/// [`ArgMode::Owned`]: the callee releases the reference it is handed, so the
-/// caller pays for one.
+/// Retain, at the end of the block, each argument its terminating call hands
+/// over by copy: one passed [`ArgMode::Owned`], whose callee releases the
+/// reference it is handed, and one passed [`ArgMode::Donated`], which the
+/// container the callee stores it in keeps. Either way the caller pays for one
+/// reference. An argument spelled `move` is a transfer of the caller's own
+/// reference, whose producer deleted or re-bound its release, and is not
+/// funded: a copy-on-write or append receiver is handed over this way.
 ///
 /// A constant argument needs nothing: every constant that reaches a managed
 /// parameter is inert to reference counting. A string literal is immortal, so
@@ -544,32 +553,64 @@ impl RcInsertion {
 /// a release skips; and a regex literal never reaches MIR as a constant —
 /// lowering turns it into the call that builds the pattern.
 ///
-/// The retain is unconditional on the argument's place: the callee's parameter
-/// is a managed type, which is what made it ownable, so the value is a counted
-/// reference even where the walk over a projection cannot resolve its type.
-fn fund_owned_arguments(block: &BasicBlockData, new_stmts: &mut Vec<Statement>) -> bool {
+/// An owned argument is retained unconditionally: the callee's parameter is a
+/// managed type, which is what made it ownable, so the value is a counted
+/// reference even where the walk over a projection cannot resolve its type. A
+/// donated one is retained only when it is counted: a container stores numbers
+/// and values held as their bytes the same way, and those carry no count. A
+/// donated element whose type cannot be resolved is refused, never guessed:
+/// skipping its retain would let the container free a value the caller still
+/// holds.
+fn fund_handed_over_arguments(
+    ctx: &RcContext,
+    block: &BasicBlockData,
+    new_stmts: &mut Vec<Statement>,
+) -> Result<bool, String> {
     let Some(terminator) = &block.terminator else {
-        return false;
+        return Ok(false);
     };
     let TerminatorKind::Call {
         args, arg_modes, ..
     } = &terminator.kind
     else {
-        return false;
+        return Ok(false);
     };
     let before = new_stmts.len();
     for (position, arg) in args.iter().enumerate() {
-        if arg_mode(arg_modes, position) != ArgMode::Owned {
+        // A move hands the caller's own reference over: the producer that
+        // spelled it deleted or re-bound the source's release.
+        let Operand::Copy(place) = arg else {
             continue;
-        }
-        if let Operand::Copy(place) | Operand::Move(place) = arg {
+        };
+        let is_funded = match arg_mode(arg_modes, position) {
+            ArgMode::Owned => true,
+            ArgMode::Donated => donated_element_is_counted(place, position, ctx)?,
+            ArgMode::Borrowed | ArgMode::Out => false,
+        };
+        if is_funded {
             new_stmts.push(Statement {
                 kind: StatementKind::IncRef(place.clone()),
                 span: terminator.span,
             });
         }
     }
-    new_stmts.len() > before
+    Ok(new_stmts.len() > before)
+}
+
+/// Whether the element `place`, donated at argument `position`, is counted;
+/// an element whose type cannot be resolved is an error.
+fn donated_element_is_counted(
+    place: &Place,
+    position: usize,
+    ctx: &RcContext,
+) -> Result<bool, String> {
+    let declared = place_declared_type(place, ctx).ok_or_else(|| {
+        format!(
+            "argument {position} donates {place}, whose type cannot be resolved to tell whether \
+             the container's reference must be funded"
+        )
+    })?;
+    Ok(ctx.is_counted(&declared.kind))
 }
 
 /// Extract the source place from a Copy or Ref rvalue (aliasing operations).

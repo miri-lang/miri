@@ -407,7 +407,7 @@ fn absent_writes_only(body: &Body, local: crate::mir::Local) -> bool {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -457,10 +457,10 @@ fn released_placeholder(body: &Body, item: &Unconformed) -> Option<Statement> {
     let TerminatorKind::Call { func, .. } = &terminator.kind else {
         return None;
     };
-    (func.called_runtime_effect()?.taken_positions())
+    (func.called_runtime_effect()?.handed_over_positions())
         .contains(&argument)
         .then(|| Statement {
-            kind: StatementKind::StorageDead(Place::new(local)),
+            kind: StatementKind::storage_dead(Place::new(local)),
             span: terminator.span,
         })
 }
@@ -474,10 +474,7 @@ fn conformed_local(
     slot: &Type,
     span: crate::error::syntax::Span,
 ) -> (Vec<Statement>, Place) {
-    let source = match operand {
-        Operand::Move(place) => Operand::Copy(place.clone()),
-        Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => operand.clone(),
-    };
+    let source = operand.clone();
     let missing_layers = {
         let slots = PlaceTypes::of(body);
         match slots.operand_type(&source) {

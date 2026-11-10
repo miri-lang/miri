@@ -103,8 +103,11 @@ pub(crate) fn lower_identifier_symbol(
     }
 }
 
-/// Lower a reference to a local variable: copy into `dest`, else Move/Copy per
-/// the variable's auto-copy semantics.
+/// Lower a reference to a local variable: copy into `dest`, else read the
+/// variable by `Copy`.
+///
+/// A named binding keeps its own release at its scope end, so reading it never
+/// transfers its reference: whoever keeps the value retains it.
 ///
 /// A value held as its bytes is copied by the assignment that reads it, so
 /// the result is independent of the variable it came from.
@@ -114,6 +117,9 @@ fn lower_local_identifier(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    if ctx.type_checker.consumed_arguments.consumes(expr) {
+        ctx.consumed_reads.insert(expr.id, local);
+    }
     let ty = ctx.body.local_decls[local.0].ty.clone();
     let source = Place::new(local);
 
@@ -127,11 +133,7 @@ fn lower_local_identifier(
         });
         return Ok(Operand::Copy(d));
     }
-    if ctx.is_type_auto_copy(&ty) {
-        Ok(Operand::Copy(source))
-    } else {
-        Ok(Operand::Move(source))
-    }
+    Ok(Operand::Copy(source))
 }
 
 /// The width the checker read a number binding at, when it differs from the

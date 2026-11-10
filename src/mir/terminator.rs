@@ -74,6 +74,47 @@ impl Terminator {
         Self { kind, span }
     }
 
+    /// A call to the runtime entry point `func`, writing its result into
+    /// `destination`, with every argument passed the way the entry point's
+    /// declaration states ([`Terminator::with_declared_modes`]).
+    pub fn runtime_call(
+        func: Operand,
+        args: Vec<Operand>,
+        destination: Place,
+        target: Option<BasicBlock>,
+        span: Span,
+    ) -> Self {
+        let kind = TerminatorKind::Call {
+            func,
+            args,
+            arg_modes: Vec::new(),
+            arg_handles: Vec::new(),
+            flags: CallFlags::default(),
+            destination,
+            target,
+        };
+        Terminator::new(kind, span).with_declared_modes()
+    }
+
+    /// This terminator, with each argument of a call to a runtime entry
+    /// point passed the way the entry point's declaration states: a stored
+    /// element [`ArgMode::Donated`], a copy-on-write or append receiver
+    /// [`ArgMode::Owned`]. The one place a call's modes are read off a
+    /// runtime declaration; any other terminator comes back unchanged.
+    pub fn with_declared_modes(mut self) -> Self {
+        if let TerminatorKind::Call {
+            func,
+            args,
+            arg_modes,
+            ..
+        } = &mut self.kind
+        {
+            let modes = std::mem::take(arg_modes);
+            *arg_modes = declared_arg_modes(func, args.len(), modes);
+        }
+        self
+    }
+
     /// Every place this terminator stores a value into: the destination of a
     /// call, a virtual call or a kernel launch, and each `out` argument of a
     /// call.
@@ -469,6 +510,12 @@ pub enum ArgMode {
     /// for releasing it. Marked by `crate::mir::optimization::owned_params` on
     /// every call to a function that takes the parameter over.
     Owned,
+    /// The callee keeps the reference the caller hands it past the call: a
+    /// container storing an element. The caller funds one reference when the
+    /// value is counted, and the container releases it with the element.
+    /// Written by lowering on every argument a runtime entry point's
+    /// declaration stores ([`crate::runtime_effects::ParamUse::Stores`]).
+    Donated,
 }
 
 impl ArgMode {
@@ -480,6 +527,49 @@ impl ArgMode {
             ArgMode::Borrowed
         }
     }
+
+    /// Whether the caller hands the callee a reference of its own, which the
+    /// callee or the container it stores the value in releases.
+    pub fn hands_over_reference(self) -> bool {
+        match self {
+            ArgMode::Owned | ArgMode::Donated => true,
+            ArgMode::Borrowed | ArgMode::Out => false,
+        }
+    }
+}
+
+/// `modes`, with each position the runtime entry point `func` declares laid
+/// over it: a stored element [`ArgMode::Donated`], a copy-on-write or append
+/// receiver [`ArgMode::Owned`]. `modes` comes back unchanged for any other
+/// callee.
+///
+/// A container keeps an element handed to it donated, so RC insertion funds
+/// the reference it keeps; the local the element was read from is still
+/// released by whoever owns it, and by the caller once the call returns when
+/// it is a temporary that only existed to produce the value.
+fn declared_arg_modes(func: &Operand, arg_count: usize, mut modes: Vec<ArgMode>) -> Vec<ArgMode> {
+    let Some(effect) = func.called_runtime_effect() else {
+        return modes;
+    };
+    let declared = |position: usize| {
+        if effect.stores(position) {
+            Some(ArgMode::Donated)
+        } else if effect.takes_over(position) {
+            Some(ArgMode::Owned)
+        } else {
+            None
+        }
+    };
+    if (0..arg_count).all(|position| declared(position).is_none()) {
+        return modes;
+    }
+    modes.resize(arg_count.max(modes.len()), ArgMode::Borrowed);
+    for (position, mode) in modes.iter_mut().enumerate().take(arg_count) {
+        if let Some(declared) = declared(position) {
+            *mode = declared;
+        }
+    }
+    modes
 }
 
 /// The mode of the argument at `position`, given a call's `arg_modes`.

@@ -21,7 +21,7 @@ impl Statement {
         match &self.kind {
             StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => Some(place),
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -39,7 +39,12 @@ impl fmt::Display for Statement {
                 write!(f, "reassign {} = {}", place, rvalue)
             }
             StatementKind::StorageLive(place) => write!(f, "StorageLive({})", place),
-            StatementKind::StorageDead(place) => write!(f, "StorageDead({})", place),
+            StatementKind::StorageDead(place, EndCause::Scope) => {
+                write!(f, "StorageDead({})", place)
+            }
+            StatementKind::StorageDead(place, EndCause::Consumed) => {
+                write!(f, "StorageDead({}, consumed)", place)
+            }
             StatementKind::IncRef(place) => write!(f, "IncRef({})", place),
             StatementKind::DecRef(place) => write!(f, "DecRef({})", place),
             StatementKind::Dealloc(place) => write!(f, "Dealloc({})", place),
@@ -63,8 +68,10 @@ pub enum StatementKind {
     Reassign(Place, Rvalue),
     /// A storage live statement (start of variable scope).
     StorageLive(Place),
-    /// A storage dead statement (end of variable scope).
-    StorageDead(Place),
+    /// The end of a binding's storage, and with it the place its release
+    /// goes: where its scope ends, or where a consuming site gave its value
+    /// up ([`EndCause`]).
+    StorageDead(Place, EndCause),
     /// Unconditional increment of reference count.
     IncRef(Place),
     /// Unconditional decrement of reference count. May trigger deallocation.
@@ -78,6 +85,27 @@ pub enum StatementKind {
     ReadHeader(HeaderRead),
     /// No-op.
     Nop,
+}
+
+impl StatementKind {
+    /// The end of `place`'s storage where its scope ends.
+    pub fn storage_dead(place: Place) -> StatementKind {
+        StatementKind::StorageDead(place, EndCause::Scope)
+    }
+}
+
+/// Why a binding's storage ends.
+///
+/// Both causes release the binding there. A consuming end is written where a
+/// site gives the binding's value up — a call that keeps it, a `let` moving
+/// it into a new binding, `value.drop()` — and drop elaboration decides, from
+/// the consuming ends alone, which later scope ends still release it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EndCause {
+    /// The scope declaring the binding ends.
+    Scope,
+    /// A consuming site gave the binding's value up.
+    Consumed,
 }
 
 /// What a [`StatementKind::ReadHeader`] reads and for which blocks: the

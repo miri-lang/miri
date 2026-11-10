@@ -43,22 +43,40 @@ pub struct BodyPass {
     pub records: &'static [Fact],
     /// The fact groups a rewrite by the pass leaves true.
     pub preserves: &'static [Fact],
+    /// The fact groups no pass may have recorded when it starts: the pass
+    /// establishes them, and running it a second time would act on a body
+    /// it already rewrote.
+    pub excludes: &'static [Fact],
 }
 
 impl BodyPass {
     /// Whether the pass reads or writes any fact group.
     pub fn uses_facts(&self) -> bool {
-        !(self.requires.is_empty() && self.records.is_empty() && self.preserves.is_empty())
+        !(self.requires.is_empty()
+            && self.records.is_empty()
+            && self.preserves.is_empty()
+            && self.excludes.is_empty())
     }
 }
 
+/// Releases each binding a consuming site gives up exactly once on every
+/// path.
+pub const ELABORATE_DROPS: BodyPass = BodyPass {
+    name: "elaborate_drops",
+    rewrites_cfg: true,
+    requires: &[],
+    records: &[Fact::DropsElaborated],
+    preserves: &[],
+    excludes: &[Fact::DropsElaborated],
+};
 /// Reads back gpu-resident bindings a host read needs fresh.
 pub const INSERT_READBACKS: BodyPass = BodyPass {
     name: "insert_readbacks",
     rewrites_cfg: true,
     requires: &[],
     records: &[],
-    preserves: &[Fact::Ownership],
+    preserves: &[Fact::Ownership, Fact::DropsElaborated],
+    excludes: &[],
 };
 /// Copies a value argument a call also writes.
 pub const COPY_VALUE_ARGUMENTS: BodyPass = BodyPass {
@@ -67,6 +85,7 @@ pub const COPY_VALUE_ARGUMENTS: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 /// Converts optional operands to the layout their use expects.
 pub const CONFORM_OPTIONAL_OPERANDS: BodyPass = BodyPass {
@@ -75,6 +94,7 @@ pub const CONFORM_OPTIONAL_OPERANDS: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 /// Decides which parameters each function takes over from its callers.
 pub const DECIDE_OWNED_PARAMETERS: BodyPass = BodyPass {
@@ -83,6 +103,7 @@ pub const DECIDE_OWNED_PARAMETERS: BodyPass = BodyPass {
     requires: &[],
     records: &[Fact::Ownership],
     preserves: &[],
+    excludes: &[],
 };
 /// Marks the calls that release nothing their caller holds.
 pub const STAMP_QUIET_CALLS: BodyPass = BodyPass {
@@ -91,14 +112,16 @@ pub const STAMP_QUIET_CALLS: BodyPass = BodyPass {
     requires: &[Fact::Ownership],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 /// Inserts every retain and release.
 pub const INSERT_RC: BodyPass = BodyPass {
     name: "insert_rc",
     rewrites_cfg: false,
-    requires: &[Fact::Ownership],
+    requires: &[Fact::Ownership, Fact::DropsElaborated],
     records: &[Fact::Ownership],
     preserves: &[],
+    excludes: &[],
 };
 /// Removes retain and release pairs that cancel.
 pub const ELIDE_RC: BodyPass = BodyPass {
@@ -107,6 +130,7 @@ pub const ELIDE_RC: BodyPass = BodyPass {
     requires: &[Fact::Ownership],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 /// Drops uniqueness checks an earlier write already answered.
 pub const ELIDE_UNSHARE_CHECKS: BodyPass = BodyPass {
@@ -115,6 +139,7 @@ pub const ELIDE_UNSHARE_CHECKS: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 /// Threads branch conditions known on an incoming edge.
 pub const THREAD_BRANCH_CONDITIONS: BodyPass = BodyPass {
@@ -123,6 +148,7 @@ pub const THREAD_BRANCH_CONDITIONS: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 /// Copies each loop a guard on its bound proves in bounds.
 pub const VERSION_BOUNDED_LOOPS: BodyPass = BodyPass {
@@ -131,6 +157,7 @@ pub const VERSION_BOUNDED_LOOPS: BodyPass = BodyPass {
     requires: &[Fact::Ownership],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 /// Records each collection a loop leaves unchanged.
 pub const RECORD_STABLE_COLLECTIONS: BodyPass = BodyPass {
@@ -139,6 +166,7 @@ pub const RECORD_STABLE_COLLECTIONS: BodyPass = BodyPass {
     requires: &[Fact::Ownership],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 /// Records each access proven in bounds.
 pub const RECORD_IN_BOUNDS: BodyPass = BodyPass {
@@ -147,6 +175,7 @@ pub const RECORD_IN_BOUNDS: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 /// Spells element arguments by address.
 ///
@@ -158,6 +187,7 @@ pub const PASS_ELEMENTS_BY_ADDRESS: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 /// Spells closure arguments with their trampolines.
 pub const PASS_CLOSURES_WITH_TRAMPOLINES: BodyPass = BodyPass {
@@ -166,6 +196,7 @@ pub const PASS_CLOSURES_WITH_TRAMPOLINES: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 
 /// How a pass broke its declaration.
@@ -182,6 +213,12 @@ pub enum PassContract {
     Stale(&'static str, StaleFact),
     /// The program's facts do not describe its bodies one for one.
     FactsMisaligned { facts: usize, bodies: usize },
+    /// The pass met a body it cannot rewrite soundly, and refused it rather
+    /// than guess.
+    Failed { pass: &'static str, reason: String },
+    /// The pass establishes a fact group an earlier pass already recorded
+    /// about the body.
+    Repeated(&'static str, Fact),
 }
 
 impl std::fmt::Display for PassContract {
@@ -205,6 +242,13 @@ impl std::fmt::Display for PassContract {
             Self::FactsMisaligned { facts, bodies } => write!(
                 f,
                 "the program holds facts for {facts} bodies but has {bodies}"
+            ),
+            Self::Failed { pass, reason } => {
+                write!(f, "the pass `{pass}` could not complete: {reason}")
+            }
+            Self::Repeated(pass, fact) => write!(
+                f,
+                "the pass `{pass}` establishes the {fact} facts, which were already recorded"
             ),
         }
     }
@@ -291,8 +335,12 @@ pub fn run_program_pass_with_facts<K, R>(
     Ok(result)
 }
 
-/// Fails unless every fact group `pass` reads holds at `body`'s generation.
+/// Fails unless every fact group `pass` reads holds at `body`'s generation
+/// and no fact group it establishes was recorded before.
 fn require(pass: &BodyPass, body: &Body, facts: &BodyFacts) -> Result<(), PassContract> {
+    if let Some(&fact) = pass.excludes.iter().find(|&&fact| facts.was_recorded(fact)) {
+        return Err(PassContract::Repeated(pass.name, fact));
+    }
     for &fact in pass.requires {
         (facts.check(fact, body)).map_err(|stale| PassContract::Stale(pass.name, stale))?;
     }
@@ -348,6 +396,10 @@ impl Watch {
 /// A body-at-a-time pass's work.
 pub type BodyRun = fn(&mut Body, &mut BodyFacts);
 
+/// A body pass's work when it may refuse a body it cannot rewrite soundly,
+/// saying why.
+pub type FallibleBodyRun = fn(&mut Body, &mut BodyFacts) -> Result<(), String>;
+
 /// A whole-program pass's work.
 pub type ProgramRun = fn(&mut [(Symbol, Body)], &mut ProgramFacts, &mut PassContext<'_>);
 
@@ -385,6 +437,7 @@ impl<'a> PassContext<'a> {
 #[derive(Clone, Copy)]
 enum Run {
     Body(BodyRun),
+    FallibleBody(FallibleBodyRun),
     Program(ProgramRun),
 }
 
@@ -405,6 +458,13 @@ impl Step {
     }
 
     /// A pass run over every body at once.
+    pub const fn fallible_body(pass: &'static BodyPass, run: FallibleBodyRun) -> Self {
+        Step {
+            pass,
+            run: Run::FallibleBody(run),
+        }
+    }
+
     pub const fn program(pass: &'static BodyPass, run: ProgramRun) -> Self {
         Step {
             pass,
@@ -424,6 +484,8 @@ pub enum PassOrder {
         fact: Fact,
         rewrite: &'static str,
     },
+    /// `pass` establishes `fact`, which an earlier pass already recorded.
+    Repeated { pass: &'static str, fact: Fact },
 }
 
 impl std::fmt::Display for PassOrder {
@@ -441,6 +503,10 @@ impl std::fmt::Display for PassOrder {
                 f,
                 "the pass `{pass}` reads the {fact} facts, which `{rewrite}` left stale"
             ),
+            Self::Repeated { pass, fact } => write!(
+                f,
+                "the pass `{pass}` establishes the {fact} facts, which an earlier pass records"
+            ),
         }
     }
 }
@@ -452,13 +518,20 @@ pub struct PassManager<'s> {
 
 impl<'s> PassManager<'s> {
     /// A manager for `steps`, refused unless every fact group a pass reads
-    /// was recorded by an earlier pass and no rewrite since left it stale.
+    /// was recorded by an earlier pass and no rewrite since left it stale,
+    /// and no pass establishes a fact group an earlier pass recorded.
     pub fn new(steps: &'s [Step]) -> Result<Self, PassOrder> {
         // For each group: `None` before any pass records it, then the pass
         // that last left it stale, if one did.
         let mut held: HashMap<Fact, Option<&'static str>> = HashMap::new();
         for step in steps {
             let pass = step.pass;
+            if let Some(&fact) = pass.excludes.iter().find(|fact| held.contains_key(fact)) {
+                return Err(PassOrder::Repeated {
+                    pass: pass.name,
+                    fact,
+                });
+            }
             for &fact in pass.requires {
                 match held.get(&fact) {
                     None => {
@@ -510,6 +583,16 @@ impl<'s> PassManager<'s> {
                         run_body_pass_with_facts(step.pass, body, body_facts, run)?;
                     }
                 }
+                Run::FallibleBody(run) => {
+                    for ((_, body), body_facts) in bodies.iter_mut().zip(facts.iter_mut()) {
+                        run_body_pass_with_facts(step.pass, body, body_facts, run)?.map_err(
+                            |reason| PassContract::Failed {
+                                pass: step.pass.name,
+                                reason,
+                            },
+                        )?;
+                    }
+                }
                 Run::Program(run) => {
                     run_program_pass_with_facts(step.pass, bodies, facts, |bodies, facts| {
                         run(bodies, facts, context)
@@ -521,15 +604,23 @@ impl<'s> PassManager<'s> {
     }
 }
 
+/// Elaborates the drops of `body`, refusing a body that ends a binding twice
+/// along one path.
+fn elaborate_drops(body: &mut Body, _: &mut BodyFacts) -> Result<(), String> {
+    crate::mir::drop_elaboration::elaborate_drops(body)
+}
+
 /// The passes run between lowering and the checks on the MIR the backends
 /// read, in order.
 ///
-/// Readbacks come first, before reference counting accounts for the host
+/// Drop elaboration comes first, deciding which ends of a consumed binding
+/// still release it; reference counting reads that it ran. Readbacks come next, before reference counting accounts for the host
 /// arrays they detach. Ownership is decided across the program before any
 /// pass reads it; retains and releases are inserted once, on the bodies as
 /// lowering and the GPU passes left them, then the pairs that cancel are
 /// removed. The rewrites after that see every retain spelled out.
 pub const MIR_PASSES: &[Step] = &[
+    Step::fallible_body(&ELABORATE_DROPS, elaborate_drops),
     Step::body(&INSERT_READBACKS, |body, _| {
         crate::mir::residency::insert_readbacks(body)
     }),
@@ -543,7 +634,7 @@ pub const MIR_PASSES: &[Step] = &[
     Step::program(&STAMP_QUIET_CALLS, |bodies, facts, context| {
         crate::mir::analysis::heap_effects::stamp_quiet_calls(bodies, facts, &context.hooks)
     }),
-    Step::body(&INSERT_RC, |body, facts| {
+    Step::fallible_body(&INSERT_RC, |body, facts| {
         crate::mir::optimization::insert_rc(body, facts.ownership_mut())
     }),
     Step::body(&ELIDE_RC, |body, facts| {

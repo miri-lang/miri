@@ -185,7 +185,7 @@ fn end_after_call(body: &mut Body, block: usize, places: Vec<Place>, predecessor
     let span = terminator.span;
     let ends: Vec<Statement> = places
         .into_iter()
-        .map(|place| statement(StatementKind::StorageDead(place), span))
+        .map(|place| statement(StatementKind::storage_dead(place), span))
         .collect();
     if predecessors.get(target.0) == Some(&1) && target.0 != block {
         if let Some(data) = body.basic_blocks.get_mut(target.0) {

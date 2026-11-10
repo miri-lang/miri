@@ -324,8 +324,8 @@ impl<'a> FunctionTranslator<'a> {
         }
         match mode {
             ArgMode::Out | ArgMode::Borrowed => Ok(address),
-            ArgMode::Owned => Err(CodegenError::Internal(
-                "a value held as its bytes is passed owned, which only a counted local is"
+            ArgMode::Owned | ArgMode::Donated => Err(CodegenError::Internal(
+                "a value held as its bytes is handed over, which only a counted local is"
                     .to_string(),
             )),
         }

@@ -14,16 +14,18 @@ use std::fmt;
 /// An operand for an Rvalue.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operand {
-    /// Moves the value out of the place.
+    /// Hands the reference the place holds on to the consumer.
     ///
-    /// Reference counting does not honour this: the source local is still
-    /// released when its scope ends, so a move of a managed place hands the
-    /// value on without retaining it and leaves one allocation carrying two
-    /// releases. Consumers that release what they receive must read the place
-    /// by [`Operand::Copy`] instead — several lowering seams normalize to
-    /// `Copy` for exactly this reason.
+    /// A move is a transfer: whatever writes one deletes or re-binds the
+    /// source's own release in the same rewrite, so the reference is released
+    /// exactly once, by its new holder, and is never retained for it. Lowering
+    /// spells a move only where it builds such a sequence itself, as the
+    /// copy-on-write check does (`tmp = cow(move x); x = move tmp`); a read of
+    /// a named local is always a [`Operand::Copy`]. The reference-count passes
+    /// turn a copy into a move where the source dies at the read.
     Move(Place),
-    /// Copies the value from the place.
+    /// Reads the value from the place, which keeps its own reference: a
+    /// consumer that holds on to a counted value is funded with a retain.
     Copy(Place),
     /// A constant value.
     Constant(Box<Constant>),

@@ -174,7 +174,7 @@ impl<'a> Representations<'a> {
                     Some((dest, rvalue))
                 }
                 StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
+                | StatementKind::StorageDead(_, _)
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
@@ -248,7 +248,7 @@ impl<'a> Representations<'a> {
                 self.count_violation(place, "Dealloc", Self::holds_value)
             }
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => Vec::new(),
         }

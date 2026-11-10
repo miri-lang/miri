@@ -26,6 +26,7 @@ use crate::mir::lowering::helpers::{
     ensure_place, gpu_math_return_type, index_at_int, resolve_type,
 };
 use crate::mir::lowering::sequencing::lower_operand;
+use crate::mir::lowering::variable;
 
 pub(crate) fn lower_call_expr(
     ctx: &mut LoweringContext,
@@ -35,7 +36,52 @@ pub(crate) fn lower_call_expr(
     let ExpressionKind::Call(func, args) = &expr.node else {
         unreachable!()
     };
+    let result = lower_call_form(ctx, expr, func, args, dest)?;
+    release_consumed_arguments(ctx, func, args, expr.span)?;
+    Ok(result)
+}
 
+/// Give up the caller's reference to every binding the call consumed.
+///
+/// The type checker decides which arguments a call consumes: a resource the
+/// callee keeps (`type_checker::use_after_move::ConsumedArguments`). The call
+/// lends it like any argument, and the callee funds whatever it keeps with a
+/// reference of its own, so the binding the argument was read from is
+/// released here, where the call consumed it, as `let b = a` releases `a`'s.
+fn release_consumed_arguments(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    span: crate::error::syntax::Span,
+) -> Result<(), LoweringError> {
+    let receiver = match &func.node {
+        ExpressionKind::Member(receiver, _) => Some(receiver.as_ref()),
+        _ => None,
+    };
+    let named = args.iter().map(|arg| match &arg.node {
+        ExpressionKind::NamedArgument(_, value) => value.as_ref(),
+        _ => arg,
+    });
+    let mut released = Vec::new();
+    for argument in receiver.into_iter().chain(named) {
+        let Some(local) = variable::consumed_read(ctx, argument)? else {
+            continue;
+        };
+        if !released.contains(&local) && variable::end_consumed_binding(ctx, local, span) {
+            released.push(local);
+        }
+    }
+    Ok(())
+}
+
+/// Lower the call through the first form that recognises it.
+fn lower_call_form(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    func: &Expression,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
     if let Some(op) = try_lower_option_some(ctx, func, args, expr, dest.clone())? {
         return Ok(op);
     }

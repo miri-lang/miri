@@ -128,6 +128,6 @@ pub(crate) fn copy_forwarded_argument(
         kind: StatementKind::Assign(Place::new(copy), Rvalue::Use(forwarded)),
         span,
     });
-    let operand = emit_cow_check(ctx, Operand::Move(Place::new(copy)), written, cow, span)?;
+    let operand = emit_cow_check(ctx, Operand::Copy(Place::new(copy)), written, cow, span)?;
     Ok((operand, Some(copy)))
 }

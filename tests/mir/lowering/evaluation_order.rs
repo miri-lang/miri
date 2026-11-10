@@ -375,7 +375,7 @@ fn main()
     let ends: Vec<usize> = (body.basic_blocks.iter().enumerate())
         .filter(|(_, block)| {
             block.statements.iter().any(|statement| {
-                matches!(&statement.kind, StatementKind::StorageDead(place)
+                matches!(&statement.kind, StatementKind::StorageDead(place, _)
                     if place.local == snapshot && place.projection.is_empty())
             })
         })

@@ -92,7 +92,7 @@ fn excluded_locals(body: &Body) -> HashSet<usize> {
                     }
                 }
                 StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
+                | StatementKind::StorageDead(_, _)
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)

@@ -13,9 +13,11 @@
 //! verifier reports nothing at all.
 
 mod abi_translation;
+mod drop_flags;
 mod in_bounds;
 mod lent_arguments;
 mod local_borrows;
+mod moved_out;
 mod optional_representation;
 mod parameter_writes;
 mod resolved_self;
@@ -83,7 +85,7 @@ fn storage_live(local: usize) -> Statement {
 }
 
 fn storage_dead(local: usize) -> Statement {
-    stmt(StatementKind::StorageDead(place(local)))
+    stmt(StatementKind::storage_dead(place(local)))
 }
 
 fn decref(local: usize) -> Statement {
@@ -1370,6 +1372,53 @@ fn uploading_one_gpu_binding_into_another_needs_a_readback_of_the_source() {
     assert_one_unfenced_read(&upload);
 }
 
+/// A call that stores a gpu binding as an element of a host container keeps
+/// its host array, so the binding has to be fenced as for any other host read.
+#[test]
+fn storing_a_gpu_binding_in_a_host_container_needs_a_readback() {
+    let stored = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), stores_local_1(ArgMode::Donated)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_one_unfenced_read(&stored);
+    let message = &verify_cross_residency_readback(&stored)[0].message;
+    assert!(
+        message.contains("is stored as an element"),
+        "got: {message}"
+    );
+}
+
+/// A call that only lends a gpu binding reads at most its length, which the
+/// host array holds whatever the device did.
+#[test]
+fn lending_a_gpu_binding_to_a_call_needs_no_readback() {
+    let lent = cross_residency_body(
+        7,
+        vec![
+            block(Vec::new(), stores_local_1(ArgMode::Borrowed)),
+            block(Vec::new(), ret()),
+        ],
+    );
+    assert_fenced(&lent, "a call that only lends the binding");
+}
+
+/// A call passing local 1 second, after local 2, in `mode`.
+fn stores_local_1(mode: ArgMode) -> Terminator {
+    let mut call = runtime_call(
+        "miri_rt_set_add",
+        vec![Operand::Copy(place(2)), Operand::Copy(place(1))],
+        3,
+        1,
+    );
+    if let TerminatorKind::Call { arg_modes, .. } = &mut call.kind {
+        *arg_modes = vec![ArgMode::Borrowed, mode];
+    }
+    call
+}
+
 /// Capturing a gpu binding into a closure copies its host array into the
 /// closure's environment, a host boundary the same as `let h = g`: without a
 /// readback the closure holds the host array's initial values.
@@ -2100,7 +2149,7 @@ fn flag_guarded_copy(set_after_launch: bool, registered: bool) -> Body {
     );
     body.new_local(LocalDecl::new(bool_ty(), span()));
     if registered {
-        body.local_decls[4].stale_flag_of = Some(DeviceHandleId(7));
+        body.local_decls[4].flag_of = Some(miri::mir::FlagOf::Stale(DeviceHandleId(7)));
     }
     body
 }
@@ -2160,7 +2209,7 @@ fn the_readback_pass_keeps_a_flag_for_a_read_at_the_head_of_a_loop() {
     assert_fenced(&looping, "the pass's output");
     assert_eq!(readback_calls(&looping), 1, "one guarded readback");
     let flags: Vec<_> = (looping.local_decls.iter())
-        .filter_map(|decl| decl.stale_flag_of)
+        .filter_map(|decl| decl.stale_flag_of())
         .collect();
     assert_eq!(flags, vec![DeviceHandleId(7)], "one flag for handle 7");
     let enters_the_entry_block = looping
@@ -2191,7 +2240,7 @@ fn the_readback_pass_reads_back_once_for_two_reads_after_a_launch() {
     assert_fenced(&twice, "the pass's output");
     assert_eq!(readback_calls(&twice), 1);
     assert!(
-        (twice.local_decls.iter()).all(|decl| decl.stale_flag_of.is_none()),
+        (twice.local_decls.iter()).all(|decl| decl.stale_flag_of().is_none()),
         "no read needs a flag"
     );
 }
@@ -2600,6 +2649,68 @@ fn a_call_whose_mode_disagrees_with_its_callee_is_reported() {
     );
 }
 
+/// A program whose entry point pushes its string temp `_1` onto a list,
+/// passing the list and the element in `modes`.
+fn list_push_program(modes: Vec<ArgMode>) -> Vec<(Symbol, Body)> {
+    let mut push = runtime_call(
+        "miri_rt_list_push",
+        vec![
+            constant(void_ty(), Literal::Identifier("list".to_string())),
+            Operand::Copy(place(1)),
+        ],
+        2,
+        1,
+    );
+    if let TerminatorKind::Call { arg_modes, .. } = &mut push.kind {
+        *arg_modes = modes;
+    }
+    let caller = temp_body(vec![
+        block(vec![storage_live(1), assign_fresh(1)], push),
+        block(vec![storage_dead(1)], ret()),
+    ]);
+    vec![(Symbol::entry(), caller)]
+}
+
+fn argument_mode_findings(program: &[(Symbol, Body)]) -> Vec<(Symbol, VerificationViolation)> {
+    verify_owned_argument_modes(program, &ProgramFacts::of(program))
+}
+
+#[test]
+fn an_element_a_container_stores_is_passed_donated() {
+    let donated = list_push_program(vec![ArgMode::Borrowed, ArgMode::Donated]);
+    assert!(
+        argument_mode_findings(&donated).is_empty(),
+        "the stored element is donated and the list lent: {:?}",
+        argument_mode_findings(&donated)
+    );
+    let lent = argument_mode_findings(&list_push_program(Vec::new()));
+    assert_eq!(lent.len(), 1, "an element the list keeps, passed lent");
+    assert!(
+        lent[0].1.message.contains("miri_rt_list_push"),
+        "the finding names the entry point: {}",
+        lent[0].1.message
+    );
+    let receiver = list_push_program(vec![ArgMode::Donated, ArgMode::Donated]);
+    assert_eq!(
+        argument_mode_findings(&receiver).len(),
+        1,
+        "a list the call writes in place but does not keep, passed donated"
+    );
+}
+
+#[test]
+fn a_donation_to_a_function_of_the_program_is_reported() {
+    let program = vec![
+        (callee_symbol(), owned_param_body(Vec::new())),
+        (Symbol::entry(), caller_passing_temp(ArgMode::Donated)),
+    ];
+    assert_eq!(
+        argument_mode_findings(&program).len(),
+        1,
+        "only a runtime container keeps a donated reference"
+    );
+}
+
 /// A callee taking its parameter over, called owned by the entry point.
 fn owned_call_program() -> Vec<(Symbol, Body)> {
     vec![
@@ -2643,4 +2754,52 @@ fn a_function_taking_a_parameter_over_lowered_twice_is_reported() {
     let found = verify_owned_argument_modes(&program, &owned_callee_facts(&program));
     assert_eq!(found.len(), 1, "two bodies under one symbol");
     assert_eq!(found[0].0, callee_symbol());
+}
+
+/// A program whose entry point appends a constant to its string `_1`, handing
+/// `_1` to the append by `move` in `modes`, into `_2`, which it then releases.
+fn string_append_program(modes: Vec<ArgMode>) -> Vec<(Symbol, Body)> {
+    let mut append = runtime_call(
+        "miri_rt_string_append",
+        vec![Operand::Move(place(1)), fresh_string_operand()],
+        2,
+        1,
+    );
+    if let TerminatorKind::Call { arg_modes, .. } = &mut append.kind {
+        *arg_modes = modes;
+    }
+    let caller = body_of(
+        &[void_ty(), string_ty(), string_ty()],
+        0,
+        vec![
+            block(vec![storage_live(1), assign_fresh(1)], append),
+            block(vec![decref(2), storage_dead(2), storage_dead(1)], ret()),
+        ],
+    );
+    vec![(Symbol::entry(), caller)]
+}
+
+fn fresh_string_operand() -> Operand {
+    constant(string_ty(), Literal::String("x".to_string()))
+}
+
+#[test]
+fn an_append_receiver_is_handed_over_and_its_count_balances() {
+    let owned = string_append_program(vec![ArgMode::Owned, ArgMode::Borrowed]);
+    assert!(
+        argument_mode_findings(&owned).is_empty(),
+        "the receiver the append takes over is handed over: {:?}",
+        argument_mode_findings(&owned)
+    );
+    let violations = verify_body(&owned[0].1, &OwnershipFacts::default());
+    assert!(
+        violations.is_empty(),
+        "the receiver is released once, by the call: {violations:?}"
+    );
+    let lent = argument_mode_findings(&string_append_program(Vec::new()));
+    assert_eq!(
+        lent.len(),
+        1,
+        "a receiver the append takes over, passed lent"
+    );
 }

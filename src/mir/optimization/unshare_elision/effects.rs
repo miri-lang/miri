@@ -181,7 +181,7 @@ impl ProgramBuilder<'_> {
                 let reads = self.rvalue_reads(rvalue);
                 self.store(place, fresh, reads)
             }
-            StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+            StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
                 self.replaced(place).map(Effect::Forget)
             }
             StatementKind::IncRef(place)

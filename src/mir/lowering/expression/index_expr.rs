@@ -39,7 +39,7 @@ pub(crate) fn lower_index_expr(
     }
 
     // Watermark so we can release any managed temp created for `obj` (e.g. an
-    // array literal). Only drop on Copy — RC insertion IncRef's the source temp.
+    // array literal) once the element has been read out of it.
     let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_operand(ctx, obj)?;
 
@@ -49,7 +49,6 @@ pub(crate) fn lower_index_expr(
         return lower_tuple_element(ctx, obj_operand, obj, obj_watermark, position, expr, dest);
     }
 
-    let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
     let index_operand = lower_operand(ctx, index_expr)?;
@@ -59,15 +58,7 @@ pub(crate) fn lower_index_expr(
     let mut indexed_place = obj_place.clone();
     indexed_place.projection.push(PlaceElem::index(index_local));
 
-    finish_index_read(
-        ctx,
-        indexed_place,
-        &obj_place,
-        obj_op_is_copy,
-        obj_watermark,
-        expr,
-        dest,
-    )
+    finish_index_read(ctx, indexed_place, &obj_place, obj_watermark, expr, dest)
 }
 
 /// The position `obj[index_expr]` names when `obj` is a tuple and the index is
@@ -108,7 +99,6 @@ fn lower_string_index_read(
 ) -> Result<Operand, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_operand(ctx, obj)?;
-    let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
     let obj_place = ensure_place(ctx, obj_operand.clone(), obj.span);
 
     let result_ty = Type::new(TypeKind::String, expr.span);
@@ -132,9 +122,7 @@ fn lower_string_index_read(
         lower_string_char_at(ctx, expr, obj_operand, index_expr, &destination)?;
     }
 
-    if obj_op_is_copy {
-        ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
-    }
+    ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
 
     Ok(Operand::Copy(destination))
 }
@@ -306,27 +294,25 @@ pub(crate) fn ensure_index_local(
     }
 }
 
-/// Emit the indexed read into `dest` (or a temp), releasing the collection temp
-/// after the element is read when `obj` was a Copy-returned temporary.
+/// Emit the indexed read into `dest` (or a temp), releasing the collection
+/// after the element is read when it is a temporary this expression built.
 fn finish_index_read(
     ctx: &mut LoweringContext,
     indexed_place: Place,
     obj_place: &Place,
-    obj_op_is_copy: bool,
     obj_watermark: usize,
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let obj_is_temporary = ctx.is_released_by_expression(obj_place.local, obj_watermark);
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(indexed_place))),
             span: expr.span,
         });
-        if obj_op_is_copy {
-            ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
-        }
+        ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
         Ok(Operand::Copy(d))
-    } else if obj_op_is_copy {
+    } else if obj_is_temporary {
         // Materialize the element first so the collection is freed AFTER the read.
         //
         // The type is read through the active instantiation substitution. A read
@@ -348,9 +334,9 @@ fn finish_index_read(
         ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
         Ok(Operand::Copy(Place::new(elem_temp)))
     } else {
-        // obj accessed via Move — no IncRef, no drop. The projected place is a
-        // borrow of the element the collection still holds; a consumer that
-        // keeps it copies it, which raises the count.
+        // The collection outlives the read, so the projected place is a borrow
+        // of the element it still holds; a consumer that keeps it copies it,
+        // which raises the count.
         Ok(Operand::Copy(indexed_place))
     }
 }

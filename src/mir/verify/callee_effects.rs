@@ -192,7 +192,7 @@ fn writes_receiver_in_place(body: &Body) -> bool {
                     dest.local == receiver && !dest.projection.is_empty()
                 }
                 StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
+                | StatementKind::StorageDead(_, _)
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
@@ -258,7 +258,7 @@ impl<'b> BodyHarm<'b> {
                 .declared(place)
                 .is_some_and(|ty| !self.hooks.may_run_drop_hook(&ty)),
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => true,

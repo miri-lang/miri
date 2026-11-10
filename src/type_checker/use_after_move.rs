@@ -15,7 +15,7 @@
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::pattern::Pattern;
-use crate::ast::statement::{BindingResidency, StatementKind, DROP_HOOK_NAME};
+use crate::ast::statement::{BindingResidency, StatementKind, WhileStatementType, DROP_HOOK_NAME};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::context::{class_implements_trait, TypeDefinition};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
-use super::utils::{is_resource, runs_drop_hook};
+use super::utils::{is_resource, runs_drop_hook, trait_declares_drop_hook};
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
 pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value this scope owns";
@@ -63,6 +63,160 @@ impl std::fmt::Display for Sink {
     }
 }
 
+/// The expressions that consume the binding they name and hand its reference
+/// on: an argument a call keeps (a method's receiver included), and the
+/// initializer of a binding a resource moves into. Each is recorded by the
+/// expression naming the binding, and only when its type runs a drop hook of
+/// its own: a value held at a trait is shared rather than moved, so consuming
+/// it hands nothing on.
+///
+/// The one answer to "does consuming this binding release its reference
+/// here": MIR lowering reads it to release the binding where it is consumed,
+/// rather than where its scope ends. Lowering adds one rule of its own: a
+/// parameter's reference is its caller's, so consuming a parameter releases
+/// nothing in the callee.
+#[derive(Debug, Default)]
+pub struct ConsumedArguments {
+    expressions: HashSet<usize>,
+}
+
+impl ConsumedArguments {
+    /// Whether the call `argument` is passed to consumes the binding it names.
+    pub fn consumes(&self, argument: &Expression) -> bool {
+        self.expressions.contains(&argument.id)
+    }
+
+    /// Add every argument `other` records.
+    pub fn extend(&mut self, other: ConsumedArguments) {
+        self.expressions.extend(other.expressions);
+    }
+}
+
+/// What the analysis finds in a program.
+pub struct UseAfterMoveFindings {
+    pub errors: Vec<TypeError>,
+    pub warnings: Vec<Diagnostic>,
+    pub consumed_arguments: ConsumedArguments,
+}
+
+/// The resources consumed on some path into a point, each with what
+/// consumed it.
+type Consumed = HashMap<String, ConsumedInfo>;
+
+/// For each name a scope binds afresh, what the binding it shadows had
+/// consumed when the scope bound it: the scope restores it when it ends.
+type Shadowed = HashMap<String, Option<ConsumedInfo>>;
+
+/// The control-flow question the analysis asks of the type checker: whether
+/// any path reaches the point after a statement or an expression.
+pub trait Reachability {
+    /// Whether control can never reach the end of `stmt`.
+    fn never_finishes(&self, stmt: &Statement) -> bool;
+    /// Whether control can never reach the end of `expr`.
+    fn never_ends(&self, expr: &Expression) -> bool;
+}
+
+impl Reachability for super::TypeChecker {
+    fn never_finishes(&self, stmt: &Statement) -> bool {
+        self.statement_never_finishes(stmt)
+    }
+
+    fn never_ends(&self, expr: &Expression) -> bool {
+        self.expression_never_ends(expr, true)
+    }
+}
+
+/// What the passes of the loop being analysed carry to its jumps: the state
+/// at each `break`, which reaches the code after the loop, and at each
+/// `continue`, which reaches the next pass.
+#[derive(Default)]
+struct LoopExits {
+    breaks: Vec<Consumed>,
+    continues: Vec<Consumed>,
+}
+
+/// What one pass of a loop runs: a condition before the body (`while`), the
+/// body, and a condition after it (`do … while`). A `for` has neither: its
+/// iterable is evaluated once, before the first pass.
+#[derive(Clone, Copy)]
+struct LoopPass<'e> {
+    leading: Option<&'e Expression>,
+    body: &'e Statement,
+    trailing: Option<&'e Expression>,
+}
+
+/// Where one pass of a loop goes: the state it starts the next pass in, if
+/// any path goes on, and the state on each path that leaves the loop.
+struct PassOutcome {
+    next: Option<Consumed>,
+    leaves: Vec<Consumed>,
+}
+
+/// Add to `into` every resource `from` consumed: consumed on some path is
+/// consumed after the paths meet.
+fn merge_consumed(into: &mut Consumed, from: Consumed) {
+    for (name, info) in from {
+        into.entry(name).or_insert(info);
+    }
+}
+
+/// [`merge_consumed`] from a state the caller keeps, copying only what
+/// `into` lacks.
+fn merge_consumed_from(into: &mut Consumed, from: &Consumed) {
+    for (name, info) in from {
+        if !into.contains_key(name) {
+            into.insert(name.clone(), info.clone());
+        }
+    }
+}
+
+/// The state where the paths of `arms` meet: what any arm that reaches the
+/// join consumed. An arm that never finishes reaches no join, and when no
+/// arm does, the code after it is unreachable and keeps `before`.
+fn join_arms(before: &Consumed, arms: impl IntoIterator<Item = (Consumed, bool)>) -> Consumed {
+    let mut reaching = arms
+        .into_iter()
+        .filter_map(|(state, finishes)| finishes.then_some(state));
+    let Some(mut joined) = reaching.next() else {
+        return before.clone();
+    };
+    for state in reaching {
+        merge_consumed(&mut joined, state);
+    }
+    joined
+}
+
+/// Remember, the first time `name` is bound afresh in a scope, what the
+/// binding it shadows had consumed, and bind it unconsumed in `state`.
+fn shadow(shadowed: &mut Shadowed, name: &str, state: &mut Consumed) {
+    let outer = state.remove(name);
+    if !shadowed.contains_key(name) {
+        shadowed.insert(name.to_string(), outer);
+    }
+}
+
+/// The scope that bound `shadowed` ends: each name names the outer binding
+/// again, consumed or not as that one was.
+fn restore_shadowed(state: &mut Consumed, shadowed: Shadowed) {
+    for (name, outer) in shadowed {
+        match outer {
+            Some(info) => state.insert(name, info),
+            None => state.remove(name.as_str()),
+        };
+    }
+}
+
+/// What identifies a reported error, so a loop's second pass reports only
+/// what its first did not.
+fn error_key(error: &TypeError) -> (Span, Option<DiagnosticCode>) {
+    let code = if let TypeErrorKind::Coded { code, .. } = &error.kind {
+        Some(*code)
+    } else {
+        None
+    };
+    (error.span, code)
+}
+
 #[derive(Clone)]
 struct ConsumedInfo {
     by_fn: String,
@@ -73,6 +227,9 @@ struct ConsumedInfo {
 }
 
 pub struct UseAfterMoveChecker<'a> {
+    /// Answers whether control can reach the end of a statement or an
+    /// expression.
+    flow: &'a dyn Reachability,
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
     /// Escape summaries keyed by [`FunctionId`]: a free function by name, a
@@ -103,15 +260,28 @@ pub struct UseAfterMoveChecker<'a> {
     /// only these may be released early with `value.drop()`. A lambda body
     /// starts empty: what it captures belongs to the scope that declared it.
     owned_locals: HashSet<String>,
+    /// Every argument a call consumed, by the expression naming it.
+    consumed_arguments: ConsumedArguments,
+    /// The jumps of each loop enclosing the point analysed, innermost last;
+    /// a function or lambda body starts with none.
+    loop_exits: Vec<LoopExits>,
+    /// Whether the pass being analysed re-checks a loop body from the state
+    /// its next pass starts in. A loop inside such a pass runs once from
+    /// that state: its own loop-carried uses were checked when the enclosing
+    /// loop's first pass reached it, so re-checking them again would cost
+    /// a walk for every combination of passes of the loops around it.
+    rechecking: bool,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
     pub fn new(
+        flow: &'a dyn Reachability,
         types: &'a HashMap<usize, Type>,
         type_definitions: &'a HashMap<String, TypeDefinition>,
         escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     ) -> Self {
         Self {
+            flow,
             types,
             type_definitions,
             escape_summaries,
@@ -120,14 +290,21 @@ impl<'a> UseAfterMoveChecker<'a> {
             fn_bindings: HashSet::new(),
             gpu_bindings: HashSet::new(),
             owned_locals: HashSet::new(),
+            consumed_arguments: ConsumedArguments::default(),
+            loop_exits: Vec::new(),
+            rechecking: false,
         }
     }
 
-    /// Runs the analysis on a complete program and returns detected errors and warnings.
-    pub fn check_program(mut self, program: &Program) -> (Vec<TypeError>, Vec<Diagnostic>) {
+    /// Runs the analysis on a complete program and returns what it found.
+    pub fn check_program(mut self, program: &Program) -> UseAfterMoveFindings {
         let mut consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_block(&program.body, &mut consumed);
-        (self.errors, self.warnings)
+        UseAfterMoveFindings {
+            errors: self.errors,
+            warnings: self.warnings,
+            consumed_arguments: self.consumed_arguments,
+        }
     }
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
@@ -145,9 +322,8 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::If(cond, then, else_, _) => {
                 self.check_if_stmt(cond, then, else_.as_deref(), consumed);
             }
-            StatementKind::While(cond, body, _) => {
-                self.check_expr(cond, consumed);
-                self.check_loop_body(body, &HashSet::new(), consumed);
+            StatementKind::While(cond, body, kind) => {
+                self.check_while_stmt(cond, body, kind, consumed);
             }
             StatementKind::For(decls, iter, body) | StatementKind::GpuFrame(decls, iter, body) => {
                 self.check_for_stmt(decls, iter, body, consumed);
@@ -167,9 +343,9 @@ impl<'a> UseAfterMoveChecker<'a> {
             StatementKind::Struct(_, _, _, methods, _, _)
             | StatementKind::Enum(_, _, _, methods, _, _)
             | StatementKind::Trait(_, _, _, methods, _) => self.check_method_bodies(methods),
+            StatementKind::Break => self.note_loop_exit(consumed, |exits| &mut exits.breaks),
+            StatementKind::Continue => self.note_loop_exit(consumed, |exits| &mut exits.continues),
             StatementKind::Empty
-            | StatementKind::Break
-            | StatementKind::Continue
             | StatementKind::Use(_, _)
             | StatementKind::Type(_, _)
             | StatementKind::RuntimeFunctionDeclaration(_, _, _, _, _)
@@ -195,8 +371,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         for p in &decl.params {
             self.fn_bindings.insert(p.name.clone());
         }
+        let prev_loops = std::mem::take(&mut self.loop_exits);
         let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_stmt(body, &mut fn_consumed);
+        self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
@@ -229,44 +407,61 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// Check each declaration's initializer, then bind its name afresh: the
+    /// new binding is not consumed.
     fn check_variable_stmt(
         &mut self,
         decls: &[crate::ast::statement::VariableDeclaration],
-        consumed: &mut HashMap<String, ConsumedInfo>,
+        consumed: &mut Consumed,
     ) {
         for decl in decls {
-            if let Some(init) = &decl.initializer {
-                self.check_expr(init, consumed);
-                if let ExpressionKind::Identifier(src, _) = &init.node {
-                    let gpu_move =
-                        decl.residency == BindingResidency::Gpu && self.gpu_bindings.contains(src);
-                    let resource = self
-                        .types
-                        .get(&init.id)
-                        .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions));
-                    if gpu_move || resource {
-                        let by_fn = if gpu_move {
-                            format!("move to gpu binding '{}'", decl.name)
-                        } else {
-                            format!("assignment to '{}'", decl.name)
-                        };
-                        consumed.insert(
-                            src.clone(),
-                            ConsumedInfo {
-                                by_fn,
-                                at_span: init.span,
-                                chain: vec![],
-                            },
-                        );
-                    }
-                }
-            }
-            if decl.residency == BindingResidency::Gpu {
-                self.gpu_bindings.insert(decl.name.clone());
-            }
-            self.fn_bindings.insert(decl.name.clone());
-            self.owned_locals.insert(decl.name.clone());
+            self.check_initializer(decl, consumed);
+            consumed.remove(decl.name.as_str());
+            self.bind_declared_name(decl);
         }
+    }
+
+    /// Check `decl`'s initializer; one that names a resource, or a gpu
+    /// binding bound to another gpu binding, moves it to the new binding.
+    fn check_initializer(
+        &mut self,
+        decl: &crate::ast::statement::VariableDeclaration,
+        consumed: &mut Consumed,
+    ) {
+        let Some(init) = &decl.initializer else {
+            return;
+        };
+        self.check_expr(init, consumed);
+        let ExpressionKind::Identifier(src, _) = &init.node else {
+            return;
+        };
+        let gpu_move = decl.residency == BindingResidency::Gpu && self.gpu_bindings.contains(src);
+        if !gpu_move && !self.is_resource_expr(init) {
+            return;
+        }
+        let by_fn = if gpu_move {
+            format!("move to gpu binding '{}'", decl.name)
+        } else {
+            format!("assignment to '{}'", decl.name)
+        };
+        let info = ConsumedInfo {
+            by_fn,
+            at_span: init.span,
+            chain: vec![],
+        };
+        consumed.insert(src.clone(), info);
+        if self.hands_on_its_reference(init) {
+            self.consumed_arguments.expressions.insert(init.id);
+        }
+    }
+
+    /// Record `decl`'s name as a binding of the scope being analysed.
+    fn bind_declared_name(&mut self, decl: &crate::ast::statement::VariableDeclaration) {
+        if decl.residency == BindingResidency::Gpu {
+            self.gpu_bindings.insert(decl.name.clone());
+        }
+        self.fn_bindings.insert(decl.name.clone());
+        self.owned_locals.insert(decl.name.clone());
     }
 
     fn check_if_stmt(
@@ -283,54 +478,134 @@ impl<'a> UseAfterMoveChecker<'a> {
         if let Some(e) = else_ {
             self.check_stmt(e, &mut else_consumed);
         }
-        *consumed = then_consumed
-            .into_iter()
-            .filter(|(k, _)| else_consumed.contains_key(k))
-            .collect();
+        let arms = [
+            (then_consumed, self.finishes(then)),
+            (else_consumed, else_.is_none_or(|e| self.finishes(e))),
+        ];
+        *consumed = join_arms(consumed, arms);
     }
 
-    /// Check a loop's body, then again from the state its first pass leaves,
-    /// since the next iteration starts there: a resource the body consumes and
-    /// uses again is used after it was consumed on the pass before.
-    ///
-    /// Only the second pass's new use-after-consume errors are kept; anything
-    /// else it reports the first pass already did. A body that can leave the
-    /// loop (`break`, `return`) may consume a resource on its way out, which no
-    /// next pass sees, so it is checked once.
-    fn check_loop_body(
+    /// Whether control can reach the end of `stmt`.
+    fn finishes(&self, stmt: &Statement) -> bool {
+        !self.flow.never_finishes(stmt)
+    }
+
+    /// Record the state at a `break` or `continue` with the innermost loop.
+    fn note_loop_exit(
         &mut self,
-        body: &Statement,
-        loop_variables: &HashSet<String>,
-        consumed: &mut HashMap<String, ConsumedInfo>,
+        consumed: &Consumed,
+        jumps: impl FnOnce(&mut LoopExits) -> &mut Vec<Consumed>,
     ) {
-        let before: HashSet<String> = consumed.keys().cloned().collect();
-        self.check_stmt(body, consumed);
-        let consumed_this_pass = consumed.keys().any(|name| !before.contains(name));
-        if !consumed_this_pass || can_leave_the_loop(body) {
-            return;
+        if let Some(exits) = self.loop_exits.last_mut() {
+            jumps(exits).push(consumed.clone());
         }
-        let (errors_before, warnings_before) = (self.errors.len(), self.warnings.len());
-        // A name the body declares is bound afresh on every pass, so what the
-        // first pass consumed of it does not carry into the next.
-        let mut next_pass = consumed.clone();
+    }
+
+    /// A `while` or `until` tests its condition before every pass, a
+    /// `do … while` after every pass.
+    fn check_while_stmt(
+        &mut self,
+        cond: &Expression,
+        body: &Statement,
+        kind: &WhileStatementType,
+        consumed: &mut Consumed,
+    ) {
+        let pass = match kind {
+            WhileStatementType::While | WhileStatementType::Until | WhileStatementType::Forever => {
+                LoopPass {
+                    leading: Some(cond),
+                    body,
+                    trailing: None,
+                }
+            }
+            WhileStatementType::DoWhile | WhileStatementType::DoUntil => LoopPass {
+                leading: None,
+                body,
+                trailing: Some(cond),
+            },
+        };
+        self.check_loop(pass, &HashSet::new(), consumed);
+    }
+
+    /// Check one pass of a loop, then the next pass again from the state it
+    /// starts in: what the first pass consumed on every path that goes on,
+    /// the end of the body or a `continue`. A resource the loop consumes and
+    /// uses again is used after it was consumed on the pass before. A pass
+    /// that leaves the loop (`break`, `return`) right after consuming starts
+    /// no next pass.
+    ///
+    /// After the loop, what was consumed on any path out of it is consumed:
+    /// a failed condition, the end of a pass that goes on, or a `break`.
+    /// Only the second pass's new use-after-consume errors are kept; anything
+    /// else it reports the first pass already did.
+    fn check_loop(
+        &mut self,
+        pass: LoopPass<'_>,
+        loop_variables: &HashSet<String>,
+        consumed: &mut Consumed,
+    ) {
+        let before = std::mem::take(consumed);
         let mut declared: Vec<String> = loop_variables.iter().cloned().collect();
-        names_declared_in(body, &mut declared);
-        for name in &declared {
-            if !before.contains(name) {
-                next_pass.remove(name);
+        names_declared_in(pass.body, &mut declared);
+        declared.retain(|name| !before.contains_key(name));
+        let PassOutcome { mut next, leaves } = self.check_pass(pass, before.clone());
+        if let Some(next) = next.as_mut() {
+            forget_names(next, &declared);
+            if !self.rechecking && next.keys().any(|name| !before.contains_key(name)) {
+                let mut entry = next.clone();
+                merge_consumed_from(&mut entry, &before);
+                self.check_next_pass(pass, entry);
             }
         }
-        self.check_stmt(body, &mut next_pass);
+        let mut after = before;
+        for state in leaves.into_iter().chain(next) {
+            merge_consumed(&mut after, state);
+        }
+        forget_names(&mut after, &declared);
+        *consumed = after;
+    }
+
+    /// Check one pass of a loop from `state`: the leading condition, the
+    /// body, and, on the paths that go on, the trailing condition.
+    fn check_pass(&mut self, pass: LoopPass<'_>, mut state: Consumed) -> PassOutcome {
+        let mut leaves = Vec::new();
+        if let Some(test) = pass.leading {
+            self.check_expr(test, &mut state);
+            leaves.push(state.clone());
+        }
+        self.loop_exits.push(LoopExits::default());
+        self.check_stmt(pass.body, &mut state);
+        let exits = self.loop_exits.pop().unwrap_or_default();
+        leaves.extend(exits.breaks);
+        let mut going_on = exits.continues;
+        if self.finishes(pass.body) {
+            going_on.push(state);
+        }
+        let mut next = going_on.into_iter().reduce(|mut joined, state| {
+            merge_consumed(&mut joined, state);
+            joined
+        });
+        if let (Some(test), Some(next)) = (pass.trailing, next.as_mut()) {
+            self.check_expr(test, next);
+            leaves.push(next.clone());
+        }
+        PassOutcome { next, leaves }
+    }
+
+    /// Check `pass` once more from `entry`, the state a second pass starts
+    /// in, keeping only the use-after-consume errors the first pass did not
+    /// report and none of its warnings.
+    fn check_next_pass(&mut self, pass: LoopPass<'_>, entry: Consumed) {
+        let (errors_before, warnings_before) = (self.errors.len(), self.warnings.len());
+        let rechecking = std::mem::replace(&mut self.rechecking, true);
+        self.check_pass(pass, entry);
+        self.rechecking = rechecking;
         self.warnings.truncate(warnings_before);
-        let reported: HashSet<String> = self.errors[..errors_before]
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let mut seen = reported;
+        let mut seen: HashSet<_> = self.errors[..errors_before].iter().map(error_key).collect();
         let new_errors: Vec<TypeError> = self
             .errors
             .drain(errors_before..)
-            .filter(|error| seen.insert(error.to_string()))
+            .filter(|error| seen.insert(error_key(error)))
             .collect();
         self.errors.extend(new_errors);
     }
@@ -340,7 +615,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         decls: &[crate::ast::statement::VariableDeclaration],
         iter: &Expression,
         body: &Statement,
-        consumed: &mut HashMap<String, ConsumedInfo>,
+        consumed: &mut Consumed,
     ) {
         self.check_expr(iter, consumed);
         let prev_bindings = self.fn_bindings.clone();
@@ -351,16 +626,17 @@ impl<'a> UseAfterMoveChecker<'a> {
             self.owned_locals.remove(d.name.as_str());
         }
         let loop_variables: HashSet<String> = decls.iter().map(|d| d.name.clone()).collect();
-        let mut outside = consumed.clone();
+        let mut shadowed = Shadowed::new();
         for name in &loop_variables {
-            outside.remove(name);
+            shadow(&mut shadowed, name, consumed);
         }
-        self.check_loop_body(body, &loop_variables, &mut outside);
-        for (name, info) in outside {
-            if !loop_variables.contains(&name) {
-                consumed.insert(name, info);
-            }
-        }
+        let pass = LoopPass {
+            leading: None,
+            body,
+            trailing: None,
+        };
+        self.check_loop(pass, &loop_variables, consumed);
+        restore_shadowed(consumed, shadowed);
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
@@ -370,38 +646,58 @@ impl<'a> UseAfterMoveChecker<'a> {
     ///
     /// Variables declared at THIS block level (direct `StatementKind::Variable` stmts) are
     /// tracked. If a resource-typed variable is still live at the end of the block, a W0004
-    /// warning is emitted — the drop hook still runs via RC.
-    fn check_block(&mut self, stmts: &[Statement], consumed: &mut HashMap<String, ConsumedInfo>) {
+    /// warning is emitted — the drop hook still runs via RC. When the block ends, a name it
+    /// declared names the binding it shadowed again, consumed or not as that one was.
+    fn check_block(&mut self, stmts: &[Statement], consumed: &mut Consumed) {
         // A local declared in this block stops naming an owned value when the
         // block ends, and a name it shadowed names the outer binding again.
         let prev_owned = self.owned_locals.clone();
-        // Collect resource vars declared at this scope level (not in nested blocks).
-        let mut scope_resources: Vec<(String, String, Span)> = Vec::new(); // (var_name, type_name, decl_span)
-
+        let mut scope_resources: Vec<(String, String, Span)> = Vec::new();
+        let mut shadowed = Shadowed::new();
         for s in stmts {
-            if let StatementKind::Variable(decls, _) = &s.node {
-                for decl in decls {
-                    if let Some(init) = &decl.initializer {
-                        if let Some(ty) = self.types.get(&init.id) {
-                            if is_resource(&ty.kind, self.type_definitions) {
-                                if let Some(type_name) = Self::resource_type_name(&ty.kind) {
-                                    scope_resources.push((
-                                        decl.name.clone(),
-                                        type_name.to_string(),
-                                        s.span,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+            let StatementKind::Variable(decls, _) = &s.node else {
+                self.check_stmt(s, consumed);
+                continue;
+            };
+            scope_resources.extend(self.declared_resources(decls, s.span));
+            for decl in decls {
+                self.check_initializer(decl, consumed);
+                shadow(&mut shadowed, &decl.name, consumed);
+                self.bind_declared_name(decl);
             }
-            self.check_stmt(s, consumed);
         }
         self.owned_locals = prev_owned;
+        self.warn_unconsumed_resources(&scope_resources, consumed);
+        restore_shadowed(consumed, shadowed);
+    }
 
-        // At scope exit, warn for resource vars not explicitly consumed.
-        for (var_name, type_name, span) in &scope_resources {
+    /// The resources `decls` declare, each with its type's name and `span`.
+    fn declared_resources(
+        &self,
+        decls: &[crate::ast::statement::VariableDeclaration],
+        span: Span,
+    ) -> Vec<(String, String, Span)> {
+        decls
+            .iter()
+            .filter_map(|decl| {
+                let ty = self.types.get(&decl.initializer.as_ref()?.id)?;
+                if !is_resource(&ty.kind, self.type_definitions) {
+                    return None;
+                }
+                let type_name = Self::resource_type_name(&ty.kind)?;
+                Some((decl.name.clone(), type_name.to_string(), span))
+            })
+            .collect()
+    }
+
+    /// Warn for each resource of `scope_resources` its scope ends without
+    /// consuming.
+    fn warn_unconsumed_resources(
+        &mut self,
+        scope_resources: &[(String, String, Span)],
+        consumed: &Consumed,
+    ) {
+        for (var_name, type_name, span) in scope_resources {
             if !consumed.contains_key(var_name.as_str()) {
                 self.warnings.push(Diagnostic {
                     severity: Severity::Warning,
@@ -458,12 +754,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_expr(obj, consumed);
                 self.check_expr(idx, consumed);
             }
-            ExpressionKind::Conditional(cond, then, else_, _) => {
-                self.check_expr(cond, consumed);
-                self.check_expr(then, consumed);
-                if let Some(e) = else_ {
-                    self.check_expr(e, consumed);
-                }
+            ExpressionKind::Conditional(then, cond, else_, _) => {
+                self.check_conditional_expr(then, cond, else_.as_deref(), consumed)
             }
             ExpressionKind::Range(start, end_, _) => {
                 self.check_expr(start, consumed);
@@ -511,6 +803,30 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// `then if cond else else_`: the condition runs first, then one branch,
+    /// and what either branch consumed is consumed after it.
+    fn check_conditional_expr(
+        &mut self,
+        then: &Expression,
+        cond: &Expression,
+        else_: Option<&Expression>,
+        consumed: &mut Consumed,
+    ) {
+        self.check_expr(cond, consumed);
+        let mut then_consumed = consumed.clone();
+        self.check_expr(then, &mut then_consumed);
+        let mut else_consumed = consumed.clone();
+        if let Some(e) = else_ {
+            self.check_expr(e, &mut else_consumed);
+        }
+        let then_ends = !self.flow.never_ends(then);
+        let else_ends = else_.is_none_or(|e| !self.flow.never_ends(e));
+        *consumed = join_arms(
+            consumed,
+            [(then_consumed, then_ends), (else_consumed, else_ends)],
+        );
+    }
+
     fn check_each(&mut self, exprs: &[Expression], consumed: &mut HashMap<String, ConsumedInfo>) {
         for e in exprs {
             self.check_expr(e, consumed);
@@ -537,8 +853,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         for p in &lambda.params {
             self.fn_bindings.insert(p.name.clone());
         }
+        let prev_loops = std::mem::take(&mut self.loop_exits);
         let mut lambda_consumed = HashMap::new();
         self.check_stmt(&lambda.body, &mut lambda_consumed);
+        self.loop_exits = prev_loops;
         self.fn_bindings = prev_bindings;
         self.owned_locals = prev_owned;
     }
@@ -574,47 +892,52 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
+    /// Each arm starts from the state after the scrutinee. A name an arm's
+    /// pattern binds is the arm's own: unconsumed while the arm runs, and
+    /// naming the outer binding again, consumed or not as it was, after it.
     fn check_match_expr(
         &mut self,
         scrutinee: &Expression,
         branches: &[crate::ast::pattern::MatchBranch],
-        consumed: &mut HashMap<String, ConsumedInfo>,
+        consumed: &mut Consumed,
     ) {
         self.check_expr(scrutinee, consumed);
+        let arms: Vec<(Consumed, bool)> = branches
+            .iter()
+            .map(|branch| self.check_match_arm(branch, consumed))
+            .collect();
+        *consumed = join_arms(consumed, arms);
+    }
 
-        let pre_consumed = consumed.clone();
-        let mut intersection: Option<HashMap<String, ConsumedInfo>> = None;
-
-        for branch in branches {
-            let mut arm_consumed = pre_consumed.clone();
-            let prev_bindings = self.fn_bindings.clone();
-            let prev_owned = self.owned_locals.clone();
-            let mut arm_bindings = HashSet::new();
-            for pat in &branch.patterns {
-                Self::collect_pattern_bindings(pat, &mut arm_bindings);
-            }
-            self.owned_locals
-                .retain(|name| !arm_bindings.contains(name));
-            self.fn_bindings.extend(arm_bindings);
-            if let Some(guard) = &branch.guard {
-                self.check_expr(guard, &mut arm_consumed);
-            }
-            self.check_stmt(&branch.body, &mut arm_consumed);
-            self.fn_bindings = prev_bindings;
-            self.owned_locals = prev_owned;
-
-            intersection = Some(match intersection.take() {
-                None => arm_consumed,
-                Some(acc) => acc
-                    .into_iter()
-                    .filter(|(k, _)| arm_consumed.contains_key(k))
-                    .collect(),
-            });
+    /// Check one arm of a match from `before`, returning the state at its
+    /// end and whether control reaches it.
+    fn check_match_arm(
+        &mut self,
+        branch: &crate::ast::pattern::MatchBranch,
+        before: &Consumed,
+    ) -> (Consumed, bool) {
+        let mut arm_consumed = before.clone();
+        let prev_bindings = self.fn_bindings.clone();
+        let prev_owned = self.owned_locals.clone();
+        let mut arm_bindings = HashSet::new();
+        for pat in &branch.patterns {
+            Self::collect_pattern_bindings(pat, &mut arm_bindings);
         }
-
-        if let Some(result) = intersection {
-            *consumed = result;
+        let mut shadowed = Shadowed::new();
+        for name in &arm_bindings {
+            shadow(&mut shadowed, name, &mut arm_consumed);
         }
+        self.owned_locals
+            .retain(|name| !arm_bindings.contains(name));
+        self.fn_bindings.extend(arm_bindings);
+        if let Some(guard) = &branch.guard {
+            self.check_expr(guard, &mut arm_consumed);
+        }
+        self.check_stmt(&branch.body, &mut arm_consumed);
+        self.fn_bindings = prev_bindings;
+        self.owned_locals = prev_owned;
+        restore_shadowed(&mut arm_consumed, shadowed);
+        (arm_consumed, self.finishes(&branch.body))
     }
 
     fn check_call_expr(
@@ -783,7 +1106,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     fn apply_summary_to_args(
-        &self,
+        &mut self,
         args: &[Expression],
         params: &[Parameter],
         summary: &EscapeSummary,
@@ -804,7 +1127,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     fn consume_resource_args(
-        &self,
+        &mut self,
         args: &[Expression],
         params: &[Parameter],
         sink: &Sink,
@@ -828,12 +1151,25 @@ impl<'a> UseAfterMoveChecker<'a> {
             .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions))
     }
 
-    /// Marks the variable `arg` names consumed by `sink` when it is a resource;
-    /// any other value is lent and stays usable.
+    /// Whether consuming the binding `expr` names hands its reference on: its
+    /// type runs a drop hook of its own, rather than reaching the value
+    /// through a trait, which shares it.
+    fn hands_on_its_reference(&self, expr: &Expression) -> bool {
+        let Some(ty) = self.types.get(&expr.id) else {
+            return false;
+        };
+        let held_at_a_trait = matches!(&ty.kind, TypeKind::Custom(name, _)
+            if trait_declares_drop_hook(name, self.type_definitions));
+        !held_at_a_trait && runs_drop_hook(&ty.kind, self.type_definitions)
+    }
+
+    /// Marks the variable `arg` names consumed by `sink` when it is a resource,
+    /// and records the argument for lowering; any other value is lent and
+    /// stays usable.
     ///
     /// `callee_param_idx` is used for chain lookup when `sink` is a known callee name.
     fn consume_resource_arg(
-        &self,
+        &mut self,
         arg: &Expression,
         sink: &Sink,
         callee_param_idx: usize,
@@ -852,6 +1188,9 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
         if !self.is_resource_expr(ident_expr) {
             return;
+        }
+        if self.hands_on_its_reference(ident_expr) {
+            self.consumed_arguments.expressions.insert(ident_expr.id);
         }
         let chain = self.build_chain(sink, callee_param_idx);
         consumed.insert(
@@ -1186,19 +1525,11 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 }
 
-/// Whether `body` holds a `break` or `return` that leaves the loop it is the
-/// body of. A nested function or class is not part of the loop's control flow.
-fn can_leave_the_loop(body: &Statement) -> bool {
-    match &body.node {
-        StatementKind::Break | StatementKind::Return(_) => true,
-        StatementKind::Block(statements) => statements.iter().any(can_leave_the_loop),
-        StatementKind::If(_, then, else_, _) => {
-            can_leave_the_loop(then) || else_.as_deref().is_some_and(can_leave_the_loop)
-        }
-        StatementKind::While(_, inner, _) | StatementKind::For(_, _, inner) => {
-            contains_return(inner)
-        }
-        _ => false,
+/// Drop from `state` every name in `names`, bound afresh where they are
+/// declared and so never consumed outside it.
+fn forget_names(state: &mut Consumed, names: &[String]) {
+    for name in names {
+        state.remove(name);
     }
 }
 

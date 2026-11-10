@@ -50,10 +50,7 @@ impl PendingReceiver<'_> {
     pub(crate) fn read(&self, ctx: &mut LoweringContext) -> Operand {
         match &self.form {
             PendingForm::Path(path) => Operand::Copy(path.read_place(ctx, self.obj)),
-            PendingForm::Value(operand, _) => match operand {
-                Operand::Copy(place) | Operand::Move(place) => Operand::Copy(place.clone()),
-                Operand::Constant(_) | Operand::Function(_) => operand.clone(),
-            },
+            PendingForm::Value(operand, _) => operand.clone(),
         }
     }
 

@@ -144,9 +144,10 @@ fn test_a_length_replaced_between_the_comparison_and_the_switch_proves_nothing()
 #[test]
 fn test_a_length_whose_storage_ended_before_the_comparison_proves_nothing() {
     let mut body = loop_over_a_list();
-    body.basic_blocks[LOOP_HEADER]
-        .statements
-        .insert(1, statement(StatementKind::StorageDead(Place::new(LENGTH))));
+    body.basic_blocks[LOOP_HEADER].statements.insert(
+        1,
+        statement(StatementKind::storage_dead(Place::new(LENGTH))),
+    );
     assert!(proofs_of(body).is_empty());
 }
 

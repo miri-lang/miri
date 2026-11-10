@@ -100,7 +100,7 @@ fn reassign(dest: Place, rvalue: Rvalue) -> Statement {
 
 fn storage_dead(target: Place) -> Statement {
     Statement {
-        kind: StatementKind::StorageDead(target),
+        kind: StatementKind::storage_dead(target),
         span: span(),
     }
 }
@@ -127,7 +127,7 @@ fn body_with(local_tys: &[Type], arg_count: usize, statements: Vec<Statement>) -
 
 /// Run RC insertion and return the entry block's statement kinds in order.
 fn rc_statements(body: &mut Body) -> Vec<StatementKind> {
-    insert_rc(body, &mut OwnershipFacts::default());
+    insert_rc(body, &mut OwnershipFacts::default()).expect("RC insertion accepts the body");
     body.basic_blocks[0]
         .statements
         .iter()
@@ -214,7 +214,7 @@ fn test_decref_precedes_storage_dead_of_owned_managed_local() {
         rc_statements(&mut body),
         vec![
             StatementKind::DecRef(place(1)),
-            StatementKind::StorageDead(place(1)),
+            StatementKind::storage_dead(place(1)),
         ],
         "DecRef must run while the storage is still live"
     );
@@ -232,7 +232,7 @@ fn test_storage_dead_of_parameter_gets_no_decref() {
 
     assert_eq!(
         rc_statements(&mut body),
-        vec![StatementKind::StorageDead(place(1))],
+        vec![StatementKind::storage_dead(place(1))],
         "parameters are borrowed; DecRef would free the caller's allocation"
     );
 }
@@ -733,7 +733,7 @@ fn test_alias_to_scalar_gets_no_rc_ops() {
         rc_statements(&mut body),
         vec![
             StatementKind::Assign(place(2), use_copy(place(1))),
-            StatementKind::StorageDead(place(2)),
+            StatementKind::storage_dead(place(2)),
         ],
         "a name with no heap object behind it is never reference counted"
     );
@@ -756,7 +756,7 @@ fn test_auto_copy_struct_is_reference_counted() {
             StatementKind::IncRef(place(1)),
             StatementKind::Assign(place(2), use_copy(place(1))),
             StatementKind::DecRef(place(2)),
-            StatementKind::StorageDead(place(2)),
+            StatementKind::storage_dead(place(2)),
         ],
         "an aggregate that is heap-allocated must also be released"
     );
@@ -798,7 +798,7 @@ fn lowered_with_rc_and_ownership(source: &str, name: &str) -> (Body, OwnershipFa
     let Lowered { mut body, .. } =
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
     let mut ownership = OwnershipFacts::default();
-    insert_rc(&mut body, &mut ownership);
+    insert_rc(&mut body, &mut ownership).expect("RC insertion accepts the body");
     (body, ownership)
 }
 
@@ -820,7 +820,7 @@ fn rc_and_storage_statements(body: &Body) -> Vec<StatementKind> {
                 StatementKind::IncRef(_)
                     | StatementKind::DecRef(_)
                     | StatementKind::StorageLive(_)
-                    | StatementKind::StorageDead(_)
+                    | StatementKind::StorageDead(_, _)
             )
         })
         .collect()
@@ -854,7 +854,7 @@ fn every_decref_guards_its_consumer(body: &Body) -> bool {
             })
             .all(
                 |(i, target)| match block.statements.get(i + 1).map(|s| &s.kind) {
-                    Some(StatementKind::StorageDead(next)) => next == target,
+                    Some(StatementKind::StorageDead(next, _)) => next == target,
                     Some(StatementKind::Reassign(next, _)) => next == target,
                     _ => false,
                 },
@@ -1017,7 +1017,7 @@ fn unwrap_box() String:
                 projection: vec![PlaceElem::Field(0)],
             }),
             StatementKind::DecRef(place(1)),
-            StatementKind::StorageDead(place(1)),
+            StatementKind::storage_dead(place(1)),
         ],
         "the field read out is retained and the instance is released exactly once"
     );
@@ -1451,5 +1451,146 @@ fn t() bool
     assert_eq!(
         retain_and_releases(&body, local_named(&body, "row")),
         (true, 1)
+    );
+}
+
+/// A body storing its `String` local `_1` and its `int` local `_2` into the
+/// list `_3`, each passed [`miri::mir::ArgMode::Donated`], then returning.
+fn body_storing_elements() -> Body {
+    use miri::mir::ArgMode;
+    let mut body = body_with(
+        &[
+            ty(TypeKind::Void),
+            ty(TypeKind::String),
+            ty(TypeKind::Int),
+            collection("List", vec![TypeKind::String]),
+            ty(TypeKind::Void),
+        ],
+        0,
+        Vec::new(),
+    );
+    let push = |element: usize, destination: usize| TerminatorKind::Call {
+        func: Operand::runtime(
+            crate::mir::utils::runtime_callee("miri_rt_list_push"),
+            span(),
+        ),
+        args: vec![Operand::Copy(place(3)), Operand::Copy(place(element))],
+        arg_modes: vec![ArgMode::Borrowed, ArgMode::Donated],
+        arg_handles: Vec::new(),
+        flags: miri::mir::CallFlags::default(),
+        destination: place(destination),
+        target: Some(miri::mir::BasicBlock(destination - 3)),
+    };
+    body.basic_blocks[0].terminator = Some(Terminator {
+        kind: push(1, 4),
+        span: span(),
+    });
+    body.basic_blocks.push(BasicBlockData {
+        statements: Vec::new(),
+        terminator: Some(Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        }),
+        is_cleanup: false,
+    });
+    body
+}
+
+#[test]
+fn a_counted_element_a_container_keeps_is_retained_before_the_call() {
+    let mut body = body_storing_elements();
+    assert_eq!(
+        rc_statements(&mut body),
+        vec![StatementKind::IncRef(place(1))],
+        "the reference the list keeps is funded by the caller"
+    );
+}
+
+#[test]
+fn an_uncounted_element_a_container_keeps_is_not_retained() {
+    let mut body = body_storing_elements();
+    if let Some(Terminator {
+        kind: TerminatorKind::Call { args, .. },
+        ..
+    }) = &mut body.basic_blocks[0].terminator
+    {
+        args[1] = Operand::Copy(place(2));
+    }
+    assert_eq!(
+        rc_statements(&mut body),
+        Vec::<StatementKind>::new(),
+        "an int has no count to fund"
+    );
+}
+
+/// A body handing its list `_3` to the copy-on-write entry point by `arg`,
+/// passed [`miri::mir::ArgMode::Owned`] as the declaration states, then
+/// returning.
+fn body_copying_on_write(arg: Operand) -> Body {
+    use miri::mir::ArgMode;
+    let mut body = body_storing_elements();
+    body.basic_blocks[0].terminator = Some(Terminator {
+        kind: TerminatorKind::Call {
+            func: Operand::runtime(
+                crate::mir::utils::runtime_callee("miri_rt_list_cow"),
+                span(),
+            ),
+            args: vec![arg],
+            arg_modes: vec![ArgMode::Owned],
+            arg_handles: Vec::new(),
+            flags: miri::mir::CallFlags::default(),
+            destination: place(3),
+            target: Some(miri::mir::BasicBlock(1)),
+        },
+        span: span(),
+    });
+    body
+}
+
+#[test]
+fn a_receiver_moved_into_the_call_that_takes_it_over_is_not_retained() {
+    let mut body = body_copying_on_write(Operand::Move(place(3)));
+    assert_eq!(
+        rc_statements(&mut body),
+        Vec::<StatementKind>::new(),
+        "a move hands the caller's own reference over"
+    );
+}
+
+#[test]
+fn a_receiver_copied_into_the_call_that_takes_it_over_is_retained() {
+    let mut body = body_copying_on_write(Operand::Copy(place(3)));
+    assert_eq!(
+        rc_statements(&mut body),
+        vec![StatementKind::IncRef(place(3))],
+        "a copy keeps the caller's reference, so the one handed over is funded"
+    );
+}
+
+/// A donated element whose type the walk cannot resolve is refused rather
+/// than guessed: skipping its retain would let the container free a value the
+/// caller still holds.
+#[test]
+fn a_donated_element_of_an_unresolved_type_is_refused() {
+    let mut body = body_storing_elements();
+    let unknown = body.new_local(miri::mir::LocalDecl::new(
+        ty(TypeKind::Custom("Unknown".to_string(), None)),
+        span(),
+    ));
+    if let Some(Terminator {
+        kind: TerminatorKind::Call { args, .. },
+        ..
+    }) = &mut body.basic_blocks[0].terminator
+    {
+        let mut element = Place::new(unknown);
+        element.projection.push(miri::mir::PlaceElem::Field(0));
+        args[1] = Operand::Copy(element);
+    }
+    let refused = insert_rc(&mut body, &mut OwnershipFacts::default());
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|reason| reason.contains("argument 1")),
+        "{refused:?}"
     );
 }

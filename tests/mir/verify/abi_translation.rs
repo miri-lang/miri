@@ -54,6 +54,8 @@ fn main()
     let q = places.value_at(0)
     let n = ages.value_at(0)
     println(f"{first} {p.x} {flags[0]} {q.y} {n}")
+    let has = ages.contains_key("ann")
+    println(f"{has}")
 "#;
 
 /// Each body of `PROGRAM` as lowered, beside the same body once both ABI
@@ -390,4 +392,62 @@ fn test_the_backend_checks_find_a_mistranslated_body() {
                 && line.contains("statement the ABI does not add")),
         "{report:?}"
     );
+}
+
+/// A body of the program, translated, whose call ending `block` looks up the
+/// whole local `key` at element position `position`.
+fn lookup_by_a_local() -> (Body, Body, usize, Place) {
+    for (_, before, after) in translated() {
+        for block in 0..before.basic_blocks.len() {
+            let Some(TerminatorKind::Call { func, args, .. }) = before.basic_blocks[block]
+                .terminator
+                .as_ref()
+                .map(|t| &t.kind)
+            else {
+                continue;
+            };
+            let Some(effect) = func.called_runtime_effect() else {
+                continue;
+            };
+            let looked_up = (effect.element_positions().into_iter())
+                .filter(|&position| !effect.stores(position))
+                .find_map(|position| match args.get(position) {
+                    Some(Operand::Copy(place)) if place.projection.is_empty() => {
+                        Some(place.clone())
+                    }
+                    _ => None,
+                });
+            if let Some(key) = looked_up {
+                return (before, after, block, key);
+            }
+        }
+    }
+    panic!("no body looks an element up by a local");
+}
+
+/// A copy of a looked-up element into a temporary is no expansion the ABI
+/// spells: only a stored element travels from a copy the pass makes.
+#[test]
+fn test_a_looked_up_element_copied_into_a_temporary_is_flagged() {
+    let (before, mut after, block, key) = lookup_by_a_local();
+    let decl = after.local_decls[key.local.0].clone();
+    let temporary = after.new_local(decl);
+    let statements = &mut after.basic_blocks[block].statements;
+    let address = (statements.iter_mut())
+        .find_map(|statement| match &mut statement.kind {
+            StatementKind::Assign(_, Rvalue::Ref(place)) if *place == key => Some(place),
+            _ => None,
+        })
+        .expect("the translation takes the key's address");
+    *address = Place::new(temporary);
+    let copy = Statement {
+        kind: StatementKind::Assign(
+            Place::new(temporary),
+            Rvalue::Use(Operand::Copy(key.clone())),
+        ),
+        span: Span::default(),
+    };
+    let at = before.basic_blocks[block].statements.len();
+    after.basic_blocks[block].statements.insert(at, copy);
+    assert_flagged(&before, &after, "not of the element");
 }

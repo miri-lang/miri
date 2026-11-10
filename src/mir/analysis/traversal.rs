@@ -55,7 +55,7 @@ pub fn address_taken(body: &Body) -> HashSet<Local> {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)

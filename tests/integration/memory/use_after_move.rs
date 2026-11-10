@@ -992,14 +992,12 @@ fn main()
     );
 }
 
-/// Consuming it on the way out of the loop leaves no next pass to use it.
-// TODO: assert the hook order exactly, "closing\nclosed 1\ndone". The handle
-// `close` returns is owned by `_closed`, whose scope ends at the `break`, but a
-// call does not yet move a consumed resource's count to the callee, so the hook
-// still runs when `h`'s scope ends.
+/// Consuming it on the way out of the loop leaves no next pass to use it. The
+/// handle `close` returns is owned by `_closed`, whose scope ends at the
+/// `break`, so the hook runs before the loop is left.
 #[test]
 fn a_resource_consumed_before_leaving_a_loop_is_accepted() {
-    assert_runs_with_output(
+    assert_heap_guard_output(
         &format!(
             "{HANDLE}\n{}",
             r#"
@@ -1014,7 +1012,7 @@ fn main()
     println("done")
 "#
         ),
-        "closing\ndone",
+        "closing\nclosed 1\ndone",
     );
 }
 
@@ -1248,5 +1246,705 @@ fn main()
     println(f"{r.x}")
 "#,
         "'r' was consumed by 'keep'",
+    );
+}
+
+/// A resource moved to another binding in one arm of an `if` may be gone
+/// after it, so a later use is refused.
+#[test]
+fn a_resource_moved_in_one_arm_is_refused_after_the_if() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    if true
+        let _k = h
+    println(f"{h.id}")
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// The same for a call that keeps it in one arm.
+#[test]
+fn a_resource_a_call_keeps_in_one_arm_is_refused_after_the_if() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    if true
+        let _closed = close(h)
+    println(f"{h.id}")
+"#
+        ),
+        "'h' was consumed by 'close' and cannot be used again",
+    );
+}
+
+/// And for a method that keeps its receiver.
+#[test]
+fn a_receiver_a_method_keeps_in_one_arm_is_refused_after_the_if() {
+    assert_compiler_error(
+        r#"
+class Token
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+    fn keep() Token
+        return self
+
+fn main()
+    let h = Token(1)
+    if true
+        let _k = h.keep()
+    println(f"{h.id}")
+"#,
+        "MER_OWN_003",
+    );
+}
+
+/// One `match` arm consuming it is enough to refuse a use after the match.
+#[test]
+fn a_resource_consumed_in_one_match_arm_is_refused_after_the_match() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn run(n int)
+    let h = Handle(1)
+    match n
+        1: println(f"{close(h).id}")
+        _: println("other")
+    println(f"{h.id}")
+
+fn main()
+    run(1)
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// An arm that consumes it and returns never reaches the use after the `if`.
+#[test]
+fn a_resource_consumed_in_an_arm_that_returns_is_usable_after_the_if() {
+    assert_heap_guard_output(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn run(flag bool, id int)
+    let h = Handle(id)
+    if flag
+        let _closed = close(h)
+        return
+    println(f"still {h.id}")
+
+fn main()
+    run(true, 1)
+    run(false, 2)
+"#
+        ),
+        "closing\nclosed 1\nstill 2\nclosed 2",
+    );
+}
+
+/// A conditional expression consuming it in one branch may consume it.
+#[test]
+fn a_resource_consumed_in_one_branch_of_a_conditional_expression_is_refused_after_it() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn run(flag bool)
+    let h = Handle(1)
+    let k = close(h) if flag else Handle(2)
+    println(f"{h.id} {k.id}")
+
+fn main()
+    run(true)
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// Each branch of a conditional expression consuming it once is one consume
+/// per path, not two.
+#[test]
+fn a_resource_consumed_in_both_branches_of_a_conditional_expression_is_accepted() {
+    assert_heap_guard_output(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn run(flag bool)
+    let h = Handle(1)
+    let k = close(h) if flag else close(h)
+    println(f"got {k.id}")
+
+fn main()
+    run(true)
+"#
+        ),
+        "closing\ngot 1\nclosed 1",
+    );
+}
+
+/// A loop that can leave through a `break` elsewhere still runs again after
+/// a pass that consumed it without leaving.
+#[test]
+fn a_resource_consumed_on_a_pass_that_continues_is_refused_in_a_loop_that_can_break() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 2
+        if i == 5
+            break
+        let _closed = close(h)
+        i = i + 1
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// A `continue` carries what its pass consumed into the next pass.
+#[test]
+fn a_resource_consumed_before_a_continue_is_refused_on_the_next_pass() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 2
+        i = i + 1
+        if i == 1
+            let _closed = close(h)
+            continue
+        println(f"{h.id}")
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// Consumed on the way out of the loop, it is gone after the loop.
+#[test]
+fn a_resource_consumed_before_a_break_is_refused_after_the_loop() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 2
+        if i == 0
+            let _closed = close(h)
+            break
+        i = i + 1
+    println(f"{h.id}")
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// A block's own binding of a name ends with the block: the outer binding it
+/// shadowed is consumed after the block exactly when it was before it.
+#[test]
+fn a_shadowing_binding_leaves_the_outer_bindings_consumption_alone() {
+    assert_compiler_error(
+        &format!(
+            "{HANDLE}\n{}",
+            r#"
+fn main()
+    let h = Handle(1)
+    let _k = h
+    if true
+        let h = Handle(2)
+        println(f"{h.id}")
+    println(f"{h.id}")
+"#
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// The `HANDLE` program followed by `program`.
+fn with_handle(program: &str) -> String {
+    format!("{HANDLE}\n{program}")
+}
+
+/// A `while` condition runs again before every pass, so a resource it
+/// consumes is gone when it runs the second time.
+#[test]
+fn a_resource_consumed_by_a_while_condition_is_refused_on_the_next_pass() {
+    assert_compiler_error(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while close(h).id > i
+        i = i + 1
+    println("done")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// The right operand of `and` consumes on every pass that reaches it.
+#[test]
+fn a_resource_consumed_in_a_while_conditions_right_operand_is_refused() {
+    assert_compiler_error(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 3 and close(h).id > 0
+        i = i + 1
+    println("done")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// A condition that only reads the resource runs on every pass.
+#[test]
+fn a_while_condition_that_only_reads_a_resource_is_accepted() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(2)
+    var i = 0
+    while h.id > i
+        i = i + 1
+    println(f"done {i}")
+"#,
+        ),
+        "done 2\nclosed 2",
+    );
+}
+
+/// A `for` evaluates its iterable once, so reading a resource there is
+/// accepted however many passes the loop makes.
+#[test]
+fn a_for_iterable_is_evaluated_once() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(3)
+    for i in 0..h.id
+        println(f"{i}")
+    println("done")
+"#,
+        ),
+        "0\n1\n2\ndone\nclosed 3",
+    );
+}
+
+/// A match arm's binding of a name is the arm's own: consuming it leaves the
+/// outer binding of the same name alone.
+// TODO: assert "closing\nclosed 2\n1\nclosed 1". The type checker leaves the
+// outer `h` owned, but lowering does not release a payload binding the arm's
+// call consumed where `_c` goes out of scope: the option `o` still holds the
+// payload, so the hook runs when `o` is released at the end of `main`.
+#[test]
+fn a_match_arm_binding_that_shadows_a_resource_leaves_the_outer_one_alone() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    let o Handle? = Some(Handle(2))
+    match o
+        Some(h)
+            let _c = close(h)
+        None: println("none")
+    println(f"{h.id}")
+"#,
+        ),
+        "closing\n1\nclosed 2\nclosed 1",
+    );
+}
+
+/// `if let` binds its name the same way a match arm does.
+// TODO: assert "closing\nclosed 2\n1\nclosed 1". The type checker leaves the
+// outer `h` owned, but lowering does not release a payload binding the arm's
+// call consumed where `_c` goes out of scope: the option `o` still holds the
+// payload, so the hook runs when `o` is released at the end of `main`.
+#[test]
+fn an_if_let_binding_that_shadows_a_resource_leaves_the_outer_one_alone() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    let o Handle? = Some(Handle(2))
+    if let Some(h) = o
+        let _c = close(h)
+    println(f"{h.id}")
+"#,
+        ),
+        "closing\n1\nclosed 2\nclosed 1",
+    );
+}
+
+/// The outer resource consumed inside an arm is consumed after the match.
+#[test]
+fn an_outer_resource_consumed_in_a_match_arm_is_refused_after_the_match() {
+    assert_compiler_error(
+        &with_handle(
+            r#"
+fn main()
+    let h = Handle(1)
+    let o Handle? = Some(Handle(2))
+    match o
+        Some(x)
+            let _c = close(h)
+        None: println("none")
+    println(f"{h.id}")
+"#,
+        ),
+        "MER_OWN_003",
+    );
+}
+
+/// Nested loops that each consume a resource of the loop around them on
+/// every pass. Checking costs one walk per loop for each loop around it,
+/// not one for every combination of passes, so twenty-four levels check
+/// well inside the budget.
+#[test]
+fn deeply_nested_loops_that_consume_check_in_bounded_time() {
+    use std::io::Write;
+    const DEPTH: usize = 24;
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+    let mut program = String::from(HANDLE);
+    program.push_str("\nfn main()\n    let r0 = Handle(0)\n");
+    for level in 1..=DEPTH {
+        let indent = "    ".repeat(level);
+        program.push_str(&format!(
+            "{indent}while true\n{indent}    let r{level} = Handle({level})\n{indent}    let _c{level} = close(r{previous})\n",
+            previous = level - 1
+        ));
+    }
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    write!(file, "{program}").unwrap();
+    let stdlib_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+    let started = std::time::Instant::now();
+    let output = crate::utils::miri_cmd()
+        .env("MIRI_STDLIB_PATH", stdlib_path)
+        .arg("check")
+        .arg(file.path())
+        .timeout(BUDGET)
+        .output()
+        .unwrap();
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        report.contains("MER_OWN_003"),
+        "expected MER_OWN_003 within {BUDGET:?}, got {:?} after {:?}:\n{report}",
+        output.status,
+        started.elapsed(),
+    );
+}
+
+/// Twelve nested loops that consume nothing check clean.
+#[test]
+fn twelve_nested_loops_that_consume_nothing_check_clean() {
+    let mut program = String::from(HANDLE);
+    program.push_str("\nfn main()\n    let h = Handle(1)\n    var n = 0\n");
+    for level in 1..=12 {
+        let indent = "    ".repeat(level);
+        program.push_str(&format!("{indent}for i{level} in 0..1\n"));
+    }
+    program.push_str(&format!("{}n = n + h.id\n", "    ".repeat(13)));
+    program.push_str("    println(f\"{n}\")\n");
+    assert_heap_guard_output(&program, "1\nclosed 1");
+}
+
+/// Programs the rule accepts: on every path that reaches the use, the
+/// resource is still owned. Each must check clean and run with this output.
+const ACCEPTED: &[(&str, &str, &str)] = &[
+    (
+        "consumed in an arm that returns, then used",
+        r#"
+fn run(flag bool)
+    let h = Handle(1)
+    if flag
+        let _c = close(h)
+        return
+    println(f"use {h.id}")
+
+fn main()
+    run(false)
+    run(true)
+"#,
+        "use 1\nclosed 1\nclosing\nclosed 1",
+    ),
+    (
+        "re-assigned after a conditional join",
+        r#"
+fn run(flag bool)
+    var h = Handle(1)
+    if flag
+        let _c = close(h)
+    h = Handle(2)
+    println(f"use {h.id}")
+
+fn main()
+    run(true)
+"#,
+        "closing\nclosed 1\nuse 2\nclosed 2",
+    ),
+    (
+        "re-assigned inside a loop body",
+        r#"
+fn main()
+    var h = Handle(1)
+    var i = 0
+    while i < 2
+        let _c = close(h)
+        h = Handle(i + 10)
+        i = i + 1
+    println(f"last {h.id}")
+"#,
+        "closing\nclosed 1\nclosing\nclosed 10\nlast 11\nclosed 11",
+    ),
+    (
+        "consumed in an arm that panics, then used",
+        r#"
+fn run(flag bool)
+    let h = Handle(1)
+    if flag
+        let _c = close(h)
+        panic("boom")
+    println(f"use {h.id}")
+
+fn main()
+    run(false)
+"#,
+        "use 1\nclosed 1",
+    ),
+    (
+        "consumed in a match arm that panics, then used",
+        r#"
+fn run(o int?)
+    let h = Handle(1)
+    match o
+        Some(n)
+            let _c = close(h)
+            panic(f"{n}")
+        None: println("none")
+    println(f"use {h.id}")
+
+fn main()
+    run(None)
+"#,
+        "none\nuse 1\nclosed 1",
+    ),
+    (
+        "a for binding and a lambda parameter shadow a consumed resource",
+        r#"
+fn main()
+    let h = Handle(1)
+    let k = h
+    for h in 0..2
+        println(f"{h}")
+    let f = fn(h int) int: h + 1
+    println(f"{f(4)} {k.id}")
+"#,
+        "0\n1\n5 1\nclosed 1",
+    ),
+    (
+        "a match guard reads the resource",
+        r#"
+fn main()
+    let h = Handle(1)
+    let o int? = Some(3)
+    match o
+        Some(n) if n > h.id: println(f"big {n}")
+        Some(n): println(f"small {n}")
+        None: println("none")
+    println(f"use {h.id}")
+"#,
+        "big 3\nuse 1\nclosed 1",
+    ),
+    (
+        "declared and consumed inside a loop body",
+        r#"
+fn main()
+    var i = 0
+    while i < 2
+        let h = Handle(i)
+        let _c = close(h)
+        i = i + 1
+    println("done")
+"#,
+        "closing\nclosed 0\nclosing\nclosed 1\ndone",
+    ),
+    (
+        "an else-if chain whose consuming arms return",
+        r#"
+fn run(n int)
+    let h = Handle(n)
+    if n == 1
+        let _c = close(h)
+        return
+    else if n == 2
+        let _c = close(h)
+        return
+    else
+        println("kept")
+    println(f"use {h.id}")
+
+fn main()
+    run(1)
+    run(2)
+    run(3)
+"#,
+        "closing\nclosed 1\nclosing\nclosed 2\nkept\nuse 3\nclosed 3",
+    ),
+    (
+        "an inner break leaves only the inner loop",
+        r#"
+fn main()
+    var i = 0
+    while i < 2
+        i = i + 1
+        let h = Handle(i)
+        while true
+            let _c = close(h)
+            break
+        println("next")
+"#,
+        "closing\nclosed 1\nnext\nclosing\nclosed 2\nnext",
+    ),
+];
+
+#[test]
+fn programs_whose_uses_are_reached_only_while_the_resource_is_owned_are_accepted() {
+    for (case, program, expected) in ACCEPTED {
+        eprintln!("case: {case}");
+        assert_heap_guard_output(&with_handle(program), expected);
+    }
+}
+
+/// Programs the rule refuses: some path consumes the resource before the use.
+const REFUSED: &[(&str, &str)] = &[
+    (
+        "consumed by the right operand of ??, then used",
+        r#"
+fn main()
+    let h = Handle(1)
+    let o Handle? = None
+    let k = o ?? close(h)
+    println(f"{k.id} {h.id}")
+"#,
+    ),
+    (
+        "consumed by the else operand of a conditional expression, then used",
+        r#"
+fn run(flag bool)
+    let h = Handle(1)
+    let k = Handle(2) if flag else close(h)
+    println(f"{k.id} {h.id}")
+"#,
+    ),
+    (
+        "consumed before an inner continue, then used on the inner loop's next pass",
+        r#"
+fn main()
+    let h = Handle(1)
+    var j = 0
+    while j < 2
+        j = j + 1
+        if j == 1
+            let _c = close(h)
+            continue
+        println(f"{h.id}")
+"#,
+    ),
+    (
+        "consumed before an inner continue, then used after the inner loop",
+        r#"
+fn main()
+    let h = Handle(1)
+    var j = 0
+    while j < 2
+        j = j + 1
+        if j == 1
+            let _c = close(h)
+            continue
+    println(f"{h.id}")
+"#,
+    ),
+    (
+        "consumed before an inner break, then consumed again on the outer loop's next pass",
+        r#"
+fn main()
+    let h = Handle(1)
+    var i = 0
+    while i < 2
+        i = i + 1
+        while true
+            let _c = close(h)
+            break
+"#,
+    ),
+];
+
+#[test]
+fn programs_that_use_a_resource_some_path_consumed_are_refused() {
+    for (case, program) in REFUSED {
+        eprintln!("case: {case}");
+        assert_compiler_error(&with_handle(program), "MER_OWN_003");
+    }
+}
+
+/// A conditional expression's branch that never ends reaches no join, the
+/// same as an `if` or `match` arm that never finishes.
+#[test]
+fn a_resource_consumed_in_a_conditional_branch_that_never_ends_is_still_owned_after_it() {
+    assert_heap_guard_output(
+        &with_handle(
+            r#"
+@diverges
+fn give_up(h Handle) Handle
+    panic(f"gave up {h.id}")
+
+fn run(flag bool)
+    let h = Handle(1)
+    let k = Handle(2) if flag else give_up(close(h))
+    println(f"{k.id} {h.id}")
+
+fn main()
+    run(true)
+"#,
+        ),
+        "2 1\nclosed 2\nclosed 1",
     );
 }

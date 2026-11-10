@@ -9,7 +9,7 @@ use super::mirrors::{HandleCarriers, MirrorChanges};
 use super::staleness::{planned_refreshes, staleness_at_body_entry, Lag, Refresh};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::syntax::Span;
-use crate::mir::body::{BindingResidency, DeviceHandleId};
+use crate::mir::body::{BindingResidency, DeviceHandleId, FlagOf};
 use crate::mir::{
     BasicBlock, Body, Discriminant, Local, LocalDecl, Operand, Place, Statement, Terminator,
     TerminatorKind,
@@ -58,7 +58,7 @@ pub fn insert_readbacks(body: &mut Body) {
     keep_flags_on_edges(body, block_ends.collect(), &flags, &carriers);
     initialize_flags(body, &flags, &carriers);
     for (&handle, &flag) in &flags {
-        body.local_decls[flag.0].stale_flag_of = Some(DeviceHandleId(handle));
+        body.local_decls[flag.0].flag_of = Some(FlagOf::Stale(DeviceHandleId(handle)));
     }
 }
 

@@ -217,7 +217,7 @@ fn held_types(body: &Body) -> impl Iterator<Item = &Type> {
                 constructed_type(rvalue)
             }
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_)
             | StatementKind::IncRef(_)

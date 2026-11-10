@@ -196,6 +196,10 @@ pub struct TypeChecker {
     /// because a later operand of the same sequence may write them; see
     /// [`body_writes`].
     pub held_operands: body_writes::HeldOperands,
+    /// The call arguments the use-after-move pass found consumed, whose
+    /// caller's reference lowering releases at the call; see
+    /// [`use_after_move::ConsumedArguments`].
+    pub consumed_arguments: use_after_move::ConsumedArguments,
     /// What each declared runtime entry point does to its arguments and its
     /// result, as its `runtime` declaration states.
     pub runtime_effects: crate::runtime_effects::RuntimeEffects,
@@ -373,6 +377,7 @@ impl TypeChecker {
             parameter_writes: body_writes::ParameterWrites::default(),
             captured_mentions: body_writes::CapturedMentions::default(),
             held_operands: body_writes::HeldOperands::default(),
+            consumed_arguments: use_after_move::ConsumedArguments::default(),
             runtime_effects: HashMap::new(),
             call_generic_mappings: HashMap::new(),
             open_generic_calls: call_instantiation::OpenGenericCalls::default(),
@@ -831,14 +836,16 @@ impl TypeChecker {
         if !self.diagnostics.is_empty() {
             return;
         }
-        let (uam_errors, uam_warnings) = use_after_move::UseAfterMoveChecker::new(
+        let findings = use_after_move::UseAfterMoveChecker::new(
+            self,
             &self.type_table.types,
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
         )
         .check_program(program);
-        self.diagnostics.extend_errors(uam_errors);
-        self.diagnostics.extend_warnings(uam_warnings);
+        self.diagnostics.extend_errors(findings.errors);
+        self.diagnostics.extend_warnings(findings.warnings);
+        self.consumed_arguments.extend(findings.consumed_arguments);
     }
 
     /// Registers every class, trait, struct and enum among `statements` as

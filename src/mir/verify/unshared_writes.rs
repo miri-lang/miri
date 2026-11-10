@@ -311,7 +311,7 @@ impl<'a> Model<'a> {
                     self.forget_non_private(facts);
                 }
             }
-            StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+            StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
                 forget_moves(facts);
                 forget_local(place.local, facts);
             }
@@ -437,7 +437,7 @@ impl<'a> Model<'a> {
             let Some(place) = arg.place() else {
                 continue;
             };
-            let is_kept = effect.taken_positions().contains(&position)
+            let is_kept = effect.handed_over_positions().contains(&position)
                 || effect.element_positions().contains(&position);
             if is_kept {
                 self.forget(place, facts);
@@ -863,7 +863,7 @@ fn shared_roots(body: &Body, ownership: &OwnershipFacts) -> HashSet<Local> {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)

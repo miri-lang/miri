@@ -17,7 +17,7 @@ use crate::runtime_fns::rt;
 use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::dispatch::{
-    collection_slot_type, conform_operand_to_collection_slot, donate_operand_to_container,
+    collection_slot_type, conform_operand_to_collection_slot, emit_call_terminator,
     lower_stored_value, ELEMENT_SLOT, MAP_VALUE_SLOT,
 };
 use crate::mir::lowering::expression::field_append::{
@@ -27,8 +27,8 @@ use crate::mir::lowering::expression::field_append::{
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::expression::unshare::TemporaryRoot;
 use crate::mir::lowering::helpers::{
-    coerce_rvalue_in, ensure_place, read_older_local_by_copy, release_coerced_source,
-    resolve_arg_type, spellings_of_one_value, wrap_for_optional_slot,
+    coerce_rvalue_in, ensure_place, release_coerced_source, resolve_arg_type,
+    spellings_of_one_value, wrap_for_optional_slot,
 };
 
 fn assign_to_identifier(
@@ -144,8 +144,7 @@ fn assign_to_var_simple(
     let rhs_ty = crate::mir::lowering::helpers::operand_value_type(ctx, &val);
 
     let rvalue = if rhs_ty.kind != lhs_ty.kind && !spellings_of_one_value(&rhs_ty, &lhs_ty) {
-        let val = read_older_local_by_copy(val.clone(), *rhs_watermark);
-        coerce_rvalue_in(ctx, val, &rhs_ty, &lhs_ty, expr.span)
+        coerce_rvalue_in(ctx, val.clone(), &rhs_ty, &lhs_ty, expr.span)
     } else {
         Rvalue::Use(val.clone())
     };
@@ -352,7 +351,7 @@ fn assign_to_member(
         let rhs_watermark = ctx.body.local_decls.len();
         let lowered = lower_expression(ctx, rhs, None)?;
         let rhs_ty = resolve_arg_type(ctx, rhs, &lowered);
-        let val = crate::mir::lowering::dispatch::move_to_copy(lowered);
+        let val = lowered;
         let written = super::unshare::lower_written_entry_place(ctx, obj)?;
         let obj_operand = match &written {
             Some(written) => Operand::Copy(written.place.clone()),
@@ -669,24 +668,10 @@ fn assign_to_member_compound(
     Ok(())
 }
 
-/// Retain a managed value a map is about to store, so the map owns a reference
-/// of its own.
-pub(crate) fn inc_ref_if_managed(
-    ctx: &mut LoweringContext,
-    op: &Operand,
-    ty: &Type,
-    expr: &Expression,
-) {
-    if ctx.is_counted(&ty.kind) {
-        if let Operand::Copy(place) | Operand::Move(place) = op {
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::IncRef(place.clone()),
-                span: expr.span,
-            });
-        }
-    }
-}
-
+/// Store `val_op` under `key_op` in the map `obj_op` through
+/// `miri_rt_map_set`. The map keeps both; the call passes them in the mode
+/// the entry point's declaration states, which is what funds the references
+/// it keeps.
 pub(crate) fn emit_map_set_call(
     ctx: &mut LoweringContext,
     obj_op: Operand,
@@ -695,23 +680,17 @@ pub(crate) fn emit_map_set_call(
     expr: &Expression,
 ) -> Result<crate::mir::Local, LoweringError> {
     let func_op = ctx.declared_runtime_operand(rt::MAP_SET, expr.span)?;
-
-    let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, expr.span), expr.span);
-
-    ctx.set_terminator(crate::mir::Terminator::new(
-        crate::mir::TerminatorKind::Call {
-            func: func_op,
-            args: vec![obj_op, key_op, val_op],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(dummy_dest),
-            target: Some(target_bb),
-        },
+    let args = vec![obj_op, key_op, val_op];
+    emit_call_terminator(
+        ctx,
+        func_op,
+        args,
+        Vec::new(),
+        Vec::new(),
+        Place::new(dummy_dest),
         expr.span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
     Ok(dummy_dest)
 }
 
@@ -752,17 +731,15 @@ fn assign_to_index_map(
 ) -> Result<Operand, LoweringError> {
     let (pending, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_watermark = ctx.body.local_decls.len();
-    let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
-    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, idx.span);
+    let (key_op, _) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
+    let key_src = key_op.place().map(|place| place.local);
     let obj_op = pending.make_own(ctx)?;
 
     // The value arrives lowered by the assignment that owns it, so it is the one
     // stored operand that never passed through `lower_stored_value`; it is read
     // at the map's own value width here instead.
-    let (val, val_ty) =
+    let (val, _) =
         conform_operand_to_collection_slot(ctx, val, val_ty, obj_ty, MAP_VALUE_SLOT, expr.span);
-
-    inc_ref_if_managed(ctx, &val, &val_ty, expr);
 
     let _dummy_dest = emit_map_set_call(ctx, obj_op, key_op, val.clone(), expr)?;
     if let Some(src) = key_src {
@@ -770,19 +747,14 @@ fn assign_to_index_map(
     }
     TemporaryRoot::release(receiver, ctx, expr.span);
 
-    let ret_val = match val {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
-
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(ret_val.clone())),
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(val)),
             span: expr.span,
         });
         Ok(Operand::Copy(d))
     } else {
-        Ok(ret_val)
+        Ok(val)
     }
 }
 
@@ -796,7 +768,7 @@ fn assign_to_index_map(
 /// of surprise one step further on.
 ///
 /// The key is lowered once and used twice: read by the lookup, which only
-/// borrows it, and donated to the store, which keeps it.
+/// borrows it, and handed to the store, which keeps it.
 #[allow(clippy::too_many_arguments)]
 fn compound_assign_to_index_map(
     ctx: &mut LoweringContext,
@@ -822,7 +794,7 @@ fn compound_assign_to_index_map(
     // combination calls — runs between that check and the store.
     let (pending, receiver) = lower_index_assign_receiver(ctx, obj, expr.span)?;
     let key_watermark = ctx.body.local_decls.len();
-    let (key_op, key_ty) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
+    let (key_op, _) = lower_stored_value(ctx, idx, obj_ty, ELEMENT_SLOT)?;
     let key_place = ensure_place(ctx, key_op, idx.span);
 
     let value_watermark = ctx.body.local_decls.len();
@@ -839,32 +811,30 @@ fn compound_assign_to_index_map(
         combine_compound_operands(ctx, &value_ty, op, old, rhs_op, expr, value_watermark)?;
     let obj_op = pending.make_own(ctx)?;
 
-    // Combining produces a value of its own, already owning the one reference
-    // the map is about to take. Donating hands that one over and releases the
-    // temp it came from, where retaining it as well would leave a count the
-    // temp has no scope to give back.
-    let (donated_key, key_src) =
-        donate_operand_to_container(ctx, Operand::Copy(key_place), key_ty, idx.span);
-    // The store keeps the value, so it is handed a reference of its own, the
-    // way the plain `m[k] = v` hands it one. The temp the combination landed in
-    // keeps the reference it already held and gives that one back at the end of
-    // its scope.
-    inc_ref_if_managed(ctx, &combined, &value_ty, expr);
-    let donated_val = combined;
-    emit_map_set_call(ctx, obj_op, donated_key, donated_val.clone(), expr)?;
-    if let Some(src) = key_src {
-        ctx.emit_temp_drop(src, key_watermark, idx.span);
-    }
+    // The store keeps the key and the value, so the call funds a reference of
+    // its own for each, the way the plain `m[k] = v` does. The key's temp and
+    // the temp the combination landed in keep the references they already
+    // held and give them back as they always would.
+    let key_src = key_place.local;
+    let stored_val = combined;
+    emit_map_set_call(
+        ctx,
+        obj_op,
+        Operand::Copy(key_place),
+        stored_val.clone(),
+        expr,
+    )?;
+    ctx.emit_temp_drop(key_src, key_watermark, idx.span);
     TemporaryRoot::release(receiver, ctx, expr.span);
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(donated_val)),
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(stored_val)),
             span: expr.span,
         });
         Ok(Operand::Copy(d))
     } else {
-        Ok(donated_val)
+        Ok(stored_val)
     }
 }
 
@@ -1007,11 +977,6 @@ fn assign_to_index_array(
 
     let mut target_place = obj_place;
     target_place.projection.push(PlaceElem::index(index_local));
-
-    let val = match val {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
 
     match op {
         crate::ast::operator::AssignmentOp::Assign => {

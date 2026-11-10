@@ -58,7 +58,7 @@ fn bind(dest: usize, param: usize) -> Statement {
 }
 
 fn storage_dead(local: usize) -> Statement {
-    stmt(StatementKind::StorageDead(place(local)))
+    stmt(StatementKind::storage_dead(place(local)))
 }
 
 fn block(statements: Vec<Statement>, kind: TerminatorKind) -> BasicBlockData {

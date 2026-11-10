@@ -178,7 +178,7 @@ fn main()
     assert_verifies_clean(&body);
     assert_eq!(readback_calls(&body), 1, "one readback site:\n{body}");
     let flags: Vec<_> = (body.local_decls.iter())
-        .filter_map(|decl| decl.stale_flag_of)
+        .filter_map(|decl| decl.stale_flag_of())
         .collect();
     assert_eq!(flags.len(), 1, "one flag:\n{body}");
     let handle = (body.local_decls.iter()).find_map(|decl| decl.device_handle);
@@ -211,7 +211,7 @@ fn main()
     assert_verifies_clean(&body);
     assert_eq!(readback_calls(&body), 1, "one readback:\n{body}");
     assert!(
-        (body.local_decls.iter()).all(|decl| decl.stale_flag_of.is_none()),
+        (body.local_decls.iter()).all(|decl| decl.stale_flag_of().is_none()),
         "no read needs a flag"
     );
 }

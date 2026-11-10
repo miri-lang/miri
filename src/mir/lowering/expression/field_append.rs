@@ -308,9 +308,7 @@ fn lower_owned_string(
 /// Whether `place` is a whole temp lowering made after `watermark` that the
 /// expression owns, which nothing but the expression reads.
 fn is_fresh_temp(ctx: &LoweringContext, place: &Place, watermark: usize) -> bool {
-    place.projection.is_empty()
-        && ctx.is_expression_temp(place.local, watermark)
-        && !ctx.is_owned_by_a_scope(place.local)
+    place.projection.is_empty() && ctx.is_released_by_expression(place.local, watermark)
 }
 
 /// Copies the string `place` holds into a new temp, which takes a reference

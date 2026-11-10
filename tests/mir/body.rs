@@ -28,7 +28,7 @@ fn test_written_place_is_an_assignment_destination_only() {
     for other in [
         StatementKind::IncRef(target.clone()),
         StatementKind::DecRef(target.clone()),
-        StatementKind::StorageDead(target),
+        StatementKind::storage_dead(target),
         StatementKind::Nop,
     ] {
         assert_eq!(statement(other).written_place(), None);

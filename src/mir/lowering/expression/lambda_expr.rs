@@ -79,7 +79,7 @@ impl Visitor for ReferencedLocals {
                 self.visit_place(place, PlaceContext::NonMutatingUse, block);
             }
             MirStatementKind::StorageLive(_)
-            | MirStatementKind::StorageDead(_)
+            | MirStatementKind::StorageDead(_, _)
             | MirStatementKind::Nop
             | MirStatementKind::ReadHeader(_) => {}
         }
@@ -364,7 +364,7 @@ fn remove_storage_markers(body: &mut Body, locals: &HashSet<Local>) {
     }
     for block in &mut body.basic_blocks {
         block.statements.retain(|stmt| {
-            if let MirStatementKind::StorageLive(place) | MirStatementKind::StorageDead(place) =
+            if let MirStatementKind::StorageLive(place) | MirStatementKind::StorageDead(place, _) =
                 &stmt.kind
             {
                 !locals.contains(&place.local)

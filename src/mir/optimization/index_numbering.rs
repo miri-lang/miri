@@ -140,7 +140,7 @@ fn candidates(body: &Body) -> Vec<Candidate> {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -170,7 +170,7 @@ fn addressed_locals(body: &Body) -> HashSet<Local> {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -192,7 +192,9 @@ fn locals_with_storage(body: &Body) -> HashSet<Local> {
 /// The local whose storage `statement` starts or ends.
 fn storage_changed(statement: &Statement) -> Option<Local> {
     match &statement.kind {
-        StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => Some(place.local),
+        StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
+            Some(place.local)
+        }
         StatementKind::Assign(..)
         | StatementKind::Reassign(..)
         | StatementKind::IncRef(_)

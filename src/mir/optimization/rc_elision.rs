@@ -54,19 +54,20 @@
 //!
 //! # Owned arguments
 //!
-//! A call passing an argument [`ArgMode::Owned`] is preceded by the retain that
-//! funds it. When the local passed dies right after the call — its first
-//! mention in the continuation is the release RC insertion emitted for it, followed
-//! by the end of its storage or a rebinding — the two cancel: the callee takes
-//! over the caller's own reference instead of a second one, and a callee that
-//! writes the value finds it unshared. See [`cancel_owned_transfers`].
+//! A call passing an argument [`crate::mir::ArgMode::Owned`], or [`crate::mir::ArgMode::Donated`] to a
+//! container that keeps it, is preceded by the retain that funds it. When the
+//! local passed dies right after the call — its first mention in the
+//! continuation is the release RC insertion emitted for it, followed by the end
+//! of its storage or a rebinding — the two cancel: the callee or the container
+//! takes over the caller's own reference instead of a second one, and a callee
+//! that writes the value finds it unshared. See [`cancel_owned_transfers`].
 
 use crate::mir::block::BasicBlock;
 use crate::mir::facts::OwnershipFacts;
 use crate::mir::place::{Local, PlaceContext};
 use crate::mir::rc::RcClassifier;
 use crate::mir::statement::{Statement, StatementKind};
-use crate::mir::terminator::{arg_mode, ArgMode, TerminatorKind};
+use crate::mir::terminator::{arg_mode, TerminatorKind};
 use crate::mir::types::MirType;
 use crate::mir::visitor::Visitor;
 use crate::mir::{Body, Operand, Place, Rvalue};
@@ -395,7 +396,7 @@ fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
 /// 1. `L` is a whole local the body owns and releases — managed, not a
 ///    parameter or a capture, holding no device buffer — whose type has no drop
 ///    hook;
-/// 2. the call passes `L` once, at an [`ArgMode::Owned`] position, and names it
+/// 2. the call passes `L` once, at a position it hands over, and names it
 ///    nowhere else: in another argument the callee would read a value the
 ///    owned side may already have freed or written;
 /// 3. the retain is the last mention of `L` before the call;
@@ -405,7 +406,9 @@ fn stored_operands_mut(rvalue: &mut Rvalue) -> &mut [Operand] {
 ///    by `StorageDead(L)` or a rebinding of `L` that does not read it.
 ///
 /// Between the call and that end `L` holds a reference the callee may have
-/// released, and nothing reads it.
+/// released, and nothing reads it. The argument is spelled `move L` in the
+/// same rewrite, so the hand-over of `L`'s own reference is written on the
+/// call and the `moved_out` verifier refuses any later read or release of it.
 ///
 /// Returns true if any pair was cancelled.
 pub fn cancel_owned_transfers(body: &mut Body, ownership: &OwnershipFacts) -> bool {
@@ -413,25 +416,58 @@ pub fn cancel_owned_transfers(body: &mut Body, ownership: &OwnershipFacts) -> bo
         return false;
     }
     let predecessors = body.predecessor_counts();
-    let mut cancelled: Vec<(usize, usize)> = (0..body.basic_blocks.len())
+    let transfers: Vec<OwnedTransfer> = (0..body.basic_blocks.len())
         .flat_map(|block| owned_transfers_from(body, ownership, block, &predecessors))
+        .collect();
+    let mut cancelled: Vec<(usize, usize)> = transfers
+        .iter()
+        .flat_map(|transfer| [transfer.retain, transfer.release])
         .collect();
     cancelled.sort_unstable();
     cancelled.dedup();
     for (block, position) in cancelled.iter().rev() {
         body.basic_blocks[*block].statements.remove(*position);
     }
-    !cancelled.is_empty()
+    for transfer in &transfers {
+        spell_as_move(body, transfer);
+    }
+    !transfers.is_empty()
 }
 
-/// The (block, statement) positions of every retain and release the call
-/// ending `block` lets cancel.
+/// One owned argument whose funding retain and dying release cancel.
+struct OwnedTransfer {
+    /// The block whose call hands the argument over.
+    block: usize,
+    /// The argument's position in the call.
+    position: usize,
+    /// The (block, statement) of the retain funding it.
+    retain: (usize, usize),
+    /// The (block, statement) of the release it dies at.
+    release: (usize, usize),
+}
+
+/// Spell the argument `transfer` cancels as a move of the local it passes.
+fn spell_as_move(body: &mut Body, transfer: &OwnedTransfer) {
+    let terminator = body.basic_blocks[transfer.block].terminator.as_mut();
+    if let Some(TerminatorKind::Call { args, .. }) =
+        terminator.map(|terminator| &mut terminator.kind)
+    {
+        if let Some(argument) = args.get_mut(transfer.position) {
+            if let Some(local) = argument.bare_local() {
+                *argument = Operand::Move(Place::new(local));
+            }
+        }
+    }
+}
+
+/// Every owned argument of the call ending `block` whose retain and release
+/// cancel.
 fn owned_transfers_from(
     body: &Body,
     ownership: &OwnershipFacts,
     block: usize,
     predecessors: &[usize],
-) -> Vec<(usize, usize)> {
+) -> Vec<OwnedTransfer> {
     let data = &body.basic_blocks[block];
     let Some(TerminatorKind::Call {
         args,
@@ -446,10 +482,9 @@ fn owned_transfers_from(
     if target.0 == block || predecessors[target.0] != 1 {
         return Vec::new();
     }
-    let mut retains = Vec::new();
-    let mut releases = Vec::new();
+    let mut transfers = Vec::new();
     for (position, arg) in args.iter().enumerate() {
-        if arg_mode(arg_modes, position) != ArgMode::Owned {
+        if !arg_mode(arg_modes, position).hands_over_reference() {
             continue;
         }
         let Some(local) = arg.bare_local() else {
@@ -471,20 +506,27 @@ fn owned_transfers_from(
             funding_retain(&data.statements, local),
             dying_release(continuation, local),
         ) {
-            retains.push((block, retain));
-            releases.push((target.0, release));
+            transfers.push(OwnedTransfer {
+                block,
+                position,
+                retain: (block, retain),
+                release: (target.0, release),
+            });
         }
     }
-    retains.into_iter().chain(releases).collect()
+    transfers
 }
 
-/// Whether any call in `body` passes an argument [`ArgMode::Owned`].
+/// Whether any call in `body` hands an argument over, passing it
+/// [`crate::mir::ArgMode::Owned`] or [`crate::mir::ArgMode::Donated`].
 fn passes_an_owned_argument(body: &Body) -> bool {
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.as_ref())
         .any(|terminator| match &terminator.kind {
-            TerminatorKind::Call { arg_modes, .. } => arg_modes.contains(&ArgMode::Owned),
+            TerminatorKind::Call { arg_modes, .. } => {
+                arg_modes.iter().any(|mode| mode.hands_over_reference())
+            }
             TerminatorKind::VirtualCall { .. }
             | TerminatorKind::GpuLaunch { .. }
             | TerminatorKind::Goto { .. }
@@ -531,7 +573,7 @@ fn dying_release(statements: &[Statement], local: Local) -> Option<usize> {
     }
     let (_, next) = mentioning.next()?;
     let ends_value = match &next.kind {
-        StatementKind::StorageDead(p) => *p == whole,
+        StatementKind::StorageDead(p, _) => *p == whole,
         StatementKind::Reassign(p, rvalue) => {
             *p == whole && !mentions(local, |mention| mention.visit_rvalue(rvalue, BasicBlock(0)))
         }

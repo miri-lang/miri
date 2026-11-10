@@ -179,7 +179,7 @@ fn may_share(body: &Body, found: &NaturalLoop, local: Local) -> bool {
                 StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
                 | StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
+                | StatementKind::StorageDead(_, _)
                 | StatementKind::Nop
                 | StatementKind::ReadHeader(_) => {}
             }
@@ -237,7 +237,8 @@ fn whole_locals_asked(body: &Body) -> BTreeMap<usize, Vec<(usize, Question)>> {
 }
 
 /// The whole local `terminator` asks about, and how: a copy-on-write call
-/// on it, or a uniqueness check of it.
+/// on it, or a uniqueness check of it. The callee's declared effect and the
+/// place it is handed decide, never how the argument is spelled.
 fn asked_whole_local(terminator: &Terminator) -> Option<(Local, Question)> {
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return None;
@@ -246,18 +247,14 @@ fn asked_whole_local(terminator: &Terminator) -> Option<(Local, Question)> {
     let [argument] = args.as_slice() else {
         return None;
     };
-    let question = match argument {
-        Operand::Move(_) if effect.is_copy_on_write() => Question::CopyOnWrite,
-        Operand::Copy(_) | Operand::Move(_) if effect.asks_whether_shared() => Question::IsShared,
-        Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) | Operand::Function(_) => {
-            return None;
-        }
+    let question = if effect.is_copy_on_write() {
+        Question::CopyOnWrite
+    } else if effect.asks_whether_shared() {
+        Question::IsShared
+    } else {
+        return None;
     };
-    let place = argument.place()?;
-    place
-        .projection
-        .is_empty()
-        .then_some((place.local, question))
+    argument.bare_local().map(|local| (local, question))
 }
 
 /// Whether every call in `found` is a question about a whole local `asked`
@@ -363,7 +360,7 @@ fn is_written_only_by_its_questions(body: &Body, found: &NaturalLoop, local: Loc
                 StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => {
                     place.local != local || !place.projection.is_empty()
                 }
-                StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+                StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
                     place.local != local
                 }
                 StatementKind::IncRef(_)
@@ -428,17 +425,13 @@ fn make_own_before(body: &mut Body, loops: &[NaturalLoop], header: usize, local:
     let handed_back = body.new_local(LocalDecl::new(ty, span));
     let ask = BasicBlock(body.basic_blocks.len());
     let write_back = BasicBlock(ask.0 + 1);
+    let func = Operand::runtime(cow.callee(), span);
     body.basic_blocks
-        .push(BasicBlockData::new(Some(Terminator::new(
-            TerminatorKind::Call {
-                func: Operand::runtime(cow.callee(), span),
-                args: vec![Operand::Move(Place::new(local))],
-                arg_modes: Vec::new(),
-                arg_handles: Vec::new(),
-                flags: crate::mir::CallFlags::default(),
-                destination: Place::new(handed_back),
-                target: Some(write_back),
-            },
+        .push(BasicBlockData::new(Some(Terminator::runtime_call(
+            func,
+            vec![Operand::Move(Place::new(local))],
+            Place::new(handed_back),
+            Some(write_back),
             span,
         ))));
     let mut back = BasicBlockData::new(Some(Terminator::new(

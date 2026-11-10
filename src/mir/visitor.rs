@@ -81,7 +81,7 @@ pub trait Visitor {
             StatementKind::StorageLive(place) => {
                 self.visit_place(place, PlaceContext::StorageLive, block);
             }
-            StatementKind::StorageDead(place) => {
+            StatementKind::StorageDead(place, _) => {
                 self.visit_place(place, PlaceContext::StorageDead, block);
             }
             StatementKind::Nop => {}
@@ -297,7 +297,7 @@ pub trait MutVisitor {
             StatementKind::StorageLive(place) => {
                 self.visit_place(place, PlaceContext::StorageLive, block);
             }
-            StatementKind::StorageDead(place) => {
+            StatementKind::StorageDead(place, _) => {
                 self.visit_place(place, PlaceContext::StorageDead, block);
             }
             StatementKind::Nop => {}

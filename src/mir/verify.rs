@@ -25,7 +25,9 @@
 //! | MIR event | Effect on the delta |
 //! |---|---|
 //! | `StorageLive(x)` | `d(x) := unwritten` |
-//! | `StorageDead(x)` | leak if `d(x) > 0`; then `d(x) := ⊥` |
+//! | `StorageDead(x, _)`, where `x`'s scope ends or where it is consumed | leak if `d(x) > 0`; then `d(x) := ⊥` |
+//! | `flag = true` / `flag = false` on a drop flag | the paths take the flag's new value; see below |
+//! | the edge a switch on a drop flag leaves along | taken only by the paths whose flag holds the value leading there |
 //! | `IncRef(p)` | `d(p) += 1`, unless something downstream claims it — see below |
 //! | `DecRef(p)` | `d(p) -= 1`; double-release below zero, no-op while unwritten |
 //! | `Dealloc(p)` | `d(p)` must be exactly 1, then `d(p) -= 1`; over-specialization error otherwise |
@@ -33,7 +35,7 @@
 //! | a bare-local `Move(p)` inside a `Use` or a `Cast` | `d(p) -= 1`; double-release if `p` owns none |
 //! | a bare-local `Move(p)` operand of an aggregate holding references | `d(p) -= 1`; a retain before it pays for `p` itself |
 //! | call destination | `d(dest) += 1`, unless the callee hands back a borrow |
-//! | an argument the callee takes ownership of — a runtime intrinsic's taken position, or one passed `ArgMode::Owned` | `d(p) -= 1` |
+//! | an argument the callee takes ownership of — a runtime entry point's taken position, or one passed `ArgMode::Owned` to a function of the program | `d(p) -= 1` |
 //! | entry to a body | each parameter it takes over (`OwnershipFacts::owned_params`) owns 1; every other parameter is the caller's and untracked |
 //! | a call that never returns | the path stops; nothing is carried into its successor |
 //! | `Return` | every tracked local must own nothing |
@@ -61,9 +63,21 @@
 //! recorded on the callee ([`Operand::called_runtime_effect`]). A container insertion keeps
 //! what it is handed; a copy-on-write entry point takes its receiver over; a failure
 //! reporter never returns; map indexing hands back a borrow of an entry the map
-//! still owns. On its own [`Operand::Move`] is a uniqueness witness for
-//! copy-on-write, never a statement about ownership — reading it as one consumes a
-//! local at every comparison it appears in.
+//! still owns. An [`Operand::Move`] hands the place's reference on: whatever
+//! wrote it deleted or re-bound the source's own release in the same rewrite,
+//! and `moved_out` refuses any read or release of the source until something
+//! re-binds it. This verifier credits the hand-off to the destination of a
+//! plain use; an operator or an aggregate builds a value of its own from its
+//! operands, and is counted by the rules for what it builds.
+//!
+//! **A drop flag is followed, not trusted.** The state is kept apart for
+//! each combination of values the body's drop flags may hold, followed from
+//! their constant writes ([`drop_flags`]), and an edge a switch on a flag
+//! leaves along carries only the states whose flag leads there; a flag whose
+//! value is not known sends every state both ways. Every write to a flag is
+//! held to where it may sit: set right after its binding is bound whole,
+//! cleared right after its storage ends or on entry, and only ever with a
+//! constant.
 //!
 //! **A `Cast` re-spells a type without touching the value**, so it carries across
 //! whatever the read it wraps produced, and a local that keeps holding that value
@@ -106,6 +120,7 @@ use crate::mir::terminator::TerminatorKind;
 use crate::mir::terminator::{arg_mode, ArgMode};
 use crate::mir::visitor::Visitor;
 use crate::mir::{BasicBlock, Body, ExecutionModel, FunctionConstant, Local, Statement};
+use drop_flags::{DropFlags, Partitioned};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
@@ -113,9 +128,11 @@ mod abi_translation;
 mod borrow_reach;
 mod bound_names;
 mod callee_effects;
+mod drop_flags;
 mod in_bounds;
 mod lent_arguments;
 mod local_borrows;
+mod moved_out;
 mod optional_representation;
 mod optional_slots;
 mod parameter_writes;
@@ -133,6 +150,7 @@ pub use callee_effects::HarmlessCallees;
 pub use in_bounds::verify_in_bounds;
 pub use lent_arguments::verify_lent_arguments;
 pub use local_borrows::verify_local_borrows;
+pub use moved_out::verify_moved_out;
 pub use optional_representation::{verify_optional_call_layouts, verify_optional_representation};
 pub use optional_slots::verify_optional_slots;
 pub use parameter_writes::verify_parameter_writes;
@@ -310,20 +328,27 @@ pub fn verify_body_with_harmless_calls(
     violations.extend(parameter_writes::verify_parameter_writes(body, ownership));
     flag_decref_on_params(body, ownership, &managed_params, &mut violations);
 
-    let fixpoint = run_to_fixpoint(body, ownership, &tracked, &reachable);
-    report_path_findings(
+    violations.extend(drop_flags::flag_write_violations(body));
+    let walk = Walk {
         body,
-        &tracked,
-        &reachable,
-        &fixpoint.entries,
-        &mut violations,
-    );
-    report_join_divergences(body, &reachable, &tracked, &fixpoint.exits, &mut violations);
+        tracked: &tracked,
+        flags: DropFlags::of(body),
+    };
+    let fixpoint = run_to_fixpoint(&walk, ownership, &reachable);
+    report_path_findings(&walk, &reachable, &fixpoint.entries, &mut violations);
+    report_join_divergences(&walk, &reachable, &fixpoint.exits, &mut violations);
     violations
 }
 
 /// Every call whose argument modes disagree with the parameters its callee
-/// takes over, paired with the function making it.
+/// takes over or keeps, paired with the function making it.
+///
+/// A runtime entry point keeps exactly the positions its declaration stores
+/// ([`crate::runtime_effects::RuntimeEffect::stores`]); a call passes those
+/// [`ArgMode::Donated`] and nothing else so. A copy-on-write or append
+/// receiver is taken over and handed back
+/// ([`crate::runtime_effects::RuntimeEffect::takes_over`]), so a call passes
+/// it [`ArgMode::Owned`].
 ///
 /// A parameter's mode is a contract between a body and every call to it: an
 /// argument passed [`ArgMode::Owned`] to a parameter the callee only borrows
@@ -454,21 +479,84 @@ impl Visitor for OwnerMentions<'_> {
     }
 }
 
-/// The violation a call raises when an argument's mode disagrees with whether
-/// its callee takes that parameter over.
+/// Who holds the reference an argument carries once its call returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    /// The caller: the callee only borrowed it.
+    Caller,
+    /// The callee, which took the parameter over and releases it.
+    Callee,
+    /// The container a runtime entry point stored it in.
+    Container,
+}
+
+impl Holder {
+    /// The holder a call passing an argument in `mode` promises.
+    fn promised_by(mode: ArgMode) -> Self {
+        match mode {
+            ArgMode::Borrowed | ArgMode::Out => Holder::Caller,
+            ArgMode::Owned => Holder::Callee,
+            ArgMode::Donated => Holder::Container,
+        }
+    }
+
+    /// How a call promising this holder passes the argument.
+    fn passing(self) -> &'static str {
+        match self {
+            Holder::Caller => "lends",
+            Holder::Callee => "hands over",
+            Holder::Container => "donates",
+        }
+    }
+
+    /// What a callee whose parameter this holder ends up with does with it.
+    fn expected(self) -> &'static str {
+        match self {
+            Holder::Caller => "only borrows it",
+            Holder::Callee => "takes it over",
+            Holder::Container => "keeps it",
+        }
+    }
+}
+
+/// The holder the callee `func` leaves the argument at `position` with: the
+/// container when a runtime entry point's declaration stores it, the callee
+/// when the declaration takes it over and hands one back (a copy-on-write or
+/// append receiver) or the program function takes it over, and the caller
+/// otherwise.
+fn declared_holder(
+    func: Option<&Operand>,
+    owned_params: Option<&[bool]>,
+    position: usize,
+) -> Holder {
+    let effect = func.and_then(Operand::called_runtime_effect);
+    let stores = effect.is_some_and(|effect| effect.stores(position));
+    let takes_over = effect.is_some_and(|effect| effect.takes_over(position))
+        || owned_params.and_then(|params| params.get(position)) == Some(&true);
+    if stores {
+        Holder::Container
+    } else if takes_over {
+        Holder::Callee
+    } else {
+        Holder::Caller
+    }
+}
+
+/// The violation a call raises when an argument's mode disagrees with who its
+/// callee leaves holding the reference.
 fn argument_mode_violation(
     body: &Body,
     kind: &TerminatorKind,
     owned: &HashMap<&Symbol, &[bool]>,
 ) -> Option<VerificationViolation> {
-    let (callee, args, modes, destination) = match kind {
+    let (func, args, modes, destination) = match kind {
         TerminatorKind::Call {
             func,
             args,
             arg_modes,
             destination,
             ..
-        } => (func.called_symbol(), args, arg_modes, destination),
+        } => (Some(func), args, arg_modes, destination),
         TerminatorKind::VirtualCall {
             args,
             arg_modes,
@@ -481,26 +569,21 @@ fn argument_mode_violation(
         | TerminatorKind::Return
         | TerminatorKind::Unreachable => return None,
     };
+    let callee = func.and_then(Operand::called_symbol);
     let owned_params = callee.and_then(|symbol| owned.get(symbol)).copied();
-    let takes_over = |position: usize| {
-        owned_params
-            .and_then(|params| params.get(position))
-            .copied()
-            .unwrap_or(false)
-    };
-    let position = (0..args.len())
-        .find(|&position| (arg_mode(modes, position) == ArgMode::Owned) != takes_over(position))?;
-    let (passed, expected) = if takes_over(position) {
-        ("lends", "takes it over")
-    } else {
-        ("hands over", "only borrows it")
-    };
+    let (position, promised, expected) = (0..args.len()).find_map(|position| {
+        let promised = Holder::promised_by(arg_mode(modes, position));
+        let expected = declared_holder(func, owned_params, position);
+        (promised != expected).then_some((position, promised, expected))
+    })?;
     let callee = callee.map_or_else(|| "a dynamic callee".to_string(), Symbol::link_name);
     Some(VerificationViolation {
         local: destination.local,
         local_name: local_display_name(body, destination.local),
         message: format!(
-            "the call to {callee} {passed} argument {position}, but the callee {expected}"
+            "the call to {callee} {} argument {position}, but the callee {}",
+            promised.passing(),
+            expected.expected()
         ),
     })
 }
@@ -636,11 +719,46 @@ fn flag_decref_on_params(
     }
 }
 
+/// What the ownership dataflow walks: the body, the locals it tracks, and the
+/// drop flags its states are kept apart by.
+struct Walk<'b> {
+    body: &'b Body,
+    tracked: &'b [Local],
+    flags: DropFlags,
+}
+
+/// Ownership deltas at one program point, kept apart by the values the drop
+/// flags hold along the paths reaching it.
+type FlowState = Partitioned<PathState>;
+
+impl Walk<'_> {
+    /// The state a block nothing reaches is analysed from: one set of paths,
+    /// owning nothing.
+    fn unentered(&self) -> FlowState {
+        Partitioned::single(self.flags.on_entry(), PathState::new())
+    }
+
+    /// `state`, the exit of block `from`, as it enters `to`.
+    fn on_edge(&self, from: usize, to: usize, state: &FlowState) -> FlowState {
+        match &self.body.basic_blocks[from].terminator {
+            Some(terminator) => state.along_edge(&self.flags, &terminator.kind, to),
+            None => state.clone(),
+        }
+    }
+}
+
+/// Join `from` into `into`; whether `into` changed.
+fn join_changed(into: &mut PathState, from: &PathState) -> bool {
+    let before = into.clone();
+    join_states(into, from);
+    *into != before
+}
+
 /// The converged ownership dataflow: each reachable block's entry state, and
 /// the state that entry leaves at the block's exit.
 struct Fixpoint {
-    entries: HashMap<usize, PathState>,
-    exits: HashMap<usize, PathState>,
+    entries: HashMap<usize, FlowState>,
+    exits: HashMap<usize, FlowState>,
 }
 
 /// Forward dataflow to a fixpoint over the reachable blocks.
@@ -653,21 +771,18 @@ struct Fixpoint {
 /// converged entry: a change to an entry always queues its block again, and a
 /// queued block reads its entry only when it is dequeued. A reachable block the
 /// walk never enters still gets an exit, computed from the empty state.
-fn run_to_fixpoint(
-    body: &Body,
-    ownership: &OwnershipFacts,
-    tracked: &[Local],
-    reachable: &[usize],
-) -> Fixpoint {
+fn run_to_fixpoint(walk: &Walk, ownership: &OwnershipFacts, reachable: &[usize]) -> Fixpoint {
+    let body = walk.body;
     let is_reachable = block_mask(body, reachable);
-    let mut entries: HashMap<usize, PathState> = HashMap::new();
-    let mut exits: HashMap<usize, PathState> = HashMap::new();
+    let mut entries: HashMap<usize, FlowState> = HashMap::new();
+    let mut exits: HashMap<usize, FlowState> = HashMap::new();
     let mut analysed = vec![false; body.basic_blocks.len()];
     let mut queued = vec![false; body.basic_blocks.len()];
     let mut worklist: VecDeque<usize> = VecDeque::new();
 
     if is_reachable.first().copied().unwrap_or(false) {
-        entries.insert(0, entry_state(ownership, tracked));
+        let entry = entry_state(ownership, walk.tracked);
+        entries.insert(0, Partitioned::single(walk.flags.on_entry(), entry));
         worklist.push_back(0);
         queued[0] = true;
     }
@@ -675,17 +790,21 @@ fn run_to_fixpoint(
     while let Some(bb) = worklist.pop_front() {
         queued[bb] = false;
         analysed[bb] = true;
-        let mut state = entries.get(&bb).cloned().unwrap_or_default();
-        run_block(body, bb, tracked, &mut state, &mut Vec::new());
+        let mut state = entries
+            .get(&bb)
+            .cloned()
+            .unwrap_or_else(|| walk.unentered());
+        run_block(walk, bb, &mut state, &mut Vec::new());
 
         for successor in followed_successors(body, bb) {
             if !is_reachable[successor] {
                 continue;
             }
-            let entry = entries.entry(successor).or_default();
-            let before = entry.clone();
-            join_states(entry, &state);
-            let changed = *entry != before;
+            let along = walk.on_edge(bb, successor, &state);
+            let entry = entries
+                .entry(successor)
+                .or_insert_with(Partitioned::unreached);
+            let changed = entry.join(&along, join_changed);
             if (changed || !analysed[successor]) && !queued[successor] {
                 worklist.push_back(successor);
                 queued[successor] = true;
@@ -696,7 +815,7 @@ fn run_to_fixpoint(
 
     for bb in reachable {
         if !exits.contains_key(bb) {
-            exits.insert(*bb, exit_state_of(body, *bb, tracked, &entries));
+            exits.insert(*bb, exit_state_of(walk, *bb, &entries));
         }
     }
     Fixpoint { entries, exits }
@@ -776,49 +895,73 @@ fn terminator_diverges(kind: &TerminatorKind) -> bool {
 }
 
 /// Exit state of a block, recomputed from its converged entry state.
-fn exit_state_of(
-    body: &Body,
-    bb: usize,
-    tracked: &[Local],
-    entries: &HashMap<usize, PathState>,
-) -> PathState {
-    let mut state = entries.get(&bb).cloned().unwrap_or_default();
-    run_block(body, bb, tracked, &mut state, &mut Vec::new());
+fn exit_state_of(walk: &Walk, bb: usize, entries: &HashMap<usize, FlowState>) -> FlowState {
+    let mut state = entries
+        .get(&bb)
+        .cloned()
+        .unwrap_or_else(|| walk.unentered());
+    run_block(walk, bb, &mut state, &mut Vec::new());
     state
 }
 
 /// Re-run each block over its converged entry state, this time raising findings.
 fn report_path_findings(
-    body: &Body,
-    tracked: &[Local],
+    walk: &Walk,
     reachable: &[usize],
-    entries: &HashMap<usize, PathState>,
+    entries: &HashMap<usize, FlowState>,
     violations: &mut Vec<VerificationViolation>,
 ) {
     for bb in reachable {
-        let mut state = entries.get(bb).cloned().unwrap_or_default();
-        run_block(body, *bb, tracked, &mut state, violations);
+        let mut state = entries.get(bb).cloned().unwrap_or_else(|| walk.unentered());
+        run_block(walk, *bb, &mut state, violations);
 
-        let returns = body.basic_blocks[*bb]
+        let returns = walk.body.basic_blocks[*bb]
             .terminator
             .as_ref()
             .is_some_and(|terminator| matches!(terminator.kind, TerminatorKind::Return));
         if !returns {
             continue;
         }
-        for local in tracked {
-            let delta = delta_of(&state, *local);
-            if delta.is_settled() || delta == Delta::Suppressed {
-                continue;
-            }
-            violations.push(VerificationViolation {
-                local: *local,
-                local_name: local_display_name(body, *local),
-                message: format!(
-                    "still owns {} reference(s) at the return in bb{}; the release is missing on this path",
-                    delta, bb
-                ),
-            });
+        let mut found = Vec::new();
+        for paths in state.states() {
+            report_leaks_at_return(walk, *bb, paths, &mut found);
+        }
+        push_unique(violations, found);
+    }
+}
+
+/// Every tracked local still owning a reference at the return ending `bb`.
+fn report_leaks_at_return(
+    walk: &Walk,
+    bb: usize,
+    state: &PathState,
+    violations: &mut Vec<VerificationViolation>,
+) {
+    for local in walk.tracked {
+        let delta = delta_of(state, *local);
+        if delta.is_settled() || delta == Delta::Suppressed {
+            continue;
+        }
+        violations.push(VerificationViolation {
+            local: *local,
+            local_name: local_display_name(walk.body, *local),
+            message: format!(
+                "still owns {} reference(s) at the return in bb{}; the release is missing on this path",
+                delta, bb
+            ),
+        });
+    }
+}
+
+/// Add each of `found` to `violations` but those already found among it: two
+/// sets of paths kept apart by their drop flags report one defect once.
+fn push_unique(violations: &mut Vec<VerificationViolation>, found: Vec<VerificationViolation>) {
+    let mut seen: Vec<(Local, String)> = Vec::new();
+    for violation in found {
+        let key = (violation.local, violation.message.clone());
+        if !seen.contains(&key) {
+            seen.push(key);
+            violations.push(violation);
         }
     }
 }
@@ -827,12 +970,12 @@ fn report_path_findings(
 /// path and stranded on the other — the shape every reference-counting seam bug
 /// takes, and the reason this analysis is path-sensitive.
 fn report_join_divergences(
-    body: &Body,
+    walk: &Walk,
     reachable: &[usize],
-    tracked: &[Local],
-    exits: &HashMap<usize, PathState>,
+    exits: &HashMap<usize, FlowState>,
     violations: &mut Vec<VerificationViolation>,
 ) {
+    let body = walk.body;
     let predecessors = reachable_predecessors(body, reachable);
     for bb in reachable {
         let Some(incoming) = predecessors.get(bb) else {
@@ -842,12 +985,15 @@ fn report_join_divergences(
             continue;
         }
 
-        let incoming_exits: Vec<(usize, &PathState)> = incoming
+        let edge_states: Vec<(usize, FlowState)> = incoming
             .iter()
-            .filter_map(|pred| exits.get(pred).map(|state| (*pred, state)))
+            .filter_map(|pred| Some((*pred, walk.on_edge(*pred, *bb, exits.get(pred)?))))
+            .collect();
+        let incoming_exits: Vec<(usize, &PathState)> = (edge_states.iter())
+            .flat_map(|(pred, state)| state.states().map(move |paths| (*pred, paths)))
             .collect();
 
-        for local in tracked {
+        for local in walk.tracked {
             if let Some(divergence) = first_divergence(&incoming_exits, *local) {
                 let (base_bb, base, other_bb, other) = divergence;
                 violations.push(VerificationViolation {
@@ -883,29 +1029,44 @@ fn first_divergence(
         .map(|(other_bb, other)| (base_bb, base, other_bb, other))
 }
 
-/// Apply every statement and then the terminator of one block to `state`.
+/// Apply every statement and then the terminator of one block to `state`,
+/// each set of paths on its own; a write to a drop flag moves each set to
+/// the flag's new value.
 fn run_block(
-    body: &Body,
+    walk: &Walk,
     bb: usize,
-    tracked: &[Local],
-    state: &mut PathState,
+    state: &mut FlowState,
     violations: &mut Vec<VerificationViolation>,
 ) {
+    let (body, tracked) = (walk.body, walk.tracked);
     let block = &body.basic_blocks[bb];
     let credits = retain_credits(&block.statements);
+    let mut found = Vec::new();
 
     for (index, stmt) in block.statements.iter().enumerate() {
         if credits.absorbed.contains(&index) {
             continue;
         }
-        apply_statement(body, stmt, tracked, state, violations);
-        if let Some(funded) = credits.funded_reads.get(&index) {
-            adjust(state, tracked, *funded, 1);
+        for paths in state.states_mut() {
+            apply_statement(body, stmt, tracked, paths, &mut found);
+            if let Some(funded) = credits.funded_reads.get(&index) {
+                adjust(paths, tracked, *funded, 1);
+            }
+        }
+        if let Some((flag, value)) = walk.flags.write_of(&stmt.kind) {
+            state.write(flag, value, join_changed);
         }
     }
 
     if let Some(terminator) = &block.terminator {
-        apply_terminator(body, &terminator.kind, tracked, state, violations);
+        for paths in state.states_mut() {
+            apply_terminator(body, &terminator.kind, tracked, paths, &mut found);
+        }
+    }
+    if state.len() > 1 {
+        push_unique(violations, found);
+    } else {
+        violations.extend(found);
     }
 }
 
@@ -988,7 +1149,7 @@ fn reader_of(statements: &[Statement], index: usize, retained: &Place) -> Option
                     return None;
                 }
             }
-            StatementKind::StorageDead(place) => {
+            StatementKind::StorageDead(place, _) => {
                 if place == retained {
                     return None;
                 }
@@ -1069,7 +1230,7 @@ fn apply_statement(
                 state.insert(place.local, Delta::Uninit);
             }
         }
-        StatementKind::StorageDead(place) => {
+        StatementKind::StorageDead(place, _) => {
             flag_leak_at_scope_end(body, place, tracked, state, violations);
         }
         // A retain whose reference is claimed elsewhere never reaches here: the
@@ -1253,9 +1414,12 @@ fn apply_terminator(
         | TerminatorKind::Unreachable => return,
     };
 
-    release_taken_args(body, func, args, tracked, state, violations);
-    for local in owned_bare_args(args, modes) {
-        release(body, &Place::new(local), tracked, state, violations);
+    if func.and_then(Operand::called_runtime_effect).is_some() {
+        release_taken_args(body, func, args, tracked, state, violations);
+    } else {
+        for local in owned_bare_args(args, modes) {
+            release(body, &Place::new(local), tracked, state, violations);
+        }
     }
 
     let borrows = func
@@ -1266,13 +1430,15 @@ fn apply_terminator(
     }
 }
 
-/// Hand over the references a call takes ownership of.
+/// Hand over the references a call to a runtime entry point takes ownership
+/// of.
 ///
-/// Which arguments those are is a property of the callee, not of how the argument
-/// is spelled: a `move` marks a value the caller will not read again, which is what
-/// makes copy-on-write safe, but it says nothing about who releases it. Reading it
-/// as ownership would consume the arguments of every call that merely builds
-/// something out of what it was given.
+/// Which arguments a runtime entry point takes over is its declaration's; the
+/// argument's spelling does not decide it. Every taken position is released
+/// here whatever mode it carries ([`verify_owned_argument_modes`] holds the
+/// mode to the record), and a call to a function of the program releases its
+/// `Owned` arguments instead ([`owned_bare_args`]), so each hand-over is
+/// released once.
 fn release_taken_args(
     body: &Body,
     func: Option<&Operand>,
@@ -1284,7 +1450,7 @@ fn release_taken_args(
     let Some(effect) = func.and_then(Operand::called_runtime_effect) else {
         return;
     };
-    for position in effect.taken_positions() {
+    for position in effect.handed_over_positions() {
         let Some(local) = args.get(position).and_then(Operand::bare_local) else {
             continue;
         };
@@ -1383,12 +1549,13 @@ fn consumed_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
     }
 }
 
-/// Locals whose reference an rvalue takes over by moving them out.
+/// Locals whose reference an rvalue hands to its destination by a `move`.
 ///
-/// Only a plain use rebinds a value; every other rvalue reads its operands to
-/// compute something and leaves them where they were. A `move` there is the
-/// uniqueness witness copy-on-write relies on, not a transfer of ownership —
-/// reading it as one would consume a local at every comparison it appears in.
+/// A plain use re-binds the moved reference to the destination, whose producer
+/// deleted or re-bound the source's release. Every other rvalue builds a value
+/// of its own from its operands, so a local it names is not counted as handed
+/// to the destination here; what an aggregate stores is counted by the rule
+/// for stores above.
 fn moved_bare_locals(rvalue: &Rvalue) -> Vec<Local> {
     match rvalue {
         Rvalue::Use(operand) => bare_local_moved(operand).into_iter().collect(),
@@ -1664,8 +1831,8 @@ fn holds_reference_counted_elements(body: &Body, kind: &crate::ast::types::TypeK
 ///
 /// Which operands are such reads is [`residency::statement_host_reads`] and
 /// [`residency::terminator_host_reads`]: every operand that reads the binding
-/// whole into a host value, a branch on its value, and the source of an upload
-/// into another binding.
+/// whole into a host value, a branch on its value, the source of an upload
+/// into another binding, and an element a call stores in a container.
 ///
 /// A read is fenced when, on every path that reaches it, something that leaves
 /// the binding's own host array agreeing with its handle's device buffer — a
@@ -1715,6 +1882,7 @@ enum HostRead {
     Operand(Local),
     Branch,
     Upload,
+    Stored,
 }
 
 impl HostRead {
@@ -1743,11 +1911,17 @@ impl HostRead {
         })
     }
 
-    /// How a terminator reads: a call reads the source of an upload, anything
-    /// else the value it branches on.
+    /// How a terminator reads: a call reads the source of an upload or an
+    /// element it stores in a container, anything else the value it branches
+    /// on.
     fn of_terminator(kind: &TerminatorKind) -> HostRead {
         match kind {
-            TerminatorKind::Call { .. } => HostRead::Upload,
+            TerminatorKind::Call { func, .. }
+                if func.called_runtime_name() == Some(residency::UPLOAD_FN) =>
+            {
+                HostRead::Upload
+            }
+            TerminatorKind::Call { .. } => HostRead::Stored,
             TerminatorKind::SwitchInt { .. }
             | TerminatorKind::VirtualCall { .. }
             | TerminatorKind::GpuLaunch { .. }
@@ -1773,6 +1947,7 @@ impl HostRead {
             ),
             HostRead::Branch => "is branched on".to_string(),
             HostRead::Upload => "is uploaded into another binding's device buffer".to_string(),
+            HostRead::Stored => "is stored as an element of a host container".to_string(),
         }
     }
 }
@@ -1912,6 +2087,13 @@ impl Fences {
 /// The handle whose flag `kind` switches on, when only the flag's clear value
 /// leads to `target`.
 fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Option<u64> {
+    let handle = stale_flag_of(body, flag_clear_on_edge(kind, target)?)?;
+    Some(handle.0)
+}
+
+/// The local `kind` switches on, when it is a whole local and only its clear
+/// value leads to `target`.
+fn flag_clear_on_edge(kind: &TerminatorKind, target: usize) -> Option<Local> {
     let TerminatorKind::SwitchInt {
         discr,
         targets,
@@ -1920,7 +2102,7 @@ fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Op
     else {
         return None;
     };
-    let handle = stale_flag_of(body, residency::whole_local(discr)?)?;
+    let flag = discr.bare_local()?;
     let only_when_clear = otherwise.0 != target
         && targets
             .iter()
@@ -1928,13 +2110,13 @@ fn cleared_flag_on_edge(body: &Body, kind: &TerminatorKind, target: usize) -> Op
     let reached_when_clear = targets
         .iter()
         .any(|(value, block)| block.0 == target && *value == Discriminant::bool_false());
-    (only_when_clear && reached_when_clear).then_some(handle.0)
+    (only_when_clear && reached_when_clear).then_some(flag)
 }
 
 /// The device handle `local` is the stale flag of, if the readback pass made
 /// it one.
 fn stale_flag_of(body: &Body, local: Local) -> Option<DeviceHandleId> {
-    body.local_decls.get(local.0)?.stale_flag_of
+    body.local_decls.get(local.0)?.stale_flag_of()
 }
 
 /// The fences on entry to every reachable block.

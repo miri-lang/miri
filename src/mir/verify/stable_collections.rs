@@ -181,7 +181,7 @@ impl<'a> RecordCheck<'a> {
                 StatementKind::Assign(..)
                 | StatementKind::Reassign(..)
                 | StatementKind::StorageLive(_)
-                | StatementKind::StorageDead(_)
+                | StatementKind::StorageDead(_, _)
                 | StatementKind::IncRef(_)
                 | StatementKind::DecRef(_)
                 | StatementKind::Dealloc(_)
@@ -286,7 +286,7 @@ impl<'a> RecordCheck<'a> {
                 self.may_run_hook(place)
                     .then(|| format!("{block} releases a value whose release may run a drop hook"))
             }
-            StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+            StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
                 (place.local == local).then(|| format!("{block} starts or ends its storage"))
             }
             StatementKind::IncRef(_) | StatementKind::Nop | StatementKind::ReadHeader(_) => None,
@@ -310,7 +310,7 @@ impl<'a> RecordCheck<'a> {
             }
             StatementKind::DecRef(place) | StatementKind::Dealloc(place) => Some(place),
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => None,
@@ -552,7 +552,7 @@ fn whole_move(statement: &Statement) -> Option<(Local, Local)> {
         StatementKind::Assign(..)
         | StatementKind::Reassign(..)
         | StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)

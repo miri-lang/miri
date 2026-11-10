@@ -13,7 +13,7 @@ use miri::mir::block::{BasicBlock, BasicBlockData};
 use miri::mir::facts::{BodyFacts, Fact, ProgramFacts, StaleFact};
 use miri::mir::passes::{
     run_body_pass, run_body_pass_with_facts, run_program_pass_with_facts, BodyPass, PassContext,
-    PassContract, PassManager, PassOrder, Step, MIR_PASSES,
+    PassContract, PassManager, PassOrder, Step, ELABORATE_DROPS, MIR_PASSES,
 };
 use miri::mir::symbol::Symbol;
 use miri::mir::Local;
@@ -51,6 +51,7 @@ const REWRITER: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 
 const READER: BodyPass = BodyPass {
@@ -59,6 +60,7 @@ const READER: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 
 #[test]
@@ -111,6 +113,7 @@ const FORGETFUL_REWRITER: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 
 /// A rewrite declaring the ownership facts still hold after it.
@@ -120,6 +123,7 @@ const PRESERVING_REWRITER: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 
 /// A pass reading the ownership facts.
@@ -129,6 +133,7 @@ const OWNERSHIP_READER: BodyPass = BodyPass {
     requires: &[Fact::Ownership],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 
 /// A rewrite recording the ownership facts afresh.
@@ -138,6 +143,7 @@ const RECORDING_REWRITER: BodyPass = BodyPass {
     requires: &[],
     records: &[Fact::Ownership],
     preserves: &[],
+    excludes: &[],
 };
 
 /// Rewrites `body` and records it, recording nothing about its facts.
@@ -248,6 +254,7 @@ const READS: BodyPass = BodyPass {
     requires: &[Fact::Ownership],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 const RECORDS: BodyPass = BodyPass {
     name: "records",
@@ -255,6 +262,7 @@ const RECORDS: BodyPass = BodyPass {
     requires: &[],
     records: &[Fact::Ownership],
     preserves: &[],
+    excludes: &[],
 };
 const REWRITES: BodyPass = BodyPass {
     name: "rewrites",
@@ -262,6 +270,7 @@ const REWRITES: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[],
+    excludes: &[],
 };
 const REWRITES_KEEPING: BodyPass = BodyPass {
     name: "rewrites_keeping",
@@ -269,6 +278,7 @@ const REWRITES_KEEPING: BodyPass = BodyPass {
     requires: &[],
     records: &[],
     preserves: &[Fact::Ownership],
+    excludes: &[],
 };
 
 fn nothing(_: &mut Body, _: &mut BodyFacts) {}
@@ -351,4 +361,50 @@ fn the_manager_runs_each_step_over_every_body_and_settles_its_facts() {
             "and its facts went stale"
         );
     }
+}
+
+#[test]
+fn reference_counting_reads_the_elaborated_drops() {
+    let steps: Vec<Step> = (MIR_PASSES.iter())
+        .filter(|step| step.pass.name != ELABORATE_DROPS.name)
+        .copied()
+        .collect();
+    assert_eq!(
+        order_of(&steps),
+        Err(PassOrder::NeverRecorded {
+            pass: "insert_rc",
+            fact: Fact::DropsElaborated
+        })
+    );
+}
+
+#[test]
+fn a_list_elaborating_drops_twice_is_refused() {
+    let elaborate = (MIR_PASSES.iter())
+        .find(|step| step.pass.name == ELABORATE_DROPS.name)
+        .copied()
+        .expect("the compiler elaborates drops");
+    assert_eq!(
+        order_of(&[elaborate, elaborate]),
+        Err(PassOrder::Repeated {
+            pass: "elaborate_drops",
+            fact: Fact::DropsElaborated
+        })
+    );
+}
+
+#[test]
+fn elaborating_the_drops_of_a_body_twice_is_refused() {
+    let mut body = returning_body();
+    let mut facts = BodyFacts::new(&body);
+    let first = run_body_pass_with_facts(&ELABORATE_DROPS, &mut body, &mut facts, |_, _| ());
+    assert_eq!(first, Ok(()));
+    let second = run_body_pass_with_facts(&ELABORATE_DROPS, &mut body, &mut facts, |_, _| ());
+    assert_eq!(
+        second,
+        Err(PassContract::Repeated(
+            "elaborate_drops",
+            Fact::DropsElaborated
+        ))
+    );
 }

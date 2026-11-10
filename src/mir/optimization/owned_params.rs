@@ -317,7 +317,7 @@ fn is_binding_target(body: &Body, param: Local, dest: &Place) -> bool {
 fn dies_in_entry_block(body: &Body, local: Local) -> bool {
     body.basic_blocks.first().is_some_and(|entry| {
         entry.statements.iter().any(|statement| {
-            matches!(&statement.kind, StatementKind::StorageDead(place) if place.local == local)
+            matches!(&statement.kind, StatementKind::StorageDead(place, _) if place.local == local)
         })
     })
 }
@@ -418,7 +418,7 @@ fn remove_discarded_copies(body: &mut Body, discarded: &HashSet<Local>) {
         let names_discarded = match &statement.kind {
             StatementKind::Assign(place, _)
             | StatementKind::Reassign(place, _)
-            | StatementKind::StorageDead(place)
+            | StatementKind::StorageDead(place, _)
             | StatementKind::StorageLive(place) => discarded.contains(&place.local),
             StatementKind::IncRef(_)
             | StatementKind::DecRef(_)

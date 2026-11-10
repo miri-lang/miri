@@ -189,7 +189,7 @@ fn statement_leaves_headers(statement: &Statement, facts: &ReleaseFacts) -> bool
             !facts.may_run_drop_hook(place)
         }
         StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::Nop
         | StatementKind::ReadHeader(_) => true,
@@ -229,7 +229,7 @@ fn releases_nothing_it_borrows(
                 place.local == local || !facts.may_hold(place, target)
             }
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => true,
@@ -267,7 +267,7 @@ fn rebinds(statement: &Statement, local: Local) -> bool {
         | StatementKind::Reassign(place, _)
         | StatementKind::DecRef(place)
         | StatementKind::Dealloc(place) => place.local == local && place.projection.is_empty(),
-        StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+        StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
             place.local == local
         }
         StatementKind::IncRef(_) | StatementKind::Nop | StatementKind::ReadHeader(_) => false,

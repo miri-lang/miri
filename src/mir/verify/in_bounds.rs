@@ -398,7 +398,7 @@ impl<'a> Check<'a> {
                     facts.extend(inside);
                 }
             }
-            StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+            StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
                 facts.retain(|fact| !fact.names(place.local.0));
             }
             StatementKind::DecRef(place) | StatementKind::Dealloc(place)
@@ -613,7 +613,9 @@ fn assigns(statement: &Statement, local: Local) -> bool {
         StatementKind::Assign(place, _)
         | StatementKind::Reassign(place, _)
         | StatementKind::StorageLive(place)
-        | StatementKind::StorageDead(place) => place.local == local && place.projection.is_empty(),
+        | StatementKind::StorageDead(place, _) => {
+            place.local == local && place.projection.is_empty()
+        }
         StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
@@ -787,7 +789,7 @@ fn whole_copy_of(statement: &Statement) -> Option<Local> {
         StatementKind::Assign(..)
         | StatementKind::Reassign(..)
         | StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)

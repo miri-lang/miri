@@ -64,9 +64,9 @@ fn test_set_literal() {
         &[
             "// s",
             "_1 = {};",
-            r#"_3 = fn miri_rt_set_add(_1, _2)"#,
-            r#"_5 = fn miri_rt_set_add(_1, _4)"#,
-            r#"_7 = fn miri_rt_set_add(_1, _6)"#,
+            r#"_2 = fn miri_rt_set_add(_1, const Integer(I8(1)))"#,
+            r#"_3 = fn miri_rt_set_add(_1, const Integer(I8(2)))"#,
+            r#"_4 = fn miri_rt_set_add(_1, const Integer(I8(3)))"#,
         ],
     );
 }
@@ -78,8 +78,8 @@ fn test_map_literal() {
         &[
             "// m",
             "_1 = {};",
-            r#"_4 = fn miri_rt_map_set(_1, _2, _3)"#,
-            r#"_7 = fn miri_rt_map_set(_1, _5, _6)"#,
+            r#"_2 = fn miri_rt_map_set(_1, const String("a"), const Integer(I8(1)))"#,
+            r#"_3 = fn miri_rt_map_set(_1, const String("b"), const Integer(I8(2)))"#,
         ],
     );
 }
@@ -195,15 +195,13 @@ fn main()
     l.push(o.amount)
 "#,
         &[
-            // The temp donated to `miri_rt_list_push` reads the projected field
-            // and must be declared at the field's type. Declaring it at the base
-            // struct's type makes reference counting treat a plain integer as a
-            // pointer, and gives codegen a pointer slot for a scalar. The item is
-            // read before the list is copied on write, so nothing runs between
-            // that check and the push.
-            "let _3: int;",
-            "_3 = _1.0;",
-            "fn miri_rt_list_push(move _2, _3)",
+            // The projected field reaches `miri_rt_list_push` as the place it is
+            // read from: reference counting and the element ABI type it by the
+            // field, so a plain integer is neither counted nor given a pointer
+            // slot. Nothing runs between the copy-on-write check and the push,
+            // which lends the list it writes, so reads it by copy.
+            "_3 = fn miri_rt_list_cow(move _2)",
+            "fn miri_rt_list_push(_2, _1.0)",
         ],
     );
 }
@@ -226,4 +224,80 @@ fn main()
             "_6 = _1.0;",
         ],
     );
+}
+
+/// Every call `body` makes to a runtime entry point, with the modes it passes
+/// and the modes the entry point's declaration states.
+fn runtime_call_modes(
+    body: &miri::mir::Body,
+) -> Vec<(String, Vec<miri::mir::ArgMode>, Vec<miri::mir::ArgMode>)> {
+    use miri::mir::terminator::arg_mode;
+    use miri::mir::{ArgMode, TerminatorKind};
+    (body.basic_blocks.iter())
+        .filter_map(|block| block.terminator.as_ref())
+        .filter_map(|terminator| match &terminator.kind {
+            TerminatorKind::Call {
+                func,
+                args,
+                arg_modes,
+                ..
+            } => {
+                let effect = func.called_runtime_effect()?;
+                let passed = (0..args.len()).map(|at| arg_mode(arg_modes, at)).collect();
+                let declared = (0..args.len())
+                    .map(|at| {
+                        if effect.stores(at) {
+                            ArgMode::Donated
+                        } else if effect.takes_over(at) {
+                            ArgMode::Owned
+                        } else {
+                            arg_mode(arg_modes, at)
+                        }
+                    })
+                    .collect();
+                let name = func.called_runtime_name().unwrap_or_default().to_string();
+                Some((name, passed, declared))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A copy-on-write entry point takes its receiver over and hands back a
+/// reference, so the call hands the receiver over rather than lending it.
+#[test]
+fn a_copy_on_write_receiver_is_handed_over() {
+    let body = crate::mir::utils::mir_lower_code(
+        "use system.collections.list\n\nfn main()\n    var l = List([1, 2])\n    let m = l\n    l.push(3)\n    println(f\"{m.length()}\")\n",
+    );
+    let calls = runtime_call_modes(&body);
+    let cow = calls.iter().find(|(name, ..)| name.ends_with("_cow"));
+    let (_, passed, _) = cow.unwrap_or_else(|| panic!("no copy-on-write call in\n{body}"));
+    assert_eq!(passed.first(), Some(&miri::mir::ArgMode::Owned), "\n{body}");
+}
+
+/// Every runtime call lowering emits passes each argument in the mode its
+/// entry point's declaration states.
+#[test]
+fn every_runtime_call_passes_its_declared_modes() {
+    let body = crate::mir::utils::mir_lower_code(
+        r#"
+use system.collections.list
+
+fn main()
+    var l = List([1, 2])
+    l.push(3)
+    l[0] = 4
+    var m = {"a": 1}
+    m["b"] = 2
+    var s = {1, 2}
+    s.add(3)
+    let t = "abc"
+    let u = f"{t}{l.length()}x"
+    println(f"{u}{t[0]}{m.length()}{s.length()}")
+"#,
+    );
+    for (name, passed, declared) in runtime_call_modes(&body) {
+        assert_eq!(passed, declared, "the call to {name} in\n{body}");
+    }
 }

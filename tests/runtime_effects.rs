@@ -121,7 +121,7 @@ fn the_receiver_check_only_reads_the_count_it_answers_for() {
     assert!(!check.is_copy_on_write());
     assert!(!check.preserves_length());
     assert!(!check.returns_copy());
-    assert!(check.taken_positions().is_empty());
+    assert!(check.handed_over_positions().is_empty());
     let question = record(rt::RC_IS_SHARED);
     assert!(question.reads_count && question.asks_whether_shared());
     assert!(!question.insists_on_unique());
@@ -177,7 +177,7 @@ fn elements_and_closures_are_not_written_in_place() {
             "{name} stores {position}"
         );
         assert!(
-            effect.taken_positions().contains(&position),
+            effect.handed_over_positions().contains(&position),
             "{name} keeps argument {position}"
         );
     }
@@ -232,7 +232,7 @@ fn readers_copies_and_count_questions_write_nothing_in_place() {
 fn a_runtime_write_keeps_nothing_it_is_handed() {
     for callee in every_runtime_record() {
         let effect = callee.effect();
-        for position in effect.taken_positions() {
+        for position in effect.handed_over_positions() {
             assert!(
                 !effect.writes_in_place(position) || effect.param(position) == ParamUse::Appends,
                 "{} both keeps and writes in place argument {position}",
@@ -316,7 +316,7 @@ fn the_string_and_io_entry_points_only_read_their_strings() {
             );
         }
         assert!(
-            effect.taken_positions().is_empty(),
+            effect.handed_over_positions().is_empty(),
             "{name} takes nothing over"
         );
     }

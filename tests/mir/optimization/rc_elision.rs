@@ -45,7 +45,8 @@ fn get_pre_elision_bodies(source: &str) -> Vec<(String, miri::mir::Body)> {
                 mut body, lambdas, ..
             } = lower_function(stmt, &result.type_checker, false, false)
                 .expect("Lowering should succeed");
-            insert_rc(&mut body, &mut OwnershipFacts::default());
+            insert_rc(&mut body, &mut OwnershipFacts::default())
+                .expect("RC insertion accepts the body");
             bodies.push((
                 Symbol::declared_function(&ModuleId::Program, &decl.name).link_name(),
                 body,
@@ -301,7 +302,7 @@ fn benchmark(items [int]) int:
         lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed");
 
     let mut ownership = OwnershipFacts::default();
-    insert_rc(&mut body, &mut ownership);
+    insert_rc(&mut body, &mut ownership).expect("RC insertion accepts the body");
     elide_rc(&mut body, &ownership);
     let (inc1, dec1) = count_all_rc_ops(&body);
 
@@ -604,7 +605,7 @@ mod owned_transfers {
     }
 
     fn storage_dead(local: usize) -> Statement {
-        stmt(StatementKind::StorageDead(place(local)))
+        stmt(StatementKind::storage_dead(place(local)))
     }
 
     fn fresh_string() -> Rvalue {
@@ -696,6 +697,39 @@ mod owned_transfers {
         );
         elide_rc(&mut rebound, &OwnershipFacts::default());
         assert_eq!(rc_ops_on_l(&rebound), 0, "{rebound}");
+    }
+
+    /// The argument the call ending bb0 passes first.
+    fn first_argument(body: &Body) -> Option<&Operand> {
+        match &body.basic_blocks[0].terminator.as_ref()?.kind {
+            TerminatorKind::Call { args, .. } => args.first(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_cancelled_hand_over_is_spelled_as_a_move() {
+        let mut dying = caller(string_ty(), handing_over(vec![decref(1), storage_dead(1)]));
+        elide_rc(&mut dying, &OwnershipFacts::default());
+        assert_eq!(
+            first_argument(&dying),
+            Some(&Operand::Move(place(1))),
+            "{dying}"
+        );
+        let clean = miri::mir::verify::verify_moved_out(&dying);
+        assert!(clean.is_empty(), "{clean:?}");
+
+        let read_after = stmt(StatementKind::Assign(
+            place(3),
+            Rvalue::Use(Operand::Copy(place(1))),
+        ));
+        let mut reading = caller(
+            string_ty(),
+            handing_over(vec![decref(1), storage_dead(1), read_after]),
+        );
+        elide_rc(&mut reading, &OwnershipFacts::default());
+        let found = miri::mir::verify::verify_moved_out(&reading);
+        assert_eq!(found.len(), 1, "the read after the hand-over: {found:?}");
     }
 
     #[test]
@@ -818,7 +852,7 @@ mod dying_sources {
     }
 
     fn storage_dead(local: usize) -> Statement {
-        stmt(StatementKind::StorageDead(place(local)))
+        stmt(StatementKind::storage_dead(place(local)))
     }
 
     fn string_ty() -> Type {

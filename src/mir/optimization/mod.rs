@@ -99,11 +99,17 @@ pub trait OptimizationPass {
 /// * `body` - The MIR function body to annotate with RC operations (mutated in place)
 /// * `ownership` - Which parameters the body takes over; the locals it
 ///   borrows are recorded here
-pub fn insert_rc(body: &mut Body, ownership: &mut OwnershipFacts) {
+///
+/// # Errors
+///
+/// Refuses a body handing a container an element whose type it cannot
+/// resolve, rather than guess whether that element is counted.
+pub fn insert_rc(body: &mut Body, ownership: &mut OwnershipFacts) -> Result<(), String> {
     if runs_on_a_gpu(body) {
-        return;
+        return Ok(());
     }
-    RcInsertion.insert(body, ownership);
+    RcInsertion.insert(body, ownership)?;
+    Ok(())
 }
 
 /// Whether `body` executes on a GPU rather than on the host.

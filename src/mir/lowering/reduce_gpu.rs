@@ -963,19 +963,19 @@ fn build_gpu_reduce_kernel(
     emit_lane_zero_output_write(&mut ctx, output_local, sdata_local, thread_idx, span);
 
     ctx.push_statement(MirStatement {
-        kind: MirStatementKind::StorageDead(Place::new(stride)),
+        kind: MirStatementKind::storage_dead(Place::new(stride)),
         span,
     });
     ctx.push_statement(MirStatement {
-        kind: MirStatementKind::StorageDead(Place::new(loop_idx)),
+        kind: MirStatementKind::storage_dead(Place::new(loop_idx)),
         span,
     });
     ctx.push_statement(MirStatement {
-        kind: MirStatementKind::StorageDead(Place::new(acc_local)),
+        kind: MirStatementKind::storage_dead(Place::new(acc_local)),
         span,
     });
     ctx.push_statement(MirStatement {
-        kind: MirStatementKind::StorageDead(Place::new(sdata_local)),
+        kind: MirStatementKind::storage_dead(Place::new(sdata_local)),
         span,
     });
 

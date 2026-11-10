@@ -107,6 +107,10 @@ enum Access {
     /// receiver in place, by the count its caller hands it
     /// (`RECEIVER_UNIQUE`).
     MayBeWritten,
+    /// Copied whole into a container a runtime entry point stores it in,
+    /// passed [`ArgMode::Donated`]: the call retains it first, so the
+    /// container's reference is its own and the value is only read.
+    Stored,
     /// Handed to a call any other way, or to a kernel launch.
     Handed,
 }
@@ -354,7 +358,8 @@ fn refuses(access: Access, writes: Writes) -> bool {
         | Access::Retained
         | Access::ProjectedRetain
         | Access::Storage
-        | Access::ReadByCallee => false,
+        | Access::ReadByCallee
+        | Access::Stored => false,
     }
 }
 
@@ -374,6 +379,7 @@ fn leaves_owner(access: Access) -> bool {
         | Access::AddressTaken
         | Access::LentToEntryCopy
         | Access::MayBeWritten
+        | Access::Stored
         | Access::Handed => false,
     }
 }
@@ -426,7 +432,7 @@ fn is_parameter(body: &Body, local: Local) -> bool {
 /// Whether `statement` ends the binding of a parameter the body is lent:
 /// its caller's reference still holds the value.
 fn ends_lent_parameter(body: &Body, ownership: &OwnershipFacts, statement: &Statement) -> bool {
-    matches!(&statement.kind, StatementKind::StorageDead(place)
+    matches!(&statement.kind, StatementKind::StorageDead(place, _)
         if place.projection.is_empty()
             && is_parameter(body, place.local)
             && !ownership.is_owned_param(place.local))
@@ -456,7 +462,7 @@ fn stays_over_range(
         let data = &body.basic_blocks[block];
         for statement in data.statements.iter().skip(from) {
             let ends = matches!(&statement.kind,
-                StatementKind::StorageDead(p) | StatementKind::Assign(p, _) if *p == Place::new(local));
+                StatementKind::StorageDead(p, _) | StatementKind::Assign(p, _) if *p == Place::new(local));
             if ends {
                 continue 'blocks;
             }
@@ -515,7 +521,7 @@ fn statement_accesses(statement: &Statement) -> Vec<(Local, Access)> {
             push_place(&mut accesses, dest, Access::Rebound, Access::WrittenThrough);
             rvalue_accesses(rvalue, &mut accesses);
         }
-        StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+        StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
             push_place(&mut accesses, place, Access::Storage, Access::Storage);
         }
         StatementKind::IncRef(place) => {
@@ -696,16 +702,17 @@ fn argument_access(runtime: Option<&RuntimeEffect>, position: usize, mode: ArgMo
     let checked_or_kept = runtime.is_some_and(|effect| {
         effect.is_copy_on_write()
             || effect.reads_count
-            || effect.taken_positions().contains(&position)
+            || effect.handed_over_positions().contains(&position)
     });
-    // A move handed to such an entry point is a uniqueness witness at most;
-    // the entry point still only reads it.
+    // Whether the argument is spelled as a copy or a move changes nothing:
+    // the entry point's declaration alone says it only reads it.
     let only_read = runtime.is_some_and(|effect| effect.only_reads(position));
     match mode {
         ArgMode::Borrowed | ArgMode::Owned | ArgMode::Out if checked_or_kept => Access::Handed,
         ArgMode::Borrowed if only_read => Access::ReadByCallee,
         ArgMode::Borrowed | ArgMode::Owned => Access::MayBeWritten,
         ArgMode::Out => Access::Handed,
+        ArgMode::Donated => Access::Stored,
     }
 }
 

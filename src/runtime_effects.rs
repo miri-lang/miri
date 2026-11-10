@@ -150,16 +150,25 @@ impl RuntimeEffect {
             .unwrap_or(ParamUse::Scalar)
     }
 
-    /// Positions whose reference the entry point takes over, in call order:
-    /// a stored element, a copy-on-write receiver, or a string append's
-    /// receiver. The caller stops owning what it passed there.
-    pub fn taken_positions(&self) -> Vec<usize> {
-        self.positions(|use_| {
-            matches!(
-                use_,
-                ParamUse::Stores(_) | ParamUse::CopiesOnWrite | ParamUse::Appends
-            )
-        })
+    /// Positions whose reference the caller hands over, in call order: each
+    /// one the entry point [`stores`](Self::stores) or
+    /// [`takes_over`](Self::takes_over). A stored element is a funded copy:
+    /// the caller pays for the one reference the container keeps, and keeps
+    /// its own. A copy-on-write or append receiver is taken: the caller's
+    /// reference goes to the entry point, which hands one back as the result.
+    pub fn handed_over_positions(&self) -> Vec<usize> {
+        (0..self.params.len())
+            .filter(|&position| self.stores(position) || self.takes_over(position))
+            .collect()
+    }
+
+    /// Whether the entry point takes the caller's reference at `position`
+    /// and hands one back as its result: a copy-on-write or append receiver.
+    pub fn takes_over(&self, position: usize) -> bool {
+        matches!(
+            self.param(position),
+            ParamUse::CopiesOnWrite | ParamUse::Appends
+        )
     }
 
     /// Whether the entry point keeps no reference to what it is handed at
@@ -175,6 +184,11 @@ impl RuntimeEffect {
     /// order: the only arguments a call to the entry point lets escape.
     pub fn stored_positions(&self) -> Vec<usize> {
         self.positions(|use_| matches!(use_, ParamUse::Stores(_)))
+    }
+
+    /// Whether the element handed at `position` is one the container keeps.
+    pub fn stores(&self, position: usize) -> bool {
+        matches!(self.param(position), ParamUse::Stores(_))
     }
 
     /// Whether the entry point writes, in place, what it is handed at

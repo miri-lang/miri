@@ -53,12 +53,17 @@ pub fn pass_elements_by_address(body: &mut Body) -> Result<(), String> {
 /// Expand each element argument of the call ending `block` into its address
 /// and byte count.
 fn pass_element_arguments(body: &mut Body, block: usize) -> Result<(), String> {
-    let Some((positions, args, span)) = element_call(body, block) else {
+    let Some((positions, stored, args, span)) = element_call(body, block) else {
         return Ok(());
     };
     let mut expanded = Vec::with_capacity(args.len() + positions.len());
     for (index, arg) in args.into_iter().enumerate() {
         if positions.contains(&index) {
+            let arg = if stored.contains(&index) {
+                copy_stored_element(body, block, arg, span)
+            } else {
+                arg
+            };
             let (address, payload) = element_address(body, block, arg, span)?;
             expanded.push(address);
             expanded.push(payload);
@@ -70,18 +75,56 @@ fn pass_element_arguments(body: &mut Body, block: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// The element positions, arguments and span of the call ending `block`, when
-/// it calls a runtime entry point that takes an element.
-fn element_call(body: &Body, block: usize) -> Option<(Vec<usize>, Vec<Operand>, Span)> {
+/// The element positions, the stored ones among them, the arguments and the
+/// span of the call ending `block`, when it calls a runtime entry point that
+/// takes an element.
+fn element_call(body: &Body, block: usize) -> Option<ElementCall> {
     let terminator = body.basic_blocks[block].terminator.as_ref()?;
     let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
         return None;
     };
-    let positions = func.called_runtime_effect()?.element_positions();
+    let effect = func.called_runtime_effect()?;
+    let positions = effect.element_positions();
     if positions.is_empty() {
         return None;
     }
-    Some((positions, args.clone(), terminator.span))
+    Some((
+        positions,
+        effect.stored_positions(),
+        args.clone(),
+        terminator.span,
+    ))
+}
+
+/// What [`element_call`] finds of a call taking an element.
+type ElementCall = (Vec<usize>, Vec<usize>, Vec<Operand>, Span);
+
+/// The element a container keeps, read into a slot of its own when it is a
+/// place of the body.
+///
+/// The address the entry point is handed then names a slot only the call
+/// reads, never a local or a field the body goes on to use: a local whose
+/// address is taken is one every later analysis must treat as written through
+/// that address, so a loop counter stored in a list would stop proving the
+/// indexes it guards. The copy is the element's bytes, read once; reference
+/// counting has already funded the reference the container keeps. A place
+/// whose type cannot be read is handed over as it is.
+fn copy_stored_element(body: &mut Body, block: usize, arg: Operand, span: Span) -> Operand {
+    let Some(place) = arg.place() else {
+        return arg;
+    };
+    let ty = if place.projection.is_empty() {
+        Some(body.local_decls[place.local.0].ty.clone())
+    } else {
+        PlaceTypes::of(body).declared(place)
+    };
+    let Some(ty) = ty else {
+        return arg;
+    };
+    let slot = body.new_local(LocalDecl::new(ty, span));
+    let read = Rvalue::Use(Operand::Copy(place.clone()));
+    push_assign(body, block, Place::new(slot), read, span);
+    Operand::Copy(Place::new(slot))
 }
 
 /// Whether the call `kind` hands `address` to a runtime entry point as the

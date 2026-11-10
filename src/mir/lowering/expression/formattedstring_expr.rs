@@ -386,22 +386,20 @@ fn emit_integer_append(
         &crate::mir::compiler_intrinsics::STRING_APPEND_INT
     };
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(crate::mir::Terminator::new(
-        crate::mir::TerminatorKind::Call {
-            func: Operand::runtime(runtime_fn.callee(), *span),
-            args: vec![
-                Operand::Move(Place::new(left)),
-                Operand::Copy(Place::new(value)),
-            ],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(result),
-            target: Some(target_bb),
-        },
+    let append = Operand::runtime(runtime_fn.callee(), *span);
+    let args = vec![
+        Operand::Move(Place::new(left)),
+        Operand::Copy(Place::new(value)),
+    ];
+    let destination = Place::new(result);
+    crate::mir::lowering::dispatch::emit_call_terminator(
+        ctx,
+        append,
+        args,
+        Vec::new(),
+        Vec::new(),
+        destination,
         *span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
     result
 }

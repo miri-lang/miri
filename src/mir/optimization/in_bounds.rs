@@ -293,7 +293,7 @@ impl<'a> Flow<'a> {
                     self.assign(place.local, rvalue, state);
                 }
             }
-            StatementKind::StorageLive(place) | StatementKind::StorageDead(place) => {
+            StatementKind::StorageLive(place) | StatementKind::StorageDead(place, _) => {
                 state.retain(|fact| !fact.mentions(place.local.0));
             }
             StatementKind::DecRef(place) | StatementKind::Dealloc(place) => {

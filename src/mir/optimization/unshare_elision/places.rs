@@ -158,7 +158,7 @@ fn candidates<'a>(body: &'a Body, asked: &'a [&'a Place]) -> impl Iterator<Item 
                 may_be_fresh(rvalue).then_some(place)
             }
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -265,7 +265,7 @@ fn referenced_places(body: &Body) -> impl Iterator<Item = &Place> {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)

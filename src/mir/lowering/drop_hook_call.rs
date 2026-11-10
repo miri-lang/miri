@@ -5,14 +5,15 @@
 //!
 //! The hook runs when a value's last reference is released, so calling it as an
 //! ordinary method would run it once for the call and again at that release.
-//! The call instead releases the value at the call site. A local's slot is then
-//! cleared, so the scope-exit release of the now null slot does nothing; a call
+//! The call instead releases the value at the call site. A local's storage is
+//! ended there, and drop elaboration (`mir::drop_elaboration`) removes, or
+//! guards by a drop flag, the end its scope exit would reach again; a call
 //! result is released as its temporary, which nothing releases again. Either
 //! way the hook runs exactly once.
 //!
 //! The type checker admits the call only on a value the scope owns — a local it
-//! declared, or a call result — and consumes that local, so nothing reads the
-//! cleared slot afterwards.
+//! declared, or a call result — and consumes that local, so nothing reads it
+//! afterwards.
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
@@ -21,7 +22,7 @@ use crate::ast::types::{Type, TypeKind};
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{Constant, Operand, Place, Rvalue, Statement, StatementKind};
+use crate::mir::{Constant, Operand, Place, Statement, StatementKind};
 use crate::type_checker::use_after_move::{BORROWED_DROP_HELP, BORROWED_DROP_MESSAGE};
 use crate::type_checker::utils::runs_drop_hook;
 
@@ -36,13 +37,13 @@ pub(super) fn try_lower_drop_hook_call(
     method: &Expression,
     args: &[Expression],
 ) -> Result<Option<Operand>, LoweringError> {
-    let Some(receiver_ty) = drop_hook_receiver_type(ctx, receiver, method, args) else {
+    if !calls_drop_hook(ctx, receiver, method, args) {
         return Ok(None);
-    };
+    }
     if matches!(receiver.node, ExpressionKind::Call(_, _)) {
         release_call_result(ctx, receiver, *span)?;
     } else {
-        release_owned_local(ctx, receiver, receiver_ty, *span)?;
+        release_owned_local(ctx, receiver, *span)?;
     }
     Ok(Some(void_operand(*span)))
 }
@@ -65,10 +66,9 @@ fn release_call_result(
     Ok(())
 }
 
-/// Releases a local the scope declared and clears its slot, so the release at
-/// the end of its scope finds nothing to release. A local a resource was moved
-/// into holds its only reference, since the move cleared its source, so the
-/// hook runs here.
+/// Releases a local the scope declared by ending its storage here. A local a
+/// resource was moved into holds its only reference, since the move released
+/// its source's, so the hook runs here.
 ///
 /// A parameter's reference belongs to the caller, and a projection's to its
 /// container; releasing either here would release it twice. The type checker
@@ -77,7 +77,6 @@ fn release_call_result(
 fn release_owned_local(
     ctx: &mut LoweringContext,
     receiver: &Expression,
-    receiver_ty: Type,
     span: Span,
 ) -> Result<(), LoweringError> {
     let ExpressionKind::Identifier(name, _) = &receiver.node else {
@@ -91,31 +90,27 @@ fn release_owned_local(
         .map(Place::new)
         .ok_or_else(|| borrowed_receiver_error(receiver.span))?;
     ctx.push_statement(Statement {
-        kind: StatementKind::DecRef(slot.clone()),
-        span,
-    });
-    ctx.push_statement(Statement {
-        kind: StatementKind::Assign(slot, Rvalue::Use(null_of(receiver_ty, span))),
+        kind: StatementKind::StorageDead(slot, crate::mir::EndCause::Consumed),
         span,
     });
     Ok(())
 }
 
-/// The receiver's type when the call names the drop hook that type runs.
-fn drop_hook_receiver_type(
+/// Whether the call names the drop hook its receiver's type runs.
+fn calls_drop_hook(
     ctx: &LoweringContext,
     receiver: &Expression,
     method: &Expression,
     args: &[Expression],
-) -> Option<Type> {
+) -> bool {
     let ExpressionKind::Identifier(method_name, _) = &method.node else {
-        return None;
+        return false;
     };
-    if method_name != DROP_HOOK_NAME || !args.is_empty() {
-        return None;
-    }
-    let receiver_ty = ctx.recorded_type(receiver.id)?;
-    runs_drop_hook(&receiver_ty.kind, ctx.type_checker.type_definitions()).then_some(receiver_ty)
+    method_name == DROP_HOOK_NAME
+        && args.is_empty()
+        && ctx.recorded_type(receiver.id).is_some_and(|receiver_ty| {
+            runs_drop_hook(&receiver_ty.kind, ctx.type_checker.type_definitions())
+        })
 }
 
 fn borrowed_receiver_error(span: Span) -> LoweringError {
@@ -127,15 +122,11 @@ fn borrowed_receiver_error(span: Span) -> LoweringError {
     )
 }
 
-/// A null reference of `ty`, which a release skips.
-fn null_of(ty: Type, span: Span) -> Operand {
+/// The unit value the call evaluates to.
+fn void_operand(span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
         span,
-        ty,
+        ty: Type::new(TypeKind::Void, span),
         literal: Literal::None,
     }))
-}
-
-fn void_operand(span: Span) -> Operand {
-    null_of(Type::new(TypeKind::Void, span), span)
 }

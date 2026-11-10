@@ -30,6 +30,7 @@ pub use readback::insert_readbacks;
 
 use crate::ast::literal::Literal;
 use crate::mir::body::{BindingResidency, DeviceHandleId};
+use crate::mir::terminator::{arg_mode, ArgMode};
 use crate::mir::{Body, Local, Operand, Rvalue, Statement, StatementKind, TerminatorKind};
 use std::collections::HashSet;
 
@@ -274,31 +275,47 @@ pub(crate) fn host_overwrite(body: &Body, statement: &Statement) -> Option<Local
 }
 
 /// The gpu-resident bindings a terminator reads whole on the host: the value a
-/// branch switches on, and the host array an upload copies into another
-/// binding's device buffer.
+/// branch switches on, the host array an upload copies into another binding's
+/// device buffer, and every element a call stores in a container
+/// ([`ArgMode::Donated`]), since what the container keeps is the host array,
+/// which must hold what the device wrote. A receiver a call takes over to
+/// write ([`ArgMode::Owned`]) is not a read: the readback that refreshes a host
+/// array unshares it that way first.
 ///
 /// Other call arguments are left to the type checker's residency gate, which
 /// refuses a gpu binding passed to any function that reads its elements. What
-/// reaches a call is either a device buffer a residency-specialized callee
-/// launches on, or a binding whose callee reads only its length, which the host
-/// array holds correctly whatever the device did.
+/// reaches a call lent is either a device buffer a residency-specialized
+/// callee launches on, or a binding whose callee reads only its length, which
+/// the host array holds correctly whatever the device did.
 pub(crate) fn terminator_host_reads(body: &Body, kind: &TerminatorKind) -> Vec<Local> {
-    let read = match kind {
-        TerminatorKind::SwitchInt { discr, .. } => whole_local(discr),
+    let reads: Vec<Local> = match kind {
+        TerminatorKind::SwitchInt { discr, .. } => whole_local(discr).into_iter().collect(),
         TerminatorKind::Call { func, args, .. }
             if func.called_runtime_name() == Some(UPLOAD_FN) =>
         {
-            upload_source(body, args)
+            upload_source(body, args).into_iter().collect()
         }
-        TerminatorKind::Call { .. }
-        | TerminatorKind::VirtualCall { .. }
+        TerminatorKind::Call {
+            args, arg_modes, ..
+        } => stored_arguments(args, arg_modes),
+        TerminatorKind::VirtualCall { .. }
         | TerminatorKind::GpuLaunch { .. }
         | TerminatorKind::Goto { .. }
         | TerminatorKind::Return
-        | TerminatorKind::Unreachable => None,
+        | TerminatorKind::Unreachable => Vec::new(),
     };
-    read.filter(|&local| gpu_handle(body, local).is_some())
+    reads
         .into_iter()
+        .filter(|&local| gpu_handle(body, local).is_some())
+        .collect()
+}
+
+/// The bindings a call passes whole as an element its callee stores.
+fn stored_arguments(args: &[Operand], arg_modes: &[ArgMode]) -> Vec<Local> {
+    args.iter()
+        .enumerate()
+        .filter(|&(position, _)| arg_mode(arg_modes, position) == ArgMode::Donated)
+        .filter_map(|(_, arg)| whole_local(arg))
         .collect()
 }
 

@@ -22,6 +22,7 @@ pub mod closure_abi;
 pub mod compiler_intrinsics;
 pub mod declaration;
 pub mod dispatch;
+pub mod drop_elaboration;
 pub mod element_abi;
 pub mod facts;
 pub mod gpu;
@@ -58,7 +59,8 @@ pub use backend::{
 };
 pub use block::{BasicBlock, BasicBlockData};
 pub use body::{
-    BindingResidency, Body, Captures, ExecutionModel, Generics, LocalDecl, Signature, StorageClass,
+    BindingResidency, Body, Captures, ExecutionModel, FlagOf, Generics, LocalDecl, Signature,
+    StorageClass,
 };
 pub use declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
@@ -71,7 +73,7 @@ pub use operand::{Constant, FunctionConstant, Operand};
 pub use place::{Bounds, Local, Place, PlaceElem};
 pub use proven_indexes::InBounds;
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
-pub use statement::{HeaderRead, Statement, StatementKind};
+pub use statement::{EndCause, HeaderRead, Statement, StatementKind};
 pub use terminator::{
     arg_mode, ArgMode, CallFlags, Discriminant, GpuLaunchArgs, GpuLaunchArgsError, Terminator,
     TerminatorKind,

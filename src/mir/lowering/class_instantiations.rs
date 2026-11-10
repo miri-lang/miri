@@ -287,7 +287,7 @@ fn naming_span(body: &Body, class: &str, args: &[Type]) -> Span {
                 constructed_class(rvalue).is_some_and(|ty| spells_instance(ty, class, args))
             }
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_)
             | StatementKind::IncRef(_)

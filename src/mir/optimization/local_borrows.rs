@@ -343,7 +343,7 @@ fn is_parameter(body: &Body, local: Local) -> bool {
 /// Whether `statement` ends the binding of a parameter `body` is lent, whose
 /// value its caller's reference keeps.
 fn ends_lent_parameter(body: &Body, ownership: &OwnershipFacts, statement: &Statement) -> bool {
-    matches!(&statement.kind, StatementKind::StorageDead(place)
+    matches!(&statement.kind, StatementKind::StorageDead(place, _)
         if place.projection.is_empty()
             && is_parameter(body, place.local)
             && !ownership.is_owned_param(place.local))
@@ -407,7 +407,7 @@ fn refused_by_statement(statement: &Statement, is_read: impl Fn(Local) -> bool) 
         }
         StatementKind::DecRef(place) | StatementKind::Dealloc(place) => vec![place.local],
         StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::Nop
         | StatementKind::ReadHeader(_) => Vec::new(),
@@ -467,6 +467,11 @@ fn refused_by_terminator(
     };
     let refused_args = args.iter().enumerate().filter_map(|(position, arg)| {
         let place = arg.place()?;
+        // A stored element is read whole and retained for the container by
+        // the call itself, so it neither keeps nor writes the borrow.
+        if arg_mode(arg_modes, position) == ArgMode::Donated {
+            return None;
+        }
         let keeps =
             keeps_or_checks(func, position) || arg_mode(arg_modes, position) == ArgMode::Out;
         let copies_on_entry = is_copied(place.local)
@@ -518,7 +523,7 @@ fn keeps_or_checks(func: Option<&Operand>, position: usize) -> bool {
         .is_some_and(|effect| {
             effect.is_copy_on_write()
                 || effect.reads_count
-                || effect.taken_positions().contains(&position)
+                || effect.handed_over_positions().contains(&position)
         })
 }
 
@@ -635,7 +640,7 @@ impl Watch<'_> {
 /// Whether `statement` ends the storage of `local` or defines it again.
 fn ends_range(statement: &Statement, local: Local) -> bool {
     match &statement.kind {
-        StatementKind::StorageDead(place) | StatementKind::Assign(place, _) => {
+        StatementKind::StorageDead(place, _) | StatementKind::Assign(place, _) => {
             *place == Place::new(local)
         }
         StatementKind::Reassign(..)
@@ -656,7 +661,7 @@ fn statement_changes(statement: &Statement, owners: &[Local]) -> bool {
             owners.contains(&dest.local) || rvalue_changes(rvalue, owners)
         }
         StatementKind::StorageLive(place)
-        | StatementKind::StorageDead(place)
+        | StatementKind::StorageDead(place, _)
         | StatementKind::DecRef(place)
         | StatementKind::Dealloc(place) => owners.contains(&place.local),
         StatementKind::IncRef(place) => {

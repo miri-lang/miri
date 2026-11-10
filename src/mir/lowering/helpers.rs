@@ -777,23 +777,6 @@ pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue
     }
 }
 
-/// Read `operand` by copy when it moves out of a local that existed before the
-/// expression being lowered, whose first local is `watermark`.
-///
-/// Such a local — a named binding, a match-arm binding, an enclosing variable —
-/// is released when its own scope ends, and moving out of it does not cancel
-/// that release. Read by copy, the value handed on is retained for its new
-/// holder instead of being freed out from under it. A temp the expression built
-/// itself has no other holder, so moving out of it stays a transfer.
-pub fn read_older_local_by_copy(operand: Operand, watermark: usize) -> Operand {
-    match operand {
-        Operand::Move(place) if place.local.0 < watermark && place.projection.is_empty() => {
-            Operand::Copy(place)
-        }
-        already_usable => already_usable,
-    }
-}
-
 /// Helper to lower a statement and assign the result expression to a target local.
 /// This is used for match branches where each branch result should be assigned to result_local.
 /// Lower an expression statement and copy its value into `target_local`,
@@ -804,8 +787,7 @@ fn assign_expr_to_local(
     target_local: crate::mir::Local,
 ) -> Result<(), LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let lowered = lower_expression(ctx, expr, None)?;
-    let operand = read_older_local_by_copy(lowered, watermark);
+    let operand = lower_expression(ctx, expr, None)?;
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand.clone())),
         span: expr.span,
@@ -889,8 +871,7 @@ fn lower_return_expression(
         lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
     } else {
         let watermark = ctx.body.local_decls.len();
-        let lowered = lower_expression(ctx, expr, None)?;
-        let operand = read_older_local_by_copy(lowered, watermark);
+        let operand = lower_expression(ctx, expr, None)?;
         let op_ty = operand_value_type(ctx, &operand);
         // A tail of no value — a `match` or `if` every path of which returns —
         // is reached by no path, and has nothing to return.

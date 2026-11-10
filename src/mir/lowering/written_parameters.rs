@@ -102,8 +102,8 @@ fn is_copied_parameter(ctx: &LoweringContext, local: Local) -> bool {
 ///
 /// The copy is a local of the body's own, numbered past `arg_count`, so the
 /// rules that tell a parameter from a local by that number treat it as the
-/// `var` it stands for, on purpose: moving a resource out of it clears it
-/// (`variable::clear_moved_resource_source`), and calling its drop hook
+/// `var` it stands for, on purpose: consuming a resource held in it ends its
+/// storage (`variable::release_consumed_binding`), and calling its drop hook
 /// releases it (`drop_hook_call::release_owned_local`). The caller's
 /// parameter is never touched by either.
 fn bind_parameter_copy(ctx: &mut LoweringContext, param: &Parameter, local: Local) {

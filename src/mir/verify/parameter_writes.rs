@@ -89,7 +89,7 @@ fn replaces_whole(block: &BasicBlockData, whole: &Place) -> bool {
         .any(|statement| match &statement.kind {
             StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => place == whole,
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -147,7 +147,7 @@ fn stored_local(kind: &StatementKind) -> Option<Local> {
     match kind {
         StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) => Some(place.local),
         StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)

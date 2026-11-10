@@ -136,15 +136,8 @@ pub(super) fn emit_to_string(
 ) -> Result<crate::mir::place::Local, LoweringError> {
     match type_kind {
         TypeKind::String => {
-            // Already a string — assign to a temp Local.
-            // Convert Move to Copy so that RC insertion emits IncRef for the source.
-            // Both the source local and this temp are managed and will each get
-            // DecRef'd at StorageDead; without an IncRef here the RC would be
-            // decremented one extra time, causing a use-after-free.
-            let operand = match operand {
-                Operand::Move(place) => Operand::Copy(place),
-                other => other,
-            };
+            // Already a string — read it into a temp Local, which RC
+            // insertion funds with a retain of its own.
             let temp = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(operand)),
@@ -343,26 +336,24 @@ pub(super) fn emit_string_append(
     span: &crate::error::syntax::Span,
 ) -> crate::mir::place::Local {
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: Operand::runtime(
-                crate::mir::compiler_intrinsics::STRING_APPEND.callee(),
-                *span,
-            ),
-            args: vec![
-                Operand::Move(Place::new(left)),
-                Operand::Copy(Place::new(right)),
-            ],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(result),
-            target: Some(target_bb),
-        },
+    let append = Operand::runtime(
+        crate::mir::compiler_intrinsics::STRING_APPEND.callee(),
         *span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
+    let args = vec![
+        Operand::Move(Place::new(left)),
+        Operand::Copy(Place::new(right)),
+    ];
+    let destination = Place::new(result);
+    super::dispatch::emit_call_terminator(
+        ctx,
+        append,
+        args,
+        Vec::new(),
+        Vec::new(),
+        destination,
+        *span,
+    );
     result
 }
 

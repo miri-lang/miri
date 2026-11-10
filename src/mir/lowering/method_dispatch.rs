@@ -1585,7 +1585,9 @@ pub(super) fn with_mutated_receiver<R>(
 
 /// The local a write through `obj_op` checks for sharing first: a whole host
 /// local, not a GPU-resident binding — reference counts exist on the host
-/// only, and such a binding's host copy is detached by residency.
+/// only, and such a binding's host copy is detached by residency. The place
+/// the operand reads decides, never whether it is spelled as a copy or a
+/// move: either reads the binding the write lands in.
 ///
 /// A parameter whose value its caller still holds is never checked: its
 /// count holds only the caller's references, and the write would land in the
@@ -1596,11 +1598,8 @@ fn cow_checked_local(
     obj_op: &Operand,
     span: Span,
 ) -> Result<Option<Local>, LoweringError> {
-    let local = match obj_op {
-        Operand::Move(place) if place.projection.is_empty() => place.local,
-        Operand::Move(_) | Operand::Copy(_) | Operand::Constant(_) | Operand::Function(_) => {
-            return Ok(None)
-        }
+    let Some(local) = obj_op.bare_local() else {
+        return Ok(None);
     };
     let decl = &ctx.body.local_decls[local.0];
     if ctx.body.is_gpu() || decl.device_handle.is_some() {
@@ -1615,14 +1614,17 @@ fn cow_checked_local(
 
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.
 ///
-/// If the receiver is a simple local variable (`Move` with no projection), emits a call to
+/// If the receiver is a whole local ([`cow_checked_local`]), however it is read, emits a call to
 /// `cow` that returns either the same pointer (RC ≤ 1 → no copy) or a fresh exclusive
 /// clone (RC > 1 → clone + decrement old RC). The result is stored back into the receiver local
 /// so the subsequent mutation operates on an exclusively-owned collection.
 ///
-/// `Assign` (not `Reassign`) is used for the write-back so RC insertion does not DecRef the old
-/// value; `Move` is used for the cow_result so RC insertion does not IncRef it. No `StorageDead` is
-/// emitted for the cow_result temp — its ownership is transferred to self_local.
+/// The check is a transfer lowering re-binds in the same sequence: `cow` takes the receiver's
+/// reference over (`move`, passed owned as its declaration states), and the write-back `Assign`
+/// (not `Reassign`, so the old value is not released) moves the result back into the receiver,
+/// so `cow_result` gets no `StorageDead`.
+/// The write that follows reads the receiver by `Copy`: the call lends it, and the receiver keeps
+/// its own release.
 ///
 /// The body's own receiver is checked instead of copied ([`emit_receiver_unique_check`]).
 pub(super) fn emit_cow_check(
@@ -1641,20 +1643,17 @@ pub(super) fn emit_cow_check(
     }
     let cow_result = ctx.push_temp(obj_ty.clone(), span);
     let cow_fn = Operand::runtime(cow.callee(), span);
-    let cow_target = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: cow_fn,
-            args: vec![Operand::Move(Place::new(self_local))],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(cow_result),
-            target: Some(cow_target),
-        },
+    let receiver = vec![Operand::Move(Place::new(self_local))];
+    let destination = Place::new(cow_result);
+    super::dispatch::emit_call_terminator(
+        ctx,
+        cow_fn,
+        receiver,
+        Vec::new(),
+        Vec::new(),
+        destination,
         span,
-    ));
-    ctx.set_current_block(cow_target);
+    );
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             Place::new(self_local),
@@ -1662,7 +1661,7 @@ pub(super) fn emit_cow_check(
         ),
         span,
     });
-    Ok(Operand::Move(Place::new(self_local)))
+    Ok(Operand::Copy(Place::new(self_local)))
 }
 
 /// Checks that the body's own receiver, about to be written, is held by this

@@ -639,11 +639,11 @@ fn lower_collection_element_access(
     // stride (a `T = f32` element loads 4 bytes, not the pointer-width fallback).
     let obj_ty = substitute_collection_element_ty(obj_ty, &ctx.generic_subs);
     let obj_op = lower_operand(ctx, obj)?;
-    let obj_op_src = operand_src_local(&obj_op);
+    let obj_op_src = obj_op.place().map(|place| place.local);
     let index_op = lower_operand(ctx, &args[0])?;
 
     let alias_ty = receiver_alias_type(ctx, &obj_op, &obj_ty);
-    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), alias_ty, *span);
+    let obj_local = store_operand_temp(ctx, obj_op, alias_ty, *span);
     let index_local = materialize_index_local(ctx, index_op, args[0].span);
 
     let mut indexed_place = Place::new(obj_local);
@@ -780,22 +780,6 @@ pub(super) fn resolve_kernel_symbol(
     ))
 }
 
-/// The source local backing a place operand, if any.
-fn operand_src_local(op: &Operand) -> Option<Local> {
-    match op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        _ => None,
-    }
-}
-
-/// Convert a `Move` operand into a `Copy` of the same place.
-pub(crate) fn move_to_copy(op: Operand) -> Operand {
-    match op {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    }
-}
-
 /// Store an operand into a fresh temp of `ty`, returning the temp local.
 fn store_operand_temp(ctx: &mut LoweringContext, op: Operand, ty: Type, span: Span) -> Local {
     let local = ctx.push_temp(ty, span);
@@ -861,7 +845,7 @@ fn lower_list_push(
 }
 
 /// Append `item_arg` to the list `obj_op` of type `obj_ty` through
-/// `miri_rt_list_push`, donating it to the list.
+/// `miri_rt_list_push`, which keeps it.
 ///
 /// Shared by `list.push(e)` and a list literal, for the reason
 /// [`emit_set_add`] gives.
@@ -873,26 +857,22 @@ pub(crate) fn emit_list_push(
     span: &Span,
 ) -> Result<Operand, LoweringError> {
     let item_watermark = ctx.body.local_decls.len();
-    let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
+    let (item_op, _) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
-    let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
+    let item_op_src = item_op.place().map(|place| place.local);
     let obj_op = receiver.make_own(ctx)?;
     let func_op = ctx.declared_runtime_operand(rt::LIST_PUSH, *span)?;
-    let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: vec![obj_op, item_op],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(dummy_dest),
-            target: Some(target_bb),
-        },
+    let args = vec![obj_op, item_op];
+    emit_call_terminator(
+        ctx,
+        func_op,
+        args,
+        Vec::new(),
+        Vec::new(),
+        Place::new(dummy_dest),
         *span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
     if let Some(src) = item_op_src {
         ctx.emit_temp_drop(src, item_watermark, item_arg.span);
     }
@@ -945,24 +925,6 @@ pub(super) fn spill_operand_to_address(
         span,
     });
     Operand::Copy(Place::new(addr_local))
-}
-
-/// Donate a reference to a value a container is about to take ownership of.
-///
-/// Reading the operand by copy makes RC insertion retain it into the temp, and the
-/// temp is what the container stores. A temporary that only existed to produce
-/// the value is then released, so the net effect is one reference handed over:
-/// the caller keeps releasing whatever it already owned, and the container
-/// releases the donated one through its drop callback.
-pub(super) fn donate_operand_to_container(
-    ctx: &mut LoweringContext,
-    op: Operand,
-    ty: Type,
-    span: Span,
-) -> (Operand, Option<Local>) {
-    let src = operand_src_local(&op);
-    let local = store_operand_temp(ctx, move_to_copy(op), ty, span);
-    (Operand::Copy(Place::new(local)), src)
 }
 
 /// The type argument naming a `List`/`Array`/`Set` element or a `Map` key.
@@ -1102,10 +1064,9 @@ pub(super) fn collection_slot_type(
 
 /// Lower map.set(key, value) to miri_rt_map_set.
 ///
-/// The stdlib method would forward its parameters, which are borrowed, into an
-/// intrinsic that takes ownership of them, leaving the map holding references it
-/// does not own. Lowering the call here donates both instead, matching
-/// `lower_list_push`.
+/// Lowered here rather than through the stdlib method so the receiver goes
+/// through the same copy-on-write seam as `lower_list_push`; the key and the
+/// value reach the entry point directly, which keeps both.
 fn lower_map_set(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -1121,7 +1082,7 @@ fn lower_map_set(
 }
 
 /// Store `key_arg` → `value_arg` into the map `obj_op` of type `obj_ty` through
-/// `miri_rt_map_set`, donating both to the map.
+/// `miri_rt_map_set`, which keeps both.
 ///
 /// Shared by `map.set(k, v)` and a map literal, which fills the map it has
 /// just built one entry at a time, so both seams store an entry the same way.
@@ -1134,29 +1095,24 @@ pub(crate) fn emit_map_set(
     span: &Span,
 ) -> Result<Operand, LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let (key_op, key_ty) = lower_stored_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
-    let (key_op, key_src) = donate_operand_to_container(ctx, key_op, key_ty, key_arg.span);
-    let (value_op, value_ty) = lower_stored_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
-    let (value_op, value_src) =
-        donate_operand_to_container(ctx, value_op, value_ty, value_arg.span);
+    let (key_op, _) = lower_stored_value(ctx, key_arg, obj_ty, ELEMENT_SLOT)?;
+    let key_src = key_op.place().map(|place| place.local);
+    let (value_op, _) = lower_stored_value(ctx, value_arg, obj_ty, MAP_VALUE_SLOT)?;
+    let value_src = value_op.place().map(|place| place.local);
     let obj_op = receiver.make_own(ctx)?;
 
     let func_op = ctx.declared_runtime_operand(rt::MAP_SET, *span)?;
-    let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: vec![obj_op, key_op, value_op],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(dummy_dest),
-            target: Some(target_bb),
-        },
+    let args = vec![obj_op, key_op, value_op];
+    emit_call_terminator(
+        ctx,
+        func_op,
+        args,
+        Vec::new(),
+        Vec::new(),
+        Place::new(dummy_dest),
         *span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
     if let Some(src) = key_src {
         ctx.emit_temp_drop(src, watermark, key_arg.span);
     }
@@ -1166,7 +1122,7 @@ pub(crate) fn emit_map_set(
     Ok(Operand::Copy(Place::new(dummy_dest)))
 }
 
-/// Lower set.add(element) to miri_rt_set_add, donating the stored element.
+/// Lower set.add(element) to miri_rt_set_add, which keeps the element.
 ///
 /// Mirrors [`lower_map_set`]; the intrinsic reports whether the element was
 /// newly inserted, so the call keeps its boolean result.
@@ -1185,7 +1141,7 @@ fn lower_set_add(
 }
 
 /// Add `elem_arg` to the set `obj_op` of type `obj_ty` through
-/// `miri_rt_set_add`, donating it to the set, and answer whether it was newly
+/// `miri_rt_set_add`, which keeps it, and answer whether it was newly
 /// inserted.
 ///
 /// Shared by `set.add(e)` and a set literal, which fills the set it has just
@@ -1199,8 +1155,8 @@ pub(crate) fn emit_set_add(
     span: &Span,
 ) -> Result<Operand, LoweringError> {
     let watermark = ctx.body.local_decls.len();
-    let (elem_op, elem_ty) = lower_stored_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
-    let (elem_op, elem_src) = donate_operand_to_container(ctx, elem_op, elem_ty, elem_arg.span);
+    let (elem_op, _) = lower_stored_value(ctx, elem_arg, obj_ty, ELEMENT_SLOT)?;
+    let elem_src = elem_op.place().map(|place| place.local);
     let obj_op = receiver.make_own(ctx)?;
 
     // The intrinsic reports whether the element was newly inserted, so the
@@ -1208,20 +1164,16 @@ pub(crate) fn emit_set_add(
     let destination = dest
         .unwrap_or_else(|| Place::new(ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span)));
     let func_op = ctx.declared_runtime_operand(rt::SET_ADD, *span)?;
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: vec![obj_op, elem_op],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: destination.clone(),
-            target: Some(target_bb),
-        },
+    let args = vec![obj_op, elem_op];
+    emit_call_terminator(
+        ctx,
+        func_op,
+        args,
+        Vec::new(),
+        Vec::new(),
+        destination.clone(),
         *span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
     if let Some(src) = elem_src {
         ctx.emit_temp_drop(src, watermark, elem_arg.span);
     }
@@ -1252,7 +1204,7 @@ fn lower_list_insert(
 }
 
 /// Insert `item_arg` at `index_arg` into the list `obj_op` of type `obj_ty`
-/// through `miri_rt_list_insert`, donating it to the list.
+/// through `miri_rt_list_insert`, which keeps it.
 fn emit_list_insert(
     ctx: &mut LoweringContext,
     receiver: Receiver<'_>,
@@ -1262,26 +1214,22 @@ fn emit_list_insert(
     span: &Span,
 ) -> Result<Option<Operand>, LoweringError> {
     let index_op = lower_operand(ctx, index_arg)?;
-    let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
+    let (item_op, _) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
 
-    let (item_op, item_op_src) = donate_operand_to_container(ctx, item_op, item_ty, item_arg.span);
+    let item_op_src = item_op.place().map(|place| place.local);
     let obj_op = receiver.make_own(ctx)?;
     let func_op = ctx.declared_runtime_operand(rt::LIST_INSERT, *span)?;
-    let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: vec![obj_op, index_op, item_op],
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: Place::new(result_temp),
-            target: Some(target_bb),
-        },
+    let args = vec![obj_op, index_op, item_op];
+    emit_call_terminator(
+        ctx,
+        func_op,
+        args,
+        Vec::new(),
+        Vec::new(),
+        Place::new(result_temp),
         *span,
-    ));
-    ctx.set_current_block(target_bb);
+    );
     if let Some(src) = item_op_src {
         ctx.emit_temp_drop(src, item_watermark, item_arg.span);
     }
@@ -1326,18 +1274,18 @@ fn emit_collection_set(
 ) -> Result<Option<Operand>, LoweringError> {
     let index_op = lower_operand(ctx, index_arg)?;
     let (item_op, item_ty) = lower_stored_value(ctx, item_arg, obj_ty, ELEMENT_SLOT)?;
-    let item_op_src = operand_src_local(&item_op);
+    let item_op_src = item_op.place().map(|place| place.local);
     let obj_op = receiver.make_own(ctx)?;
 
     let alias_ty = receiver_alias_type(ctx, &obj_op, obj_ty);
-    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), alias_ty, *span);
+    let obj_local = store_operand_temp(ctx, obj_op, alias_ty, *span);
     let index_local = materialize_index_local(ctx, index_op, index_arg.span);
     let mut indexed_place = Place::new(obj_local);
     indexed_place
         .projection
         .push(crate::mir::PlaceElem::index(index_local));
 
-    let item_local = store_operand_temp(ctx, move_to_copy(item_op), item_ty, item_arg.span);
+    let item_local = store_operand_temp(ctx, item_op, item_ty, item_arg.span);
 
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
@@ -1502,7 +1450,7 @@ fn lower_gpu_slice(
     // argument, which it leaves alone, so the slice reads it back itself.
     super::variable::emit_cross_residency_readback(ctx, Some(obj), *span);
 
-    let obj_op = move_to_copy(lower_operand(ctx, obj)?);
+    let obj_op = lower_operand(ctx, obj)?;
     let start_op = lower_operand(ctx, start)?;
     let end_op = lower_operand(ctx, end)?;
 
@@ -1698,11 +1646,15 @@ fn lower_direct_call(
 
 /// Emit a `Call` terminator to `destination` and advance to its successor block.
 ///
+/// `arg_modes` are the modes the lowering decides (an `out` parameter's);
+/// a runtime entry point's declared modes are laid over them where the
+/// terminator is set ([`LoweringContext::set_terminator`]).
+///
 /// `arg_handles` records, per positional argument, the persistent device-buffer
 /// handle when that argument is a gpu-resident binding reaching a residency-
 /// specialized callee (empty for an ordinary host call). It is either empty or
 /// exactly `args.len()` long — the invariant validated in [`crate::mir::terminator`].
-fn emit_call_terminator(
+pub(crate) fn emit_call_terminator(
     ctx: &mut LoweringContext,
     func_op: Operand,
     args: Vec<Operand>,
@@ -1889,38 +1841,6 @@ fn resolve_param_types(
     }
 }
 
-/// Retain a value a coercion is about to take the reference of, when the local it
-/// came from keeps holding it.
-///
-/// The coercion re-spells the value's type without copying it, so the reference
-/// goes with it and the coerced temp is what gets released. A local variable is
-/// released again when its scope ends, so it needs a reference of its own to give
-/// away — otherwise one object is freed twice.
-///
-/// A parameter is not this case: it belongs to the caller, so reading it into a
-/// temp already retains it. Neither is a field read, which produces a value the
-/// reader owns, nor a constant, which is materialized fresh, nor an anonymous temp
-/// that nothing else releases — there the coerced temp is the only holder left, and
-/// retaining would strand the extra reference.
-fn retain_still_held_value(ctx: &mut LoweringContext, op: &Operand, op_ty: &Type, span: Span) {
-    if !ctx.is_counted(&op_ty.kind) {
-        return;
-    }
-    let (Operand::Copy(place) | Operand::Move(place)) = op else {
-        return;
-    };
-    let is_parameter = place.local.0 >= 1 && place.local.0 <= ctx.body.arg_count;
-    let stays_held =
-        ctx.body.local_decls[place.local.0].name.is_some() || ctx.is_owned_by_a_scope(place.local);
-    if !place.projection.is_empty() || is_parameter || !stays_held {
-        return;
-    }
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::IncRef(place.clone()),
-        span,
-    });
-}
-
 /// The type of the value `op` carries for the argument `arg`.
 ///
 /// A local holds exactly its declared type, but a projected place — an element
@@ -2061,7 +1981,7 @@ fn lower_and_coerce_args<'e>(
             Some(target_ty) => coerce_arg_to_declared(ctx, op, value, target_ty, watermark),
             None => op,
         };
-        place_at_parameter(&mut slots, position, move_to_copy(op));
+        place_at_parameter(&mut slots, position, op);
     }
     Ok((slots, written))
 }
@@ -2084,11 +2004,10 @@ fn coerce_written_arg(
     target: Option<&Type>,
 ) -> Operand {
     let watermark = ctx.body.local_decls.len();
-    let op = match target {
+    match target {
         Some(target_ty) => coerce_arg_to_declared(ctx, op, value, target_ty, watermark),
         None => op,
-    };
-    move_to_copy(op)
+    }
 }
 
 /// Bring a lowered argument to the type the callee declares for it.
@@ -2115,12 +2034,6 @@ pub(super) fn coerce_arg_to_declared(
         return op;
     }
     let temp = ctx.push_temp(target_ty.clone(), arg.span);
-    // Wrapping in `Some` builds a new value whose payload RC insertion retains
-    // itself wherever the source is read again; only a coercion that re-spells
-    // the value hands its reference on.
-    if !super::helpers::coercion_wraps_in_some(&op_ty, target_ty) {
-        retain_still_held_value(ctx, &op, &op_ty, arg.span);
-    }
     let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, target_ty, arg.span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(Place::new(temp), rvalue),
@@ -2155,7 +2068,7 @@ fn fill_default_args(
             let lowered = lower_default_argument(ctx, default_expr, call);
             ctx.variable_map = caller_scope;
             ctx.generic_subs = caller_subs;
-            place_at_parameter(slots, position, move_to_copy(lowered?));
+            place_at_parameter(slots, position, lowered?);
         }
     }
     Ok(())

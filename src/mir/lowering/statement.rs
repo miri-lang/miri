@@ -24,8 +24,7 @@ use super::context::LoweringContext;
 use super::control_flow::{lower_break, lower_continue, lower_for, lower_if, lower_while};
 use super::expression::lower_expression;
 use super::helpers::{
-    coerce_rvalue_in, mir_types_structurally_match, read_older_local_by_copy,
-    release_coerced_source, resolve_type,
+    coerce_rvalue_in, mir_types_structurally_match, release_coerced_source, resolve_type,
 };
 use super::variable::lower_variable;
 
@@ -154,8 +153,7 @@ fn lower_return(
             lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
         } else {
             let watermark = ctx.body.local_decls.len();
-            let lowered = lower_expression(ctx, expr, None)?;
-            let ret_val = read_older_local_by_copy(lowered, watermark);
+            let ret_val = lower_expression(ctx, expr, None)?;
             let val_ty = super::helpers::operand_value_type(ctx, &ret_val);
             let rvalue = if val_ty.kind != ret_ty.kind {
                 coerce_rvalue_in(ctx, ret_val.clone(), &val_ty, &ret_ty, span)

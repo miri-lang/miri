@@ -126,7 +126,7 @@ impl<'a> Layouts<'a> {
                 .into_iter()
                 .collect(),
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Nop

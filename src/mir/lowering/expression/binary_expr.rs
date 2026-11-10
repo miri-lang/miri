@@ -1064,16 +1064,12 @@ fn read_absent_into(
     watermark: usize,
     span: crate::error::syntax::Span,
 ) -> Operand {
-    let source = match op {
-        Operand::Move(place) => Operand::Copy(place),
-        other => other,
-    };
     let temp = ctx.push_temp(ty.clone(), span);
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(source.clone())),
+        kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(op.clone())),
         span,
     });
-    if let Operand::Copy(place) = &source {
+    if let Operand::Copy(place) = &op {
         ctx.emit_temp_drop(place.local, watermark, span);
     }
     Operand::Copy(Place::new(temp))

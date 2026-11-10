@@ -1347,7 +1347,7 @@ fn test_a_release_or_the_end_of_storage_forgets_the_place() {
     for forget in [
         StatementKind::DecRef(local(2)),
         StatementKind::Dealloc(local(2)),
-        StatementKind::StorageDead(local(2)),
+        StatementKind::storage_dead(local(2)),
     ] {
         let shown = format!("{forget:?}");
         let body = fresh_then_check(vec![forget]).finish();
@@ -1460,6 +1460,45 @@ fn test_the_copy_path_of_an_answered_check_does_not_reach_the_join() {
     assert_eq!(checks_left(builder.finish()), 0);
 }
 
+/// The two spellings a whole list can be handed to its copy-on-write entry
+/// point by. The place and the entry point's declared effect decide whether
+/// the call asks about the list; the spelling decides nothing.
+const RECEIVER_SPELLINGS: [fn(Place) -> Operand; 2] = [Operand::Copy, Operand::Move];
+
+/// A fresh clone in `_2`, then `between`, then `_2` handed, spelled by
+/// `receiver`, to the list's copy-on-write entry point, its answer in `_3`.
+fn fresh_then_copy_on_write(between: Vec<StatementKind>, receiver: fn(Place) -> Operand) -> Body {
+    let mut builder = Builder::new();
+    builder.fresh(local(2)).statements(between);
+    let asked = vec![receiver(local(2))];
+    builder.call(|next| runtime_call(rt::LIST_COW, asked, local(3), next));
+    builder.finish()
+}
+
+/// The copy-on-write calls `body` still reaches once the pass has run over it.
+fn copy_on_writes_left(mut body: Body) -> usize {
+    elide_unshare_checks(&mut body);
+    reachable_copy_on_writes(&body)
+}
+
+#[test]
+fn test_a_copy_on_write_of_a_fresh_clone_is_answered_however_the_list_is_read() {
+    for receiver in RECEIVER_SPELLINGS {
+        let body = fresh_then_copy_on_write(Vec::new(), receiver);
+        assert_eq!(copy_on_writes_left(body), 0);
+    }
+}
+
+/// A retain gives the clone a second holder, so a write through `_2` must
+/// copy first or the other holder would see it.
+#[test]
+fn test_a_copy_on_write_of_a_retained_clone_is_kept_however_the_list_is_read() {
+    for receiver in RECEIVER_SPELLINGS {
+        let body = fresh_then_copy_on_write(vec![StatementKind::IncRef(local(2))], receiver);
+        assert_eq!(copy_on_writes_left(body), 1);
+    }
+}
+
 /// Locals of [`nest_writing_a_list`].
 const OUTER_INDEX: Local = Local(1);
 const NEST_LIST: Local = Local(2);
@@ -1483,6 +1522,12 @@ const INSERTED_ASK: usize = 8;
 /// something other than the inner loop's questions, reading nothing of the
 /// list it replaces.
 fn nest_writing_a_list(outer_step: Vec<StatementKind>) -> Body {
+    nest_handing_the_list(outer_step, Operand::Move)
+}
+
+/// [`nest_writing_a_list`], the inner loop handing the list to its
+/// copy-on-write entry point spelled by `receiver`.
+fn nest_handing_the_list(outer_step: Vec<StatementKind>, receiver: fn(Place) -> Operand) -> Body {
     use crate::mir::optimization::stable_collections::{call, int, list_of, terminator, ty};
 
     let mut body = Body::new(0, span(), ExecutionModel::Cpu);
@@ -1532,7 +1577,7 @@ fn nest_writing_a_list(outer_step: Vec<StatementKind>) -> Body {
             Vec::new(),
             call(
                 Operand::runtime(runtime_callee(rt::LIST_COW), span()),
-                vec![Operand::Move(Place::new(NEST_LIST))],
+                vec![receiver(Place::new(NEST_LIST))],
                 HANDED_BACK,
                 7,
             ),
@@ -1576,6 +1621,14 @@ fn hoisted_before(mut body: Body) -> usize {
 fn test_a_nest_writing_a_list_only_by_its_questions_is_made_its_own_before_the_outer_loop() {
     assert_eq!(
         hoisted_before(nest_writing_a_list(Vec::new())),
+        OUTER_HEADER
+    );
+}
+
+#[test]
+fn test_a_nest_handing_the_list_by_copy_is_made_its_own_before_the_outer_loop() {
+    assert_eq!(
+        hoisted_before(nest_handing_the_list(Vec::new(), Operand::Copy)),
         OUTER_HEADER
     );
 }

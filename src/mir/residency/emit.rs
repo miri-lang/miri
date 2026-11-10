@@ -15,7 +15,7 @@ use crate::mir::body::DeviceHandleId;
 use crate::mir::compiler_intrinsics::{self as intrinsics, Intrinsic};
 use crate::mir::{
     AggregateKind, BasicBlock, BasicBlockData, Body, Constant, Local, LocalDecl, Operand, Place,
-    PlaceElem, Rvalue, Statement, StatementKind, Terminator, TerminatorKind,
+    PlaceElem, Rvalue, Statement, StatementKind, Terminator,
 };
 
 /// Append to block `from` the readback of `local`'s device buffer into its host
@@ -66,10 +66,10 @@ fn is_array(ty: &Type) -> bool {
 /// Make `local`'s host array one no other value shares, copying it only when
 /// something does.
 ///
-/// The copy-on-write entry takes the local's reference over and hands back one
-/// — the same array or a fresh copy, having released the original — so the
-/// result is stored back with `Assign`, which releases nothing, from a `Move`,
-/// which retains nothing.
+/// The copy-on-write entry takes the local's reference over (`move`, passed
+/// owned as its declaration states) and hands back one — the same array or a
+/// fresh copy, having released the original — so the result is stored back
+/// with `Assign`, which releases nothing, from a `Move`, which retains nothing.
 fn detach_host_array(body: &mut Body, from: BasicBlock, local: Local, span: Span) -> BasicBlock {
     let ty = body.local_decls[local.0].ty.clone();
     let unshared = body.new_local(LocalDecl::new(ty, span));
@@ -134,7 +134,7 @@ fn append_scalar_readback(
             span,
         },
         Statement {
-            kind: StatementKind::StorageDead(Place::new(wrapper)),
+            kind: StatementKind::storage_dead(Place::new(wrapper)),
             span,
         },
     ]);
@@ -184,16 +184,11 @@ fn append_call(
 ) -> BasicBlock {
     let func = Operand::runtime(intrinsic.callee(), span);
     let next = new_block(body);
-    body.basic_blocks[from.0].terminator = Some(Terminator::new(
-        TerminatorKind::Call {
-            func,
-            args,
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination,
-            target: Some(next),
-        },
+    body.basic_blocks[from.0].terminator = Some(Terminator::runtime_call(
+        func,
+        args,
+        destination,
+        Some(next),
         span,
     ));
     next

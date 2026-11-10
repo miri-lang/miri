@@ -162,7 +162,6 @@ pub(crate) fn coerce_to_field(
     if op_ty.kind == target_ty.kind || super::helpers::spellings_of_one_value(&op_ty, &target_ty) {
         return op;
     }
-    let op = super::helpers::read_older_local_by_copy(op, arg_watermark);
     let temp = ctx.push_temp(target_ty.clone(), span);
     let rvalue = coerce_rvalue_in(ctx, op.clone(), &op_ty, &target_ty, span);
     ctx.push_statement(crate::mir::Statement {
@@ -755,7 +754,17 @@ pub(crate) fn emit_empty_list(
     });
     let size_op = int_constant(elem_size, span);
     let list_new = ctx.declared_runtime(rt::LIST_NEW, *span)?;
-    emit_runtime_call(ctx, span, list_new, vec![size_op], destination);
+    let list_new = Operand::runtime(list_new, *span);
+    let args = vec![size_op];
+    super::dispatch::emit_call_terminator(
+        ctx,
+        list_new,
+        args,
+        Vec::new(),
+        Vec::new(),
+        destination,
+        *span,
+    );
     Ok(())
 }
 
@@ -847,38 +856,21 @@ fn lower_copy_from_source(
 
     let mut args = vec![source_op];
     args.extend(trailing_args);
-    emit_runtime_call(ctx, span, copy_fn, args, destination);
+    let copy_fn = Operand::runtime(copy_fn, *span);
+    super::dispatch::emit_call_terminator(
+        ctx,
+        copy_fn,
+        args,
+        Vec::new(),
+        Vec::new(),
+        destination,
+        *span,
+    );
 
     if let Some(local) = source_local {
         ctx.emit_temp_drop(local, arg_watermark, *span);
     }
     Ok(())
-}
-
-/// Emits a call to the runtime function `callee` storing into `destination`,
-/// and continues lowering in the call's successor block.
-fn emit_runtime_call(
-    ctx: &mut LoweringContext,
-    span: &Span,
-    callee: RuntimeCallee,
-    args: Vec<Operand>,
-    destination: Place,
-) {
-    let target_bb = ctx.new_basic_block();
-    let func_op = Operand::runtime(callee, *span);
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args,
-            arg_modes: Vec::new(),
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination,
-            target: Some(target_bb),
-        },
-        *span,
-    ));
-    ctx.set_current_block(target_bb);
 }
 
 /// An `int` constant operand holding `value`.

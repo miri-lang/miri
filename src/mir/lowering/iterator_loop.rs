@@ -227,7 +227,7 @@ fn release_temp(ctx: &mut LoweringContext, temp: Local, span: &Span) {
     let kind = ctx.body.local_decls[temp.0].ty.kind.clone();
     if ctx.is_counted(&kind) {
         ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::StorageDead(Place::new(temp)),
+            kind: StatementKind::storage_dead(Place::new(temp)),
             span: *span,
         });
     }

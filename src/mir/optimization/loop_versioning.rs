@@ -290,7 +290,7 @@ fn written_value(statement: &Statement) -> Option<&Rvalue> {
     match &statement.kind {
         StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => Some(rvalue),
         StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
@@ -463,7 +463,7 @@ fn is_length_of(body: &Body, bound: Local, collection: Local) -> bool {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)

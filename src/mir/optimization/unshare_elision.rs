@@ -214,12 +214,13 @@ fn recognize_copy_on_write(body: &Body, call: usize) -> Option<CopyOnWrite> {
     {
         return None;
     }
-    let [Operand::Move(place)] = args.as_slice() else {
+    let [argument] = args.as_slice() else {
         return None;
     };
-    place.projection.is_empty().then(|| CopyOnWrite {
+    let local = argument.bare_local()?;
+    Some(CopyOnWrite {
         call,
-        place: place.clone(),
+        place: Place::new(local),
         destination: destination.clone(),
         target: *target,
     })

@@ -205,3 +205,30 @@ fn written_places_of_a_jump_or_a_return_is_empty() {
     })
     .is_empty());
 }
+
+#[test]
+fn a_runtime_call_passes_each_argument_as_its_callee_declares() {
+    use miri::runtime_effects::{ElementRole, ParamUse};
+    let callee = runtime_callee_stating(
+        "stores_second",
+        vec![
+            ParamUse::CopiesOnWrite,
+            ParamUse::Stores(ElementRole::Element),
+            ParamUse::Scalar,
+        ],
+    );
+    let call = Terminator::runtime_call(
+        Operand::runtime(callee, Span::default()),
+        vec![dummy_operand(), dummy_operand(), dummy_operand()],
+        Place::new(Local(9)),
+        Some(BasicBlock(1)),
+        Span::default(),
+    );
+    let TerminatorKind::Call { arg_modes, .. } = call.kind else {
+        panic!("a runtime call is a call");
+    };
+    assert_eq!(
+        arg_modes,
+        vec![ArgMode::Owned, ArgMode::Donated, ArgMode::Borrowed]
+    );
+}

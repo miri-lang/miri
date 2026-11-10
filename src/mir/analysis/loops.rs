@@ -150,7 +150,7 @@ fn copied_local(statement: &Statement) -> Option<Local> {
         StatementKind::Assign(..)
         | StatementKind::Reassign(..)
         | StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
@@ -169,7 +169,7 @@ fn compared_locals(statement: &Statement) -> Option<(BinOp, Local, Local)> {
         StatementKind::Assign(..)
         | StatementKind::Reassign(..)
         | StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)
@@ -185,7 +185,9 @@ pub fn writes_whole(statement: &Statement, local: Local) -> bool {
         StatementKind::Assign(place, _)
         | StatementKind::Reassign(place, _)
         | StatementKind::StorageLive(place)
-        | StatementKind::StorageDead(place) => place.local == local && place.projection.is_empty(),
+        | StatementKind::StorageDead(place, _) => {
+            place.local == local && place.projection.is_empty()
+        }
         StatementKind::IncRef(_)
         | StatementKind::DecRef(_)
         | StatementKind::Dealloc(_)

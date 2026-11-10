@@ -44,7 +44,7 @@ fn body_with_dealloc() -> Body {
     for kind in [
         StatementKind::StorageLive(Place::new(Local(1))),
         StatementKind::Dealloc(Place::new(Local(1))),
-        StatementKind::StorageDead(Place::new(Local(1))),
+        StatementKind::storage_dead(Place::new(Local(1))),
     ] {
         block.statements.push(Statement { kind, span: span() });
     }

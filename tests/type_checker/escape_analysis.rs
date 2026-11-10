@@ -78,7 +78,7 @@ fn a_runtime_entry_point_lets_escape_exactly_what_it_stores() {
             .unwrap_or_else(|| panic!("{name} has no summary"));
         let stored: BTreeSet<usize> = (effect.element_roles().into_iter())
             .map(|(position, _)| position)
-            .filter(|position| effect.taken_positions().contains(position))
+            .filter(|position| effect.handed_over_positions().contains(position))
             .collect();
         assert_eq!(summary.direct_escapes, stored, "{name}");
         assert!(summary.return_aliases.is_empty(), "{name}");

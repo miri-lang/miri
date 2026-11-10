@@ -141,6 +141,11 @@ pub struct LoweringContext<'a> {
     /// through [`super::sequencing::hold`]; see
     /// [`super::sequencing::check_every_hold_lowered`].
     pub held_reads: super::sequencing::HeldReads,
+    /// The binding each argument the type checker records as consumed was
+    /// read from where it was lowered, by the argument's expression id: the
+    /// site consuming it ends exactly that binding
+    /// ([`super::variable::consumed_read`]).
+    pub consumed_reads: HashMap<usize, Local>,
 }
 
 /// A source file as lowering reads spans against it: the number the body
@@ -253,6 +258,7 @@ impl<'a> LoweringContext<'a> {
             residency_handles: Vec::new(),
             compilation_ids: new_shared_compilation_ids(),
             held_reads: super::sequencing::HeldReads::default(),
+            consumed_reads: HashMap::new(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
@@ -643,7 +649,7 @@ impl<'a> LoweringContext<'a> {
                 self.variable_map.remove(name);
                 if block_is_live {
                     self.push_statement(crate::mir::Statement {
-                        kind: StatementKind::StorageDead(Place::new(*local)),
+                        kind: StatementKind::storage_dead(Place::new(*local)),
                         span,
                     });
                 }
@@ -695,6 +701,14 @@ impl<'a> LoweringContext<'a> {
         local.0 >= watermark && !self.borrowed_temps.contains(&local)
     }
 
+    /// Whether the expression lowered after `watermark` is what releases
+    /// `local`: a temp it holds a reference in that no enclosing scope has
+    /// taken over. A named binding, a parameter, a borrow and a scope-owned
+    /// temp are released by their owner, however the expression read them.
+    pub fn is_released_by_expression(&self, local: Local, watermark: usize) -> bool {
+        self.is_expression_temp(local, watermark) && !self.is_owned_by_a_scope(local)
+    }
+
     pub fn is_owned_by_a_scope(&self, local: Local) -> bool {
         self.scope_stack
             .iter()
@@ -715,7 +729,7 @@ impl<'a> LoweringContext<'a> {
         let kind = self.body.local_decls[local.0].ty.kind.clone();
         if self.is_counted(&kind) {
             self.push_statement(crate::mir::Statement {
-                kind: StatementKind::StorageDead(Place::new(local)),
+                kind: StatementKind::storage_dead(Place::new(local)),
                 span,
             });
         }
@@ -758,7 +772,7 @@ impl<'a> LoweringContext<'a> {
         let (to_drop, temps_to_drop) = self.scope_exit_drops(outermost);
         for local in to_drop {
             self.push_statement(crate::mir::Statement {
-                kind: StatementKind::StorageDead(Place::new(local)),
+                kind: StatementKind::storage_dead(Place::new(local)),
                 span,
             });
         }
@@ -911,13 +925,13 @@ impl<'a> LoweringContext<'a> {
         watermark: usize,
         span: crate::error::syntax::Span,
     ) {
-        if !self.is_expression_temp(local, watermark) || self.is_owned_by_a_scope(local) {
+        if !self.is_released_by_expression(local, watermark) {
             return;
         }
         let kind = self.body.local_decls[local.0].ty.kind.clone();
         if self.is_counted(&kind) {
             self.push_statement(crate::mir::Statement {
-                kind: StatementKind::StorageDead(Place::new(local)),
+                kind: StatementKind::storage_dead(Place::new(local)),
                 span,
             });
         }
@@ -956,9 +970,13 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// End the current block with `terminator`. Every terminator lowering
+    /// emits passes through here, so a call to a runtime entry point gets
+    /// the argument modes its declaration states
+    /// ([`Terminator::with_declared_modes`]) whatever site built it.
     pub fn set_terminator(&mut self, terminator: Terminator) {
         let block = &mut self.body.basic_blocks[self.current_block.0];
-        block.terminator = Some(terminator);
+        block.terminator = Some(terminator.with_declared_modes());
     }
 
     /// Returns true if the given type has auto-copy semantics (no RC needed).

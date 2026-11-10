@@ -161,7 +161,7 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 Self::translate_assign(builder, ctx, place, rvalue, locals, type_ctx)
             }
-            StatementKind::StorageDead(place) => {
+            StatementKind::StorageDead(place, _) => {
                 Self::translate_gpu_buffer_release(builder, ctx, place, body)
             }
             StatementKind::ReadHeader(read) => {
@@ -1131,7 +1131,7 @@ impl<'a> FunctionTranslator<'a> {
     pub fn out_local_for_arg(arg_modes: &[ArgMode], i: usize, arg: &Operand) -> Option<Local> {
         match arg_mode(arg_modes, i) {
             ArgMode::Out => {}
-            ArgMode::Borrowed | ArgMode::Owned => return None,
+            ArgMode::Borrowed | ArgMode::Owned | ArgMode::Donated => return None,
         }
         arg.bare_local()
     }

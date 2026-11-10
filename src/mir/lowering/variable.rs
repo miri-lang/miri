@@ -16,7 +16,7 @@ use crate::mir::{
     TerminatorKind,
 };
 
-use super::helpers::{coerce_rvalue_in, read_older_local_by_copy, release_coerced_source};
+use super::helpers::{coerce_rvalue_in, release_coerced_source};
 use super::{lower_expression, resolve_argument_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
@@ -266,7 +266,7 @@ fn lower_single_variable(
 
     if let Some(init_expr) = init_expr_opt {
         assign_variable_initializer(ctx, local, init_expr, pre_lowered_op, &var_ty_kind, span)?;
-        clear_moved_resource_source(ctx, init_expr, *span);
+        release_consumed_binding(ctx, init_expr, *span)?;
     } else {
         start_optional_absent(ctx, local, *span);
     }
@@ -293,49 +293,67 @@ fn start_optional_absent(ctx: &mut LoweringContext, local: crate::mir::Local, sp
     });
 }
 
-/// Leave the local a resource was moved out of holding nothing.
+/// End the storage of the binding `expr` was read from when the type checker
+/// records that consuming it there hands its reference on
+/// (`type_checker::use_after_move::ConsumedArguments`); its release lands
+/// where its storage ends.
 ///
 /// `var b = a` moves a value with a drop hook: the type checker consumes `a`,
 /// so nothing reads it again. The copy into `b` shares the reference, and were
 /// `a` to keep its own, `b.drop()` would not release the last one and the hook
-/// would run only when `a`'s scope ends. Clearing `a`'s slot hands its
-/// reference to `b`, and the release at `a`'s scope exit finds nothing. A
-/// parameter's reference belongs to the caller, so moving one out of a
-/// parameter leaves it alone.
-fn clear_moved_resource_source(ctx: &mut LoweringContext, init_expr: &Expression, span: Span) {
-    let ExpressionKind::Identifier(name, _) = &init_expr.node else {
-        return;
-    };
-    let Some(source) = ctx
-        .variable_map
-        .get(name.as_str())
-        .copied()
-        .filter(|local| local.0 > ctx.body.arg_count)
-    else {
-        return;
-    };
-    let source_ty = ctx.body.local_decls[source.0].ty.clone();
-    let definitions = ctx.type_checker.type_definitions();
-    // A value held at a trait is shared, not moved, so its source keeps it.
-    let held_at_a_trait = matches!(&source_ty.kind, TypeKind::Custom(name, _)
-        if crate::type_checker::utils::trait_declares_drop_hook(name, definitions));
-    if held_at_a_trait || !crate::type_checker::utils::runs_drop_hook(&source_ty.kind, definitions)
-    {
-        return;
+/// would run only when `a`'s scope ends. Ending `a` here releases its reference
+/// right after the copy; drop elaboration (`mir::drop_elaboration`) then
+/// removes, or guards by a drop flag, the end of `a` its scope exit would
+/// otherwise reach a second time. A call that keeps `a` consumes it the same
+/// way, its callee holding a reference of its own.
+pub(crate) fn release_consumed_binding(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    span: Span,
+) -> Result<(), LoweringError> {
+    if let Some(source) = consumed_read(ctx, expr)? {
+        end_consumed_binding(ctx, source, span);
     }
-    let null = Operand::Constant(Box::new(crate::mir::Constant {
-        span,
-        ty: source_ty,
-        literal: Literal::None,
-    }));
+    Ok(())
+}
+
+/// The binding the lowering of `expr` read, when the type checker records
+/// that consuming `expr` hands its reference on; `None` for any other
+/// expression. Refused when the lowering of a consumed expression read no
+/// binding, which would leave the binding released only where its scope ends.
+pub(crate) fn consumed_read(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+) -> Result<Option<crate::mir::Local>, LoweringError> {
+    if !ctx.type_checker.consumed_arguments.consumes(expr) {
+        return Ok(None);
+    }
+    match ctx.consumed_reads.remove(&expr.id) {
+        Some(local) => Ok(Some(local)),
+        None => Err(LoweringError::internal(
+            crate::diagnostics::DiagnosticCode::MirValidationFailed,
+            "a consumed argument was lowered without reading the binding it names",
+            expr.span,
+        )),
+    }
+}
+
+/// End `local`'s storage where a consuming site gave its value up, and
+/// whether it did. A parameter's reference belongs to the caller, so
+/// consuming a parameter ends nothing here.
+pub(crate) fn end_consumed_binding(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    span: Span,
+) -> bool {
+    if local.0 <= ctx.body.arg_count {
+        return false;
+    }
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::DecRef(Place::new(source)),
+        kind: MirStatementKind::StorageDead(Place::new(local), crate::mir::EndCause::Consumed),
         span,
     });
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(source), Rvalue::Use(null)),
-        span,
-    });
+    true
 }
 
 /// Apply shared-storage and host/gpu residency metadata to a freshly-declared
@@ -439,8 +457,7 @@ fn assign_variable_initializer(
     }
 
     let watermark = ctx.body.local_decls.len();
-    let lowered = lower_expression(ctx, init_expr, None)?;
-    let op = read_older_local_by_copy(lowered, watermark);
+    let op = lower_expression(ctx, init_expr, None)?;
     let op_ty = super::helpers::operand_value_type(ctx, &op);
     let target_ty = ctx.body.local_decls[local.0].ty.clone();
     let rvalue = if op_ty.kind != *var_ty_kind {

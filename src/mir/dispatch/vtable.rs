@@ -104,7 +104,7 @@ pub fn constructed_vtable_symbols<'b>(
                 constructed_class(rvalue)
             }
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_)
             | StatementKind::IncRef(_)

@@ -118,7 +118,6 @@ impl TemporaryRoot {
 pub(crate) struct EntryWriteBack {
     map: Place,
     key: Place,
-    key_ty: Type,
     key_watermark: usize,
     value: Place,
 }
@@ -156,16 +155,10 @@ fn store_entry_back(
     write_back: EntryWriteBack,
     obj: &Expression,
 ) -> Result<(), LoweringError> {
-    let (donated_key, _) = crate::mir::lowering::dispatch::donate_operand_to_container(
-        ctx,
-        Operand::Copy(write_back.key.clone()),
-        write_back.key_ty,
-        obj.span,
-    );
     super::assignment_expr::emit_map_set_call(
         ctx,
         Operand::Copy(write_back.map),
-        donated_key,
+        Operand::Copy(write_back.key.clone()),
         Operand::Copy(write_back.value.clone()),
         obj,
     )?;
@@ -337,7 +330,7 @@ fn lower_entry_key(
     value_ty: Type,
 ) -> Result<LoweredStep, LoweringError> {
     let key_watermark = ctx.body.local_decls.len();
-    let (key_op, key_ty) = crate::mir::lowering::dispatch::lower_stored_value(
+    let (key_op, _) = crate::mir::lowering::dispatch::lower_stored_value(
         ctx,
         key,
         &map_ty,
@@ -346,7 +339,6 @@ fn lower_entry_key(
     let place = crate::mir::lowering::helpers::ensure_place(ctx, key_op, key.span);
     let key = EntryKey {
         place,
-        ty: key_ty,
         watermark: key_watermark,
         span: key.span,
     };
@@ -356,7 +348,6 @@ fn lower_entry_key(
 /// The key of a map entry on a written path, already lowered.
 struct EntryKey {
     place: Place,
-    ty: Type,
     watermark: usize,
     span: Span,
 }
@@ -404,10 +395,7 @@ fn lower_temporary_root(
     let source = source.map(|place| place.local);
     let local = ctx.push_temp(ty.clone(), root.span);
     ctx.push_statement(Statement {
-        kind: StatementKind::Assign(
-            Place::new(local),
-            Rvalue::Use(crate::mir::lowering::dispatch::move_to_copy(operand)),
-        ),
+        kind: StatementKind::Assign(Place::new(local), Rvalue::Use(operand)),
         span: root.span,
     });
     if let Some(source) = source {
@@ -594,7 +582,6 @@ fn own_entry_place(
     use super::assignment_expr::emit_map_get_checked_call;
     let EntryKey {
         place: key_place,
-        ty: key_ty,
         watermark: key_watermark,
         span: key_span,
     } = key;
@@ -611,7 +598,6 @@ fn own_entry_place(
             write_back: Some(EntryWriteBack {
                 map: map.clone(),
                 key: key_place,
-                key_ty,
                 key_watermark,
                 value: entry,
             }),
@@ -629,22 +615,18 @@ fn own_entry_place(
     let join_bb = branch_when_shared(ctx, &entry, obj.span);
     let copy = ctx.push_temp(value_ty.clone(), obj.span);
     emit_copy(ctx, &entry, value_ty, unsharing, copy, obj.span)?;
-    // The map takes over both the key it is handed and the copy, so neither
-    // temp holding them is released on its own.
-    let (donated_key, _) = crate::mir::lowering::dispatch::donate_operand_to_container(
-        ctx,
-        Operand::Copy(key_place.clone()),
-        key_ty,
-        key_span,
-    );
+    // The map keeps the key and the copy, and the call funds a reference to
+    // each; the copy's temp gives its own back once the map holds it, and the
+    // key's once the entry is looked up again.
     let copy_op = Operand::Copy(Place::new(copy));
     super::assignment_expr::emit_map_set_call(
         ctx,
         Operand::Copy(map.clone()),
-        donated_key,
+        Operand::Copy(key_place.clone()),
         copy_op,
         obj,
     )?;
+    ctx.emit_temp_drop(copy, copy.0, obj.span);
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: join_bb },
         obj.span,

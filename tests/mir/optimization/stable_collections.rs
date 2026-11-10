@@ -417,7 +417,7 @@ fn test_a_gpu_body_records_nothing() {
 
 #[test]
 fn test_ending_the_storage_of_the_list_in_the_loop_leaves_it_unrecorded() {
-    let dead = statement(StatementKind::StorageDead(Place::new(LIST)));
+    let dead = statement(StatementKind::storage_dead(Place::new(LIST)));
     assert!(records_of(with_step_statement(loop_over_a_list(), dead)).is_empty());
 }
 

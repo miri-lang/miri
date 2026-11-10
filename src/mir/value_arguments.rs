@@ -352,7 +352,7 @@ fn element_addresses_taken(block: &BasicBlockData) -> Vec<Local> {
             StatementKind::Assign(..)
             | StatementKind::Reassign(..)
             | StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::IncRef(_)
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
@@ -421,7 +421,7 @@ fn statement_written_roots(
         }
         StatementKind::DecRef(place) | StatementKind::Dealloc(place) => [Some(place.local), None],
         StatementKind::StorageLive(_)
-        | StatementKind::StorageDead(_)
+        | StatementKind::StorageDead(_, _)
         | StatementKind::IncRef(_)
         | StatementKind::Nop
         | StatementKind::ReadHeader(_) => [None, None],

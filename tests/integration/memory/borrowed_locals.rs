@@ -145,14 +145,15 @@ fn total() int
 println(f"{total()}")
 "#,
         "38",
-        5,
-        10,
+        2,
+        7,
     );
 }
 
 /// Clearing, growing or storing into the list an element was read from may
-/// free the element, so a read held across any of them keeps its reference:
-/// the counts are those of a program with no borrowing at all.
+/// free the element, so a read held across any of them keeps its reference.
+/// The counts are lower than those of a program with no borrowing because a
+/// temporary pushed into the list is no longer retained: the push takes it.
 #[test]
 fn test_reads_before_a_clear_a_push_or_an_index_store_keep_their_reference() {
     assert_borrowing(
@@ -190,8 +191,8 @@ fn read_after_index_assign() int
 println(f"{read_after_clear()} {read_after_push()} {read_after_index_assign()}")
 "#,
         "1 44 19",
-        44,
-        106,
+        4,
+        66,
     );
 }
 
@@ -555,8 +556,8 @@ fn run() String
 println(run())
 "#,
         "24 1 1",
-        10,
-        22,
+        6,
+        18,
     );
 }
 
@@ -637,8 +638,8 @@ fn run() String
 println(run())
 "#,
         "6 9 3",
-        9,
-        35,
+        7,
+        33,
     );
 }
 

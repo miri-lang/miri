@@ -202,7 +202,7 @@ impl Flow<'_> {
             }
             // Starting or ending a local's storage reads nothing of it.
             StatementKind::StorageLive(_)
-            | StatementKind::StorageDead(_)
+            | StatementKind::StorageDead(_, _)
             | StatementKind::Nop
             | StatementKind::ReadHeader(_) => None,
         };
@@ -227,7 +227,7 @@ impl Flow<'_> {
                 }
             }
             StatementKind::StorageLive(place) => self.forget_sources_naming(place.local, valid),
-            StatementKind::StorageDead(place) => {
+            StatementKind::StorageDead(place, _) => {
                 let has_device_buffer = (self.body.local_decls.get(place.local.0))
                     .is_some_and(|decl| decl.device_handle.is_some());
                 if has_device_buffer {

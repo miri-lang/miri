@@ -24,17 +24,22 @@ use crate::mir::{Body, Local};
 pub enum Fact {
     /// [`OwnershipFacts`].
     Ownership,
+    /// Every binding a consuming site gives up is released once on every
+    /// path (`crate::mir::drop_elaboration`). Recorded once, by the pass
+    /// that makes it so.
+    DropsElaborated,
 }
 
 impl Fact {
     /// Every group, in the order a body's facts hold them.
-    pub const ALL: [Fact; 1] = [Fact::Ownership];
+    pub const ALL: [Fact; 2] = [Fact::Ownership, Fact::DropsElaborated];
 }
 
 impl fmt::Display for Fact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Fact::Ownership => f.write_str("ownership"),
+            Fact::DropsElaborated => f.write_str("elaborated-drops"),
         }
     }
 }
@@ -110,6 +115,11 @@ pub struct BodyFacts {
     /// The generation the ownership facts hold at; `None` once a rewrite
     /// left it stale.
     ownership_at: Option<u64>,
+    /// The generation the body's drops were elaborated at; `None` before
+    /// they are, or once a rewrite left the fact stale.
+    drops_elaborated_at: Option<u64>,
+    /// Every group some pass has recorded, stale or not.
+    recorded: Vec<Fact>,
 }
 
 impl BodyFacts {
@@ -120,6 +130,8 @@ impl BodyFacts {
         BodyFacts {
             ownership: OwnershipFacts::default(),
             ownership_at: Some(body.generation()),
+            drops_elaborated_at: None,
+            recorded: Vec::new(),
         }
     }
 
@@ -157,6 +169,15 @@ impl BodyFacts {
     /// carried there across a rewrite that preserves it.
     pub fn stamp_current(&mut self, fact: Fact, body: &Body) {
         *self.stamp_mut(fact) = Some(body.generation());
+        if !self.recorded.contains(&fact) {
+            self.recorded.push(fact);
+        }
+    }
+
+    /// Whether a pass has ever recorded `fact` about the body, however
+    /// stale it has gone since.
+    pub fn was_recorded(&self, fact: Fact) -> bool {
+        self.recorded.contains(&fact)
     }
 
     /// Marks `fact` as no longer holding.
@@ -167,12 +188,14 @@ impl BodyFacts {
     fn stamp(&self, fact: Fact) -> &Option<u64> {
         match fact {
             Fact::Ownership => &self.ownership_at,
+            Fact::DropsElaborated => &self.drops_elaborated_at,
         }
     }
 
     fn stamp_mut(&mut self, fact: Fact) -> &mut Option<u64> {
         match fact {
             Fact::Ownership => &mut self.ownership_at,
+            Fact::DropsElaborated => &mut self.drops_elaborated_at,
         }
     }
 }

@@ -141,7 +141,7 @@ impl Translation<'_> {
     }
 
     /// The block's statements are the lowered ones, then assignments to new
-    /// locals of an address or a constant.
+    /// locals of an address, a constant or a copy of an element.
     fn statements(&mut self, block: usize) {
         let was = &self.before.basic_blocks[block].statements;
         let is = &self.after.basic_blocks[block].statements;
@@ -157,7 +157,7 @@ impl Translation<'_> {
                 StatementKind::Assign(place, value)
                     if place.projection.is_empty()
                         && self.is_new(place.local)
-                        && is_address_or_constant(value) =>
+                        && is_address_or_element_value(value) =>
                 {
                     self.added.insert(place.local, value.clone());
                 }
@@ -281,15 +281,26 @@ impl Translation<'_> {
                 Local(0),
                 format!("argument {position} changed though it travels as itself"),
             ),
-            RuntimeParamAbi::Element => self.element(position, arg, &rest[0], &rest[1]),
+            RuntimeParamAbi::Element => {
+                let stored = effect.stores(position);
+                self.element(position, stored, arg, &rest[0], &rest[1])
+            }
             RuntimeParamAbi::Closure(_) => self.closure(position, arg, &rest[0], &rest[1]),
         }
         words
     }
 
     /// An element argument spelled as the address of the place it was read
-    /// from, then its byte count.
-    fn element(&mut self, position: usize, arg: &Operand, address: &Operand, count: &Operand) {
+    /// from, or, for an element the container stores, of a temporary the pass
+    /// filled with a copy of it, then its byte count.
+    fn element(
+        &mut self,
+        position: usize,
+        stored: bool,
+        arg: &Operand,
+        address: &Operand,
+        count: &Operand,
+    ) {
         let Some(addressed) = self.address_of(address) else {
             self.flag(
                 Local(0),
@@ -298,6 +309,10 @@ impl Translation<'_> {
             return;
         };
         let read = match arg {
+            Operand::Copy(place) | Operand::Move(place) if stored => {
+                let copied = Operand::Copy(place.clone());
+                (self.temporary_of(&addressed, &copied)).unwrap_or_else(|| place.clone())
+            }
             Operand::Copy(place) | Operand::Move(place) => place.clone(),
             Operand::Constant(_) => match self.temporary_of(&addressed, arg) {
                 Some(temporary) => temporary,
@@ -563,7 +578,13 @@ fn spelled_effect(kind: &TerminatorKind) -> Option<&RuntimeEffect> {
 }
 
 /// Whether `value` is what the translation assigns a new local: an address,
-/// or a constant an address is then taken of.
-fn is_address_or_constant(value: &Rvalue) -> bool {
-    matches!(value, Rvalue::Ref(_) | Rvalue::Use(Operand::Constant(_)))
+/// or a constant or a copy of an element an address is then taken of. A copy
+/// is accounted for only where the call hands a stored element
+/// ([`Translation::element`]); anywhere else nothing reads it, and it is
+/// flagged.
+fn is_address_or_element_value(value: &Rvalue) -> bool {
+    matches!(
+        value,
+        Rvalue::Ref(_) | Rvalue::Use(Operand::Constant(_) | Operand::Copy(_))
+    )
 }

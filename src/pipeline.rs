@@ -1563,7 +1563,14 @@ impl Pipeline {
         let manager = PassManager::new(passes::MIR_PASSES)
             .map_err(|order| CompilerError::Internal(order.to_string()))?;
         manager.run(&mut lowered, &mut facts, &mut context)?;
-        let program_violations = context.violations;
+        let mut program_violations = context.violations;
+        // Passes after ownership is decided build calls of their own, so
+        // every call's argument modes are checked again on the bodies as
+        // the passes leave them.
+        if verify_mode.is_some() {
+            let modes = mir::verify::verify_owned_argument_modes(&lowered, &facts);
+            program_violations.extend(modes);
+        }
 
         let bodies: Vec<(String, mir::Body)> = lowered
             .into_iter()

@@ -533,14 +533,9 @@ pub struct LocalDecl {
     /// Set on a GPU kernel parameter the launch fills in; `None` for every
     /// other local, including captured scalars. See [`LaunchUniform`].
     pub launch_uniform: Option<LaunchUniform>,
-    /// Set on a boolean local the readback pass keeps, naming the device
-    /// handle it watches. The flag is set while that handle's device buffer
-    /// may hold results the host array lacks, and cleared when a readback, an
-    /// upload or a fresh activation brings the two back into agreement. A host
-    /// read reached along paths that disagree about the buffer tests the flag
-    /// rather than reading back every time, and the verifier takes a flag found
-    /// clear as a fence. `None` for every other local.
-    pub stale_flag_of: Option<DeviceHandleId>,
+    /// Set on a boolean local a pass keeps as a flag, naming what it tracks
+    /// ([`FlagOf`]). `None` for every other local.
+    pub flag_of: Option<FlagOf>,
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
@@ -552,6 +547,24 @@ pub struct LocalDecl {
 }
 
 impl LocalDecl {
+    /// The device handle this local is the stale flag of, if the readback
+    /// pass made it one.
+    pub fn stale_flag_of(&self) -> Option<DeviceHandleId> {
+        match self.flag_of? {
+            FlagOf::Stale(handle) => Some(handle),
+            FlagOf::Drop(_) => None,
+        }
+    }
+
+    /// The binding this local is the drop flag of, if drop elaboration made
+    /// it one.
+    pub fn drop_flag_of(&self) -> Option<Local> {
+        match self.flag_of? {
+            FlagOf::Drop(binding) => Some(binding),
+            FlagOf::Stale(_) => None,
+        }
+    }
+
     pub fn new(ty: Type, span: Span) -> Self {
         let mir_ty = MirType::from_type_kind(&ty.kind);
         Self {
@@ -565,10 +578,27 @@ impl LocalDecl {
             device_handle: None,
             device_handle_borrowed: false,
             launch_uniform: None,
-            stale_flag_of: None,
+            flag_of: None,
             mir_ty,
         }
     }
+}
+
+/// What a boolean flag local a pass keeps tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FlagOf {
+    /// Set while the device buffer of this handle may hold results the host
+    /// array lacks, and cleared when a readback, an upload or a fresh
+    /// activation brings the two back into agreement. A host read reached
+    /// along paths that disagree about the buffer tests the flag rather than
+    /// reading back every time, and the verifier takes a flag found clear as
+    /// a fence.
+    Stale(DeviceHandleId),
+    /// Set while this binding holds a value: right after it is bound whole,
+    /// and cleared right after its storage ends. A release reached along
+    /// paths that disagree about whether the binding was consumed tests the
+    /// flag.
+    Drop(Local),
 }
 
 impl fmt::Display for Body {
