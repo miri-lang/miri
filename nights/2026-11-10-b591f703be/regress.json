@@ -1,0 +1,31 @@
+{
+ "run_id": "20261110T131046Z",
+ "suspect": [
+  {
+   "cell": "wordfreq/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1083073958942742,
+   "baseline": 5.012322803205934,
+   "tonight": 5.555194433402657
+  }
+ ],
+ "regressed": [],
+ "recovered": [
+  {
+   "cell": "fannkuch-redux/miri/s/cold",
+   "measure": "time_vs_c"
+  },
+  {
+   "cell": "fannkuch-redux/miri/s/hot",
+   "measure": "time_vs_c"
+  },
+  {
+   "cell": "spectral-norm/miri/s/cold",
+   "measure": "time_vs_c"
+  },
+  {
+   "cell": "spectral-norm/miri/s/hot",
+   "measure": "time_vs_c"
+  }
+ ]
+}
