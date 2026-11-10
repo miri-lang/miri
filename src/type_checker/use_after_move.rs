@@ -982,6 +982,40 @@ impl<'a> UseAfterMoveChecker<'a> {
             return;
         }
 
+        let consumed_before: HashSet<String> = consumed.keys().cloned().collect();
+        self.consume_call_arguments(
+            callee,
+            args,
+            &fn_name,
+            (method_summary, method_chain_key, free_fn_summary),
+            is_dynamic_fn,
+            consumed,
+        );
+        self.refuse_a_kept_resource_passed_again(
+            callee,
+            args,
+            &fn_name,
+            &consumed_before,
+            consumed,
+        );
+    }
+
+    /// Consumes every resource argument the callee keeps, as its escape
+    /// summary says, or every one when the checker cannot see the callee.
+    fn consume_call_arguments(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        fn_name: &str,
+        summaries: (
+            Option<EscapeSummary>,
+            Option<FunctionId>,
+            Option<EscapeSummary>,
+        ),
+        is_dynamic_fn: bool,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        let (method_summary, method_chain_key, free_fn_summary) = summaries;
         let params: Vec<Parameter> = self
             .types
             .get(&callee.id)
@@ -994,7 +1028,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             })
             .unwrap_or_default();
 
-        let named_sink = || Sink::Function(FunctionId::free(&fn_name));
+        let named_sink = || Sink::Function(FunctionId::free(fn_name));
         if let Some(summary) = method_summary {
             let method_sink = method_chain_key.map_or_else(named_sink, Sink::Function);
             if summary.directly_escapes(0) {
@@ -1009,11 +1043,40 @@ impl<'a> UseAfterMoveChecker<'a> {
             // A callee whose body the checker cannot see is assumed to keep
             // every resource it is handed.
             let sink = if is_dynamic_fn {
-                Sink::DynamicFn(fn_name.clone())
+                Sink::DynamicFn(fn_name.to_string())
             } else {
                 named_sink()
             };
             self.consume_resource_args(args, &params, &sink, consumed);
+        }
+    }
+
+    /// Refuses a resource this call consumes that the call is also handed at
+    /// another position, kept or lent. A resource has one owner, so the call
+    /// cannot keep it twice, and it cannot lend a view of the value it keeps.
+    /// Reported at the second position it is passed at.
+    fn refuse_a_kept_resource_passed_again(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        fn_name: &str,
+        consumed_before: &HashSet<String>,
+        consumed: &HashMap<String, ConsumedInfo>,
+    ) {
+        let receiver = match &callee.node {
+            ExpressionKind::Member(object, _) => Some(object.as_ref()),
+            _ => None,
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        for passed in receiver.into_iter().chain(args.iter().map(argument_value)) {
+            let ExpressionKind::Identifier(name, _) = &passed.node else {
+                continue;
+            };
+            let kept_here = consumed.contains_key(name) && !consumed_before.contains(name);
+            if kept_here && !seen.insert(name.as_str()) {
+                self.errors
+                    .push(passed_again_error(name, fn_name, passed.span));
+            }
         }
     }
 
@@ -1570,5 +1633,33 @@ fn names_declared_in(statement: &Statement, declared: &mut Vec<String>) {
             names_declared_in(inner, declared);
         }
         _ => {}
+    }
+}
+
+/// The value an argument passes: a named argument's value, or the argument.
+fn argument_value(arg: &Expression) -> &Expression {
+    match &arg.node {
+        ExpressionKind::NamedArgument(_, value) => value,
+        _ => arg,
+    }
+}
+
+/// The refusal of a resource handed to one call at a position the call keeps
+/// and at another.
+fn passed_again_error(name: &str, fn_name: &str, span: Span) -> TypeError {
+    TypeError {
+        kind: TypeErrorKind::Coded {
+            code: DiagnosticCode::OwnUseOfMovedValue,
+            message: format!(
+                "'{name}' is passed to '{fn_name}' more than once, and '{fn_name}' keeps it: a resource has one owner\n  fix: pass '{name}' once, and read what the other argument needs from it before the call"
+            ),
+            help: None,
+            expected: None,
+            actual: None,
+        },
+        span,
+        source_override: None,
+        repair: None,
+        related: Vec::new(),
     }
 }

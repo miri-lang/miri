@@ -1948,3 +1948,111 @@ fn main()
         "2 1\nclosed 2\nclosed 1",
     );
 }
+
+const ONE_RESOURCE_TWO_POSITIONS: &str = r#"
+class Res
+    var x int
+    fn drop(self)
+        println(f"drop {self.x}")
+
+fn keep_both(a Res, b Res) Res
+    if a.x > b.x
+        return a
+    return b
+
+fn keep_first(a Res, b Res) Res
+    println(f"reads {b.x}")
+    return a
+
+fn read_both(a Res, b Res) int
+    return a.x + b.x
+
+class Picker
+    var bias int
+    fn pick(a Res, b Res) Res
+        if self.bias > 0
+            return a
+        return b
+"#;
+
+/// A resource has one owner, so a call cannot keep it at two positions.
+#[test]
+fn a_resource_kept_at_two_positions_of_one_call_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{ONE_RESOURCE_TWO_POSITIONS}
+fn main()
+    let h = Res(x: 1)
+    let p = keep_both(h, h)
+"
+        ),
+        "'h' is passed to 'keep_both' more than once",
+    );
+}
+
+/// A call cannot lend a resource it also keeps: the lent view would outlive
+/// the owner the callee becomes.
+#[test]
+fn a_resource_kept_at_one_position_and_lent_at_another_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{ONE_RESOURCE_TWO_POSITIONS}
+fn main()
+    let h = Res(x: 1)
+    let k = keep_first(h, h)
+"
+        ),
+        "'h' is passed to 'keep_first' more than once",
+    );
+}
+
+/// The same refusal through a method the receiver's class declares.
+#[test]
+fn a_resource_a_method_keeps_twice_is_refused() {
+    assert_compiler_error(
+        &format!(
+            "{ONE_RESOURCE_TWO_POSITIONS}
+fn main()
+    let picker = Picker(bias: 1)
+    let h = Res(x: 1)
+    let k = picker.pick(h, h)
+"
+        ),
+        "more than once",
+    );
+}
+
+/// Two different resources at the two kept positions are two owners handed
+/// over, which the call may keep.
+#[test]
+fn two_resources_kept_by_one_call_are_accepted() {
+    assert_heap_guard_output(
+        &format!(
+            "{ONE_RESOURCE_TWO_POSITIONS}
+fn main()
+    let h = Res(x: 1)
+    let k = Res(x: 2)
+    let kept = keep_both(h, k)
+    println(f\"kept {{kept.x}}\")
+"
+        ),
+        "drop 1\nkept 2\ndrop 2",
+    );
+}
+
+/// Lending one resource twice to a call that keeps neither is reading it
+/// twice, and the caller still owns it.
+#[test]
+fn a_resource_lent_twice_to_one_call_is_accepted() {
+    assert_heap_guard_output(
+        &format!(
+            "{ONE_RESOURCE_TWO_POSITIONS}
+fn main()
+    let h = Res(x: 2)
+    println(f\"{{read_both(h, h)}}\")
+    println(\"end\")
+"
+        ),
+        "4\nend\ndrop 2",
+    );
+}
