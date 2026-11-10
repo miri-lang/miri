@@ -78,21 +78,25 @@ enum Path {
     DropCall,
     /// It is held at a trait type, which then goes out of scope.
     ReleaseThroughTrait,
-    /// It is handed to a consuming function on every pass of a loop, which
-    /// uses it again after the first pass moved it.
+    /// It is handed on every pass of a loop to a function that keeps it, so
+    /// the second pass uses a value the first pass moved.
     ConsumeInLoop,
+    /// It is lent on every pass of a loop to a function that only reads it,
+    /// and stays its binding's until the scope ends.
+    LendInLoop,
     /// It is the value of one branch of a conditional expression whose other
     /// branch builds a second resource; the branch shares it with the result.
     PickedByOneBranch,
 }
 
 impl Path {
-    const ALL: [Path; 6] = [
+    const ALL: [Path; 7] = [
         Path::ScopeExit,
         Path::MoveIntoSlot,
         Path::DropCall,
         Path::ReleaseThroughTrait,
         Path::ConsumeInLoop,
+        Path::LendInLoop,
         Path::PickedByOneBranch,
     ];
 
@@ -103,6 +107,7 @@ impl Path {
             Path::DropCall => "drop_call",
             Path::ReleaseThroughTrait => "release_through_trait",
             Path::ConsumeInLoop => "consume_in_loop",
+            Path::LendInLoop => "lend_in_loop",
             Path::PickedByOneBranch => "picked_by_one_branch",
         }
     }
@@ -154,10 +159,21 @@ impl Path {
                     format!("let r = {made}"),
                     "var i = 0".into(),
                     "while i < 2".into(),
-                    "    consume(r)".into(),
+                    "    let _kept = consume(r)".into(),
                     "    i = i + 1".into(),
                 ],
                 Expected::Refused("MER_OWN_003"),
+            ),
+            Path::LendInLoop => (
+                vec![
+                    "if true".into(),
+                    format!("    let r = {made}"),
+                    "    var i = 0".into(),
+                    "    while i < 2".into(),
+                    "        look(r)".into(),
+                    "        i = i + 1".into(),
+                ],
+                printed(&["look", "look", "drop 1"]),
             ),
             Path::PickedByOneBranch => (
                 vec![
@@ -250,7 +266,8 @@ fn program(resource: Resource, place: Place, statements: &[String]) -> String {
         ),
     };
     format!(
-        "{}\nfn consume(r Res)\n    println(\"consumed\")\n\n{driver}",
+        "{}\nfn consume(r Res) Res\n    println(\"consumed\")\n    return r\n\n\
+         fn look(r Res)\n    println(\"look\")\n\n{driver}",
         resource.declaration()
     )
 }

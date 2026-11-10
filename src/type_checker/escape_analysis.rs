@@ -70,7 +70,7 @@ use crate::ast::Parameter;
 use crate::runtime_effects::RuntimeEffects;
 
 use super::context::TypeDefinition;
-use super::utils::is_auto_copy;
+use super::utils::{is_auto_copy, is_resource};
 
 /// Zero-based index of a parameter in a function's parameter list.
 pub type ParamIndex = usize;
@@ -661,11 +661,17 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 let summary_idx = i + arg_offset;
                 self.apply_summary_for_arg(arg, summary_idx, s, aliases_return, flow);
             }
+        } else if self.is_parameter_call(callee) {
+            // A call through a function-typed parameter reaches a function
+            // this body cannot see: it may keep any argument, and its result
+            // may be any of them.
+            for arg in args {
+                self.consume_leaf_identifier(arg, flow);
+                self.classify(arg, aliases_return, flow);
+            }
         } else {
             // No summary available — this analyzer alone cannot decide whether
-            // the call propagates flow.  The escape analysis pass handles
-            // the conservative fallback ("every managed param escapes") for
-            // unresolved callees.  For value-flow purposes, we
+            // the call propagates flow.  For value-flow purposes, we
             // recurse without propagating alias context: nested patterns
             // inside arg expressions still get classified, but we make no
             // claim about the call's own return value.
@@ -728,12 +734,23 @@ impl<'a> ReturnFlowAnalyzer<'a> {
         self.params.iter().position(|p| p.name == name)
     }
 
-    /// Returns `true` if `expr`'s resolved type is managed (non-auto-copy,
-    /// heap-allocated).  Auto-copy expressions (primitives, small POD structs)
-    /// produce by-value results that cannot alias another heap.
+    /// Returns `true` if `callee` names one of this function's parameters,
+    /// i.e. the call goes through a function value the caller supplied.
+    fn is_parameter_call(&self, callee: &Expression) -> bool {
+        matches!(&callee.node, ExpressionKind::Identifier(name, _) if self.param_index(name).is_some())
+    }
+
+    /// Returns `true` if a caller can tell whether `expr` is kept: its type is
+    /// managed (heap-allocated) or a resource. Other auto-copy values
+    /// (primitives, small all-scalar structs) are copied bytes that cannot alias
+    /// another heap; a resource is tracked whatever its layout, because its hook
+    /// runs once and the caller must know whether the callee now owns it.
     fn is_managed_expr(&self, expr: &Expression) -> bool {
         match self.types.get(&expr.id) {
-            Some(ty) => !is_auto_copy(&ty.kind, self.type_definitions),
+            Some(ty) => {
+                !is_auto_copy(&ty.kind, self.type_definitions)
+                    || is_resource(&ty.kind, self.type_definitions)
+            }
             None => false,
         }
     }
@@ -829,8 +846,10 @@ pub fn compute_escape_summaries(
                 };
                 let new_summary =
                     compute_one_summary(&def.params, def.body, types, type_definitions, &summaries);
-                let old = summaries.get(fn_id).cloned().unwrap_or_default();
-                if new_summary != old {
+                // An empty summary is stored too: "keeps nothing" is a fact a
+                // caller reads, and only a function with no summary at all is
+                // one the caller cannot see into.
+                if summaries.get(fn_id) != Some(&new_summary) {
                     summaries.insert(fn_id.clone(), new_summary);
                     changed = true;
                 }
@@ -1671,11 +1690,13 @@ fn walk_call_for_rule4(
     direct_escapes: &mut BTreeSet<ParamIndex>,
 ) {
     if let ExpressionKind::Identifier(name, _) = &callee.node {
-        if let Some(summary) = summaries.get(&FunctionId::free(name)) {
-            for (i, arg) in args.iter().enumerate() {
-                if summary.directly_escapes(i) {
-                    apply_rule4_to_arg(arg, i, params, direct_escapes);
-                }
+        // A call through a function-typed parameter reaches a function this
+        // body cannot see, so it may keep every argument it is given.
+        let through_parameter = params.iter().any(|p| p.name == *name);
+        let summary = summaries.get(&FunctionId::free(name));
+        for (i, arg) in args.iter().enumerate() {
+            if through_parameter || summary.is_some_and(|s| s.directly_escapes(i)) {
+                apply_rule4_to_arg(arg, i, params, direct_escapes);
             }
         }
     }

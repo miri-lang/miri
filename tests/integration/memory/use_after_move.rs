@@ -8,8 +8,8 @@ use super::super::utils::*;
 // ─────────────────────────────────────────────
 
 #[test]
-fn test_list_use_after_move_error() {
-    assert_compiler_error(
+fn test_list_passed_to_a_call_is_still_usable() {
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -20,7 +20,7 @@ let x = List([1, 2, 3])
 process(x)
 println(f"{x.length()}")
 "#,
-        "consumed",
+        "3",
     );
 }
 
@@ -75,8 +75,8 @@ println(f"original={p.x}")
 // ─────────────────────────────────────────────
 
 #[test]
-fn test_string_use_after_move_error() {
-    assert_compiler_error(
+fn test_string_passed_to_a_call_is_still_usable() {
+    assert_heap_guard_output(
         r#"
 
 fn consume(s String)
@@ -86,7 +86,7 @@ let s = "hello"
 consume(s)
 println(s)
 "#,
-        "consumed",
+        "hello",
     );
 }
 
@@ -179,8 +179,8 @@ println(f"y_first={y.element_at(0)}")
 // ─────────────────────────────────────────────
 
 #[test]
-fn test_custom_class_use_after_move_error() {
-    assert_compiler_error(
+fn test_class_without_a_hook_passed_to_a_call_is_still_usable() {
+    assert_heap_guard_output(
         r#"
 
 class Buffer
@@ -193,7 +193,7 @@ let b = Buffer(data: "hello")
 consume(b)
 println(b.data)
 "#,
-        "consumed",
+        "hello",
     );
 }
 
@@ -227,16 +227,20 @@ println(f"{x.length()}")
 fn test_use_after_move_error_still_reported_after_fresh_consume() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn process(x [int])
-    return
+class Res
+    x int
+    fn drop(self)
+        return
 
-var x = List([1, 2, 3])
-process(x)
-x = List([4, 5, 6])
-process(x)
-println(f"{x.length()}")
+fn keep(r Res) Res
+    return r
+
+var x = Res(x: 1)
+let a = keep(x)
+x = Res(x: 2)
+let b = keep(x)
+println(f"{x.x}")
 "#,
         "consumed",
     );
@@ -247,8 +251,8 @@ println(f"{x.length()}")
 // ─────────────────────────────────────────────
 
 #[test]
-fn test_map_use_after_move_error() {
-    assert_compiler_error(
+fn test_map_passed_to_a_call_is_still_usable() {
+    assert_heap_guard_output(
         r#"
 use system.collections.map
 
@@ -259,7 +263,7 @@ let m = {"a": 1, "b": 2}
 consume(m)
 println(f"{m.length()}")
 "#,
-        "consumed",
+        "2",
     );
 }
 
@@ -268,8 +272,8 @@ println(f"{m.length()}")
 // ─────────────────────────────────────────────
 
 #[test]
-fn test_set_use_after_move_error() {
-    assert_compiler_error(
+fn test_set_passed_to_a_call_is_still_usable() {
+    assert_heap_guard_output(
         r#"
 use system.collections.set
 
@@ -280,7 +284,7 @@ let s = {1, 2, 3}
 consume(s)
 println(f"{s.length()}")
 "#,
-        "consumed",
+        "3",
     );
 }
 
@@ -341,18 +345,22 @@ else
 fn test_consume_in_both_branches_is_consumed_after_if() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn process(x [int])
-    return
+class Res
+    x int
+    fn drop(self)
+        return
+
+fn keep(r Res) Res
+    return r
 
 var flag = true
-let x = List([1, 2, 3])
+let x = Res(x: 1)
 if flag
-    process(x)
+    let a = keep(x)
 else
-    process(x)
-println(f"{x.length()}")
+    let b = keep(x)
+println(f"{x.x}")
 "#,
         "consumed",
     );
@@ -368,12 +376,12 @@ class Conn
     fn drop(self)
         return
 
-fn sink(c Conn)
-    return
+fn sink(c Conn) Conn
+    return c
 
 fn handle(c Conn)
-    sink(c)
-    sink(c)
+    let a = sink(c)
+    let b = sink(c)
 
 handle(Conn(handle: 1))
 "#,
@@ -411,12 +419,12 @@ class Res
     fn drop(self)
         return
 
-fn sink(r Res)
-    return
+fn sink(r Res) Res
+    return r
 
 let r = Res(x: 1)
-sink(r)
-sink(r)
+let a = sink(r)
+let b = sink(r)
 "#,
         "consumed",
     );
@@ -541,11 +549,11 @@ class Conn
     fn drop(self)
         return
 
-fn process(c Conn)
-    return
+fn process(c Conn) Conn
+    return c
 
 let c = Conn(handle: 1)
-process(c)
+let kept = process(c)
 println(f"{c.handle}")
 "#,
         "'c' was consumed by 'process'",
@@ -562,11 +570,11 @@ class Conn
     fn drop(self)
         return
 
-fn sink(c Conn)
-    return
+fn sink(c Conn) Conn
+    return c
 
 fn process(c Conn)
-    sink(c)
+    let kept = sink(c)
     println(f"{c.handle}")
 
 process(Conn(handle: 1))
@@ -619,16 +627,20 @@ println("after_if")
 }
 
 #[test]
-fn test_dynamic_fn_param_callee_consumes_managed_arg() {
+fn test_dynamic_fn_param_callee_consumes_resource_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn apply(items [int], f fn(xs [int]) int)
-    f(items)
-    println(f"{items.length()}")
+class Res
+    x int
+    fn drop(self)
+        return
 
-apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
+fn apply(r Res, f fn(r Res) int)
+    f(r)
+    println(f"{r.x}")
+
+apply(Res(x: 1), fn(r Res) int: r.x)
 "#,
         "consumed",
     );
@@ -636,39 +648,48 @@ apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
 
 #[test]
 fn test_dynamic_fn_param_diagnostic_names_dynamic_fn() {
-    // The sink description must mention the dynamic-fn fallback so that the
+    // The sink description must mention the dynamic-fn fallback, so the
+    // refusal says why a callee nobody can see into is assumed to keep it.
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn apply(items [int], f fn(xs [int]) int)
-    f(items)
-    println(f"{items.length()}")
+class Res
+    x int
+    fn drop(self)
+        return
 
-apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
+fn apply(r Res, f fn(r Res) int)
+    f(r)
+    println(f"{r.x}")
+
+apply(Res(x: 1), fn(r Res) int: r.x)
 "#,
         "dynamic fn",
     );
 }
 
 #[test]
-fn test_dynamic_fn_let_bound_branch_consumes_managed_arg() {
+fn test_dynamic_fn_let_bound_branch_consumes_resource_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn save(xs [int]) int
-    return xs.length()
+class Res
+    x int
+    fn drop(self)
+        return
 
-fn noop(xs [int]) int
+fn save(r Res) int
+    return r.x
+
+fn noop(r Res) int
     return 0
 
-fn process(items [int], cond bool)
+fn process(r Res, cond bool)
     let target = if cond: save else: noop
-    target(items)
-    println(f"{items.length()}")
+    target(r)
+    println(f"{r.x}")
 
-process(List([1, 2, 3]), true)
+process(Res(x: 1), true)
 "#,
         "consumed",
     );
@@ -712,17 +733,21 @@ process(List([1, 2, 3]))
 }
 
 #[test]
-fn test_dynamic_fn_lambda_param_callee_consumes_managed_arg() {
+fn test_dynamic_fn_lambda_param_callee_consumes_resource_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
+
+class Res
+    x int
+    fn drop(self)
+        return
 
 fn run()
-    let h = fn(g fn(xs [int]) int, items [int]) int
-        let r = g(items)
-        let unused = items.length()
-        return r
-    let _ = h(fn(xs [int]) int: xs.length(), List([1, 2, 3]))
+    let h = fn(g fn(r Res) int, r Res) int
+        let n = g(r)
+        let unused = r.x
+        return n
+    let _ = h(fn(r Res) int: r.x, Res(x: 1))
 
 run()
 "#,
@@ -731,17 +756,22 @@ run()
 }
 
 #[test]
-fn test_dynamic_fn_for_loop_pattern_callee_consumes_managed_arg() {
+fn test_dynamic_fn_for_loop_pattern_callee_consumes_resource_arg() {
     assert_compiler_error(
         r#"
 use system.collections.list
 
-fn run(fns [fn(xs [int]) int], items [int])
-    for f in fns
-        let _ = f(items)
-    let _ = items.length()
+class Res
+    x int
+    fn drop(self)
+        return
 
-run(List<fn(xs [int]) int>(), List([1, 2, 3]))
+fn run(fns [fn(r Res) int], r Res)
+    for f in fns
+        let _ = f(r)
+    let _ = r.x
+
+run(List<fn(r Res) int>(), Res(x: 1))
 "#,
         "consumed",
     );
@@ -825,10 +855,10 @@ a",
 }
 
 #[test]
-fn test_a_method_returning_the_receiver_itself_still_consumes_it() {
-    // The receiver is the returned value here, not a projection of it, so the
-    // caller really cannot use it again and must still be refused.
-    assert_compiler_error(
+fn test_a_method_returning_the_receiver_leaves_a_value_receiver_usable() {
+    // A class instance without a hook is a value: the method returns a copy
+    // of its receiver, and the caller's binding still holds its own.
+    assert_heap_guard_output(
         r#"
 use system.collections.list
 
@@ -844,9 +874,9 @@ class Holder
 fn main()
     let o = Holder(List([1, 2]))
     let taken = o.into_self()
-    println(f"{o.items.length()}")
+    println(f"{o.items.length()} {taken.items.length()}")
 "#,
-        "was consumed by",
+        "2 2",
     );
 }
 
@@ -906,19 +936,24 @@ fn main()
 
 #[test]
 fn test_a_whole_value_handed_to_a_consuming_function_is_still_refused() {
-    // The projection rule must not soften the ordinary case: a value passed on
-    // as itself is gone, and using it afterwards is still an error.
+    // The projection rule must not soften the ordinary case: a resource passed
+    // on as itself to a callee that keeps it is gone, and using it afterwards
+    // is still an error.
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn sink(x [int]) [int]
-    return x
+class Res
+    x int
+    fn drop(self)
+        return
+
+fn sink(r Res) Res
+    return r
 
 fn main()
-    let l = List([1, 2])
+    let l = Res(x: 1)
     let taken = sink(l)
-    println(f"{l.length()}")
+    println(f"{l.x}")
 "#,
         "was consumed by",
     );
@@ -932,8 +967,9 @@ class Handle
     fn drop(self)
         println(f"closed {self.id}")
 
-fn close(h Handle)
+fn close(h Handle) Handle
     println("closing")
+    return h
 "#;
 
 /// A resource consumed on every pass of a loop is used again on the second
@@ -948,7 +984,7 @@ fn main()
     let h = Handle(1)
     var i = 0
     while i < 2
-        close(h)
+        let _closed = close(h)
         i = i + 1
 "#
         ),
@@ -957,6 +993,10 @@ fn main()
 }
 
 /// Consuming it on the way out of the loop leaves no next pass to use it.
+// TODO: assert the hook order exactly, "closing\nclosed 1\ndone". The handle
+// `close` returns is owned by `_closed`, whose scope ends at the `break`, but a
+// call does not yet move a consumed resource's count to the callee, so the hook
+// still runs when `h`'s scope ends.
 #[test]
 fn a_resource_consumed_before_leaving_a_loop_is_accepted() {
     assert_runs_with_output(
@@ -968,7 +1008,7 @@ fn main()
     var i = 0
     while i < 2
         if i == 0
-            close(h)
+            let _closed = close(h)
             break
         i = i + 1
     println("done")
@@ -998,5 +1038,215 @@ fn main()
     println("end")
 "#,
         "inside\ndrop 1\nend",
+    );
+}
+
+/// A call lends a list at the top level as it does inside a function: the
+/// list is still the caller's after a callee that keeps a copy of it.
+#[test]
+fn a_list_a_callee_keeps_is_still_usable_at_the_top_level() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn keep(xs [int]) [int]
+    return xs
+
+let a = List([1, 2, 3])
+let b = keep(a)
+println(f"{a.length()} {b.length()}")
+"#,
+        "3 3",
+    );
+}
+
+/// The same statements inside `main` behave exactly as at the top level.
+#[test]
+fn a_list_a_callee_keeps_is_still_usable_inside_a_function() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn keep(xs [int]) [int]
+    return xs
+
+fn main()
+    let a = List([1, 2, 3])
+    let b = keep(a)
+    println(f"{a.length()} {b.length()}")
+"#,
+        "3 3",
+    );
+}
+
+/// A list passed twice in one call, at the top level, is lent twice.
+#[test]
+fn a_list_passed_twice_to_one_call_is_lent_at_the_top_level() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn bump(x [int], y [int]) int
+    return x.length() + y.length()
+
+var a = List([1, 2, 3])
+println(f"{bump(a, a)}")
+println(f"{a.length()}")
+"#,
+        "6\n3",
+    );
+}
+
+/// A write the callee makes to the copy it kept is never seen by the caller.
+#[test]
+fn a_kept_list_written_by_the_callee_leaves_the_callers_list_unchanged() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn grow(xs [int]) [int]
+    var ys = xs
+    ys.push(4)
+    return ys
+
+fn main()
+    let a = List([1, 2, 3])
+    let b = grow(a)
+    println(f"{a.length()} {b.length()}")
+"#,
+        "3 4",
+    );
+}
+
+/// A string a method stores is still the caller's after the call.
+#[test]
+fn a_string_a_method_stores_is_still_usable() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    var names = List<String>()
+    let s = "a" + "b"
+    names.push(s)
+    println(s)
+    println(names[0])
+"#,
+        "ab\nab",
+    );
+}
+
+/// A list handed to a function value is lent, not consumed.
+#[test]
+fn a_list_passed_to_a_function_value_is_still_usable() {
+    assert_heap_guard_output(
+        r#"
+use system.collections.list
+
+fn main()
+    let f = fn(xs [int]) [int]: xs
+    let a = List([1, 2])
+    let b = f(a)
+    println(f"{a.length()} {b.length()}")
+"#,
+        "2 2",
+    );
+}
+
+/// A resource lent to a function that only reads it stays the caller's, and
+/// its hook runs once, at the caller's scope end, in every scope.
+#[test]
+fn a_resource_a_callee_only_reads_is_lent_at_the_top_level() {
+    assert_heap_guard_output(
+        r#"
+class Res
+    x int
+    fn drop(self)
+        println("dropped")
+
+fn look(r Res)
+    println(f"look {r.x}")
+
+let r = Res(x: 1)
+look(r)
+look(r)
+println("end")
+"#,
+        "look 1\nlook 1\nend\ndropped",
+    );
+}
+
+/// Inside a function, a resource lent twice runs its hook once, at scope end.
+#[test]
+fn a_resource_a_callee_only_reads_is_lent_inside_a_function() {
+    assert_heap_guard_output(
+        r#"
+class Res
+    x int
+    fn drop(self)
+        println("dropped")
+
+fn look(r Res)
+    println(f"look {r.x}")
+
+fn main()
+    let r = Res(x: 1)
+    look(r)
+    look(r)
+    println("end")
+"#,
+        "look 1\nlook 1\nend\ndropped",
+    );
+}
+
+/// A resource a callee keeps is consumed by the call, at the top level, and the
+/// refusal names the callee without suggesting a copy.
+#[test]
+fn a_resource_a_callee_keeps_is_consumed_at_the_top_level() {
+    let output = crate::utils::miri_check(
+        r#"
+class Res
+    x int
+    fn drop(self)
+        println("dropped")
+
+fn keep(r Res) Res
+    return r
+
+let r = Res(x: 1)
+let k = keep(r)
+println(f"{r.x}")
+"#,
+    )
+    .output();
+    assert!(
+        output.contains("'r' was consumed by 'keep'"),
+        "expected the consuming callee named:\n{output}"
+    );
+    assert!(
+        !output.contains(".clone()"),
+        "a resource has one owner, so a copy is not the repair:\n{output}"
+    );
+}
+
+/// The same refusal inside a function.
+#[test]
+fn a_resource_a_callee_keeps_is_consumed_inside_a_function() {
+    assert_compiler_error(
+        r#"
+class Res
+    x int
+    fn drop(self)
+        println("dropped")
+
+fn keep(r Res) Res
+    return r
+
+fn main()
+    let r = Res(x: 1)
+    let k = keep(r)
+    println(f"{r.x}")
+"#,
+        "'r' was consumed by 'keep'",
     );
 }

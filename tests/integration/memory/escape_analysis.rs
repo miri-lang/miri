@@ -258,8 +258,8 @@ println(f"count_down={count_down(xs, 3)}")
 
 #[test]
 fn test_resource_param_inside_fn_body_still_errors() {
-    // Resource types (those with fn drop(self)) must still be flagged inside
-    // function bodies — resource semantics remain unchanged.
+    // A resource handed to a callee that keeps it is consumed inside a
+    // function body as at the top level.
     assert_compiler_error(
         r#"
 
@@ -268,12 +268,13 @@ class Conn
     fn drop(self)
         println("closed")
 
-fn sink(c Conn)
+fn sink(c Conn) Conn
     println(c.host)
+    return c
 
 fn use_twice(c Conn)
-    sink(c)
-    sink(c)
+    let a = sink(c)
+    let b = sink(c)
 
 let c = Conn("db.local")
 use_twice(c)
@@ -350,8 +351,8 @@ println("done")
 
 #[test]
 fn test_resource_bounded_generic_strict_consume_in_fn_body() {
-    // A generic param bounded by a resource class (`fn drop(self)` defined)
-    // must trigger the strict-consume rule even inside a function body.
+    // A generic param bounded by a resource class (`fn drop(self)` defined) is
+    // a resource: handed to a callee that keeps it, it is consumed.
     assert_compiler_error(
         r#"
 
@@ -362,12 +363,12 @@ class Conn
     fn drop(self)
         println("closed")
 
-fn sink<T extends Conn>(x T)
-    return
+fn sink<T extends Conn>(x T) T
+    return x
 
 fn use_twice<T extends Conn>(x T)
-    sink(x)
-    sink(x)
+    let a = sink(x)
+    let b = sink(x)
 
 let c = Conn(h: "db.local")
 use_twice(c)
@@ -407,10 +408,10 @@ move_then_use(c)
 
 #[test]
 fn test_resource_bounded_generic_method_arg_strict_consume() {
-    // Resource-bounded generic passed to a method argument must strict-consume,
-    // mirroring the standard behaviour for concrete resource types in method-call context.
-    // The method `Logger.drain` takes a Conn directly; the caller funnels its
-    // own resource-bounded generic param into it.
+    // A resource-bounded generic passed to a method that keeps it is consumed,
+    // as a concrete resource would be. The method `Logger.drain` takes a Conn
+    // directly and returns it; the caller funnels its own resource-bounded
+    // generic param into it.
     assert_compiler_error(
         r#"
 
@@ -424,12 +425,12 @@ class Conn
 class Logger
     fn init()
         return
-    fn drain(x Conn)
-        return
+    fn drain(x Conn) Conn
+        return x
 
 fn use_twice<T extends Conn>(log Logger, x T)
-    log.drain(x)
-    log.drain(x)
+    let a = log.drain(x)
+    let b = log.drain(x)
 
 let c = Conn(h: "db.local")
 let l = Logger()
@@ -487,16 +488,20 @@ use_twice(ys)
 fn test_single_hop_escape_via_return_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn pass_through(xs [int]) [int]
+class Res
+    x int
+    fn drop(self)
+        return
+
+fn pass_through(xs Res) Res
     return xs
 
-fn check(xs [int])
+fn check(xs Res)
     let ys = pass_through(xs)
-    println(f"{ys.length()} {xs.length()}")
+    println(f"{ys.x} {xs.x}")
 
-let data = List([1, 2, 3])
+let data = Res(x: 3)
 check(data)
 "#,
         "consumed",
@@ -511,19 +516,23 @@ check(data)
 fn test_two_hop_escape_via_return_chain_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn pass_through(xs [int]) [int]
+class Res
+    x int
+    fn drop(self)
+        return
+
+fn pass_through(xs Res) Res
     return xs
 
-fn wrap_through(xs [int]) [int]
+fn wrap_through(xs Res) Res
     return pass_through(xs)
 
-fn check(xs [int])
+fn check(xs Res)
     let ys = wrap_through(xs)
-    println(f"{ys.length()} {xs.length()}")
+    println(f"{ys.x} {xs.x}")
 
-let data = List([1, 2, 3])
+let data = Res(x: 3)
 check(data)
 "#,
         "consumed",
@@ -539,19 +548,23 @@ check(data)
 fn test_escape_via_non_return_call_site_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn pass_through(xs [int]) [int]
+class Res
+    x int
+    fn drop(self)
+        return
+
+fn pass_through(xs Res) Res
     return xs
 
-fn sink(xs [int])
+fn sink(xs Res)
     let _ys = pass_through(xs)
 
-fn check(xs [int])
+fn check(xs Res)
     sink(xs)
-    println(f"{xs.length()}")
+    println(f"{xs.x}")
 
-let data = List([1, 2, 3])
+let data = Res(x: 3)
 check(data)
 "#,
         "consumed",
@@ -674,21 +687,25 @@ report(data)
 fn test_escape_via_call_in_match_arm_consumes_arg() {
     assert_compiler_error(
         r#"
-use system.collections.list
 
-fn pass_through(xs [int]) [int]
+class Res
+    x int
+    fn drop(self)
+        return
+
+fn pass_through(xs Res) Res
     return xs
 
-fn sink_in_match(xs [int], n int)
+fn sink_in_match(xs Res, n int)
     let _ = match n
-        0: pass_through(xs).length()
+        0: pass_through(xs).x
         _: 0
 
-fn caller(xs [int])
+fn caller(xs Res)
     sink_in_match(xs, 1)
-    println(f"{xs.length()}")
+    println(f"{xs.x}")
 
-let data = List([1, 2, 3])
+let data = Res(x: 3)
 caller(data)
 "#,
         "consumed",
@@ -730,24 +747,28 @@ fn test_a_trait_dispatched_call_sees_an_implementer_reached_through_its_base_cla
     // dispatched to keeps it.
     assert_compiler_error(
         r#"
-use system.collections.list
+
+class Res
+    x int
+    fn drop(self)
+        return
 
 trait Sink
-    public fn take(items [int]) [int]
+    public fn take(items Res) Res
 
 class Keeper implements Sink
-    public fn take(_items [int]) [int]
-        return List([0])
+    public fn take(_items Res) Res
+        return Res(x: 0)
 
 class SubKeeper extends Keeper
-    public fn take(items [int]) [int]
+    public fn take(items Res) Res
         return items
 
 fn main()
-    let l = List([1, 2])
+    let l = Res(x: 2)
     let k Sink = SubKeeper()
     let got = k.take(l)
-    println(f"{l.length()} {got.length()}")
+    println(f"{l.x} {got.x}")
 "#,
         "was consumed by",
     );
@@ -759,24 +780,28 @@ fn test_a_trait_dispatched_call_still_sees_a_direct_implementer() {
     // naming the trait itself was always refused, and must stay refused.
     assert_compiler_error(
         r#"
-use system.collections.list
+
+class Res
+    x int
+    fn drop(self)
+        return
 
 trait Sink
-    public fn take(items [int]) [int]
+    public fn take(items Res) Res
 
 class Keeper implements Sink
-    public fn take(_items [int]) [int]
-        return List([0])
+    public fn take(_items Res) Res
+        return Res(x: 0)
 
 class SubKeeper implements Sink
-    public fn take(items [int]) [int]
+    public fn take(items Res) Res
         return items
 
 fn main()
-    let l = List([1, 2])
+    let l = Res(x: 2)
     let k Sink = SubKeeper()
     let got = k.take(l)
-    println(f"{l.length()} {got.length()}")
+    println(f"{l.x} {got.x}")
 "#,
         "was consumed by",
     );

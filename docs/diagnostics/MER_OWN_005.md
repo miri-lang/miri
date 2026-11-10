@@ -24,6 +24,7 @@ fn close(h Handle)
 
 let h = Handle(id: 1)
 close(h)
+h.drop()
 ```
 
 ## After

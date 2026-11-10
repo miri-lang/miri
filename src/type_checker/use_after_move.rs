@@ -4,13 +4,14 @@
 //! Use-after-move analysis for the Miri type checker.
 //!
 //! Tracks which variables have been "consumed" and emits a compile-time error
-//! if a consumed variable is subsequently accessed. A variable is consumed by:
-//! - Passing it as an argument to a function call
-//! - Assigning it to another variable when the type is a resource
+//! if a consumed variable is subsequently accessed. Only a resource (a value
+//! whose release may run a `drop` hook) is ever consumed, and only by:
+//! - a call whose callee keeps it, as the callee's escape summary says; a
+//!   callee with no summary (a function value) is assumed to keep it;
+//! - an assignment to another binding, a `return`, or `value.drop()`.
 //!
-//! Auto-copy types (size ≤ 128 bytes, all-primitive fields) are always copied
-//! and are never flagged. Resource types (`fn drop(self)` defined) are always
-//! tracked; other managed types are only tracked at top-level scope.
+//! Every other value is lent to a call and stays the caller's, at the top
+//! level of a file as inside a function: the rule does not depend on scope.
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::pattern::Pattern;
@@ -25,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::context::{class_implements_trait, TypeDefinition};
 use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
-use super::utils::{is_auto_copy, is_resource, runs_drop_hook};
+use super::utils::{is_resource, runs_drop_hook};
 
 /// Why `value.drop()` is refused on a receiver the scope does not own.
 pub(crate) const BORROWED_DROP_MESSAGE: &str = "drop() can only release a value this scope owns";
@@ -80,9 +81,6 @@ pub struct UseAfterMoveChecker<'a> {
     escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
-    /// True when analysis is inside a function body (vs. top-level script code).
-    /// Resource types are always tracked. Managed types are only tracked at top level.
-    in_function_body: bool,
     /// Names currently bound as parameters or `let`/`var` locals.  Used to
     /// distinguish a literal callee identifier (a free function declared at
     /// module scope — never re-bound, so absent here) from a dynamic fn-value
@@ -105,9 +103,6 @@ pub struct UseAfterMoveChecker<'a> {
     /// only these may be released early with `value.drop()`. A lambda body
     /// starts empty: what it captures belongs to the scope that declared it.
     owned_locals: HashSet<String>,
-    /// The synthetic `main` a script's top-level statements were wrapped in,
-    /// whose body is read as the top-level code it was written as.
-    script_main: Option<usize>,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
@@ -122,20 +117,10 @@ impl<'a> UseAfterMoveChecker<'a> {
             escape_summaries,
             errors: vec![],
             warnings: vec![],
-            in_function_body: false,
             fn_bindings: HashSet::new(),
             gpu_bindings: HashSet::new(),
             owned_locals: HashSet::new(),
-            script_main: None,
         }
-    }
-
-    /// Read the body of the function declared by statement `id` as top-level
-    /// code: it is the synthetic `main` a script's statements were wrapped in,
-    /// and wrapping them changes where they run, not what they mean.
-    pub fn reading_as_script(mut self, id: Option<usize>) -> Self {
-        self.script_main = id;
-        self
     }
 
     /// Runs the analysis on a complete program and returns detected errors and warnings.
@@ -147,11 +132,6 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &stmt.node {
-            StatementKind::FunctionDeclaration(decl) if self.script_main == Some(stmt.id) => {
-                if let Some(body) = &decl.body {
-                    self.check_stmt(body, consumed);
-                }
-            }
             StatementKind::FunctionDeclaration(decl) => self.check_fn_decl(decl),
             StatementKind::Block(stmts) => self.check_block(stmts, consumed),
             StatementKind::Expression(expr) => self.check_expr(expr, consumed),
@@ -209,17 +189,14 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_fn_decl(&mut self, decl: &crate::ast::statement::FunctionDeclarationData) {
         let Some(body) = &decl.body else { return };
-        let prev_in_fn = self.in_function_body;
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
         let prev_gpu = std::mem::take(&mut self.gpu_bindings);
         let prev_owned = std::mem::take(&mut self.owned_locals);
-        self.in_function_body = true;
         for p in &decl.params {
             self.fn_bindings.insert(p.name.clone());
         }
         let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
         self.check_stmt(body, &mut fn_consumed);
-        self.in_function_body = prev_in_fn;
         self.fn_bindings = prev_bindings;
         self.gpu_bindings = prev_gpu;
         self.owned_locals = prev_owned;
@@ -582,8 +559,8 @@ impl<'a> UseAfterMoveChecker<'a> {
                 kind: TypeErrorKind::Coded {
                     code: DiagnosticCode::OwnUseOfMovedValue,
                     message: format!(
-                        "'{}' was consumed by '{}' and cannot be used again{}\n  fix: call .clone() to keep your copy independent",
-                        name, info.by_fn, chain_section
+                        "'{}' was consumed by '{}' and cannot be used again{}\n  fix: use '{}' before the call that keeps it, or pass it to a function that only reads it",
+                        name, info.by_fn, chain_section, name
                     ),
                     help: None,
                     expected: None,
@@ -654,19 +631,18 @@ impl<'a> UseAfterMoveChecker<'a> {
         let method_chain_key: Option<FunctionId> = self.extract_method_chain_key(callee);
         let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
 
-        let free_fn_summary: Option<EscapeSummary> =
-            if self.in_function_body && method_summary.is_none() {
-                match &callee.node {
-                    ExpressionKind::Identifier(name, _)
-                        if !self.fn_bindings.contains(name.as_str()) =>
-                    {
-                        self.escape_summaries.get(&FunctionId::free(name)).cloned()
-                    }
-                    _ => None,
+        let free_fn_summary: Option<EscapeSummary> = if method_summary.is_none() {
+            match &callee.node {
+                ExpressionKind::Identifier(name, _)
+                    if !self.fn_bindings.contains(name.as_str()) =>
+                {
+                    self.escape_summaries.get(&FunctionId::free(name)).cloned()
                 }
-            } else {
-                None
-            };
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         let is_dynamic_fn = method_summary.is_none()
             && free_fn_summary.is_none()
@@ -700,17 +676,21 @@ impl<'a> UseAfterMoveChecker<'a> {
             let method_sink = method_chain_key.map_or_else(named_sink, Sink::Function);
             if summary.directly_escapes(0) {
                 if let ExpressionKind::Member(obj_expr, _) = &callee.node {
-                    self.consume_arg_dynamic(obj_expr, &method_sink, 0, consumed);
+                    self.consume_resource_arg(obj_expr, &method_sink, 0, consumed);
                 }
             }
             self.apply_summary_to_args(args, &params, &summary, &method_sink, consumed, true);
         } else if let Some(summary) = free_fn_summary {
             self.apply_summary_to_args(args, &params, &summary, &named_sink(), consumed, false);
-        } else if is_dynamic_fn {
-            let sink = Sink::DynamicFn(fn_name.clone());
-            self.consume_args_unconditional(args, &params, &sink, consumed);
         } else {
-            self.consume_args_with_predicate(args, &params, &named_sink(), consumed);
+            // A callee whose body the checker cannot see is assumed to keep
+            // every resource it is handed.
+            let sink = if is_dynamic_fn {
+                Sink::DynamicFn(fn_name.clone())
+            } else {
+                named_sink()
+            };
+            self.consume_resource_args(args, &params, &sink, consumed);
         }
     }
 
@@ -818,12 +798,12 @@ impl<'a> UseAfterMoveChecker<'a> {
                 idx += 1;
             }
             if !is_out && summary.directly_escapes(idx) {
-                self.consume_arg_dynamic(arg, sink, idx, consumed);
+                self.consume_resource_arg(arg, sink, idx, consumed);
             }
         }
     }
 
-    fn consume_args_unconditional(
+    fn consume_resource_args(
         &self,
         args: &[Expression],
         params: &[Parameter],
@@ -835,104 +815,24 @@ impl<'a> UseAfterMoveChecker<'a> {
             let (is_out, idx) = Self::arg_classify(arg, params, &mut pos_idx);
             let param_idx = if idx == usize::MAX { 0 } else { idx };
             if !is_out {
-                self.consume_arg_dynamic(arg, sink, param_idx, consumed);
+                self.consume_resource_arg(arg, sink, param_idx, consumed);
             }
         }
     }
 
-    fn consume_args_with_predicate(
-        &self,
-        args: &[Expression],
-        params: &[Parameter],
-        sink: &Sink,
-        consumed: &mut HashMap<String, ConsumedInfo>,
-    ) {
-        let mut pos_idx = 0usize;
-        for arg in args {
-            let (is_out, idx) = Self::arg_classify(arg, params, &mut pos_idx);
-            let param_idx = if idx == usize::MAX { 0 } else { idx };
-            if !is_out {
-                self.maybe_consume_arg(arg, sink, param_idx, consumed);
-            }
-        }
+    /// Whether `expr` is a resource, the only kind of value a call consumes:
+    /// every other value is lent and stays the caller's.
+    fn is_resource_expr(&self, expr: &Expression) -> bool {
+        self.types
+            .get(&expr.id)
+            .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions))
     }
 
-    /// If `arg` is a plain `Identifier` (or a `NamedArgument` wrapping one) that refers
-    /// to a variable that should be consumed, mark it as consumed by `sink`.
-    ///
-    /// At top level: any managed type is consumed.
-    /// Inside a function body: only resource types (those with `fn drop(self)`) are consumed.
-    ///
-    /// `callee_param_idx` is the parameter index of this arg in `sink`'s parameter list,
-    /// used to look up the escape chain for richer diagnostics.
-    fn maybe_consume_arg(
-        &self,
-        arg: &Expression,
-        sink: &Sink,
-        callee_param_idx: usize,
-        consumed: &mut HashMap<String, ConsumedInfo>,
-    ) {
-        match &arg.node {
-            ExpressionKind::Identifier(name, _)
-                if !consumed.contains_key(name.as_str()) && self.should_consume_expr(arg) =>
-            {
-                let chain = self.build_chain(sink, callee_param_idx);
-                consumed.insert(
-                    name.clone(),
-                    ConsumedInfo {
-                        by_fn: sink.to_string(),
-                        at_span: arg.span,
-                        chain,
-                    },
-                );
-            }
-            ExpressionKind::NamedArgument(_, val) => {
-                if let ExpressionKind::Identifier(name, _) = &val.node {
-                    if !consumed.contains_key(name.as_str()) && self.should_consume_expr(val) {
-                        let chain = self.build_chain(sink, callee_param_idx);
-                        consumed.insert(
-                            name.clone(),
-                            ConsumedInfo {
-                                by_fn: sink.to_string(),
-                                at_span: val.span,
-                                chain,
-                            },
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Returns true if passing this expression should consume it.
-    ///
-    /// Rule:
-    /// - Resource types (`fn drop(self)` present): always consumed, at all call sites.
-    /// - Other managed (non-auto-copy) types: consumed only at top level.
-    /// - Inside a function body: only resource types are consumed.
-    fn should_consume_expr(&self, expr: &Expression) -> bool {
-        if let Some(ty) = self.types.get(&expr.id) {
-            if is_resource(&ty.kind, self.type_definitions) {
-                true
-            } else if self.in_function_body {
-                false
-            } else {
-                !is_auto_copy(&ty.kind, self.type_definitions)
-            }
-        } else {
-            false
-        }
-    }
-
-    /// Dynamic-fn fallback: at a call site whose callee is a dynamic fn-value,
-    /// every non-auto-copy argument is consumed regardless of scope.
-    /// Mirrors `maybe_consume_arg` but uses the broader "any managed type"
-    /// predicate (since the conservative rule says "all managed-type params
-    /// escape", not just resources).
+    /// Marks the variable `arg` names consumed by `sink` when it is a resource;
+    /// any other value is lent and stays usable.
     ///
     /// `callee_param_idx` is used for chain lookup when `sink` is a known callee name.
-    fn consume_arg_dynamic(
+    fn consume_resource_arg(
         &self,
         arg: &Expression,
         sink: &Sink,
@@ -950,13 +850,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         if consumed.contains_key(name.as_str()) {
             return;
         }
-        // Auto-copy types pass by value at every call boundary; the dynamic-fn
-        // rule still respects this (an auto-copy struct never aliases the
-        // caller's heap and so cannot be retained by the callee).
-        let Some(ty) = self.types.get(&ident_expr.id) else {
-            return;
-        };
-        if is_auto_copy(&ty.kind, self.type_definitions) {
+        if !self.is_resource_expr(ident_expr) {
             return;
         }
         let chain = self.build_chain(sink, callee_param_idx);

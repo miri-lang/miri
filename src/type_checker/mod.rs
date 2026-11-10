@@ -836,7 +836,6 @@ impl TypeChecker {
             &self.type_table.global_type_definitions,
             &context.escape_summaries,
         )
-        .reading_as_script(self.script_main)
         .check_program(program);
         self.diagnostics.extend_errors(uam_errors);
         self.diagnostics.extend_warnings(uam_warnings);

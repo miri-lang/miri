@@ -1,38 +1,46 @@
 ## Rule
 
-A value was consumed and then used again. For resource types (classes with `fn drop(self)`), assignment is a move: the source variable is transferred to the destination and cannot be accessed afterward. For other types, the same rule applies at top-level scope. Call `.clone()` to keep an independent copy.
+A resource was consumed and then used again. A resource (a class or enum with a `drop` hook) has one owner: assigning it moves it, and passing it to a function that keeps it (stores it, returns it, captures it) gives that function ownership. The name the resource came from cannot be read afterwards. A call that only reads its argument lends it, and every other type is lent by every call, so only a kept resource is ever consumed.
 
 ## Messages
 
-- `'{var}' was consumed by '{sink}' and cannot be used again\n  fix: call .clone() to keep your copy independent`
+- `'{var}' was consumed by '{sink}' and cannot be used again{chain}\n  fix: use '{var}' before the call that keeps it, or pass it to a function that only reads it`
 
 ## Before
 
 ```miri
 class Resource
+    var id int
     fn drop(self)
         return
 
-fn sink(x Resource)
-    return
+fn keep(r Resource) Resource
+    return r
 
-var r = Resource()
-sink(r)
-sink(r)
+fn main()
+    let r = Resource(id: 1)
+    let kept = keep(r)
+    println(f"{r.id} {kept.id}")
+    kept.drop()
 ```
 
 ## After
 
 ```miri
 class Resource
+    var id int
     fn drop(self)
         return
 
-fn sink(x Resource)
-    return
+fn keep(r Resource) Resource
+    return r
 
-var r = Resource()
-sink(r)
+fn main()
+    let r = Resource(id: 1)
+    println(f"{r.id}")
+    let kept = keep(r)
+    println(f"{kept.id}")
+    kept.drop()
 ```
 
 ## Reference
