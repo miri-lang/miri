@@ -10,8 +10,9 @@
 //
 // A `gpu frame` block runs the classic pressure-projection pipeline as ordered,
 // buffer-disjoint passes over ping-ponged fields (a→b):
-// 1. Splat:      inject a velocity impulse + dye color where the pointer moves
-//    (or the ambient swirl when the pointer is still).
+// 1. Splat:      inject a velocity impulse, then dye color, where the pointer
+//    moves (or the ambient swirl when the pointer is still). Two passes, so
+//    neither binds more storage buffers than a WebGPU device guarantees.
 // 2. Advect vel: semi-Lagrangian backtrace of velocity (manual bilinear).
 // 3. Advect dye: carry the dye along the velocity field.
 // 4. Divergence: measure the velocity field's divergence.
@@ -78,63 +79,79 @@ forall px, py in 0..CW, 0..CH
     paint[base + 2] = 0.0
     paint[base + 3] = 1.0
 
+// Splat helpers, shared by the velocity and the dye splat passes.
+
+// Pointer activity is movement, with or without a button: the pointer pushes
+// dye by dragging through the fluid, so a stationary pointer injects nothing
+// however long it is held down. Holding also counting as activity would pour
+// dye into one spot for as long as the button was pressed.
+fn pointer_active(mvx f32, mvy f32) f32
+    return 1.0 if (abs(mvx) + abs(mvy)) > 0.0006 else 0.0
+
+// The ambient emission point walks a wobbling circle, so successive puffs land
+// in different places and stir the whole field over time. This is its angle.
+fn ambient_angle(t f32) f32
+    return t * 0.8 + sin(t * 0.37) * 3.0
+
+// Ambient swirl weight at (fx, fy), on only while the pointer is idle. It fires
+// as a puff roughly every 1.4 seconds rather than continuously: a source that
+// ran every frame would inject dye some eighty times faster than it dissipates,
+// so the field would keep brightening instead of settling. The window is one
+// frame wide, so the phase test needs `dt`. The opening frame puffs too, so the
+// field is never empty waiting for the first period to elapse; `dt` is zero
+// only on that frame.
+fn ambient_weight(fx f32, fy f32, t f32, dt f32, active f32) f32
+    let period = 1.4
+    let cycle = t / period
+    let phase = cycle - floor(cycle)
+    let puff = 1.0 if phase < (dt / period) or dt <= 0.0 else 0.0
+    let amb = (1.0 - active) * puff
+    let a = ambient_angle(t)
+    let dxa = fx - (0.5 + 0.33 * cos(a))
+    let dya = fy - (0.5 + 0.33 * sin(a * 1.3))
+    let w = exp((0.0 - (dxa * dxa + dya * dya)) / 0.0018) * amb
+    return w as f32
+
+// Pointer impulse weight at (fx, fy): a blob at the cursor while it moves.
+fn pointer_weight(fx f32, fy f32, mx f32, my f32, active f32) f32
+    let dxp = fx - mx
+    let dyp = fy - my
+    let w = exp((0.0 - (dxp * dxp + dyp * dyp)) / 0.0018) * active
+    return w as f32
+
 gpu frame
-    // Pass 1: splat. Wherever the pointer moves this frame it injects a dye blob
-    // and pushes the flow along its motion; when the pointer is still an ambient
-    // swirl (driven by frame.time) keeps the field alive. The dye colour
-    // alternates yellow/blue over time, as in the reference. Pointer position is
+    // Pass 1a: splat velocity. Wherever the pointer moves this frame it pushes
+    // the flow along its motion; when the pointer is still an ambient swirl
+    // (driven by frame.time) keeps the field alive. Pointer position is
     // normalized [0,1] (matching fx/fy); move_* is a normalized per-frame delta.
     forall idx in 0..36864
-        let x = idx % 192
-        let y = idx / 192
-        let fx = (x as f32) / 192.0
-        let fy = (y as f32) / 192.0
+        let fx = ((idx % 192) as f32) / 192.0
+        let fy = ((idx / 192) as f32) / 192.0
         let t = frame.time
-
-        // Pointer activity is movement, with or without a button: the pointer
-        // pushes dye by dragging through the fluid, so a stationary pointer
-        // injects nothing however long it is held down. Holding also counting as
-        // activity would pour dye into one spot for as long as the button was
-        // pressed.
         let mvx = frame.move_x
         let mvy = frame.move_y
-        let active = 1.0 if (abs(mvx) + abs(mvy)) > 0.0006 else 0.0
+        let active = pointer_active(mvx, mvy)
+        let ga = ambient_weight(fx, fy, t, frame.dt, active)
+        let gp = pointer_weight(fx, fy, frame.mouse_x, frame.mouse_y, active)
 
-        // Ambient swirl, on only while the pointer is idle. It fires as a puff
-        // roughly every 1.4 seconds rather than continuously: a source that ran
-        // every frame would inject dye some eighty times faster than it
-        // dissipates, so the field would keep brightening instead of settling.
-        // The window is one frame wide, so the phase test needs `dt`.
-        // The opening frame puffs too, so the field is never empty waiting for
-        // the first period to elapse; `dt` is zero only on that frame.
-        let period = 1.4
-        let cycle = t / period
-        let phase = cycle - floor(cycle)
-        let puff = 1.0 if phase < (frame.dt / period) or frame.dt <= 0.0 else 0.0
-        let amb = (1.0 - active) * puff
-        // The emission point walks a wobbling circle, so successive puffs land
-        // in different places and stir the whole field over time.
-        let a = t * 0.8 + sin(t * 0.37) * 3.0
-        let ax = 0.5 + 0.33 * cos(a)
-        let ay = 0.5 + 0.33 * sin(a * 1.3)
+        // The ambient puff blows along its circle; the pointer's motion delta
+        // becomes the flow velocity (normalized delta → cell units via 800).
+        let a = ambient_angle(t)
         let adx = (0.0 - sin(a)) * 220.0
         let ady = cos(a * 1.3) * 220.0
-        let dxa = fx - ax
-        let dya = fy - ay
-        let ga = exp((0.0 - (dxa * dxa + dya * dya)) / 0.0018) * amb
+        vx_b[idx] = vx_a[idx] + adx * ga + mvx * 800.0 * gp
+        vy_b[idx] = vy_a[idx] + ady * ga + mvy * 800.0 * gp
 
-        // Pointer impulse at the cursor; the motion delta becomes the flow
-        // velocity (normalized delta → cell units via the 800 factor).
-        let dxp = fx - frame.mouse_x
-        let dyp = fy - frame.mouse_y
-        let gp = exp((0.0 - (dxp * dxp + dyp * dyp)) / 0.0018) * active
+    // Pass 1b: splat dye where the velocity was injected. The dye colour
+    // alternates yellow/blue over time, as in the reference.
+    forall idx in 0..36864
+        let fx = ((idx % 192) as f32) / 192.0
+        let fy = ((idx / 192) as f32) / 192.0
+        let t = frame.time
+        let active = pointer_active(frame.move_x, frame.move_y)
+        let ga = ambient_weight(fx, fy, t, frame.dt, active)
+        let gp = pointer_weight(fx, fy, frame.mouse_x, frame.mouse_y, active)
 
-        var nvx = vx_a[idx] + adx * ga + mvx * 800.0 * gp
-        var nvy = vy_a[idx] + ady * ga + mvy * 800.0 * gp
-        vx_b[idx] = nvx
-        vy_b[idx] = nvy
-
-        // Dye color: yellow vs blue, alternating slowly.
         let warm = 1.0 if sin(t * 0.7) > 0.0 else 0.0
         let cr = mix(0.10, 0.55, warm)
         let cg = mix(0.20, 0.40, warm)
