@@ -1,0 +1,28 @@
+{
+ "run_id": "20261111T122012Z",
+ "suspect": [
+  {
+   "cell": "binary-trees/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.113959944126546,
+   "baseline": 0.9187275537475632,
+   "tonight": 1.0234256944401539
+  },
+  {
+   "cell": "mandelbrot/miri/s/cold",
+   "measure": "time_vs_c",
+   "change": 1.052626342539269,
+   "baseline": 1.0450005879031874,
+   "tonight": 1.099995146795918
+  },
+  {
+   "cell": "matmul/miri/s/hot",
+   "measure": "time_vs_c",
+   "change": 1.1729451067239651,
+   "baseline": 2.1285205261404885,
+   "tonight": 2.496637735698006
+  }
+ ],
+ "regressed": [],
+ "recovered": []
+}
