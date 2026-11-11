@@ -3,7 +3,12 @@
 
 //! The methods a program runs without writing a call to them: the ones
 //! building and releasing an instance runs, the ones a container's runtime
-//! thunk asks of its elements, and the ones an operator dispatches to.
+//! thunk asks of its elements, the ones an operator dispatches to, and the
+//! ones a `for` loop walks a value through.
+//!
+//! Every such call is the compiler's, and it lends every operand, so a
+//! method answering one of these names never owns a parameter
+//! ([`is_called_without_a_written_call`]).
 //!
 //! This is part of the language's contract, so it lives beside the syntax.
 //! The type checker answers a generic class's requirements wherever one of
@@ -14,8 +19,9 @@
 use crate::ast::operator::BinaryOp;
 pub use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{
-    Type, TypeKind, ADDING_TRAIT_NAME, EQUALITY_TRAIT_NAME, ORDERING_TRAIT_NAME,
-    REPEATING_TRAIT_NAME,
+    Type, TypeKind, ADDING_TRAIT_NAME, ENTRY_VALUE_METHOD_NAME, EQUALITY_TRAIT_NAME,
+    ITERATOR_METHOD_NAME, NEXT_METHOD_NAME, ORDERING_TRAIT_NAME, POSITIONAL_METHOD_NAMES,
+    REPEATING_TRAIT_NAME, STEPPING_METHOD_NAMES,
 };
 pub use crate::ast::types::{
     CLONE_METHOD_NAME, EQUALS_METHOD_NAME, HASH_METHOD_NAME, ORDERING_METHOD_NAME,
@@ -57,6 +63,38 @@ pub const OPERATOR_METHOD_NAMES: [&str; 4] = [
     EQUALS_METHOD_NAME,
     ORDERING_METHOD_NAME,
 ];
+
+/// The methods a `for` loop runs on a value it walks through an iterator:
+/// the iterator it asks for, each next element, and an entry's value.
+pub const ITERATION_METHOD_NAMES: [&str; 3] = [
+    ITERATOR_METHOD_NAME,
+    NEXT_METHOD_NAME,
+    ENTRY_VALUE_METHOD_NAME,
+];
+
+/// Whether a runtime thunk calls the method `name` of every class, at each
+/// instantiation: the drop hook, and the methods a container copies, orders,
+/// matches and hashes its elements through ([`THUNK_METHOD_NAMES`]).
+pub fn is_called_by_a_runtime_thunk(name: &str) -> bool {
+    name == DROP_HOOK_NAME || THUNK_METHOD_NAMES.contains(&name)
+}
+
+/// Whether the compiler calls a method named `name` where the program wrote
+/// no call to it: building and releasing an instance, a runtime thunk, an
+/// operator, membership, a `for` loop stepping a range, walking an iterator
+/// or reading a sequence by position. Such a call lends every operand, so
+/// no method of the name may own a parameter. Every runtime thunk's method
+/// is among them ([`is_called_by_a_runtime_thunk`]).
+pub fn is_called_without_a_written_call(name: &str) -> bool {
+    is_called_by_a_runtime_thunk(name)
+        || (CONSTRUCTION_METHOD_NAMES.iter())
+            .chain(&OPERATOR_METHOD_NAMES)
+            .chain(&STEPPING_METHOD_NAMES)
+            .chain(&POSITIONAL_METHOD_NAMES)
+            .chain(&ITERATION_METHOD_NAMES)
+            .chain(std::iter::once(&MEMBERSHIP_METHOD_NAME))
+            .any(|implicit| *implicit == name)
+}
 
 /// How an operator reads the value the method it dispatches to returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +253,15 @@ pub fn operator_receiver<'t>(op: &BinaryOp, left: &'t Type) -> &'t Type {
 mod tests {
     use super::*;
     use crate::error::syntax::Span;
+
+    #[test]
+    fn every_method_a_runtime_thunk_calls_is_called_without_a_written_call() {
+        for name in THUNK_METHOD_NAMES.iter().chain(&[DROP_HOOK_NAME]) {
+            assert!(is_called_by_a_runtime_thunk(name), "{name}");
+            assert!(is_called_without_a_written_call(name), "{name}");
+        }
+        assert!(!is_called_without_a_written_call("put_on"));
+    }
 
     #[test]
     fn every_operator_method_is_named_by_some_operator() {

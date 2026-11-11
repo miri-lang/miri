@@ -24,6 +24,9 @@ use super::class_instantiations::is_registered_instantiation;
 use super::dispatch_symbols::{instantiation_substitution, vtable_slot_index};
 use super::expression::unshare::{lent_parameter_write, TemporaryRoot};
 use super::generic_method_calls::{bound_by_position, GenericMethodSite};
+use super::kept_parameters::{
+    hand_over_kept_arguments, refuse_lending_to_a_keeper, release_after_kept_call, KeptCall,
+};
 use super::written_receiver::{lower_pending_receiver, Receiver};
 use super::{apply_generic_sub, LoweringContext};
 use crate::ast::BuiltinCollectionKind;
@@ -299,52 +302,61 @@ fn method_call_args(
     Ok(call_args)
 }
 
-/// Emit a static method call (direct function call).
-#[allow(clippy::too_many_arguments)]
+/// A statically dispatched method call: the body it names, its operands
+/// lowered, the parameters its callee owns, and the local its receiver
+/// operand reads.
+pub(super) struct StaticMethodCall<'a> {
+    pub symbol: Symbol,
+    pub call: LoweredMethodCall,
+    /// The call's owned positions, the receiver at 0, with the first local
+    /// lowering its receiver made; none for a callee owning no parameter.
+    pub handover: KeptCall<'a>,
+    pub method_info: &'a MethodInfo,
+    /// The local the receiver operand reads, when it reads one.
+    pub receiver_temp: Option<Local>,
+}
+
+/// Emit a statically dispatched method call (a direct function call).
+///
+/// The operands at the positions the callee owns are handed over as a
+/// direct call to a function owning them hands them
+/// ([`hand_over_kept_arguments`]): a binding the call consumes, or a
+/// temporary only the call releases — a receiver built for the call,
+/// `Handle(1).keep()`, included — is moved and ended without a release;
+/// anything else, a field or a lent parameter, is copied, and reference
+/// counting funds the method's reference with a retain. A callee owning no
+/// parameter is lent every operand. Every temporary the call did not take
+/// over is released after it.
 pub(super) fn emit_static_method_call(
     ctx: &mut LoweringContext,
-    symbol: Symbol,
-    call: LoweredMethodCall,
-    method_info: &MethodInfo,
+    call: StaticMethodCall<'_>,
     destination: &Place,
-    op: &Operand,
-    obj_temp_local: Option<Local>,
-    obj_watermark: usize,
     span: Span,
-) -> Result<Option<Operand>, LoweringError> {
-    let LoweredMethodCall {
-        args: call_args,
-        written_count,
-        arg_watermark,
+) -> Result<(), LoweringError> {
+    let StaticMethodCall {
+        symbol,
+        call,
+        handover,
+        method_info,
+        receiver_temp,
     } = call;
-    let func_op = Operand::function(symbol, span);
-    let arg_modes =
+    let LoweredMethodCall {
+        args: mut call_args,
+        written_count,
+        arg_watermark: _,
+    } = call;
+    let mut arg_modes =
         super::dispatch::build_method_arg_modes(method_info, written_count, call_args.len());
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: call_args.clone(),
-            arg_modes,
-            arg_handles: Vec::new(),
-            flags: crate::mir::CallFlags::default(),
-            destination: destination.clone(),
-            target: Some(target_bb),
-        },
-        span,
-    ));
-    ctx.set_current_block(target_bb);
-    if let Some(local) = obj_temp_local {
-        ctx.emit_temp_drop(local, obj_watermark, span);
+    let handed = hand_over_kept_arguments(ctx, &handover, &mut call_args, &mut arg_modes)?;
+    let arg_locals = super::dispatch::operand_locals(call_args.get(1..).unwrap_or_default());
+    let func = Operand::function(symbol, span);
+    let place = destination.clone();
+    super::dispatch::emit_call_terminator(ctx, func, call_args, arg_modes, Vec::new(), place, span);
+    if let Some(local) = receiver_temp.filter(|local| !handed.moved.contains(local)) {
+        ctx.emit_temp_drop(local, handover.arg_watermark, span);
     }
-    super::dispatch::emit_method_arg_drops(
-        ctx,
-        &call_args[1..],
-        arg_watermark,
-        destination.local,
-        span,
-    );
-    Ok(Some(op.clone()))
+    release_after_kept_call(ctx, &handover, &arg_locals, &handed, span);
+    Ok(())
 }
 
 /// A call the compiler makes on a value already held in an operand, rather
@@ -416,18 +428,15 @@ pub(crate) fn emit_held_receiver_method_call(
         return Ok(());
     }
     let (symbol, _) = operator_method_callee(ctx, receiver_ty, &owner, method_name, &method);
-    emit_static_method_call(
-        ctx,
+    refuse_lending_to_a_keeper(ctx, (&owner, method_name), span)?;
+    let static_call = StaticMethodCall {
         symbol,
-        lowered,
-        &method,
-        destination,
-        &result,
-        None,
-        arg_watermark,
-        span,
-    )?;
-    Ok(())
+        call: lowered,
+        handover: KeptCall::lending(span, (arg_watermark, destination.local)),
+        method_info: &method,
+        receiver_temp: None,
+    };
+    emit_static_method_call(ctx, static_call, destination, span)
 }
 
 /// The vtable slot a call of `method_name` on a `class_name` receiver goes
@@ -626,6 +635,7 @@ pub(crate) fn lower_method_call_with(
             span,
             call_expr_id,
             obj,
+            method_expr,
             obj_ty: &obj_ty,
             class_name: &class_name,
             method_name: &method_name,
@@ -662,6 +672,8 @@ struct ResolvedMethod<'a> {
     /// checker inferred for its result.
     call_expr_id: usize,
     obj: &'a Expression,
+    /// The expression naming the method.
+    method_expr: &'a Expression,
     obj_ty: &'a Type,
     class_name: &'a str,
     method_name: &'a str,
@@ -742,17 +754,23 @@ fn emit_method_call(
     } else {
         Symbol::method(m.defining_class, &[], m.method_name, &[])
     };
-    emit_static_method_call(
-        ctx,
+    let handover = KeptCall {
+        span: m.method_expr.span,
+        receiver: Some(m.obj),
+        kept: (ctx.type_checker).kept_parameters_of_method(m.defining_class, m.method_name),
+        args: m.args.written,
+        arg_watermark: obj_watermark,
+        destination: destination.local,
+    };
+    let static_call = StaticMethodCall {
         symbol,
         call,
-        m.method_info,
-        destination,
-        op,
-        obj_temp_local,
-        obj_watermark,
-        *m.span,
-    )
+        handover: handover.checked_against_method(m.method_info)?,
+        method_info: m.method_info,
+        receiver_temp: obj_temp_local,
+    };
+    emit_static_method_call(ctx, static_call, destination, *m.span)?;
+    Ok(Some(op.clone()))
 }
 
 /// The symbol of the copy of the generic method `m` calls, recorded on the

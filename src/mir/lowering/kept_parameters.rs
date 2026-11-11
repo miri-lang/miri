@@ -24,6 +24,7 @@
 
 use crate::ast::common::Parameter;
 use crate::ast::expression::Expression;
+use crate::ast::statement::RECEIVER_PARAM_NAME;
 use crate::ast::types::TypeKind;
 use crate::diagnostics::DiagnosticCode;
 use crate::error::lowering::LoweringError;
@@ -34,6 +35,7 @@ use crate::mir::{
     ArgMode, EndCause, Local, Operand, Place, Rvalue, Statement as MirStatement,
     StatementKind as MirStatementKind,
 };
+use crate::type_checker::context::MethodInfo;
 use crate::type_checker::TypeChecker;
 
 /// The scope the owned locals of a body's kept parameters are bound in.
@@ -53,18 +55,48 @@ impl KeptParameterBindings {
     }
 }
 
-/// Records `kept` on the body's signature and binds, at the body's entry,
-/// each parameter it owns to a local of its own holding the reference the
-/// caller handed over, so every use of the parameter's name reads the local.
+/// The parameters a body binds by name, in the order a call passes its
+/// operands: the receiver of an instance method, then each declared one.
+pub(crate) struct NamedParameters<'a> {
+    /// Where the receiver is declared, for an instance method; `None` for a
+    /// body with no receiver.
+    pub receiver: Option<Span>,
+    /// The parameters a caller supplies.
+    pub params: &'a [Parameter],
+}
+
+impl NamedParameters<'_> {
+    fn len(&self) -> usize {
+        usize::from(self.receiver.is_some()) + self.params.len()
+    }
+
+    /// Each parameter's name and where it is declared, in operand order.
+    fn names(&self) -> impl Iterator<Item = (&str, Span)> {
+        let receiver = (self.receiver).map(|span| (RECEIVER_PARAM_NAME, span));
+        let params = (self.params.iter()).map(|param| (param.name.as_str(), param.typ.span));
+        receiver.into_iter().chain(params)
+    }
+}
+
+/// Records on the body's signature the parameters the function or method
+/// the statement `declaration` declares owns, and binds, at the body's
+/// entry, each one to a local of its own holding the reference the caller
+/// handed over, so every use of the parameter's name reads the local. A
+/// method owning its receiver binds `self` so; the signature's receiver
+/// stays the parameter the caller passes. The analyses of a write through
+/// the receiver read `Signature::receiver` and so do not see the owned
+/// `self`; they only act on a receiver copied on write, and a class or an
+/// enum, the only receivers the type checker keeps, never is one.
 ///
 /// Refused when a GPU body owns a parameter, or an owned parameter has no
 /// binding to move from: the type checker keeps no parameter of either.
 pub(crate) fn record_and_bind_kept_parameters(
     ctx: &mut LoweringContext,
-    params: &[Parameter],
-    kept: &[bool],
+    declaration: usize,
+    params: NamedParameters<'_>,
     span: Span,
 ) -> Result<KeptParameterBindings, LoweringError> {
+    let kept = ctx.type_checker.kept_parameters_of_declaration(declaration);
     if !kept.contains(&true) {
         return Ok(KeptParameterBindings { is_scoped: false });
     }
@@ -79,30 +111,29 @@ pub(crate) fn record_and_bind_kept_parameters(
     }
     ctx.body.signature.kept_params = kept.to_vec();
     ctx.push_scope();
-    for (param, _) in params.iter().zip(kept).filter(|(_, is_kept)| **is_kept) {
-        let Some(&local) = ctx.variable_map.get(param.name.as_str()) else {
-            let message = format!("the owned parameter `{}` has no binding", param.name);
-            let span = param.typ.span;
+    for ((name, span), _) in params.names().zip(kept).filter(|(_, is_kept)| **is_kept) {
+        let Some(&local) = ctx.variable_map.get(name) else {
+            let message = format!("the owned parameter `{name}` has no binding");
             return Err(LoweringError::internal(
                 DiagnosticCode::MirValidationFailed,
                 message,
                 span,
             ));
         };
-        bind_owned_parameter(ctx, param, local);
+        bind_owned_parameter(ctx, name, local, span);
     }
     Ok(KeptParameterBindings { is_scoped: true })
 }
 
-/// Binds `param`'s name to a new local the parameter `local` moves into.
+/// Binds the parameter `name` to a new local the parameter `local` moves
+/// into.
 ///
 /// The local is numbered past `arg_count`, so it is the binding a consuming
 /// site ends (`variable::end_consumed_binding`) and a drop hook call releases
 /// (`drop_hook_call::release_owned_local`), as a `let` would be.
-fn bind_owned_parameter(ctx: &mut LoweringContext, param: &Parameter, local: Local) {
-    let span = param.typ.span;
+fn bind_owned_parameter(ctx: &mut LoweringContext, name: &str, local: Local, span: Span) {
     let ty = ctx.body.local_decls[local.0].ty.clone();
-    let owned = ctx.alloc_local(param.name.clone(), ty, span);
+    let owned = ctx.push_local(name.to_string(), ty, span);
     ctx.push_statement(MirStatement {
         kind: MirStatementKind::Assign(
             Place::new(owned),
@@ -110,19 +141,21 @@ fn bind_owned_parameter(ctx: &mut LoweringContext, param: &Parameter, local: Loc
         ),
         span,
     });
-    ctx.bind_local_name(param.name.clone(), owned);
 }
 
 /// A direct call, with the parameters its callee owns.
 pub(crate) struct KeptCall<'a> {
-    /// The expression naming the callee.
-    pub callee: &'a Expression,
-    /// Which parameters the callee owns, in parameter order; empty when it
-    /// owns none.
+    /// Where the call names its callee.
+    pub span: Span,
+    /// The receiver the call passes first, for a method call.
+    pub receiver: Option<&'a Expression>,
+    /// Which parameters the callee owns, in the order the call passes its
+    /// operands, a method's receiver first; empty when it owns none.
     pub kept: &'a [bool],
     /// The arguments as written.
     pub args: &'a [Expression],
-    /// The first local the call's arguments were lowered into.
+    /// The first local lowering the call's operands made: its receiver's,
+    /// for a method call, else its arguments'.
     pub arg_watermark: usize,
     /// The local the call writes its result into.
     pub destination: Local,
@@ -163,12 +196,44 @@ impl<'a> KeptCall<'a> {
             ));
         }
         Ok(KeptCall {
-            callee,
+            span: callee.span,
+            receiver: variable::member_receiver(callee),
             kept,
             args,
             arg_watermark,
             destination,
         })
+    }
+
+    /// This call, checked against the method `method` it calls by name:
+    /// its owned parameters, in operand order, cover the receiver of an
+    /// instance method and each parameter it declares.
+    ///
+    /// Refused when they do not, which would hand over the wrong argument.
+    pub(crate) fn checked_against_method(self, method: &MethodInfo) -> Result<Self, LoweringError> {
+        let operands = method.params.len() + usize::from(!method.is_static);
+        if self.kept.is_empty() || self.kept.len() == operands {
+            return Ok(self);
+        }
+        let message = "the parameters a method owns do not match the operands its calls pass";
+        Err(LoweringError::internal(
+            DiagnosticCode::MirValidationFailed,
+            message,
+            self.span,
+        ))
+    }
+
+    /// A call the compiler makes where the program wrote none, to a callee
+    /// owning no parameter: it lends every operand.
+    pub(crate) fn lending(span: Span, (arg_watermark, destination): (usize, Local)) -> Self {
+        KeptCall {
+            span,
+            receiver: None,
+            kept: &[],
+            args: &[],
+            arg_watermark,
+            destination,
+        }
     }
 }
 
@@ -180,6 +245,17 @@ pub(crate) struct HandedOver {
     pub moved: Vec<Local>,
     /// Consumed, but passed by copy: each ends releasing its reference.
     pub consumed: Vec<Local>,
+}
+
+impl HandedOver {
+    /// The locals no temporary release after the call may end: each one the
+    /// call took over by `move`, and the call's `destination`.
+    pub(crate) fn held_with(&self, destination: Local) -> Vec<Local> {
+        let mut held = Vec::with_capacity(self.moved.len() + 1);
+        held.extend_from_slice(&self.moved);
+        held.push(destination);
+        held
+    }
 }
 
 /// Passes each argument at a position the callee owns [`ArgMode::Owned`],
@@ -199,32 +275,45 @@ pub(crate) fn hand_over_kept_arguments(
     }
     if arg_ops.len() < call.kept.len() {
         let message = "a call passes fewer arguments than its callee owns parameters";
-        let span = call.callee.span;
         return Err(LoweringError::internal(
             DiagnosticCode::MirValidationFailed,
             message,
-            span,
+            call.span,
         ));
     }
     if arg_modes.len() < arg_ops.len() {
         arg_modes.resize(arg_ops.len(), ArgMode::Borrowed);
     }
-    let consumed = variable::consumed_argument_locals(ctx, call.callee, call.args)?;
+    let consumed = variable::consumed_operand_locals(ctx, call.receiver, call.args)?;
     for &(argument, _) in &consumed {
         ctx.consumed_reads.insert(argument, ConsumedRead::Ended);
     }
     let owned_positions = (call.kept.iter().enumerate()).filter(|(_, is_kept)| **is_kept);
     for (position, _) in owned_positions {
         arg_modes[position] = ArgMode::Owned;
+        // TODO: a field read, an element read or an `out` parameter handed
+        // to a keeper is copied and funded with a retain, so the value has
+        // two holders until the call's new owner ends: reading a resource
+        // out of a field is not yet a borrow that cannot be stored, and an
+        // `out` parameter handed to a keeper is not yet refused.
         let Some(local) = whole_local_copied(&arg_ops[position]) else {
             continue;
         };
         let is_consumed_binding =
             consumed.iter().any(|&(_, read)| read == local) && variable::is_own_binding(ctx, local);
-        if is_consumed_binding || is_call_temporary(ctx, call, local) {
-            arg_ops[position] = Operand::Move(Place::new(local));
-            handed.moved.push(local);
+        if !is_consumed_binding && !is_call_temporary(ctx, call, local) {
+            continue;
         }
+        if handed.moved.contains(&local) {
+            let message = "a call hands the same local over at two owned positions";
+            return Err(LoweringError::internal(
+                DiagnosticCode::MirValidationFailed,
+                message,
+                call.span,
+            ));
+        }
+        arg_ops[position] = Operand::Move(Place::new(local));
+        handed.moved.push(local);
     }
     handed.consumed = (consumed.into_iter())
         .map(|(_, local)| local)
@@ -249,6 +338,21 @@ fn is_call_temporary(ctx: &LoweringContext, call: &KeptCall<'_>, local: Local) -
         && ctx.is_counted(&ctx.body.local_decls[local.0].ty.kind)
 }
 
+/// What follows a direct call once it returns, the continuation aside: every
+/// temporary among the locals its operands read, `arg_locals`, that the call
+/// did not take over released, and what it took over ended.
+pub(crate) fn release_after_kept_call(
+    ctx: &mut LoweringContext,
+    call: &KeptCall<'_>,
+    arg_locals: &[Local],
+    handed: &HandedOver,
+    span: Span,
+) {
+    let held = handed.held_with(call.destination);
+    super::dispatch::emit_direct_call_drops(ctx, arg_locals, call.arg_watermark, &held, span);
+    end_handed_over(ctx, handed, span);
+}
+
 /// Ends, after the call, what [`hand_over_kept_arguments`] handed it: each
 /// local taken by `move` without a release, and each consumed binding passed
 /// by copy releasing its own reference, as any consuming site does.
@@ -262,4 +366,32 @@ pub(crate) fn end_handed_over(ctx: &mut LoweringContext, handed: &HandedOver, sp
     for &local in &handed.consumed {
         variable::end_consumed_binding(ctx, local, span);
     }
+}
+
+/// Refuses a call the compiler makes where the program wrote none — one that
+/// lends every operand — to the method `method` of `owner` when that method
+/// owns a parameter, which it would release though no caller handed it one.
+///
+/// The type checker keeps no parameter of a method the compiler calls so
+/// ([`crate::ast::implicit_methods::is_called_without_a_written_call`]);
+/// this holds each such call site to that decision.
+pub(crate) fn refuse_lending_to_a_keeper(
+    ctx: &LoweringContext,
+    (owner, method): (&str, &str),
+    span: Span,
+) -> Result<(), LoweringError> {
+    if !ctx
+        .type_checker
+        .kept_parameters_of_method(owner, method)
+        .contains(&true)
+    {
+        return Ok(());
+    }
+    let message =
+        format!("the compiler calls `{owner}.{method}`, which owns a parameter, lending it");
+    Err(LoweringError::internal(
+        DiagnosticCode::MirValidationFailed,
+        message,
+        span,
+    ))
 }

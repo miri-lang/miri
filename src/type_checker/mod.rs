@@ -89,6 +89,7 @@ mod used_methods;
 pub mod utils;
 pub mod value_class;
 mod value_demand;
+pub(crate) mod vtable_selectors;
 
 use context::{Context, SymbolInfo, TypeDefinition};
 use diagnostics::DiagnosticCollector;
@@ -507,10 +508,18 @@ impl TypeChecker {
             .map_or(&[], |function| self.kept_parameters.of(function))
     }
 
-    /// Which parameters the top-level function `statement_id` declares
-    /// owns; empty when it owns none.
+    /// Which parameters the top-level function or method `statement_id`
+    /// declares owns, in the order a call passes its operands, a method's
+    /// receiver first; empty when it owns none.
     pub fn kept_parameters_of_declaration(&self, statement_id: usize) -> &[bool] {
         self.kept_parameters.of_declaration(statement_id)
+    }
+
+    /// Which parameters the method `method` of the type `owner` owns, in the
+    /// order a call passes its operands, the receiver first; empty when it
+    /// owns none.
+    pub fn kept_parameters_of_method(&self, owner: &str, method: &str) -> &[bool] {
+        self.kept_parameters.of_method(owner, method)
     }
 
     /// The module the top-level function declaration `statement_id` is
@@ -890,11 +899,14 @@ impl TypeChecker {
         if !self.diagnostics.is_empty() {
             return;
         }
+        let type_definitions = &self.type_table.global_type_definitions;
+        let selectors = vtable_selectors::vtable_selectors(type_definitions);
         let facts = kept_parameters::KeepFacts {
-            type_definitions: &self.type_table.global_type_definitions,
+            type_definitions,
             escape_summaries: &context.escape_summaries,
             modules: &self.fn_analysis.declaring_modules,
             function_values: &self.fn_analysis.function_values,
+            selectors: &selectors,
         };
         self.kept_parameters =
             kept_parameters::decide_kept_parameters(top_level_statements(program), &facts);

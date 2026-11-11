@@ -232,9 +232,16 @@ fn lower_function_body(
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
-    let kept = tc.kept_parameters_of_declaration(ast_func.id);
-    let owned =
-        kept_parameters::record_and_bind_kept_parameters(&mut ctx, params, kept, ast_func.span)?;
+    let named = kept_parameters::NamedParameters {
+        receiver: None,
+        params,
+    };
+    let owned = kept_parameters::record_and_bind_kept_parameters(
+        &mut ctx,
+        ast_func.id,
+        named,
+        ast_func.span,
+    )?;
     let copies = copy_written_parameters(&mut ctx, params);
 
     // Emit guard checks for parameters with guards
@@ -980,6 +987,16 @@ fn lower_class_method_body(
     out_params.push(false);
     ctx.body.signature.out_params = out_params;
 
+    let named = kept_parameters::NamedParameters {
+        receiver: has_self.then_some(ast_method.span),
+        params,
+    };
+    let owned = kept_parameters::record_and_bind_kept_parameters(
+        &mut ctx,
+        ast_method.id,
+        named,
+        ast_method.span,
+    )?;
     let copies = copy_written_parameters(&mut ctx, params);
 
     // Lower body
@@ -987,6 +1004,7 @@ fn lower_class_method_body(
         lower_body_as_return(&mut ctx, body_box, &ret_ty)?;
     }
     copies.close(&mut ctx, ast_method.span);
+    owned.close(&mut ctx, ast_method.span);
 
     finalize_body(&mut ctx, ast_method.span)
 }

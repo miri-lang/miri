@@ -177,6 +177,8 @@ fn lower_zero_arg_method_as_property(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    let owner = (class_name, method_name);
+    crate::mir::lowering::kept_parameters::refuse_lending_to_a_keeper(ctx, owner, expr.span)?;
     let func_op = Operand::function(Symbol::method(class_name, &[], method_name, &[]), expr.span);
 
     let mut call_args = vec![obj_operand];

@@ -369,6 +369,11 @@ pub(super) fn emit_string_concat(
     right: crate::mir::place::Local,
     span: &crate::error::syntax::Span,
 ) -> Result<crate::mir::place::Local, LoweringError> {
+    let concat = (
+        STRING_TYPE_NAME,
+        crate::ast::implicit_methods::CONCAT_METHOD_NAME,
+    );
+    crate::mir::lowering::kept_parameters::refuse_lending_to_a_keeper(ctx, concat, *span)?;
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
     let mut call_args = vec![
         Operand::Copy(Place::new(left)),

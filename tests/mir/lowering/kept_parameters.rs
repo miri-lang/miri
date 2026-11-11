@@ -5,9 +5,12 @@
 //! the callee binds the parameter on entry to a local of its own, and the
 //! caller hands its binding over by `move`, ending it without a release.
 
+use miri::ast::expression::ExpressionKind;
 use miri::ast::statement::StatementKind as AstStatementKind;
+use miri::ast::types::{Type, TypeKind};
+use miri::error::syntax::Span;
 use miri::mir::drop_elaboration::elaborate_drops;
-use miri::mir::lowering::lower_function;
+use miri::mir::lowering::{lower_class_method, lower_function};
 use miri::mir::{
     ArgMode, Body, EndCause, Local, Operand, Place, Rvalue, StatementKind, TerminatorKind,
 };
@@ -247,4 +250,185 @@ fn an_element_argument_is_copied_for_the_callee_to_be_funded() {
     let (args, modes) = call_to(&body, ".cond");
     assert!(matches!(args[0], Operand::Copy(_)), "{body}");
     assert_eq!(modes[0], ArgMode::Owned, "{body}");
+}
+
+const SHELF: &str = r#"
+struct Shelf
+    slot Handle?
+
+class Rack
+    fn init()
+        println("rack")
+    fn put(h Handle) int
+        let _shelf = Shelf(slot: Some(h))
+        return 0
+
+class Keeper
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed keeper {self.id}")
+    fn put_on(self, n int) int
+        if true
+            let _shelf = KeeperShelf(slot: Some(self))
+        return n
+
+struct KeeperShelf
+    slot Keeper?
+
+class Point
+    public var x int
+    fn init(x int)
+        self.x = x
+    fn moved(self) Point
+        return self
+
+struct Holder
+    k Keeper
+"#;
+
+/// The method `method` of the type `owner` the fixture declares, lowered
+/// before any MIR pass runs.
+fn lowered_method(program: &str, owner: &str, method: &str) -> Body {
+    let source = format!("{HANDLE}\n{SHELF}\n{program}");
+    let result = Pipeline::new()
+        .frontend(&source)
+        .expect("the fixture type checks");
+    let members = (result.ast.body.iter())
+        .find_map(|stmt| match &stmt.node {
+            AstStatementKind::Class(data) => matches!(
+                &data.name.node,
+                ExpressionKind::Identifier(name, _) if name == owner
+            )
+            .then_some(data.body.as_slice()),
+            _ => None,
+        })
+        .expect("the fixture declares the type");
+    let statement = (members.iter())
+        .find(|member| {
+            matches!(&member.node, AstStatementKind::FunctionDeclaration(f) if f.name == method)
+        })
+        .expect("the type declares the method");
+    let receiver = Type::new(TypeKind::Custom(owner.to_string(), None), Span::default());
+    lower_class_method(statement, receiver, &result.type_checker, false)
+        .expect("the fixture lowers")
+        .body
+}
+
+const KEEPER_MAIN: &str = r#"
+fn main()
+    let k = Keeper(1)
+    let n = k.put_on(2)
+    let holder = Holder(k: Keeper(2))
+    let m = holder.k.put_on(3)
+    let rack = Rack()
+    let h = Handle(3)
+    let r = rack.put(h)
+"#;
+
+#[test]
+fn a_kept_receiver_is_on_the_signature_and_moved_into_a_local_on_entry() {
+    let body = lowered_method(KEEPER_MAIN, "Keeper", "put_on");
+    assert_eq!(body.signature.kept_params, vec![true, false], "{body}");
+    assert_eq!(body.signature.receiver, Some(Local(1)), "{body}");
+    let this = owned_local(&body, "self");
+    let moves_receiver = body.basic_blocks[0].statements.iter().any(|statement| {
+        statement.kind
+            == StatementKind::Assign(
+                Place::new(this),
+                Rvalue::Use(Operand::Move(Place::new(Local(1)))),
+            )
+    });
+    assert!(
+        moves_receiver,
+        "the entry block binds `self` by move:\n{body}"
+    );
+}
+
+#[test]
+fn a_kept_method_parameter_is_on_the_signature_after_the_receiver() {
+    let body = lowered_method(KEEPER_MAIN, "Rack", "put");
+    assert_eq!(body.signature.kept_params, vec![false, true], "{body}");
+    let h = owned_local(&body, "h");
+    let moves_parameter = body.basic_blocks[0].statements.iter().any(|statement| {
+        statement.kind
+            == StatementKind::Assign(
+                Place::new(h),
+                Rvalue::Use(Operand::Move(Place::new(Local(2)))),
+            )
+    });
+    assert!(
+        moves_parameter,
+        "the entry block binds `h` by move:\n{body}"
+    );
+}
+
+#[test]
+fn a_receiver_that_is_no_resource_is_never_kept() {
+    let body = lowered_method(KEEPER_MAIN, "Point", "moved");
+    assert!(body.signature.kept_params.is_empty(), "{body}");
+}
+
+#[test]
+fn a_consumed_receiver_is_handed_over_by_move_and_ended_without_a_release() {
+    let source = format!("{HANDLE}\n{SHELF}\n{KEEPER_MAIN}");
+    let body = lowered_from(&source, "main");
+    let k = owned_local(&body, "k");
+    let (args, modes) = call_to(&body, ".put_on");
+    assert_eq!(args[0], Operand::Move(Place::new(k)), "{body}");
+    assert_eq!(modes[0], ArgMode::Owned, "{body}");
+    assert_eq!(modes[1], ArgMode::Borrowed, "{body}");
+    assert_eq!(ends_by(&body, k, EndCause::Moved), 1, "{body}");
+    assert_eq!(ends_by(&body, k, EndCause::Consumed), 0, "{body}");
+}
+
+#[test]
+fn a_kept_receivers_caller_releases_nothing_it_handed_over() {
+    let source = format!("{HANDLE}\n{SHELF}\n{KEEPER_MAIN}");
+    let (bodies, _) = Pipeline::new()
+        .get_mir_program_with_rc(&source)
+        .expect("the fixture compiles");
+    let (_, body) = (bodies.iter())
+        .find(|(name, _)| name == "main" || name.ends_with(".main"))
+        .expect("the program has `main`");
+    let k = owned_local(body, "k");
+    let releases = (body.basic_blocks.iter())
+        .flat_map(|block| &block.statements)
+        .filter(|statement| statement.kind == StatementKind::DecRef(Place::new(k)))
+        .count();
+    assert_eq!(releases, 0, "`k` is the method's from the call on:\n{body}");
+}
+
+#[test]
+fn a_field_receiver_is_copied_for_the_method_to_be_funded() {
+    let source = format!("{HANDLE}\n{SHELF}\n{KEEPER_MAIN}");
+    let body = lowered_from(&source, "main");
+    let holder = owned_local(&body, "holder");
+    let field_call = (body.basic_blocks.iter())
+        .filter_map(|block| block.terminator.as_ref())
+        .find_map(|terminator| match &terminator.kind {
+            TerminatorKind::Call {
+                args, arg_modes, ..
+            } if matches!(args.first(), Some(Operand::Copy(place))
+                if place.local == holder && !place.projection.is_empty()) =>
+            {
+                Some((args.clone(), arg_modes.clone()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no call on `holder.k` in\n{body}"));
+    assert_eq!(field_call.1[0], ArgMode::Owned, "{body}");
+}
+
+#[test]
+fn a_consumed_method_argument_is_handed_over_by_move() {
+    let source = format!("{HANDLE}\n{SHELF}\n{KEEPER_MAIN}");
+    let body = lowered_from(&source, "main");
+    let h = owned_local(&body, "h");
+    let (args, modes) = call_to(&body, ".put");
+    assert_eq!(modes[0], ArgMode::Borrowed, "the rack is lent:\n{body}");
+    assert_eq!(args[1], Operand::Move(Place::new(h)), "{body}");
+    assert_eq!(modes[1], ArgMode::Owned, "{body}");
+    assert_eq!(ends_by(&body, h, EndCause::Moved), 1, "{body}");
 }

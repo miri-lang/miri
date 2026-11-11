@@ -141,3 +141,53 @@ fn a_kept_parameter_the_callee_hands_on_by_a_funded_copy_is_reported() {
     assert_eq!(found.len(), 1, "{found:?}\n{body}");
     assert_eq!(found[0].local, h);
 }
+
+/// A program whose `Keeper.put_on` keeps its receiver in one arm, and whose
+/// `main` hands it the binding `k`.
+pub(super) const RECEIVER_KEEPER: &str = r#"
+struct KeeperShelf
+    slot Keeper?
+
+class Keeper
+    public var id int
+    fn init(id int)
+        self.id = id
+    fn drop(self)
+        println(f"closed {self.id}")
+    fn put_on(self, n int) int
+        if n > 0
+            let _shelf = KeeperShelf(slot: Some(self))
+            println("kept")
+        return n
+
+fn main()
+    let k = Keeper(1)
+    let n = k.put_on(2)
+    println(f"{n}")
+"#;
+
+#[test]
+fn a_kept_receiver_handed_over_by_move_is_accepted() {
+    let compiled = Compiled::of(RECEIVER_KEEPER);
+    for name in ["put_on", "main"] {
+        let (body, ownership) = compiled.body(name);
+        let found = verify_resource_transfers(&body, &ownership, &compiled.hooks());
+        assert!(found.is_empty(), "{name}: {found:?}\n{body}");
+    }
+}
+
+#[test]
+fn a_kept_receiver_the_caller_hands_over_by_a_funded_copy_is_reported() {
+    let compiled = Compiled::of(RECEIVER_KEEPER);
+    let (mut body, ownership) = compiled.body("main");
+    let k = owned_local(&body, "k");
+    fund_instead_of_moving(&mut body, k);
+    let found = verify_resource_transfers(&body, &ownership, &compiled.hooks());
+    assert_eq!(found.len(), 1, "{found:?}\n{body}");
+    assert_eq!(found[0].local, k);
+    assert!(
+        found[0].message.contains("at argument 0"),
+        "the finding names the receiver's position: {}",
+        found[0].message
+    );
+}

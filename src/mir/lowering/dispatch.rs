@@ -46,7 +46,9 @@ pub(crate) use super::kernel_launch::try_lower_kernel_launch;
 
 // Import private helpers from specialized modules.
 use super::generic_method_calls::{generic_method_symbol, GenericMethodSite};
-use super::kept_parameters::{end_handed_over, hand_over_kept_arguments, HandedOver, KeptCall};
+use super::kept_parameters::{
+    hand_over_kept_arguments, release_after_kept_call, HandedOver, KeptCall,
+};
 use super::method_dispatch::{residency_specialize_call, with_mutated_receiver};
 use super::runtime_writes::{self, RuntimeCallee};
 use super::sequencing::lower_operand;
@@ -230,16 +232,13 @@ fn try_lower_static_method_call(
         .find_static_method_in_chain(type_name, method_name.as_str())
     {
         if method_info.is_static {
-            return lower_static_method_impl(
-                ctx,
-                span,
-                call_expr_id,
-                &defining_class_name,
-                method_name,
-                args,
-                dest,
-                &method_info,
-            );
+            let site = StaticMethodSite {
+                expr: method_expr,
+                name: method_name,
+                defining_type: &defining_class_name,
+                info: &method_info,
+            };
+            return lower_static_method_impl(ctx, (span, call_expr_id), site, args, dest);
         }
     }
 
@@ -254,16 +253,13 @@ fn try_lower_static_method_call(
     {
         if let Some(method_info) = enum_def.methods.get(method_name) {
             if method_info.is_static {
-                return lower_static_method_impl(
-                    ctx,
-                    span,
-                    call_expr_id,
-                    type_name,
-                    method_name,
-                    args,
-                    dest,
-                    method_info,
-                );
+                let site = StaticMethodSite {
+                    expr: method_expr,
+                    name: method_name,
+                    defining_type: type_name,
+                    info: method_info,
+                };
+                return lower_static_method_impl(ctx, (span, call_expr_id), site, args, dest);
             }
         }
     }
@@ -271,17 +267,28 @@ fn try_lower_static_method_call(
     Ok(None)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A static method a call names: the expression naming it, its name, the
+/// type declaring it and its signature.
+struct StaticMethodSite<'a> {
+    expr: &'a Expression,
+    name: &'a str,
+    defining_type: &'a str,
+    info: &'a MethodInfo,
+}
+
 fn lower_static_method_impl(
     ctx: &mut LoweringContext,
-    span: &Span,
-    call_expr_id: usize,
-    defining_type_name: &str,
-    method_name: &str,
+    (span, call_expr_id): (&Span, usize),
+    site: StaticMethodSite<'_>,
     args: &[Expression],
     dest: Option<&Place>,
-    method_info: &crate::type_checker::context::MethodInfo,
 ) -> Result<Option<Operand>, LoweringError> {
+    let StaticMethodSite {
+        expr: method_expr,
+        name: method_name,
+        defining_type: defining_type_name,
+        info: method_info,
+    } = site;
     // Static method call with no receiver
     let arg_watermark = ctx.body.local_decls.len();
     let param_names: Vec<&str> = method_info
@@ -315,18 +322,30 @@ fn lower_static_method_impl(
     let func_op = Operand::function(symbol, *span);
 
     // Build arg_modes from method_info with no receiver offset (static methods have no self).
-    let arg_modes = build_method_arg_modes_with_offset(method_info, args.len(), arg_ops.len(), 0);
+    let mut arg_modes =
+        build_method_arg_modes_with_offset(method_info, args.len(), arg_ops.len(), 0);
+    let call = KeptCall {
+        span: method_expr.span,
+        receiver: None,
+        kept: (ctx.type_checker).kept_parameters_of_method(defining_type_name, method_name),
+        args,
+        arg_watermark,
+        destination: destination.local,
+    }
+    .checked_against_method(method_info)?;
+    let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
+    let arg_locals = operand_locals(&arg_ops);
 
     emit_call_terminator(
         ctx,
         func_op,
-        arg_ops.clone(),
+        arg_ops,
         arg_modes,
         Vec::new(), // arg_handles
-        destination.clone(),
+        destination,
         *span,
     );
-    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, &[destination.local], *span);
+    release_after_kept_call(ctx, &call, &arg_locals, &handed, *span);
     Ok(Some(result_op))
 }
 
@@ -474,16 +493,18 @@ fn lower_aliased_function_call(
     let mut arg_modes = Vec::new();
     let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
+    let arg_locals = operand_locals(&arg_ops);
+
     emit_call_terminator(
         ctx,
         func_op,
-        arg_ops.clone(),
+        arg_ops,
         arg_modes,
         Vec::new(),
-        destination.clone(),
+        destination,
         *span,
     );
-    end_direct_call(ctx, &call, &arg_ops, &handed, *span);
+    end_direct_call(ctx, (callee, *span), &call, &arg_locals, &handed);
     Ok(Some(result_op))
 }
 
@@ -1631,16 +1652,18 @@ fn lower_direct_call(
     let call = KeptCall::of(ctx.type_checker, callee, callee.id, &func_op, args, at)?;
     let handed = hand_over_kept_arguments(ctx, &call, &mut arg_ops, &mut arg_modes)?;
 
+    let arg_locals = operand_locals(&arg_ops);
+
     emit_call_terminator(
         ctx,
         func_op,
-        arg_ops.clone(),
+        arg_ops,
         arg_modes,
         arg_handles,
         destination.clone(),
         *span,
     );
-    end_direct_call(ctx, &call, &arg_ops, &handed, *span);
+    end_direct_call(ctx, (callee, *span), &call, &arg_locals, &handed);
     release_called_value(
         ctx,
         &func_op_for_drop,
@@ -1723,12 +1746,24 @@ fn build_arg_modes(
     }
 }
 
-/// Drop each freshly-created argument temp, skipping `held`: the call's
-/// destination and every temp the call took over by `move`, which it ended
-/// already.
-fn emit_direct_call_drops(
+/// The local each of `operands` reads, in order, for the ones reading a
+/// place: what a call's argument temporaries are released from once the
+/// operands themselves are the call's.
+pub(super) fn operand_locals(operands: &[Operand]) -> Vec<Local> {
+    (operands.iter())
+        .filter_map(|operand| match operand {
+            Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+            Operand::Constant(_) | Operand::Function(_) => None,
+        })
+        .collect()
+}
+
+/// Drop each freshly-created argument temp among `arg_locals`, skipping
+/// `held`: the call's destination and every temp the call took over by
+/// `move`, which it ended already.
+pub(super) fn emit_direct_call_drops(
     ctx: &mut LoweringContext,
-    arg_ops: &[Operand],
+    arg_locals: &[Local],
     arg_watermark: usize,
     held: &[Local],
     span: Span,
@@ -1737,11 +1772,9 @@ fn emit_direct_call_drops(
     // parameter's default may read the value an earlier argument passes, and
     // both slots then name the same temporary.
     let mut released = std::collections::HashSet::new();
-    for arg_op in arg_ops {
-        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-            if !held.contains(&place.local) && released.insert(place.local) {
-                ctx.emit_temp_drop(place.local, arg_watermark, span);
-            }
+    for &local in arg_locals {
+        if !held.contains(&local) && released.insert(local) {
+            ctx.emit_temp_drop(local, arg_watermark, span);
         }
     }
 }
@@ -1758,21 +1791,18 @@ fn seal_after_diverging_call(ctx: &mut LoweringContext, callee: &Expression, spa
     }
 }
 
-/// What follows a direct call once it returns: the continuation sealed when
-/// the callee never returns, every argument temporary the call did not take
-/// over released, and what it took over ended.
+/// What follows a direct call to `callee` once it returns: the continuation
+/// sealed when the callee never returns, then the release every call owning
+/// or lending its operands makes ([`release_after_kept_call`]).
 fn end_direct_call(
     ctx: &mut LoweringContext,
+    (callee, span): (&Expression, Span),
     call: &KeptCall<'_>,
-    arg_ops: &[Operand],
+    arg_locals: &[Local],
     handed: &HandedOver,
-    span: Span,
 ) {
-    seal_after_diverging_call(ctx, call.callee, span);
-    let mut held = handed.moved.clone();
-    held.push(call.destination);
-    emit_direct_call_drops(ctx, arg_ops, call.arg_watermark, &held, span);
-    end_handed_over(ctx, handed, span);
+    seal_after_diverging_call(ctx, callee, span);
+    release_after_kept_call(ctx, call, arg_locals, handed, span);
 }
 
 fn apply_generic_mangling(

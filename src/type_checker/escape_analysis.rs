@@ -484,6 +484,10 @@ impl<'a> ReturnFlowAnalyzer<'a> {
             ExpressionKind::Cast(value_expr, _target_type_expr) => {
                 self.classify(value_expr, aliases_return, flow);
             }
+            // TODO: `super` names the receiver, yet handing it to a keeper
+            // (`super.keep()`) does not yet make `self` escape, so a method
+            // forwarding its receiver through `super` is not seen keeping it
+            // and lends it instead of owning it.
             ExpressionKind::Literal(_)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::GenericType(_, _, _)

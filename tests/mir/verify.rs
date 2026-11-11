@@ -2917,6 +2917,22 @@ fn a_keeper_named_as_a_value_fails_the_reach_check() {
     );
 }
 
+/// The reach check refuses on every build, verifier or not, a direct call
+/// lending an argument its callee keeps: the callee would release a
+/// reference the caller still holds.
+#[test]
+fn a_direct_call_lending_a_kept_argument_fails_the_reach_check() {
+    let program = kept_param_program(ArgMode::Borrowed);
+    let refused = refuse_indirectly_reached_keepers(&program, &HashSet::new());
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|reason| reason.contains("lends argument 0")
+                && reason.contains(&callee_symbol().link_name())),
+        "{refused:?}"
+    );
+}
+
 #[test]
 fn a_keeper_filling_a_vtable_slot_fails_the_reach_check() {
     let program = kept_param_program(ArgMode::Owned);
@@ -2985,4 +3001,116 @@ fn a_kept_parameter_whose_flag_guard_is_deleted_is_released_twice() {
         "the path that handed the handle on releases it again: {}\n{body}",
         messages(&found)
     );
+}
+
+/// The program `main` and `Keeper.put_on` of the receiver keeper fixture
+/// make, each under the symbol a call names it by, with the call in `main`
+/// handing `put_on` its receiver.
+fn receiver_keeper_program() -> Vec<(Symbol, Body)> {
+    use resource_transfers::{Compiled, RECEIVER_KEEPER};
+    let compiled = Compiled::of(RECEIVER_KEEPER);
+    let (main, _) = compiled.body("main");
+    let (put_on, _) = compiled.body("put_on");
+    let symbol = (main.basic_blocks.iter())
+        .filter_map(|block| block.terminator.as_ref())
+        .find_map(|terminator| match &terminator.kind {
+            TerminatorKind::Call { func, .. } => func
+                .called_symbol()
+                .filter(|symbol| symbol.link_name().ends_with(".put_on"))
+                .cloned(),
+            _ => None,
+        })
+        .expect("`main` calls `put_on`");
+    vec![(symbol, put_on), (Symbol::entry(), main)]
+}
+
+/// The findings of the owned-argument rule on `program` naming `put_on`.
+fn put_on_mode_violations(program: &[(Symbol, Body)]) -> Vec<String> {
+    verify_owned_argument_modes(program, &ProgramFacts::of(program))
+        .into_iter()
+        .map(|(_, violation)| violation.message)
+        .filter(|message| message.contains(".put_on"))
+        .collect()
+}
+
+#[test]
+fn a_call_handing_over_the_receiver_its_method_keeps_agrees_with_it() {
+    let program = receiver_keeper_program();
+    assert_eq!(program[0].1.signature.kept_params, vec![true, false]);
+    assert!(
+        put_on_mode_violations(&program).is_empty(),
+        "{:?}",
+        put_on_mode_violations(&program)
+    );
+}
+
+#[test]
+fn a_call_lending_the_receiver_its_method_keeps_is_reported() {
+    let mut program = receiver_keeper_program();
+    pass_put_on_argument(&mut program, 0, ArgMode::Borrowed);
+    let found = put_on_mode_violations(&program);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].contains("lends argument 0, but the callee takes it over"),
+        "the finding names the receiver and the rule: {}",
+        found[0]
+    );
+    assert!(
+        found[0].contains("Keeper.put_on"),
+        "the finding names the callee: {}",
+        found[0]
+    );
+}
+
+/// Sets the mode `main` passes argument `position` of `put_on` in.
+fn pass_put_on_argument(program: &mut [(Symbol, Body)], position: usize, mode: ArgMode) {
+    for block in &mut program[1].1.basic_blocks {
+        let Some(TerminatorKind::Call {
+            func, arg_modes, ..
+        }) = block
+            .terminator
+            .as_mut()
+            .map(|terminator| &mut terminator.kind)
+        else {
+            continue;
+        };
+        if func
+            .called_symbol()
+            .is_some_and(|symbol| symbol.link_name().ends_with(".put_on"))
+        {
+            arg_modes[position] = mode;
+        }
+    }
+}
+
+/// The reverse mutation: a call handing over an argument the method does not
+/// keep promises the method a reference it never releases.
+#[test]
+fn a_call_handing_over_an_argument_its_method_does_not_keep_is_reported() {
+    let mut program = receiver_keeper_program();
+    pass_put_on_argument(&mut program, 1, ArgMode::Owned);
+    let found = put_on_mode_violations(&program);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].contains("hands over argument 1, but the callee only borrows it"),
+        "the finding names the argument and the rule: {}",
+        found[0]
+    );
+    assert!(found[0].contains("Keeper.put_on"), "{}", found[0]);
+}
+
+/// The callee-side mutation: a method whose signature no longer keeps its
+/// receiver, called by a caller that still hands it over.
+#[test]
+fn a_receiver_handed_to_a_method_that_no_longer_keeps_it_is_reported() {
+    let mut program = receiver_keeper_program();
+    program[0].1.signature.kept_params = vec![false, false];
+    let found = put_on_mode_violations(&program);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].contains("hands over argument 0, but the callee only borrows it"),
+        "the finding names the receiver and the rule: {}",
+        found[0]
+    );
+    assert!(found[0].contains("Keeper.put_on"), "{}", found[0]);
 }

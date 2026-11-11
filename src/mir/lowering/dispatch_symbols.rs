@@ -23,13 +23,15 @@ use super::method_dispatch::{instantiated_callee, resolve_inherited_method};
 use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
 use crate::ast::statement::DROP_HOOK_NAME;
 use crate::ast::types::{Type, CLONE_METHOD_NAME};
-use crate::mir::dispatch::{dispatched_method_names, overridden_method_names, takes_vtable_slot};
 use crate::mir::symbol::Symbol;
 use crate::type_checker::context::{
     class_ancestry, resolve_method_source, trait_lineage, ClassDefinition, MethodInfo,
     MethodSource, TraitDefinition, TypeDefinition,
 };
 use crate::type_checker::utils::has_drop_hook;
+use crate::type_checker::vtable_selectors::{
+    dispatched_method_names, overridden_method_names, takes_vtable_slot,
+};
 use crate::type_checker::TypeChecker;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

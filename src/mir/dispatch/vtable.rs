@@ -8,11 +8,9 @@ use crate::ast::types::{Type, TypeKind};
 use crate::mir::instantiation::monomorphized_arguments;
 use crate::mir::symbol::{Symbol, ThunkKind};
 use crate::mir::{AggregateKind, Body, Rvalue, StatementKind};
-use crate::type_checker::context::{
-    class_ancestry, class_is_extended, class_needs_vtable, ClassDefinition, MethodInfo,
-    TypeDefinition,
-};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use crate::type_checker::context::{class_is_extended, class_needs_vtable, TypeDefinition};
+use crate::type_checker::vtable_selectors::vtable_selectors;
+use std::collections::{BTreeMap, HashMap};
 
 /// The vtable one constructed class instance points at: the class, and the
 /// type arguments it is built at when they have a monomorphized spelling.
@@ -148,12 +146,7 @@ impl VtableLayout {
     /// The numbering the traits, abstract classes and overrides of
     /// `type_defs` give.
     pub fn of(type_defs: &HashMap<String, TypeDefinition>) -> Self {
-        let declared = type_defs
-            .values()
-            .filter_map(dispatching_methods)
-            .flat_map(dispatched_method_names);
-        let selectors: BTreeSet<&str> =
-            declared.chain(overridden_method_names(type_defs)).collect();
+        let selectors = vtable_selectors(type_defs);
         Self {
             selectors: selectors.into_iter().map(Box::from).collect(),
         }
@@ -194,76 +187,6 @@ pub fn released_by_runtime_class(name: &str, type_defs: &HashMap<String, TypeDef
         )
         | None => false,
     }
-}
-
-/// The methods of a definition whose instance methods take vtable slots: a
-/// trait's, or an abstract class's.
-fn dispatching_methods(definition: &TypeDefinition) -> Option<&BTreeMap<String, MethodInfo>> {
-    match definition {
-        TypeDefinition::Trait(trait_def) => Some(&trait_def.methods),
-        TypeDefinition::Class(class) => class.is_abstract.then_some(&class.methods),
-        TypeDefinition::Struct(_)
-        | TypeDefinition::Enum(_)
-        | TypeDefinition::Generic(_)
-        | TypeDefinition::Alias(_) => None,
-    }
-}
-
-/// The name of every method some class overrides: one it declares that a
-/// class it extends, directly or further up, declares too.
-pub(crate) fn overridden_method_names(
-    type_defs: &HashMap<String, TypeDefinition>,
-) -> impl Iterator<Item = &str> {
-    type_defs
-        .values()
-        .filter_map(|definition| match definition {
-            TypeDefinition::Class(class) => Some(class),
-            TypeDefinition::Trait(_)
-            | TypeDefinition::Struct(_)
-            | TypeDefinition::Enum(_)
-            | TypeDefinition::Generic(_)
-            | TypeDefinition::Alias(_) => None,
-        })
-        .flat_map(move |class| overrides_of(class, type_defs))
-}
-
-/// The methods `class` declares that a class it extends declares too.
-fn overrides_of<'td>(
-    class: &'td ClassDefinition,
-    type_defs: &'td HashMap<String, TypeDefinition>,
-) -> impl Iterator<Item = &'td str> {
-    let ancestors: Vec<&ClassDefinition> = class
-        .base_class
-        .as_deref()
-        .map(|base| {
-            class_ancestry(base, type_defs)
-                .map(|(_, def)| def)
-                .collect()
-        })
-        .unwrap_or_default();
-    dispatched_method_names(&class.methods).filter(move |method| {
-        ancestors
-            .iter()
-            .any(|ancestor| ancestor.methods.get(*method).is_some_and(takes_vtable_slot))
-    })
-}
-
-/// The names among `methods` a vtable slot can stand for.
-pub(crate) fn dispatched_method_names(
-    methods: &BTreeMap<String, MethodInfo>,
-) -> impl Iterator<Item = &str> {
-    methods
-        .iter()
-        .filter(|(_, info)| takes_vtable_slot(info))
-        .map(|(name, _)| name.as_str())
-}
-
-/// Whether a method takes a vtable slot: every one but the constructors,
-/// statics and generic methods. A generic method is compiled once per type
-/// argument a call binds, and a slot holds one body, so every call to one is
-/// static.
-pub(crate) fn takes_vtable_slot(info: &MethodInfo) -> bool {
-    !info.is_constructor && !info.is_static && !info.declares_type_parameters()
 }
 
 /// One filled vtable slot: its number, the method it stands for and the

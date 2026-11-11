@@ -337,11 +337,27 @@ pub(crate) fn consumed_argument_locals(
     func: &Expression,
     args: &[Expression],
 ) -> Result<Vec<(usize, crate::mir::Local)>, LoweringError> {
-    let receiver = if let ExpressionKind::Member(receiver, _) = &func.node {
-        Some(receiver.as_ref())
+    consumed_operand_locals(ctx, member_receiver(func), args)
+}
+
+/// The receiver a call through `func` passes, when `func` names a member of
+/// it.
+pub(crate) fn member_receiver(func: &Expression) -> Option<&Expression> {
+    if let ExpressionKind::Member(receiver, _) = &func.node {
+        Some(receiver)
     } else {
         None
-    };
+    }
+}
+
+/// The bindings a call's operands consume — its `receiver`, when it passes
+/// one, and its arguments — each once, with the id of the first operand
+/// naming it. Each read is taken: the caller ends every binding returned.
+pub(crate) fn consumed_operand_locals(
+    ctx: &mut LoweringContext,
+    receiver: Option<&Expression>,
+    args: &[Expression],
+) -> Result<Vec<(usize, crate::mir::Local)>, LoweringError> {
     let mut consumed: Vec<(usize, crate::mir::Local)> = Vec::new();
     for argument in receiver.into_iter().chain(args.iter().map(argument_value)) {
         let Some(local) = consumed_read(ctx, argument)? else {

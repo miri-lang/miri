@@ -38,13 +38,13 @@
 //! ([`crate::mir::Signature::kept_params`]), and lowering writes both sides
 //! of every call to it. This pass starts from those and only adds to them.
 
-use crate::ast::implicit_methods::THUNK_METHOD_NAMES;
-use crate::ast::statement::DROP_HOOK_NAME;
+use crate::ast::implicit_methods::is_called_by_a_runtime_thunk;
 use crate::mir::facts::ProgramFacts;
 use crate::mir::instantiation::shape::mentions_type_parameter;
 use crate::mir::place::PlaceContext;
 use crate::mir::place_type::PlaceTypes;
 use crate::mir::symbol::Symbol;
+use crate::mir::terminator::arg_mode;
 use crate::mir::type_facts::DropHookReach;
 use crate::mir::visitor::Visitor;
 use crate::mir::{
@@ -192,19 +192,26 @@ pub fn reach_of(
 }
 
 /// Refuses a program reaching a function whose signature keeps a parameter
-/// other than through a host call naming it: as a value, from a GPU body,
-/// through a vtable slot or a runtime thunk (`synthesized`), or under a
-/// symbol with a second body. Such a caller lends every argument, so the
-/// callee would release a reference nobody handed it.
+/// other than through a host call naming it and passing every kept position
+/// [`ArgMode::Owned`]: as a value, from a GPU body, through a vtable slot or
+/// a runtime thunk (`synthesized`), under a symbol with a second body, or by
+/// a call lending a kept position — a method's receiver, a call the
+/// compiler makes where none is written. Such a caller lends the argument,
+/// so the callee would release a reference nobody handed it.
 ///
 /// The type checker keeps no parameter of a function it sees reached any of
-/// these ways; this holds that decision to what the lowered program does.
+/// these ways; this holds that decision to what the lowered program does, on
+/// every build.
 pub fn refuse_indirectly_reached_keepers(
     program: &[(Symbol, Body)],
     synthesized: &HashSet<Symbol>,
 ) -> Result<(), String> {
-    let arities: HashMap<Symbol, usize> = (program.iter())
+    let keepers: HashMap<&Symbol, &[bool]> = (program.iter())
         .filter(|(_, body)| body.signature.kept_params.contains(&true))
+        .map(|(symbol, body)| (symbol, body.signature.kept_params.as_slice()))
+        .collect();
+    let arities: HashMap<Symbol, usize> = (program.iter())
+        .filter(|(symbol, _)| keepers.contains_key(symbol))
         .map(|(symbol, body)| (symbol.clone(), body.arg_count))
         .collect();
     let reach = reach_of(program, arities);
@@ -212,14 +219,58 @@ pub fn refuse_indirectly_reached_keepers(
         .filter(|(symbol, reach)| synthesized.contains(*symbol) || !reach.is_only_called_directly())
         .map(|(symbol, _)| symbol.link_name())
         .collect();
+    if !refused.is_empty() {
+        refused.sort_unstable();
+        return Err(format!(
+            "{} keeps a parameter, yet is reached other than by a host call naming it",
+            refused.join(", ")
+        ));
+    }
+    refuse_lent_kept_positions(program, &keepers)
+}
+
+/// Refuses a direct call passing a position its callee's signature keeps
+/// other than [`ArgMode::Owned`]: the call would lend what the callee
+/// releases.
+fn refuse_lent_kept_positions(
+    program: &[(Symbol, Body)],
+    keepers: &HashMap<&Symbol, &[bool]>,
+) -> Result<(), String> {
+    if keepers.is_empty() {
+        return Ok(());
+    }
+    let calls = (program.iter())
+        .flat_map(|(caller, body)| body.basic_blocks.iter().map(move |block| (caller, block)))
+        .filter_map(|(caller, block)| Some((caller, &block.terminator.as_ref()?.kind)));
+    let mut refused: Vec<String> = Vec::new();
+    for (caller, kind) in calls {
+        let TerminatorKind::Call {
+            func: Operand::Function(function),
+            arg_modes,
+            ..
+        } = kind
+        else {
+            continue;
+        };
+        let Some(kept) = keepers.get(&function.symbol) else {
+            continue;
+        };
+        let lent = (kept.iter().enumerate()).find(|&(position, is_kept)| {
+            *is_kept && arg_mode(arg_modes, position) != ArgMode::Owned
+        });
+        if let Some((position, _)) = lent {
+            refused.push(format!(
+                "{} lends argument {position} of {}, which keeps it",
+                caller.link_name(),
+                function.symbol.link_name()
+            ));
+        }
+    }
     if refused.is_empty() {
         return Ok(());
     }
     refused.sort_unstable();
-    Err(format!(
-        "{} keeps a parameter, yet is reached other than by a host call naming it",
-        refused.join(", ")
-    ))
+    Err(refused.join("; "))
 }
 
 /// The functions with at least one parameter that could be owned, keyed by
@@ -255,20 +306,13 @@ fn can_own_parameters(symbol: &Symbol, body: &Body, synthesized: &HashSet<Symbol
     let is_static_callee = symbol.is_plain_function()
         || symbol
             .plain_method_name()
-            .is_some_and(|method| !is_called_by_a_thunk(method));
+            .is_some_and(|method| !is_called_by_a_runtime_thunk(method));
     is_static_callee
         && !synthesized.contains(symbol)
         && matches!(body.execution_model, ExecutionModel::Cpu)
         && body.generics.open_params.is_empty()
         && body.captures.env_capture_locals.is_empty()
         && body.predecessor_counts().first() == Some(&1)
-}
-
-/// Whether codegen calls the method `method` of every class through a
-/// runtime thunk, at each instantiation, lending what it passes: the drop
-/// hook and the element methods a collection compares, hashes and clones by.
-fn is_called_by_a_thunk(method: &str) -> bool {
-    method == DROP_HOOK_NAME || THUNK_METHOD_NAMES.contains(&method)
 }
 
 /// The entry-block statement binding a parameter, and the copies of it whose

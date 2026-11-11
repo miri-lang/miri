@@ -1613,12 +1613,11 @@ fn main()
     );
 }
 
-/// A method is reached through its class's dispatch as well as by name, so
-/// its parameters stay lent and the caller releases the argument after the
-/// call. Owning one needs every way a method is reached to agree on it, which
-/// is a change of its own.
+/// A method every call reaches by name owns a parameter it keeps, as a
+/// function does: the handle is released where the method's new owner ends,
+/// before the method goes on.
 #[test]
-fn a_method_keeping_a_parameter_lends_and_the_caller_releases_after_the_call() {
+fn a_method_keeping_a_parameter_owns_it_and_releases_it_where_the_new_owner_ends() {
     assert_heap_guard_output(
         &with_handle(
             r#"
@@ -1637,7 +1636,7 @@ fn main()
     println("end")
 "#,
         ),
-        "closing\nc\nafter\nclosed 1\nend",
+        "closing\nc\nclosed 1\nafter\nend",
     );
 }
 
