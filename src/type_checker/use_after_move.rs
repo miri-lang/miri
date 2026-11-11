@@ -18,7 +18,7 @@ use crate::ast::statement::{BindingResidency, StatementKind, WhileStatementType,
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::diagnostics::DiagnosticCode;
-use crate::error::diagnostic::{Diagnostic, Severity};
+use crate::error::diagnostic::{Diagnostic, RelatedNote, Severity};
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::{HashMap, HashSet};
@@ -235,8 +235,10 @@ struct ConsumedInfo {
     by_fn: String,
     #[allow(dead_code)]
     at_span: Span,
-    /// "consumed because:" chain lines, empty when no chain was computed.
-    chain: Vec<String>,
+    /// The "consumed because" chain, one note per step, each at the line
+    /// that takes it when the report's file shows it; empty when no chain
+    /// was computed.
+    chain: Vec<RelatedNote>,
 }
 
 pub struct UseAfterMoveChecker<'a> {
@@ -1007,17 +1009,12 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed: &HashMap<String, ConsumedInfo>,
     ) {
         if let Some(info) = consumed.get(name) {
-            let chain_section = if info.chain.is_empty() {
-                String::new()
-            } else {
-                format!("\n  consumed because:\n{}", info.chain.join("\n"))
-            };
             self.errors.push(TypeError {
                 kind: TypeErrorKind::Coded {
                     code: DiagnosticCode::OwnUseOfMovedValue,
                     message: format!(
-                        "'{}' was consumed by '{}' and cannot be used again{}\n  fix: use '{}' before the call that keeps it, or pass it to a function that only reads it",
-                        name, info.by_fn, chain_section, name
+                        "'{}' was consumed by '{}' and cannot be used again\n  fix: use '{}' before the call that keeps it, or pass it to a function that only reads it",
+                        name, info.by_fn, name
                     ),
                     help: None,
                     expected: None,
@@ -1026,7 +1023,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 span,
                 source_override: None,
                 repair: None,
-                related: Vec::new(),
+                related: info.chain.clone(),
             });
         }
     }
@@ -1470,79 +1467,44 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// Builds the "consumed because:" chain lines by following `escape_next_hops`
-    /// through the escape summaries.
+    /// Builds the "consumed because" chain by following `escape_next_hops`
+    /// through the escape summaries: one note per step, at the place that
+    /// takes it.
     ///
     /// Starts at `sink` / `param_idx` and follows hops until reaching a sink
-    /// or a function with no hop data.  Returns the chain lines (each one line),
-    /// or an empty Vec when no chain info is available — always so for a
-    /// dynamic function value, which has no summary.
-    fn build_chain(&self, sink: &Sink, param_idx: usize) -> Vec<String> {
-        let mut lines = Vec::new();
+    /// or a function with no hop data. Empty when no chain info is
+    /// available — always so for a dynamic function value, which has no
+    /// summary.
+    fn build_chain(&self, sink: &Sink, param_idx: usize) -> Vec<RelatedNote> {
+        let mut notes = Vec::new();
         let Sink::Function(callee_fn) = sink else {
-            return lines;
+            return notes;
         };
         let mut current_fn = callee_fn.clone();
         let mut current_param = param_idx;
         let mut visited = std::collections::HashSet::new();
-
-        loop {
-            if !visited.insert((current_fn.clone(), current_param)) {
-                break; // cycle guard
-            }
-            let Some(summary) = self.escape_summaries.get(&current_fn) else {
+        while visited.insert((current_fn.clone(), current_param)) {
+            let Some(site) = (self.escape_summaries.get(&current_fn))
+                .and_then(|summary| summary.escape_next_hops.get(&current_param))
+            else {
                 break;
             };
-            let Some(hop) = summary.escape_next_hops.get(&current_param) else {
+            let message = format!(
+                "consumed because {} \u{2192} {}",
+                current_fn,
+                step(&site.hop)
+            );
+            notes.push(RelatedNote {
+                message,
+                span: site.span,
+            });
+            let EscapeNextHop::Call { callee, param_slot } = &site.hop else {
                 break;
             };
-            match hop {
-                EscapeNextHop::Call { callee, param_slot } => {
-                    lines.push(format!(
-                        "    {} → calls {} (passes its argument)",
-                        current_fn, callee
-                    ));
-                    current_fn = callee.clone();
-                    current_param = *param_slot;
-                }
-                EscapeNextHop::Return => {
-                    lines.push(format!(
-                        "    {} → returns its argument (escape sink)",
-                        current_fn
-                    ));
-                    break;
-                }
-                EscapeNextHop::ReturnAggregate => {
-                    lines.push(format!(
-                        "    {} → returns its argument in an aggregate (escape sink)",
-                        current_fn
-                    ));
-                    break;
-                }
-                EscapeNextHop::FieldStore { field } => {
-                    lines.push(format!(
-                        "    {} → stores its argument into field '{}' (escape sink)",
-                        current_fn, field
-                    ));
-                    break;
-                }
-                EscapeNextHop::ClosureCapture => {
-                    lines.push(format!(
-                        "    {} → captures its argument in a returned closure (escape sink)",
-                        current_fn
-                    ));
-                    break;
-                }
-                EscapeNextHop::DynamicFn { fn_name } => {
-                    lines.push(format!(
-                        "    {} → passes its argument to dynamic fn '{}' (escape sink)",
-                        current_fn, fn_name
-                    ));
-                    break;
-                }
-            }
+            current_fn = callee.clone();
+            current_param = *param_slot;
         }
-        lines
+        notes
     }
 
     fn extract_callee_name(&self, callee: &Expression) -> String {
@@ -1701,5 +1663,32 @@ fn given_away_capture_error(name: &str, span: Span) -> TypeError {
         source_override: None,
         repair: None,
         related: Vec::new(),
+    }
+}
+
+/// What one step of a "consumed because" chain says the function does.
+fn step(hop: &EscapeNextHop) -> String {
+    match hop {
+        EscapeNextHop::Call { callee, .. } => format!("calls {callee} (passes its argument)"),
+        EscapeNextHop::Return => "returns its argument (escape sink)".to_string(),
+        EscapeNextHop::ReturnAggregate => {
+            "returns its argument in an aggregate (escape sink)".to_string()
+        }
+        EscapeNextHop::FieldStore { field } => {
+            format!("stores its argument into field '{field}' (escape sink)")
+        }
+        EscapeNextHop::ElementStore => {
+            "stores its argument into an element (escape sink)".to_string()
+        }
+        EscapeNextHop::Built => "builds a value that holds its argument (escape sink)".to_string(),
+        EscapeNextHop::ClosureCapture { returned: true } => {
+            "captures its argument in a returned closure (escape sink)".to_string()
+        }
+        EscapeNextHop::ClosureCapture { returned: false } => {
+            "captures its argument in a closure (escape sink)".to_string()
+        }
+        EscapeNextHop::DynamicFn { fn_name } => {
+            format!("passes its argument to dynamic fn '{fn_name}' (escape sink)")
+        }
     }
 }

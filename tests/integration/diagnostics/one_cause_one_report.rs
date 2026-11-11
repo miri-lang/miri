@@ -13,10 +13,7 @@
 //! These tests pin the shape an agent consumes: one primary diagnostic, the
 //! echoes attached to it as `related` entries that carry their own location.
 
-use miri::diagnostics::json::DiagnosticsEnvelope;
-use std::io::Write;
-use std::path::PathBuf;
-use tempfile::NamedTempFile;
+use crate::utils::miri_check_json;
 
 /// A `match` whose arms both omit the `Result.` prefix the patterns require.
 const BARE_RESULT_PATTERNS: &str = r#"fn classify(r Result<int, String>) int
@@ -31,32 +28,9 @@ fn main()
     println(f"{classify(Result.Ok(1))}")
 "#;
 
-/// The envelope `miri check --format json` produces for `source`.
-fn check_envelope(source: &str) -> DiagnosticsEnvelope {
-    let mut file = NamedTempFile::new().expect("a temp file for the program");
-    write!(file, "{}", source).expect("the program is written");
-    let stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("stdlib");
-
-    let output = crate::utils::miri_cmd()
-        .env("MIRI_STDLIB_PATH", stdlib.to_str().expect("a utf-8 path"))
-        .env_remove("MIRI_CC")
-        .env_remove("CC")
-        .arg("check")
-        .arg(file.path())
-        .arg("--format")
-        .arg("json")
-        .output()
-        .expect("check runs");
-
-    let stdout = String::from_utf8(output.stdout).expect("utf-8 output");
-    serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("a parseable envelope: {e}\n{stdout}"))
-}
-
 #[test]
 fn test_a_failed_pattern_does_not_report_the_names_it_binds_as_undefined() {
-    let envelope = check_envelope(BARE_RESULT_PATTERNS);
+    let envelope = miri_check_json(BARE_RESULT_PATTERNS);
     let undefined: Vec<_> = envelope
         .diagnostics
         .iter()
@@ -72,7 +46,7 @@ fn test_a_failed_pattern_does_not_report_the_names_it_binds_as_undefined() {
 
 #[test]
 fn test_the_bare_pattern_program_reports_one_primary_diagnostic() {
-    let envelope = check_envelope(BARE_RESULT_PATTERNS);
+    let envelope = miri_check_json(BARE_RESULT_PATTERNS);
     let messages: Vec<_> = envelope
         .diagnostics
         .iter()
@@ -87,7 +61,7 @@ fn test_the_bare_pattern_program_reports_one_primary_diagnostic() {
 
 #[test]
 fn test_the_primary_diagnostic_names_the_fix() {
-    let envelope = check_envelope(BARE_RESULT_PATTERNS);
+    let envelope = miri_check_json(BARE_RESULT_PATTERNS);
     let primary = &envelope.diagnostics[0];
     assert_eq!(primary.code.as_deref(), Some("MER_TYP_038"));
     assert!(
@@ -99,7 +73,7 @@ fn test_the_primary_diagnostic_names_the_fix() {
 
 #[test]
 fn test_the_second_bad_arm_is_attached_as_a_located_related_entry() {
-    let envelope = check_envelope(BARE_RESULT_PATTERNS);
+    let envelope = miri_check_json(BARE_RESULT_PATTERNS);
     let primary = &envelope.diagnostics[0];
     assert_eq!(
         primary.related.len(),
@@ -129,7 +103,7 @@ fn test_the_second_bad_arm_is_attached_as_a_located_related_entry() {
 /// wrong way.
 #[test]
 fn test_a_match_whose_patterns_did_not_resolve_is_not_also_called_non_exhaustive() {
-    let envelope = check_envelope(BARE_RESULT_PATTERNS);
+    let envelope = miri_check_json(BARE_RESULT_PATTERNS);
     let exhaustiveness: Vec<_> = envelope
         .diagnostics
         .iter()
@@ -161,7 +135,7 @@ fn describe(c Color) String
 fn main()
     println(describe(Color.Red))
 "#;
-    let envelope = check_envelope(code);
+    let envelope = miri_check_json(code);
     assert!(
         envelope
             .diagnostics
@@ -190,7 +164,7 @@ fn handle(s Signal) int
 fn main()
     println(f"{handle(Signal.Start(1))}")
 "#;
-    let envelope = check_envelope(code);
+    let envelope = miri_check_json(code);
     assert_eq!(envelope.diagnostics.len(), 1);
     let lines: Vec<_> = envelope.diagnostics[0]
         .related

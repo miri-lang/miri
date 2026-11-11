@@ -831,7 +831,8 @@ impl TypeChecker {
             modules: &self.fn_analysis.declaring_modules,
         };
         context.escape_summaries = escape_analysis::compute_escape_summaries(
-            program.body.iter().chain(&self.imported_statements),
+            &program.body,
+            &self.imported_statements,
             &facts,
             escape_analysis::runtime_escape_summaries(&self.runtime_effects),
         );

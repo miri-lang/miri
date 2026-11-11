@@ -3,7 +3,7 @@
 //
 // Integration tests for escape-chain diagnostics.
 //
-// Each test verifies that the "consumed because:" chain in use-after-move errors
+// Each test verifies that the "consumed because" chain in use-after-move errors
 // names the actual escape sink — not just the immediate callee. Only a resource
 // a callee keeps is consumed, so the programs pass a `Res` with a drop hook. The chain
 // follows escape_next_hops through the escape summaries computed bottom-up by
@@ -24,8 +24,11 @@
 //   - No false positive: mutation of a local without escape
 //   - Diagnostic stability under rename (chain updates with new name)
 //   - Dynamic fn-valued callee produces "dynamic fn" in error message
+//   - Every way a callee keeps its argument is named as a hop that points at
+//     the line keeping it, in the text output and the JSON envelope
 
 use super::super::utils::*;
+use crate::utils::{miri_check, miri_check_json};
 
 #[test]
 fn test_chain_single_hop_baseline() {
@@ -461,5 +464,187 @@ c.store(xs)
 println(f"{xs.x}")
 "#,
         "Base.store",
+    );
+}
+
+/// The resource every hop test hands to a function that keeps it.
+const RES: &str = "use system.collections.list
+
+class Res
+    var x int
+    fn drop(self)
+        return
+";
+
+/// The 1-based line `source` writes `line` on; it must be written once.
+fn line_of(source: &str, line: &str) -> usize {
+    let found: Vec<usize> = (source.lines().enumerate())
+        .filter(|(_, written)| *written == line)
+        .map(|(index, _)| index + 1)
+        .collect();
+    assert_eq!(found.len(), 1, "'{line}' is written once in:\n{source}");
+    found[0]
+}
+
+/// The use-after-move report on `program` names `hop`, pointing at the line
+/// `keeping` that keeps the value, in the text output and in the JSON
+/// envelope's related entries.
+fn assert_hop(program: &str, hop: &str, keeping: &str) {
+    let source = format!("{RES}\n{program}");
+    let line = line_of(&source, keeping);
+
+    let output = miri_check(&source).output();
+    let lines: Vec<&str> = output.lines().collect();
+    let at = (lines.iter())
+        .position(|written| written.contains(hop))
+        .unwrap_or_else(|| panic!("'{hop}' is named in:\n{output}"));
+    let location = lines.get(at + 1).copied().unwrap_or_default();
+    assert!(
+        location.contains("-->") && location.contains(&format!(":{line}:")),
+        "the hop '{hop}' points at line {line}:\n{output}"
+    );
+
+    let envelope = miri_check_json(&source);
+    let diagnostic = (envelope.diagnostics.iter())
+        .find(|d| d.code.as_deref() == Some("MER_OWN_003"))
+        .unwrap_or_else(|| panic!("a use-after-move report: {envelope:#?}"));
+    assert!(
+        (diagnostic.related.iter())
+            .any(|related| related.message.contains(hop) && related.line == Some(line)),
+        "a related entry names '{hop}' at line {line}: {diagnostic:#?}"
+    );
+}
+
+/// A function that keeps a resource and then reads the caller's binding.
+fn reads_after(keeper: &str, call: &str) -> String {
+    format!("{keeper}\n\nfn main()\n    let h = Res(x: 1)\n    {call}\n    println(f\"{{h.x}}\")\n")
+}
+
+#[test]
+fn a_hop_names_the_tail_a_function_returns_its_argument_on() {
+    assert_hop(
+        &reads_after("fn keep(r Res) Res\n    r", "keep(h)"),
+        "keep \u{2192} returns its argument",
+        "    r",
+    );
+}
+
+#[test]
+fn a_hop_names_the_tuple_a_function_returns_its_argument_in() {
+    assert_hop(
+        &reads_after("fn keep(r Res) (Res, int)\n    return (r, 1)", "keep(h)"),
+        "keep \u{2192} returns its argument in an aggregate",
+        "    return (r, 1)",
+    );
+}
+
+#[test]
+fn a_hop_names_the_constructor_a_function_returns_its_argument_in() {
+    assert_hop(
+        &reads_after(
+            "class Pair\n    var a Res\n\nfn keep(a Res) Pair\n    return Pair(a: a)",
+            "keep(h)",
+        ),
+        "keep \u{2192} returns its argument in an aggregate",
+        "    return Pair(a: a)",
+    );
+}
+
+#[test]
+fn a_hop_names_the_variant_a_function_returns_its_argument_in() {
+    assert_hop(
+        &reads_after(
+            "enum Held\n    One(Res)\n    Zero\n\nfn keep(r Res) Held\n    return Held.One(r)",
+            "keep(h)",
+        ),
+        "keep \u{2192} returns its argument in an aggregate",
+        "    return Held.One(r)",
+    );
+}
+
+#[test]
+fn a_hop_names_the_value_a_function_builds_of_its_argument() {
+    assert_hop(
+        &reads_after("fn keep(r Res) int\n    let t = (r, 1)\n    1", "keep(h)"),
+        "keep \u{2192} builds a value that holds its argument",
+        "    let t = (r, 1)",
+    );
+}
+
+const SHELF: &str = "class Shelf
+    var slot Res?
+    var items [Res]
+    fn init()
+        self.slot = None
+        self.items = List<Res>()";
+
+#[test]
+fn a_hop_names_the_field_a_method_stores_its_argument_into() {
+    assert_hop(
+        &reads_after(
+            &format!("{SHELF}\n    fn put(self, a Res)\n        self.slot = Some(a)"),
+            "Shelf().put(h)",
+        ),
+        "Shelf.put \u{2192} stores its argument into field 'slot'",
+        "        self.slot = Some(a)",
+    );
+}
+
+/// The hop into a collection's own method lives in another file, so it is
+/// named without a location the report's file could not show.
+#[test]
+fn a_hop_names_the_container_a_method_passes_its_argument_to() {
+    let program = reads_after(
+        &format!("{SHELF}\n    fn put(self, a Res)\n        self.items.push(a)"),
+        "Shelf().put(h)",
+    );
+    assert_hop(
+        &program,
+        "Shelf.put \u{2192} calls List.push (passes its argument)",
+        "        self.items.push(a)",
+    );
+    let envelope = miri_check_json(&format!("{RES}\n{program}"));
+    let imported = (envelope.diagnostics.iter())
+        .flat_map(|d| &d.related)
+        .find(|related| related.message.contains("List.push \u{2192}"))
+        .unwrap_or_else(|| panic!("the hop inside the collection is named: {envelope:#?}"));
+    assert_eq!(imported.line, None, "{imported:#?}");
+}
+
+#[test]
+fn a_hop_names_the_method_a_function_passes_its_argument_to() {
+    assert_hop(
+        &reads_after(
+            &format!(
+                "{SHELF}\n    fn put(self, a Res)\n        self.slot = Some(a)\n\nfn keep(r Res)\n    Shelf().put(r)"
+            ),
+            "keep(h)",
+        ),
+        "keep \u{2192} calls Shelf.put (passes its argument)",
+        "    Shelf().put(r)",
+    );
+}
+
+#[test]
+fn a_hop_names_the_trait_method_a_function_passes_its_argument_to() {
+    assert_hop(
+        &reads_after(
+            "trait Sink\n    fn take(self, r Res)\n\nclass Bin implements Sink\n    var held [Res]\n    fn init()\n        self.held = List<Res>()\n    fn take(self, r Res)\n        self.held.push(r)\n\nfn give(s Sink, r Res)\n    s.take(r)",
+            "give(Bin(), h)",
+        ),
+        "give \u{2192} calls Sink.take (passes its argument)",
+        "    s.take(r)",
+    );
+}
+
+#[test]
+fn a_hop_names_the_closure_a_function_captures_its_argument_in() {
+    assert_hop(
+        &reads_after(
+            "class Box\n    var f fn() int\n    fn init()\n        self.f = fn() int: 0\n    fn reg(self, g fn() int)\n        self.f = g\n\nfn keep(b Box, r Res)\n    b.reg(fn() int: r.x)",
+            "keep(Box(), h)",
+        ),
+        "keep \u{2192} captures its argument in a closure",
+        "    b.reg(fn() int: r.x)",
     );
 }

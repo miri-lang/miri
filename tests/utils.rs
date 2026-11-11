@@ -150,6 +150,27 @@ pub fn miri_check(input: &str) -> CompilerResult {
     exec_miri("check", input, &[])
 }
 
+/// The envelope `miri check --format json` produces for `input`.
+pub fn miri_check_json(input: &str) -> miri::diagnostics::json::DiagnosticsEnvelope {
+    let mut file = NamedTempFile::new().expect("a temp file for the program");
+    write!(file, "{}", input).expect("the program is written");
+    let stdlib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+    let output = miri_cmd()
+        .env("MIRI_STDLIB_PATH", stdlib.to_str().expect("a utf-8 path"))
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
+        .arg("check")
+        .arg(file.path())
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("check runs");
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 output");
+    serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("a parseable envelope: {e}\n{stdout}"))
+}
+
 /// Run Miri binary with 'build' command (compilation)
 pub fn miri_build(input: &str) -> CompilerResult {
     exec_miri("build", input, &[])
